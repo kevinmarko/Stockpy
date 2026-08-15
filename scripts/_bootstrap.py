@@ -102,9 +102,24 @@ def bootstrap() -> None:
     ``.venv`` interpreter is actually found; otherwise it silently proceeds
     under the current interpreter).
     """
+    # Do not re-exec when running under pytest/unit tests or when imported by a test runner or disabled via env
+    if (
+        "pytest" in sys.modules
+        or "unittest" in sys.modules
+        or os.environ.get("PYTEST_CURRENT_TEST")
+        or os.environ.get("NO_VENV_REEXEC")
+    ):
+        try:
+            from dotenv import load_dotenv as _load_dotenv
+            _load_dotenv(_REPO_ROOT / ".env", override=False)
+        except ImportError:
+            pass
+        return
+
     venv_python = _venv_python_path()
+    venv_dir = _REPO_ROOT / ".venv"
     if venv_python.exists():
-        if os.path.realpath(sys.executable) != os.path.realpath(str(venv_python)):
+        if os.path.realpath(sys.prefix) != os.path.realpath(str(venv_dir)):
             sys.exit(_sp.call([str(venv_python)] + sys.argv))
     else:
         print(

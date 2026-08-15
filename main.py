@@ -60,7 +60,13 @@ _venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "b
 _venv_python = os.path.join(_venv_dir, "python3")
 if not os.path.exists(_venv_python):
     _venv_python = os.path.join(_venv_dir, "python")
-if os.path.exists(_venv_python) and os.path.realpath(sys.executable) != os.path.realpath(_venv_python):
+if (
+    "pytest" not in sys.modules
+    and "unittest" not in sys.modules
+    and not os.environ.get("PYTEST_CURRENT_TEST")
+    and os.path.exists(_venv_python)
+    and os.path.realpath(sys.executable) != os.path.realpath(_venv_python)
+):
     sys.exit(_sp.call([_venv_python] + sys.argv))
 
 # ---------------------------------------------------------------------------

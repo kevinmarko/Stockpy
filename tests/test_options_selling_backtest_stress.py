@@ -212,15 +212,13 @@ class TestSharedMtmHelperByteIdentical:
     property no test here claims).
     """
 
-    @classmethod
     @pytest.fixture(scope="class")
-    def golden(cls) -> dict:
+    def golden(self) -> dict:
         with open(_GOLDEN_FIXTURE_PATH) as f:
             return json.load(f)
 
-    @classmethod
     @pytest.fixture(scope="class")
-    def golden_spy(cls, golden: dict) -> pd.Series:
+    def golden_spy(self, golden: dict) -> pd.Series:
         return _synthetic_spy_from_params(golden["_meta"]["synthetic_spy_params"])
 
     @staticmethod

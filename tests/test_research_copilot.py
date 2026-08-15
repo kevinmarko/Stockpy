@@ -480,8 +480,8 @@ class TestResearchCopilotSynthesis:
         assert "RSI_14" in res.metadata["required_features"]
 
         # Run verification harness
-        passed, _ = verify_signal_module(res.code)
-        assert passed is True
+        passed, report = verify_signal_module(res.code)
+        assert passed is True, f"Report errors: {report.get('errors')}"
 
     def test_synthesize_from_hypothesis_bollinger_zscore(self):
         hyp = "Statistical arbitrage Z-score mean reversion: calculate price deviation from 20-day SMA in standard deviations. Short if Z > 2.0, Long if Z < -2.0."

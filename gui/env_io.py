@@ -584,6 +584,25 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "RAG_QUERY_API_ENABLED",
     "STRATEGY_WRITES_ENABLED",
+    # Multi-leg paper options trading & risk tunables
+    "MAX_CONCURRENT_OPTION_POSITIONS",
+    "MAX_OPTION_NOTIONAL_PER_TRADE",
+    "OPTIONS_0DTE_ENABLED",
+    "OPTIONS_0DTE_HARD_EXIT_TIME",
+    "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+    "OPTIONS_0DTE_STOP_LOSS_PCT",
+    "OPTIONS_AUTO_EXIT_ENABLED",
+    "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+    "OPTIONS_DELTA_HEDGE_ENABLED",
+    "OPTIONS_EARNINGS_CRUSH_ENABLED",
+    "OPTIONS_EARNINGS_MIN_EDGE",
+    "OPTIONS_EARNINGS_WING_MULTIPLIER",
+    "OPTIONS_MANAGE_DTE_THRESHOLD",
+    "OPTIONS_META_LABELER_ENABLED",
+    "OPTIONS_PROFIT_TARGET_PCT",
+    "OPTIONS_RISK_FREE_RATE",
+    "OPTIONS_STOP_LOSS_MULTIPLE",
+    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -691,6 +710,7 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_EMAIL_SMTP_HOST",
     "ALERT_NTFY_TOPIC",
     "ALERT_SLACK_WEBHOOK_URL",  # description literally says "Secret"
+    "OPTIONS_ALERT_WEBHOOK_URL",
     # Reddit API User-Agent header. Not a credential in the auth sense (REDDIT_
     # CLIENT_ID/SECRET already cover that), but a per-operator identifying value
     # for a third-party API — classified here for the exact same reason

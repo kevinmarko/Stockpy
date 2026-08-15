@@ -34,7 +34,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from signals.base import SignalContext, SignalModule, SignalOutput
-from signals.registry import global_registry
+from signals.registry import SignalRegistry, global_registry
 
 logger = logging.getLogger(__name__)
 
@@ -646,16 +646,20 @@ def instantiate_module(code: str) -> SignalModule:
         "SignalModule": SignalModule,
         "SignalContext": SignalContext,
         "SignalOutput": SignalOutput,
-        "global_registry": global_registry,
+        "global_registry": SignalRegistry(),
     }
 
     local_namespace: dict[str, Any] = {}
-
+    saved_modules = set(global_registry._modules.keys())
     try:
         compiled_code = compile(code, "<synthesized_signal>", "exec")
         exec(compiled_code, safe_globals, local_namespace)  # noqa: S102
     except Exception as exc:
         raise ValueError(f"Failed to execute synthesized signal code in safe sandbox: {exc}") from exc
+    finally:
+        for k in list(global_registry._modules.keys()):
+            if k not in saved_modules:
+                global_registry.unregister(k)
 
     module_class: type[SignalModule] | None = None
     for obj in local_namespace.values():

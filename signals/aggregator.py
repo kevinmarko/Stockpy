@@ -60,8 +60,8 @@ logger = logging.getLogger(__name__)
 # imports at module load time. (ml.meta_labeling → no signals dependency.)
 def _get_meta_registry():
     """Lazy import of global_meta_registry to avoid load-time circular imports."""
-    from ml.meta_labeling import global_meta_registry  # noqa: PLC0415
-    return global_meta_registry
+    import ml.meta_labeling as _ml_meta  # noqa: PLC0415
+    return _ml_meta.global_meta_registry
 
 
 # ---------------------------------------------------------------------------

@@ -12,16 +12,16 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 273,
-    "no_op": 2,
+    "live_safe": 290,
+    "no_op": 4,
     "restart_required": 91,
-    "total": 366
+    "total": 385
   },
   "dynamic_sites": [
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2714,
+      "line": 2720,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 379,
+  "files_scanned": 413,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -296,7 +296,9 @@
     "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
     "MARKET_DATA_WS_STALE_SECONDS",
     "MARKET_DATA_WS_SYMBOLS",
+    "MAX_CONCURRENT_OPTION_POSITIONS",
     "MAX_LEVERAGE",
+    "MAX_OPTION_NOTIONAL_PER_TRADE",
     "MAX_PORTFOLIO_GROSS",
     "MCP_OAUTH_MULTI_USER_ENABLED",
     "META_LABELING_ENABLED",
@@ -311,7 +313,21 @@
     "OPAL_RESEARCH_PROVIDER",
     "OPAL_RESEARCH_TIMEOUT_SECONDS",
     "OPENAI_API_KEY",
+    "OPTIONS_0DTE_HARD_EXIT_TIME",
+    "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+    "OPTIONS_0DTE_STOP_LOSS_PCT",
+    "OPTIONS_ALERT_WEBHOOK_URL",
+    "OPTIONS_AUTO_EXIT_ENABLED",
+    "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+    "OPTIONS_DELTA_HEDGE_ENABLED",
+    "OPTIONS_EARNINGS_MIN_EDGE",
+    "OPTIONS_EARNINGS_WING_MULTIPLIER",
+    "OPTIONS_MANAGE_DTE_THRESHOLD",
     "OPTIONS_MATRIX_ENABLED",
+    "OPTIONS_META_LABELER_ENABLED",
+    "OPTIONS_PROFIT_TARGET_PCT",
+    "OPTIONS_RISK_FREE_RATE",
+    "OPTIONS_STOP_LOSS_MULTIPLE",
     "OPTIONS_TRUE_IVR_ENABLED",
     "ORCHESTRATOR_API_PORT",
     "ORCHESTRATOR_DAEMON_ENABLED",
@@ -319,6 +335,7 @@
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
+    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
     "PAPER_TRADING_START_DATE",
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
@@ -416,20 +433,22 @@
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
   ],
   "no_op": [
+    "OPTIONS_0DTE_ENABLED",
+    "OPTIONS_EARNINGS_CRUSH_ENABLED",
     "PROMPT_MAX_CHARS",
     "SENTIMENT_PIT_MIN_MONTHS"
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 789,
+    "attr": 797,
     "factory_param": 4,
-    "getattr_const": 263,
+    "getattr_const": 306,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
     "attr": 231,
     "factory_param": 4,
-    "getattr_const": 160,
+    "getattr_const": 179,
     "os_environ": 17
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -814,6 +833,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/execution_audit_store.py:239",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:743",
         "via": []
       },
@@ -823,7 +851,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:61",
+        "site": "data/paper_account_store.py:70",
         "via": []
       },
       {
@@ -942,6 +970,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/execution_audit_store.py:244",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/execution_audit_store.py:246",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:754",
         "via": []
       },
@@ -960,7 +1006,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:65",
+        "site": "data/paper_account_store.py:74",
         "via": []
       },
       {
@@ -969,7 +1015,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:67",
+        "site": "data/paper_account_store.py:76",
         "via": []
       },
       {
@@ -1142,6 +1188,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/execution_audit_store.py:244",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/execution_audit_store.py:246",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:754",
         "via": []
       },
@@ -1160,7 +1224,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:65",
+        "site": "data/paper_account_store.py:74",
         "via": []
       },
       {
@@ -1169,7 +1233,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:67",
+        "site": "data/paper_account_store.py:76",
         "via": []
       },
       {
@@ -1483,9 +1547,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:84",
+        "site": "data/paper_account_store.py:93",
         "via": [
-          72
+          81
         ]
       }
     ],
@@ -1911,6 +1975,15 @@
         "rules": [
           "module_level"
         ],
+        "site": "ml/options_meta_labeler.py:25",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
         "site": "universe_engine.py:40",
         "via": []
       }
@@ -2050,6 +2123,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/execution_audit_store.py:244",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:754",
         "via": []
       },
@@ -2059,7 +2141,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:65",
+        "site": "data/paper_account_store.py:74",
         "via": []
       },
       {
@@ -2466,7 +2548,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11021",
+        "site": "Gravity AI Review Suite.py:11027",
         "via": []
       }
     ],
@@ -2735,7 +2817,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "main.py:267",
+        "site": "main.py:273",
         "via": []
       },
       {
@@ -2767,14 +2849,14 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 67,
+    "cross_module_init_helper": 73,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 41,
     "method_self_assign": 4,
-    "module_level": 73,
+    "module_level": 74,
     "os_environ": 24
   },
   "restart_required_via_name_literal_only": [

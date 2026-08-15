@@ -211,3 +211,45 @@ def test_calculate_efficient_frontier():
     # Frontier should show tradeoff: as risk aversion goes up, shortfall goes up and variance goes down
     assert points[-1]['expected_shortfall'] > points[0]['expected_shortfall']
     assert points[-1]['variance'] < points[0]['variance']
+
+
+def test_risk_aversion_kappa_front_loading():
+    """Verify that an increase in risk aversion lambda raises kappa = sqrt(lambda * sigma^2 / eta)
+    and front-loads trades to shed inventory risk quickly."""
+    sigma = 0.2
+    eta = 0.05
+    gamma = 0.002
+    
+    lambda_low = 1e-4
+    lambda_high = 1e-2
+    
+    kappa_low = math.sqrt(lambda_low * (sigma ** 2) / eta)
+    kappa_high = math.sqrt(lambda_high * (sigma ** 2) / eta)
+    
+    assert kappa_high > kappa_low
+    
+    res_low = compute_trading_trajectory(
+        total_shares=10000.0,
+        total_time=5.0,
+        n_intervals=50,
+        volatility=sigma,
+        temp_impact=eta,
+        perm_impact=gamma,
+        risk_aversion=lambda_low,
+    )
+    
+    res_high = compute_trading_trajectory(
+        total_shares=10000.0,
+        total_time=5.0,
+        n_intervals=50,
+        volatility=sigma,
+        temp_impact=eta,
+        perm_impact=gamma,
+        risk_aversion=lambda_high,
+    )
+    
+    # High risk aversion should trade more in the very first interval (front-loading)
+    assert res_high['trade_list'][0] > res_low['trade_list'][0]
+    # And leave less remaining inventory at mid-point
+    assert res_high['trajectory'][25] < res_low['trajectory'][25]
+

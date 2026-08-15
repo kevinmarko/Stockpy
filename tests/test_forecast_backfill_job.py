@@ -93,13 +93,13 @@ def _set_behavior(monkeypatch, behavior: str) -> None:
 
 
 def _wait_until_terminal(job, timeout: float = 10.0) -> None:
-    """Poll a job's state until it leaves 'running', or fail the test."""
+    """Poll a job's state until it leaves 'running' and active job ID clears, or fail the test."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         with job._lock:
-            if job.state != "running":
+            if job.state != "running" and forecast_backfill_job.get_active_job_id() != job.job_id:
                 return
-        time.sleep(0.05)
+        time.sleep(0.02)
     pytest.fail(f"job {job.job_id} did not reach a terminal state within {timeout}s")
 
 

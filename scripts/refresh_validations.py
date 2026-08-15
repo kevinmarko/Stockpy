@@ -1764,7 +1764,7 @@ def _build_forecast_direction_adapter(
 #                         docs/signals/vrp_premium_selling.md).
 _REPLAY_EXCLUDED_MODULES = {
     "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
-    "vrp_premium_selling",
+    "vrp_premium_selling", "options_flow_sentiment",
 }
 
 _AROON_LENGTH = 25

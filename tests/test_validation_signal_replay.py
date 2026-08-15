@@ -82,18 +82,19 @@ def _run_adapter(closes, sectors=None, ohlcv=None, store=None):
 # ---------------------------------------------------------------------------
 
 class TestReplayExcludedModules:
-    def test_excludes_exactly_five_modules(self) -> None:
+    def test_excludes_exactly_six_modules(self) -> None:
         assert _REPLAY_EXCLUDED_MODULES == {
             "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
-            "vrp_premium_selling",
+            "vrp_premium_selling", "options_flow_sentiment",
         }
 
     def test_surviving_registry_has_fourteen_modules(self) -> None:
+        import signals  # noqa: F401 -- ensures all 20 modules are registered
         from signals.registry import global_registry
 
         all_names = set(global_registry.get_all().keys())
         surviving = all_names - _REPLAY_EXCLUDED_MODULES
-        assert len(all_names) == 19
+        assert len(all_names) == 20
         assert len(surviving) == 14
 
 

@@ -60,6 +60,13 @@ def get_stock_quote(symbol: str) -> Dict[str, Any]:
     }
 
 
+def get_latest_price(symbol: str) -> float:
+    """Returns the latest spot price for symbol, or 0.0 if unavailable."""
+    quote = get_stock_quote(symbol)
+    return float(quote.get("price") or 0.0)
+
+
+
 def get_current_price(symbol: str, fallback_price: Optional[float] = None) -> float:
     """
     Returns current stock price from FMP, falling back to previousClose or explicit fallback.

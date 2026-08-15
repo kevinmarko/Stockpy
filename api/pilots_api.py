@@ -5644,6 +5644,26 @@ class ZeroDteExecuteRequest(BaseModel):
 
 
 
+class MultiLegOptionLeg(BaseModel):
+    strike: float = Field(..., gt=0.0, description="Strike price of the option leg")
+    option_type: Literal["call", "put", "CALL", "PUT"] = Field(..., description="Option type: CALL or PUT")
+    action: Literal["buy", "sell", "BUY", "SELL"] = Field(..., description="Action: BUY or SELL")
+    ratio: int = Field(default=1, gt=0, description="Contract ratio multiplier (>= 1)")
+    expiration: Optional[str] = Field(default=None, description="Expiration date string (YYYY-MM-DD)")
+    premium: Optional[float] = Field(default=None, ge=0.0, description="Market price per share if known")
+    iv: Optional[float] = Field(default=None, gt=0.0, description="Implied volatility decimal (e.g. 0.30)")
+
+class MultiLegStructurePricingRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=10, description="Underlying ticker symbol")
+    structure_type: Optional[str] = Field(default="CUSTOM", description="Structure type: IRON_CONDOR, VERTICAL_SPREAD, STRADDLE, STRANGLE, etc.")
+    legs: List[MultiLegOptionLeg] = Field(..., min_length=1, description="List of component option legs")
+    underlying_price: Optional[float] = Field(default=None, gt=0.0, description="Spot price override if not fetching from market")
+    iv_override: Optional[float] = Field(default=None, gt=0.0, description="Global IV override for unpriced legs")
+
+class MultiLegValidationRequest(BaseModel):
+    structure_type: str = Field(..., description="Structure type: IRON_CONDOR, VERTICAL_SPREAD, STRADDLE, STRANGLE, etc.")
+    legs: List[MultiLegOptionLeg] = Field(..., min_length=1, description="List of component option legs")
+
 
 @app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
 def get_cls_concentrated_positions() -> Dict[str, Any]:
@@ -6107,6 +6127,72 @@ def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
         payload=body.payload,
         channels=body.channels,
     )
+
+
+@app.post("/pilots/options/multi-leg/price", dependencies=[Depends(require_read_token)])
+def post_options_multi_leg_price(body: MultiLegStructurePricingRequest) -> Dict[str, Any]:
+    """Calculates theoretical prices, composite net Greeks, net entry cost/credit,
+    max profit, max loss, risk/reward, break-evens, and expiration payoff curve
+    for any multi-leg option strategy."""
+    from pilots.multi_leg_pricing import OptionLegSpec, price_multi_leg_structure
+    from pilots.price_provider import get_latest_price
+
+    spot = body.underlying_price
+    if spot is None or spot <= 0:
+        spot = get_latest_price(body.symbol) or 100.0
+
+    specs = [
+        OptionLegSpec(
+            strike=l.strike,
+            option_type=l.option_type,
+            action=l.action,
+            ratio=l.ratio,
+            expiration=l.expiration,
+            premium=l.premium,
+            iv=l.iv or body.iv_override,
+        )
+        for l in body.legs
+    ]
+
+    res = price_multi_leg_structure(
+        spot=spot,
+        legs=specs,
+        default_iv=body.iv_override or 0.30,
+    )
+    res["symbol"] = body.symbol.upper()
+    res["structure_type"] = body.structure_type
+    return res
+
+
+@app.post("/pilots/options/multi-leg/validate", dependencies=[Depends(require_read_token)])
+def post_options_multi_leg_validate(body: MultiLegValidationRequest) -> Dict[str, Any]:
+    """Validates structural correctness of multi-leg option configurations
+    (e.g. Iron Condor wing ordering, Vertical Spread strike ordering, Straddle parity)."""
+    from pilots.multi_leg_pricing import OptionLegSpec, validate_multi_leg_structure
+
+    specs = [
+        OptionLegSpec(
+            strike=l.strike,
+            option_type=l.option_type,
+            action=l.action,
+            ratio=l.ratio,
+            expiration=l.expiration,
+            premium=l.premium,
+            iv=l.iv,
+        )
+        for l in body.legs
+    ]
+
+    is_valid, errors = validate_multi_leg_structure(
+        structure_type=body.structure_type,
+        legs=specs,
+    )
+    return {
+        "structure_type": body.structure_type,
+        "is_valid": is_valid,
+        "errors": errors,
+    }
+
 @app.get("/pilots/options/dispersion/opportunities", dependencies=[Depends(require_read_token)])
 def get_options_dispersion_opportunities(
     indices: Optional[str] = None,
