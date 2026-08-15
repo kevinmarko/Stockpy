@@ -59,10 +59,10 @@ def job_status(handle: RunHandle, *, cancelled: bool) -> str:
 
     Never reads a ``.status``/``.exit_code()`` attribute — RunHandle has neither.
     """
-    if handle.is_running():
-        return "running"
     if cancelled:
         return "cancelled"
+    if handle.is_running():
+        return "running"
     rc = handle.returncode()
     if rc is None:
         return "unknown"
@@ -222,12 +222,17 @@ class JobManager:
                 "process to cancel (daemon-hosted run — it will run to completion)"
             )
         with rec._lock:
+            if rec.cancelled:
+                return True
             if not rec.handle.is_running():
                 return False
             stopped = stop_run(rec.handle)
             if stopped:
+                if rec.handle.returncode() == 0:
+                    return False
                 rec.cancelled = True
-            return stopped
+                return True
+            return False
 
 
 job_manager = JobManager()
