@@ -39,6 +39,7 @@ def run_numba_backtest(prices, signals, initial_cash=10000.0, fee_rate=0.001, sl
     cash = initial_cash
     position = 0.0
     entry_price = 0.0
+    entry_fee = 0.0
     
     for i in range(n_bars):
         current_price = prices[i]
@@ -53,10 +54,11 @@ def run_numba_backtest(prices, signals, initial_cash=10000.0, fee_rate=0.001, sl
             # Simple Hard Stop-Loss: Exit if price drops 5% below entry_price
             stop_price = entry_price * 0.95
             if current_price <= stop_price:
-                # Execute Force Sell (Stop Triggered)
-                exec_price = stop_price * (1.0 - slippage_rate) # apply slippage
+                # Execute Force Sell (Stop Triggered), bounding price to avoid gap-down execution optimism
+                base_exit_price = min(stop_price, current_price)
+                exec_price = base_exit_price * (1.0 - slippage_rate) # apply downward slippage
                 fees = (position * exec_price) * fee_rate
-                realized_pnl = (position * (exec_price - entry_price)) - fees
+                realized_pnl = (position * (exec_price - entry_price)) - (entry_fee + fees)
                 
                 cash += (position * exec_price) - fees
                 
@@ -71,6 +73,7 @@ def run_numba_backtest(prices, signals, initial_cash=10000.0, fee_rate=0.001, sl
                 # Reset state
                 position = 0.0
                 entry_price = 0.0
+                entry_fee = 0.0
                 continue # move to next bar immediately
 
         # 2. TRIGGER LOGIC: Evaluation of Signals
@@ -86,6 +89,7 @@ def run_numba_backtest(prices, signals, initial_cash=10000.0, fee_rate=0.001, sl
             
             position = position_size
             entry_price = exec_price
+            entry_fee = fees
             
             # Log the trade
             trades_log[trade_count, 0] = float(i)
@@ -99,7 +103,7 @@ def run_numba_backtest(prices, signals, initial_cash=10000.0, fee_rate=0.001, sl
         elif signal == -1 and position > 0.0:
             exec_price = current_price * (1.0 - slippage_rate) # sell with downward slippage
             fees = (position * exec_price) * fee_rate
-            realized_pnl = (position * (exec_price - entry_price)) - fees
+            realized_pnl = (position * (exec_price - entry_price)) - (entry_fee + fees)
             
             cash += (position * exec_price) - fees
             
@@ -114,6 +118,7 @@ def run_numba_backtest(prices, signals, initial_cash=10000.0, fee_rate=0.001, sl
             # Reset state
             position = 0.0
             entry_price = 0.0
+            entry_fee = 0.0
 
     return equity_curve, trades_log[:trade_count]
 

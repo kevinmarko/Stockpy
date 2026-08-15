@@ -31,9 +31,9 @@ def test_numba_backtest_stop_loss_trigger():
 
     # Trade 1: Buy, Trade 2: Stop-loss Sell
     assert len(trades) == 2
-    # Stop-loss sell executed at 95.0 (stop price)
+    # Stop-loss sell executed at min(stop_price, current_price) = 94.0
     exit_trade = trades[1]
-    assert exit_trade[1] == pytest.approx(95.0, abs=1e-4)
+    assert exit_trade[1] == pytest.approx(94.0, abs=1e-4)
     assert exit_trade[4] < 0  # Realized negative PnL
 
 
@@ -67,3 +67,21 @@ def test_numba_backtest_no_signals():
 
     assert len(trades) == 0
     assert np.all(equity == 10000.0)
+
+
+def test_numba_backtest_gap_down_stop_loss():
+    """Verify stop loss executes at current price if bar gaps down below stop price."""
+    # Entry at 100 (stop price = 95), bar 2 gaps down directly to 88.0
+    prices = np.array([100.0, 88.0, 92.0], dtype=np.float64)
+    signals = np.array([1, 0, 0], dtype=np.int64)
+
+    equity, trades = run_numba_backtest(
+        prices, signals, initial_cash=10000.0, fee_rate=0.0, slippage_rate=0.0
+    )
+
+    assert len(trades) == 2
+    exit_trade = trades[1]
+    # Execution price reflects gap price 88.0 rather than optimistic 95.0
+    assert exit_trade[1] == pytest.approx(88.0, abs=1e-4)
+    assert exit_trade[4] < 0
+
