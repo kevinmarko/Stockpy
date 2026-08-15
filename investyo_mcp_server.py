@@ -2423,20 +2423,20 @@ def get_model_registry_status() -> str:
     Reads ml/registry.yaml and returns model health: last training date,
     feature importance, OOS metrics, and staleness warnings.
     """
-    import yaml
     from datetime import datetime, timedelta
+    try:
+        from ml.registry_io import load_registry, resolve_registry_path  # noqa: PLC0415
+        reg_path = resolve_registry_path()
+        if not reg_path.exists():
+            return "Error: ml/registry.yaml not found."
+        registry = load_registry()
+    except Exception as exc:
+        return f"Error: failed to load ml/registry.yaml ({exc})."
 
-    registry_path = "ml/registry.yaml"
-    if not os.path.exists(registry_path):
-        return "Error: ml/registry.yaml not found."
+    if not registry:
+        return "Registry is empty."
 
     try:
-        with open(registry_path, "r") as f:
-            registry = yaml.safe_load(f)
-
-        if not registry:
-            return "Registry is empty."
-
         lines = ["# ML Model Registry Status\n"]
         now = datetime.now()
         stale_threshold = timedelta(days=30)

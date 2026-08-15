@@ -226,15 +226,95 @@ models:
     artifact_file: lgbm_20260801.pkl
 """, encoding="utf-8")
 
-    # Create a newer physical artifact on disk
+    # Create a newer physical artifact on disk with matching artifact_file
     (models_dir / "lgbm_20260814.pkl").write_text("binary", encoding="utf-8")
 
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
 
     rows = model_registry_rows()
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["name"] == "lgbm_ranker"
+    row = next(r for r in rows if r["name"] == "lgbm_ranker")
     # Self-healed to the newer physical artifact date
     assert row["trained_date"] == "2026-08-14"
+
+
+def test_model_registry_rows_unvalidated_artifact_resets_metrics(tmp_path, monkeypatch):
+    """If a new .pkl exists on disk whose filename does not match the registry's validated
+    artifact_file, the row surfaces the new date but resets metrics to None (CONSTRAINT #4)."""
+    from settings import settings
+    from pilots.models import model_registry_rows
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    reg_file = models_dir / "registry.yaml"
+    reg_file.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.99
+    pbo: 0.2
+    n_train: 400
+    deployable: true
+    notes: Test note
+    artifact_file: lgbm_20260801.pkl
+""", encoding="utf-8")
+
+    # New artifact on disk with different filename/date
+    (models_dir / "lgbm_20260815.pkl").write_text("binary", encoding="utf-8")
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    rows = model_registry_rows()
+    row = next(r for r in rows if r["name"] == "lgbm_ranker")
+    assert row["trained_date"] == "2026-08-15"
+    assert row["cpcv_dsr"] is None
+    assert row["pbo"] is None
+    assert row["deployable"] is False
+
+
+def test_load_registry_smart_merge_git_newer(tmp_path, monkeypatch):
+    """When git-tracked registry has a newer model than LOCAL_DATA_ROOT, git entry wins."""
+    from settings import settings
+    from ml.registry_io import load_registry
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    # Local has an older model
+    local_reg = models_dir / "registry.yaml"
+    local_reg.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.90
+    pbo: 0.4
+    n_train: 300
+    deployable: false
+""", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    # load_registry merges with repo _DEFAULT_REGISTRY_PATH (which has 2026-08-14)
+    data = load_registry()
+    assert "models" in data
+    assert data["models"]["lgbm_ranker"]["trained_date"] == "2026-08-14"
+    assert data["models"]["lgbm_ranker"]["deployable"] is True
+
+
+def test_update_model_metrics_explicit_path_error_propagates(tmp_path):
+    """When an explicit unwriteable path is passed, update_model_metrics propagates the error."""
+    from ml.registry_io import update_model_metrics
+
+    bad_path = tmp_path / "nonexistent_dir" / "readonly_sub" / "reg.yaml"
+    # Create valid YAML at source
+    src_reg = tmp_path / "reg.yaml"
+    src_reg.write_text("models:\n  lgbm_ranker:\n    role: test\n", encoding="utf-8")
+
+    with pytest.raises(Exception):
+        update_model_metrics("lgbm_ranker", path=bad_path, trained_date="2026-08-15")
 

@@ -127,7 +127,7 @@ def _load_registry_rows_cached(path_str: str, _mtime: float) -> List[Dict[str, A
     return _normalise_registry(raw)
 
 
-def _load_registry_rows(path: str = "ml/registry.yaml") -> List[Dict[str, Any]]:
+def _load_registry_rows(path: Optional[str] = None) -> List[Dict[str, Any]]:
     """Load + normalise ``ml/registry.yaml`` into a flat list of row dicts.
 
     Testable: returns ``[]`` on ANY failure (missing file, unreadable,
@@ -135,9 +135,9 @@ def _load_registry_rows(path: str = "ml/registry.yaml") -> List[Dict[str, Any]]:
     instead of a traceback (CONSTRAINT #6). ``null`` metrics are preserved as
     ``None`` (the render layer maps them to "—", never 0 — CONSTRAINT #4).
 
-    A relative ``path`` is resolved against the repo root so the helper works
-    regardless of the process CWD; an absolute path is used as-is. The actual
-    read+parse is delegated to the mtime-keyed cached loader
+    When ``path`` is omitted (or "ml/registry.yaml"), resolves via
+    ``ml.registry_io.resolve_registry_path()`` to honor LOCAL_DATA_ROOT.
+    The actual read+parse is delegated to the mtime-keyed cached loader
     :func:`_load_registry_rows_cached` (PR B GUI-caching) so a rerun no longer
     re-reads/re-parses the file when its mtime is unchanged.
 
@@ -147,9 +147,16 @@ def _load_registry_rows(path: str = "ml/registry.yaml") -> List[Dict[str, Any]]:
         One dict per model with keys: ``model``, ``role``, ``trained_date``,
         ``cpcv_dsr``, ``pbo``, ``n_train``, ``deployable``, ``notes``.
     """
-    p = Path(path)
-    if not p.is_absolute():
-        p = _REPO_ROOT / p
+    if path is not None and path != "ml/registry.yaml":
+        p = Path(path)
+        if not p.is_absolute():
+            p = _REPO_ROOT / p
+    else:
+        try:
+            from ml.registry_io import resolve_registry_path  # noqa: PLC0415
+            p = resolve_registry_path()
+        except Exception:
+            p = _REPO_ROOT / "ml" / "registry.yaml"
 
     try:
         if not p.exists():
