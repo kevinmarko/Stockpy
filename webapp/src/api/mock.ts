@@ -250,6 +250,9 @@ import type {
   MarketMakerSimRequest,
   MarketMakerSimResponse,
   MarketMakerStepPoint,
+  TransformerForecastResponse,
+  DiffusionStressRequest,
+  DiffusionStressResponse,
 } from "./types";
 
 const SECTORS = [
@@ -10604,6 +10607,59 @@ export const mockApi = {
       Forecast_90_Upper: null,
       attention,
     });
+  },
+
+  async getTransformerForecast(symbol: string): Promise<TransformerForecastResponse> {
+    if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol);
+    const sym = symbol.toUpperCase();
+    const current_vol = 0.15 + (sym.length % 5) * 0.02;
+    const trajectory = [];
+    const lower = [];
+    const upper = [];
+    for (let i = 0; i < 30; i++) {
+      const v = current_vol * (1 + 0.05 * Math.sin(i / 5));
+      trajectory.push(v);
+      lower.push(v * 0.9);
+      upper.push(v * 1.1);
+    }
+    const attention_weights = Array.from({ length: 30 }, () => Array.from({ length: 10 }, () => Math.random()));
+    const feature_importance = { "RSI": 0.25, "MACD": 0.15, "VIX": 0.3, "Sector": 0.1, "Flow": 0.2 };
+    
+    return delay<TransformerForecastResponse>({
+      symbol: sym,
+      current_vol,
+      forecast_horizon: 30,
+      forecast_trajectory: trajectory,
+      cone_lower_bounds: lower,
+      cone_upper_bounds: upper,
+      attention_weights,
+      feature_importance,
+    });
+  },
+
+  async runDiffusionStressTest(req: DiffusionStressRequest): Promise<DiffusionStressResponse> {
+    const sym = req.symbol.toUpperCase();
+    const terminal = [];
+    const drawdowns = [];
+    for (let i = 0; i < 100; i++) {
+      terminal.push(100 * (1 + req.drift + req.volatility * (Math.random() - 0.5)));
+      drawdowns.push(req.volatility * Math.random());
+    }
+    terminal.sort((a, b) => a - b);
+    drawdowns.sort((a, b) => a - b);
+    
+    return delay<DiffusionStressResponse>({
+      symbol: sym,
+      horizon_days: req.horizon_days,
+      paths_simulated: req.paths,
+      var_95: 0.12,
+      cvar_95: 0.18,
+      expected_shortfall: 0.15,
+      max_drawdown_distribution: drawdowns,
+      terminal_price_distribution: terminal,
+      crash_probabilities: { "-5%": 0.25, "-10%": 0.1, "-20%": 0.02 },
+      sample_paths: Array.from({ length: 5 }, () => Array.from({ length: req.horizon_days }, () => 100 + (Math.random() - 0.5) * 10)),
+    }, 500);
   },
 
   // ---- Agentic Trading tab ----

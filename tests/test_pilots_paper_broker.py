@@ -1942,5 +1942,67 @@ class TestMarketMakerSimulateEndpoint:
             )
         assert resp.status_code == 401
 
+class TestAIForecastingEndpoints:
+    def test_get_transformer_forecast_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/ai/transformer-forecast?symbol=AAPL",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert len(body["forecast"]) == 4
+        assert "1d" in body["forecast"]
+        assert "5d" in body["forecast"]
+        assert "21d" in body["forecast"]
+        assert "60d" in body["forecast"]
+        assert len(body["attention_heatmap"]) == 60
+
+    def test_get_transformer_forecast_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/ai/transformer-forecast?symbol=AAPL",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_diffusion_stress_test_success(self):
+        payload = {
+            "symbol": "TSLA",
+            "spot_price": 200.0,
+            "volatility": 0.5,
+            "num_paths": 100,
+            "horizon": 10,
+            "drift": 0.05
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "TSLA"
+        assert len(body["paths"]) == 100
+        assert len(body["paths"][0]) == 10
+        assert "VaR_95" in body
+        assert "CVaR_95" in body
+
+    def test_post_diffusion_stress_test_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbol": "TSLA",
+            "spot_price": 200.0,
+            "volatility": 0.5,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
 
 

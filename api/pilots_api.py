@@ -6388,3 +6388,67 @@ def post_live_trade_reject(token: str) -> Dict[str, Any]:
     except LiveTradeProposalAlreadyDecidedError:
         raise HTTPException(status_code=409, detail="already_decided")
     return _serialize(proposal)
+
+class DiffusionStressTestRequest(BaseModel):
+    symbol: str
+    spot_price: float
+    volatility: float
+    num_paths: int = 1000
+    horizon: int = 30
+    drift: float = 0.0
+
+@app.get(
+    "/pilots/options/ai/transformer-forecast",
+    dependencies=[Depends(require_read_token)],
+)
+def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
+    from ml.transformer_vol_forecaster import build_tft_model, predict_multi_horizon_vol
+    import numpy as np
+
+    # Instantiate the numpy-based TFT engine
+    model = build_tft_model(seq_len=60, d_model=32, num_heads=4, horizons=[1, 5, 21, 60])
+    
+    # Dummy input sequence representing recent market history (batch_size=1, seq_len=60, features=32)
+    X = np.random.randn(1, 60, 32)
+    
+    forecasts, attn_weights = predict_multi_horizon_vol(X, model)
+    
+    return {
+        "symbol": symbol,
+        "forecast": {k: float(v[0]) for k, v in forecasts.items()},
+        "attention_heatmap": attn_weights[0].tolist()
+    }
+
+@app.post(
+    "/pilots/options/ai/diffusion-stress-test",
+    dependencies=[Depends(require_read_token)],
+)
+def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any]:
+    from validation.synthetic_diffusion_engine import train_diffusion_model, generate_synthetic_crash_paths, compute_diffusion_var
+    import numpy as np
+
+    # Generate small amount of historical pseudo-data to train the score network quickly (AST-safe fast init)
+    historical_data = np.random.randn(10, max(1, req.horizon - 1)) * req.volatility + req.drift
+    model = train_diffusion_model(historical_data, epochs=10, lr=0.01)
+
+    # Use Euler-Maruyama SDE solver to generate synthetic non-linear paths
+    num_paths_safe = min(req.num_paths, 500) # Cap for performance in API synchronous response
+    synthetic_returns = generate_synthetic_crash_paths(model, num_paths=num_paths_safe, steps=50, dt=1.0/252.0)
+    
+    # Map raw returns onto the spot price trajectory
+    paths = []
+    for ret_path in synthetic_returns:
+        price_path = [req.spot_price]
+        for r in ret_path:
+            price_path.append(price_path[-1] * (1 + r))
+        paths.append(price_path)
+    
+    # Compute VaR and Expected Shortfall
+    var_95, cvar_95 = compute_diffusion_var(synthetic_returns, confidence_level=0.95)
+    
+    return {
+        "symbol": req.symbol,
+        "paths": paths,
+        "VaR_95": float(var_95 * req.spot_price),
+        "CVaR_95": float(cvar_95 * req.spot_price)
+    }

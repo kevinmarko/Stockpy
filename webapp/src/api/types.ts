@@ -4822,3 +4822,40 @@ export interface MarketMakerSimResponse {
   steps: MarketMakerStepPoint[];
   as_of?: string;
 }
+
+export interface TransformerForecastResponse {
+  symbol: string;
+  current_vol: number;
+  forecast_horizon: number;
+  cone_lower_bounds: number[];
+  cone_upper_bounds: number[];
+  forecast_trajectory: number[];
+  attention_weights: number[][];
+  feature_importance: Record<string, number>;
+  as_of?: string;
+}
+
+export interface DiffusionStressRequest {
+  symbol: string;
+  drift: number;
+  volatility: number;
+  jump_intensity: number;
+  jump_mean: number;
+  jump_std: number;
+  paths: number;
+  horizon_days: number;
+}
+
+export interface DiffusionStressResponse {
+  symbol: string;
+  horizon_days: number;
+  paths_simulated: number;
+  cvar_95: number;
+  var_95: number;
+  expected_shortfall: number;
+  max_drawdown_distribution: number[];
+  terminal_price_distribution: number[];
+  crash_probabilities: Record<string, number>;
+  sample_paths: number[][];
+  as_of?: string;
+}

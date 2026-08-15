@@ -185,6 +185,9 @@ import type {
   CopulaPairsResponse,
   MarketMakerSimRequest,
   MarketMakerSimResponse,
+  TransformerForecastResponse,
+  DiffusionStressRequest,
+  DiffusionStressResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -594,6 +597,13 @@ const liveApi = {
     }),
   getForecastResult: (symbol: string) =>
     http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
+  getTransformerForecast: (symbol: string) =>
+    http<TransformerForecastResponse>(`/data/ai/transformer-vol/${encodeURIComponent(symbol)}`),
+  runDiffusionStressTest: (req: DiffusionStressRequest) =>
+    http<DiffusionStressResponse>("/data/ai/diffusion-stress", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",
