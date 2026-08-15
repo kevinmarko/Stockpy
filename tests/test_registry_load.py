@@ -306,15 +306,50 @@ models:
     assert data["models"]["lgbm_ranker"]["deployable"] is True
 
 
-def test_update_model_metrics_explicit_path_error_propagates(tmp_path):
-    """When an explicit unwriteable path is passed, update_model_metrics propagates the error."""
-    from ml.registry_io import update_model_metrics
+def test_load_registry_smart_merge_local_newer(tmp_path, monkeypatch):
+    """When LOCAL_DATA_ROOT has a newer retrained model than git, local entry wins."""
+    from settings import settings
+    from ml.registry_io import load_registry
 
-    bad_path = tmp_path / "nonexistent_dir" / "readonly_sub" / "reg.yaml"
-    # Create valid YAML at source
-    src_reg = tmp_path / "reg.yaml"
-    src_reg.write_text("models:\n  lgbm_ranker:\n    role: test\n", encoding="utf-8")
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
 
-    with pytest.raises(Exception):
-        update_model_metrics("lgbm_ranker", path=bad_path, trained_date="2026-08-15")
+    # Local has a freshly retrained model with newer date (2026-09-01 > 2026-08-14)
+    local_reg = models_dir / "registry.yaml"
+    local_reg.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-09-01'
+    cpcv_dsr: 0.999
+    pbo: 0.1
+    n_train: 800
+    deployable: true
+""", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    data = load_registry()
+    assert "models" in data
+    assert data["models"]["lgbm_ranker"]["trained_date"] == "2026-09-01"
+    assert data["models"]["lgbm_ranker"]["cpcv_dsr"] == 0.999
+
+
+def test_update_model_metrics_explicit_path_error_propagates(tmp_path, monkeypatch):
+    """When an explicit unwriteable path is passed, update_model_metrics propagates the write error."""
+    import ml.registry_io as reg_io
+
+    valid_reg = tmp_path / "reg.yaml"
+    valid_reg.write_text("models:\n  lgbm_ranker:\n    role: test\n    trained_date: '2026-08-01'\n", encoding="utf-8")
+
+    # Mock _dump_registry to simulate a filesystem write failure
+    def _fail_dump(*args, **kwargs):
+        raise PermissionError("Simulated read-only filesystem")
+
+    monkeypatch.setattr(reg_io, "_dump_registry", _fail_dump)
+
+    with pytest.raises(PermissionError):
+        reg_io.update_model_metrics("lgbm_ranker", path=valid_reg, trained_date="2026-08-15")
 

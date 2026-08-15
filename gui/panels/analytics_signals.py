@@ -102,7 +102,7 @@ def _normalise_registry(raw: Any) -> List[Dict[str, Any]]:
 
 
 @st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
-def _load_registry_rows_cached(path_str: str, _mtime: float) -> List[Dict[str, Any]]:
+def _load_registry_rows_cached(path_str: str, mtime: float) -> List[Dict[str, Any]]:
     """mtime-keyed cached read+parse of ``ml/registry.yaml`` (PR B convention).
 
     Streamlit reruns the whole script on every interaction, so the previously

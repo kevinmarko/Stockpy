@@ -70,16 +70,21 @@ _REGISTRY_HEADER = """\
 
 
 def compute_deployable(cpcv_dsr: Optional[float], pbo: Optional[float]) -> bool:
-    """The single deployability gate: DSR > 0.95 AND PBO < 0.5.
+    """The single deployability gate: DSR > DSR_MIN AND PBO < PBO_MAX.
 
     Returns ``False`` whenever either metric is ``None`` (honest — an
     uncomputable metric can never clear the gate).
     """
+    try:
+        from validation.thresholds import DSR_MIN, PBO_MAX
+    except Exception:
+        DSR_MIN, PBO_MAX = 0.95, 0.50
+
     return (
         cpcv_dsr is not None
-        and cpcv_dsr > 0.95
+        and cpcv_dsr > DSR_MIN
         and pbo is not None
-        and pbo < 0.5
+        and pbo < PBO_MAX
     )
 
 
@@ -186,8 +191,9 @@ def load_registry(path: Optional[Path] = None) -> dict:
 
     # Merge per-model:
     merged: dict[str, Any] = dict(repo_data)
-    merged_models: dict[str, Any] = dict(repo_data.get("models", {}))
-    local_models = local_data.get("models", {})
+    repo_models = dict(repo_data.get("models") or {})
+    local_models = dict(local_data.get("models") or {})
+    merged_models = dict(repo_models)
 
     if isinstance(local_models, dict):
         for model_key, local_spec in local_models.items():

@@ -2441,20 +2441,51 @@ def get_model_registry_status() -> str:
         now = datetime.now()
         stale_threshold = timedelta(days=30)
 
-        models = registry if isinstance(registry, list) else registry.get("models", [registry])
-        if isinstance(models, dict):
-            models = [models]
+        # Handle production mapping (models: { name: meta }), single model dict, and list formats
+        if isinstance(registry, dict) and "models" in registry:
+            raw_models = registry["models"]
+            if isinstance(raw_models, dict):
+                model_items = list(raw_models.items())
+            elif isinstance(raw_models, list):
+                model_items = [
+                    (m.get("name", m.get("model_name", f"model_{i}")), m)
+                    for i, m in enumerate(raw_models)
+                    if isinstance(m, dict)
+                ]
+            else:
+                model_items = []
+        elif isinstance(registry, dict) and ("trained_date" in registry or "last_trained" in registry or "name" in registry):
+            model_items = [(registry.get("name", registry.get("model_name", "unknown")), registry)]
+        elif isinstance(registry, dict):
+            model_items = [(k, v) for k, v in registry.items() if isinstance(v, dict)]
+        elif isinstance(registry, list):
+            model_items = [
+                (m.get("name", m.get("model_name", f"model_{i}")), m)
+                for i, m in enumerate(registry)
+                if isinstance(m, dict)
+            ]
+        else:
+            model_items = []
 
-        for model in models:
-            name = model.get("name", model.get("model_name", "unknown"))
-            trained = model.get("last_trained", model.get("trained_at", "N/A"))
-            lines.append(f"## {name}")
+        if not model_items:
+            return "Registry is empty."
+
+        for model_name, meta in model_items:
+            if not isinstance(meta, dict):
+                continue
+            lines.append(f"## {model_name}")
+
+            role = meta.get("role")
+            if role:
+                lines.append(f"- **Role**: {role}")
+
+            trained = meta.get("trained_date", meta.get("last_trained", meta.get("trained_at", "N/A")))
             lines.append(f"- **Last Trained**: {trained}")
 
             # Check staleness
-            if trained != "N/A":
+            if trained and trained != "N/A":
                 try:
-                    trained_dt = datetime.fromisoformat(str(trained).replace("Z", "+00:00").split("+")[0])
+                    trained_dt = datetime.strptime(str(trained)[:10], "%Y-%m-%d")
                     age = now - trained_dt
                     if age > stale_threshold:
                         lines.append(f"- ⚠️ **STALE**: Model is {age.days} days old (threshold: 30 days)")
@@ -2463,19 +2494,47 @@ def get_model_registry_status() -> str:
                 except Exception:
                     pass
 
-            # Feature importance
-            features = model.get("feature_importance", model.get("top_features", {}))
-            if features:
+            deployable = meta.get("deployable")
+            if deployable is not None:
+                status_icon = "✅ DEPLOYABLE" if deployable else "❌ NOT DEPLOYABLE"
+                lines.append(f"- **Deployability**: {status_icon}")
+
+            cpcv_dsr = meta.get("cpcv_dsr")
+            if cpcv_dsr is not None:
+                lines.append(f"- **CPCV DSR**: {cpcv_dsr}")
+
+            pbo = meta.get("pbo")
+            if pbo is not None:
+                lines.append(f"- **PBO**: {pbo}")
+
+            sharpe = meta.get("cpcv_mean_oos_sharpe")
+            if sharpe is not None:
+                lines.append(f"- **CPCV Mean OOS Sharpe**: {sharpe}")
+
+            max_dd = meta.get("cpcv_mean_oos_max_dd")
+            if max_dd is not None:
+                lines.append(f"- **CPCV Mean OOS Max DD**: {max_dd}")
+
+            n_train = meta.get("n_train")
+            if n_train is not None:
+                lines.append(f"- **Training Samples**: {n_train}")
+
+            features = meta.get("features")
+            if isinstance(features, list) and features:
+                lines.append(f"- **Features**: {', '.join(str(f) for f in features)}")
+
+            # Legacy feature importance & metrics fallback
+            legacy_features = meta.get("feature_importance", meta.get("top_features", {}))
+            if legacy_features:
                 lines.append("- **Top Features**:")
-                items = list(features.items())[:10] if isinstance(features, dict) else features[:10]
+                items = list(legacy_features.items())[:10] if isinstance(legacy_features, dict) else legacy_features[:10]
                 for item in items:
                     if isinstance(item, tuple):
                         lines.append(f"  - `{item[0]}`: {item[1]}")
                     else:
                         lines.append(f"  - {item}")
 
-            # Metrics
-            metrics = model.get("metrics", model.get("oos_metrics", {}))
+            metrics = meta.get("metrics", meta.get("oos_metrics", {}))
             if metrics:
                 lines.append("- **OOS Metrics**:")
                 for k, v in metrics.items():
@@ -2483,7 +2542,7 @@ def get_model_registry_status() -> str:
 
             lines.append("")
 
-        return "\n".join(lines)
+        return "\n".join(lines).strip()
     except Exception as e:
         return f"Registry status failed: {str(e)}"
 
