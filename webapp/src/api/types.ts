@@ -4905,10 +4905,51 @@ export interface AlmgrenChrissTrajectoryPoint {
 export interface AlmgrenChrissOptimizeResponse {
   symbol: string;
   trajectory: AlmgrenChrissTrajectoryPoint[];
+  expected_trajectory: AlmgrenChrissTrajectoryPoint[];
   expected_shortfall: number;
   variance: number;
   half_life: number;
   as_of?: string;
+}
+
+export interface FixRouteFill {
+  venue: string;
+  fill_qty: number;
+  fill_price: number;
+  fee: number;
+  rebate: number;
+  latency_ms: number;
+  exec_id: string;
+  ord_status: string;
+  raw_fix: string;
+}
+
+export interface FixRouteOrderRequest {
+  symbol: string;
+  side: string;
+  quantity: number;
+  limit_price: number;
+  routing_policy?: string;
+}
+
+export interface FixRouteOrderResponse {
+  symbol: string;
+  side: string;
+  quantity: number;
+  limit_price: number;
+  routing_policy: string;
+  status: string;
+  total_filled_qty: number;
+  leaves_qty: number;
+  weighted_avg_price: number;
+  total_net_fee: number;
+  total_rebates: number;
+  total_cost: number;
+  avg_latency_ms: number;
+  max_latency_ms: number;
+  fills: FixRouteFill[];
+  nbbo: any;
+  fix_audit_log: string[];
 }
 
 // ============================================================================

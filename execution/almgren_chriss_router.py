@@ -1,4 +1,5 @@
 import numpy as np
+from typing import List, Dict
 
 def compute_trading_trajectory(
     total_shares: float,
@@ -29,17 +30,27 @@ def compute_trading_trajectory(
             - 'expected_shortfall': Expected cost of the strategy
             - 'variance': Variance of the strategy cost
     """
+    if total_shares <= 0:
+        raise ValueError("total_shares must be positive")
     if n_intervals <= 0 or total_time <= 0:
         raise ValueError("n_intervals and total_time must be positive")
     if temp_impact <= 0:
         raise ValueError("temp_impact must be positive")
+    if volatility < 0:
+        raise ValueError("volatility cannot be negative")
+    if perm_impact < 0:
+        raise ValueError("perm_impact cannot be negative")
 
     tau = total_time / n_intervals
 
     trajectory = [total_shares]
     trade_list = []
 
-    if risk_aversion <= 0:
+    kappa = 0.0
+    if risk_aversion > 0 and volatility > 0:
+        kappa = np.sqrt(risk_aversion * (volatility ** 2) / temp_impact)
+
+    if risk_aversion <= 0 or volatility == 0 or kappa == 0:
         # TWAP
         for k in range(1, n_intervals + 1):
             x_k = total_shares * (1.0 - k / n_intervals)
@@ -47,11 +58,12 @@ def compute_trading_trajectory(
             trade_list.append(n_k)
             trajectory.append(x_k)
     else:
-        kappa = np.sqrt(risk_aversion * (volatility ** 2) / temp_impact)
         for k in range(1, n_intervals + 1):
             t_k = k * tau
             if k == n_intervals:
                 x_k = 0.0
+            elif kappa * total_time > 100:
+                x_k = total_shares * np.exp(-kappa * t_k)
             else:
                 x_k = total_shares * np.sinh(kappa * (total_time - t_k)) / np.sinh(kappa * total_time)
             
@@ -72,3 +84,34 @@ def compute_trading_trajectory(
         "expected_shortfall": float(expected_shortfall),
         "variance": float(variance)
     }
+
+
+def calculate_efficient_frontier(
+    total_shares: float,
+    total_time: float,
+    n_intervals: int,
+    volatility: float,
+    temp_impact: float,
+    perm_impact: float,
+    lambda_min: float = 1e-8,
+    lambda_max: float = 1e-2,
+    n_points: int = 20
+) -> List[Dict[str, float]]:
+    lambdas = np.logspace(np.log10(lambda_min), np.log10(lambda_max), n_points)
+    frontier = []
+    for risk_aversion in lambdas:
+        result = compute_trading_trajectory(
+            total_shares=total_shares,
+            total_time=total_time,
+            n_intervals=n_intervals,
+            volatility=volatility,
+            temp_impact=temp_impact,
+            perm_impact=perm_impact,
+            risk_aversion=risk_aversion
+        )
+        frontier.append({
+            "risk_aversion": float(risk_aversion),
+            "expected_shortfall": result["expected_shortfall"],
+            "variance": result["variance"]
+        })
+    return frontier

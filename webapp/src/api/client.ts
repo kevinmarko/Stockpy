@@ -192,6 +192,8 @@ import type {
   HrpCvarOptimizeResponse,
   AlmgrenChrissOptimizeRequest,
   AlmgrenChrissOptimizeResponse,
+  FixRouteOrderRequest,
+  FixRouteOrderResponse,
   ResearchSynthesizeRequest,
   ResearchSynthesizeResponse,
   AutonomousBacktestRequest,
@@ -624,6 +626,11 @@ const liveApi = {
     }),
   optimizeAlmgrenChriss: (req: AlmgrenChrissOptimizeRequest) =>
     http<AlmgrenChrissOptimizeResponse>("/pilots/execution/optimize/almgren-chriss", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  routeFixOrder: (req: FixRouteOrderRequest) =>
+    http<FixRouteOrderResponse>("/pilots/execution/fix/route", {
       method: "POST",
       body: JSON.stringify(req),
     }),

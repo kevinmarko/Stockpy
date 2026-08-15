@@ -6454,7 +6454,7 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
     }
 
 class HRPCVaRRequest(BaseModel):
-    symbols: List[str]
+    symbols: List[str] = Field(..., min_length=1)
     target_return: Optional[float] = None
     risk_aversion: Optional[float] = None
 
@@ -6521,11 +6521,13 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
 
 class AlmgrenChrissRequest(BaseModel):
     symbol: str
-    quantity: float
+    quantity: float = Field(..., gt=0.0)
     risk_aversion: Optional[float] = None
     volatility: Optional[float] = None
     liquidity: Optional[float] = None
     horizon_steps: Optional[int] = None
+    total_time: Optional[float] = Field(1.0, gt=0.0)
+    n_intervals: Optional[int] = Field(10, gt=0)
 
 @app.post(
     "/pilots/execution/optimize/almgren-chriss",
@@ -6577,15 +6579,15 @@ def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[st
 
 class FixRouteOrderRequest(BaseModel):
     symbol: str = Field(..., min_length=1)
-    side: str = Field(...)
-    quantity: float = Field(..., gt=0)
-    limit_price: float = Field(..., gt=0)
-    routing_policy: Optional[str] = "SMART_SWEEP"
+    side: Literal["BUY", "SELL"]
+    quantity: float = Field(..., gt=0.0)
+    limit_price: float = Field(..., gt=0.0)
+    routing_policy: Optional[Literal["SMART_SWEEP", "FASTEST_VENUE", "MAX_REBATE"]] = "SMART_SWEEP"
 
 
 @app.post(
     "/pilots/execution/fix/route",
-    dependencies=[Depends(require_read_token)],
+    dependencies=[Depends(require_command_token)],
 )
 async def post_pilots_execution_fix_route(req: FixRouteOrderRequest) -> Dict[str, Any]:
     """Routes an order across multiple option/equity execution venues via the Smart Order Router (SOR).

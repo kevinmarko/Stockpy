@@ -24,6 +24,10 @@ describe("AlmgrenChrissRouterView", () => {
         { step: 1, shares_remaining: 100, trade_size: 10, expected_price: 150 },
         { step: 2, shares_remaining: 90, trade_size: 10, expected_price: 150 },
       ],
+      expected_trajectory: [
+        { step: 1, shares_remaining: 100, trade_size: 10, expected_price: 150 },
+        { step: 2, shares_remaining: 90, trade_size: 10, expected_price: 150 },
+      ],
     });
 
     render(<AlmgrenChrissRouterView symbol="AAPL" quantity={100} />);
@@ -44,11 +48,14 @@ describe("AlmgrenChrissRouterView", () => {
     expect(screen.getByText("5.0")).toBeInTheDocument();
   });
 
-  it("handles empty symbol or zero quantity", () => {
+  it("handles empty symbol, zero, or negative quantity", () => {
     const { rerender } = render(<AlmgrenChrissRouterView symbol="" quantity={100} />);
     expect(screen.getByRole("button", { name: "Calculate Execution Trajectory" })).toBeDisabled();
 
     rerender(<AlmgrenChrissRouterView symbol="AAPL" quantity={0} />);
+    expect(screen.getByRole("button", { name: "Calculate Execution Trajectory" })).toBeDisabled();
+
+    rerender(<AlmgrenChrissRouterView symbol="AAPL" quantity={-50} />);
     expect(screen.getByRole("button", { name: "Calculate Execution Trajectory" })).toBeDisabled();
   });
 
@@ -61,6 +68,25 @@ describe("AlmgrenChrissRouterView", () => {
     
     await waitFor(() => {
       expect(screen.getByText("Calculation failed")).toBeInTheDocument();
+    });
+  });
+
+  it("handles empty trajectory array in response", async () => {
+    vi.mocked(api.optimizeAlmgrenChriss).mockResolvedValueOnce({
+      symbol: "AAPL",
+      expected_shortfall: 0,
+      variance: 0,
+      half_life: 0,
+      trajectory: [],
+      expected_trajectory: [],
+    });
+    render(<AlmgrenChrissRouterView symbol="AAPL" quantity={100} />);
+    
+    const btn = screen.getByRole("button", { name: "Calculate Execution Trajectory" });
+    fireEvent.click(btn);
+    
+    await waitFor(() => {
+      expect(screen.getByText("Expected Shortfall")).toBeInTheDocument();
     });
   });
 });

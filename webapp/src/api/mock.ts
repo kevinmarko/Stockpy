@@ -257,6 +257,8 @@ import type {
   HrpCvarOptimizeResponse,
   AlmgrenChrissOptimizeRequest,
   AlmgrenChrissOptimizeResponse,
+  FixRouteOrderRequest,
+  FixRouteOrderResponse,
   ResearchSynthesizeRequest,
   ResearchSynthesizeResponse,
   AutonomousBacktestRequest,
@@ -10700,20 +10702,78 @@ export const mockApi = {
   },
 
   async optimizeAlmgrenChriss(req: AlmgrenChrissOptimizeRequest): Promise<AlmgrenChrissOptimizeResponse> {
+    const t: any[] = [];
+    let rem = req.quantity;
+    let expected_price = 100.0;
     const steps = req.horizon_steps || 10;
-    const trajectory = Array.from({ length: steps }, (_, _i) => ({
-      step: _i,
-      shares_remaining: Math.max(0, req.quantity - (req.quantity / steps) * _i),
-      trade_size: req.quantity / steps,
-      expected_price: 100 + (Math.random() - 0.5) * 2
-    }));
+    for (let i = 0; i < steps; i++) {
+      const trade_size = rem / (steps - i);
+      rem -= trade_size;
+      expected_price -= 0.01;
+      t.push({
+        step: i + 1,
+        shares_remaining: Math.max(0, rem),
+        trade_size: trade_size,
+        expected_price: expected_price,
+      });
+    }
+
     return delay<AlmgrenChrissOptimizeResponse>({
       symbol: req.symbol,
-      trajectory,
-      expected_shortfall: 1.25,
-      variance: 0.8,
-      half_life: steps / 2,
-      as_of: new Date().toISOString()
+      trajectory: t,
+      expected_trajectory: t,
+      expected_shortfall: 15.42,
+      variance: 2.15,
+      half_life: 3.4,
+      as_of: new Date().toISOString(),
+    }, 400);
+  },
+
+  async routeFixOrder(req: FixRouteOrderRequest): Promise<FixRouteOrderResponse> {
+    return delay<FixRouteOrderResponse>({
+      symbol: req.symbol,
+      side: req.side,
+      quantity: req.quantity,
+      limit_price: req.limit_price,
+      routing_policy: req.routing_policy || "SMART_SWEEP",
+      status: "FILLED",
+      total_filled_qty: req.quantity,
+      leaves_qty: 0,
+      weighted_avg_price: req.limit_price - 0.01,
+      total_net_fee: 0.15,
+      total_rebates: 0.05,
+      total_cost: (req.quantity * (req.limit_price - 0.01)) + 0.15,
+      avg_latency_ms: 12.5,
+      max_latency_ms: 24.1,
+      fills: [
+        {
+          venue: "ARCA",
+          fill_qty: req.quantity * 0.6,
+          fill_price: req.limit_price - 0.01,
+          fee: 0.10,
+          rebate: 0.02,
+          latency_ms: 11.2,
+          exec_id: "EXEC-ARCA-1234",
+          ord_status: "FILLED",
+          raw_fix: "8=FIX.4.4|9=123|35=8|49=ARCA|...",
+        },
+        {
+          venue: "NSDQ",
+          fill_qty: req.quantity * 0.4,
+          fill_price: req.limit_price - 0.01,
+          fee: 0.05,
+          rebate: 0.03,
+          latency_ms: 13.8,
+          exec_id: "EXEC-NSDQ-5678",
+          ord_status: "FILLED",
+          raw_fix: "8=FIX.4.4|9=124|35=8|49=NSDQ|...",
+        }
+      ],
+      nbbo: null,
+      fix_audit_log: [
+        "8=FIX.4.4|9=123|35=8|49=ARCA|...",
+        "8=FIX.4.4|9=124|35=8|49=NSDQ|..."
+      ],
     }, 500);
   },
 

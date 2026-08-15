@@ -2068,6 +2068,28 @@ class TestOptimizationEndpoints:
 # ---------------------------------------------------------------------------
 
 
+
+    def test_post_portfolio_optimize_hrp_cvar_invalid_empty_symbols(self):
+        payload = {"symbols": []}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_post_execution_optimize_almgren_chriss_invalid_negative_quantity(self):
+        payload = {"symbol": "AAPL", "quantity": -100.0, "urgency": 0.5}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/optimize/almgren-chriss",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+
 class TestPilotsExecutionFixEndpoints:
     def test_get_execution_fix_venues_success(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -2116,11 +2138,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 500.0,
             "routing_policy": "SMART_SWEEP",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2153,11 +2175,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 450.0,
             "routing_policy": "FASTEST_VENUE",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2174,11 +2196,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 220.0,
             "routing_policy": "MAX_REBATE",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2196,11 +2218,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 250.0,
             "routing_policy": "SMART_SWEEP",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2217,14 +2239,13 @@ class TestPilotsExecutionFixEndpoints:
             "quantity": 100.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
-        assert resp.status_code == 400
-        assert "Invalid side" in resp.json()["detail"]
+        assert resp.status_code == 422
 
     def test_post_execution_fix_route_invalid_policy(self):
         payload = {
@@ -2234,14 +2255,13 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 500.0,
             "routing_policy": "UNKNOWN_POLICY",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
-        assert resp.status_code == 400
-        assert "Invalid routing_policy" in resp.json()["detail"]
+        assert resp.status_code == 422
 
     def test_post_execution_fix_route_invalid_quantity(self):
         payload = {
@@ -2250,11 +2270,11 @@ class TestPilotsExecutionFixEndpoints:
             "quantity": -50.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 422
 
@@ -2265,7 +2285,7 @@ class TestPilotsExecutionFixEndpoints:
             "quantity": 100.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
@@ -2273,20 +2293,19 @@ class TestPilotsExecutionFixEndpoints:
             )
         assert resp.status_code == 401
 
-    def test_post_execution_fix_route_fail_open_without_token(self):
+    def test_post_execution_fix_route_fails_closed_without_token(self):
         payload = {
             "symbol": "SPY",
             "side": "BUY",
             "quantity": 50.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=None):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
             )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "FILLED"
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
