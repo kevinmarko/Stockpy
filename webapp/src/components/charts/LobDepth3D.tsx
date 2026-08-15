@@ -172,8 +172,15 @@ export function calculateMicrostructureMetrics(
       spreadBps = (spread / midPrice) * 10000;
     }
 
-    // Microprice: P_micro = (P_bid * V_ask + P_ask * V_bid) / (V_bid + V_ask)
-    if (totalDepth > 0) {
+    // Microprice: P_micro = (P_bid * V_ask_L1 + P_ask * V_bid_L1) / (V_bid_L1 + V_ask_L1)
+    const bestBidLevel = validBids.find((b) => b.price === bestBid);
+    const bestAskLevel = validAsks.find((a) => a.price === bestAsk);
+    const bestBidVol = bestBidLevel ? bestBidLevel.size : 0;
+    const bestAskVol = bestAskLevel ? bestAskLevel.size : 0;
+    const topDepth = bestBidVol + bestAskVol;
+    if (topDepth > 0) {
+      microPrice = (bestBid * bestAskVol + bestAsk * bestBidVol) / topDepth;
+    } else if (totalDepth > 0) {
       microPrice =
         (bestBid * totalAskDepth + bestAsk * totalBidDepth) / totalDepth;
     } else {
@@ -406,7 +413,7 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlayWaterfall);
   const [flowSpeed, setFlowSpeed] = useState<number>(initialFlowSpeed);
   const [orderFilter, setOrderFilter] = useState<"all" | "market" | "limit">("all");
-  const [waterfallEvents, setWaterfallEvents] = useState<OrderFlowEvent[]>([]);
+  const [, setWaterfallEvents] = useState<OrderFlowEvent[]>([]);
   const [recentTape, setRecentTape] = useState<OrderFlowEvent[]>([]);
 
   // Queue Priority Inspector State
@@ -428,6 +435,40 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
   const animFrameIdRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
   const spawnTimerRef = useRef<number>(0);
+  const waterfallEventsRef = useRef<OrderFlowEvent[]>([]);
+
+  // State ref to decouple 60fps render loop from React state re-renders
+  const lobStateRef = useRef({
+    yaw,
+    pitch,
+    zoom,
+    isPlaying,
+    flowSpeed,
+    orderFilter,
+    selectedPrice,
+    selectedSide,
+    metrics,
+    symbol,
+    bids,
+    asks,
+    effectivePrice,
+  });
+
+  lobStateRef.current = {
+    yaw,
+    pitch,
+    zoom,
+    isPlaying,
+    flowSpeed,
+    orderFilter,
+    selectedPrice,
+    selectedSide,
+    metrics,
+    symbol,
+    bids,
+    asks,
+    effectivePrice,
+  };
 
   // Calculate Queue Priority for inspector
   const queueResult = useMemo(() => {
@@ -441,15 +482,23 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
     if (preset === "iso") {
       setYaw(35);
       setPitch(28);
+      lobStateRef.current.yaw = 35;
+      lobStateRef.current.pitch = 28;
     } else if (preset === "front") {
       setYaw(0);
       setPitch(10);
+      lobStateRef.current.yaw = 0;
+      lobStateRef.current.pitch = 10;
     } else if (preset === "top") {
       setYaw(0);
       setPitch(85);
+      lobStateRef.current.yaw = 0;
+      lobStateRef.current.pitch = 85;
     } else if (preset === "side") {
-      setYaw(75);
-      setPitch(20);
+      setYaw(90);
+      setPitch(15);
+      lobStateRef.current.yaw = 90;
+      lobStateRef.current.pitch = 15;
     }
   };
 
@@ -468,7 +517,8 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
         splashAge: 0,
       };
 
-      setWaterfallEvents((prev) => [newEvent, ...prev.slice(0, 40)]);
+      waterfallEventsRef.current = [newEvent, ...waterfallEventsRef.current.slice(0, 39)];
+      setWaterfallEvents((prev) => [newEvent, ...prev.slice(0, 39)]);
       setRecentTape((prev) => [newEvent, ...prev.slice(0, 19)]);
     },
     []
@@ -484,6 +534,7 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
 
   // Reset Simulation
   const handleResetSimulation = () => {
+    waterfallEventsRef.current = [];
     setWaterfallEvents([]);
     setRecentTape([]);
     setSelectedPrice(metrics.bestBid ?? bids[0]?.price ?? 449.95);
@@ -508,36 +559,51 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
       const dt = (now - lastTimeRef.current) / 1000;
       lastTimeRef.current = now;
 
-      // Update waterfall event positions
-      if (isPlaying) {
-        spawnTimerRef.current += dt * flowSpeed;
+      const {
+        yaw: curYaw,
+        pitch: curPitch,
+        zoom: curZoom,
+        isPlaying: curIsPlaying,
+        flowSpeed: curFlowSpeed,
+        orderFilter: curOrderFilter,
+        selectedPrice: curSelectedPrice,
+        selectedSide: curSelectedSide,
+        metrics: curMetrics,
+        symbol: curSymbol,
+        bids: curBids,
+        asks: curAsks,
+        effectivePrice: curEffPrice,
+      } = lobStateRef.current;
+
+      // Update waterfall event positions mutably
+      if (curIsPlaying) {
+        spawnTimerRef.current += dt * curFlowSpeed;
         if (spawnTimerRef.current >= 0.9) {
           spawnTimerRef.current = 0;
-          const simulated = simulateIncomingOrder(bids, asks, effectivePrice);
+          const simulated = simulateIncomingOrder(curBids, curAsks, curEffPrice);
           if (
-            orderFilter === "all" ||
-            (orderFilter === "market" && simulated.type === "market") ||
-            (orderFilter === "limit" && simulated.type === "limit")
+            curOrderFilter === "all" ||
+            (curOrderFilter === "market" && simulated.type === "market") ||
+            (curOrderFilter === "limit" && simulated.type === "limit")
           ) {
-            setWaterfallEvents((prev) => [simulated, ...prev.slice(0, 35)]);
+            waterfallEventsRef.current = [simulated, ...waterfallEventsRef.current.slice(0, 34)];
             setRecentTape((prev) => [simulated, ...prev.slice(0, 19)]);
           }
         }
 
-        setWaterfallEvents((prev) =>
-          prev
-            .map((ev) => {
-              const currentZ = ev.zProgress ?? 0;
-              const nextZ = currentZ + dt * 0.8 * flowSpeed;
-              const splashAge = nextZ >= 1 ? (ev.splashAge ?? 0) + 1 : 0;
-              return {
-                ...ev,
-                zProgress: Math.min(1.0, nextZ),
-                splashAge,
-              };
-            })
-            .filter((ev) => (ev.splashAge ?? 0) < 25)
-        );
+        // Mutate in place without causing React state re-renders
+        waterfallEventsRef.current = waterfallEventsRef.current
+          .map((ev) => {
+            const currentZ = ev.zProgress ?? 0;
+            const nextZ = currentZ + dt * 0.8 * curFlowSpeed;
+            const splashAge = nextZ >= 1 ? (ev.splashAge ?? 0) + 1 : 0;
+            return {
+              ...ev,
+              zProgress: Math.min(1.0, nextZ),
+              splashAge,
+            };
+          })
+          .filter((ev) => (ev.splashAge ?? 0) < 25);
       }
 
       // Drawing canvas
@@ -553,8 +619,8 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
       const centerY = height * 0.62;
 
       // 3D Isometric projection math
-      const radYaw = (yaw * Math.PI) / 180;
-      const radPitch = (pitch * Math.PI) / 180;
+      const radYaw = (curYaw * Math.PI) / 180;
+      const radPitch = (curPitch * Math.PI) / 180;
       const cosYaw = Math.cos(radYaw);
       const sinYaw = Math.sin(radYaw);
       const cosPitch = Math.cos(radPitch);
@@ -568,7 +634,7 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
         const ry = y * cosPitch - rz * sinPitch;
         const finalZ = y * sinPitch + rz * cosPitch;
 
-        const scale = (zoom * width) / 450;
+        const scale = (curZoom * width) / 450;
         const sx = centerX + rx * scale;
         const sy = centerY - ry * scale;
         return { x: sx, y: sy, depth: finalZ };
@@ -696,9 +762,9 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
       };
 
       // Draw Bid Towers (Left of Mid-Market: negative X)
-      bids.forEach((bid, idx) => {
+      curBids.forEach((bid, idx) => {
         const xPos = -(idx + 1) * (towerWidth + 5) - 4;
-        const isSelected = selectedSide === "bid" && Math.abs(bid.price - selectedPrice) < 0.001;
+        const isSelected = curSelectedSide === "bid" && Math.abs(bid.price - curSelectedPrice) < 0.001;
 
         draw3DTower(
           xPos,
@@ -719,9 +785,9 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
       });
 
       // Draw Ask Towers (Right of Mid-Market: positive X)
-      asks.forEach((ask, idx) => {
+      curAsks.forEach((ask, idx) => {
         const xPos = (idx + 1) * (towerWidth + 5) + 4;
-        const isSelected = selectedSide === "ask" && Math.abs(ask.price - selectedPrice) < 0.001;
+        const isSelected = curSelectedSide === "ask" && Math.abs(ask.price - curSelectedPrice) < 0.001;
 
         draw3DTower(
           xPos,
@@ -742,7 +808,7 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
       });
 
       // Draw Waterfall Streaming Order Flow Particles
-      waterfallEvents.forEach((ev) => {
+      waterfallEventsRef.current.forEach((ev) => {
         const progress = ev.zProgress ?? 0;
         const isBuy = ev.side === "buy";
         const isMarket = ev.type === "market";
@@ -750,10 +816,10 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
         // Determine matching tower X location
         let targetX = 0;
         if (isBuy) {
-          const idx = bids.findIndex((b) => Math.abs(b.price - ev.price) < 0.001);
+          const idx = curBids.findIndex((b) => Math.abs(b.price - ev.price) < 0.001);
           targetX = idx >= 0 ? -(idx + 1) * (towerWidth + 5) - 4 : -25;
         } else {
-          const idx = asks.findIndex((a) => Math.abs(a.price - ev.price) < 0.001);
+          const idx = curAsks.findIndex((a) => Math.abs(a.price - ev.price) < 0.001);
           targetX = idx >= 0 ? (idx + 1) * (towerWidth + 5) + 4 : 25;
         }
 
@@ -819,12 +885,12 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
       ctx.fillStyle = theme.textPrimary;
       ctx.font = "bold 12px sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText(`${symbol} LOB 3D DEPTH`, 22, 30);
+      ctx.fillText(`${curSymbol} LOB 3D DEPTH`, 22, 30);
 
       ctx.fillStyle = theme.textMuted;
       ctx.font = "10px monospace";
       ctx.fillText(
-        `SPREAD: $${metrics.spread.toFixed(2)} (${metrics.spreadBps.toFixed(1)} bps)`,
+        `SPREAD: $${curMetrics.spread.toFixed(2)} (${curMetrics.spreadBps.toFixed(1)} bps)`,
         22,
         48
       );
@@ -840,22 +906,7 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
         cancelAnimationFrame(animFrameIdRef.current);
       }
     };
-  }, [
-    bids,
-    asks,
-    effectivePrice,
-    yaw,
-    pitch,
-    zoom,
-    isPlaying,
-    flowSpeed,
-    orderFilter,
-    waterfallEvents,
-    selectedPrice,
-    selectedSide,
-    metrics,
-    symbol,
-  ]);
+  }, [bids, asks, effectivePrice]);
 
   // Click on canvas to select price level
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {

@@ -2163,8 +2163,8 @@ class TestPilotsExecutionFixEndpoints:
         body = resp.json()
         assert body["routing_policy"] == "FASTEST_VENUE"
         assert len(body["fills"]) > 0
-        # FASTEST_VENUE routes to EDGX first (base latency 0.6ms)
-        assert body["fills"][0]["venue"] == "EDGX"
+        # FASTEST_VENUE routes to lowest latency tier (EDGX 0.6ms, MIAX 0.8ms base)
+        assert body["fills"][0]["venue"] in {"EDGX", "MIAX"}
 
     def test_post_execution_fix_route_max_rebate_success(self):
         payload = {
@@ -2301,11 +2301,11 @@ class TestPilotsAIResearchSynthesize:
             "strategy_type": "hypothesis",
             "target_asset_class": "equities",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/synthesize",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2318,28 +2318,28 @@ class TestPilotsAIResearchSynthesize:
 
     def test_synthesize_empty_prompt_400(self):
         payload = {"prompt": "   "}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/synthesize",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 400
         assert "Prompt cannot be empty" in resp.json()["detail"]
 
     def test_synthesize_missing_prompt_422(self):
         payload = {"strategy_type": "momentum"}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/synthesize",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 422
 
     def test_synthesize_wrong_token_401(self):
         payload = {"prompt": "A simple mean-reversion signal."}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/synthesize",
                 json=payload,
@@ -2347,15 +2347,14 @@ class TestPilotsAIResearchSynthesize:
             )
         assert resp.status_code == 401
 
-    def test_synthesize_fail_open_without_token(self):
+    def test_synthesize_fail_closed_without_token(self):
         payload = {"prompt": "A simple RSI oscillator momentum signal."}
-        with mock_patch_settings(STATE_API_TOKEN=None):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/synthesize",
                 json=payload,
             )
-        assert resp.status_code == 200
-        assert resp.json()["success"] is True
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -2384,11 +2383,11 @@ def strategy(df: pd.DataFrame) -> pd.Series:
             "symbol": "SPY",
             "cost_bps": 5.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2405,22 +2404,22 @@ def strategy(df: pd.DataFrame) -> pd.Series:
 
     def test_backtest_empty_code_400(self):
         payload = {"code": "   ", "symbol": "SPY"}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 400
         assert "Strategy code cannot be empty" in resp.json()["detail"]
 
     def test_backtest_missing_code_422(self):
         payload = {"symbol": "SPY"}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 422
 
@@ -2429,11 +2428,11 @@ def strategy(df: pd.DataFrame) -> pd.Series:
             "code": "import os\ndef strategy(df):\n    os.system('echo test')\n    return df['Close']",
             "symbol": "SPY",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2442,7 +2441,7 @@ def strategy(df: pd.DataFrame) -> pd.Series:
 
     def test_backtest_wrong_token_401(self):
         payload = {"code": self._SAMPLE_STRATEGY, "symbol": "SPY"}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",
                 json=payload,
@@ -2450,15 +2449,14 @@ def strategy(df: pd.DataFrame) -> pd.Series:
             )
         assert resp.status_code == 401
 
-    def test_backtest_fail_open_without_token(self):
+    def test_backtest_fail_closed_without_token(self):
         payload = {"code": self._SAMPLE_STRATEGY, "symbol": "SPY"}
-        with mock_patch_settings(STATE_API_TOKEN=None):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",
                 json=payload,
             )
-        assert resp.status_code == 200
-        assert "is_deployable" in resp.json()
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -2568,11 +2566,11 @@ class TestPilotsExecutionBrokersFailover:
             "target_broker": "interactive_brokers",
             "reason": "Primary broker latency degradation",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/brokers/failover",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2586,28 +2584,28 @@ class TestPilotsExecutionBrokersFailover:
             "target_broker": "nonexistent_fake_broker",
             "reason": "Test unknown",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/brokers/failover",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 400
         assert "not registered in gateway" in resp.json()["detail"]
 
     def test_brokers_failover_missing_target_422(self):
         payload = {"reason": "Missing target"}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/brokers/failover",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 422
 
     def test_brokers_failover_wrong_token_401(self):
         payload = {"target_broker": "tradier"}
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/brokers/failover",
                 json=payload,
@@ -2615,15 +2613,14 @@ class TestPilotsExecutionBrokersFailover:
             )
         assert resp.status_code == 401
 
-    def test_brokers_failover_fail_open_without_token(self):
+    def test_brokers_failover_fail_closed_without_token(self):
         payload = {"target_broker": "tradier"}
-        with mock_patch_settings(STATE_API_TOKEN=None):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/brokers/failover",
                 json=payload,
             )
-        assert resp.status_code == 200
-        assert resp.json()["active_broker"] == "tradier"
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------

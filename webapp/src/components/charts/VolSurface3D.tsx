@@ -397,7 +397,10 @@ export function sliceMesh(
     }
     const chosenStrike = mesh.strikes[bestIdx];
     const sliceX = mesh.dtes;
-    const sliceY = mesh.grid.map((row) => row[bestIdx] ?? 0);
+    const sliceY = mesh.grid.map((row) => {
+      const v = row[bestIdx];
+      return typeof v === "number" && !isNaN(v) ? v : (row[bestIdx - 1] ?? row[bestIdx + 1] ?? 0.2);
+    });
     return {
       sliceX,
       sliceY,
@@ -541,6 +544,40 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const animFrameIdRef = useRef<number | null>(null);
 
+  // Camera and Interaction Mutable Ref (decouples 60fps render loop from React state re-renders)
+  const cameraRef = useRef({
+    yaw,
+    pitch,
+    panX,
+    panY,
+    zoom,
+    isAutoRotating,
+    colormap,
+    renderMode,
+    sliceDim,
+    sliceVal,
+    hoveredPoint,
+    selectedPoint,
+    mesh,
+  });
+
+  // Keep cameraRef synced with React state updates
+  cameraRef.current = {
+    yaw,
+    pitch,
+    panX,
+    panY,
+    zoom,
+    isAutoRotating,
+    colormap,
+    renderMode,
+    sliceDim,
+    sliceVal,
+    hoveredPoint,
+    selectedPoint,
+    mesh,
+  };
+
   // Cross-section slice data
   const sliceData = useMemo(() => {
     if (sliceDim === "none") return null;
@@ -552,22 +589,36 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
     setActivePreset(preset);
     setPanX(0);
     setPanY(0);
+    cameraRef.current.panX = 0;
+    cameraRef.current.panY = 0;
     if (preset === "iso") {
       setYaw(40);
       setPitch(32);
       setZoom(1.0);
+      cameraRef.current.yaw = 40;
+      cameraRef.current.pitch = 32;
+      cameraRef.current.zoom = 1.0;
     } else if (preset === "smile") {
       setYaw(0);
       setPitch(6);
       setZoom(1.1);
+      cameraRef.current.yaw = 0;
+      cameraRef.current.pitch = 6;
+      cameraRef.current.zoom = 1.1;
     } else if (preset === "term") {
       setYaw(90);
       setPitch(6);
       setZoom(1.1);
+      cameraRef.current.yaw = 90;
+      cameraRef.current.pitch = 6;
+      cameraRef.current.zoom = 1.1;
     } else if (preset === "contour") {
       setYaw(0);
       setPitch(88);
       setZoom(1.0);
+      cameraRef.current.yaw = 0;
+      cameraRef.current.pitch = 88;
+      cameraRef.current.zoom = 1.0;
     }
   };
 
@@ -582,6 +633,14 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
     setIsAutoRotating(false);
     setSelectedPoint(null);
     setHoveredPoint(null);
+    cameraRef.current.yaw = 40;
+    cameraRef.current.pitch = 32;
+    cameraRef.current.zoom = 1.0;
+    cameraRef.current.panX = 0;
+    cameraRef.current.panY = 0;
+    cameraRef.current.isAutoRotating = false;
+    cameraRef.current.selectedPoint = null;
+    cameraRef.current.hoveredPoint = null;
   };
 
   // ==========================================================================
@@ -604,11 +663,19 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
       lastMousePosRef.current = { x: e.clientX, y: e.clientY };
 
       if (dragModeRef.current === "orbit") {
-        setYaw((prev) => (prev + dx * 0.6) % 360);
-        setPitch((prev) => Math.max(5, Math.min(88, prev + dy * 0.4)));
+        const nextYaw = (cameraRef.current.yaw + dx * 0.6) % 360;
+        const nextPitch = Math.max(5, Math.min(88, cameraRef.current.pitch + dy * 0.4));
+        cameraRef.current.yaw = nextYaw;
+        cameraRef.current.pitch = nextPitch;
+        setYaw(nextYaw);
+        setPitch(nextPitch);
       } else {
-        setPanX((prev) => prev + dx * 0.8);
-        setPanY((prev) => prev + dy * 0.8);
+        const nextPanX = cameraRef.current.panX + dx * 0.8;
+        const nextPanY = cameraRef.current.panY + dy * 0.8;
+        cameraRef.current.panX = nextPanX;
+        cameraRef.current.panY = nextPanY;
+        setPanX(nextPanX);
+        setPanY(nextPanY);
       }
     } else {
       // Raycast / find nearest surface point to mouse cursor
@@ -622,11 +689,11 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
 
       const widthPx = canvas.width;
       const heightPx = canvas.height;
-      const centerX = widthPx / 2 + panX;
-      const centerY = heightPx * 0.56 + panY;
+      const centerX = widthPx / 2 + cameraRef.current.panX;
+      const centerY = heightPx * 0.56 + cameraRef.current.panY;
 
-      const radYaw = (yaw * Math.PI) / 180;
-      const radPitch = (pitch * Math.PI) / 180;
+      const radYaw = (cameraRef.current.yaw * Math.PI) / 180;
+      const radPitch = (cameraRef.current.pitch * Math.PI) / 180;
       const cosYaw = Math.cos(radYaw);
       const sinYaw = Math.sin(radYaw);
       const cosPitch = Math.cos(radPitch);
@@ -659,7 +726,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
           const rz = x3d * sinYaw + z3d * cosYaw;
           const ry = y3d * cosPitch - rz * sinPitch;
 
-          const scale = (zoom * widthPx) / 480;
+          const scale = (cameraRef.current.zoom * widthPx) / 480;
           const sx = centerX + rx * scale;
           const sy = centerY - ry * scale;
 
@@ -676,6 +743,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         }
       }
 
+      cameraRef.current.hoveredPoint = closestPt;
       setHoveredPoint(closestPt);
       if (onHoverPoint) onHoverPoint(closestPt);
     }
@@ -688,13 +756,15 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08;
-    setZoom((prev) => Math.max(0.4, Math.min(3.0, Number((prev * zoomFactor).toFixed(2)))));
+    const nextZoom = Math.max(0.4, Math.min(3.0, Number((cameraRef.current.zoom * zoomFactor).toFixed(2))));
+    cameraRef.current.zoom = nextZoom;
+    setZoom(nextZoom);
   };
 
   const handleCanvasClick = () => {
-    if (hoveredPoint) {
-      setSelectedPoint(hoveredPoint);
-      if (onSelectPoint) onSelectPoint(hoveredPoint);
+    if (cameraRef.current.hoveredPoint) {
+      setSelectedPoint(cameraRef.current.hoveredPoint);
+      if (onSelectPoint) onSelectPoint(cameraRef.current.hoveredPoint);
     }
   };
 
@@ -713,10 +783,25 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
     const render = () => {
       if (!isSubscribed) return;
 
-      // Handle auto-rotate
-      if (isAutoRotating) {
-        setYaw((prev) => (prev + 0.35) % 360);
+      // Handle auto-rotate mutably without triggering 60fps React state re-renders
+      if (cameraRef.current.isAutoRotating) {
+        cameraRef.current.yaw = (cameraRef.current.yaw + 0.35) % 360;
       }
+
+      const {
+        yaw: curYaw,
+        pitch: curPitch,
+        panX: curPanX,
+        panY: curPanY,
+        zoom: curZoom,
+        colormap: curColormap,
+        renderMode: curRenderMode,
+        sliceDim: curSliceDim,
+        sliceVal: curSliceVal,
+        hoveredPoint: curHoveredPoint,
+        selectedPoint: curSelectedPoint,
+        mesh: curMesh,
+      } = cameraRef.current;
 
       const widthPx = canvas.width;
       const heightPx = canvas.height;
@@ -726,11 +811,11 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
       ctx.fillRect(0, 0, widthPx, heightPx);
 
       // Camera coordinates & projections
-      const centerX = widthPx / 2 + panX;
-      const centerY = heightPx * 0.56 + panY;
+      const centerX = widthPx / 2 + curPanX;
+      const centerY = heightPx * 0.56 + curPanY;
 
-      const radYaw = (yaw * Math.PI) / 180;
-      const radPitch = (pitch * Math.PI) / 180;
+      const radYaw = (curYaw * Math.PI) / 180;
+      const radPitch = (curPitch * Math.PI) / 180;
       const cosYaw = Math.cos(radYaw);
       const sinYaw = Math.sin(radYaw);
       const cosPitch = Math.cos(radPitch);
@@ -744,15 +829,15 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         const ry = y * cosPitch - rz * sinPitch;
         const finalZ = y * sinPitch + rz * cosPitch;
 
-        const scale = (zoom * widthPx) / 480;
+        const scale = (curZoom * widthPx) / 480;
         const sx = centerX + rx * scale;
         const sy = centerY - ry * scale;
         return { x: sx, y: sy, depth: finalZ };
       };
 
-      const ivSpan = mesh.maxIv - mesh.minIv || 0.1;
-      const strikeSpan = mesh.maxStrike - mesh.minStrike || 1;
-      const dteSpan = mesh.maxDte - mesh.minDte || 1;
+      const ivSpan = curMesh.maxIv - curMesh.minIv || 0.1;
+      const strikeSpan = curMesh.maxStrike - curMesh.minStrike || 1;
+      const dteSpan = curMesh.maxDte - curMesh.minDte || 1;
 
       const boxWidth = 260;
       const boxDepth = 220;
@@ -818,13 +903,13 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
       ctx.stroke();
 
       // 2. Draw Spot Price Reference Plane (K = Spot)
-      const normSpotX = ((mesh.spotPrice - mesh.minStrike) / strikeSpan) * 2 - 1;
+      const normSpotX = ((curMesh.spotPrice - curMesh.minStrike) / strikeSpan) * 2 - 1;
       if (normSpotX >= -1.05 && normSpotX <= 1.05) {
         const spotX3d = normSpotX * hw;
         const sp_b1 = project3D(spotX3d, 0, -hd);
         const sp_b2 = project3D(spotX3d, 0, hd);
-        const sp_t2 = project3D(spotX3d, boxHeight, hd);
         const sp_t1 = project3D(spotX3d, boxHeight, -hd);
+        const sp_t2 = project3D(spotX3d, boxHeight, hd);
 
         ctx.fillStyle = "rgba(56, 189, 248, 0.08)";
         ctx.beginPath();
@@ -836,49 +921,45 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         ctx.fill();
 
         ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(sp_b1.x, sp_b1.y);
-        ctx.lineTo(sp_b2.x, sp_b2.y);
+        ctx.lineWidth = 1.5;
         ctx.stroke();
-        ctx.setLineDash([]);
       }
 
-      // 3. Draw Slicing Plane (if slice mode active)
-      if (sliceDim === "dte") {
-        const normZ = ((sliceVal - mesh.minDte) / dteSpan) * 2 - 1;
+      // 3. Draw Cross-Section Slicing Plane
+      if (curSliceDim === "dte") {
+        const normZ = ((curSliceVal - curMesh.minDte) / dteSpan) * 2 - 1;
         const sliceZ3d = normZ * hd;
-        const sl_b1 = project3D(-hw, 0, sliceZ3d);
-        const sl_b2 = project3D(hw, 0, sliceZ3d);
-        const sl_t2 = project3D(hw, boxHeight, sliceZ3d);
-        const sl_t1 = project3D(-hw, boxHeight, sliceZ3d);
+        const sc_b1 = project3D(-hw, 0, sliceZ3d);
+        const sc_b2 = project3D(hw, 0, sliceZ3d);
+        const sc_t1 = project3D(-hw, boxHeight, sliceZ3d);
+        const sc_t2 = project3D(hw, boxHeight, sliceZ3d);
 
-        ctx.fillStyle = "rgba(245, 158, 11, 0.14)";
+        ctx.fillStyle = "rgba(245, 158, 11, 0.1)";
         ctx.beginPath();
-        ctx.moveTo(sl_b1.x, sl_b1.y);
-        ctx.lineTo(sl_b2.x, sl_b2.y);
-        ctx.lineTo(sl_t2.x, sl_t2.y);
-        ctx.lineTo(sl_t1.x, sl_t1.y);
+        ctx.moveTo(sc_b1.x, sc_b1.y);
+        ctx.lineTo(sc_b2.x, sc_b2.y);
+        ctx.lineTo(sc_t2.x, sc_t2.y);
+        ctx.lineTo(sc_t1.x, sc_t1.y);
         ctx.closePath();
         ctx.fill();
 
         ctx.strokeStyle = "#f59e0b";
         ctx.lineWidth = 1.5;
         ctx.stroke();
-      } else if (sliceDim === "strike") {
-        const normX = ((sliceVal - mesh.minStrike) / strikeSpan) * 2 - 1;
+      } else if (curSliceDim === "strike") {
+        const normX = ((curSliceVal - curMesh.minStrike) / strikeSpan) * 2 - 1;
         const sliceX3d = normX * hw;
-        const sl_b1 = project3D(sliceX3d, 0, -hd);
-        const sl_b2 = project3D(sliceX3d, 0, hd);
-        const sl_t2 = project3D(sliceX3d, boxHeight, hd);
-        const sl_t1 = project3D(sliceX3d, boxHeight, -hd);
+        const sc_b1 = project3D(sliceX3d, 0, -hd);
+        const sc_b2 = project3D(sliceX3d, 0, hd);
+        const sc_t1 = project3D(sliceX3d, boxHeight, -hd);
+        const sc_t2 = project3D(sliceX3d, boxHeight, hd);
 
-        ctx.fillStyle = "rgba(16, 185, 129, 0.14)";
+        ctx.fillStyle = "rgba(16, 185, 129, 0.1)";
         ctx.beginPath();
-        ctx.moveTo(sl_b1.x, sl_b1.y);
-        ctx.lineTo(sl_b2.x, sl_b2.y);
-        ctx.lineTo(sl_t2.x, sl_t2.y);
-        ctx.lineTo(sl_t1.x, sl_t1.y);
+        ctx.moveTo(sc_b1.x, sc_b1.y);
+        ctx.lineTo(sc_b2.x, sc_b2.y);
+        ctx.lineTo(sc_t2.x, sc_t2.y);
+        ctx.lineTo(sc_t1.x, sc_t1.y);
         ctx.closePath();
         ctx.fill();
 
@@ -887,20 +968,19 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         ctx.stroke();
       }
 
-      // 4. Transform All Surface Mesh Vertices
+      // 4. Transform & Project All Surface Vertices
       const projectedGrid: { x: number; y: number; depth: number; iv: number; strike: number; dte: number }[][] = [];
-
-      for (let j = 0; j < mesh.dtes.length; j++) {
-        const dte = mesh.dtes[j];
-        const normZ = ((dte - mesh.minDte) / dteSpan) * 2 - 1;
+      for (let j = 0; j < curMesh.dtes.length; j++) {
+        const dte = curMesh.dtes[j];
+        const normZ = ((dte - curMesh.minDte) / dteSpan) * 2 - 1;
         const z3d = normZ * hd;
         const row: { x: number; y: number; depth: number; iv: number; strike: number; dte: number }[] = [];
 
-        for (let i = 0; i < mesh.strikes.length; i++) {
-          const strike = mesh.strikes[i];
-          const iv = mesh.grid[j][i];
-          const normX = ((strike - mesh.minStrike) / strikeSpan) * 2 - 1;
-          const normY = (iv - mesh.minIv) / ivSpan;
+        for (let i = 0; i < curMesh.strikes.length; i++) {
+          const strike = curMesh.strikes[i];
+          const iv = curMesh.grid[j][i];
+          const normX = ((strike - curMesh.minStrike) / strikeSpan) * 2 - 1;
+          const normY = (iv - curMesh.minIv) / ivSpan;
 
           const x3d = normX * hw;
           const y3d = normY * boxHeight;
@@ -922,8 +1002,8 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
       }
 
       const quads: QuadFacet[] = [];
-      for (let j = 0; j < mesh.dtes.length - 1; j++) {
-        for (let i = 0; i < mesh.strikes.length - 1; i++) {
+      for (let j = 0; j < curMesh.dtes.length - 1; j++) {
+        for (let i = 0; i < curMesh.strikes.length - 1; i++) {
           const p00 = projectedGrid[j][i];
           const p10 = projectedGrid[j][i + 1];
           const p11 = projectedGrid[j + 1][i + 1];
@@ -940,13 +1020,13 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
       quads.sort((a, b) => b.avgDepth - a.avgDepth);
 
       // 6. Draw Surface Quads & Wireframe Lines
-      const shouldDrawSurface = renderMode === "surface" || renderMode === "surface-wireframe";
-      const shouldDrawWireframe = renderMode === "wireframe" || renderMode === "surface-wireframe";
+      const shouldDrawSurface = curRenderMode === "surface" || curRenderMode === "surface-wireframe";
+      const shouldDrawWireframe = curRenderMode === "wireframe" || curRenderMode === "surface-wireframe";
 
       if (shouldDrawSurface) {
         for (const quad of quads) {
-          const normIv = (quad.avgIv - mesh.minIv) / ivSpan;
-          const color = sampleColormap(colormap, normIv);
+          const normIv = (quad.avgIv - curMesh.minIv) / ivSpan;
+          const color = sampleColormap(curColormap, normIv);
 
           // Simple directional lighting factor based on elevation
           const lightFactor = 0.85 + 0.15 * Math.sin(normIv * Math.PI);
@@ -1050,11 +1130,11 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
             ctx.stroke();
           }
         }
-      } else if (sliceDim === "strike") {
+      } else if (curSliceDim === "strike") {
         let bestIdx = 0;
         let minDiff = Infinity;
-        for (let i = 0; i < mesh.strikes.length; i++) {
-          const diff = Math.abs(mesh.strikes[i] - sliceVal);
+        for (let i = 0; i < curMesh.strikes.length; i++) {
+          const diff = Math.abs(curMesh.strikes[i] - curSliceVal);
           if (diff < minDiff) {
             minDiff = diff;
             bestIdx = i;
@@ -1063,7 +1143,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         ctx.strokeStyle = "#10b981";
         ctx.lineWidth = 3;
         ctx.beginPath();
-        for (let j = 0; j < mesh.dtes.length; j++) {
+        for (let j = 0; j < curMesh.dtes.length; j++) {
           const pt = projectedGrid[j][bestIdx];
           if (pt) {
             if (j === 0) ctx.moveTo(pt.x, pt.y);
@@ -1081,24 +1161,24 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
       // X Axis (Strike)
       const ax_x1 = project3D(-hw, 0, hd + 18);
       const ax_x2 = project3D(hw, 0, hd + 18);
-      ctx.fillText(`Strike ($${mesh.minStrike} → $${mesh.maxStrike})`, (ax_x1.x + ax_x2.x) / 2, (ax_x1.y + ax_x2.y) / 2 + 12);
+      ctx.fillText(`Strike ($${curMesh.minStrike} → $${curMesh.maxStrike})`, (ax_x1.x + ax_x2.x) / 2, (ax_x1.y + ax_x2.y) / 2 + 12);
 
       // Z Axis (DTE)
       const ax_z1 = project3D(hw + 18, 0, -hd);
       const ax_z2 = project3D(hw + 18, 0, hd);
-      ctx.fillText(`Expiry (${mesh.minDte}d → ${mesh.maxDte}d DTE)`, (ax_z1.x + ax_z2.x) / 2, (ax_z1.y + ax_z2.y) / 2 + 12);
+      ctx.fillText(`Expiry (${curMesh.minDte}d → ${curMesh.maxDte}d DTE)`, (ax_z1.x + ax_z2.x) / 2, (ax_z1.y + ax_z2.y) / 2 + 12);
 
       // Y Axis (IV %)
       const ax_y1 = project3D(-hw - 15, 0, -hd);
       const ax_y2 = project3D(-hw - 15, boxHeight, -hd);
-      ctx.fillText(`IV (${(mesh.minIv * 100).toFixed(0)}% - ${(mesh.maxIv * 100).toFixed(0)}%)`, ax_y2.x - 10, (ax_y1.y + ax_y2.y) / 2);
+      ctx.fillText(`IV (${(curMesh.minIv * 100).toFixed(0)}% - ${(curMesh.maxIv * 100).toFixed(0)}%)`, ax_y2.x - 10, (ax_y1.y + ax_y2.y) / 2);
 
       // 10. Selected & Hovered Point Indicator Pin
-      const targetPin = hoveredPoint || selectedPoint;
+      const targetPin = curHoveredPoint || curSelectedPoint;
       if (targetPin) {
-        const normX = ((targetPin.strike - mesh.minStrike) / strikeSpan) * 2 - 1;
-        const normY = (targetPin.iv - mesh.minIv) / ivSpan;
-        const normZ = ((targetPin.dte - mesh.minDte) / dteSpan) * 2 - 1;
+        const normX = ((targetPin.strike - curMesh.minStrike) / strikeSpan) * 2 - 1;
+        const normY = (targetPin.iv - curMesh.minIv) / ivSpan;
+        const normZ = ((targetPin.dte - curMesh.minDte) / dteSpan) * 2 - 1;
 
         const x3d = normX * hw;
         const y3d = normY * boxHeight;
@@ -1133,7 +1213,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         ctx.fillText(`K:$${targetPin.strike} | ${(targetPin.iv * 100).toFixed(1)}% IV`, topPt.x, topPt.y - badgeH + 8);
         ctx.fillStyle = theme.textSecondary;
         ctx.font = "9px monospace";
-        ctx.fillText(`DTE: ${targetPin.dte}d (${(targetPin.strike / mesh.spotPrice).toFixed(2)}x)`, topPt.x, topPt.y - badgeH + 20);
+        ctx.fillText(`DTE: ${targetPin.dte}d (${(targetPin.strike / curMesh.spotPrice).toFixed(2)}x)`, topPt.x, topPt.y - badgeH + 20);
       }
 
       // Schedule next frame
@@ -1148,21 +1228,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
         cancelAnimationFrame(animFrameIdRef.current);
       }
     };
-  }, [
-    mesh,
-    yaw,
-    pitch,
-    zoom,
-    panX,
-    panY,
-    colormap,
-    renderMode,
-    isAutoRotating,
-    sliceDim,
-    sliceVal,
-    hoveredPoint,
-    selectedPoint,
-  ]);
+  }, [mesh]);
 
   return (
     <div

@@ -196,12 +196,29 @@ class SimpleMovingAverageSignal(SignalModule):
             "pd.read_pickle('file.pkl')",
             "df.to_pickle('file.pkl')",
             "df.to_sql('table', con)",
+            "pd.read_csv('test.csv')",
+            "df.to_csv('test.csv')",
+            "pd.eval('1 + 1')",
+            "df.query('a > 1')",
+            "np.load('data.npy')",
+            "np.save('data.npy', arr)",
         ],
     )
     def test_forbidden_method_calls_rejected(self, method_call: str):
         code = f"def run(): {method_call}"
         is_safe, _ = validate_ast_safety(code)
         assert is_safe is False
+
+    def test_forbidden_attribute_aliasing_rejected(self):
+        code = "alias = pd.eval"
+        is_safe, violations = validate_ast_safety(code)
+        assert is_safe is False
+        assert any("Forbidden attribute access to 'eval'" in v for v in violations)
+
+        code_io = "alias = df.to_csv"
+        is_safe_io, violations_io = validate_ast_safety(code_io)
+        assert is_safe_io is False
+        assert any("Forbidden attribute access to 'to_csv'" in v for v in violations_io)
 
     def test_global_and_nonlocal_statements_rejected(self):
         code_global = "global my_var; my_var = 1"
@@ -297,6 +314,23 @@ class CustomAlphaModelSignal(SignalModule):
         assert meta["has_vectorized"] is False
         assert meta["has_pre_compute"] is False
         assert meta["is_valid_signal_module"] is True
+
+    def test_extract_tuple_unpacking(self):
+        code = """
+from signals.base import SignalModule, SignalContext, SignalOutput
+
+class UnpackedParamsSignal(SignalModule):
+    name, required_features = "unpacked_signal", ["Close", "Volume"]
+    fast, slow = 10, 30
+
+    def compute(self, row, context):
+        return SignalOutput(score=0.0, confidence=1.0)
+"""
+        meta = extract_strategy_metadata(code)
+        assert meta["name"] == "unpacked_signal"
+        assert meta["required_features"] == ["Close", "Volume"]
+        assert meta["parameters"]["fast"] == 10
+        assert meta["parameters"]["slow"] == 30
 
     def test_extract_from_empty_or_invalid_code(self):
         meta_empty = extract_strategy_metadata("")

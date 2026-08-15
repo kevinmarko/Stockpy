@@ -728,6 +728,13 @@ class AutonomousBacktestRunner:
 
             strategies_to_evaluate.extend([_buy_and_hold, _short_and_hold, _cash_allocator])
 
+        # Pre-compute returns on the continuous series for each candidate strategy
+        # to strictly prevent gap-jump indicator errors across non-contiguous CPCV splits
+        precomputed_strategy_returns: List[pd.Series] = []
+        for strat in strategies_to_evaluate:
+            full_ret, _, _ = self.backtest_single_path(strat, ohlcv_df)
+            precomputed_strategy_returns.append(full_ret)
+
         n_strategies = len(strategies_to_evaluate)
         is_sharpe_matrix: List[List[float]] = []
         oos_sharpe_matrix: List[List[float]] = []
@@ -739,15 +746,12 @@ class AutonomousBacktestRunner:
             if len(train_idx) < 10 or len(test_idx) < 5:
                 continue
 
-            train_df = ohlcv_df.iloc[train_idx]
-            test_df = ohlcv_df.iloc[test_idx]
-
             path_is_sharpes: List[float] = []
             path_oos_sharpes: List[float] = []
 
-            for strat in strategies_to_evaluate:
-                tr_ret, _, _ = self.backtest_single_path(strat, train_df)
-                te_ret, _, _ = self.backtest_single_path(strat, test_df)
+            for full_ret in precomputed_strategy_returns:
+                tr_ret = full_ret.iloc[train_idx]
+                te_ret = full_ret.iloc[test_idx]
 
                 is_sr = sharpe_ratio(tr_ret, freq=self.freq)
                 oos_sr = sharpe_ratio(te_ret, freq=self.freq)
@@ -759,7 +763,7 @@ class AutonomousBacktestRunner:
             oos_sharpe_matrix.append(path_oos_sharpes)
 
             # Record candidate strategy (index 0) OOS metrics
-            c_ret, _, _ = self.backtest_single_path(strategy_fn, test_df)
+            c_ret = precomputed_strategy_returns[0].iloc[test_idx]
             if len(c_ret) > 0:
                 all_oos_returns.extend(c_ret.tolist())
                 oos_max_dds.append(compute_max_drawdown(c_ret))

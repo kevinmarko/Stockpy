@@ -6650,7 +6650,7 @@ class ResearchSynthesizeRequest(BaseModel):
 
 @app.post(
     "/pilots/ai/research/synthesize",
-    dependencies=[Depends(require_read_token)],
+    dependencies=[Depends(require_command_token)],
 )
 def post_pilots_ai_research_synthesize(req: ResearchSynthesizeRequest) -> Dict[str, Any]:
     """Synthesizes AST-safe SignalModule implementation and metadata from quantitative research input."""
@@ -6691,7 +6691,7 @@ class ResearchBacktestRequest(BaseModel):
 
 @app.post(
     "/pilots/ai/research/backtest",
-    dependencies=[Depends(require_read_token)],
+    dependencies=[Depends(require_command_token)],
 )
 def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, Any]:
     """Executes CPCV and evaluates quantitative strategy code against formal deployability gates (PBO, DSR, Sharpe, MaxDD)."""
@@ -6800,7 +6800,7 @@ class BrokerFailoverRequest(BaseModel):
 
 @app.post(
     "/pilots/execution/brokers/failover",
-    dependencies=[Depends(require_read_token)],
+    dependencies=[Depends(require_command_token)],
 )
 def post_pilots_execution_brokers_failover(req: BrokerFailoverRequest) -> Dict[str, Any]:
     """Triggers manual broker failover in MultiBrokerGateway."""

@@ -90,7 +90,7 @@ FORBIDDEN_CALL_NAMES: set[str] = {
     "memoryview",
 }
 
-# Forbidden method names associated with system I/O, subprocess, or networking
+# Forbidden method names associated with system I/O, subprocess, networking, or eval
 FORBIDDEN_METHOD_NAMES: set[str] = {
     "system",
     "popen",
@@ -114,9 +114,39 @@ FORBIDDEN_METHOD_NAMES: set[str] = {
     "urlopen",
     "urlretrieve",
     "request",
+    "eval",
+    "query",
     "read_pickle",
     "to_pickle",
     "to_sql",
+    "read_csv",
+    "read_table",
+    "read_parquet",
+    "read_json",
+    "read_excel",
+    "read_html",
+    "read_xml",
+    "read_sql",
+    "read_feather",
+    "read_hdf",
+    "to_csv",
+    "to_parquet",
+    "to_json",
+    "to_excel",
+    "to_html",
+    "to_xml",
+    "to_string",
+    "to_clipboard",
+    "to_feather",
+    "to_hdf",
+    "loadtxt",
+    "genfromtxt",
+    "load",
+    "save",
+    "savez",
+    "savez_compressed",
+    "fromfile",
+    "tofile",
 }
 
 
@@ -197,9 +227,17 @@ class _ASTSafetyVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr.startswith("__"):
+        if node.attr.startswith("__") and node.attr not in ("__name__", "__doc__"):
             self.violations.append(
                 f"Line {node.lineno}: Forbidden access to dunder attribute '{node.attr}'."
+            )
+        if node.attr in FORBIDDEN_METHOD_NAMES:
+            self.violations.append(
+                f"Line {node.lineno}: Forbidden attribute access to '{node.attr}'."
+            )
+        if node.attr in FORBIDDEN_CALL_NAMES:
+            self.violations.append(
+                f"Line {node.lineno}: Forbidden attribute access to '{node.attr}'."
             )
         self.generic_visit(node)
 
@@ -438,6 +476,19 @@ def extract_strategy_metadata(code: str) -> dict[str, Any]:
                         meta_features = [str(x) for x in val]
                     elif target_id not in reserved_class_attrs and val is not None:
                         parameters[target_id] = val
+                elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(item.value, (ast.Tuple, ast.List)):
+                    for elt_target, elt_val_node in zip(target.elts, item.value.elts):
+                        if isinstance(elt_target, ast.Name):
+                            target_id = elt_target.id
+                            val = _extract_literal_value(elt_val_node)
+                            if target_id == "name" and isinstance(val, str):
+                                name_val = val
+                            elif target_id == "required_features" and isinstance(val, list):
+                                req_features = [str(x) for x in val]
+                            elif target_id == "meta_label_features" and isinstance(val, list):
+                                meta_features = [str(x) for x in val]
+                            elif target_id not in reserved_class_attrs and val is not None:
+                                parameters[target_id] = val
 
         elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             target_id = item.target.id

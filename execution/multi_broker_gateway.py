@@ -1273,7 +1273,15 @@ class MultiBrokerGateway(BrokerBase):
         """
         candidates: list[BaseBrokerAdapter] = []
 
-        # If manual override is engaged
+        # In strict MANUAL mode, only route to manual override if set and healthy
+        if self._failover_mode == FailoverMode.MANUAL:
+            if self._manual_override_broker_id is not None:
+                adapter = self.get_broker(self._manual_override_broker_id)
+                if adapter is not None and adapter._connected and adapter.circuit_breaker.can_execute():
+                    return [adapter]
+            return []
+
+        # If manual override is engaged in AUTO / other mode
         if self._manual_override_broker_id is not None:
             adapter = self.get_broker(self._manual_override_broker_id)
             if adapter is not None:
@@ -1394,8 +1402,8 @@ class MultiBrokerGateway(BrokerBase):
                     )
                     final_result = res
 
-                    # If failover is disabled, do not attempt subsequent fallbacks
-                    if self._failover_mode == FailoverMode.DISABLED:
+                    # If failover is disabled or manual, do not attempt subsequent fallbacks
+                    if self._failover_mode in (FailoverMode.DISABLED, FailoverMode.MANUAL):
                         break
 
             except Exception as exc:
@@ -1416,7 +1424,7 @@ class MultiBrokerGateway(BrokerBase):
                 )
                 audit_trail.attempts.append(attempt)
 
-                if self._failover_mode == FailoverMode.DISABLED:
+                if self._failover_mode in (FailoverMode.DISABLED, FailoverMode.MANUAL):
                     final_result = OrderResult(
                         client_order_id=client_order_id,
                         broker_order_id=None,
