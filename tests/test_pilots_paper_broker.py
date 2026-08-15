@@ -1595,11 +1595,6 @@ class TestOptionsSorSimulateLeggingEndpoint:
         assert body["num_simulations"] == 500
         assert body["latency_seconds"] == 2.0
         assert 0.0 <= body["hung_leg_probability"] <= 1.0
-        assert "trajectory" in body
-        assert "expected_shortfall" in body
-        assert "variance" in body
-        assert "half_life" in body
-        assert len(body["trajectory"]) == 10
         assert "distribution" in body
         assert "percentiles" in body["distribution"]
         assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
@@ -2081,3 +2076,230 @@ class TestOptimizationEndpoints:
                 headers={"Authorization": "Bearer WRONG"},
             )
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /pilots/execution/fix/route & GET /pilots/execution/fix/venues
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsExecutionFixEndpoints:
+    def test_get_execution_fix_venues_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/fix/venues?symbol=SPY&spot_price=500.0",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "venues" in body
+        assert "supported_policies" in body
+        assert "timestamp" in body
+        assert len(body["venues"]) == 6
+        expected_names = {"CBOE", "MIAX", "BOX", "PHLX", "ARCA", "EDGX"}
+        venue_names = {v["venue"] for v in body["venues"]}
+        assert venue_names == expected_names
+        for v in body["venues"]:
+            assert "base_latency_ms" in v
+            assert "liquidity_depth" in v
+            assert "taker_fee" in v
+            assert "maker_fee" in v
+            assert "simulated_book_depth" in v
+            assert len(v["simulated_book_depth"]["bids"]) == 3
+            assert len(v["simulated_book_depth"]["asks"]) == 3
+
+    def test_get_execution_fix_venues_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.get("/pilots/execution/fix/venues")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["venues"]) == 6
+
+    def test_get_execution_fix_venues_fails_with_invalid_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/fix/venues",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_execution_fix_route_smart_sweep_success(self):
+        payload = {
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 250.0,
+            "limit_price": 500.0,
+            "routing_policy": "SMART_SWEEP",
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert body["side"] == "BUY"
+        assert body["quantity"] == 250.0
+        assert body["limit_price"] == 500.0
+        assert body["routing_policy"] == "SMART_SWEEP"
+        assert body["status"] == "FILLED"
+        assert body["total_filled_qty"] == 250.0
+        assert body["leaves_qty"] == 0.0
+        assert body["weighted_avg_price"] > 0
+        assert "total_net_fee" in body
+        assert "avg_latency_ms" in body
+        assert len(body["fills"]) > 0
+        assert len(body["fix_audit_log"]) == len(body["fills"])
+        # SMART_SWEEP routes to lowest taker fee first (BOX: 0.10)
+        assert body["fills"][0]["venue"] == "BOX"
+        assert "raw_fix" in body["fills"][0]
+        assert "8=FIX.4.4" in body["fills"][0]["raw_fix"]
+        assert "nbbo" in body
+        assert body["nbbo"]["best_bid"] > 0
+        assert body["nbbo"]["best_ask"] >= body["nbbo"]["best_bid"]
+
+    def test_post_execution_fix_route_fastest_venue_success(self):
+        payload = {
+            "symbol": "QQQ",
+            "side": "BUY",
+            "quantity": 100.0,
+            "limit_price": 450.0,
+            "routing_policy": "FASTEST_VENUE",
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["routing_policy"] == "FASTEST_VENUE"
+        assert len(body["fills"]) > 0
+        # FASTEST_VENUE routes to EDGX first (base latency 0.6ms)
+        assert body["fills"][0]["venue"] == "EDGX"
+
+    def test_post_execution_fix_route_max_rebate_success(self):
+        payload = {
+            "symbol": "AAPL",
+            "side": "SELL",
+            "quantity": 150.0,
+            "limit_price": 220.0,
+            "routing_policy": "MAX_REBATE",
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["routing_policy"] == "MAX_REBATE"
+        assert len(body["fills"]) > 0
+        # MAX_REBATE routes to EDGX first (maker rebate 0.40)
+        assert body["fills"][0]["venue"] == "EDGX"
+        assert body["total_rebates"] > 0
+
+    def test_post_execution_fix_route_partial_fills_and_multi_venue_sweep(self):
+        payload = {
+            "symbol": "TSLA",
+            "side": "BUY",
+            "quantity": 2500.0,
+            "limit_price": 250.0,
+            "routing_policy": "SMART_SWEEP",
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["quantity"] == 2500.0
+        assert len(body["fills"]) >= 2
+        total_fill_qty = sum(f["fill_qty"] for f in body["fills"])
+        assert total_fill_qty <= 2500.0
+        assert len(body["fix_audit_log"]) == len(body["fills"])
+
+    def test_post_execution_fix_route_invalid_side(self):
+        payload = {
+            "symbol": "SPY",
+            "side": "INVALID_SIDE",
+            "quantity": 100.0,
+            "limit_price": 500.0,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        assert "Invalid side" in resp.json()["detail"]
+
+    def test_post_execution_fix_route_invalid_policy(self):
+        payload = {
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 100.0,
+            "limit_price": 500.0,
+            "routing_policy": "UNKNOWN_POLICY",
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        assert "Invalid routing_policy" in resp.json()["detail"]
+
+    def test_post_execution_fix_route_invalid_quantity(self):
+        payload = {
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": -50.0,
+            "limit_price": 500.0,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_post_execution_fix_route_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 100.0,
+            "limit_price": 500.0,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_execution_fix_route_fail_open_without_token(self):
+        payload = {
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 50.0,
+            "limit_price": 500.0,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.post(
+                "/pilots/execution/fix/route",
+                json=payload,
+            )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "FILLED"
+

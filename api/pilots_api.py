@@ -6631,7 +6631,71 @@ def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[st
     return {
         "symbol": req.symbol,
         "trajectory": trajectory,
+        "expected_trajectory": trajectory,
         "expected_shortfall": res["expected_shortfall"],
         "variance": res["variance"],
         "half_life": float(half_life)
     }
+
+
+class FixRouteOrderRequest(BaseModel):
+    symbol: str = Field(..., min_length=1)
+    side: str = Field(...)
+    quantity: float = Field(..., gt=0)
+    limit_price: float = Field(..., gt=0)
+    routing_policy: Optional[str] = "SMART_SWEEP"
+
+
+@app.post(
+    "/pilots/execution/fix/route",
+    dependencies=[Depends(require_read_token)],
+)
+async def post_pilots_execution_fix_route(req: FixRouteOrderRequest) -> Dict[str, Any]:
+    """Routes an order across multiple option/equity execution venues via the Smart Order Router (SOR).
+    Returns multi-venue fill breakdown, fee/rebate schedules, VWAP, execution latency statistics, and FIX audit log.
+    """
+    from execution.fix_gateway import MultiVenueAggregator, RoutingPolicy
+
+    side_norm = req.side.strip().upper()
+    if side_norm not in {"BUY", "SELL", "1", "2", "BUY_MINUS", "SELL_PLUS", "SELL_SHORT", "SELL_SHORT_EXEMPT"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid side '{req.side}'. Expected BUY or SELL.",
+        )
+
+    policy_norm = (req.routing_policy or "SMART_SWEEP").strip().upper()
+    valid_policies = {p.value for p in RoutingPolicy}
+    if policy_norm not in valid_policies:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid routing_policy '{req.routing_policy}'. Supported policies: {sorted(valid_policies)}",
+        )
+
+    aggregator = MultiVenueAggregator()
+    result = await aggregator.route_order(
+        symbol=req.symbol.strip().upper(),
+        side=side_norm,
+        qty=float(req.quantity),
+        limit_price=float(req.limit_price),
+        routing_policy=policy_norm,
+        detailed=True,
+    )
+    return result
+
+
+@app.get(
+    "/pilots/execution/fix/venues",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_execution_fix_venues(
+    symbol: Optional[str] = Query("SPY", min_length=1),
+    spot_price: Optional[float] = Query(None, gt=0),
+) -> Dict[str, Any]:
+    """Returns available execution venues, base latency profiles, fee/rebate schedules,
+    and simulated multi-level book depth.
+    """
+    from execution.fix_gateway import MultiVenueAggregator
+
+    aggregator = MultiVenueAggregator()
+    return aggregator.get_venues_info(symbol=symbol, spot_price=spot_price)
+

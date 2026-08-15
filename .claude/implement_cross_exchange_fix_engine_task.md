@@ -1,0 +1,5 @@
+- [x] Implement `execution/fix_gateway.py` (FIX 4.4 simulated state machine and multi-venue aggregation)
+- [x] Create `tests/test_fix_gateway.py`
+- [x] Ensure 100% test pass rate
+- [x] Update `docs/architecture/execution.md`
+- [x] Create walkthrough
