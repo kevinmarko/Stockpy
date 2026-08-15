@@ -1125,44 +1125,50 @@ function renderPitMatrix(container, payload) {
 }
 
 function renderModelDiagnostics(container, payload) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "model-diagnostics-panel";
-
-  const header = document.createElement("div");
-  header.className = "detail-header";
-  header.innerHTML = `<strong>Forecast Model Skill Decay & Drift Report</strong><span class="badge ${payload.drift_detected ? "badge-decline" : "badge-growth"}">${payload.drift_detected ? "Drift Warning" : "Healthy Calibration"}</span>`;
-  wrapper.appendChild(header);
-
-  const rows = payload.rows || [];
-  if (rows.length === 0) {
-    const p = document.createElement("p");
-    p.className = "empty-state";
-    p.textContent = payload.reason || "No forecast drift records recorded yet.";
-    wrapper.appendChild(p);
-  } else {
-    const table = document.createElement("table");
-    table.className = "table";
-    table.innerHTML = `<thead><tr><th>Symbol</th><th>Horizon</th><th>Skill Decay (%)</th><th>RMSE Inv</th><th>Status</th></tr></thead>`;
-    const tbody = document.createElement("tbody");
-    for (const r of rows) {
-      const tr = document.createElement("tr");
-      const decay = r.decay_pct ?? r.decay;
-      const isWarn = typeof decay === "number" && decay > 15;
-      tr.innerHTML = `
-        <td><strong>${r.symbol || "—"}</strong></td>
-        <td>${r.horizon_days ? r.horizon_days + "d" : "30d"}</td>
-        <td style="color:${isWarn ? "var(--decline)" : "var(--text-primary)};">${decay != null ? decay.toFixed(1) + "%" : "—"}</td>
-        <td>${fmtMetric(r.inverse_rmse ?? r.skill_score)}</td>
-        <td><span class="badge ${isWarn ? "badge-caution" : "badge-growth"}">${isWarn ? "Drifting" : "Calibrated"}</span></td>
-      `;
-      tbody.appendChild(tr);
+    const wrapper = document.createElement("div");
+    wrapper.className = "model-diagnostics-panel";
+    
+    const header = document.createElement("div");
+    header.className = "detail-header";
+    header.innerHTML = `<strong>Forecast Model Skill Decay & Drift Report</strong><span class="badge ${payload.drift_detected ? "badge-decline" : "badge-growth"}">${payload.drift_detected ? "Drift Warning" : "Healthy Calibration"}</span>`;
+    wrapper.appendChild(header);
+    
+    const rows = payload.rows || [];
+    
+    if (rows.length === 0) {
+        const p = document.createElement("p");
+        p.className = "empty-state";
+        p.textContent = payload.reason || "No forecast drift records recorded yet.";
+        wrapper.appendChild(p);
+    } else {
+        const table = document.createElement("table");
+        table.className = "table";
+        table.innerHTML = `<thead><tr><th>Symbol</th><th>Horizon</th><th>Skill Decay (%)</th><th>RMSE Inv</th><th>Status</th></tr></thead>`;
+        
+        const tbody = document.createElement("tbody");
+        
+        for (const r of rows) {
+            const tr = document.createElement("tr");
+            const decay = r.decay_pct ?? r.decay;
+            const isWarn = typeof decay === "number" && decay > 15;
+            
+            tr.innerHTML = `
+                <td><strong>${r.symbol || "—"}</strong></td>
+                <td>${r.horizon_days ? r.horizon_days + "d" : "30d"}</td>
+                <td style="color:${isWarn ? "var(--decline)" : "var(--text-primary)"};">${typeof decay === "number" ? decay.toFixed(1) + "%" : "—"}</td>
+                <td>${fmtMetric(r.inverse_rmse ?? r.skill_score)}</td>
+                <td><span class="badge ${isWarn ? "badge-caution" : "badge-growth"}">${isWarn ? "Drifting" : "Calibrated"}</span></td>
+            `;
+            
+            tbody.appendChild(tr);
+        }
+        
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
     }
-    table.appendChild(tbody);
-    wrapper.appendChild(table);
-  }
-
-  container.appendChild(wrapper);
-  return wrapper;
+    
+    container.appendChild(wrapper);
+    return wrapper;
 }
 
 function renderStrategyTuner(container, payload, app) {
