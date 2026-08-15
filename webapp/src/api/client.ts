@@ -188,6 +188,10 @@ import type {
   TransformerForecastResponse,
   DiffusionStressRequest,
   DiffusionStressResponse,
+  HrpCvarOptimizeRequest,
+  HrpCvarOptimizeResponse,
+  AlmgrenChrissOptimizeRequest,
+  AlmgrenChrissOptimizeResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -601,6 +605,16 @@ const liveApi = {
     http<TransformerForecastResponse>(`/data/ai/transformer-vol/${encodeURIComponent(symbol)}`),
   runDiffusionStressTest: (req: DiffusionStressRequest) =>
     http<DiffusionStressResponse>("/data/ai/diffusion-stress", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  optimizeHrpCvar: (req: HrpCvarOptimizeRequest) =>
+    http<HrpCvarOptimizeResponse>("/data/portfolio/hrp-cvar", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  optimizeAlmgrenChriss: (req: AlmgrenChrissOptimizeRequest) =>
+    http<AlmgrenChrissOptimizeResponse>("/data/execution/almgren-chriss", {
       method: "POST",
       body: JSON.stringify(req),
     }),

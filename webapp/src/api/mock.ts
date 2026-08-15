@@ -253,6 +253,10 @@ import type {
   TransformerForecastResponse,
   DiffusionStressRequest,
   DiffusionStressResponse,
+  HrpCvarOptimizeRequest,
+  HrpCvarOptimizeResponse,
+  AlmgrenChrissOptimizeRequest,
+  AlmgrenChrissOptimizeResponse,
 } from "./types";
 
 const SECTORS = [
@@ -10659,6 +10663,43 @@ export const mockApi = {
       terminal_price_distribution: terminal,
       crash_probabilities: { "-5%": 0.25, "-10%": 0.1, "-20%": 0.02 },
       sample_paths: Array.from({ length: 5 }, () => Array.from({ length: req.horizon_days }, () => 100 + (Math.random() - 0.5) * 10)),
+    }, 500);
+  },
+
+  async optimizeHrpCvar(req: HrpCvarOptimizeRequest): Promise<HrpCvarOptimizeResponse> {
+    const allocations = req.symbols.map((sym, _i) => ({
+      symbol: sym,
+      weight: 1 / req.symbols.length + (Math.random() - 0.5) * 0.1
+    }));
+    return delay<HrpCvarOptimizeResponse>({
+      allocations,
+      dendrogram: {
+        name: "root",
+        distance: 1.0,
+        children: req.symbols.map(sym => ({ name: sym, distance: 0 }))
+      },
+      expected_return: 0.12,
+      cvar_95: 0.08,
+      sharpe_ratio: 1.5,
+      as_of: new Date().toISOString()
+    }, 500);
+  },
+
+  async optimizeAlmgrenChriss(req: AlmgrenChrissOptimizeRequest): Promise<AlmgrenChrissOptimizeResponse> {
+    const steps = req.horizon_steps || 10;
+    const trajectory = Array.from({ length: steps }, (_, _i) => ({
+      step: _i,
+      shares_remaining: Math.max(0, req.quantity - (req.quantity / steps) * _i),
+      trade_size: req.quantity / steps,
+      expected_price: 100 + (Math.random() - 0.5) * 2
+    }));
+    return delay<AlmgrenChrissOptimizeResponse>({
+      symbol: req.symbol,
+      trajectory,
+      expected_shortfall: 1.25,
+      variance: 0.8,
+      half_life: steps / 2,
+      as_of: new Date().toISOString()
     }, 500);
   },
 

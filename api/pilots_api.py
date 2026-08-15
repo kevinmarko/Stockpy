@@ -6452,3 +6452,84 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         "VaR_95": float(var_95 * req.spot_price),
         "CVaR_95": float(cvar_95 * req.spot_price)
     }
+
+class HRPCVaRRequest(BaseModel):
+    symbols: List[str]
+
+@app.post(
+    "/pilots/portfolio/optimize/hrp-cvar",
+    dependencies=[Depends(require_read_token)],
+)
+def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
+    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar
+    import numpy as np
+    import pandas as pd
+    from scipy.cluster.hierarchy import linkage
+    from scipy.spatial.distance import squareform
+    
+    if not req.symbols:
+        raise HTTPException(status_code=400, detail="Must provide at least one symbol.")
+        
+    num_assets = len(req.symbols)
+    # Generate dummy returns (n_days, n_assets)
+    returns_np = np.random.randn(252, num_assets) * 0.02
+    returns = pd.DataFrame(returns_np, columns=req.symbols)
+    cov = returns.cov()
+    
+    dist = compute_correlation_distance(cov)
+    
+    # We need linkage Z for the UI
+    dist_np = dist.values
+    dist_np = (dist_np + dist_np.T) / 2
+    np.fill_diagonal(dist_np, 0.0)
+    condensed_dist = squareform(dist_np, checks=False)
+    Z = linkage(condensed_dist, method='single') if num_assets > 1 else np.array([])
+    
+    sort_ix = quasi_diagonalization(dist)
+    initial_w = recursive_bisection(cov, sort_ix)
+    
+    # Constrain CVaR to an arbitrary realistic threshold
+    final_w = constrain_cvar(returns, initial_w, max_cvar=0.05)
+    
+    return {
+        "optimal_weights": final_w.to_dict(),
+        "dendrogram_linkage": Z.tolist() if num_assets > 1 else []
+    }
+
+class AlmgrenChrissRequest(BaseModel):
+    symbol: str
+    quantity: float
+    urgency: float = 0.5
+
+@app.post(
+    "/pilots/execution/optimize/almgren-chriss",
+    dependencies=[Depends(require_read_token)],
+)
+def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[str, Any]:
+    from execution.almgren_chriss_router import compute_trading_trajectory
+    
+    res = compute_trading_trajectory(
+        total_shares=req.quantity,
+        total_time=1.0,
+        n_intervals=10,
+        volatility=0.02,
+        temp_impact=0.1,
+        perm_impact=0.01,
+        risk_aversion=req.urgency
+    )
+    
+    trajectory = []
+    traj_arr = res["trajectory"]
+    trade_arr = res["trade_list"]
+    for i in range(len(trade_arr)):
+        trajectory.append({
+            "time_step": i + 1,
+            "remaining_qty": traj_arr[i + 1],
+            "trade_qty": trade_arr[i]
+        })
+        
+    return {
+        "expected_trajectory": trajectory,
+        "expected_shortfall": res["expected_shortfall"],
+        "variance": res["variance"]
+    }

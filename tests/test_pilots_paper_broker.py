@@ -2004,5 +2004,61 @@ class TestAIForecastingEndpoints:
             )
         assert resp.status_code == 401
 
+class TestOptimizationEndpoints:
+    def test_post_portfolio_optimize_hrp_cvar_success(self):
+        payload = {
+            "symbols": ["AAPL", "MSFT", "GOOGL"]
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "optimal_weights" in body
+        assert "dendrogram_linkage" in body
+        assert len(body["optimal_weights"]) == 3
 
+    def test_post_portfolio_optimize_hrp_cvar_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbols": ["AAPL", "MSFT", "GOOGL"]
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
 
+    def test_post_execution_optimize_almgren_chriss_success(self):
+        payload = {
+            "symbol": "AAPL",
+            "quantity": 100.0,
+            "urgency": 0.5
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/optimize/almgren-chriss",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "expected_trajectory" in body
+        assert len(body["expected_trajectory"]) > 0
+
+    def test_post_execution_optimize_almgren_chriss_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbol": "AAPL",
+            "quantity": 100.0
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/optimize/almgren-chriss",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
