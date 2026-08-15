@@ -649,6 +649,7 @@ def train_signal(
     universe: Tuple[str, ...] = _DEFAULT_UNIVERSE,
     lookback_days: int = _DEFAULT_LOOKBACK_DAYS,
     seed: int = 0,
+    registry_path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Train and persist a MetaLabeler for ``signal_id``.
 
@@ -733,6 +734,7 @@ def train_signal(
             features=list(labeler._feature_names),
             cpcv_mean_oos_sharpe=cpcv.get("mean_oos_sharpe"),
             cpcv_mean_oos_max_dd=cpcv.get("mean_oos_max_dd"),
+            registry_path=registry_path,
         )
 
     logger.info(

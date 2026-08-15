@@ -165,13 +165,11 @@ def retrain_all(
         try:
             # train_signal is itself dead-letter safe (returns None on skip),
             # but we still guard against a hard raise here.
-            # NOTE: train_signal() does not accept a registry_path override (its
-            # meta_labeler_<id> row is written to the module-default registry).
-            # We only thread --registry-path into the LGBM trainer + summary read.
             path = train_signal(
                 signal_id,
                 force_synthetic=offline,
                 update_registry=True,
+                registry_path=registry_path,
             )
             if path is None:
                 logger.warning(

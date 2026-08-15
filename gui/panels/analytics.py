@@ -764,14 +764,12 @@ def render_analytics() -> None:
         from gui.panels import analytics_signals
 
         st.divider()
-        analytics_signals.render_ml_registry()
-        st.divider()
         analytics_signals.render_news_sentiment(snap)
         st.divider()
         analytics_signals.render_slippage_covar(snap)
     except Exception as exc:  # noqa: BLE001 — sibling module optional / in-flight
         logger.debug("analytics_signals panels unavailable: %s", exc)
         st.caption(
-            "_Signals-analytics panels (ML registry / news sentiment / "
+            "_Signals-analytics panels (news sentiment / "
             "slippage & CoVaR) are not available yet._"
         )
