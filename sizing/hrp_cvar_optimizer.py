@@ -42,7 +42,7 @@ def _get_cluster_var(cov: np.ndarray, c_items: List[int]) -> float:
     Calculate cluster variance using inverse variance portfolio allocation.
     """
     cov_slice = cov[np.ix_(c_items, c_items)]
-    ivp = 1.0 / np.diag(cov_slice)
+    ivp = 1.0 / np.clip(np.diag(cov_slice), a_min=1e-10, a_max=None)
     ivp /= ivp.sum()
     return np.dot(ivp, np.dot(cov_slice, ivp))
 
@@ -66,7 +66,8 @@ def recursive_bisection(cov: pd.DataFrame, sort_ix: List[int]) -> pd.Series:
             c_var0 = _get_cluster_var(cov_np, c_items0)
             c_var1 = _get_cluster_var(cov_np, c_items1)
             
-            alpha = 1 - c_var0 / (c_var0 + c_var1)
+            total_var = c_var0 + c_var1
+            alpha = 0.5 if total_var < 1e-12 else 1.0 - c_var0 / total_var
             
             w[c_items0] *= alpha
             w[c_items1] *= 1 - alpha
@@ -80,6 +81,8 @@ def calculate_cvar(weights: np.ndarray, returns: np.ndarray, alpha: float = 0.05
     Calculates Conditional Value at Risk (CVaR) for a given portfolio.
     Returns positive expected loss in the tail.
     """
+    if len(returns) == 0:
+        return 0.0
     portfolio_returns = np.dot(returns, weights)
     var = np.percentile(portfolio_returns, alpha * 100)
     # Filter returns worse than or equal to VaR

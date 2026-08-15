@@ -16,6 +16,17 @@ import pytest
 # resolve correctly regardless of where pytest is invoked from.
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Reset settings singleton to clean defaults on test session initialization
+try:
+    from settings import Settings, settings
+    import runtime_flags
+    # Reset singleton to clean defaults
+    _defaults = Settings()
+    for field_name in type(_defaults).model_fields:
+        setattr(settings, field_name, getattr(_defaults, field_name))
+except Exception:
+    pass
+
 
 @pytest.fixture(autouse=True)
 def _no_gdelt_throttle_in_tests(monkeypatch):
@@ -79,3 +90,73 @@ def _no_fmp_throttle_in_tests(monkeypatch):
     reset_fmp_rate_limiter()
     yield
     reset_fmp_rate_limiter()
+
+
+@pytest.fixture(autouse=True)
+def _clean_meta_registry_between_tests():
+    """Reset global_meta_registry state so tests that register temporary
+    MetaLabelers do not leak gating decisions into subsequent test files."""
+    try:
+        import ml.meta_labeling as _ml_meta
+        _ml_meta.global_meta_registry._labelers.clear()
+        yield
+        _ml_meta.global_meta_registry._labelers.clear()
+    except Exception:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _clean_settings_between_tests(monkeypatch):
+    """Reset mutable settings attributes between tests so tests that mutate
+    settings (e.g. weights, disabled modules, kill switch) don't leak state."""
+    try:
+        import copy
+        from settings import Settings, settings
+        _clean = Settings(_env_file=None)
+        for k in (
+            "SIGNAL_WEIGHTS",
+            "DISABLED_SIGNAL_MODULES",
+            "REGIME_SIGNAL_WEIGHTS",
+            "HISTORICAL_STORE_ENABLED",
+            "KILL_SWITCH_ACTIVE",
+            "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
+            "META_LABELING_ENABLED",
+            "META_LABEL_MIN_CONFIDENCE",
+        ):
+            val = getattr(_clean, k)
+            if isinstance(val, (dict, list, set)):
+                val = copy.deepcopy(val)
+            monkeypatch.setattr(settings, k, val, raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _clean_signal_registry_between_tests():
+    """Reset global_registry._modules so dynamically registered mock/synthesized
+    signal modules (e.g. from research copilot tests) do not leak into other tests."""
+    standard_names = {
+        "macro_regime", "graham_value", "dividend_quality", "macd_momentum",
+        "aroon_trend", "forecast_alignment", "relative_strength", "rsi_extremes",
+        "sortino_drawdown", "edge_garch", "timeseries_momentum", "cross_sectional_momentum",
+        "rsi2_mean_reversion", "multifactor", "regime_multiplier", "lgbm_ranker",
+        "news_catalyst", "sector_quality_rank", "vrp_premium_selling", "options_flow_sentiment",
+    }
+    try:
+        import signals  # noqa: F401 -- ensures all 20 standard modules are registered
+        from signals.registry import global_registry
+        for k in list(global_registry._modules.keys()):
+            if k not in standard_names:
+                global_registry.unregister(k)
+    except Exception:
+        pass
+
+    yield
+
+    try:
+        from signals.registry import global_registry
+        for k in list(global_registry._modules.keys()):
+            if k not in standard_names:
+                global_registry.unregister(k)
+    except Exception:
+        pass

@@ -61,9 +61,9 @@ import scripts.train_meta_labelers as trainer
 @pytest.fixture(autouse=True)
 def _reset_registry():
     """Reset the global meta-registry before and after each test."""
-    meta_labeling.global_meta_registry = MetaLabelerRegistry()
+    meta_labeling.global_meta_registry._labelers.clear()
     yield
-    meta_labeling.global_meta_registry = MetaLabelerRegistry()
+    meta_labeling.global_meta_registry._labelers.clear()
 
 
 @pytest.fixture
@@ -317,7 +317,7 @@ def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monke
 # 3. End-to-end: registered LOW-confidence labeler fires the aggregator gate
 # ---------------------------------------------------------------------------
 
-def test_registered_low_confidence_fires_hard_gate(tmp_models_dir):
+def test_registered_low_confidence_fires_hard_gate(tmp_models_dir, monkeypatch):
     """A registered MetaLabeler returning P < 0.4 forces meta_label_composite=0.
 
     Reuses the aggregator wiring pattern from tests/test_meta_labeler_uplift.py.
@@ -332,6 +332,10 @@ def test_registered_low_confidence_fires_hard_gate(tmp_models_dir):
     from signals.registry import global_registry
     from signals.base import SignalContext
     from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+    from settings import settings
+
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [])
+    monkeypatch.setattr(settings, "META_LABEL_MIN_CONFIDENCE", 0.4)
 
     # A MetaLabeler subclass that always returns P=0.1 (< META_LABEL_MIN_CONFIDENCE).
     class AlwaysLowMetaLabeler(MetaLabeler):
@@ -341,44 +345,47 @@ def test_registered_low_confidence_fires_hard_gate(tmp_models_dir):
     low = AlwaysLowMetaLabeler(signal_id="timeseries_momentum")
     low._model = object()  # mark as "trained" so predict paths engage
     low._n_train_samples = 100
-    meta_labeling.global_meta_registry.register(low)
-    assert meta_labeling.global_meta_registry.has("timeseries_momentum")
+    try:
+        meta_labeling.global_meta_registry.register(low)
+        assert meta_labeling.global_meta_registry.has("timeseries_momentum")
 
-    aggregator = SignalAggregator(global_registry)
+        aggregator = SignalAggregator(global_registry)
 
-    bar = MarketBarDTO(
-        date=_dt(2024, 1, 1), ticker="AAPL",
-        open_price=149.0, high_price=151.0, low_price=148.0,
-        close_price=150.0, volume=1_000_000,
-    )
-    fundamentals = FundamentalDataDTO(
-        ticker="AAPL", pe_ratio=25.0, pb_ratio=5.0, dividend_yield=0.01,
-        book_value=30.0, eps_trailing=6.0, dividend_growth_rate=0.05,
-        payout_ratio=0.3, sector="Technology", company_name="Apple Inc",
-        market_cap=2_500_000_000_000.0,
-    )
-    macro = MacroEconomicDTO(
-        yield_curve_10y_2y=0.5, vix_value=15.0, sahm_rule_indicator=0.1,
-        high_yield_oas=300.0, inflation_rate=0.03,
-    )
-    context = SignalContext(bar=bar, fundamentals=fundamentals, macro=macro)
-    row = pd.Series({
-        "current_price": 150.0, "Close": 150.0, "RSI_2": 50.0, "SMA_5": 149.0,
-        "SMA_200": 140.0, "ROC_12M": 0.1, "GARCH_Vol": 0.15, "garch_vol": 0.15,
-        "sector": "Technology", "ticker": "AAPL",
-        "forecast_price": 155.0, "trend_strength": 60.0, "atr": 2.0,
-        "macd_line": 0.5, "macd_signal": 0.3, "aroon_osc": 40.0,
-        "rsi": 55.0, "sortino_ratio": 1.0, "max_drawdown": 0.1,
-        "relative_strength": 0.8, "edge_ratio": 1.2,
-        "chandelier_long": 145.0, "chandelier_short": 155.0,
-    })
+        bar = MarketBarDTO(
+            date=_dt(2024, 1, 1), ticker="AAPL",
+            open_price=149.0, high_price=151.0, low_price=148.0,
+            close_price=150.0, volume=1_000_000,
+        )
+        fundamentals = FundamentalDataDTO(
+            ticker="AAPL", pe_ratio=25.0, pb_ratio=5.0, dividend_yield=0.01,
+            book_value=30.0, eps_trailing=6.0, dividend_growth_rate=0.05,
+            payout_ratio=0.3, sector="Technology", company_name="Apple Inc",
+            market_cap=2_500_000_000_000.0,
+        )
+        macro = MacroEconomicDTO(
+            yield_curve_10y_2y=0.5, vix_value=15.0, sahm_rule_indicator=0.1,
+            high_yield_oas=300.0, inflation_rate=0.03,
+        )
+        context = SignalContext(bar=bar, fundamentals=fundamentals, macro=macro)
+        row = pd.Series({
+            "current_price": 150.0, "Close": 150.0, "RSI_2": 50.0, "SMA_5": 149.0,
+            "SMA_200": 140.0, "ROC_12M": 0.1, "GARCH_Vol": 0.15, "garch_vol": 0.15,
+            "sector": "Technology", "ticker": "AAPL",
+            "forecast_price": 155.0, "trend_strength": 60.0, "atr": 2.0,
+            "macd_line": 0.5, "macd_signal": 0.3, "aroon_osc": 40.0,
+            "rsi": 55.0, "sortino_ratio": 1.0, "max_drawdown": 0.1,
+            "relative_strength": 0.8, "edge_ratio": 1.2,
+            "chandelier_long": 145.0, "chandelier_short": 155.0,
+        })
 
-    _, _, _, _, _, composite = aggregator.aggregate(row, context)
+        _, _, _, _, _, composite = aggregator.aggregate(row, context)
 
-    assert composite == 0.0, (
-        f"Expected meta_label_composite=0.0 when registered MetaLabeler P=0.1 "
-        f"< 0.4, got {composite}"
-    )
+        assert composite == 0.0, (
+            f"Expected meta_label_composite=0.0 when registered MetaLabeler P=0.1 "
+            f"< 0.4, got {composite}"
+        )
+    finally:
+        meta_labeling.global_meta_registry.unregister("timeseries_momentum")
 
 
 # ---------------------------------------------------------------------------

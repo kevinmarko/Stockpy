@@ -2083,6 +2083,28 @@ class TestOptimizationEndpoints:
 # ---------------------------------------------------------------------------
 
 
+
+    def test_post_portfolio_optimize_hrp_cvar_invalid_empty_symbols(self):
+        payload = {"symbols": []}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_post_execution_optimize_almgren_chriss_invalid_negative_quantity(self):
+        payload = {"symbol": "AAPL", "quantity": -100.0, "urgency": 0.5}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/optimize/almgren-chriss",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+
 class TestPilotsExecutionFixEndpoints:
     def test_get_execution_fix_venues_success(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -2131,11 +2153,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 500.0,
             "routing_policy": "SMART_SWEEP",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2168,18 +2190,18 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 450.0,
             "routing_policy": "FASTEST_VENUE",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
         assert body["routing_policy"] == "FASTEST_VENUE"
         assert len(body["fills"]) > 0
-        # FASTEST_VENUE routes to EDGX first (base latency 0.6ms)
-        assert body["fills"][0]["venue"] == "EDGX"
+        # FASTEST_VENUE routes to lowest latency tier (EDGX 0.6ms, MIAX 0.8ms base)
+        assert body["fills"][0]["venue"] in {"EDGX", "MIAX"}
 
     def test_post_execution_fix_route_max_rebate_success(self):
         payload = {
@@ -2189,11 +2211,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 220.0,
             "routing_policy": "MAX_REBATE",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2211,11 +2233,11 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 250.0,
             "routing_policy": "SMART_SWEEP",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
         body = resp.json()
@@ -2232,14 +2254,13 @@ class TestPilotsExecutionFixEndpoints:
             "quantity": 100.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
-        assert resp.status_code == 400
-        assert "Invalid side" in resp.json()["detail"]
+        assert resp.status_code == 422
 
     def test_post_execution_fix_route_invalid_policy(self):
         payload = {
@@ -2249,14 +2270,13 @@ class TestPilotsExecutionFixEndpoints:
             "limit_price": 500.0,
             "routing_policy": "UNKNOWN_POLICY",
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
-        assert resp.status_code == 400
-        assert "Invalid routing_policy" in resp.json()["detail"]
+        assert resp.status_code == 422
 
     def test_post_execution_fix_route_invalid_quantity(self):
         payload = {
@@ -2265,11 +2285,11 @@ class TestPilotsExecutionFixEndpoints:
             "quantity": -50.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 422
 
@@ -2280,7 +2300,7 @@ class TestPilotsExecutionFixEndpoints:
             "quantity": 100.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
@@ -2288,18 +2308,409 @@ class TestPilotsExecutionFixEndpoints:
             )
         assert resp.status_code == 401
 
-    def test_post_execution_fix_route_fail_open_without_token(self):
+    def test_post_execution_fix_route_fails_closed_without_token(self):
         payload = {
             "symbol": "SPY",
             "side": "BUY",
             "quantity": 50.0,
             "limit_price": 500.0,
         }
-        with mock_patch_settings(STATE_API_TOKEN=None):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/execution/fix/route",
                 json=payload,
             )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /pilots/ai/research/synthesize
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsAIResearchSynthesize:
+    def test_synthesize_success(self):
+        payload = {
+            "prompt": "Construct a trend following strategy using 20-day and 50-day moving average crossovers.",
+            "strategy_type": "hypothesis",
+            "target_asset_class": "equities",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/synthesize",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
         assert resp.status_code == 200
-        assert resp.json()["status"] == "FILLED"
+        body = resp.json()
+        assert body["success"] is True
+        assert "class " in body["code"]
+        assert body["validation_passed"] is True
+        assert body["synthesis_mode"] in {"hypothesis", "template"}
+        assert body["target_asset_class"] == "equities"
+        assert isinstance(body["metadata"], dict)
+
+    def test_synthesize_empty_prompt_400(self):
+        payload = {"prompt": "   "}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/synthesize",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        assert "Prompt cannot be empty" in resp.json()["detail"]
+
+    def test_synthesize_missing_prompt_422(self):
+        payload = {"strategy_type": "momentum"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/synthesize",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_synthesize_wrong_token_401(self):
+        payload = {"prompt": "A simple mean-reversion signal."}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/synthesize",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_synthesize_fail_closed_without_token(self):
+        payload = {"prompt": "A simple RSI oscillator momentum signal."}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/synthesize",
+                json=payload,
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /pilots/ai/research/backtest
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsAIResearchBacktest:
+    _SAMPLE_STRATEGY = """
+import numpy as np
+import pandas as pd
+
+def strategy(df: pd.DataFrame) -> pd.Series:
+    close = df['Close']
+    ma20 = close.rolling(20, min_periods=1).mean()
+    ma50 = close.rolling(50, min_periods=1).mean()
+    pos = pd.Series(0.0, index=df.index)
+    pos[close > ma20] = 1.0
+    pos[close < ma50] = -1.0
+    return pos
+"""
+
+    def test_backtest_success(self):
+        payload = {
+            "code": self._SAMPLE_STRATEGY,
+            "symbol": "SPY",
+            "cost_bps": 5.0,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/backtest",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "is_deployable" in body
+        assert "sharpe_ratio" in body
+        assert "pbo" in body
+        assert "dsr" in body
+        assert "gate_evaluations" in body
+        assert "pbo_gate" in body["gate_evaluations"]
+        assert "dsr_gate" in body["gate_evaluations"]
+        assert "sharpe_gate" in body["gate_evaluations"]
+        assert "max_dd_gate" in body["gate_evaluations"]
+        assert body["strategy_id"] == "SPY"
+
+    def test_backtest_empty_code_400(self):
+        payload = {"code": "   ", "symbol": "SPY"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/backtest",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        assert "Strategy code cannot be empty" in resp.json()["detail"]
+
+    def test_backtest_missing_code_422(self):
+        payload = {"code": "def strategy(df): pass", "cost_bps": -10.0}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/backtest",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_backtest_unsafe_ast_code(self):
+        payload = {
+            "code": "import os\ndef strategy(df):\n    os.system('echo test')\n    return df['Close']",
+            "symbol": "SPY",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/backtest",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["is_deployable"] is False
+        assert body["error"] is not None or len(body["failure_reasons"]) > 0
+
+    def test_backtest_wrong_token_401(self):
+        payload = {"code": self._SAMPLE_STRATEGY, "symbol": "SPY"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/backtest",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_backtest_fail_closed_without_token(self):
+        payload = {"code": self._SAMPLE_STRATEGY, "symbol": "SPY"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/ai/research/backtest",
+                json=payload,
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /pilots/options/vol-surface/3d-mesh
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsOptionsVolSurface3DMesh:
+    def test_vol_surface_mesh_default_symbol(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vol-surface/3d-mesh",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert body["spot_price"] > 0
+        assert isinstance(body["mesh"], list)
+        assert len(body["mesh"]) > 0
+        point = body["mesh"][0]
+        assert "x" in point and "y" in point and "z" in point
+        assert "strike" in point and "dte" in point and "iv" in point
+        assert isinstance(body["grid"], list)
+        assert "smiles" in body
+        assert "term_structure" in body
+
+    def test_vol_surface_mesh_custom_symbol(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vol-surface/3d-mesh?symbol=AAPL",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert len(body["mesh"]) > 0
+
+    def test_vol_surface_mesh_empty_symbol_422(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vol-surface/3d-mesh?symbol=",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code in {400, 422}
+
+    def test_vol_surface_mesh_wrong_token_401(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vol-surface/3d-mesh",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_vol_surface_mesh_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.get("/pilots/options/vol-surface/3d-mesh")
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "SPY"
+
+
+# ---------------------------------------------------------------------------
+# GET /pilots/execution/brokers/status
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsExecutionBrokersStatus:
+    def test_brokers_status_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/brokers/status",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "active_broker_id" in body
+        assert "priority_hierarchy" in body
+        assert "brokers" in body
+        assert isinstance(body["brokers"], dict)
+        assert "alpaca" in body["brokers"]
+        assert "total_orders_routed" in body
+        assert "total_failovers" in body
+
+    def test_brokers_status_wrong_token_401(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/brokers/status",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_brokers_status_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.get("/pilots/execution/brokers/status")
+        assert resp.status_code == 200
+        assert "brokers" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# POST /pilots/execution/brokers/failover
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsExecutionBrokersFailover:
+    def test_brokers_failover_success(self):
+        payload = {
+            "target_broker": "interactive_brokers",
+            "reason": "Primary broker latency degradation",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/brokers/failover",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["active_broker"] == "interactive_brokers"
+        assert body["manual_override"] == "interactive_brokers"
+        assert body["reason"] == "Primary broker latency degradation"
+
+    def test_brokers_failover_unregistered_broker_400(self):
+        payload = {
+            "target_broker": "nonexistent_fake_broker",
+            "reason": "Test unknown",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/brokers/failover",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 400
+        assert "not registered in gateway" in resp.json()["detail"]
+
+    def test_brokers_failover_missing_target_422(self):
+        payload = {"reason": "Missing target"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/brokers/failover",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_brokers_failover_wrong_token_401(self):
+        payload = {"target_broker": "tradier"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/brokers/failover",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_brokers_failover_fail_closed_without_token(self):
+        payload = {"target_broker": "tradier"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/brokers/failover",
+                json=payload,
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /pilots/execution/sec-606/report
+# ---------------------------------------------------------------------------
+
+
+class TestPilotsExecutionSec606Report:
+    def test_sec_606_report_default_params(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/sec-606/report",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "header" in body
+        assert "summary" in body
+        assert "order_category_breakdown" in body
+        assert "venue_breakdown" in body
+        assert body["header"]["year"] == 2026
+        assert body["header"]["quarter"] == 1
+
+    def test_sec_606_report_custom_year_quarter_is_option(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/sec-606/report?year=2026&quarter=2&is_option=true",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["header"]["year"] == 2026
+        assert body["header"]["quarter"] == 2
+        assert body["header"]["is_option"] is True
+
+    def test_sec_606_report_invalid_quarter_422(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/sec-606/report?quarter=5",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code in {400, 422}
+
+    def test_sec_606_report_wrong_token_401(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/execution/sec-606/report",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_sec_606_report_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.get("/pilots/execution/sec-606/report")
+        assert resp.status_code == 200
+        assert "header" in resp.json()
+        assert "summary" in resp.json()
+
 

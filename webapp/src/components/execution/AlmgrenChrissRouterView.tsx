@@ -54,10 +54,16 @@ export function AlmgrenChrissRouterView({ symbol, quantity }: { symbol: string; 
             {loading ? "Calculating..." : "Calculate Execution Trajectory"}
           </button>
           {error && <p className="text-red-500 m-0">{error}</p>}
+          {(!symbol || quantity <= 0) && <p className="text-yellow-500 text-sm m-0">Please provide a valid symbol and quantity.</p>}
         </div>
 
         {data && (
           <div className="space-y-4">
+            {data.variance === 0 && (
+              <div className="bg-yellow-900 border border-yellow-700 text-yellow-200 p-3 rounded text-sm">
+                Warning: Zero variance detected. Execution trajectory may be degenerate.
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 text-sm">
               <div className="bg-gray-800 p-3 rounded">
                 <span className="block text-gray-400">Expected Shortfall</span>

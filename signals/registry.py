@@ -63,6 +63,10 @@ class SignalRegistry:
         """Returns a copy of all registered signal modules."""
         return self._modules.copy()
 
+    def unregister(self, name: str) -> None:
+        """Removes a registered signal module by name, if present."""
+        self._modules.pop(name, None)
+
     def run_pre_compute(
         self,
         universe_df: pd.DataFrame,

@@ -8,6 +8,7 @@ export type StrategyCategory = 'Verticals' | 'Straddles & Strangles' | 'Calendar
 export type StrategyName = 
   | 'Custom'
   | 'Bull Call Spread' | 'Bear Put Spread' | 'Bull Put Spread' | 'Bear Call Spread'
+  | 'Iron Condor'
   | 'Long Straddle' | 'Long Strangle'
   | 'Long Call Calendar' | 'Long Put Calendar' | 'Short Put Calendar';
 
@@ -38,6 +39,7 @@ const STRATEGIES: { name: StrategyName, category: StrategyCategory, outlook: str
   { name: 'Bear Put Spread', category: 'Verticals', outlook: 'Bearish', desc: 'Buy a put and sell a lower strike put. Limited risk, limited reward.', shape: 'put-spread' },
   { name: 'Bull Put Spread', category: 'Verticals', outlook: 'Bullish', desc: 'Sell a put and buy a lower strike put for a net credit.', shape: 'call-spread' },
   { name: 'Bear Call Spread', category: 'Verticals', outlook: 'Bearish', desc: 'Sell a call and buy a higher strike call for a net credit.', shape: 'put-spread' },
+  { name: 'Iron Condor', category: 'Verticals', outlook: 'Neutral', desc: 'Sell an out-of-the-money put spread and call spread for a net credit. Limited risk, limited reward.', shape: 'put-spread' },
   
   { name: 'Long Straddle', category: 'Straddles & Strangles', outlook: 'Volatile', desc: 'Buy a call and put at the same strike. Profits from a large move in either direction.', shape: 'straddle' },
   { name: 'Long Strangle', category: 'Straddles & Strangles', outlook: 'Volatile', desc: 'Buy an out-of-the-money call and put. Requires a larger move than a straddle but costs less.', shape: 'strangle' },
@@ -99,6 +101,17 @@ export const OptionsStrategyBuilder: React.FC<Props> = ({ symbol, chain, expirat
         case 'Bear Call Spread': {
           const shortCall = findClosestStrikeByDelta(calls, 0.30);
           const longCall = findClosestStrikeByDelta(calls, 0.15);
+          if (shortCall) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
+          if (longCall && longCall.strike !== shortCall?.strike) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
+          break;
+        }
+        case 'Iron Condor': {
+          const longPut = findClosestStrikeByDelta(puts, -0.15);
+          const shortPut = findClosestStrikeByDelta(puts, -0.30);
+          const shortCall = findClosestStrikeByDelta(calls, 0.30);
+          const longCall = findClosestStrikeByDelta(calls, 0.15);
+          if (longPut) newLegs.push({ contract: longPut, type: 'put', action: 'Buy' });
+          if (shortPut && shortPut.strike !== longPut?.strike) newLegs.push({ contract: shortPut, type: 'put', action: 'Sell' });
           if (shortCall) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
           if (longCall && longCall.strike !== shortCall?.strike) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
           break;

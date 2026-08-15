@@ -61,13 +61,30 @@ describe("HrpCvarOptimizerView", () => {
 
   it("handles api error", async () => {
     vi.mocked(api.optimizeHrpCvar).mockRejectedValueOnce(new Error("Optimization failed"));
-    render(<HrpCvarOptimizerView symbols={["AAPL"]} />);
+    render(<HrpCvarOptimizerView symbols={["AAPL", "MSFT"]} />);
     
     const btn = screen.getByRole("button", { name: "Run Optimization" });
     fireEvent.click(btn);
     
     await waitFor(() => {
       expect(screen.getByText("Optimization failed")).toBeInTheDocument();
+    });
+  });
+  it("handles empty allocations array in response", async () => {
+    vi.mocked(api.optimizeHrpCvar).mockResolvedValueOnce({
+      allocations: [],
+      dendrogram: { name: "root", distance: 0, children: [] },
+      expected_return: 0,
+      cvar_95: 0,
+      sharpe_ratio: 0,
+    });
+    render(<HrpCvarOptimizerView symbols={["AAPL", "MSFT"]} />);
+    
+    const btn = screen.getByRole("button", { name: "Run Optimization" });
+    fireEvent.click(btn);
+    
+    await waitFor(() => {
+      expect(screen.getByText("Asset Allocations")).toBeInTheDocument();
     });
   });
 });

@@ -436,19 +436,26 @@ async def test_multi_venue_aggregator_routing():
     aggregator = MultiVenueAggregator()
 
     import numpy as np
-    np.random.seed(42)
     import random
+
+    np_state = np.random.get_state()
+    py_state = random.getstate()
+    np.random.seed(42)
     random.seed(42)
 
-    qty_to_route = 1500.0
-    fills = await aggregator.route_order("AAPL", Side.BUY, qty_to_route, 150.0)
+    try:
+        qty_to_route = 1500.0
+        fills = await aggregator.route_order("AAPL", Side.BUY, qty_to_route, 150.0)
 
-    total_filled = sum(f["fill_qty"] for f in fills)
-    assert len(fills) > 0
-    # Sweeps lowest fee venue first (BOX 0.10, MIAX 0.25, PHLX 0.40, CBOE 0.45)
-    sorted_venues = [f["venue"] for f in fills]
-    assert sorted_venues[0] == "BOX"
-    assert total_filled <= qty_to_route
+        total_filled = sum(f["fill_qty"] for f in fills)
+        assert len(fills) > 0
+        # Sweeps lowest fee venue first (BOX 0.10, MIAX 0.25, PHLX 0.40, CBOE 0.45)
+        sorted_venues = [f["venue"] for f in fills]
+        assert sorted_venues[0] == "BOX"
+        assert total_filled <= qty_to_route
+    finally:
+        np.random.set_state(np_state)
+        random.setstate(py_state)
 
 
 # --- 6. Additional Edge Cases & Validation Tests ---
@@ -487,6 +494,9 @@ def test_order_replace_reject_reverts_state():
 
     # State should revert from PENDING_REPLACE back to NEW
     assert session.order_book[ord_id]["status"] == OrdStatus.NEW
+    
+    # Replacement ClOrdID should be REJECTED
+    assert session.order_book[rpl_id]["status"] == OrdStatus.REJECTED
 
 
 def test_parsing_error_cases():
@@ -631,4 +641,67 @@ def test_multi_venue_aggregator_get_venues_info():
         assert len(asks) == 3
         assert bids[0]["price"] < asks[0]["price"]
 
+
+def test_poss_dup_execution_report_deduplication():
+    session = FixSession("CLIENT1", "EXCHANGE")
+    callbacks = []
+    session.register_callback("execution_report", lambda msg: callbacks.append(msg))
+    
+    cl_ord_id = session.send_order("AAPL", Side.BUY, 100, 150.0)
+    
+    # Send original execution report (seq=1)
+    er1 = ExecutionReport("EXCHANGE", "CLIENT1", 1, "EXCH_1", cl_ord_id, "EXEC_1", ExecType.NEW, OrdStatus.NEW, "AAPL", Side.BUY, 100, 0, 0)
+    session.simulate_receive(er1)
+    
+    assert len(callbacks) == 1
+    
+    # Send duplicate execution report with PossDupFlag="Y" and same seq_num
+    er_dup = ExecutionReport("EXCHANGE", "CLIENT1", 1, "EXCH_1", cl_ord_id, "EXEC_1", ExecType.NEW, OrdStatus.NEW, "AAPL", Side.BUY, 100, 0, 0)
+    er_dup.set_tag("43", "Y") # PossDupFlag
+    session.simulate_receive(er_dup)
+    
+    # Callback should not fire again since seq_num 1 is <= inbound_seq_num
+    assert len(callbacks) == 1
+
+
+@pytest.mark.anyio
+async def test_concurrent_connect_disconnect():
+    session = FixSession("CLIENT1", "EXCHANGE")
+    
+    # Run multiple connects concurrently
+    await asyncio.gather(
+        session.connect(),
+        session.connect(),
+        session.connect()
+    )
+    assert session.state == FixSessionState.CONNECTED
+    
+    # Run multiple disconnects concurrently
+    await asyncio.gather(
+        session.disconnect(),
+        session.disconnect(),
+        session.disconnect()
+    )
+    assert session.state == FixSessionState.DISCONNECTED
+
+
+@pytest.mark.anyio
+async def test_zero_liquidity_venue_routing():
+    aggregator = MultiVenueAggregator()
+    for venue in aggregator.venues.values():
+        venue.liquidity_depth = 0.0
+    
+    # Limit price is so low that no venue's asks will match
+    res = await aggregator.route_order(
+        symbol="SPY",
+        side=Side.BUY,
+        qty=1000.0,
+        limit_price=1.0, 
+        routing_policy=RoutingPolicy.SMART_SWEEP,
+        detailed=True
+    )
+    
+    # No fills should happen
+    assert res["total_filled_qty"] == 0.0
+    assert len(res["fills"]) == 0
 

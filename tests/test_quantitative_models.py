@@ -37,9 +37,10 @@ def _reset_meta_registry():
     every test so this file's tests are order-independent (same pattern as
     tests/test_train_meta_labelers.py's _reset_registry fixture).
     """
-    meta_labeling.global_meta_registry = MetaLabelerRegistry()
+    from ml.meta_labeling import global_meta_registry
+    global_meta_registry._labelers.clear()
     yield
-    meta_labeling.global_meta_registry = MetaLabelerRegistry()
+    global_meta_registry._labelers.clear()
 
 
 # =============================================================================

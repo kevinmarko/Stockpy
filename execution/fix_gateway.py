@@ -10,6 +10,7 @@ import time
 import datetime
 import random
 import uuid
+import logging
 from enum import Enum
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable, Awaitable
 import numpy as np
@@ -1091,6 +1092,7 @@ class FixSession:
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._last_received_time: float = time.time()
         self._last_sent_time: float = time.time()
+        self._lock = asyncio.Lock()
 
         # Callbacks
         self.on_execution_report: Optional[Callable[[ExecutionReport], Any]] = None
@@ -1134,32 +1136,34 @@ class FixSession:
 
     async def connect(self, reset_seq: bool = False):
         """Initiate logon sequence and activate heartbeat loop."""
-        self.state = FixSessionState.LOGGING_ON
-        await asyncio.sleep(0.01)
-        logon_msg = Logon(
-            self.sender_comp_id,
-            self.target_comp_id,
-            self.outbound_seq_num,
-            heartbeat_int=self.heartbeat_int,
-            reset_seq_num=reset_seq,
-        )
-        self._send(logon_msg)
-        self.state = FixSessionState.CONNECTED
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        async with self._lock:
+            self.state = FixSessionState.LOGGING_ON
+            await asyncio.sleep(0.01)
+            logon_msg = Logon(
+                self.sender_comp_id,
+                self.target_comp_id,
+                self.outbound_seq_num,
+                heartbeat_int=self.heartbeat_int,
+                reset_seq_num=reset_seq,
+            )
+            self._send(logon_msg)
+            self.state = FixSessionState.CONNECTED
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def disconnect(self, text: Optional[str] = None):
         """Initiate logout sequence and cancel heartbeat task."""
-        self.state = FixSessionState.LOGGING_OFF
-        logout_msg = Logout(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, text=text)
-        self._send(logout_msg)
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
-            self._heartbeat_task = None
-        self.state = FixSessionState.DISCONNECTED
+        async with self._lock:
+            self.state = FixSessionState.LOGGING_OFF
+            logout_msg = Logout(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, text=text)
+            self._send(logout_msg)
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+                try:
+                    await self._heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                self._heartbeat_task = None
+            self.state = FixSessionState.DISCONNECTED
 
     async def _heartbeat_loop(self):
         """Background heartbeat generator loop."""
@@ -1264,7 +1268,12 @@ class FixSession:
         if orig_cl_ord_id in self.order_book:
             self.order_book[orig_cl_ord_id]["status"] = OrdStatus.PENDING_CANCEL
             self.order_book[orig_cl_ord_id]["pending_cancel_id"] = cl_ord_id
-            self.order_book[cl_ord_id] = self.order_book[orig_cl_ord_id]
+            self.order_book[cl_ord_id] = {
+                **self.order_book[orig_cl_ord_id],
+                "cl_ord_id": cl_ord_id,
+                "orig_cl_ord_id": orig_cl_ord_id,
+                "status": OrdStatus.PENDING_CANCEL,
+            }
         return cl_ord_id
 
     def replace_order(
@@ -1411,7 +1420,8 @@ class FixSession:
             # Check if PossDupFlag is set
             is_poss_dup = msg.tags.get("43") == "Y"
             if is_poss_dup:
-                self._process_message_payload(msg)
+                logging.debug(f"Ignored poss dup message seq {seq} < {self.inbound_seq_num} to avoid duplicate processing")
+                return msg
             # Otherwise ignore outdated sequence number without advancing
             return msg
 
@@ -1504,9 +1514,8 @@ class FixSession:
         elif msg_type == FixMsgType.ORDER_CANCEL_REJECT.value:
             orig_cl_ord_id = msg.tags.get("41")
             cl_ord_id = msg.tags.get("11")
-            target_id = orig_cl_ord_id or cl_ord_id
-            if target_id and target_id in self.order_book:
-                order_rec = self.order_book[target_id]
+            if orig_cl_ord_id and orig_cl_ord_id in self.order_book:
+                order_rec = self.order_book[orig_cl_ord_id]
                 # Revert pending status to active status
                 status_in_msg = msg.tags.get("39")
                 if status_in_msg:
@@ -1515,6 +1524,11 @@ class FixSession:
                     order_rec["status"] = OrdStatus.PARTIALLY_FILLED
                 else:
                     order_rec["status"] = OrdStatus.NEW
+            if cl_ord_id and cl_ord_id in self.order_book:
+                # For cancel_order, cl_ord_id shares the same dict as orig_cl_ord_id. 
+                # For replace_order, it's a new dict. We only mark REJECTED if it's a separate dict.
+                if orig_cl_ord_id not in self.order_book or id(self.order_book[cl_ord_id]) != id(self.order_book[orig_cl_ord_id]):
+                    self.order_book[cl_ord_id]["status"] = OrdStatus.REJECTED
             self._invoke_callback(self.on_cancel_reject, msg)
 
         elif msg_type == FixMsgType.EXECUTION_REPORT.value:
@@ -1538,7 +1552,7 @@ class FixSession:
                 order_rec["avg_px"] = avg_px
                 if order_id:
                     order_rec["order_id"] = order_id
-                if ord_status == OrdStatus.REPLACED:
+                if ord_status in {OrdStatus.REPLACED, OrdStatus.CANCELED, OrdStatus.REJECTED}:
                     if "38" in msg.tags:
                         order_rec["qty"] = float(msg.tags["38"])
                     if "44" in msg.tags:
@@ -1546,6 +1560,7 @@ class FixSession:
                     self.order_book[cl_ord_id] = order_rec
                     if orig_cl_ord_id:
                         self.order_book[orig_cl_ord_id] = order_rec
+                        self.order_book[orig_cl_ord_id]["filled"] = cum_qty
                 order_rec.setdefault("history", []).append(msg.to_dict())
             else:
                 self.order_book[cl_ord_id] = {
@@ -1788,11 +1803,11 @@ class MultiVenueAggregator:
 
         # Sort according to policy
         if policy_str == RoutingPolicy.FASTEST_VENUE.value:
-            quotes.sort(key=lambda x: (x["latency_ms"], x["taker_fee"]))
+            quotes.sort(key=lambda x: (x["config"].base_latency_ms, x["taker_fee"]))
         elif policy_str == RoutingPolicy.MAX_REBATE.value:
             quotes.sort(key=lambda x: (x["maker_fee"], x["latency_ms"]))
         else:  # SMART_SWEEP
-            quotes.sort(key=lambda x: (x["fee"], x["latency_ms"]))
+            quotes.sort(key=lambda x: (x["taker_fee"], x["latency_ms"]))
 
         remaining_qty = float(qty)
         total_filled = 0.0

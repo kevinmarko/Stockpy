@@ -52,6 +52,10 @@ class _QuietHandler(http.server.BaseHTTPRequestHandler):
         pass  # suppress default request logging to keep test output clean
 
 
+import pytest
+
+
+@pytest.mark.network
 class TestWaitForHttp:
     def test_returns_true_when_server_is_listening(self) -> None:
         port = find_free_port()

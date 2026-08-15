@@ -192,6 +192,17 @@ import type {
   HrpCvarOptimizeResponse,
   AlmgrenChrissOptimizeRequest,
   AlmgrenChrissOptimizeResponse,
+  FixRouteOrderRequest,
+  FixRouteOrderResponse,
+  ResearchSynthesizeRequest,
+  ResearchSynthesizeResponse,
+  AutonomousBacktestRequest,
+  AutonomousBacktestResponse,
+  VolSurface3DMeshResponse,
+  MultiBrokerStatusResponse,
+  BrokerFailoverRequest,
+  BrokerFailoverResponse,
+  SecRule606ReportResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -615,6 +626,11 @@ const liveApi = {
     }),
   optimizeAlmgrenChriss: (req: AlmgrenChrissOptimizeRequest) =>
     http<AlmgrenChrissOptimizeResponse>("/pilots/execution/optimize/almgren-chriss", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  routeFixOrder: (req: FixRouteOrderRequest) =>
+    http<FixRouteOrderResponse>("/pilots/execution/fix/route", {
       method: "POST",
       body: JSON.stringify(req),
     }),
@@ -1152,6 +1168,38 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
+
+  // ---- Tier D: AI Research Copilot, 3D Vol, Multi-Broker & SEC 606 ----
+
+  synthesizeQuantResearch: (request: ResearchSynthesizeRequest) =>
+    http<ResearchSynthesizeResponse>("/pilots/ai/research/synthesize", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  runAutonomousBacktest: (request: AutonomousBacktestRequest) =>
+    http<AutonomousBacktestResponse>("/pilots/ai/backtest/autonomous", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getVolSurface3DMesh: (symbol?: string) => {
+    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+    return http<VolSurface3DMeshResponse>(`/pilots/options/vol-surface/3d-mesh${q}`);
+  },
+  getMultiBrokerStatus: () =>
+    http<MultiBrokerStatusResponse>("/pilots/execution/multi-broker/status"),
+  triggerBrokerFailover: (request: BrokerFailoverRequest) =>
+    http<BrokerFailoverResponse>("/pilots/execution/multi-broker/failover", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getSecRule606Report: (params?: { year?: number; quarter?: number; is_option?: boolean }) => {
+    const q = new URLSearchParams();
+    if (params?.year != null) q.set("year", String(params.year));
+    if (params?.quarter != null) q.set("quarter", String(params.quarter));
+    if (params?.is_option != null) q.set("is_option", String(params.is_option));
+    const qs = q.toString() ? `?${q.toString()}` : "";
+    return http<SecRule606ReportResponse>(`/pilots/execution/sec-606/report${qs}`);
+  },
 
   // ---- Live Trade Approvals ----
 

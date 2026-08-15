@@ -5644,6 +5644,26 @@ class ZeroDteExecuteRequest(BaseModel):
 
 
 
+class MultiLegOptionLeg(BaseModel):
+    strike: float = Field(..., gt=0.0, description="Strike price of the option leg")
+    option_type: Literal["call", "put", "CALL", "PUT"] = Field(..., description="Option type: CALL or PUT")
+    action: Literal["buy", "sell", "BUY", "SELL"] = Field(..., description="Action: BUY or SELL")
+    ratio: int = Field(default=1, gt=0, description="Contract ratio multiplier (>= 1)")
+    expiration: Optional[str] = Field(default=None, description="Expiration date string (YYYY-MM-DD)")
+    premium: Optional[float] = Field(default=None, ge=0.0, description="Market price per share if known")
+    iv: Optional[float] = Field(default=None, gt=0.0, description="Implied volatility decimal (e.g. 0.30)")
+
+class MultiLegStructurePricingRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=10, description="Underlying ticker symbol")
+    structure_type: Optional[str] = Field(default="CUSTOM", description="Structure type: IRON_CONDOR, VERTICAL_SPREAD, STRADDLE, STRANGLE, etc.")
+    legs: List[MultiLegOptionLeg] = Field(..., min_length=1, description="List of component option legs")
+    underlying_price: Optional[float] = Field(default=None, gt=0.0, description="Spot price override if not fetching from market")
+    iv_override: Optional[float] = Field(default=None, gt=0.0, description="Global IV override for unpriced legs")
+
+class MultiLegValidationRequest(BaseModel):
+    structure_type: str = Field(..., description="Structure type: IRON_CONDOR, VERTICAL_SPREAD, STRADDLE, STRANGLE, etc.")
+    legs: List[MultiLegOptionLeg] = Field(..., min_length=1, description="List of component option legs")
+
 
 @app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
 def get_cls_concentrated_positions() -> Dict[str, Any]:
@@ -6119,6 +6139,72 @@ def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
         logger.error("pilots_api: alerts/test failed: %s", exc, exc_info=True)
         return {"ok": False, "error": "Internal error while dispatching test alert; see server logs for detail."}
+
+
+@app.post("/pilots/options/multi-leg/price", dependencies=[Depends(require_read_token)])
+def post_options_multi_leg_price(body: MultiLegStructurePricingRequest) -> Dict[str, Any]:
+    """Calculates theoretical prices, composite net Greeks, net entry cost/credit,
+    max profit, max loss, risk/reward, break-evens, and expiration payoff curve
+    for any multi-leg option strategy."""
+    from pilots.multi_leg_pricing import OptionLegSpec, price_multi_leg_structure
+    from pilots.price_provider import get_latest_price
+
+    spot = body.underlying_price
+    if spot is None or spot <= 0:
+        spot = get_latest_price(body.symbol) or 100.0
+
+    specs = [
+        OptionLegSpec(
+            strike=l.strike,
+            option_type=l.option_type,
+            action=l.action,
+            ratio=l.ratio,
+            expiration=l.expiration,
+            premium=l.premium,
+            iv=l.iv or body.iv_override,
+        )
+        for l in body.legs
+    ]
+
+    res = price_multi_leg_structure(
+        spot=spot,
+        legs=specs,
+        default_iv=body.iv_override or 0.30,
+    )
+    res["symbol"] = body.symbol.upper()
+    res["structure_type"] = body.structure_type
+    return res
+
+
+@app.post("/pilots/options/multi-leg/validate", dependencies=[Depends(require_read_token)])
+def post_options_multi_leg_validate(body: MultiLegValidationRequest) -> Dict[str, Any]:
+    """Validates structural correctness of multi-leg option configurations
+    (e.g. Iron Condor wing ordering, Vertical Spread strike ordering, Straddle parity)."""
+    from pilots.multi_leg_pricing import OptionLegSpec, validate_multi_leg_structure
+
+    specs = [
+        OptionLegSpec(
+            strike=l.strike,
+            option_type=l.option_type,
+            action=l.action,
+            ratio=l.ratio,
+            expiration=l.expiration,
+            premium=l.premium,
+            iv=l.iv,
+        )
+        for l in body.legs
+    ]
+
+    is_valid, errors = validate_multi_leg_structure(
+        structure_type=body.structure_type,
+        legs=specs,
+    )
+    return {
+        "structure_type": body.structure_type,
+        "is_valid": is_valid,
+        "errors": errors,
+    }
+
 @app.get("/pilots/options/dispersion/opportunities", dependencies=[Depends(require_read_token)])
 def get_options_dispersion_opportunities(
     indices: Optional[str] = None,
@@ -6517,7 +6603,7 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
     }
 
 class HRPCVaRRequest(BaseModel):
-    symbols: List[str]
+    symbols: List[str] = Field(..., min_length=1)
     target_return: Optional[float] = None
     risk_aversion: Optional[float] = None
 
@@ -6584,11 +6670,13 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
 
 class AlmgrenChrissRequest(BaseModel):
     symbol: str
-    quantity: float
+    quantity: float = Field(..., gt=0.0)
     risk_aversion: Optional[float] = None
     volatility: Optional[float] = None
     liquidity: Optional[float] = None
     horizon_steps: Optional[int] = None
+    total_time: Optional[float] = Field(1.0, gt=0.0)
+    n_intervals: Optional[int] = Field(10, gt=0)
 
 @app.post(
     "/pilots/execution/optimize/almgren-chriss",
@@ -6640,15 +6728,15 @@ def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[st
 
 class FixRouteOrderRequest(BaseModel):
     symbol: str = Field(..., min_length=1)
-    side: str = Field(...)
-    quantity: float = Field(..., gt=0)
-    limit_price: float = Field(..., gt=0)
-    routing_policy: Optional[str] = "SMART_SWEEP"
+    side: Literal["BUY", "SELL"]
+    quantity: float = Field(..., gt=0.0)
+    limit_price: float = Field(..., gt=0.0)
+    routing_policy: Optional[Literal["SMART_SWEEP", "FASTEST_VENUE", "MAX_REBATE"]] = "SMART_SWEEP"
 
 
 @app.post(
     "/pilots/execution/fix/route",
-    dependencies=[Depends(require_read_token)],
+    dependencies=[Depends(require_command_token)],
 )
 async def post_pilots_execution_fix_route(req: FixRouteOrderRequest) -> Dict[str, Any]:
     """Routes an order across multiple option/equity execution venues via the Smart Order Router (SOR).
@@ -6698,4 +6786,230 @@ def get_pilots_execution_fix_venues(
 
     aggregator = MultiVenueAggregator()
     return aggregator.get_venues_info(symbol=symbol, spot_price=spot_price)
+
+
+# ---------------------------------------------------------------------------
+# AI Research Copilot & Autonomous Backtest Endpoints
+# ---------------------------------------------------------------------------
+
+
+class ResearchSynthesizeRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Quantitative hypothesis, academic abstract, or math formula.")
+    strategy_type: Optional[str] = Field(None, description="Optional strategy type/mode e.g. momentum, mean_reversion, hypothesis.")
+    target_asset_class: Optional[str] = Field(None, description="Optional target asset class e.g. equities, options, crypto.")
+
+
+@app.post(
+    "/pilots/ai/research/synthesize",
+    dependencies=[Depends(require_command_token)],
+)
+def post_pilots_ai_research_synthesize(req: ResearchSynthesizeRequest) -> Dict[str, Any]:
+    """Synthesizes AST-safe SignalModule implementation and metadata from quantitative research input."""
+    prompt_clean = req.prompt.strip()
+    if not prompt_clean:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    from llm.research_copilot import ResearchCopilot
+
+    mode = req.strategy_type or "hypothesis"
+    copilot = ResearchCopilot()
+    result = copilot.synthesize(
+        prompt_or_text=prompt_clean,
+        mode=mode,
+    )
+
+    return {
+        "success": result.success,
+        "code": result.code,
+        "metadata": result.metadata,
+        "validation_passed": result.validation_passed,
+        "validation_errors": result.validation_errors,
+        "source_prompt": result.source_prompt,
+        "synthesis_mode": result.synthesis_mode,
+        "explanation": result.explanation,
+        "target_asset_class": req.target_asset_class,
+        "strategy_type": req.strategy_type,
+    }
+
+
+class ResearchBacktestRequest(BaseModel):
+    code: Optional[str] = Field(None, description="AST-safe SignalModule or strategy Python code.")
+    strategy_code: Optional[str] = Field(None, description="Alias for code.")
+    symbol: Optional[str] = Field("SPY", description="Ticker symbol to validate against.")
+    strategy_id: Optional[str] = Field(None, description="Strategy identifier.")
+    symbols: Optional[List[str]] = Field(None, description="List of symbols.")
+    start_date: Optional[str] = Field(None, description="Start date YYYY-MM-DD.")
+    end_date: Optional[str] = Field(None, description="End date YYYY-MM-DD.")
+    cost_bps: Optional[float] = Field(5.0, ge=0.0, description="Transaction cost in basis points per turnover.")
+    transaction_cost_bps: Optional[float] = Field(None, ge=0.0, description="Alias for cost_bps.")
+    apply_trend_gate: Optional[bool] = Field(False, description="Apply Faber SMA-200 trend gating.")
+
+
+@app.post(
+    "/pilots/ai/research/backtest",
+    dependencies=[Depends(require_command_token)],
+)
+@app.post(
+    "/pilots/ai/backtest/autonomous",
+    dependencies=[Depends(require_command_token)],
+)
+def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, Any]:
+    """Executes CPCV and evaluates quantitative strategy code against formal deployability gates (PBO, DSR, Sharpe, MaxDD)."""
+    raw_code = req.code or req.strategy_code or ""
+    code_clean = raw_code.strip()
+    if not code_clean:
+        raise HTTPException(status_code=400, detail="Strategy code cannot be empty.")
+
+    from validation.autonomous_backtest_runner import AutonomousBacktestRunner
+
+    sym = (req.symbol or (req.symbols[0] if req.symbols else "SPY") or "SPY").strip().upper()
+    ohlcv_df = None
+    try:
+        store = HistoricalStore()
+        ohlcv_df = store.get_bars(sym)
+    except Exception as exc:
+        logger.debug("Failed to fetch historical bars for %s: %s", sym, exc)
+        ohlcv_df = None
+
+    if ohlcv_df is None or len(ohlcv_df) < 50:
+        ohlcv_df = AutonomousBacktestRunner.generate_synthetic_ohlcv(500, regime="bull", seed=42)
+
+    cost = req.transaction_cost_bps if req.transaction_cost_bps is not None else req.cost_bps
+    cost_val = float(cost) if cost is not None else 5.0
+
+    runner = AutonomousBacktestRunner(cost_bps=cost_val)
+    result = runner.run(
+        strategy=code_clean,
+        ohlcv_df=ohlcv_df,
+        strategy_id=req.strategy_id or sym,
+        apply_trend_gate=bool(req.apply_trend_gate),
+    )
+
+    return result.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Options 3D Volatility Surface Mesh Endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/pilots/options/vol-surface/3d-mesh",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_options_vol_surface_3d_mesh(
+    symbol: Optional[str] = Query("SPY", min_length=1),
+) -> Dict[str, Any]:
+    """Returns 3D coordinate grid of strike, DTE, and IV points for Three.js rendering."""
+    sym = (symbol or "SPY").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="Symbol cannot be empty.")
+
+    from pilots.volatility_surface import get_volatility_surface_data
+
+    surface_data = get_volatility_surface_data(symbol=sym)
+    grid_points = surface_data.get("surface_grid", [])
+
+    mesh = [
+        {
+            "x": float(pt["strike"]),
+            "y": float(pt["dte"]),
+            "z": float(pt["iv"]),
+            "strike": float(pt["strike"]),
+            "dte": int(pt["dte"]),
+            "iv": float(pt["iv"]),
+            "moneyness": float(pt.get("moneyness", 1.0)),
+            "call_delta": float(pt.get("call_delta", 0.0)) if pt.get("call_delta") is not None else None,
+            "put_delta": float(pt.get("put_delta", 0.0)) if pt.get("put_delta") is not None else None,
+        }
+        for pt in grid_points
+    ]
+
+    return {
+        "symbol": sym,
+        "spot_price": surface_data.get("spot_price"),
+        "as_of": surface_data.get("as_of"),
+        "mesh": mesh,
+        "grid": grid_points,
+        "expirations": surface_data.get("expirations", []),
+        "term_structure": surface_data.get("term_structure", {}),
+        "smiles": surface_data.get("smiles", {}),
+        "skew_summary": surface_data.get("skew_summary", {}),
+        "vrp_cone": surface_data.get("vrp_cone", {}),
+        "missing_data": surface_data.get("missing_data", False),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Multi-Broker Gateway Telemetry & Failover Endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/pilots/execution/brokers/status",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_execution_brokers_status() -> Dict[str, Any]:
+    """Returns multi-broker gateway status snapshot (active broker, latencies, circuit breaker states, available adapters)."""
+    from execution.multi_broker_gateway import MultiBrokerGateway
+
+    gateway = MultiBrokerGateway.get_default_gateway()
+    snapshot = gateway.get_status_snapshot()
+    return snapshot.to_dict()
+
+
+class BrokerFailoverRequest(BaseModel):
+    target_broker: str = Field(..., min_length=1, description="Target broker ID to manually route execution to.")
+    reason: Optional[str] = Field(None, description="Operator rationale for manual failover.")
+
+
+@app.post(
+    "/pilots/execution/brokers/failover",
+    dependencies=[Depends(require_command_token)],
+)
+def post_pilots_execution_brokers_failover(req: BrokerFailoverRequest) -> Dict[str, Any]:
+    """Triggers manual broker failover in MultiBrokerGateway."""
+    from execution.multi_broker_gateway import MultiBrokerGateway
+
+    gateway = MultiBrokerGateway.get_default_gateway()
+    target = req.target_broker.strip().lower()
+    registered = gateway.list_brokers()
+    if target not in registered:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target broker '{req.target_broker}' is not registered in gateway. Available brokers: {registered}",
+        )
+
+    gateway.set_manual_override(target)
+    return {
+        "status": "ok",
+        "active_broker": target,
+        "manual_override": target,
+        "reason": req.reason or "manual_operator_failover",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# SEC Rule 606 Execution Quality Report Endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/pilots/execution/sec-606/report",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_execution_sec_606_report(
+    year: int = Query(2026, ge=2000, le=2100),
+    quarter: int = Query(1, ge=1, le=4),
+    is_option: Optional[bool] = Query(None),
+) -> Dict[str, Any]:
+    """Returns SEC Rule 606(a)(1) quarterly metrics and venue percentages."""
+    if quarter < 1 or quarter > 4:
+        raise HTTPException(status_code=400, detail="Quarter must be between 1 and 4.")
+
+    from execution.sec_rule_606_reporter import SecRule606Reporter
+
+    reporter = SecRule606Reporter()
+    return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
 

@@ -726,6 +726,7 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_EMAIL_SMTP_HOST",
     "ALERT_NTFY_TOPIC",
     "ALERT_SLACK_WEBHOOK_URL",  # description literally says "Secret"
+    "OPTIONS_ALERT_WEBHOOK_URL",
     # Reddit API User-Agent header. Not a credential in the auth sense (REDDIT_
     # CLIENT_ID/SECRET already cover that), but a per-operator identifying value
     # for a third-party API — classified here for the exact same reason

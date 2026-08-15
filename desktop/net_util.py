@@ -41,10 +41,11 @@ def wait_for_http(url: str, timeout: float = 15.0, interval: float = 0.25) -> bo
     Returns True as soon as a response is received, False if ``timeout``
     is exceeded without one.
     """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + timeout
     while True:
         try:
-            urllib.request.urlopen(url, timeout=interval)
+            opener.open(url, timeout=interval)
             return True
         except urllib.error.HTTPError:
             # Any HTTP response, even an error status, means something is

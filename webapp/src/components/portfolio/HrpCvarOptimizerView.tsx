@@ -55,6 +55,7 @@ export function HrpCvarOptimizerView({ symbols }: { symbols: string[] }) {
             {loading ? "Optimizing..." : "Run Optimization"}
           </button>
           {error && <p className="text-red-500 m-0">{error}</p>}
+          {symbols.length === 0 && <p className="text-yellow-500 text-sm m-0">Please select at least 1 symbol for clustering.</p>}
         </div>
 
         {data && (

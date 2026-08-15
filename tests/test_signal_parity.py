@@ -13,15 +13,13 @@ from settings import settings
 
 
 def test_strategy_engine_buy_range_and_options_overlays_parity(monkeypatch):
-    # Pin SIGNAL_WEIGHTS to the declared defaults so this test's hardcoded
-    # expected scores/actions are deterministic regardless of whatever the
-    # real .env in this checkout has tuned them to (operator-customized
-    # weights via the Strategy Matrix tab are a legitimate deployment state,
-    # not a violation of this test's assumptions) -- same fix as
-    # tests/test_quantitative_models.py's parity counterpart.
-    monkeypatch.setattr(
-        settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
-    )
+    # Pin SIGNAL_WEIGHTS and signal switches to declared defaults so this test's
+    # hardcoded expected scores/actions are deterministic regardless of whatever the
+    # real .env in this checkout has tuned them to.
+    _clean = type(settings)(_env_file=None)
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", _clean.SIGNAL_WEIGHTS)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", _clean.DISABLED_SIGNAL_MODULES)
+    monkeypatch.setattr(settings, "REGIME_SIGNAL_WEIGHTS", _clean.REGIME_SIGNAL_WEIGHTS)
     engine = StrategyEngine()
 
     # Scenario A: JNJ in Bull Market / Risk-On -> STRONG BUY

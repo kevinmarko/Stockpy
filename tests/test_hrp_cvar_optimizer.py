@@ -123,3 +123,41 @@ def test_constrain_cvar_no_change():
     
     # Should be almost exactly the same weights
     np.testing.assert_almost_equal(w_new.values, initial_weights.values, decimal=4)
+
+def test_zero_variance_asset():
+    cov = pd.DataFrame([
+        [0.0, 0.0, 0.0],
+        [0.0, 0.04, 0.01],
+        [0.0, 0.01, 0.09]
+    ], index=['Cash', 'A', 'B'], columns=['Cash', 'A', 'B'])
+    dist = compute_correlation_distance(cov)
+    assert not dist.isna().any().any()
+    np.testing.assert_almost_equal(np.diag(dist), np.zeros(3))
+
+def test_collinear_returns_singular_cov():
+    cov = pd.DataFrame([
+        [0.04, 0.04, 0.0],
+        [0.04, 0.04, 0.0],
+        [0.0, 0.0, 0.09]
+    ], index=['A1', 'A2', 'B'], columns=['A1', 'A2', 'B'])
+    dist = compute_correlation_distance(cov)
+    assert not dist.isna().any().any()
+    np.testing.assert_almost_equal(dist.loc['A1', 'A2'], 0.0)
+
+def test_calculate_cvar_empty_returns():
+    weights = np.array([0.5, 0.5])
+    returns = np.empty((0, 2))
+    cvar = calculate_cvar(weights, returns, alpha=0.05)
+    assert cvar == 0.0
+
+def test_degenerate_bisections():
+    cov2 = pd.DataFrame([
+        [0.04, 0.0],
+        [0.0, 0.09]
+    ], index=['A', 'B'], columns=['A', 'B'])
+    w2 = recursive_bisection(cov2, [0, 1])
+    assert np.isclose(w2.sum(), 1.0)
+    
+    cov4 = pd.DataFrame(np.eye(4), index=['A', 'B', 'C', 'D'], columns=['A', 'B', 'C', 'D'])
+    w4 = recursive_bisection(cov4, [0, 1, 2, 3])
+    assert np.isclose(w4.sum(), 1.0)
