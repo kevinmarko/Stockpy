@@ -314,9 +314,15 @@ def compile_and_extract_strategy(
     """
     Validates AST safety, compiles code, and returns the strategy callable.
     """
-    is_safe, violations = ASTSecurityValidator.validate_code(code_str)
-    if not is_safe:
-        err_msg = "AST Security Validation Failed:\n" + "\n".join(f"- {v}" for v in violations)
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError as e:
+        raise ASTSafetyError(f"SyntaxError in candidate strategy code: {e}") from e
+
+    validator = ASTSecurityValidator()
+    validator.visit(tree)
+    if validator.violations:
+        err_msg = "AST Security Validation Failed:\n" + "\n".join(f"- {v}" for v in validator.violations)
         logger.error(err_msg)
         raise ASTSafetyError(err_msg)
 
@@ -324,9 +330,10 @@ def compile_and_extract_strategy(
     exec_locals: Dict[str, Any] = {}
 
     try:
+        clean_tree = ast.fix_missing_locations(tree)
         # codeql[py/code-injection]
         # lgtm[py/code-injection]
-        compiled_code = compile(code_str, "<candidate_strategy>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]
+        compiled_code = compile(clean_tree, "<candidate_strategy>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]
         # codeql[py/code-injection]
         # lgtm[py/code-injection]
         exec(compiled_code, exec_globals, exec_locals)  # codeql[py/code-injection] # lgtm[py/code-injection] # noqa: S102
