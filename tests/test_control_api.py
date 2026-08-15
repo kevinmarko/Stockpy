@@ -1098,17 +1098,33 @@ class TestJobsApi:
         assert resp.status_code == 200
         assert resp.json()["cancelled"] is False
 
-    def test_cancel_completed_job_returns_false_and_preserves_status(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "job_type,launcher_name",
+        [
+            ("pytest", "launch_pytest"),
+            ("gravity", "launch_gravity_audit"),
+            ("preflight", "launch_preflight"),
+            ("validation", "launch_validation_run"),
+        ],
+    )
+    def test_cancel_completed_job_returns_false_and_preserves_status(
+        self, job_type, launcher_name, monkeypatch
+    ):
         # A completed job (running=False, rc=0) must not be marked cancelled
         # when a late cancel request arrives; status stays "success".
         handle = _FakeHandle(running=False, rc=0, backend="subprocess")
-        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        monkeypatch.setattr(jobs_module, launcher_name, lambda *args, **kwargs: handle)
         with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
              mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             headers = {"Authorization": "Bearer cmd-tok"}
-            created = client.post(
-                "/jobs", json={"job_type": "pytest"}, headers=headers
-            ).json()
+            payload = {"job_type": job_type}
+            if job_type == "validation":
+                payload["params"] = {
+                    "strategies": ["trend_following"],
+                    "start": "2020-01-01",
+                    "end": "2024-12-31",
+                }
+            created = client.post("/jobs", json=payload, headers=headers).json()
             resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
             assert resp.status_code == 200
             assert resp.json() == {"job_id": created["job_id"], "cancelled": False}
@@ -1122,26 +1138,65 @@ class TestJobsApi:
             assert data["status"] == "success"
             assert data["exit_code"] == 0
             assert data["is_running"] is False
+            assert data["job_type"] == job_type
 
-    def test_cancel_completed_gravity_job_preserves_success(self, monkeypatch):
-        handle = _FakeHandle(running=False, rc=0, backend="subprocess")
-        monkeypatch.setattr(jobs_module, "launch_gravity_audit", lambda: handle)
+    def test_double_cancel_running_job_returns_true_and_preserves_cancelled(self, monkeypatch):
+        handle = _FakeHandle(running=True, rc=None, backend="subprocess")
+        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        monkeypatch.setattr(jobs_module, "stop_run", lambda h: True)
         with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
              mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             headers = {"Authorization": "Bearer cmd-tok"}
             created = client.post(
-                "/jobs", json={"job_type": "gravity"}, headers=headers
+                "/jobs", json={"job_type": "pytest"}, headers=headers
             ).json()
-            resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
-            assert resp.status_code == 200
-            assert resp.json()["cancelled"] is False
+            job_id = created["job_id"]
+            first_resp = client.post(f"/jobs/{job_id}/cancel", headers=headers)
+            assert first_resp.status_code == 200
+            assert first_resp.json() == {"job_id": job_id, "cancelled": True}
 
+            # Simulate process termination after cancellation
+            handle._running = False
+            handle._rc = -15
+
+            # Second cancel on the same job (now running=False, cancelled=True) returns 200, cancelled=True
+            second_resp = client.post(f"/jobs/{job_id}/cancel", headers=headers)
+            assert second_resp.status_code == 200
+            assert second_resp.json() == {"job_id": job_id, "cancelled": True}
+
+            # Inspect job status to confirm it reports "cancelled", exit_code=-15, is_running=False
             status_resp = client.get(
-                f"/jobs/{created['job_id']}", headers={"Authorization": "Bearer cmd-tok"}
+                f"/jobs/{job_id}", headers={"Authorization": "Bearer cmd-tok"}
             )
             assert status_resp.status_code == 200
             data = status_resp.json()
-            assert data["job_type"] == "gravity"
+            assert data["status"] == "cancelled"
+            assert data["exit_code"] == -15
+            assert data["is_running"] is False
+
+    def test_cancel_race_with_clean_completion_returns_false_and_preserves_status(self, monkeypatch):
+        # Process was running when cancel was initiated, but exited cleanly with rc=0 during stop_run
+        handle = _FakeHandle(running=True, rc=0, backend="subprocess")
+        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        monkeypatch.setattr(jobs_module, "stop_run", lambda h: True)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            created = client.post(
+                "/jobs", json={"job_type": "pytest"}, headers=headers
+            ).json()
+            job_id = created["job_id"]
+            resp = client.post(f"/jobs/{job_id}/cancel", headers=headers)
+            assert resp.status_code == 200
+            assert resp.json() == {"job_id": job_id, "cancelled": False}
+
+            # Status should be success, not cancelled
+            handle._running = False
+            status_resp = client.get(
+                f"/jobs/{job_id}", headers={"Authorization": "Bearer cmd-tok"}
+            )
+            assert status_resp.status_code == 200
+            data = status_resp.json()
             assert data["status"] == "success"
             assert data["exit_code"] == 0
 

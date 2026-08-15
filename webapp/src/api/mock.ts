@@ -10911,7 +10911,17 @@ export const mockApi = {
     job_id: string,
   ): Promise<{ job_id: string; cancelled: boolean }> {
     const job = _mockJobs[job_id];
-    if (job) job.cancelled = true;
+    if (!job) {
+      return delay({ job_id, cancelled: false }, 100);
+    }
+    if (job.cancelled) {
+      return delay({ job_id, cancelled: true }, 100);
+    }
+    const isRunning = Date.now() - job.startedAt < 2000;
+    if (!isRunning) {
+      return delay({ job_id, cancelled: false }, 100);
+    }
+    job.cancelled = true;
     return delay({ job_id, cancelled: true }, 100);
   },
 

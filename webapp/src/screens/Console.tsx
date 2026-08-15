@@ -127,7 +127,7 @@ const JOB_COLUMNS: Column<JobRecord>[] = [
     ),
   },
   { key: "created_at", header: "Launched", render: (row) => (row.created_at ? timeAgo(row.created_at) : "—") },
-  { key: "cancellable", header: "Cancellable", render: (row) => (row.status === "running" || row.is_running ? (row.cancellable ? "Yes" : "No") : "—") },
+  { key: "cancellable", header: "Cancellable", render: (row) => (!TERMINAL_STATUSES.has(row.status) ? (row.cancellable ? "Yes" : "No") : "—") },
 ];
 
 export function Console() {
@@ -159,27 +159,34 @@ export function Console() {
     }
   };
 
-  // Poll GET /jobs/{id} while the job is in flight so the status badge
-  // actually reflects reality (the SSE `end` event only tells LogStream to
-  // stop reading -- it doesn't tell this component anything).
+  // Poll GET /jobs/{id} for all in-flight jobs in jobHistory so superseded and
+  // active jobs update their row in Job History and status badge upon completion.
   useEffect(() => {
-    if (!activeJob || TERMINAL_STATUSES.has(activeJob.status)) {
+    const inFlightJobs = jobHistory.filter((job) => !TERMINAL_STATUSES.has(job.status));
+    if (inFlightJobs.length === 0) {
       stopPolling();
       return;
     }
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
-        const latest = await api.getJobStatus(activeJob.job_id);
-        setActiveJob(latest);
-        recordJob(latest);
+        const results = await Promise.allSettled(
+          inFlightJobs.map((job) => api.getJobStatus(job.job_id))
+        );
+        for (const res of results) {
+          if (res.status === "fulfilled") {
+            const latest = res.value;
+            recordJob(latest);
+            setActiveJob((curr) => (curr?.job_id === latest.job_id ? latest : curr));
+          }
+        }
       } catch {
         // A transient poll failure isn't fatal -- just try again next tick.
       }
     }, STATUS_POLL_MS);
     return stopPolling;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeJob?.job_id, activeJob?.status]);
+  }, [jobHistory]);
 
   useEffect(() => stopPolling, []);
 
@@ -251,15 +258,30 @@ export function Console() {
           { icon: '⚠️' }
         );
       } else {
-        toast(
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Cancel requested</span>
-            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
-              Could not be confirmed — the job may still be running.
-            </span>
-          </div>,
-          { icon: '⚠️' }
-        );
+        const latest = await api.getJobStatus(activeJob.job_id);
+        setActiveJob(latest);
+        recordJob(latest);
+        if (TERMINAL_STATUSES.has(latest.status)) {
+          toast(
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Job completed</span>
+              <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+                {activeJob.job_id} already finished ({latest.status}).
+              </span>
+            </div>,
+            { icon: 'ℹ️' }
+          );
+        } else {
+          toast(
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Cancel requested</span>
+              <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+                Could not be confirmed — the job may still be running.
+              </span>
+            </div>,
+            { icon: '⚠️' }
+          );
+        }
       }
     } catch (err: any) {
       toast.error(
@@ -283,7 +305,7 @@ export function Console() {
           </p>
         </div>
         <div style={{ display: "flex", gap: "var(--s-2)" }}>
-        {activeJob && activeJob.cancellable && activeJob.is_running !== false && (
+        {activeJob && activeJob.cancellable && activeJob.is_running !== false && !TERMINAL_STATUSES.has(activeJob.status) && (
           <Button variant="neutral" onClick={handleCancel} data-testid="console-cancel-job">
             Cancel Active Job
           </Button>

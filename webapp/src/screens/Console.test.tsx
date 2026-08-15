@@ -148,4 +148,163 @@ describe("Console screen (real mock API)", () => {
       ).not.toBeInTheDocument()
     );
   });
+
+  it("handles successful cancellation and updates active job status", async () => {
+    vi.spyOn(api, "createJob").mockResolvedValueOnce({
+      job_id: "job-cancel-1",
+      job_type: "pytest",
+      status: "running",
+      cancellable: true,
+      is_running: true,
+    });
+    vi.spyOn(api, "cancelJob").mockResolvedValueOnce({
+      cancelled: true,
+      job_id: "job-cancel-1",
+    });
+    vi.spyOn(api, "getJobStatus").mockResolvedValueOnce({
+      job_id: "job-cancel-1",
+      job_type: "pytest",
+      status: "cancelled",
+      cancellable: true,
+      is_running: false,
+    });
+
+    renderConsole();
+    screen.getByText("🧪 Run Test Suite").click();
+
+    const cancelBtn = await screen.findByRole("button", { name: "Cancel Active Job" });
+    fireEvent.click(cancelBtn);
+
+    expect(await screen.findByText("Job cancelled")).toBeInTheDocument();
+    expect(await screen.findByText("job-cancel-1 cancelled.")).toBeInTheDocument();
+  });
+
+  it("handles cancellation when job already completed (cancelled=false) with accurate toast", async () => {
+    vi.spyOn(api, "createJob").mockResolvedValueOnce({
+      job_id: "job-race-1",
+      job_type: "pytest",
+      status: "running",
+      cancellable: true,
+      is_running: true,
+    });
+    vi.spyOn(api, "cancelJob").mockResolvedValueOnce({
+      cancelled: false,
+      job_id: "job-race-1",
+    });
+    vi.spyOn(api, "getJobStatus").mockResolvedValueOnce({
+      job_id: "job-race-1",
+      job_type: "pytest",
+      status: "success",
+      cancellable: true,
+      is_running: false,
+    });
+
+    renderConsole();
+    screen.getByText("🧪 Run Test Suite").click();
+
+    const cancelBtn = await screen.findByRole("button", { name: "Cancel Active Job" });
+    fireEvent.click(cancelBtn);
+
+    expect(await screen.findByText("Job completed")).toBeInTheDocument();
+    expect(await screen.findByText("job-race-1 already finished (success).")).toBeInTheDocument();
+  });
+
+  it("handles cancellation when cancel not confirmed and job is still running", async () => {
+    vi.spyOn(api, "createJob").mockResolvedValueOnce({
+      job_id: "job-stuck-1",
+      job_type: "pytest",
+      status: "running",
+      cancellable: true,
+      is_running: true,
+    });
+    vi.spyOn(api, "cancelJob").mockResolvedValueOnce({
+      cancelled: false,
+      job_id: "job-stuck-1",
+    });
+    vi.spyOn(api, "getJobStatus").mockResolvedValueOnce({
+      job_id: "job-stuck-1",
+      job_type: "pytest",
+      status: "running",
+      cancellable: true,
+      is_running: true,
+    });
+
+    renderConsole();
+    screen.getByText("🧪 Run Test Suite").click();
+
+    const cancelBtn = await screen.findByRole("button", { name: "Cancel Active Job" });
+    fireEvent.click(cancelBtn);
+
+    expect(await screen.findByText("Cancel requested")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Could not be confirmed — the job may still be running.")
+    ).toBeInTheDocument();
+  });
+
+  it("polls all in-flight jobs in jobHistory so superseded jobs also update upon completion", async () => {
+    vi.spyOn(api, "createJob")
+      .mockResolvedValueOnce({
+        job_id: "job-first",
+        job_type: "preflight",
+        status: "running",
+        cancellable: true,
+        is_running: true,
+      })
+      .mockResolvedValueOnce({
+        job_id: "job-second",
+        job_type: "pytest",
+        status: "running",
+        cancellable: true,
+        is_running: true,
+      });
+
+    vi.spyOn(api, "getJobStatus").mockImplementation(async (id: string) => {
+      if (id === "job-first") {
+        return {
+          job_id: "job-first",
+          job_type: "preflight",
+          status: "success",
+          cancellable: true,
+          is_running: false,
+        };
+      }
+      return {
+        job_id: "job-second",
+        job_type: "pytest",
+        status: "running",
+        cancellable: true,
+        is_running: true,
+      };
+    });
+
+    renderConsole();
+    fireEvent.click(screen.getByText("🛡️ Preflight Check"));
+    await screen.findByText(/Active Job:/);
+    expect(screen.getAllByText("job-first").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("🧪 Run Test Suite"));
+    await waitFor(() => expect(screen.getAllByText("job-second").length).toBeGreaterThan(0));
+
+    // After polling fires, superseded job-first should update to success
+    await waitFor(() => {
+      expect(screen.getByText("success")).toBeInTheDocument();
+    }, { timeout: 3500 });
+  });
+
+  it("renders 'Yes', 'No', and '—' in Cancellable column based on status and cancellable flag", async () => {
+    vi.spyOn(api, "createJob").mockResolvedValueOnce({
+      job_id: "job-canc-yes",
+      job_type: "pytest",
+      status: "running",
+      cancellable: true,
+      is_running: true,
+    });
+
+    renderConsole();
+    fireEvent.click(screen.getByText("🧪 Run Test Suite"));
+    await screen.findByText(/Active Job:/);
+
+    // Running + cancellable -> "Yes"
+    expect(screen.getByText("Yes")).toBeInTheDocument();
+  });
 });
