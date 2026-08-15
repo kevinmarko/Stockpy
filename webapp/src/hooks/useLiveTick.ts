@@ -37,13 +37,21 @@ export function useLiveTick(symbol: string): LiveTick {
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryDelay = useRef(1000);
-  const aliveRef = useRef(true);
 
   const connect = useCallback(() => {
-    if (!symbol || !aliveRef.current) return;
+    if (!symbol) return;
 
-    // Clean up any existing connection
+    // Defensive only -- wsRef.current is always already null by the time
+    // connect() actually runs today (both call sites below, the mount
+    // effect and the retry timeout in onclose, only ever reach connect()
+    // after wsRef.current has already been nulled). Kept in case a future
+    // call site is added that doesn't hold that invariant; nulling every
+    // handler (not just onclose) before close() guarantees none of them
+    // fire again for this socket, even for an event already in flight.
     if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
       wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
@@ -55,13 +63,11 @@ export function useLiveTick(symbol: string): LiveTick {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      if (!aliveRef.current) return;
       retryDelay.current = 1000; // reset backoff on success
       setTick(prev => ({ ...prev, isConnected: true, error: null }));
     };
 
     ws.onmessage = (event) => {
-      if (!aliveRef.current) return;
       try {
         const data = JSON.parse(event.data);
         if (data.error) {
@@ -84,18 +90,15 @@ export function useLiveTick(symbol: string): LiveTick {
     };
 
     ws.onerror = () => {
-      if (!aliveRef.current) return;
       setTick(prev => ({ ...prev, error: 'WebSocket error', isConnected: false }));
     };
 
     ws.onclose = () => {
       wsRef.current = null;
-      if (!aliveRef.current) return;
       setTick(prev => ({ ...prev, isConnected: false }));
       // Exponential backoff reconnect (max 30 s)
       if (retryRef.current) clearTimeout(retryRef.current);
       retryRef.current = setTimeout(() => {
-        if (!aliveRef.current) return;
         retryDelay.current = Math.min(retryDelay.current * 2, 30_000);
         connect();
       }, retryDelay.current);
@@ -103,13 +106,17 @@ export function useLiveTick(symbol: string): LiveTick {
   }, [symbol]);
 
   useEffect(() => {
-    aliveRef.current = true;
     connect();
     return () => {
-      aliveRef.current = false;
       if (retryRef.current) clearTimeout(retryRef.current);
       if (wsRef.current) {
-        wsRef.current.onclose = null; // prevent reconnect on intentional unmount
+        // Null every handler, not just onclose -- prevents onmessage/
+        // onopen/onerror from firing on an event already in flight too,
+        // in addition to suppressing the reconnect onclose would trigger.
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onclose = null;
         wsRef.current.close();
         wsRef.current = null;
       }

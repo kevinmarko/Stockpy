@@ -98,6 +98,11 @@ export function Modal({
   const isMobile = useMediaQuery("(max-width: 768px)");
 
   // Desktop implementation
+  // sheetRef is attached to BOTH the desktop `.sheet` div (below) and the
+  // mobile `Drawer.Content` (vaul forwards its ref to the underlying DOM
+  // node) so the blur-on-unmount cleanup right below covers both branches
+  // from one place, instead of each `children` consumer having to
+  // duplicate its own focus-release logic to cover the mobile case.
   const sheetRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
 
@@ -184,6 +189,7 @@ export function Modal({
             onClick={closeOnBackdropClick ? requestClose : undefined}
           />
           <Drawer.Content
+            ref={sheetRef}
             className="sheet"
             aria-label={ariaLabel}
             style={{

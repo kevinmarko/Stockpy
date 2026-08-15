@@ -88,10 +88,10 @@ export function CommandPaletteModal({
       });
     return () => {
       alive = false;
+      // No explicit blur here -- this input always renders inside Modal's
+      // sheetRef subtree (Modal.tsx), whose own cleanup blurs it (covering
+      // both the desktop and mobile branches) before this cleanup runs.
       clearTimeout(focusTimer);
-      if (inputRef.current && document.activeElement === inputRef.current) {
-        inputRef.current.blur();
-      }
     };
   }, [isOpen]);
 
