@@ -1098,6 +1098,53 @@ class TestJobsApi:
         assert resp.status_code == 200
         assert resp.json()["cancelled"] is False
 
+    def test_cancel_completed_job_returns_false_and_preserves_status(self, monkeypatch):
+        # A completed job (running=False, rc=0) must not be marked cancelled
+        # when a late cancel request arrives; status stays "success".
+        handle = _FakeHandle(running=False, rc=0, backend="subprocess")
+        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            created = client.post(
+                "/jobs", json={"job_type": "pytest"}, headers=headers
+            ).json()
+            resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
+            assert resp.status_code == 200
+            assert resp.json() == {"job_id": created["job_id"], "cancelled": False}
+
+            # Inspect job status to confirm it was not mutated to "cancelled"
+            status_resp = client.get(
+                f"/jobs/{created['job_id']}", headers={"Authorization": "Bearer cmd-tok"}
+            )
+            assert status_resp.status_code == 200
+            data = status_resp.json()
+            assert data["status"] == "success"
+            assert data["exit_code"] == 0
+            assert data["is_running"] is False
+
+    def test_cancel_completed_gravity_job_preserves_success(self, monkeypatch):
+        handle = _FakeHandle(running=False, rc=0, backend="subprocess")
+        monkeypatch.setattr(jobs_module, "launch_gravity_audit", lambda: handle)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            created = client.post(
+                "/jobs", json={"job_type": "gravity"}, headers=headers
+            ).json()
+            resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
+            assert resp.status_code == 200
+            assert resp.json()["cancelled"] is False
+
+            status_resp = client.get(
+                f"/jobs/{created['job_id']}", headers={"Authorization": "Bearer cmd-tok"}
+            )
+            assert status_resp.status_code == 200
+            data = status_resp.json()
+            assert data["job_type"] == "gravity"
+            assert data["status"] == "success"
+            assert data["exit_code"] == 0
+
     def test_stream_unknown_job_is_404(self):
         with mock.patch.object(settings, "JOBS_API_ENABLED", True):
             resp = client.get("/jobs/does-not-exist/stream")

@@ -127,7 +127,7 @@ const JOB_COLUMNS: Column<JobRecord>[] = [
     ),
   },
   { key: "created_at", header: "Launched", render: (row) => (row.created_at ? timeAgo(row.created_at) : "—") },
-  { key: "cancellable", header: "Cancellable", render: (row) => (row.cancellable ? "Yes" : "No") },
+  { key: "cancellable", header: "Cancellable", render: (row) => (row.status === "running" || row.is_running ? (row.cancellable ? "Yes" : "No") : "—") },
 ];
 
 export function Console() {
