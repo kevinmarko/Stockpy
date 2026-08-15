@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from execution.fix_gateway import (
-    FixMessage, FixMsgType, NewOrderSingle, ExecutionReport, 
+    FixMessage, FixMsgType, NewOrderSingle, ExecutionReport, OrderCancelReplace,
     Side, OrdStatus, FixSession, FixSessionState, MultiVenueAggregator
 )
 
@@ -44,11 +44,10 @@ async def test_fix_session_state_machine():
     
     # Simulate Execution Report
     exec_rep = ExecutionReport(
-        "EXCHANGE", "CLIENT1", 1, "EXCH_ORD_1", "EXEC_1", 
+        "EXCHANGE", "CLIENT1", 1, "EXCH_ORD_1", cl_ord_id, "EXEC_1", 
         OrdStatus.FILLED, OrdStatus.FILLED, "AAPL", Side.BUY, 0.0, 100.0, 150.0
     )
     exec_dict = exec_rep.to_dict()
-    exec_dict["37"] = cl_ord_id # route back to cl_ord_id for simulation
     
     session.simulate_receive(exec_dict)
     assert session.inbound_seq_num == 2
@@ -62,6 +61,36 @@ async def test_fix_session_state_machine():
     # Disconnect
     await session.disconnect()
     assert session.state == FixSessionState.DISCONNECTED
+
+def test_order_cancel_replace():
+    ocr = OrderCancelReplace(
+        "CLIENT1", "EXCHANGE", 2, "ORIG_ORD123", "NEW_ORD124", 
+        "AAPL", Side.BUY, 200.0, 155.0
+    )
+    ocr_dict = ocr.to_dict()
+    assert ocr_dict["35"] == "G"
+    assert ocr_dict["41"] == "ORIG_ORD123"
+    assert ocr_dict["11"] == "NEW_ORD124"
+    assert ocr_dict["55"] == "AAPL"
+    assert ocr_dict["54"] == "1"
+    assert ocr_dict["38"] == 200.0
+    assert ocr_dict["44"] == 155.0
+
+def test_simulate_receive_sequence():
+    session = FixSession("CLIENT1", "EXCHANGE")
+    assert session.inbound_seq_num == 1
+    
+    # Process sequence 1
+    session.simulate_receive({"34": 1, "35": "0"})
+    assert session.inbound_seq_num == 2
+    
+    # Receive old sequence 0 (should not decrement)
+    session.simulate_receive({"34": 0, "35": "0"})
+    assert session.inbound_seq_num == 2
+    
+    # Receive sequence 5 (gap simulation)
+    session.simulate_receive({"34": 5, "35": "0"})
+    assert session.inbound_seq_num == 6
 
 @pytest.mark.anyio
 async def test_multi_venue_aggregator_routing():

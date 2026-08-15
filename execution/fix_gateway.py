@@ -71,11 +71,12 @@ class NewOrderSingle(FixMessage):
 
 class ExecutionReport(FixMessage):
     def __init__(self, sender_comp_id: str, target_comp_id: str, seq_num: int, 
-                 order_id: str, exec_id: str, exec_type: OrdStatus, ord_status: OrdStatus,
+                 order_id: str, cl_ord_id: str, exec_id: str, exec_type: OrdStatus, ord_status: OrdStatus,
                  symbol: str, side: Side, leaves_qty: float, cum_qty: float, avg_px: float):
         super().__init__(FixMsgType.EXECUTION_REPORT, sender_comp_id, target_comp_id, seq_num)
         self.tags.update({
             "37": order_id,
+            "11": cl_ord_id,
             "17": exec_id,
             "150": exec_type.value,
             "39": ord_status.value,
@@ -166,14 +167,12 @@ class FixSession:
     def simulate_receive(self, msg_dict: Dict[str, Any]):
         """Simulate receiving a message from the exchange."""
         seq = msg_dict.get("34", 0)
-        if seq > self.inbound_seq_num:
-            # Simulated sequence gap
-            pass
-        self.inbound_seq_num = seq + 1
+        if seq >= self.inbound_seq_num:
+            self.inbound_seq_num = seq + 1
         
         msg_type = msg_dict.get("35")
         if msg_type == FixMsgType.EXECUTION_REPORT.value:
-            cl_ord_id = msg_dict.get("37") # Assuming 37 maps to order ID
+            cl_ord_id = msg_dict.get("11")
             if cl_ord_id in self.order_book:
                 self.order_book[cl_ord_id]["status"] = OrdStatus(msg_dict.get("39"))
                 self.order_book[cl_ord_id]["filled"] = msg_dict.get("14", 0.0)
