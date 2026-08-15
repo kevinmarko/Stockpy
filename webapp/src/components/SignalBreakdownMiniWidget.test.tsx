@@ -84,8 +84,10 @@ describe("SignalBreakdownMiniWidget", () => {
 
     render(<SignalBreakdownMiniWidget />);
 
-    const select = (await screen.findByTestId("signal-breakdown-widget-symbol-select")) as HTMLSelectElement;
-    expect(select.value).toBe("NVDA");
+    await waitFor(() => {
+      const select = screen.getByTestId("signal-breakdown-widget-symbol-select") as HTMLSelectElement;
+      expect(select.value).toBe("NVDA");
+    });
     expect(await screen.findByTestId("signalBreakdown-widget")).toBeInTheDocument();
 
     expect(screen.getByText("BUY")).toBeInTheDocument();
