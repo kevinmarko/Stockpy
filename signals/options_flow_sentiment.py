@@ -48,7 +48,8 @@ class OptionsFlowSentimentSignal(SignalModule):
 
     name: str = "options_flow_sentiment"
     required_features: List[str] = []
-    meta_label_features: List[str] = []
+    meta_label_features: List[str] = ["ROC_12M", "ROC_6M", "RSI_14", "Vol_20", "GARCH_Vol", "SMA_5", "SMA_200"]
+    meta_label_horizons: List[int] = [10, 30, 60, 90]
 
     def __init__(self) -> None:
         self._sentiment_scores: Dict[str, float] = {}

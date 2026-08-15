@@ -51,3 +51,14 @@ Where:
 * **`news_catalyst`**: Complements headline and social sentiment with real-time institutional money flow.
 * **`timeseries_momentum` / `cross_sectional_momentum`**: Acts as an alpha overlay confirming whether institutional options positioning aligns with price trend.
 * **`vrp_premium_selling`**: Differentiates between directional options flow vs. volatility-selling regimes.
+
+---
+
+## Backtest Validation (`options_flow_sentiment`, 2026-08)
+
+Point-in-time institutional options flow and order-level sweep/block history is an intraday options microstructure feed accumulating going forward in `HistoricalStore` / `output/unusual_options_flow.json`. Reconstructing historical order book aggressor signatures across multiple decades without survivorship-biased vendor feeds is structurally infeasible; the module stays honestly curveless (`validation_strategy_id=None`) until sufficient point-in-time flow history accumulates.
+
+To enable machine learning and confidence gating, `meta_label_features` (`ROC_12M`, `ROC_6M`, `RSI_14`, `Vol_20`, `GARCH_Vol`, `SMA_5`, `SMA_200`) and multi-horizon targets (10d, 30d, 60d, 90d) are configured in `signals/options_flow_sentiment.py` for integration into `ml/forecast_backfill.py`'s `AgenticForecastBackfiller` and the webapp Forecasting Backfill tab.
+
+See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for strategy registry fix history.
+

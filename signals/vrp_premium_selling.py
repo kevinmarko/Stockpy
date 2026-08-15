@@ -51,6 +51,8 @@ VRP_SATURATION = 0.10
 class VRPPremiumSellingSignal(SignalModule):
     name = "vrp_premium_selling"
     required_features = []
+    meta_label_features = ["GARCH_Vol", "Vol_20", "Vol_50", "RSI_14", "SMA_200", "Vol_Ratio"]
+    meta_label_horizons = [10, 30, 60, 90]
 
     def is_active_in_regime(self, macro: MacroEconomicDTO) -> bool:
         """Suppresses this module's contribution entirely when the

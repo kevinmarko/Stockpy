@@ -207,6 +207,8 @@ class SectorNeutralQualitySignal(SignalModule):
 
     name = "sector_quality_rank"
     required_features: list[str] = []  # Cross-sectional data lives in context, not row
+    meta_label_features = ["ROC_12M", "ROC_6M", "Vol_20", "Vol_50", "GARCH_Vol", "SMA_200"]
+    meta_label_horizons = [10, 30, 60, 90]
 
     # ------------------------------------------------------------------ #
     # Phase 1: called once per cycle on the full universe DataFrame        #

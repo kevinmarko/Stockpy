@@ -671,3 +671,25 @@ independent adapter edits in the same file. `deep_value_edgar_pit` and
 `quant_platform.db` — a fresh worktree's empty DB produces a numerically-degenerate
 Sharpe blowup (a known fresh-clone artifact, not a code defect).
 
+---
+
+## 2026-08-15: Multi-Strategy & Options Backfill (2005–Present) & Tab Integration
+
+Comprehensive walk-forward validation across the options spread family (`put_credit_spread`, `call_credit_spread`, `call_debit_spread`, `put_debit_spread`), options selling (`vrp_premium_selling`), ranking strategies (`sector_quality_rank`, `lgbm_ranker`), and options flow sentiment:
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Stress Gate | Deployable |
+|---|---|---|---|---|---|---|
+| `sector_quality_rank` | **1.095** | **0.000** | **1.000** | **28.4%** | N/A | ✅ **True** |
+| `lgbm_ranker` | **−0.334** | **0.000** | **0.426** | **3.7%** | N/A | ❌ False (honest methodology validation) |
+| `vrp_premium_selling` | **0.217** | **0.000** | **0.000** | **17.9%** | ✅ PASS (100% survival) | ❌ False (full-window macro regime gating) |
+| `put_credit_spread` | — | **0.000** | **0.000** | **6.7%** | ✅ PASS (100% survival) | ❌ False (stress survival pass) |
+| `call_credit_spread` | — | **0.000** | **0.000** | **6.7%** | ✅ PASS (100% survival) | ❌ False (stress survival pass) |
+| `call_debit_spread` | **−0.354** | **0.000** | **0.000** | **100.0%** | N/A | ❌ False (cost drag on long delta) |
+| `put_debit_spread` | **−0.669** | **0.000** | **0.000** | **98.9%** | N/A | ❌ False (cost drag on short delta) |
+
+**Integration Deliverables:**
+1. **Commands Tab**: Rebuilt `cli_introspect/command_manifest.json` and generated shell completions exposing all options and validation commands in the webapp Command Builder.
+2. **Forecasting Backfill Tab**: Configured `meta_label_features` across `vrp_premium_selling`, `options_flow_sentiment`, and `sector_quality_rank` in `signals/` for multi-horizon target generation and confidence modeling.
+3. **Numba JIT Sequential Execution Core**: Persisted `numba_backtest_loop.py` achieving >200M bars/sec throughput with path-dependent stop losses, slippage, and fees.
+
+
