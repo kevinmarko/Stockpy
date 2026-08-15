@@ -942,8 +942,8 @@ def compute_copula_spread_and_zscore(
 
     spread = y - (beta * x)
 
-    warmup_n = min(len(spread), max(20, lookback * 2))
-    half_life = estimate_ou_half_life(spread.iloc[:warmup_n] if warmup_n > 10 else spread)
+    warmup_n = min(len(spread) // 4, 15) if len(spread) >= 30 else 0
+    half_life = estimate_ou_half_life(spread.iloc[warmup_n:] if (len(spread) - warmup_n) >= 10 else spread)
 
     w = max(10, min(120, int(lookback)))
     spread_mean = spread.rolling(window=w, min_periods=max(5, w // 2)).mean()
@@ -1079,25 +1079,12 @@ def evaluate_copula_stat_arb_pair(
         )
 
     kalman_res = estimate_kalman_dynamic_hedge_ratio(y, x, delta=delta, R=R)
-    # KNOWN ISSUE (audited, not fixed — see pilots/copula_stat_arb.py's module
-    # docstring / docs and the 2026-08 copula-desk audit report): this applies
-    # the FINAL latest_beta scalar (only knowable at the end of the series)
-    # across the ENTIRE history to reconstruct spread_portfolio, which is a
-    # lookahead-bias leak in the OU half-life gate below IF this function is
-    # ever wired into a live/rolling signal. Confirmed unreachable from the
-    # live API path today (compute_copula_spread_analysis /
-    # generate_copula_stat_arb_signals use compute_copula_spread_and_zscore's
-    # causal, time-varying beta_t spread instead — see that function).
-    # evaluate_copula_stat_arb_pair itself has zero non-test callers in this
-    # codebase. Swapping to the time-varying beta_t array here (the causally
-    # correct fix) was attempted and reverted: the Kalman filter's wide
-    # initial covariance (P_0 = 10^3 * I) makes early beta_t estimates too
-    # noisy for the AR(1) OU regression, which broke mean-reversion detection
-    # in testing — a real fix needs warm-up-period trimming, out of scope for
-    # this pass. Do not wire this function into a live signal without fixing
-    # this first.
-    spread_portfolio = y - kalman_res.latest_beta * x
-    half_life = calculate_ou_half_life(spread_portfolio)
+    # Causal time-varying spread S_t = y_t - beta_t * x_t (strictly lookahead-free)
+    # Uses the causal beta_t path with warm-up stabilization rather than the full-sample final scalar
+    spread_portfolio = y - kalman_res.beta * x
+    warmup = min(len(spread_portfolio) // 4, 15) if len(spread_portfolio) >= 30 else 0
+    eval_spread = spread_portfolio[warmup:] if (len(spread_portfolio) - warmup) >= 10 else spread_portfolio
+    half_life = calculate_ou_half_life(eval_spread)
     ou_reverting = bool(half_life is not None and 1.0 <= half_life <= 120.0)
 
     ret_y = np.diff(y) / np.maximum(y[:-1], 1e-6)
@@ -1185,27 +1172,15 @@ def generate_copula_stat_arb_signals(
             summary={"status": "insufficient_data"},
         )
 
-    # KNOWN LOOKAHEAD-BIAS CAVEAT (audited, disclosed-not-fixed, 2026-08 copula-desk
-    # audit): copula_fit is fit ONCE via best-AIC family selection over the FULL
-    # ret_y/ret_x sample passed to this function (i.e. it "sees" the entire window,
-    # including its most recent bars) and the resulting tail_risk_acceptable gate
-    # below is then applied UNIFORMLY across the ENTIRE per-timestep loop that
-    # follows (positions/signals/strategy_returns/sharpe/max_dd over the whole
-    # window) — an early timestep's gate is therefore informed by copula behavior
-    # that, in a true walk-forward sense, was not yet observable at that point.
-    # This does NOT affect the live z-score / Kalman beta_t path (both are
-    # strictly causal — see compute_copula_spread_and_zscore and
-    # estimate_kalman_dynamic_hedge_ratio) — only the copula family/theta
-    # selection and the resulting tail-risk-acceptable flag are affected. A
-    # correct fix (periodic re-fit on a trailing window only) is a materially
-    # larger change than the AIC-selection call site itself and is left for a
-    # follow-up; this comment exists so the leak is disclosed rather than silent.
     ret_y = y_s.pct_change().dropna()
     ret_x = x_s.pct_change().dropna()
-    copula_fit = fit_best_copula(ret_y, ret_x)
 
+    # Causal spread & rolling z-score computation (strictly lookahead-free forward Kalman filter)
     spread_df = compute_copula_spread_and_zscore(y_s, x_s, lookback=lookback)
     half_life = float(spread_df["half_life"].iloc[-1]) if not spread_df.empty else float("inf")
+
+    # Fit final copula on full history for latest telemetry reporting
+    copula_fit = fit_best_copula(ret_y, ret_x)
 
     tail_risk_acceptable = True
     tail_notes = []
@@ -1237,6 +1212,11 @@ def generate_copula_stat_arb_signals(
 
     z_vals = spread_df["z_score"].to_numpy()
 
+    # Causal step-by-step tail-risk evaluation for lookahead-free signal generation
+    copula_cache_interval = 5
+    last_step_fit = None
+    last_tail_risk_ok = False
+
     for t in range(n):
         zt = z_vals[t]
         if not np.isfinite(zt):
@@ -1245,12 +1225,31 @@ def generate_copula_stat_arb_signals(
             actions[t] = "Flat / Warming up"
             continue
 
+        # Causal trailing copula evaluation: strictly uses returns available at/before timestep t
+        if t >= 15:
+            if t == n - 1:
+                step_tail_ok = tail_risk_acceptable
+            elif last_step_fit is None or (t % copula_cache_interval == 0):
+                sub_y = ret_y.iloc[max(0, t - max(30, lookback)):t]
+                sub_x = ret_x.iloc[max(0, t - max(30, lookback)):t]
+                if len(sub_y) >= 15:
+                    c_fit = fit_best_copula(sub_y, sub_x)
+                    step_tail_ok = bool(c_fit.lower_tail_dependence <= tail_risk_lower_limit)
+                    last_step_fit = c_fit
+                    last_tail_risk_ok = step_tail_ok
+                else:
+                    step_tail_ok = False
+            else:
+                step_tail_ok = last_tail_risk_ok
+        else:
+            step_tail_ok = False
+
         if current_pos == 0.0:
-            if zt <= -abs(z_entry) and tail_risk_acceptable:
+            if zt <= -abs(z_entry) and step_tail_ok:
                 current_pos = 1.0
                 signals[t] = "LONG_SPREAD"
                 actions[t] = f"Buy {sym_y}, Short {sym_x}"
-            elif zt >= abs(z_entry) and tail_risk_acceptable:
+            elif zt >= abs(z_entry) and step_tail_ok:
                 current_pos = -1.0
                 signals[t] = "SHORT_SPREAD"
                 actions[t] = f"Sell {sym_y}, Long {sym_x}"

@@ -603,3 +603,41 @@ def test_calculate_spread_zscore_and_ou_half_life():
     # Short stationary spread
     assert hl is None or hl > 0.0
 
+
+def test_copula_stat_arb_zero_lookahead_bias():
+    """
+    Lookahead Perturbation Test:
+    Verifies that mutating future prices at t >= cutoff does NOT change past signals or
+    spread/z-score calculations for t < cutoff.
+    """
+    np.random.seed(42)
+    n = 120
+    cutoff = 80
+
+    x_base = np.cumsum(np.random.normal(0, 1, n)) + 100.0
+    spread_base = [0.0]
+    for _ in range(n - 1):
+        spread_base.append(spread_base[-1] * 0.85 + np.random.normal(0, 0.3))
+    y_base = 1.5 * x_base + np.array(spread_base)
+
+    # Base run
+    res_base = generate_copula_stat_arb_signals("Y", "X", y_base, x_base, lookback=25)
+    sig_base = res_base.signals_df.iloc[:cutoff]
+
+    # Perturbed future run (dramatically alter prices at and after cutoff)
+    y_perturbed = y_base.copy()
+    x_perturbed = x_base.copy()
+    y_perturbed[cutoff:] = y_perturbed[cutoff:] * 2.5 + 50.0
+    x_perturbed[cutoff:] = x_perturbed[cutoff:] * 0.5 - 20.0
+
+    res_perturbed = generate_copula_stat_arb_signals("Y", "X", y_perturbed, x_perturbed, lookback=25)
+    sig_perturbed = res_perturbed.signals_df.iloc[:cutoff]
+
+    # Causal invariance check: all past spread, beta, z-score, positions, and signals MUST match exactly
+    np.testing.assert_allclose(sig_base["beta"].values, sig_perturbed["beta"].values, rtol=1e-7, atol=1e-7)
+    np.testing.assert_allclose(sig_base["spread"].values, sig_perturbed["spread"].values, rtol=1e-7, atol=1e-7)
+    np.testing.assert_allclose(sig_base["z_score"].dropna().values, sig_perturbed["z_score"].dropna().values, rtol=1e-7, atol=1e-7)
+    assert list(sig_base["signal"].values) == list(sig_perturbed["signal"].values)
+    assert list(sig_base["position"].values) == list(sig_perturbed["position"].values)
+
+

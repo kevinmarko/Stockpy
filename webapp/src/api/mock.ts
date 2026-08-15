@@ -12069,6 +12069,7 @@ export const mockApi = {
 
     return delay<UnusualOptionsFlowResponse>({
       trades: filtered,
+      records: filtered,
       count: filtered.length,
       as_of: new Date().toISOString(),
     });

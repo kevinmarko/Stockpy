@@ -102,13 +102,15 @@ _HUMAN_SYM_RE = re.compile(
 @dataclass
 class UOARecord:
     """Standardized Unusual Options Activity container supporting both attribute and dict-like access."""
-    symbol: str
+    id: Optional[str] = None
+    symbol: str = ""
     contract_symbol: str = ""
     expiration: str = ""
     strike: float = 0.0
     option_type: str = "call"  # "call" or "put"
     trade_price: float = 0.0
     price: float = 0.0
+    spot_price: Optional[float] = None
     bid: float = 0.0
     ask: float = 0.0
     volume: int = 0
@@ -118,11 +120,13 @@ class UOARecord:
     underlying_notional: float = 0.0  # Underlying notional (spot * volume * 100)
     aggressiveness: str = "mid_block"  # "ask_sweep", "bid_sweep", "mid_block"
     trade_type: str = "block"  # "ask_sweep", "bid_sweep", "mid_block", "block"
+    aggressor_side: str = ""  # "ASK", "BID", "MID"
     sentiment: str = "NEUTRAL"  # "BULLISH", "BEARISH", "NEUTRAL"
     iv: Optional[float] = None
     implied_volatility: Optional[float] = None
     hv_30: Optional[float] = None
     historical_volatility: Optional[float] = None
+    historical_vol_30d: Optional[float] = None
     iv_burst_score: Optional[float] = None  # IV / HV_30
     iv_burst_detected: bool = False
     iv_expansion_flag: bool = False
@@ -137,6 +141,11 @@ class UOARecord:
             self.trade_price = self.price
         elif self.price == 0.0 and self.trade_price > 0.0:
             self.price = self.trade_price
+
+        # Sync id
+        if not self.id:
+            opt_type_upper = self.option_type.upper()
+            self.id = self.contract_symbol or f"{self.symbol}-{self.expiration}-{self.strike}-{opt_type_upper}-{self.timestamp}"
 
         # Sync trade_type and aggressiveness
         if self.aggressiveness == "mid_block" and self.trade_type == "block":
@@ -153,10 +162,21 @@ class UOARecord:
             self.implied_volatility = self.iv
 
         # Sync HV aliases
-        if self.hv_30 is None and self.historical_volatility is not None:
-            self.hv_30 = self.historical_volatility
-        elif self.historical_volatility is None and self.hv_30 is not None:
-            self.historical_volatility = self.hv_30
+        hvs = [x for x in (self.hv_30, self.historical_volatility, self.historical_vol_30d) if x is not None]
+        if hvs:
+            hv_val = hvs[0]
+            self.hv_30 = hv_val
+            self.historical_volatility = hv_val
+            self.historical_vol_30d = hv_val
+
+        # Sync aggressor_side
+        if not self.aggressor_side:
+            if self.aggressiveness == "ask_sweep":
+                self.aggressor_side = "ASK"
+            elif self.aggressiveness == "bid_sweep":
+                self.aggressor_side = "BID"
+            else:
+                self.aggressor_side = "MID"
 
         # Sync IV expansion flags
         if self.iv_burst_detected and not self.iv_expansion_flag:
@@ -780,6 +800,7 @@ def scan_unusual_options_activity(
                 option_type=opt_type,
                 trade_price=trade_price,
                 price=trade_price,
+                spot_price=resolved_spot,
                 bid=bid,
                 ask=ask,
                 volume=volume,
@@ -1086,6 +1107,14 @@ def get_unusual_options_activity(
         save_uoa_records(merged)
     except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
         logger.debug("get_unusual_options_activity: failed to persist new records: %s", exc)
+
+    # Dispatch whale sweep alerts for qualifying records (non-blocking, condition-deduped)
+    for rec in new_records:
+        try:
+            from pilots.options_alerts import dispatch_uoa_whale_alert
+            dispatch_uoa_whale_alert(rec)
+        except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+            logger.debug("UOA whale alert dispatch failed for %s: %s", getattr(rec, "contract_symbol", ""), exc)
 
     records = [r.to_dict() for r in new_records]
     if min_vol_oi is not None:

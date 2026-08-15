@@ -77,22 +77,18 @@ def _black_scholes_price(
     option_type: str = "call",
     r: float = _DEFAULT_RFR,
 ) -> float:
-    """Calculates Black-Scholes European option theoretical price."""
-    if spot <= 0 or strike <= 0 or t_years <= _DEGENERATE_THRESHOLD or sigma <= _DEGENERATE_THRESHOLD:
-        if option_type.lower() == "call":
-            return max(0.0, spot - strike)
-        return max(0.0, strike - spot)
+    """Calculates Black-Scholes European option theoretical price (delegates to canonical pilots.options_risk)."""
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    vol_sqrt_t = sigma * math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    if option_type.lower() == "call":
-        price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-    else:
-        price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
-
-    return max(0.0, float(price))
+    res = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=r,
+    )
+    return float(res["price"])
 
 
 def _black_scholes_delta(
@@ -103,21 +99,18 @@ def _black_scholes_delta(
     option_type: str = "call",
     r: float = _DEFAULT_RFR,
 ) -> float:
-    """Calculates Black-Scholes Delta for Call in (0, 1) or Put in (-1, 0)."""
-    if spot <= 0 or strike <= 0:
-        return 0.0
+    """Calculates Black-Scholes Delta for Call in (0, 1) or Put in (-1, 0) (delegates to canonical pilots.options_risk)."""
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    if t_years <= _DEGENERATE_THRESHOLD or sigma <= _DEGENERATE_THRESHOLD:
-        if option_type.lower() == "call":
-            return 1.0 if spot > strike else 0.0
-        return -1.0 if spot < strike else 0.0
-
-    vol_sqrt_t = sigma * math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / vol_sqrt_t
-
-    if option_type.lower() == "call":
-        return float(norm.cdf(d1))
-    return float(norm.cdf(d1) - 1.0)
+    res = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=r,
+    )
+    return float(res["delta"])
 
 
 def _black_scholes_vega(
@@ -127,13 +120,18 @@ def _black_scholes_vega(
     sigma: float,
     r: float = _DEFAULT_RFR,
 ) -> float:
-    """Calculates Black-Scholes Vega (derivative of price with respect to sigma)."""
-    if spot <= 0 or strike <= 0 or t_years <= _DEGENERATE_THRESHOLD or sigma <= _DEGENERATE_THRESHOLD:
-        return 0.0
+    """Calculates Black-Scholes Vega (derivative of price with respect to sigma) (delegates to canonical pilots.options_risk)."""
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    vol_sqrt_t = sigma * math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / vol_sqrt_t
-    return float(spot * norm.pdf(d1) * math.sqrt(t_years))
+    res = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type="call",
+        r=r,
+    )
+    return float(res["vega_raw"])
 
 
 def implied_volatility_black_scholes(
