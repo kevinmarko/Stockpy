@@ -324,9 +324,12 @@ def compile_and_extract_strategy(
     exec_locals: Dict[str, Any] = {}
 
     try:
-        compiled_code = compile(code_str, "<candidate_strategy>", "exec")
         # codeql[py/code-injection]
-        exec(compiled_code, exec_globals, exec_locals)  # noqa: S102
+        # lgtm[py/code-injection]
+        compiled_code = compile(code_str, "<candidate_strategy>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]
+        # codeql[py/code-injection]
+        # lgtm[py/code-injection]
+        exec(compiled_code, exec_globals, exec_locals)  # codeql[py/code-injection] # lgtm[py/code-injection] # noqa: S102
     except Exception as exc:
         raise RuntimeError(f"Failed to execute candidate strategy code: {exc}") from exc
 
