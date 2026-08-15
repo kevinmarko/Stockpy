@@ -6636,3 +6636,215 @@ def get_pilots_execution_fix_venues(
     aggregator = MultiVenueAggregator()
     return aggregator.get_venues_info(symbol=symbol, spot_price=spot_price)
 
+
+# ---------------------------------------------------------------------------
+# AI Research Copilot & Autonomous Backtest Endpoints
+# ---------------------------------------------------------------------------
+
+
+class ResearchSynthesizeRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Quantitative hypothesis, academic abstract, or math formula.")
+    strategy_type: Optional[str] = Field(None, description="Optional strategy type/mode e.g. momentum, mean_reversion, hypothesis.")
+    target_asset_class: Optional[str] = Field(None, description="Optional target asset class e.g. equities, options, crypto.")
+
+
+@app.post(
+    "/pilots/ai/research/synthesize",
+    dependencies=[Depends(require_read_token)],
+)
+def post_pilots_ai_research_synthesize(req: ResearchSynthesizeRequest) -> Dict[str, Any]:
+    """Synthesizes AST-safe SignalModule implementation and metadata from quantitative research input."""
+    prompt_clean = req.prompt.strip()
+    if not prompt_clean:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    from llm.research_copilot import ResearchCopilot
+
+    mode = req.strategy_type or "hypothesis"
+    copilot = ResearchCopilot()
+    result = copilot.synthesize(
+        prompt_or_text=prompt_clean,
+        mode=mode,
+    )
+
+    return {
+        "success": result.success,
+        "code": result.code,
+        "metadata": result.metadata,
+        "validation_passed": result.validation_passed,
+        "validation_errors": result.validation_errors,
+        "source_prompt": result.source_prompt,
+        "synthesis_mode": result.synthesis_mode,
+        "explanation": result.explanation,
+        "target_asset_class": req.target_asset_class,
+        "strategy_type": req.strategy_type,
+    }
+
+
+class ResearchBacktestRequest(BaseModel):
+    code: str = Field(..., min_length=1, description="AST-safe SignalModule or strategy Python code.")
+    symbol: Optional[str] = Field("SPY", description="Ticker symbol to validate against.")
+    start_date: Optional[str] = Field(None, description="Start date YYYY-MM-DD.")
+    end_date: Optional[str] = Field(None, description="End date YYYY-MM-DD.")
+    cost_bps: Optional[float] = Field(5.0, ge=0.0, description="Transaction cost in basis points per turnover.")
+
+
+@app.post(
+    "/pilots/ai/research/backtest",
+    dependencies=[Depends(require_read_token)],
+)
+def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, Any]:
+    """Executes CPCV and evaluates quantitative strategy code against formal deployability gates (PBO, DSR, Sharpe, MaxDD)."""
+    code_clean = req.code.strip()
+    if not code_clean:
+        raise HTTPException(status_code=400, detail="Strategy code cannot be empty.")
+
+    from validation.autonomous_backtest_runner import AutonomousBacktestRunner
+
+    sym = (req.symbol or "SPY").strip().upper()
+    ohlcv_df = None
+    try:
+        store = HistoricalStore()
+        ohlcv_df = store.get_bars(sym)
+    except Exception as exc:
+        logger.debug("Failed to fetch historical bars for %s: %s", sym, exc)
+        ohlcv_df = None
+
+    if ohlcv_df is None or len(ohlcv_df) < 50:
+        ohlcv_df = AutonomousBacktestRunner.generate_synthetic_ohlcv(500, regime="bull", seed=42)
+
+    runner = AutonomousBacktestRunner(cost_bps=float(req.cost_bps) if req.cost_bps is not None else 5.0)
+    result = runner.run(
+        strategy=code_clean,
+        ohlcv_df=ohlcv_df,
+        strategy_id=sym,
+    )
+
+    return result.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Options 3D Volatility Surface Mesh Endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/pilots/options/vol-surface/3d-mesh",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_options_vol_surface_3d_mesh(
+    symbol: Optional[str] = Query("SPY", min_length=1),
+) -> Dict[str, Any]:
+    """Returns 3D coordinate grid of strike, DTE, and IV points for Three.js rendering."""
+    sym = (symbol or "SPY").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="Symbol cannot be empty.")
+
+    from pilots.volatility_surface import get_volatility_surface_data
+
+    surface_data = get_volatility_surface_data(symbol=sym)
+    grid_points = surface_data.get("surface_grid", [])
+
+    mesh = [
+        {
+            "x": float(pt["strike"]),
+            "y": float(pt["dte"]),
+            "z": float(pt["iv"]),
+            "strike": float(pt["strike"]),
+            "dte": int(pt["dte"]),
+            "iv": float(pt["iv"]),
+            "moneyness": float(pt.get("moneyness", 1.0)),
+            "call_delta": float(pt.get("call_delta", 0.0)) if pt.get("call_delta") is not None else None,
+            "put_delta": float(pt.get("put_delta", 0.0)) if pt.get("put_delta") is not None else None,
+        }
+        for pt in grid_points
+    ]
+
+    return {
+        "symbol": sym,
+        "spot_price": surface_data.get("spot_price"),
+        "as_of": surface_data.get("as_of"),
+        "mesh": mesh,
+        "grid": grid_points,
+        "expirations": surface_data.get("expirations", []),
+        "term_structure": surface_data.get("term_structure", {}),
+        "smiles": surface_data.get("smiles", {}),
+        "skew_summary": surface_data.get("skew_summary", {}),
+        "vrp_cone": surface_data.get("vrp_cone", {}),
+        "missing_data": surface_data.get("missing_data", False),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Multi-Broker Gateway Telemetry & Failover Endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/pilots/execution/brokers/status",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_execution_brokers_status() -> Dict[str, Any]:
+    """Returns multi-broker gateway status snapshot (active broker, latencies, circuit breaker states, available adapters)."""
+    from execution.multi_broker_gateway import MultiBrokerGateway
+
+    gateway = MultiBrokerGateway.get_default_gateway()
+    snapshot = gateway.get_status_snapshot()
+    return snapshot.to_dict()
+
+
+class BrokerFailoverRequest(BaseModel):
+    target_broker: str = Field(..., min_length=1, description="Target broker ID to manually route execution to.")
+    reason: Optional[str] = Field(None, description="Operator rationale for manual failover.")
+
+
+@app.post(
+    "/pilots/execution/brokers/failover",
+    dependencies=[Depends(require_read_token)],
+)
+def post_pilots_execution_brokers_failover(req: BrokerFailoverRequest) -> Dict[str, Any]:
+    """Triggers manual broker failover in MultiBrokerGateway."""
+    from execution.multi_broker_gateway import MultiBrokerGateway
+
+    gateway = MultiBrokerGateway.get_default_gateway()
+    target = req.target_broker.strip().lower()
+    registered = gateway.list_brokers()
+    if target not in registered:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target broker '{req.target_broker}' is not registered in gateway. Available brokers: {registered}",
+        )
+
+    gateway.set_manual_override(target)
+    return {
+        "status": "ok",
+        "active_broker": target,
+        "manual_override": target,
+        "reason": req.reason or "manual_operator_failover",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# SEC Rule 606 Execution Quality Report Endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/pilots/execution/sec-606/report",
+    dependencies=[Depends(require_read_token)],
+)
+def get_pilots_execution_sec_606_report(
+    year: int = Query(2026, ge=2000, le=2100),
+    quarter: int = Query(1, ge=1, le=4),
+    is_option: Optional[bool] = Query(None),
+) -> Dict[str, Any]:
+    """Returns SEC Rule 606(a)(1) quarterly metrics and venue percentages."""
+    if quarter < 1 or quarter > 4:
+        raise HTTPException(status_code=400, detail="Quarter must be between 1 and 4.")
+
+    from execution.sec_rule_606_reporter import SecRule606Reporter
+
+    reporter = SecRule606Reporter()
+    return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
+

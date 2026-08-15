@@ -4911,3 +4911,239 @@ export interface AlmgrenChrissOptimizeResponse {
   as_of?: string;
 }
 
+// ============================================================================
+// Tier D: AI Research Copilot & Autonomous Backtesting Types
+// ============================================================================
+
+export interface ResearchSynthesizeRequest {
+  prompt: string;
+  strategy_type?: string;
+  asset_universe?: string[];
+  lookback_period_days?: number;
+  target_metric?: string;
+  enable_ast_security_scan?: boolean;
+  constraints?: Record<string, any>;
+}
+
+export interface ResearchSynthesizeResponse {
+  synthesis_id: string;
+  prompt: string;
+  synthesized_code: string;
+  ast_safety_passed: boolean;
+  ast_violations: string[];
+  suggested_parameters: Record<string, any>;
+  explanation: string;
+  model_used: string;
+  created_at?: string;
+  confidence_score: number;
+}
+
+export interface AutonomousBacktestRequest {
+  strategy_code: string;
+  strategy_id?: string;
+  symbols?: string[];
+  start_date?: string;
+  end_date?: string;
+  initial_capital?: number;
+  cpcv_folds?: number;
+  purge_window?: number;
+  embargo_window?: number;
+  transaction_cost_bps?: number;
+}
+
+export interface AutonomousBacktestResponse {
+  strategy_id: string;
+  is_deployable: boolean;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  max_drawdown: number;
+  pbo: number;
+  dsr: number;
+  turnover: number;
+  annualized_return: number;
+  cumulative_return: number;
+  win_rate: number;
+  calmar_ratio: number;
+  volatility: number;
+  gate_evaluations: Record<string, boolean>;
+  failure_reasons: string[];
+  n_paths: number;
+  n_observations: number;
+  execution_time_seconds: number;
+  cpcv_mean_oos_sharpe?: number | null;
+  cpcv_mean_oos_max_dd?: number | null;
+  cpcv_mean_oos_sortino?: number | null;
+  equity_curve?: Array<{ date: string; equity: number; drawdown: number }>;
+  error?: string | null;
+  as_of?: string;
+}
+
+// ============================================================================
+// Tier D: 3D Volatility Surface Types
+// ============================================================================
+
+export interface VolSurface3DPoint {
+  strike: number;
+  dte: number;
+  iv: number;
+  moneyness?: number;
+  expiration?: string;
+  call_iv?: number;
+  put_iv?: number;
+}
+
+export interface VolSurface3DMeshResponse {
+  symbol: string;
+  spot_price: number;
+  strikes: number[];
+  dtes: number[];
+  grid: number[][]; // grid[dteIdx][strikeIdx] = iv
+  min_iv: number;
+  max_iv: number;
+  min_strike: number;
+  max_strike: number;
+  min_dte: number;
+  max_dte: number;
+  points?: VolSurface3DPoint[];
+  as_of?: string;
+}
+
+// ============================================================================
+// Tier D: Multi-Broker Gateway & Circuit Breaker Types
+// ============================================================================
+
+export interface BrokerHealthStatusDto {
+  broker_id: string;
+  broker_type: string;
+  connection_state: "connected" | "degraded" | "failing" | "disconnected" | "maintenance";
+  circuit_state: "closed" | "open" | "half_open";
+  is_healthy: boolean;
+  is_routable: boolean;
+  latency_ms: number;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  error_rate: number;
+  consecutive_failures: number;
+  last_heartbeat?: string | null;
+  last_error?: string | null;
+  status_message: string;
+}
+
+export interface RoutingAuditDto {
+  client_order_id: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  primary_broker_id: string;
+  executed_broker_id?: string | null;
+  was_failover: boolean;
+  total_latency_ms: number;
+  final_status: string;
+  failover_reason?: string | null;
+  timestamp: string;
+}
+
+export interface MultiBrokerStatusResponse {
+  active_broker_id: string;
+  failover_mode: "auto" | "manual" | "disabled";
+  manual_override_broker_id?: string | null;
+  priority_hierarchy: string[];
+  brokers: Record<string, BrokerHealthStatusDto>;
+  total_orders_routed: number;
+  total_failovers: number;
+  last_failover_time?: string | null;
+  last_failover_reason?: string | null;
+  recent_routing_audits?: RoutingAuditDto[];
+  as_of?: string;
+}
+
+export interface BrokerFailoverRequest {
+  target_broker_id: string;
+  reason?: string;
+  force?: boolean;
+}
+
+export interface BrokerFailoverResponse {
+  success: boolean;
+  previous_broker_id: string;
+  active_broker_id: string;
+  failover_timestamp: string;
+  reason: string;
+  message: string;
+}
+
+// ============================================================================
+// Tier D: SEC Rule 606 Execution Quality Report Types
+// ============================================================================
+
+export interface SecRule606VenueRow {
+  venue: string;
+  order_count: number;
+  pct_of_category_orders?: number;
+  pct_of_total_orders: number;
+  executed_shares: number;
+  pct_of_category_shares?: number;
+  pct_of_total_shares: number;
+  net_fee_rebate_dollars: number;
+  rebate_per_hundred_shares_dollars: number;
+  rebate_per_hundred_shares_cents: number;
+  price_improved_orders_count: number;
+  price_improvement_rate: number;
+  price_improved_shares_count?: number;
+  total_price_improvement_dollars: number;
+  avg_price_improvement_per_order_dollars: number;
+  avg_price_improvement_per_share_cents: number;
+  avg_price_improvement_per_improved_share_cents?: number;
+}
+
+export interface SecRule606CategoryBreakdown {
+  category: string;
+  order_count: number;
+  pct_of_total_orders: number;
+  executed_shares: number;
+  pct_of_total_shares: number;
+  net_fee_rebate_dollars: number;
+  rebate_per_hundred_shares_dollars: number;
+  rebate_per_hundred_shares_cents: number;
+  price_improved_orders_count: number;
+  price_improvement_rate: number;
+  price_improved_shares_count: number;
+  price_improved_shares_rate: number;
+  total_price_improvement_dollars: number;
+  avg_price_improvement_per_order_dollars: number;
+  avg_price_improvement_per_improved_order_dollars: number;
+  avg_price_improvement_per_share_cents: number;
+  avg_price_improvement_per_improved_share_cents: number;
+}
+
+export interface SecRule606ReportResponse {
+  header: {
+    report_type: string;
+    period: string;
+    year?: number | null;
+    quarter?: number | null;
+    start_date: string;
+    end_date: string;
+    is_option?: boolean | null;
+    created_at: string;
+  };
+  summary: {
+    total_orders: number;
+    total_shares: number;
+    total_notional: number;
+    total_net_rebate_dollars: number;
+    total_price_improvement_dollars: number;
+    overall_price_improvement_rate: number;
+    overall_share_price_improvement_rate: number;
+    overall_rebate_per_hundred_shares_dollars: number;
+    overall_rebate_per_hundred_shares_cents: number;
+    overall_avg_price_improvement_per_order_dollars: number;
+    price_improved_orders_count: number;
+  };
+  order_category_breakdown: Record<string, SecRule606CategoryBreakdown>;
+  venue_breakdown: {
+    by_category: Record<string, SecRule606VenueRow[]>;
+    venues_overall: SecRule606VenueRow[];
+  };
+}
+

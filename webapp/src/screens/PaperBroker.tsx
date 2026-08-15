@@ -21,6 +21,9 @@ import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
 import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
 import { HrpCvarOptimizerView } from "../components/portfolio/HrpCvarOptimizerView";
 import { AlmgrenChrissRouterView } from "../components/execution/AlmgrenChrissRouterView";
+import { ResearchCopilotView } from "../components/ai/ResearchCopilotView";
+import { MultiBrokerGatewayView } from "../components/execution/MultiBrokerGatewayView";
+import { SecRule606ReportView } from "../components/execution/SecRule606ReportView";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -50,6 +53,9 @@ export function PaperBroker() {
   const [showMarketMaker, setShowMarketMaker] = useState(false);
   const [showHrpCvar, setShowHrpCvar] = useState(false);
   const [showAlmgrenChriss, setShowAlmgrenChriss] = useState(false);
+  const [showAiCopilot, setShowAiCopilot] = useState(false);
+  const [showMultiBroker, setShowMultiBroker] = useState(false);
+  const [showSec606, setShowSec606] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -194,7 +200,52 @@ export function PaperBroker() {
             Simulated Execution, Greeks Risk, Options Backtest & Stage 4 ML Engine
           </div>
         </div>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setShowAiCopilot(!showAiCopilot)}
+            style={{
+              padding: "8px 14px",
+              background: showAiCopilot ? theme.accent : theme.surface,
+              border: `1px solid ${showAiCopilot ? theme.accent : theme.border}`,
+              color: showAiCopilot ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🤖 AI Quant IDE
+          </button>
+          <button
+            onClick={() => setShowMultiBroker(!showMultiBroker)}
+            style={{
+              padding: "8px 14px",
+              background: showMultiBroker ? theme.growth : theme.surface,
+              border: `1px solid ${showMultiBroker ? theme.growth : theme.border}`,
+              color: showMultiBroker ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🔀 Multi-Broker
+          </button>
+          <button
+            onClick={() => setShowSec606(!showSec606)}
+            style={{
+              padding: "8px 14px",
+              background: showSec606 ? theme.accent : theme.surface,
+              border: `1px solid ${showSec606 ? theme.accent : theme.border}`,
+              color: showSec606 ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            📋 SEC 606
+          </button>
           <button
             onClick={handleManageExits}
             disabled={manageExitsMutation.pending}
@@ -556,6 +607,53 @@ export function PaperBroker() {
             spotPrice={account.data?.equity ? 546.50 : 546.50}
             onClose={() => setShowMarketMaker(false)}
           />
+        )}
+
+        {/* AI Quant Research Copilot IDE */}
+        {showAiCopilot && (
+          <div style={{ position: "relative" }}>
+            <button 
+              onClick={() => setShowAiCopilot(false)}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
+            >
+              ✕
+            </button>
+            <ResearchCopilotView onDeployStrategy={(strategyId) => {
+              setShowAiCopilot(false);
+              setExecStatus(`Deployed strategy ${strategyId} to Paper Broker.`);
+              candidates.reload();
+            }} />
+          </div>
+        )}
+
+        {/* Multi-Broker Execution Gateway */}
+        {showMultiBroker && (
+          <div style={{ position: "relative" }}>
+            <button 
+              onClick={() => setShowMultiBroker(false)}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
+            >
+              ✕
+            </button>
+            <MultiBrokerGatewayView onFailoverSuccess={() => {
+              account.reload();
+              positions.reload();
+              orders.reload();
+            }} />
+          </div>
+        )}
+
+        {/* SEC Rule 606 Compliance Disclosure Reporter */}
+        {showSec606 && (
+          <div style={{ position: "relative" }}>
+            <button 
+              onClick={() => setShowSec606(false)}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
+            >
+              ✕
+            </button>
+            <SecRule606ReportView />
+          </div>
         )}
 
         {/* HRP CVaR Optimizer Desk */}

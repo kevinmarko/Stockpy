@@ -23,9 +23,11 @@ import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
 import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
 import { TransformerVolForecastView } from "../components/charts/TransformerVolForecastView";
 import { GenerativeDiffusionStressView } from "../components/charts/GenerativeDiffusionStressView";
+import { VolSurface3D } from "../components/charts/VolSurface3D";
+import { LobDepth3D } from "../components/charts/LobDepth3D";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob" | "copula" | "mm" | "aivol" | "stress";
+type ChainTab = "calls" | "puts" | "volsurf3d" | "lob3d" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob" | "copula" | "mm" | "aivol" | "stress";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -207,6 +209,8 @@ export function OptionsChain() {
         {[
           { key: "calls", label: "Calls" },
           { key: "puts", label: "Puts" },
+          { key: "volsurf3d", label: "🌐 3D Surface" },
+          { key: "lob3d", label: "📊 3D LOB" },
           { key: "gex", label: "📊 GEX Profile" },
           { key: "lob", label: "🪜 LOB Depth" },
           { key: "copula", label: "🔗 Copula" },
@@ -251,7 +255,11 @@ export function OptionsChain() {
       <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: (selectedLegs.length > 0 || isStockTradeOpen) ? 350 : 16 }}>
         <TabGuide tabKey="options-chain" />
         
-        {activeTab === "copula" ? (
+        {activeTab === "volsurf3d" ? (
+          <VolSurface3D symbol={ticker || "SPY"} spotPrice={spotPrice || 505.20} />
+        ) : activeTab === "lob3d" ? (
+          <LobDepth3D symbol={ticker || "SPY"} currentPrice={spotPrice || 505.20} />
+        ) : activeTab === "copula" ? (
           <CopulaSpreadView initialPair={`${ticker || "SPY"}/QQQ`} />
         ) : activeTab === "mm" ? (
           <MarketMakerAgentView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />

@@ -257,6 +257,20 @@ import type {
   HrpCvarOptimizeResponse,
   AlmgrenChrissOptimizeRequest,
   AlmgrenChrissOptimizeResponse,
+  ResearchSynthesizeRequest,
+  ResearchSynthesizeResponse,
+  AutonomousBacktestRequest,
+  AutonomousBacktestResponse,
+  VolSurface3DMeshResponse,
+  VolSurface3DPoint,
+  MultiBrokerStatusResponse,
+  BrokerHealthStatusDto,
+  RoutingAuditDto,
+  BrokerFailoverRequest,
+  BrokerFailoverResponse,
+  SecRule606ReportResponse,
+  SecRule606VenueRow,
+  SecRule606CategoryBreakdown,
 } from "./types";
 
 const SECTORS = [
@@ -13579,6 +13593,596 @@ export const mockApi = {
       avg_spread: avgSpread,
       steps,
       as_of: new Date().toISOString(),
+    });
+  },
+
+  // ---- Tier D: AI Research Copilot & Autonomous Backtest ----
+
+  async synthesizeQuantResearch(request: ResearchSynthesizeRequest): Promise<ResearchSynthesizeResponse> {
+    const p = (request.prompt || "").toLowerCase();
+    const isUnsafe = p.includes("os.system") || p.includes("eval(") || p.includes("import os") || p.includes("subprocess");
+
+    if (isUnsafe) {
+      return delay<ResearchSynthesizeResponse>({
+        synthesis_id: `syn_${Math.random().toString(36).substring(2, 9)}`,
+        prompt: request.prompt,
+        synthesized_code: `# Rejected by AST Security Validator\n# Violations detected:\n# - Forbidden import: 'os' is explicitly blacklisted.\n# - Forbidden function call: 'eval()' is prohibited.`,
+        ast_safety_passed: false,
+        ast_violations: [
+          "Forbidden import: module 'os' is explicitly blacklisted.",
+          "Forbidden function call: 'eval()' is prohibited in candidate strategy sandbox.",
+        ],
+        suggested_parameters: {},
+        explanation: "Candidate code violates AST security sandbox rules. Forbidden imports or builtins detected.",
+        model_used: "InvestYo-QuantSynthesizer-v4",
+        created_at: new Date().toISOString(),
+        confidence_score: 0.12,
+      }, 100);
+    }
+
+    const code = `import numpy as np
+import pandas as pd
+import scipy.stats as stats
+
+def generate_signals(df: pd.DataFrame) -> pd.Series:
+    """
+    Synthesized Alpha: Volatility-Adjusted Momentum & Mean Reversion Filter
+    Universe: ${(request.asset_universe || ["SPY", "QQQ", "AAPL", "MSFT"]).join(", ")}
+    Lookback: ${request.lookback_period_days || 20} days
+    Target Metric: ${request.target_metric || "Sharpe Ratio"}
+    """
+    close = df["close"]
+    ma_fast = close.rolling(window=10, min_periods=5).mean()
+    ma_slow = close.rolling(window=${request.lookback_period_days || 20}, min_periods=10).mean()
+    vol = close.pct_change().rolling(window=20).std()
+    
+    # Normalized Z-Score Spread
+    z_spread = (close - ma_slow) / (vol * close + 1e-6)
+    
+    # Vectorized Alpha Signal (+1.0 Long, -1.0 Short)
+    signals = pd.Series(0.0, index=df.index)
+    signals[z_spread < -1.8] = 1.0
+    signals[z_spread > 1.8] = -1.0
+    
+    # Volatility targeting weight adjustment
+    target_vol = 0.15
+    scaling = np.clip(target_vol / (vol * np.sqrt(252) + 1e-4), 0.2, 2.0)
+    return signals * scaling
+`;
+
+    return delay<ResearchSynthesizeResponse>({
+      synthesis_id: `syn_${Math.random().toString(36).substring(2, 9)}`,
+      prompt: request.prompt,
+      synthesized_code: code,
+      ast_safety_passed: true,
+      ast_violations: [],
+      suggested_parameters: {
+        lookback_fast: 10,
+        lookback_slow: request.lookback_period_days || 20,
+        z_threshold: 1.8,
+        target_annual_vol: 0.15,
+        rebalance_cadence: "1D",
+      },
+      explanation: "Synthesized institutional-grade signal generating engine using AST-safe vectorized pandas/numpy computations. Incorporates dynamic volatility-targeting scaling and rolling Z-score mean reversion thresholds.",
+      model_used: "InvestYo-QuantSynthesizer-v4-DeepSeekR1",
+      created_at: new Date().toISOString(),
+      confidence_score: 0.94,
+    }, 150);
+  },
+
+  async runAutonomousBacktest(request: AutonomousBacktestRequest): Promise<AutonomousBacktestResponse> {
+    const code = request.strategy_code || "";
+    const isUnsafe = code.includes("os.system") || code.includes("import os") || code.includes("eval(");
+
+    if (isUnsafe) {
+      return delay<AutonomousBacktestResponse>({
+        strategy_id: request.strategy_id || "candidate_alpha_01",
+        is_deployable: false,
+        sharpe_ratio: 0,
+        sortino_ratio: 0,
+        max_drawdown: 1.0,
+        pbo: 1.0,
+        dsr: 0.0,
+        turnover: 0,
+        annualized_return: 0,
+        cumulative_return: 0,
+        win_rate: 0,
+        calmar_ratio: 0,
+        volatility: 0,
+        gate_evaluations: {
+          "pbo_gate (< 0.50)": false,
+          "dsr_gate (> 0.95)": false,
+          "sharpe_gate (> 0.50)": false,
+          "max_drawdown_gate (< 0.30)": false,
+        },
+        failure_reasons: ["AST Security Error: Prohibited operation detected in candidate strategy."],
+        n_paths: 0,
+        n_observations: 0,
+        execution_time_seconds: 0.04,
+        error: "AST Security Validation Failed: Prohibited operation.",
+        as_of: new Date().toISOString(),
+      }, 100);
+    }
+
+    const nObs = 252 * 4;
+    const curve: Array<{ date: string; equity: number; drawdown: number }> = [];
+    let currentEquity = request.initial_capital || 100000;
+    let peakEquity = currentEquity;
+    const baseDate = new Date(2022, 0, 3);
+
+    for (let i = 0; i < 80; i++) {
+      const d = new Date(baseDate.getTime() + i * (5 * 86400000));
+      const dailyRet = (Math.sin(i * 0.22) * 0.007 + 0.0022 + (i % 6 === 0 ? 0.005 : -0.002));
+      currentEquity *= (1 + dailyRet);
+      if (currentEquity > peakEquity) peakEquity = currentEquity;
+      const dd = (peakEquity - currentEquity) / peakEquity;
+      curve.push({
+        date: d.toISOString().slice(0, 10),
+        equity: Number(currentEquity.toFixed(2)),
+        drawdown: Number((dd * 100).toFixed(2)),
+      });
+    }
+
+    return delay<AutonomousBacktestResponse>({
+      strategy_id: request.strategy_id || `alpha_${Math.random().toString(36).substring(2, 8)}`,
+      is_deployable: true,
+      sharpe_ratio: 1.84,
+      sortino_ratio: 2.52,
+      max_drawdown: 0.118,
+      pbo: 0.142,
+      dsr: 0.982,
+      turnover: 0.32,
+      annualized_return: 0.246,
+      cumulative_return: Number(((currentEquity - (request.initial_capital || 100000)) / (request.initial_capital || 100000)).toFixed(4)),
+      win_rate: 0.584,
+      calmar_ratio: 2.08,
+      volatility: 0.134,
+      gate_evaluations: {
+        "pbo_gate (< 0.50)": true,
+        "dsr_gate (> 0.95)": true,
+        "sharpe_gate (> 0.50)": true,
+        "max_drawdown_gate (< 0.30)": true,
+      },
+      failure_reasons: [],
+      n_paths: 16,
+      n_observations: nObs,
+      execution_time_seconds: 1.482,
+      cpcv_mean_oos_sharpe: 1.62,
+      cpcv_mean_oos_max_dd: 0.135,
+      cpcv_mean_oos_sortino: 2.18,
+      equity_curve: curve,
+      error: null,
+      as_of: new Date().toISOString(),
+    }, 150);
+  },
+
+  // ---- Tier D: 3D Volatility Surface ----
+
+  async getVolSurface3DMesh(symbol?: string): Promise<VolSurface3DMeshResponse> {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "QQQ" ? 445.0 : sym === "NVDA" ? 128.5 : 505.2;
+    const strikes: number[] = [];
+    const minK = Math.round(spot * 0.8);
+    const maxK = Math.round(spot * 1.2);
+    const nStrikes = 15;
+    const step = (maxK - minK) / (nStrikes - 1);
+    for (let i = 0; i < nStrikes; i++) {
+      strikes.push(Number((minK + i * step).toFixed(1)));
+    }
+
+    const dtes = [7, 14, 30, 45, 60, 90, 180, 365];
+    const grid: number[][] = [];
+    const points: VolSurface3DPoint[] = [];
+    let minIv = Infinity;
+    let maxIv = -Infinity;
+
+    for (let j = 0; j < dtes.length; j++) {
+      const dte = dtes[j];
+      const T = dte / 365.0;
+      const row: number[] = [];
+      const baseAtmIv = 0.18 + 0.04 * Math.log(1 + T);
+
+      for (let i = 0; i < strikes.length; i++) {
+        const strike = strikes[i];
+        const m = Math.log(strike / spot);
+        const skewSlope = -0.15 / Math.sqrt(Math.max(0.04, T));
+        const smileCurvature = 0.22 / Math.max(0.1, Math.pow(T, 0.4));
+        const iv = Number(Math.max(0.08, baseAtmIv + skewSlope * m + smileCurvature * m * m).toFixed(4));
+
+        minIv = Math.min(minIv, iv);
+        maxIv = Math.max(maxIv, iv);
+        row.push(iv);
+        points.push({
+          strike,
+          dte,
+          iv,
+          moneyness: Number((strike / spot).toFixed(3)),
+          call_iv: Number((iv * 0.98).toFixed(4)),
+          put_iv: Number((iv * 1.02).toFixed(4)),
+        });
+      }
+      grid.push(row);
+    }
+
+    return delay<VolSurface3DMeshResponse>({
+      symbol: sym,
+      spot_price: spot,
+      strikes,
+      dtes,
+      grid,
+      min_iv: minIv,
+      max_iv: maxIv,
+      min_strike: strikes[0],
+      max_strike: strikes[strikes.length - 1],
+      min_dte: dtes[0],
+      max_dte: dtes[dtes.length - 1],
+      points,
+      as_of: new Date().toISOString(),
+    });
+  },
+
+  // ---- Tier D: Multi-Broker Gateway & Circuit Breakers ----
+
+  async getMultiBrokerStatus(): Promise<MultiBrokerStatusResponse> {
+    const brokers: Record<string, BrokerHealthStatusDto> = {
+      alpaca: {
+        broker_id: "alpaca",
+        broker_type: "alpaca",
+        connection_state: "connected",
+        circuit_state: "closed",
+        is_healthy: true,
+        is_routable: true,
+        latency_ms: 24.5,
+        avg_latency_ms: 26.2,
+        p95_latency_ms: 42.0,
+        error_rate: 0.002,
+        consecutive_failures: 0,
+        last_heartbeat: new Date().toISOString(),
+        last_error: null,
+        status_message: "Alpaca REST/WS healthy, primary routing operational.",
+      },
+      interactive_brokers: {
+        broker_id: "interactive_brokers",
+        broker_type: "interactive_brokers",
+        connection_state: "connected",
+        circuit_state: "closed",
+        is_healthy: true,
+        is_routable: true,
+        latency_ms: 38.1,
+        avg_latency_ms: 40.5,
+        p95_latency_ms: 68.4,
+        error_rate: 0.005,
+        consecutive_failures: 0,
+        last_heartbeat: new Date().toISOString(),
+        last_error: null,
+        status_message: "TWS Gateway v10.19 connected, options & equities ready.",
+      },
+      tradier: {
+        broker_id: "tradier",
+        broker_type: "tradier",
+        connection_state: "connected",
+        circuit_state: "closed",
+        is_healthy: true,
+        is_routable: true,
+        latency_ms: 45.2,
+        avg_latency_ms: 48.0,
+        p95_latency_ms: 78.0,
+        error_rate: 0.008,
+        consecutive_failures: 0,
+        last_heartbeat: new Date().toISOString(),
+        last_error: null,
+        status_message: "Tradier Production Sandbox connected.",
+      },
+      robinhood: {
+        broker_id: "robinhood",
+        broker_type: "robinhood",
+        connection_state: "degraded",
+        circuit_state: "half_open",
+        is_healthy: false,
+        is_routable: false,
+        latency_ms: 182.4,
+        avg_latency_ms: 165.0,
+        p95_latency_ms: 340.0,
+        error_rate: 0.12,
+        consecutive_failures: 2,
+        last_heartbeat: new Date(Date.now() - 45000).toISOString(),
+        last_error: "RateLimitExceeded: 429 Too Many Requests",
+        status_message: "Degraded latency probe. Canary half-open recovery active.",
+      },
+      fmp_paper: {
+        broker_id: "fmp_paper",
+        broker_type: "fmp_paper",
+        connection_state: "connected",
+        circuit_state: "closed",
+        is_healthy: true,
+        is_routable: true,
+        latency_ms: 1.8,
+        avg_latency_ms: 2.1,
+        p95_latency_ms: 3.5,
+        error_rate: 0.0,
+        consecutive_failures: 0,
+        last_heartbeat: new Date().toISOString(),
+        last_error: null,
+        status_message: "In-memory paper simulated broker ledger active.",
+      },
+    };
+
+    const audits: RoutingAuditDto[] = [
+      {
+        client_order_id: "ord_d89f2a01",
+        symbol: "SPY",
+        side: "BUY",
+        qty: 100,
+        primary_broker_id: "alpaca",
+        executed_broker_id: "alpaca",
+        was_failover: false,
+        total_latency_ms: 23.4,
+        final_status: "FILLED",
+        failover_reason: null,
+        timestamp: new Date(Date.now() - 120000).toISOString(),
+      },
+      {
+        client_order_id: "ord_c44b9102",
+        symbol: "QQQ",
+        side: "SELL",
+        qty: 50,
+        primary_broker_id: "robinhood",
+        executed_broker_id: "alpaca",
+        was_failover: true,
+        total_latency_ms: 88.2,
+        final_status: "FILLED",
+        failover_reason: "high_latency (>150ms)",
+        timestamp: new Date(Date.now() - 480000).toISOString(),
+      },
+      {
+        client_order_id: "ord_e7710a99",
+        symbol: "NVDA",
+        side: "BUY",
+        qty: 200,
+        primary_broker_id: "alpaca",
+        executed_broker_id: "alpaca",
+        was_failover: false,
+        total_latency_ms: 28.1,
+        final_status: "FILLED",
+        failover_reason: null,
+        timestamp: new Date(Date.now() - 920000).toISOString(),
+      },
+    ];
+
+    return delay<MultiBrokerStatusResponse>({
+      active_broker_id: "alpaca",
+      failover_mode: "auto",
+      manual_override_broker_id: null,
+      priority_hierarchy: ["alpaca", "interactive_brokers", "tradier", "fmp_paper"],
+      brokers,
+      total_orders_routed: 14250,
+      total_failovers: 2,
+      last_failover_time: new Date(Date.now() - 480000).toISOString(),
+      last_failover_reason: "High latency detected on primary adapter; automated failover to Alpaca.",
+      recent_routing_audits: audits,
+      as_of: new Date().toISOString(),
+    });
+  },
+
+  async triggerBrokerFailover(request: BrokerFailoverRequest): Promise<BrokerFailoverResponse> {
+    return delay<BrokerFailoverResponse>({
+      success: true,
+      previous_broker_id: "alpaca",
+      active_broker_id: request.target_broker_id,
+      failover_timestamp: new Date().toISOString(),
+      reason: request.reason || "Manual operator failover triggered from MultiBrokerGatewayView.",
+      message: `Successfully switched active execution gateway to '${request.target_broker_id}'.`,
+    });
+  },
+
+  // ---- Tier D: SEC Rule 606 Execution Quality Reporter ----
+
+  async getSecRule606Report(params?: { year?: number; quarter?: number; is_option?: boolean }): Promise<SecRule606ReportResponse> {
+    const yr = params?.year ?? 2026;
+    const qtr = params?.quarter ?? 1;
+    const isOpt = params?.is_option ?? null;
+
+    const venuesOverall: SecRule606VenueRow[] = [
+      {
+        venue: "CITADEL SECURITIES LLC",
+        order_count: 5420,
+        pct_of_total_orders: 38.04,
+        executed_shares: 1120000,
+        pct_of_total_shares: 39.30,
+        net_fee_rebate_dollars: 1456.20,
+        rebate_per_hundred_shares_dollars: 0.13,
+        rebate_per_hundred_shares_cents: 13.0,
+        price_improved_orders_count: 4820,
+        price_improvement_rate: 88.93,
+        price_improved_shares_count: 994000,
+        total_price_improvement_dollars: 8420.50,
+        avg_price_improvement_per_order_dollars: 1.55,
+        avg_price_improvement_per_share_cents: 0.75,
+        avg_price_improvement_per_improved_share_cents: 0.85,
+      },
+      {
+        venue: "VIRTU FINANCIAL BD LLC",
+        order_count: 3560,
+        pct_of_total_orders: 24.98,
+        executed_shares: 720000,
+        pct_of_total_shares: 25.26,
+        net_fee_rebate_dollars: 936.00,
+        rebate_per_hundred_shares_dollars: 0.13,
+        rebate_per_hundred_shares_cents: 13.0,
+        price_improved_orders_count: 3100,
+        price_improvement_rate: 87.08,
+        price_improved_shares_count: 628000,
+        total_price_improvement_dollars: 5120.30,
+        avg_price_improvement_per_order_dollars: 1.44,
+        avg_price_improvement_per_share_cents: 0.71,
+        avg_price_improvement_per_improved_share_cents: 0.82,
+      },
+      {
+        venue: "JANE STREET CAPITAL LLC",
+        order_count: 2480,
+        pct_of_total_orders: 17.40,
+        executed_shares: 510000,
+        pct_of_total_shares: 17.89,
+        net_fee_rebate_dollars: 612.00,
+        rebate_per_hundred_shares_dollars: 0.12,
+        rebate_per_hundred_shares_cents: 12.0,
+        price_improved_orders_count: 2090,
+        price_improvement_rate: 84.27,
+        price_improved_shares_count: 428000,
+        total_price_improvement_dollars: 3240.10,
+        avg_price_improvement_per_order_dollars: 1.31,
+        avg_price_improvement_per_share_cents: 0.64,
+        avg_price_improvement_per_improved_share_cents: 0.76,
+      },
+      {
+        venue: "TWO SIGMA SECURITIES LLC",
+        order_count: 1840,
+        pct_of_total_orders: 12.91,
+        executed_shares: 340000,
+        pct_of_total_shares: 11.93,
+        net_fee_rebate_dollars: 374.00,
+        rebate_per_hundred_shares_dollars: 0.11,
+        rebate_per_hundred_shares_cents: 11.0,
+        price_improved_orders_count: 1480,
+        price_improvement_rate: 80.43,
+        price_improved_shares_count: 275000,
+        total_price_improvement_dollars: 1820.40,
+        avg_price_improvement_per_order_dollars: 0.99,
+        avg_price_improvement_per_share_cents: 0.54,
+        avg_price_improvement_per_improved_share_cents: 0.66,
+      },
+      {
+        venue: "NEW YORK STOCK EXCHANGE (ARCA)",
+        order_count: 950,
+        pct_of_total_orders: 6.67,
+        executed_shares: 160000,
+        pct_of_total_shares: 5.61,
+        net_fee_rebate_dollars: 42.30,
+        rebate_per_hundred_shares_dollars: 0.026,
+        rebate_per_hundred_shares_cents: 2.6,
+        price_improved_orders_count: 510,
+        price_improvement_rate: 53.68,
+        price_improved_shares_count: 86000,
+        total_price_improvement_dollars: 348.95,
+        avg_price_improvement_per_order_dollars: 0.37,
+        avg_price_improvement_per_share_cents: 0.22,
+        avg_price_improvement_per_improved_share_cents: 0.41,
+      },
+    ];
+
+    const categoryBreakdown: Record<string, SecRule606CategoryBreakdown> = {
+      market: {
+        category: "market",
+        order_count: 6200,
+        pct_of_total_orders: 43.51,
+        executed_shares: 1250000,
+        pct_of_total_shares: 43.86,
+        net_fee_rebate_dollars: 1625.00,
+        rebate_per_hundred_shares_dollars: 0.13,
+        rebate_per_hundred_shares_cents: 13.0,
+        price_improved_orders_count: 5760,
+        price_improvement_rate: 92.90,
+        price_improved_shares_count: 1160000,
+        price_improved_shares_rate: 92.80,
+        total_price_improvement_dollars: 11450.25,
+        avg_price_improvement_per_order_dollars: 1.85,
+        avg_price_improvement_per_improved_order_dollars: 1.99,
+        avg_price_improvement_per_share_cents: 0.92,
+        avg_price_improvement_per_improved_share_cents: 0.99,
+      },
+      marketable_limit: {
+        category: "marketable_limit",
+        order_count: 5150,
+        pct_of_total_orders: 36.14,
+        executed_shares: 1020000,
+        pct_of_total_shares: 35.79,
+        net_fee_rebate_dollars: 1326.00,
+        rebate_per_hundred_shares_dollars: 0.13,
+        rebate_per_hundred_shares_cents: 13.0,
+        price_improved_orders_count: 4580,
+        price_improvement_rate: 88.93,
+        price_improved_shares_count: 910000,
+        price_improved_shares_rate: 89.22,
+        total_price_improvement_dollars: 6320.00,
+        avg_price_improvement_per_order_dollars: 1.23,
+        avg_price_improvement_per_improved_order_dollars: 1.38,
+        avg_price_improvement_per_share_cents: 0.62,
+        avg_price_improvement_per_improved_share_cents: 0.69,
+      },
+      non_marketable_limit: {
+        category: "non_marketable_limit",
+        order_count: 2450,
+        pct_of_total_orders: 17.19,
+        executed_shares: 490000,
+        pct_of_total_shares: 17.19,
+        net_fee_rebate_dollars: 441.00,
+        rebate_per_hundred_shares_dollars: 0.09,
+        rebate_per_hundred_shares_cents: 9.0,
+        price_improved_orders_count: 1540,
+        price_improvement_rate: 62.86,
+        price_improved_shares_count: 310000,
+        price_improved_shares_rate: 63.27,
+        total_price_improvement_dollars: 1120.00,
+        avg_price_improvement_per_order_dollars: 0.46,
+        avg_price_improvement_per_improved_order_dollars: 0.73,
+        avg_price_improvement_per_share_cents: 0.23,
+        avg_price_improvement_per_improved_share_cents: 0.36,
+      },
+      other: {
+        category: "other",
+        order_count: 450,
+        pct_of_total_orders: 3.16,
+        executed_shares: 90000,
+        pct_of_total_shares: 3.16,
+        net_fee_rebate_dollars: 28.50,
+        rebate_per_hundred_shares_dollars: 0.032,
+        rebate_per_hundred_shares_cents: 3.2,
+        price_improved_orders_count: 120,
+        price_improvement_rate: 26.67,
+        price_improved_shares_count: 31000,
+        price_improved_shares_rate: 34.44,
+        total_price_improvement_dollars: 60.00,
+        avg_price_improvement_per_order_dollars: 0.13,
+        avg_price_improvement_per_improved_order_dollars: 0.50,
+        avg_price_improvement_per_share_cents: 0.07,
+        avg_price_improvement_per_improved_share_cents: 0.19,
+      },
+    };
+
+    return delay<SecRule606ReportResponse>({
+      header: {
+        report_type: "SEC Rule 606(a)(1) Order Routing & Execution Quality Report",
+        period: `${yr}-Q${qtr}`,
+        year: yr,
+        quarter: qtr,
+        start_date: `${yr}-01-01T00:00:00Z`,
+        end_date: `${yr}-03-31T23:59:59Z`,
+        is_option: isOpt,
+        created_at: new Date().toISOString(),
+      },
+      summary: {
+        total_orders: 14250,
+        total_shares: 2850000,
+        total_notional: 412500000,
+        total_net_rebate_dollars: 3420.50,
+        total_price_improvement_dollars: 18950.25,
+        overall_price_improvement_rate: 84.21,
+        overall_share_price_improvement_rate: 84.59,
+        overall_rebate_per_hundred_shares_dollars: 0.12,
+        overall_rebate_per_hundred_shares_cents: 12.0,
+        overall_avg_price_improvement_per_order_dollars: 1.33,
+        price_improved_orders_count: 12000,
+      },
+      order_category_breakdown: categoryBreakdown,
+      venue_breakdown: {
+        by_category: {
+          market: venuesOverall.slice(0, 3),
+          marketable_limit: venuesOverall.slice(0, 4),
+          non_marketable_limit: venuesOverall.slice(1, 5),
+          other: venuesOverall.slice(3, 5),
+        },
+        venues_overall: venuesOverall,
+      },
     });
   },
 
