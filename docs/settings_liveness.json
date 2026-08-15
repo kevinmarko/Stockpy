@@ -443,9 +443,9 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 798,
+    "attr": 797,
     "factory_param": 4,
-    "getattr_const": 314,
+    "getattr_const": 313,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
@@ -736,7 +736,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:242",
+        "site": "gui/panels/analytics.py:247",
         "via": []
       },
       {
@@ -2164,7 +2164,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5198",
+        "site": "investyo_mcp_server.py:5257",
         "via": []
       }
     ],
@@ -2184,7 +2184,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5150",
+        "site": "investyo_mcp_server.py:5209",
         "via": []
       }
     ],
@@ -2224,7 +2224,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5158",
+        "site": "investyo_mcp_server.py:5217",
         "via": []
       }
     ],
@@ -2257,7 +2257,7 @@
           "default_arg",
           "module_level"
         ],
-        "site": "pilots/copula_stat_arb.py:1145",
+        "site": "pilots/copula_stat_arb.py:1132",
         "via": []
       }
     ],

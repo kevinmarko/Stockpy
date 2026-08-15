@@ -88,13 +88,13 @@ class TestReplayExcludedModules:
             "vrp_premium_selling",
         }
 
-    def test_surviving_registry_has_fourteen_modules(self) -> None:
+    def test_surviving_registry_has_fifteen_modules(self) -> None:
         from signals.registry import global_registry
 
         all_names = set(global_registry.get_all().keys())
         surviving = all_names - _REPLAY_EXCLUDED_MODULES
-        assert len(all_names) == 19
-        assert len(surviving) == 14
+        assert len(all_names) == 20
+        assert len(surviving) == 15
 
 
 # ---------------------------------------------------------------------------
