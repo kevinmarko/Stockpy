@@ -52,7 +52,7 @@ _investyo_complete() {
     universe_engine.py) kind='opts'; cands=(--date --report) ;;
     app_shell.py) kind='opts'; cands=(--interval) ;;
     execution.kill_switch) kind='opts'; cands=(--activate --deactivate --status --reason) ;;
-    validation.harness) kind='opts'; cands=(--strategy --start --end) ;;
+    validation.harness) kind='opts'; cands=(--strategy --start --end --ticker) ;;
     prompt_registry) kind='subs'; cands=(list get sync pin rollback diff verify publish) ;;
     prompt_registry/list) kind='opts'; cands=() ;;
     prompt_registry/get) kind='opts'; cands=(--version -v --raw) ;;
@@ -63,7 +63,7 @@ _investyo_complete() {
     prompt_registry/verify) kind='opts'; cands=() ;;
     prompt_registry/publish) kind='opts'; cands=(--version -v --author --notes) ;;
     preflight_check.py) kind='opts'; cands=(--json --skip --fire-alerts --validation-staleness-only) ;;
-    scripts.refresh_validations) kind='opts'; cands=(--strategies --start --end --output-dir --n-cpcv-splits --n-test-splits --json) ;;
+    scripts.refresh_validations) kind='opts'; cands=(--strategies --start --end --output-dir --n-cpcv-splits --n-test-splits --workers -w --json) ;;
     daily_briefing.py) kind='opts'; cands=(--output-dir --print) ;;
     track_record_status.py) kind='opts'; cands=(--output-dir --json) ;;
     database_setup.py) kind='opts'; cands=() ;;

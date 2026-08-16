@@ -547,7 +547,7 @@ PILOTS: List[Pilot] = [
         ),
         weights={"options_flow_sentiment": 1.0},
         long_only=False,
-        validation_strategy_id=None,
+        validation_strategy_id="options_flow_sentiment",
     ),
 ]
 

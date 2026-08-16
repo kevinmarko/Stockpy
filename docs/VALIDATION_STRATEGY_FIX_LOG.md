@@ -671,3 +671,28 @@ independent adapter edits in the same file. `deep_value_edgar_pit` and
 `quant_platform.db` — a fresh worktree's empty DB produces a numerically-degenerate
 Sharpe blowup (a known fresh-clone artifact, not a code defect).
 
+---
+
+## 2026-08-15: Multi-Strategy & Options Backfill (2005–Present) & Tab Integration
+
+Comprehensive walk-forward validation across the options spread family (`put_credit_spread`, `call_credit_spread`, `call_debit_spread`, `put_debit_spread`), options selling (`vrp_premium_selling`), ranking strategies (`sector_quality_rank`, `lgbm_ranker`), and options flow sentiment:
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Stress Gate | Deployable |
+|---|---|---|---|---|---|---|
+| `sector_quality_rank` | **0.955** | **0.000** | **0.000** | **28.4%** | N/A | ❌ False (honest WFA DSR gate) |
+| `lgbm_ranker` | **4.749** | **0.000** | **0.875** | **2.1%** | N/A | ❌ False (honest CPCV DSR gate 0.88 < 0.95) |
+| `vrp_premium_selling` | **0.217** | **0.000** | **0.000** | **17.9%** | ✅ PASS (100% survival) | ❌ False (full-window macro regime gating) |
+| `options_flow_sentiment` | **0.231** | **0.111** | **0.906** | **27.7%** | N/A | ❌ False (joined adapter, DSR 0.91 < 0.95) |
+| `put_credit_spread` | — | **0.000** | **0.000** | **6.7%** | ✅ PASS (100% survival) | ❌ False (stress survival pass) |
+| `call_credit_spread` | — | **0.000** | **0.000** | **6.7%** | ✅ PASS (100% survival) | ❌ False (stress survival pass) |
+| `call_debit_spread` | **−0.354** | **0.000** | **0.000** | **100.0%** | N/A | ❌ False (cost drag on long delta) |
+| `put_debit_spread` | **−0.669** | **0.000** | **0.000** | **98.9%** | N/A | ❌ False (cost drag on short delta) |
+
+**Institutional Quantitative Enhancements:**
+1. **Institutional Metrics Suite (`validation/metrics.py`)**: Added `profit_factor`, `ulcer_index`, `ulcer_performance_index` (UPI / Martin Ratio targeting > 1.0), and `walk_forward_efficiency_ratio` (WFE targeting > 0.50).
+2. **Dynamic Margin & Frictional Realism (`numba_backtest_loop.py`)**: Integrated `run_numba_backtest_with_margin` modeling volatility-scaled margin calls ($M_t = \text{BaseMargin} \times (1 + 2\sigma_t)$) and volatility panic slippage ($\text{Slippage}_t = \text{BaseSlippage} \times (1 + 3\sigma_t)$).
+3. **Options Flow Sentiment Validation Bridge**: Constructed `_build_options_flow_sentiment_adapter` on SPY (5d/20d momentum velocity and trend gating with 1-day lag zero lookahead) and registered `options_flow_sentiment` in `STRATEGY_REGISTRY` & `pilots/catalog.py`.
+4. **Commands & Forecasting Backfill Tabs**: Rebuilt `command_manifest.json` across all 27 strategies and exposed multi-horizon meta-labeling.
+
+
+

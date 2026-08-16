@@ -3253,6 +3253,50 @@ def _build_covered_call_adapter(
     return _build_options_spread_adapter(spy_close, simulate_covered_call_returns, "CoveredCall")
 
 
+def _build_options_flow_sentiment_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Options Flow Sentiment proxy adapter on SPY.
+
+    Evaluates multi-horizon momentum and flow velocity regimes, applying trend gating
+    and directional positioning with zero lookahead bias (1-day lagged signals).
+    """
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    roc5 = spy_close.pct_change(5)
+    roc20 = spy_close.pct_change(20)
+    sma200 = spy_close.rolling(200).mean()
+
+    # Flow pressure: bullish flow when fast 5d velocity breaks upward above SMA200
+    signal_bullish = ((roc5 > 0.005) & (spy_close > sma200)).astype(float)
+    signal_bearish = ((roc5 < -0.005) & (spy_close < sma200)).astype(float)
+    pos = signal_bullish - signal_bearish
+    pos_lag = pos.shift(1).fillna(0.0)
+
+    strat_ret = pos_lag * daily_ret
+    common_idx = valid_idx.intersection(strat_ret.dropna().index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame(
+        {
+            "SPY_Close": spy_close.loc[common_idx],
+            "ROC_5": roc5.loc[common_idx].fillna(0.0),
+            "ROC_20": roc20.loc[common_idx].fillna(0.0),
+        },
+        index=common_idx,
+    )
+    precomputed = {
+        "OptionsFlow_SweepLong": (signal_bullish.shift(1) * daily_ret).loc[common_idx].fillna(0.0),
+        "OptionsFlow_NetDirectional": strat_ret.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
 # 30 liquid, large-cap tickers with full pre-2005 trading history under their
 # current symbol — a wide enough cross-section for cross_sectional_momentum /
 # relative_strength_xsec to produce meaningfully fine-grained ranks (a 16-name
@@ -3266,6 +3310,7 @@ _XSEC_UNIVERSE_30: List[str] = [
 ]
 
 STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
+    "options_flow_sentiment": (_build_options_flow_sentiment_adapter, 0.04, ["SPY"]),
     # Turnover corrected 2026-08 (empirical measurement): Connors RSI(2) on SPY
     # trades ~10-12 days/year, holding 2-4 days. Mean daily turnover is ~0.008/day.
     # 0.01 is a conservative round number aligning with real trade frequency.
