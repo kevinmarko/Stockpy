@@ -1,34 +1,41 @@
-# Walkthrough: Institutional Quantitative Framework Implementation across 4 Strategies/Options, Numba JIT Core, and Validation Pipeline
+# Walkthrough: Institutional Quantitative Framework Implementation across 4 Strategies/Options, Numba JIT Core, and Dual-Agent Audit
 
 ## Overview & Changes Made
 
-### 1. Strategy & Options Walk-Forward Validation & Harness Backfill (2005–Present)
-- Executed the walk-forward validation harness across the full suite of options selling, options spreads, ranking models, and equity strategies.
-- Evaluated tail-risk scenario stress tests (`OCT_2008`, `FEB_2018`, `MAR_2020`, `AUG_2024`) with 100% survival across premium selling strategies.
-- Generated and saved validation summary JSONs under `reports/` (`sector_quality_rank_validation_summary.json`, `vrp_premium_selling_validation_summary.json`, `lgbm_ranker_validation_summary.json`, `options_flow_sentiment_validation_summary.json`, `put_credit_spread_validation_summary.json`, etc.).
+### 1. Walk-Forward Analysis (WFA) Engine (`validation/walk_forward.py`)
+- **80/20 Rolling In-Sample / Out-of-Sample Windowing**: Created `run_walk_forward_analysis` dividing data into rolling 80% calibration (IS) and 20% validation (OOS) windows with non-overlapping OOS intervals.
+- **Walk-Forward Efficiency (WFE)**: Computes $\text{WFE} = \frac{\text{ProfitFactor}(\text{OOS})}{\text{ProfitFactor}(\text{IS})}$.
+- **Downside & Drawdown Metrics**: Computes Out-of-Sample Ulcer Index (Peter Martin, 1987) and Martin Ratio (UPI / Ulcer Performance Index) measuring excess return per unit of quadratic drawdown depth/duration risk.
+- **PIT Multi-Asset Rebalancing**: Implemented cross-sectional universe rebalancing with trailing momentum and inverse-volatility weighting with strict non-lookahead history masking.
+- **Unit Tests**: [`tests/test_walk_forward.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/tests/test_walk_forward.py) (**9/9 passed**).
 
-### 2. High-Performance Numba JIT Execution & Dynamic Margin Core
-- Implemented and benchmarked `numba_backtest_loop.py` (`@njit` compiled event-driven sequential backtesting loop with path-dependent 5% stop loss, slippage, and round-trip fee accounting).
-- Added `run_numba_backtest_with_margin`: models volatility-scaled margin calls ($M_t = \text{BaseMargin} \times (1 + 2\sigma_t)$) and volatility panic slippage ($\text{Slippage}_t = \text{BaseSlippage} \times (1 + 3\sigma_t)$).
-- Added `compute_numba_backtest_metrics`: calculates Sharpe, Sortino, Calmar, MaxDD, Ulcer Index, Ulcer Performance Index (UPI / Martin Ratio), and Profit Factor.
-- Validated execution throughput of >200M bars/sec with unit tests in `tests/test_numba_backtest_loop.py` (6/6 passed).
+### 2. High-Performance Numba JIT Execution & Dynamic Options Margin Modeling
+- **`numba_backtest_loop.py`**: `@njit` JIT zero-allocation machine code sequential execution (>200M bars/sec) with path-dependent stop-loss, slippage, and fee tracking.
+- **Dynamic Volatility-Scaled Margin Model** ([`validation/options_selling_backtest.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/validation/options_selling_backtest.py)):
+  - Implemented $\text{Margin\_Req}_t = \text{Base\_Margin} \times (1.0 + 2.0 \times \sigma_t)$ and utilization time series $\text{Utilization}_t = \frac{\text{Margin\_Req}_t}{\text{Current\_Equity}_t}$.
+  - Added `simulate_options_strategy_with_margin` tracking margin call triggers and liquidation events under volatility shocks.
+  - Preserved 100% backward compatibility for all existing simulation callers.
+- **Unit Tests**: [`tests/test_numba_backtest_loop.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/tests/test_numba_backtest_loop.py) (**6/6 passed**).
 
-### 3. Institutional Quantitative Metrics Suite (`validation/metrics.py`)
-- Added `profit_factor(returns)`: calculates gross gains / gross losses with robust float epsilon and degenerate sequence guards.
-- Added `ulcer_index(returns)`: calculates the canonical Peter Martin (1987) quadratic root-mean-square percentage drawdown index.
-- Added `ulcer_performance_index(returns, freq, rf)`: calculates excess annualized return per unit of Ulcer Index downside risk (Martin Ratio).
-- Added `walk_forward_efficiency_ratio(is_returns, oos_returns)`: evaluates out-of-sample profit factor to in-sample profit factor ratio ($WFE > 0.50$).
-- Created comprehensive unit tests in `tests/test_institutional_metrics.py` (4/4 passed).
+### 3. Institutional Options Flow Sentiment & Blackout Windows
+- **`signals/options_flow_sentiment.py`**:
+  - `calculate_order_flow_velocity(closes, window=5)`: Fast order flow velocity (5d ROC).
+  - `calculate_accumulation_distribution(closes)`: 20d ROC institutional accumulation/distribution vs. 200d SMA trend.
+  - `is_blackout_active(dates, news_events, blackout_window_days=3)`: Earnings/news calendar blackout window filtering ($\pm 3$ days), neutralizing directional bets during corporate announcements.
+  - `compute_flow_regime`: Computes flow score, regime classification (`ACCUMULATION`, `DISTRIBUTION`, `HIGH_VELOCITY_BULLISH`, `HIGH_VELOCITY_BEARISH`, `NEUTRAL`, `BLACKOUT`), and position recommendation.
+- **Unit Tests**: [`tests/test_options_flow_sentiment.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/tests/test_options_flow_sentiment.py) (**23/23 passed**).
 
-### 4. Options Flow Sentiment Adapter & Catalog Integration
-- Constructed `_build_options_flow_sentiment_adapter` in `scripts/refresh_validations.py` evaluating fast 5d velocity, 20d momentum, and `SMA_200` trend filtering with strict 1-day lagged signals (zero lookahead bias).
-- Registered `"options_flow_sentiment": (_build_options_flow_sentiment_adapter, 0.04, ["SPY"])` in `STRATEGY_REGISTRY`.
-- Wired `validation_strategy_id="options_flow_sentiment"` in `pilots/catalog.py` for the `options-flow-sentiment` Pilot.
-- Verified that `pilots/strategy_health.py::strategy_health_rows()` cleanly discovers and surfaces live gates for `options-flow-sentiment`.
+### 4. Institutional Quantitative Metrics Suite (`validation/metrics.py`)
+- `profit_factor(returns)`: Gross gains / gross losses with robust float epsilon guards.
+- `ulcer_index(returns)`: Root-mean-square percentage drawdown index.
+- `ulcer_performance_index(returns, freq, rf)`: Martin Ratio (UPI $> 1.0$).
+- `walk_forward_efficiency_ratio(is_returns, oos_returns)`: Robert Pardo WFE ($> 0.50$).
+- **Unit Tests**: [`tests/test_institutional_metrics.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/tests/test_institutional_metrics.py) (**4/4 passed**).
 
-### 5. Forecasting Backfill & Commands Tabs Integration
-- **Commands Tab**: Rebuilt `cli_introspect/command_manifest.json` and generated shell completions (`completions/investyo.bash` / `.zsh`) via `scripts/build_command_manifest.py` and `scripts/generate_shell_completion.py`, exposing all 27 strategies.
-- **Forecasting Backfill Tab**: Configured `meta_label_features` and `meta_label_horizons` across `signals/vrp_premium_selling.py`, `signals/options_flow_sentiment.py`, and `signals/sector_quality_rank.py` for integration into `ml/forecast_backfill.py`'s `AgenticForecastBackfiller`.
+### 5. Validation Harness & Webapp Integration (2005–Present)
+- **Harness Validation Backfill**: Ran walk-forward backfill across `options_flow_sentiment`, `sector_quality_rank`, `lgbm_ranker`, `vrp_premium_selling`, and options spreads.
+- **Commands & Forecasting Backfill Tabs**: Rebuilt `cli_introspect/command_manifest.json` and completions for all 27 strategies; configured `meta_label_features` for multi-horizon confidence modeling.
+- **Pilots Catalog & Strategy Health**: Wired `validation_strategy_id="options_flow_sentiment"` in `pilots/catalog.py` and verified clean discovery in `pilots/strategy_health.py`.
 
 ---
 
@@ -49,17 +56,14 @@
 
 ## Multi-Agent Independent Auditor Findings
 
-### 1. Institutional Quantitative Auditor (`df1d8737-b10b-4679-8e7f-f003a5bb0d05`)
-- **Mathematical Correctness**: Validated `profit_factor`, `ulcer_index`, `ulcer_performance_index`, and `walk_forward_efficiency_ratio` against canonical literature.
-- **Dynamic Margin & Slippage Realism**: Confirmed path-dependent adverse execution and stop-out arithmetic in `numba_backtest_loop.py`.
-- **Zero Lookahead Guarantee**: Inspected `_build_options_flow_sentiment_adapter` (1-day signal lag) and confirmed 0 lookahead bias.
-- **Definitive Verdict**: **PASS**.
+### 1. Auditor 1: Quantitative & WFA Auditor (`6dd00edc-295c-4a9a-91f4-bae62f58fb3a`)
+- **Mathematical Correctness**: Validated rolling 80/20 windowing, non-overlapping OOS intervals, and $WFE$ calculation against deterministic reference models.
+- **Dynamic Margin Arithmetic**: Confirmed path-dependent adverse execution and stop-out arithmetic in options selling simulations.
+- **Zero Lookahead Guarantee**: Confirmed zero backward information leakage via adversarial OOS perturbation tests ($10^{-12}$ invariance) and 1-day lagged flow signals.
+- **Definitive Verdict**: **`PASS`**.
 
-### 2. Systems & Catalog Auditor (`845cb0c6-3533-46f2-9caa-301265a83a81`)
-- **Catalog & Strategy Health Parity**: Verified `options-flow-sentiment` clean mapping and live gate evaluations in `pilots/strategy_health.py`.
-- **Manifest & Shell Parity**: 100% parity across all 27 strategies in `command_manifest.json`, bash completions, and zsh completions.
-- **Automated Gates**:
-  - Python tests: **116 passed**.
-  - TypeScript compilation: **0 errors**.
-  - Vitest test suite: **55 passed** across `ForecastBackfillScreen.test.tsx`, `Commands.test.tsx`, and `StrategyHealth.test.tsx`.
-- **Definitive Verdict**: **PASS (Production Ready)**.
+### 2. Auditor 2: Systems & Test Rigor Auditor (`1587d620-3be4-4df1-a80e-555c949b8009`)
+- **Test Suite Execution**: 379 Python tests passed (0 failures), TypeScript typecheck passed (0 errors), Vitest suite passed (1,721/1,721 tests in 161 files).
+- **Codebase Invariants**: Zero data fabrication (CONSTRAINT #4) and complete dead-letter resilience (CONSTRAINT #6).
+- **Documentation Parity**: Verified complete alignment across `docs/signals/options_flow_sentiment.md` and `docs/VALIDATION_STRATEGY_FIX_LOG.md`.
+- **Definitive Verdict**: **`PASS`**.

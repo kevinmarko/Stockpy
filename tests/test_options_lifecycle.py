@@ -372,14 +372,14 @@ def test_settle_post_earnings_trades(store, executor):
     3. Executes settle_post_earnings_trades to close all open legs at market open.
     4. Verifies all positions are closed and IV crush profit is harvested into cash balance.
     """
-    order_date = date(2026, 8, 14)
-    settle_date = date(2026, 8, 15)
+    today = datetime.now(timezone.utc).date()
+    settle_date = today + timedelta(days=1)
 
     candidate = {
         "symbol": "NVDA",
         "strategy": "Iron Condor",
         "expiration": "2026-08-21",
-        "earnings_date": "2026-08-14",
+        "earnings_date": str(today),
         "legs": [
             {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
             {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},

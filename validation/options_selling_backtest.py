@@ -116,6 +116,13 @@ import numpy as np
 import pandas as pd
 
 from technical_options_engine import OptionsPricingRecommender, TechnicalOptionsEngine
+from validation.metrics import (
+    profit_factor,
+    sharpe_ratio,
+    ulcer_index,
+    ulcer_performance_index,
+)
+from validation.stress_scenarios import compute_max_drawdown
 from volatility.iv_engine import get_vrp
 
 logger = logging.getLogger(__name__)
@@ -336,6 +343,15 @@ class _OptionLeg:
     strike: float
 
 
+@dataclass
+class LegSimulationDetail:
+    """Detailed simulation output including daily returns and dynamic margin tracking."""
+
+    daily_returns: Dict[pd.Timestamp, float]
+    margin_utilization: Dict[pd.Timestamp, float] = field(default_factory=dict)
+    margin_calls: List[pd.Timestamp] = field(default_factory=list)
+
+
 def _simulate_leg_mtm_pnl(
     ohlcv: pd.DataFrame,
     cycle_dates: pd.DatetimeIndex,
@@ -346,7 +362,11 @@ def _simulate_leg_mtm_pnl(
     stop_loss_threshold: float,
     *,
     entry_spot: Optional[float] = None,
-) -> Dict[pd.Timestamp, float]:
+    initial_capital: float = 10000.0,
+    base_margin_rate: float = 0.20,
+    enforce_margin_call: bool = False,
+    return_details: bool = False,
+) -> Union[Dict[pd.Timestamp, float], LegSimulationDetail]:
     """Shared per-day Black-Scholes mark-to-market + stop-loss loop, factored
     out of what used to be 6 near-identical ~25-40 line branches in
     ``simulate_options_strategy_returns`` (one per options-selling strategy).
@@ -358,39 +378,20 @@ def _simulate_leg_mtm_pnl(
         stock_pnl      = (spot_t - entry_spot) * 100.0   [only when entry_spot is given]
         cumulative_pnl = stock_pnl + (net_premium - cost_to_close) * 100.0
 
-    See ``tests/test_options_selling_backtest_stress.py::TestSharedMtmHelperByteIdentical``
-    for the byte-for-byte proof against the pre-refactor per-branch
-    implementations, and each call site below for the per-strategy
-    derivation:
-
-      * Credit spreads (Put/Call Credit Spread, Iron Condor): ``net_premium``
-        is the raw credit received (positive); ``cost_to_close`` is exactly
-        the mtm-short-minus-mtm-long formula each of those branches computed
-        directly before this refactor.
-      * Debit spreads (Call/Put Debit Spread): ``net_premium`` here is the
-        RAW (negative) ``Net_Premium`` straight from the directive -- i.e.
-        ``-net_debit``, NOT ``abs(net_premium)`` (callers still compute
-        ``net_debit = abs(net_premium)`` separately, but only for their
-        ``max_risk``/validity guard). ``position_value = mtm_long - mtm_short
-        == -cost_to_close``, so ``(position_value - net_debit) ==
-        (net_premium - cost_to_close)`` -- the identical expression.
-      * Covered Call: ``entry_spot`` is supplied (the only strategy with a
-        stock leg) and ``legs`` holds a single short call, collapsing
-        ``stock_pnl + short_pnl`` into this same formula.
-
-    ``max_risk``/``stop_loss_threshold`` are computed by the caller (they
-    differ by strategy -- see ``STOP_LOSS_CREDIT_MULTIPLE`` /
-    ``STOP_LOSS_DEBIT_RATIO`` / ``STOP_LOSS_COVERED_CALL_RATIO`` at module
-    top) and passed in as an absolute-dollar loss threshold; this helper only
-    ever compares ``-cumulative_pnl`` against it.
+    Margin Model (from numba_backtest_loop.py):
+        Margin_Req_t = Base_Margin * (1.0 + 2.0 * Volatility_t)
+        Utilization_t = Margin_Req_t / Current_Equity_t
     """
     daily_returns: Dict[pd.Timestamp, float] = {}
+    margin_utilization: Dict[pd.Timestamp, float] = {}
+    margin_calls: List[pd.Timestamp] = []
     cumulative_pnl = 0.0
     stop_triggered = False
 
     for i, d in enumerate(cycle_dates):
         if stop_triggered:
             daily_returns[d] = 0.0
+            margin_utilization[d] = 0.0
             continue
 
         spot_t = float(ohlcv.loc[d, "Close"])
@@ -416,8 +417,30 @@ def _simulate_leg_mtm_pnl(
         daily_returns[d] = daily_pnl / max_risk
         cumulative_pnl = new_cumulative_pnl
 
-        if -cumulative_pnl > stop_loss_threshold:
+        # Volatility-scaled dynamic margin requirement (from numba_backtest_loop.py)
+        vol_t = sigma
+        margin_rate = base_margin_rate * (1.0 + 2.0 * vol_t)
+        notional = (entry_spot * 100.0) if entry_spot is not None else max_risk
+        margin_required = notional * margin_rate
+        current_equity = max(0.0, initial_capital + cumulative_pnl)
+        utilization = margin_required / max(current_equity, 1e-6)
+        margin_utilization[d] = float(utilization)
+
+        # Dynamic margin call check
+        is_margin_call = current_equity < margin_required
+        if is_margin_call:
+            margin_calls.append(d)
+
+        # Stop loss or dynamic margin liquidation
+        if -cumulative_pnl > stop_loss_threshold or (enforce_margin_call and is_margin_call):
             stop_triggered = True
+
+    if return_details:
+        return LegSimulationDetail(
+            daily_returns=daily_returns,
+            margin_utilization=margin_utilization,
+            margin_calls=margin_calls,
+        )
 
     return daily_returns
 
@@ -949,4 +972,350 @@ def simulate_covered_call_returns(
     """Convenience wrapper simulating Covered Call returns."""
     return simulate_options_strategy_returns(
         "covered_call", start, end, ticker=ticker, closes=closes
+    )
+
+
+def simulate_options_strategy_with_margin(
+    strategy_name: str,
+    start: str,
+    end: str,
+    *,
+    ticker: str = "SPY",
+    closes: Optional[pd.Series] = None,
+    initial_capital: float = 10000.0,
+    base_margin_rate: float = 0.20,
+    enforce_margin_call: bool = False,
+) -> Dict[str, Any]:
+    """
+    Simulates options strategy returns and records margin utilization and dynamic margin calls
+    using the volatility-scaled formula from numba_backtest_loop.py:
+        Margin_Req_t = Base_Margin * (1.0 + 2.0 * Volatility_t)
+        Utilization_t = Margin_Req_t / Current_Equity_t
+
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary with returns, equity_curve, margin_utilization, margin_calls, and risk metrics.
+    """
+    target_strategy = None
+    if strategy_name:
+        clean_name = strategy_name.lower().strip()
+        target_strategy = _STRATEGY_MAP.get(clean_name.replace(" ", "_"), _STRATEGY_MAP.get(clean_name, strategy_name))
+        if clean_name in ("all", "any", "dynamic", "pricing_matrix"):
+            target_strategy = None
+
+    if closes is None:
+        closes = _download_spy_closes(start, end, ticker)
+    if closes is None or closes.empty:
+        return {
+            "returns": pd.Series(dtype=float),
+            "equity_curve": pd.Series(dtype=float),
+            "margin_utilization": pd.Series(dtype=float),
+            "margin_calls": 0,
+            "margin_call_dates": [],
+            "max_margin_utilization": 0.0,
+            "avg_margin_utilization": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "ulcer_index": 0.0,
+            "ulcer_performance_index": 0.0,
+            "profit_factor": 0.0,
+            "annualized_return": 0.0,
+        }
+
+    plan = _get_cycle_plan(ticker, start, end, closes)
+    if not plan.entries:
+        return {
+            "returns": pd.Series(dtype=float),
+            "equity_curve": pd.Series(dtype=float),
+            "margin_utilization": pd.Series(dtype=float),
+            "margin_calls": 0,
+            "margin_call_dates": [],
+            "max_margin_utilization": 0.0,
+            "avg_margin_utilization": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "ulcer_index": 0.0,
+            "ulcer_performance_index": 0.0,
+            "profit_factor": 0.0,
+            "annualized_return": 0.0,
+        }
+
+    ohlcv = plan.ohlcv
+    daily_returns: Dict[pd.Timestamp, float] = {}
+    daily_margin_util: Dict[pd.Timestamp, float] = {}
+    all_margin_calls: List[pd.Timestamp] = []
+
+    for entry in plan.entries:
+        cycle_dates = entry.cycle_dates
+
+        if entry.kind != "priced":
+            for d in cycle_dates:
+                daily_returns[d] = 0.0
+                daily_margin_util[d] = 0.0
+            continue
+
+        rec_strategy = entry.rec_strategy
+        if (target_strategy is not None and rec_strategy != target_strategy) or rec_strategy == "Cash":
+            for d in cycle_dates:
+                daily_returns[d] = 0.0
+                daily_margin_util[d] = 0.0
+            continue
+
+        directive = entry.directive
+        legs = directive.get("Legs", [])
+        net_premium = float(directive.get("Net_Premium", 0.0))
+        sigma = entry.sigma
+        entry_spot = entry.entry_spot
+
+        res: Optional[LegSimulationDetail] = None
+
+        if rec_strategy == "Put Credit Spread":
+            if len(legs) != 2 or net_premium <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            k_short_put = float(legs[0]["Strike"])
+            k_long_put = float(legs[1]["Strike"])
+            strike_width = abs(k_short_put - k_long_put)
+            max_risk = strike_width * 100.0 - net_premium * 100.0
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("short", "put", k_short_put),
+                _OptionLeg("long", "put", k_long_put),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            res = _simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                initial_capital=initial_capital, base_margin_rate=base_margin_rate,
+                enforce_margin_call=enforce_margin_call, return_details=True,
+            )
+
+        elif rec_strategy == "Call Credit Spread":
+            if len(legs) != 2 or net_premium <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            k_short_call = float(legs[0]["Strike"])
+            k_long_call = float(legs[1]["Strike"])
+            strike_width = abs(k_long_call - k_short_call)
+            max_risk = strike_width * 100.0 - net_premium * 100.0
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("short", "call", k_short_call),
+                _OptionLeg("long", "call", k_long_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            res = _simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                initial_capital=initial_capital, base_margin_rate=base_margin_rate,
+                enforce_margin_call=enforce_margin_call, return_details=True,
+            )
+
+        elif rec_strategy == "Iron Condor":
+            if len(legs) != 4 or net_premium <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            k_short_put = float(legs[0]["Strike"])
+            k_long_put = float(legs[1]["Strike"])
+            k_short_call = float(legs[2]["Strike"])
+            k_long_call = float(legs[3]["Strike"])
+            put_width = abs(k_short_put - k_long_put)
+            call_width = abs(k_long_call - k_short_call)
+            max_risk = max(put_width, call_width) * 100.0 - net_premium * 100.0
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("short", "put", k_short_put),
+                _OptionLeg("long", "put", k_long_put),
+                _OptionLeg("short", "call", k_short_call),
+                _OptionLeg("long", "call", k_long_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            res = _simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                initial_capital=initial_capital, base_margin_rate=base_margin_rate,
+                enforce_margin_call=enforce_margin_call, return_details=True,
+            )
+
+        elif rec_strategy == "Call Debit Spread":
+            net_debit = abs(net_premium)
+            if len(legs) != 2 or net_debit <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            k_long_call = float(legs[0]["Strike"])
+            k_short_call = float(legs[1]["Strike"])
+            max_risk = net_debit * 100.0
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("long", "call", k_long_call),
+                _OptionLeg("short", "call", k_short_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_DEBIT_RATIO * max_risk
+            res = _simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                initial_capital=initial_capital, base_margin_rate=base_margin_rate,
+                enforce_margin_call=enforce_margin_call, return_details=True,
+            )
+
+        elif rec_strategy == "Put Debit Spread":
+            net_debit = abs(net_premium)
+            if len(legs) != 2 or net_debit <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            k_long_put = float(legs[0]["Strike"])
+            k_short_put = float(legs[1]["Strike"])
+            max_risk = net_debit * 100.0
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("long", "put", k_long_put),
+                _OptionLeg("short", "put", k_short_put),
+            ]
+            stop_loss_threshold = STOP_LOSS_DEBIT_RATIO * max_risk
+            res = _simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                initial_capital=initial_capital, base_margin_rate=base_margin_rate,
+                enforce_margin_call=enforce_margin_call, return_details=True,
+            )
+
+        elif rec_strategy == "Covered Call":
+            if len(legs) != 1 or net_premium <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            k_short_call = float(legs[0]["Strike"])
+            max_risk = max((entry_spot - net_premium) * 100.0, entry_spot * 10.0)
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                    daily_margin_util[d] = 0.0
+                continue
+            leg_list = [_OptionLeg("short", "call", k_short_call)]
+            stop_loss_threshold = STOP_LOSS_COVERED_CALL_RATIO * max_risk
+            res = _simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                entry_spot=entry_spot, initial_capital=initial_capital,
+                base_margin_rate=base_margin_rate, enforce_margin_call=enforce_margin_call,
+                return_details=True,
+            )
+
+        else:
+            for d in cycle_dates:
+                daily_returns[d] = 0.0
+                daily_margin_util[d] = 0.0
+
+        if isinstance(res, LegSimulationDetail):
+            daily_returns.update(res.daily_returns)
+            daily_margin_util.update(res.margin_utilization)
+            all_margin_calls.extend(res.margin_calls)
+
+    idx = pd.DatetimeIndex(sorted(daily_returns.keys()))
+    returns_series = pd.Series([daily_returns[d] for d in idx], index=idx, dtype=float)
+    margin_util_series = pd.Series([daily_margin_util.get(d, 0.0) for d in idx], index=idx, dtype=float)
+
+    equity_series = initial_capital * (1.0 + returns_series).cumprod()
+
+    sr = sharpe_ratio(returns_series)
+    max_dd = compute_max_drawdown(returns_series)
+    ui = ulcer_index(returns_series)
+    upi = ulcer_performance_index(returns_series)
+    pf = profit_factor(returns_series)
+    ann_ret = float(returns_series.mean() * 252) if len(returns_series) > 0 else 0.0
+
+    return {
+        "returns": returns_series,
+        "equity_curve": equity_series,
+        "margin_utilization": margin_util_series,
+        "margin_calls": len(all_margin_calls),
+        "margin_call_dates": all_margin_calls,
+        "max_margin_utilization": float(margin_util_series.max()) if len(margin_util_series) > 0 else 0.0,
+        "avg_margin_utilization": float(margin_util_series.mean()) if len(margin_util_series) > 0 else 0.0,
+        "sharpe": float(sr) if not np.isnan(sr) else 0.0,
+        "max_drawdown": float(max_dd) if not np.isnan(max_dd) else 0.0,
+        "ulcer_index": float(ui) if not np.isnan(ui) else 0.0,
+        "ulcer_performance_index": float(upi) if not np.isnan(upi) else 0.0,
+        "profit_factor": float(pf) if not np.isnan(pf) else 0.0,
+        "annualized_return": ann_ret,
+    }
+
+
+def simulate_put_credit_spread_with_margin(
+    start: str, end: str, *, ticker: str = "SPY", closes: Optional[pd.Series] = None, initial_capital: float = 10000.0
+) -> Dict[str, Any]:
+    """Simulate Put Credit Spread returns with full margin utilization tracking."""
+    return simulate_options_strategy_with_margin(
+        "put_credit_spread", start, end, ticker=ticker, closes=closes, initial_capital=initial_capital
+    )
+
+
+def simulate_call_credit_spread_with_margin(
+    start: str, end: str, *, ticker: str = "SPY", closes: Optional[pd.Series] = None, initial_capital: float = 10000.0
+) -> Dict[str, Any]:
+    """Simulate Call Credit Spread returns with full margin utilization tracking."""
+    return simulate_options_strategy_with_margin(
+        "call_credit_spread", start, end, ticker=ticker, closes=closes, initial_capital=initial_capital
+    )
+
+
+def simulate_vrp_iron_condor_with_margin(
+    start: str, end: str, *, ticker: str = "SPY", closes: Optional[pd.Series] = None, initial_capital: float = 10000.0
+) -> Dict[str, Any]:
+    """Simulate VRP Iron Condor returns with full margin utilization tracking."""
+    return simulate_options_strategy_with_margin(
+        "iron_condor", start, end, ticker=ticker, closes=closes, initial_capital=initial_capital
+    )
+
+
+def simulate_call_debit_spread_with_margin(
+    start: str, end: str, *, ticker: str = "SPY", closes: Optional[pd.Series] = None, initial_capital: float = 10000.0
+) -> Dict[str, Any]:
+    """Simulate Call Debit Spread returns with full margin utilization tracking."""
+    return simulate_options_strategy_with_margin(
+        "call_debit_spread", start, end, ticker=ticker, closes=closes, initial_capital=initial_capital
+    )
+
+
+def simulate_put_debit_spread_with_margin(
+    start: str, end: str, *, ticker: str = "SPY", closes: Optional[pd.Series] = None, initial_capital: float = 10000.0
+) -> Dict[str, Any]:
+    """Simulate Put Debit Spread returns with full margin utilization tracking."""
+    return simulate_options_strategy_with_margin(
+        "put_debit_spread", start, end, ticker=ticker, closes=closes, initial_capital=initial_capital
+    )
+
+
+def simulate_covered_call_with_margin(
+    start: str, end: str, *, ticker: str = "SPY", closes: Optional[pd.Series] = None, initial_capital: float = 10000.0
+) -> Dict[str, Any]:
+    """Simulate Covered Call returns with full margin utilization tracking."""
+    return simulate_options_strategy_with_margin(
+        "covered_call", start, end, ticker=ticker, closes=closes, initial_capital=initial_capital
     )
