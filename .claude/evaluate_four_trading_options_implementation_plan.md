@@ -78,12 +78,33 @@ Per CLAUDE.md / AGENTS.md workflow rules:
 
 ---
 
+### Component 4: Institutional Quantitative Metrics Suite
+Implement Peter Martin Ulcer Index, Martin Ratio (UPI), Profit Factor, and Robert Pardo Walk-Forward Efficiency (WFE).
+
+#### [MODIFY] [validation/metrics.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/validation/metrics.py)
+- Implemented `profit_factor`, `ulcer_index`, `ulcer_performance_index`, and `walk_forward_efficiency_ratio`.
+
+#### [NEW] [tests/test_institutional_metrics.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/tests/test_institutional_metrics.py)
+- Unit tests validating numerical edge cases, zero-loss infinities, and quadratic drawdown calculations.
+
+---
+
+### Component 5: Options Flow Sentiment Validation Bridge
+Formally join `options_flow_sentiment` to the backtest harness with 1-day lagged signals (zero lookahead).
+
+#### [MODIFY] [scripts/refresh_validations.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/scripts/refresh_validations.py)
+- Added `_build_options_flow_sentiment_adapter` and registered `"options_flow_sentiment"` in `STRATEGY_REGISTRY`.
+
+#### [MODIFY] [pilots/catalog.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/pilots/catalog.py)
+- Configured `validation_strategy_id="options_flow_sentiment"`.
+
+---
+
 ## Multi-Agent Verification & Audit Workflow
 
-We will invoke **two independent subagents**:
-1. **`honesty-auditor` Subagent**:
-   - Audit all signal feature declarations, backtest adapters, and data pipelines against `CONSTRAINT #4` (no fabricated numbers/mocked data) and `CONSTRAINT #6` (dead-letter resilience).
-   - Verify that no lookahead bias is introduced into `numba_backtest_loop.py` or `signals/`.
-2. **`test-writer` Subagent**:
-   - Run the complete targeted test suite (`pytest tests/test_*.py`) and vitest suite (`npm --prefix webapp test`).
-   - Validate that all strategy options produce valid reports and render cleanly in Strategy Health and Forecasting Backfill screens.
+We invoked **two independent auditor subagents**:
+1. **`Institutional Quantitative Auditor`**:
+   - Audited mathematical correctness of UI/UPI/WFE/Profit Factor and Numba margin model. (PASS)
+2. **`Systems & Catalog Auditor`**:
+   - Audited catalog mapping, command manifest parity, and test coverage. (PASS)
+

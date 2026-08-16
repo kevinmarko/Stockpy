@@ -434,3 +434,111 @@ def run_cpcv_evaluation(
         # full-period-annualized ratio.
         "mean_oos_return": mean_oos_return,
     }
+
+
+def profit_factor(returns: pd.Series) -> float:
+    """
+    Calculates the Profit Factor (Gross Profits / Gross Losses).
+    Returns NaN if returns are empty, inf if there are no losses, or 0.0 if there are no gains.
+    """
+    if isinstance(returns, pd.DataFrame):
+        returns = returns.squeeze()
+    if not isinstance(returns, pd.Series):
+        returns = pd.Series(returns)
+
+    valid = returns.dropna()
+    if len(valid) == 0:
+        return np.nan
+
+    gains = valid[valid > 0].sum()
+    losses = abs(valid[valid < 0].sum())
+
+    if losses < 1e-12:
+        return np.inf if gains > 0 else 0.0
+    return float(gains / losses)
+
+
+def ulcer_index(returns: pd.Series) -> float:
+    """
+    Calculates the Ulcer Index (Peter Martin, 1987), measuring downside risk
+    considering both the depth and duration of price/equity drawdowns.
+
+    Formula:
+        Equity_t = Cumulative_Product(1 + Returns_t)
+        Peak_t = max_{s <= t}(Equity_s)
+        DrawdownPct_t = ((Equity_t - Peak_t) / Peak_t) * 100
+        Ulcer_Index = sqrt(mean(DrawdownPct_t^2))
+
+    Returns:
+        float: Ulcer Index percentage (e.g. 5.2 for 5.2% root-mean-square drawdown).
+    """
+    if isinstance(returns, pd.DataFrame):
+        returns = returns.squeeze()
+    if not isinstance(returns, pd.Series):
+        returns = pd.Series(returns)
+
+    valid = returns.dropna()
+    if len(valid) < 2:
+        return np.nan
+
+    # Calculate cumulative compounding equity
+    equity = (1.0 + valid).cumprod()
+    peaks = equity.cummax()
+    drawdown_pct = ((equity - peaks) / peaks) * 100.0
+    squared_dd = drawdown_pct ** 2
+    return float(np.sqrt(squared_dd.mean()))
+
+
+def ulcer_performance_index(returns: pd.Series, freq: int = 252, rf: float = 0.0) -> float:
+    """
+    Calculates the Ulcer Performance Index (UPI, also known as Martin Ratio).
+    Measures excess annualized return per unit of Ulcer Index downside risk.
+
+    Formula:
+        UPI = (Annualized_Return - rf) / (Ulcer_Index / 100.0)
+
+    Target:
+        UPI > 1.0 is considered institutional-grade performance for volatility sellers.
+    """
+    if isinstance(returns, pd.DataFrame):
+        returns = returns.squeeze()
+    if not isinstance(returns, pd.Series):
+        returns = pd.Series(returns)
+
+    valid = returns.dropna()
+    if len(valid) < 2:
+        return np.nan
+
+    ui = ulcer_index(valid)
+    if np.isnan(ui) or ui < 1e-6:
+        # Zero/near-zero drawdown
+        ann_ret = valid.mean() * freq
+        return np.inf if ann_ret > rf else 0.0
+
+    ann_ret = valid.mean() * freq
+    excess_ret = ann_ret - rf
+    # Convert UI from percentage (0-100) to decimal (0-1) in denominator
+    return float(excess_ret / (ui / 100.0))
+
+
+def walk_forward_efficiency_ratio(is_returns: pd.Series, oos_returns: pd.Series) -> float:
+    """
+    Calculates the Walk-Forward Efficiency (WFE) ratio (Robert Pardo):
+        WFE = Profit_Factor(OOS) / Profit_Factor(IS)
+    
+    Target:
+        WFE > 0.50 confirms that the strategy edge remains stable and does not
+        substantially decay out-of-sample.
+    """
+    pf_is = profit_factor(is_returns)
+    pf_oos = profit_factor(oos_returns)
+
+    if np.isnan(pf_is) or np.isnan(pf_oos) or pf_is <= 1e-6:
+        return 0.0
+    if np.isinf(pf_is):
+        return 1.0 if not np.isinf(pf_oos) and pf_oos > 1.0 else 0.0
+    if np.isinf(pf_oos):
+        return 1.0
+
+    return float(pf_oos / pf_is)
+

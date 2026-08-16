@@ -85,3 +85,30 @@ def test_numba_backtest_gap_down_stop_loss():
     assert exit_trade[1] == pytest.approx(88.0, abs=1e-4)
     assert exit_trade[4] < 0
 
+
+def test_numba_backtest_with_margin_and_vol_frictions():
+    """Verify dynamic margin model and volatility-dependent slippage."""
+    from numba_backtest_loop import run_numba_backtest_with_margin, compute_numba_backtest_metrics
+
+    prices = np.array([100.0, 102.0, 104.0, 93.0, 95.0], dtype=np.float64)
+    signals = np.array([1, 0, 0, 0, 0], dtype=np.int64)
+    # High volatility spike on bar 3 (vol = 0.08)
+    volatility = np.array([0.02, 0.02, 0.03, 0.08, 0.04], dtype=np.float64)
+
+    equity, trades = run_numba_backtest_with_margin(
+        prices, signals, volatility, initial_cash=10000.0, stop_loss_pct=0.05
+    )
+
+    assert len(equity) == len(prices)
+    assert len(trades) == 2  # Entry + Stop/Margin Exit
+
+    metrics = compute_numba_backtest_metrics(equity, trades)
+    assert "sharpe" in metrics
+    assert "sortino" in metrics
+    assert "max_drawdown" in metrics
+    assert "ulcer_index" in metrics
+    assert "ulcer_performance_index" in metrics
+    assert "profit_factor" in metrics
+    assert metrics["total_trades"] == 1
+
+

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-15T22:44:06.270358+00:00",
+  "generated_at": "2026-08-16T00:29:32.284289+00:00",
   "command_count": 12,
   "dead_letters": [],
   "commands": [
@@ -581,7 +581,7 @@
           "aliases": [
             "--strategies"
           ],
-          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, pairs_trading, put_credit_spread, put_debit_spread, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vrp_premium_selling).",
+          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, options_flow_sentiment, pairs_trading, put_credit_spread, put_debit_spread, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vrp_premium_selling).",
           "default": null,
           "choices": null,
           "required": false,

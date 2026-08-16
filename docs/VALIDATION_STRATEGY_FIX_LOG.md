@@ -679,17 +679,20 @@ Comprehensive walk-forward validation across the options spread family (`put_cre
 
 | Strategy | Sharpe | PBO | DSR | MaxDD | Stress Gate | Deployable |
 |---|---|---|---|---|---|---|
-| `sector_quality_rank` | **1.095** | **0.000** | **1.000** | **28.4%** | N/A | ✅ **True** |
-| `lgbm_ranker` | **−0.334** | **0.000** | **0.426** | **3.7%** | N/A | ❌ False (honest methodology validation) |
+| `sector_quality_rank` | **0.955** | **0.000** | **0.000** | **28.4%** | N/A | ❌ False (honest WFA DSR gate) |
+| `lgbm_ranker` | **4.749** | **0.000** | **0.875** | **2.1%** | N/A | ❌ False (honest CPCV DSR gate 0.88 < 0.95) |
 | `vrp_premium_selling` | **0.217** | **0.000** | **0.000** | **17.9%** | ✅ PASS (100% survival) | ❌ False (full-window macro regime gating) |
+| `options_flow_sentiment` | **0.231** | **0.111** | **0.906** | **27.7%** | N/A | ❌ False (joined adapter, DSR 0.91 < 0.95) |
 | `put_credit_spread` | — | **0.000** | **0.000** | **6.7%** | ✅ PASS (100% survival) | ❌ False (stress survival pass) |
 | `call_credit_spread` | — | **0.000** | **0.000** | **6.7%** | ✅ PASS (100% survival) | ❌ False (stress survival pass) |
 | `call_debit_spread` | **−0.354** | **0.000** | **0.000** | **100.0%** | N/A | ❌ False (cost drag on long delta) |
 | `put_debit_spread` | **−0.669** | **0.000** | **0.000** | **98.9%** | N/A | ❌ False (cost drag on short delta) |
 
-**Integration Deliverables:**
-1. **Commands Tab**: Rebuilt `cli_introspect/command_manifest.json` and generated shell completions exposing all options and validation commands in the webapp Command Builder.
-2. **Forecasting Backfill Tab**: Configured `meta_label_features` across `vrp_premium_selling`, `options_flow_sentiment`, and `sector_quality_rank` in `signals/` for multi-horizon target generation and confidence modeling.
-3. **Numba JIT Sequential Execution Core**: Persisted `numba_backtest_loop.py` achieving >200M bars/sec throughput with path-dependent stop losses, slippage, and fees.
+**Institutional Quantitative Enhancements:**
+1. **Institutional Metrics Suite (`validation/metrics.py`)**: Added `profit_factor`, `ulcer_index`, `ulcer_performance_index` (UPI / Martin Ratio targeting > 1.0), and `walk_forward_efficiency_ratio` (WFE targeting > 0.50).
+2. **Dynamic Margin & Frictional Realism (`numba_backtest_loop.py`)**: Integrated `run_numba_backtest_with_margin` modeling volatility-scaled margin calls ($M_t = \text{BaseMargin} \times (1 + 2\sigma_t)$) and volatility panic slippage ($\text{Slippage}_t = \text{BaseSlippage} \times (1 + 3\sigma_t)$).
+3. **Options Flow Sentiment Validation Bridge**: Constructed `_build_options_flow_sentiment_adapter` on SPY (5d/20d momentum velocity and trend gating with 1-day lag zero lookahead) and registered `options_flow_sentiment` in `STRATEGY_REGISTRY` & `pilots/catalog.py`.
+4. **Commands & Forecasting Backfill Tabs**: Rebuilt `command_manifest.json` across all 27 strategies and exposed multi-horizon meta-labeling.
+
 
 

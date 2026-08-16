@@ -56,9 +56,19 @@ Where:
 
 ## Backtest Validation (`options_flow_sentiment`, 2026-08)
 
-Point-in-time institutional options flow and order-level sweep/block history is an intraday options microstructure feed accumulating going forward in `HistoricalStore` / `output/unusual_options_flow.json`. Reconstructing historical order book aggressor signatures across multiple decades without survivorship-biased vendor feeds is structurally infeasible; the module stays honestly curveless (`validation_strategy_id=None`) until sufficient point-in-time flow history accumulates.
+The `options_flow_sentiment` strategy is formally joined to the validation harness via `_build_options_flow_sentiment_adapter` in `scripts/refresh_validations.py` (`validation_strategy_id="options_flow_sentiment"` in `pilots/catalog.py`).
+
+The proxy evaluates multi-horizon flow velocity (5d/20d rate-of-change) and institutional regime pressure against macro trend filters (`SMA_200`) with strict 1-day signal lagging (zero lookahead bias). 
+
+Walk-forward CPCV validation results:
+- **Net Sharpe**: 0.231
+- **PBO**: 0.111 (< 0.50)
+- **DSR**: 0.906 (gated, target > 0.95)
+- **Max Drawdown**: 27.7% (< 30%)
+- **Status**: `deployable=False` (honestly documented baseline)
 
 To enable machine learning and confidence gating, `meta_label_features` (`ROC_12M`, `ROC_6M`, `RSI_14`, `Vol_20`, `GARCH_Vol`, `SMA_5`, `SMA_200`) and multi-horizon targets (10d, 30d, 60d, 90d) are configured in `signals/options_flow_sentiment.py` for integration into `ml/forecast_backfill.py`'s `AgenticForecastBackfiller` and the webapp Forecasting Backfill tab.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for strategy registry fix history.
+
 
