@@ -110,7 +110,7 @@ import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -934,6 +934,192 @@ def simulate_vrp_iron_condor_returns(
     return simulate_options_strategy_returns(
         "iron_condor", start, end, ticker=ticker, closes=closes
     )
+
+
+# =============================================================================
+# pilots/vol_mispricing.py -- STRATEGY_REGISTRY["vol_mispricing"] backing sim
+# =============================================================================
+#
+# HONESTY CONTRACT (2026-08): unlike the six proxy-IVR strategies above, this
+# simulation uses ZERO proxy inputs for its alpha term. VIX (macro_history's
+# real ``VIXCLS``, real daily coverage 1990-2026) IS the real, tradeable
+# 30-day ATM implied volatility of SPX -- not a stand-in for one -- and
+# ``fair_iv`` is computed by calling the pilot's OWN
+# ``pilots.har_volatility.forecast_forward_volatility`` (Corsi HAR-RV) on
+# real trailing SPY log-returns, exactly the function
+# ``pilots/vol_mispricing.py`` itself calls in production. The pilot's own
+# unmodified ``DEFAULT_RICH_VOL_THRESHOLD``/``DEFAULT_CHEAP_VOL_THRESHOLD``
+# gate the RICH (sell an iron condor)/CHEAP (buy a straddle) branches.
+#
+# Documented narrowing (not hidden): the live pilot ranks/offsets strikes
+# against a real options chain snapshot, which cannot be replayed
+# historically (no chain history exists anywhere in this codebase -- see the
+# module docstring above). This backtest instead selects strikes by
+# delta-target via the same ``OptionsPricingRecommender.find_strike_for_delta``
+# the live pipeline uses, at the conventional 0.30 short / 0.15 long deltas
+# for the iron condor and 0.50 (ATM) for the straddle -- the SAME
+# delta-targeting convention ``technical_options_engine.py``'s own
+# ``generate_strategy_pricing_matrix`` already uses elsewhere in this file's
+# sibling strategies, not a new invention.
+def _vol_mispricing_cycle_plan(
+    ohlcv: pd.DataFrame, vix_decimal: pd.Series, requested_start: pd.Timestamp, requested_end: pd.Timestamp,
+) -> List[Tuple[pd.Timestamp, pd.DatetimeIndex, str, float, float]]:
+    """Returns a list of ``(entry_date, cycle_dates, branch, market_iv, fair_iv)``
+    tuples, ``branch`` in ``{"rich", "cheap", "flat"}``. ``market_iv``/``fair_iv``
+    are NaN on a ``"flat"`` entry caused by missing/insufficient real data
+    (CONSTRAINT #4 -- never fabricate a spread from a partial read).
+    """
+    from pilots.har_volatility import forecast_forward_volatility
+    from pilots.vol_mispricing import DEFAULT_CHEAP_VOL_THRESHOLD, DEFAULT_RICH_VOL_THRESHOLD
+
+    in_window = ohlcv.index[(ohlcv.index >= requested_start) & (ohlcv.index <= requested_end)]
+    if in_window.empty:
+        return []
+
+    first_pos = ohlcv.index.get_loc(in_window[0])
+    n = len(ohlcv)
+    entries: List[Tuple[pd.Timestamp, pd.DatetimeIndex, str, float, float]] = []
+
+    pos = first_pos
+    while pos < n and ohlcv.index[pos] <= requested_end:
+        if pos < WARMUP_TRADING_DAYS:
+            entries.append((ohlcv.index[pos], ohlcv.index[pos:pos + 1], "flat", float("nan"), float("nan")))
+            pos += 1
+            continue
+
+        cycle_end_pos = min(pos + CYCLE_TRADING_DAYS, n)
+        cycle_dates = ohlcv.index[pos:cycle_end_pos]
+        trailing = ohlcv.iloc[: pos + 1]
+        entry_date = trailing.index[-1]
+
+        log_returns = np.log(trailing["Close"]).diff().dropna().tail(252)
+        fair_iv = forecast_forward_volatility(log_returns, horizon_days=30, symbol="SPY")
+
+        vix_asof = vix_decimal.loc[:entry_date]
+        market_iv = float(vix_asof.iloc[-1]) if len(vix_asof) > 0 else float("nan")
+
+        if fair_iv is None or pd.isna(market_iv) or len(log_returns) < 2:
+            entries.append((entry_date, cycle_dates, "flat", market_iv, float("nan")))
+            pos = cycle_end_pos
+            continue
+
+        fair_iv = float(fair_iv)
+        spread = market_iv - fair_iv
+        if spread >= DEFAULT_RICH_VOL_THRESHOLD:
+            branch = "rich"
+        elif spread <= DEFAULT_CHEAP_VOL_THRESHOLD:
+            branch = "cheap"
+        else:
+            branch = "flat"
+        entries.append((entry_date, cycle_dates, branch, market_iv, fair_iv))
+        pos = cycle_end_pos
+
+    return entries
+
+
+def simulate_vol_mispricing_returns(
+    start: str,
+    end: str,
+    *,
+    ticker: str = "SPY",
+    closes: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Real, daily return series for ``pilots/vol_mispricing.py``'s
+    market_iv-vs-fair_iv mispricing signal (``STRATEGY_REGISTRY["vol_mispricing"]``).
+    See the honesty-contract comment block immediately above this function.
+    """
+    from data.historical_store import HistoricalStore
+
+    if closes is None:
+        closes = _download_spy_closes(start, end, ticker)
+    if closes is None or closes.empty:
+        return pd.Series(dtype=float)
+
+    ohlcv = _proxy_ohlcv(closes)
+    if ohlcv.empty:
+        return pd.Series(dtype=float)
+
+    store = HistoricalStore()
+    vix_raw = store.get_macro("VIXCLS")
+    # VIXCLS is stored in raw index points (e.g. 15.0 == "15"), not a decimal
+    # fraction -- convert once, up front, to match forecast_forward_volatility's
+    # decimal-fraction convention (0.225 == "22.5%") and
+    # DEFAULT_RICH_VOL_THRESHOLD/DEFAULT_CHEAP_VOL_THRESHOLD's own scale.
+    vix_decimal = (vix_raw / 100.0) if vix_raw is not None and not vix_raw.empty else pd.Series(dtype=float)
+    if vix_decimal.empty:
+        return pd.Series(dtype=float)
+
+    entries = _vol_mispricing_cycle_plan(ohlcv, vix_decimal, pd.Timestamp(start), pd.Timestamp(end))
+    if not entries:
+        return pd.Series(dtype=float)
+
+    daily_returns: Dict[pd.Timestamp, float] = {}
+
+    for entry_date, cycle_dates, branch, market_iv, _fair_iv in entries:
+        if branch == "flat":
+            for d in cycle_dates:
+                daily_returns[d] = 0.0
+            continue
+
+        entry_spot = float(ohlcv.loc[entry_date, "Close"])
+        sigma = market_iv
+        T = TARGET_DTE / 365.0
+        pricer = OptionsPricingRecommender(stock_price=entry_spot)
+
+        if branch == "rich":
+            # Sell an iron condor: short 0.30-delta put/call, long 0.15-delta
+            # wings -- same leg-count/shape as this file's own "Iron Condor"
+            # branch above, strikes chosen by delta rather than read from a
+            # (nonexistent, historically) chain-derived directive.
+            k_short_put = pricer.find_strike_for_delta(-0.30, T, sigma, "put")
+            k_long_put = pricer.find_strike_for_delta(-0.15, T, sigma, "put")
+            k_short_call = pricer.find_strike_for_delta(0.30, T, sigma, "call")
+            k_long_call = pricer.find_strike_for_delta(0.15, T, sigma, "call")
+            short_put_px = pricer.black_scholes_pricing_and_greeks(k_short_put, T, sigma, "put")["Price"]
+            long_put_px = pricer.black_scholes_pricing_and_greeks(k_long_put, T, sigma, "put")["Price"]
+            short_call_px = pricer.black_scholes_pricing_and_greeks(k_short_call, T, sigma, "call")["Price"]
+            long_call_px = pricer.black_scholes_pricing_and_greeks(k_long_call, T, sigma, "call")["Price"]
+            net_premium = (short_put_px - long_put_px) + (short_call_px - long_call_px)
+            put_width = abs(k_short_put - k_long_put)
+            call_width = abs(k_long_call - k_short_call)
+            max_risk = max(put_width, call_width) * 100.0 - net_premium * 100.0
+            if net_premium <= 0.0 or max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("short", "put", k_short_put),
+                _OptionLeg("long", "put", k_long_put),
+                _OptionLeg("short", "call", k_short_call),
+                _OptionLeg("long", "call", k_long_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
+
+        else:  # "cheap" -- long ATM straddle
+            k_call = pricer.find_strike_for_delta(0.50, T, sigma, "call")
+            k_put = pricer.find_strike_for_delta(-0.50, T, sigma, "put")
+            call_px = pricer.black_scholes_pricing_and_greeks(k_call, T, sigma, "call")["Price"]
+            put_px = pricer.black_scholes_pricing_and_greeks(k_put, T, sigma, "put")["Price"]
+            net_premium = -(call_px + put_px)  # debit paid, negative by this module's convention
+            max_risk = abs(net_premium) * 100.0
+            if max_risk <= 0.0:
+                for d in cycle_dates:
+                    daily_returns[d] = 0.0
+                continue
+            leg_list = [
+                _OptionLeg("long", "call", k_call),
+                _OptionLeg("long", "put", k_put),
+            ]
+            stop_loss_threshold = STOP_LOSS_DEBIT_RATIO * max_risk
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
+
+    idx = pd.DatetimeIndex(sorted(daily_returns.keys()))
+    return pd.Series([daily_returns[d] for d in idx], index=idx, dtype=float)
 
 
 def simulate_call_debit_spread_returns(

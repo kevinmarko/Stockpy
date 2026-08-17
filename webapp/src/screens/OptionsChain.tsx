@@ -272,7 +272,7 @@ export function OptionsChain() {
         ) : activeTab === "aivol" ? (
           <TransformerVolForecastView symbol={ticker || "SPY"} />
         ) : activeTab === "stress" ? (
-          <GenerativeDiffusionStressView symbol={ticker || "SPY"} />
+          <GenerativeDiffusionStressView symbol={ticker || "SPY"} spotPrice={spotPrice || 505.20} />
         ) : activeTab === "gamma" ? (
           <GammaScalperView initialSymbol={ticker} spotPrice={spotPrice} />
         ) : activeTab === "dispersion" ? (

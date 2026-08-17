@@ -613,9 +613,11 @@ const liveApi = {
   getForecastResult: (symbol: string) =>
     http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
   getTransformerForecast: (symbol: string) =>
-    http<TransformerForecastResponse>(`/data/ai/transformer-vol/${encodeURIComponent(symbol)}`),
+    http<TransformerForecastResponse>(
+      `/pilots/options/ai/transformer-forecast?symbol=${encodeURIComponent(symbol)}`
+    ),
   runDiffusionStressTest: (req: DiffusionStressRequest) =>
-    http<DiffusionStressResponse>("/data/ai/diffusion-stress", {
+    http<DiffusionStressResponse>("/pilots/options/ai/diffusion-stress-test", {
       method: "POST",
       body: JSON.stringify(req),
     }),
@@ -1186,9 +1188,9 @@ const liveApi = {
     return http<VolSurface3DMeshResponse>(`/pilots/options/vol-surface/3d-mesh${q}`);
   },
   getMultiBrokerStatus: () =>
-    http<MultiBrokerStatusResponse>("/pilots/execution/multi-broker/status"),
+    http<MultiBrokerStatusResponse>("/pilots/execution/brokers/status"),
   triggerBrokerFailover: (request: BrokerFailoverRequest) =>
-    http<BrokerFailoverResponse>("/pilots/execution/multi-broker/failover", {
+    http<BrokerFailoverResponse>("/pilots/execution/brokers/failover", {
       method: "POST",
       body: JSON.stringify(request),
     }),

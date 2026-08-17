@@ -1,10 +1,13 @@
 """Tests for execution/options_paper_executor.py."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+import numpy as np
 import pytest
 
 from data.paper_account_store import PaperAccountStore
 from execution.options_paper_executor import OptionsPaperExecutor, _calculate_default_expiration
+from ml.options_meta_labeler import OptionsMetaLabeler, OptionsTradeFeatureRow, global_options_meta_labeler
 
 
 def test_calculate_default_expiration():
@@ -131,3 +134,204 @@ def test_execute_strategy_directives_deduplication():
     assert res2["executed_count"] == 0
     assert res2["skipped_count"] == 1
     assert "already exists" in res2["skipped"][0]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 ML Meta-Labeler warm-up on construction (F3 audit fix)
+# ---------------------------------------------------------------------------
+#
+# ``global_options_meta_labeler`` (ml/options_meta_labeler.py) is a true
+# module-level singleton shared across the entire pytest session. Tests below
+# that mutate its ``.model``/``.model_path``/``.n_samples`` MUST restore the
+# original state afterward so they don't leak into unrelated tests (including
+# the ones above, which rely on the singleton staying at its untouched,
+# ``self.model is None`` default so the honest 0.65/1.0x fallback keeps their
+# assertions order-independent).
+
+@pytest.fixture
+def reset_meta_labeler_singleton():
+    """Snapshots and restores the global_options_meta_labeler singleton's state."""
+    saved = dict(global_options_meta_labeler.__dict__)
+    try:
+        yield global_options_meta_labeler
+    finally:
+        global_options_meta_labeler.__dict__.clear()
+        global_options_meta_labeler.__dict__.update(saved)
+
+
+def _train_synthetic_meta_labeler(model_path: Path):
+    """Trains and persists a real OptionsMetaLabeler with a strong, learnable opinion.
+
+    Mirrors tests/test_options_meta_labeler.py::test_train_and_predict's synthetic
+    distribution: bullish/high-IVR/high-VRP put credit spreads win, bearish/low-IVR/
+    negative-VRP ones lose. Returns (labeler, good_cand, bad_cand).
+    """
+    np.random.seed(42)
+    labeler = OptionsMetaLabeler(model_path=model_path)
+    samples = []
+    for _ in range(50):
+        samples.append(
+            OptionsTradeFeatureRow(
+                strategy="Put Credit Spread",
+                ivr=60.0 + np.random.uniform(0, 30),
+                vrp=0.03 + np.random.uniform(0, 0.03),
+                vix=18.0 + np.random.uniform(0, 5),
+                trend_bias=1.0,
+                target_dte=35,
+                credit_to_width_ratio=0.30,
+                short_delta=0.25,
+                outcome_win=1,
+            )
+        )
+        samples.append(
+            OptionsTradeFeatureRow(
+                strategy="Put Credit Spread",
+                ivr=10.0 + np.random.uniform(0, 15),
+                vrp=-0.02 + np.random.uniform(0, 0.01),
+                vix=35.0 + np.random.uniform(0, 10),
+                trend_bias=-1.0,
+                target_dte=35,
+                credit_to_width_ratio=0.15,
+                short_delta=0.45,
+                outcome_win=0,
+            )
+        )
+    res = labeler.train(samples)
+    assert res["samples"] == 100
+
+    good_cand = {
+        "strategy": "Put Credit Spread",
+        "ivr": 75.0,
+        "vrp": 0.04,
+        "vix": 19.0,
+        "trend_bias": 1.0,
+        "target_dte": 35,
+        "credit_to_width_ratio": 0.32,
+        "short_delta": 0.25,
+    }
+    bad_cand = {
+        "strategy": "Put Credit Spread",
+        "ivr": 12.0,
+        "vrp": -0.02,
+        "vix": 38.0,
+        "trend_bias": -1.0,
+        "target_dte": 35,
+        "credit_to_width_ratio": 0.12,
+        "short_delta": 0.45,
+    }
+    return labeler, good_cand, bad_cand
+
+
+def test_executor_construction_loads_real_trained_model(reset_meta_labeler_singleton, tmp_path):
+    """OptionsPaperExecutor() must actually load a real trained model file, not just
+    leave the singleton at its hardcoded-fallback ``self.model is None`` state."""
+    model_path = tmp_path / "options_meta_labeler.pkl"
+    _labeler, good_cand, bad_cand = _train_synthetic_meta_labeler(model_path)
+
+    # Simulate a fresh, never-loaded process pointed at the real trained-model file.
+    singleton = reset_meta_labeler_singleton
+    singleton.model = None
+    singleton.model_path = model_path
+    singleton.n_samples = 0
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    OptionsPaperExecutor(store=store)
+
+    # The real file's contents were loaded (not merely a non-None sentinel).
+    assert singleton.model is not None
+    assert singleton.n_samples == 100
+
+    p_good = singleton.predict_probability(good_cand)
+    p_bad = singleton.predict_probability(bad_cand)
+
+    # The hardcoded fallback (0.65) would satisfy neither of these -- proves the
+    # REAL loaded model, not the fallback, answered both predictions.
+    assert p_good > 0.60
+    assert p_bad < 0.50
+    assert p_good != p_bad
+
+
+def test_execute_strategy_directives_uses_real_model_for_gating_and_sizing(
+    reset_meta_labeler_singleton, tmp_path
+):
+    """The production execute_strategy_directives() path must gate/size using the
+    real loaded model's opinion, not the old always-approve/always-1.0x no-op."""
+    model_path = tmp_path / "options_meta_labeler.pkl"
+    _labeler, good_cand, bad_cand = _train_synthetic_meta_labeler(model_path)
+
+    singleton = reset_meta_labeler_singleton
+    singleton.model = None
+    singleton.model_path = model_path
+    singleton.n_samples = 0
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    assert singleton.model is not None  # warmed up by construction
+
+    legs = [
+        {"strike": 150.0, "side": "sell", "type": "put", "ratio_qty": 1.0, "price": 2.20},
+        {"strike": 145.0, "side": "buy", "type": "put", "ratio_qty": 1.0, "price": 0.70},
+    ]
+
+    bad_directive = {
+        "symbol": "AAPL",
+        "action": "Open",
+        "net_premium": 1.50,
+        "target_dte": 30,
+        "legs": legs,
+        **bad_cand,
+    }
+    good_directive = {
+        "symbol": "AAPL",
+        "action": "Open",
+        "net_premium": 1.50,
+        "target_dte": 30,
+        "legs": legs,
+        **good_cand,
+    }
+
+    # A directive shaped like the losing training distribution must be rejected by
+    # the real model -- this could never happen under the old bug, since the
+    # hardcoded 0.65 fallback always clears the 0.52 min-confidence threshold.
+    bad_result = executor.execute_strategy_directives(directives=[bad_directive], dry_run=True)
+    assert bad_result["executed_count"] == 0
+    assert bad_result["skipped_count"] == 1
+    assert "Stage 4 ML Meta-Labeler rejected" in bad_result["skipped"][0]["reason"]
+
+    # The real model's sizing multiplier for a directive shaped like the winning
+    # training distribution must not be pinned at the old no-op 1.0x.
+    ml_score = singleton.score_option_directive(good_directive)
+    assert ml_score["approved"] is True
+    assert ml_score["sizing_multiplier"] != 1.0
+    assert ml_score["sizing_multiplier"] > 1.0
+
+    # Prove this multiplier actually changes production behavior: with the ML gate
+    # enabled the real model's >1.0x multiplier must scale contracts away from the
+    # raw (ML-disabled) baseline for the exact same directive.
+    good_result = executor.execute_strategy_directives(directives=[good_directive], dry_run=True)
+    assert good_result["executed_count"] == 1
+    contracts_with_ml = good_result["executed"][0]["contracts"]
+
+    with patch("execution.options_paper_executor.settings.OPTIONS_META_LABELER_ENABLED", False):
+        baseline_result = executor.execute_strategy_directives(directives=[good_directive], dry_run=True)
+    assert baseline_result["executed_count"] == 1
+    contracts_baseline = baseline_result["executed"][0]["contracts"]
+
+    assert contracts_with_ml != contracts_baseline
+
+
+def test_executor_construction_no_model_file_is_honest_and_non_crashing(
+    reset_meta_labeler_singleton, tmp_path
+):
+    """A fresh install with no trained model on disk must not crash construction,
+    and must keep the honest 0.65/1.0x fallback (CONSTRAINT #6)."""
+    singleton = reset_meta_labeler_singleton
+    singleton.model = None
+    singleton.model_path = tmp_path / "does_not_exist.pkl"
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    OptionsPaperExecutor(store=store)  # must not raise
+
+    assert singleton.model is None
+    assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.65
+    assert singleton.get_sizing_multiplier(0.65) == 1.0

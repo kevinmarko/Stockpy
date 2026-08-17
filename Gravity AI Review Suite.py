@@ -2485,8 +2485,19 @@ class GravityAIAuditor:
             except TypeError:
                 audit["checks"]["model_abc_uninstantiable"] = {"status": "PASSED"}
 
-            # ── (c) ml/registry.yaml ─────────────────────────────────────────
-            registry_path = Path(__file__).parent / "ml" / "registry.yaml"
+            # ── (c) ML model registry ────────────────────────────────────────
+            # Resolves the SAME way pilots/models.py (the Pilots PWA's
+            # /models endpoint), gui/panels/analytics.py, gui/panels/analytics_signals.py,
+            # and investyo_mcp_server.py do: the machine-global
+            # settings.LOCAL_DATA_ROOT/ml_models/registry.yaml if it exists,
+            # else the repo-root ml/registry.yaml — so this audit checks the
+            # actual authoritative registry, not a copy that may have been
+            # reverted by a git operation (see docs/architecture/ml-and-reports.md).
+            try:
+                from ml.registry_io import resolve_registry_path
+                registry_path = resolve_registry_path()
+            except Exception:
+                registry_path = Path(__file__).parent / "ml" / "registry.yaml"
             if not registry_path.exists():
                 audit["checks"]["registry_yaml_parseable"] = {"status": "FAILED", "note": "file not found"}
             else:
