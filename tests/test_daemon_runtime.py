@@ -554,6 +554,60 @@ class TestTimerThread:
             "timer thread kept triggering runs after shutdown()"
         )
 
+    def test_timer_loop_never_calls_maybe_refresh_settings_when_flag_disabled(self, monkeypatch):
+        """Regression guard: _timer_loop()'s maybe_refresh_settings() calls
+        must be gated on settings.RUNTIME_FLAGS_REFRESH_ENABLED -- the SAME
+        flag desktop/orchestrator_daemon.py's standalone refresher thread is
+        gated on before it is even spawned. An earlier version called
+        maybe_refresh_settings() unconditionally from this loop, so setting
+        the flag to False (an operator explicitly opting OUT of
+        cross-process settings hot-reload) did not actually disable it for
+        the timer-loop path -- it kept polling/applying
+        output/runtime_flags.json regardless."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(
+            "desktop.daemon_runtime.is_automatic_run_gated",
+            lambda now_utc, extended_hours_only: False,
+        )
+        from settings import settings
+        monkeypatch.setattr(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", False)
+
+        d = OrchestratorDaemon(interval_seconds=1)
+        with mock.patch.object(d, "maybe_refresh_settings") as spy:
+            d.start()
+            try:
+                _poll_until(
+                    lambda: any(
+                        d.get_run(rid) is not None and d.get_run(rid).reason == "interval"
+                        for rid in list(d._run_order)
+                    ),
+                    timeout=3.0,
+                )
+            finally:
+                d.shutdown(timeout=2.0)
+        spy.assert_not_called()
+
+    def test_timer_loop_calls_maybe_refresh_settings_when_flag_enabled(self, monkeypatch):
+        """Positive counterpart of the guard above -- when the flag IS on,
+        the timer loop must still call through on every wake, matching this
+        PR's actual intent (hot-reload without a restart)."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(
+            "desktop.daemon_runtime.is_automatic_run_gated",
+            lambda now_utc, extended_hours_only: False,
+        )
+        from settings import settings
+        monkeypatch.setattr(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", True)
+
+        d = OrchestratorDaemon(interval_seconds=1)
+        with mock.patch.object(d, "maybe_refresh_settings") as spy:
+            d.start()
+            try:
+                saw_call = _poll_until(lambda: spy.call_count > 0, timeout=3.0)
+            finally:
+                d.shutdown(timeout=2.0)
+        assert saw_call, "maybe_refresh_settings() was never called with the flag enabled"
+
 
 class TestShutdownWaitsForInFlightRun:
     def test_shutdown_waits_rather_than_killing(self, monkeypatch):

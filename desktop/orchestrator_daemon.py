@@ -355,7 +355,7 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
     )
 
     # Optional fourth service: cross-process settings hot-reload
-    # (settings.RUNTIME_FLAGS_REFRESH_ENABLED, default False -- a store
+    # (settings.RUNTIME_FLAGS_REFRESH_ENABLED, default True -- a store
     # write from THIS process's own in-process Pilots API, if hosted here
     # via PILOTS_API_ENABLED, already applies immediately via
     # runtime_flags_writer's own re-apply; this thread exists for a write
