@@ -1211,22 +1211,43 @@ def check_db_exists() -> CheckResult:
     An empty file (0 bytes) indicates that ``database_setup.py`` was not run
     after cloning the repository.  A missing file indicates the same.
 
-    This check always validates the local ``quant_platform.db`` file
-    regardless of ``settings.DATABASE_URL`` (see ``db_config.py``): the
-    SQLite-backed caches -- ``HistoricalStore``, ``ForecastTracker``, and the
-    ``DailySignals``/``ExecutionLogs`` tables from ``database_setup.py`` --
-    always live in this local file. Only the SQLAlchemy ORM stores
-    (``transactions_store.py``'s ``trades`` table and
-    ``volatility/iv_engine.py``'s ``iv_history`` table) honor ``DATABASE_URL``
-    and may instead live in Postgres.
+    ``settings.LOCAL_DATA_ROOT`` (PR #718) moved the canonical location of
+    ``quant_platform.db`` from the repo root to a machine-global root shared
+    across every worktree/checkout (see ``db_config.py``). This check
+    resolves the SAME canonical path every real store uses --
+    ``db_config.resolve_database_url()`` -- rather than a hardcoded
+    ``_REPO_ROOT``-relative literal, which previously made this check FAIL
+    in every worktree even when the (220MB+, actively-written) database was
+    present and healthy at its real location. A legacy repo-root file is
+    still accepted as a fallback for setups that predate the migration or
+    that hand-set ``DATABASE_URL`` to point there.
     """
     name = "db_exists"
-    db = _REPO_ROOT / "quant_platform.db"
-    if db.exists() and db.stat().st_size > 0:
-        return CheckResult(name, True, f"Database found: {db}")
+    candidates: list[Path] = []
+    try:
+        from sqlalchemy.engine import make_url
+
+        from db_config import resolve_database_url
+
+        url = make_url(resolve_database_url())
+        if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+            candidates.append(Path(url.database))
+    except Exception as exc:
+        logger.debug(f"check_db_exists: could not resolve the canonical DB path ({exc}); "
+                     "falling back to the legacy repo-root candidate.")
+
+    legacy = _REPO_ROOT / "quant_platform.db"
+    if legacy not in candidates:
+        candidates.append(legacy)
+
+    for db in candidates:
+        if db.exists() and db.stat().st_size > 0:
+            return CheckResult(name, True, f"Database found: {db}")
+
+    checked = ", ".join(str(c) for c in candidates)
     return CheckResult(
         name, False,
-        "quant_platform.db not found or empty — run: python3 database_setup.py",
+        f"quant_platform.db not found or empty (checked: {checked}) — run: python3 database_setup.py",
     )
 
 

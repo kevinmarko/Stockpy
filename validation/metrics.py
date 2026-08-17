@@ -152,23 +152,35 @@ def probability_of_backtest_overfitting(
     n_paths, n_strategies = in_sample_sharpes.shape
     if n_paths == 0 or n_strategies == 0:
         return 0.0
-        
+
     overfit_count = 0
-    
+    measurable_paths = 0
+
     for s in range(n_paths):
-        # Best strategy index in-sample for path s
-        best_is_idx = np.nanargmax(in_sample_sharpes[s])
-        
+        # Best strategy index in-sample for path s. Every trial can be NaN
+        # on a given path (e.g. constant/degenerate train_returns for the
+        # whole trial set on that one path) -- np.nanargmax raises on an
+        # all-NaN row, so that path is skipped entirely (excluded from the
+        # denominator below) rather than fabricating a "best" index among
+        # values that were never actually measured (CONSTRAINT #4).
+        try:
+            best_is_idx = np.nanargmax(in_sample_sharpes[s])
+        except ValueError:
+            continue
+
         # OOS performance of the best IS strategy
         oos_perf_of_best_is = out_of_sample_sharpes[s, best_is_idx]
-        
+
         # Median OOS performance of all strategies on path s
         median_oos_perf = np.nanmedian(out_of_sample_sharpes[s])
-        
+
+        measurable_paths += 1
         if oos_perf_of_best_is < median_oos_perf:
             overfit_count += 1
-            
-    return float(overfit_count) / n_paths
+
+    if measurable_paths == 0:
+        return float("nan")
+    return float(overfit_count) / measurable_paths
 
 def run_cpcv_evaluation(
     strategy_fn: Callable[[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series], List[Dict[str, Any]]],
@@ -217,6 +229,27 @@ def run_cpcv_evaluation(
 
     cv = CombinatorialPurgedCV(n_splits=n_splits, n_test_splits=n_test_splits)
 
+    def _rank_key(values: List[float]) -> List[float]:
+        """NaN-safe argmax input: a NaN Sharpe (degenerate/constant returns)
+        must never win an argmax-based "best trial" selection, but unlike a
+        finite placeholder (e.g. the historical -999.0 sentinel this
+        replaced), -inf here is purely a LOCAL ranking key -- it is never
+        stored in is_sharpe_matrix/oos_sharpe_matrix and can never leak into
+        a reported metric (mean_oos_sharpe, paths[].sharpe, distribution),
+        which all preserve the real NaN (CONSTRAINT #4 -- never fabricate a
+        finite value in place of "unmeasurable")."""
+        return [v if not np.isnan(v) else -np.inf for v in values]
+
+    def _nanmean_or(values, default: float) -> float:
+        # All-NaN input is an expected, non-error case here (e.g. a
+        # degenerate/constant-returns trial on every path) -- avoid numpy's
+        # "Mean of empty slice" RuntimeWarning and report the honest default
+        # instead of a fabricated number.
+        finite = [v for v in values if not np.isnan(v)]
+        if not finite:
+            return default
+        return float(np.mean(finite))
+
     paths_data = []
     is_sharpe_matrix = []
     oos_sharpe_matrix = []
@@ -252,15 +285,20 @@ def run_cpcv_evaluation(
         for trial in trials:
             is_sr = sharpe_ratio(trial["train_returns"], freq=freq)
             oos_sr = sharpe_ratio(trial["test_returns"], freq=freq)
-            is_sharpes.append(is_sr if not np.isnan(is_sr) else -999.0)
-            oos_sharpes.append(oos_sr if not np.isnan(oos_sr) else -999.0)
+            # Preserve the real value (including NaN) here -- these lists
+            # feed is_sharpe_matrix/oos_sharpe_matrix directly, which are
+            # what paths_data / distribution / mean_oos_sharpe report.
+            is_sharpes.append(is_sr)
+            oos_sharpes.append(oos_sr)
 
         is_sharpe_matrix.append(is_sharpes)
         oos_sharpe_matrix.append(oos_sharpes)
         all_trials_by_path.append(trials)
 
-        # Track the best performing configuration on this path (in-sample)
-        best_is_idx = np.argmax(is_sharpes)
+        # Track the best performing configuration on this path (in-sample).
+        # Ranked via _rank_key so a degenerate (NaN) trial can never win --
+        # is_sharpes itself keeps its real NaN for reporting.
+        best_is_idx = int(np.argmax(_rank_key(is_sharpes)))
         best_trial = trials[best_is_idx]
 
         paths_data.append({
@@ -286,9 +324,16 @@ def run_cpcv_evaluation(
     pbo = probability_of_backtest_overfitting(is_sharpe_matrix, oos_sharpe_matrix)
 
     # 2. Calculate DSR for the best overall selected strategy
-    # Let's find the configuration that performed best overall in-sample (on average)
-    mean_is_sharpes = is_sharpe_matrix.mean(axis=0)
-    best_overall_idx = np.argmax(mean_is_sharpes)
+    # Let's find the configuration that performed best overall in-sample (on
+    # average). Per-trial mean is computed via _nanmean_or (skips a path's
+    # NaN Sharpe rather than poisoning the whole column to NaN); a trial
+    # that's NaN on EVERY path stays honestly NaN and _rank_key keeps it
+    # from winning the argmax outright.
+    mean_is_sharpes = np.array([
+        _nanmean_or(list(is_sharpe_matrix[:, j]), float("nan"))
+        for j in range(is_sharpe_matrix.shape[1])
+    ])
+    best_overall_idx = int(np.argmax(_rank_key(list(mean_is_sharpes))))
     best_overall_oos_sharpes = oos_sharpe_matrix[:, best_overall_idx]
 
     # Calculate returns skew/kurtosis of the selected strategy (all merged OOS
@@ -315,12 +360,18 @@ def run_cpcv_evaluation(
     if np.isnan(skew): skew = 0.0
     if np.isnan(kurt): kurt = 3.0
 
-    # Observed Sharpe ratio is the mean OOS Sharpe of the selected strategy
-    sr_observed = np.mean(best_overall_oos_sharpes)
+    # Observed Sharpe ratio is the mean OOS Sharpe of the selected strategy.
+    # NaN-aware: a path where the selected trial's OOS Sharpe itself came out
+    # NaN (degenerate/constant test_returns) is skipped rather than dragging
+    # sr_observed down with a fabricated finite placeholder -- CONSTRAINT #4;
+    # this replaced a prior -999.0 sentinel that leaked into this exact value.
+    sr_observed = _nanmean_or(list(best_overall_oos_sharpes), float("nan"))
     n_trials = is_sharpe_matrix.shape[1]
 
-    # Variance of Sharpe ratios across all trials.
-    sr_variance = np.var(mean_is_sharpes)
+    # Variance of Sharpe ratios across all trials (skipping any NaN entries
+    # from an all-degenerate trial column -- see mean_is_sharpes above).
+    finite_mean_is_sharpes = [v for v in mean_is_sharpes if not np.isnan(v)]
+    sr_variance = float(np.var(finite_mean_is_sharpes)) if finite_mean_is_sharpes else 0.0
     # Degenerate-std guard convention: a near-zero-but-not-exact variance
     # (floating-point noise from near-identical trial Sharpes) must not be
     # treated as "genuinely zero" -- but it also must not be left as literal
@@ -358,7 +409,10 @@ def run_cpcv_evaluation(
     )
 
     distribution = oos_sharpe_matrix[:, best_overall_idx]
-    mean_oos_sharpe = float(np.mean(distribution))
+    # NaN-aware: a per-path degenerate OOS Sharpe stays honestly NaN inside
+    # `distribution` itself (never a fabricated -999.0), and is skipped here
+    # rather than dragging mean_oos_sharpe to a nonsensical negative value.
+    mean_oos_sharpe = _nanmean_or(list(distribution), float("nan"))
 
     # Genuinely OOS drawdown/sortino/hit-rate/avg-trade/turnover for the
     # DSR-selected strategy — the mean of each metric computed independently
@@ -399,15 +453,7 @@ def run_cpcv_evaluation(
         # different, deliberately trade-conditional metric).
         per_path_mean_return.append(float(oos_returns.mean()))
 
-    def _nanmean_or(values: List[float], default: float) -> float:
-        # All-NaN input (e.g. a strategy with zero down-days ever, so every
-        # path's Sortino is NaN) is an expected, non-error case here -- avoid
-        # numpy's "Mean of empty slice" RuntimeWarning for it.
-        finite = [v for v in values if not np.isnan(v)]
-        if not finite:
-            return default
-        return float(np.mean(finite))
-
+    # _nanmean_or is defined once, above the main CPCV loop -- reused here.
     mean_oos_max_dd = _nanmean_or(per_path_max_dd, float("nan"))
     mean_oos_sortino = _nanmean_or(per_path_sortino, float("nan"))
     mean_oos_hit_rate = _nanmean_or(per_path_hit_rate, 0.0)
