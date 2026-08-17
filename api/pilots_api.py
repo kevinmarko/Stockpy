@@ -7061,9 +7061,9 @@ def get_pilots_execution_fix_venues(
 
 
 class ResearchSynthesizeRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, description="Quantitative hypothesis, academic abstract, or math formula.")
-    strategy_type: Optional[str] = Field(None, description="Optional strategy type/mode e.g. momentum, mean_reversion, hypothesis.")
-    target_asset_class: Optional[str] = Field(None, description="Optional target asset class e.g. equities, options, crypto.")
+    prompt: str = Field(..., min_length=1, max_length=4000, description="Quantitative hypothesis, academic abstract, or math formula.")
+    strategy_type: Optional[str] = Field(None, max_length=50, description="Optional strategy type/mode e.g. momentum, mean_reversion, hypothesis.")
+    target_asset_class: Optional[str] = Field(None, max_length=50, description="Optional target asset class e.g. equities, options, crypto.")
 
 
 @app.post(
@@ -7100,15 +7100,15 @@ def post_pilots_ai_research_synthesize(req: ResearchSynthesizeRequest) -> Dict[s
 
 
 class ResearchBacktestRequest(BaseModel):
-    code: Optional[str] = Field(None, description="AST-safe SignalModule or strategy Python code.")
-    strategy_code: Optional[str] = Field(None, description="Alias for code.")
-    symbol: Optional[str] = Field("SPY", description="Ticker symbol to validate against.")
-    strategy_id: Optional[str] = Field(None, description="Strategy identifier.")
+    code: Optional[str] = Field(None, max_length=100000, description="AST-safe SignalModule or strategy Python code.")
+    strategy_code: Optional[str] = Field(None, max_length=100000, description="Alias for code.")
+    symbol: Optional[str] = Field("SPY", max_length=20, description="Ticker symbol to validate against.")
+    strategy_id: Optional[str] = Field(None, max_length=100, description="Strategy identifier.")
     symbols: Optional[List[str]] = Field(None, description="List of symbols.")
-    start_date: Optional[str] = Field(None, description="Start date YYYY-MM-DD.")
-    end_date: Optional[str] = Field(None, description="End date YYYY-MM-DD.")
-    cost_bps: Optional[float] = Field(5.0, ge=0.0, description="Transaction cost in basis points per turnover.")
-    transaction_cost_bps: Optional[float] = Field(None, ge=0.0, description="Alias for cost_bps.")
+    start_date: Optional[str] = Field(None, max_length=20, description="Start date YYYY-MM-DD.")
+    end_date: Optional[str] = Field(None, max_length=20, description="End date YYYY-MM-DD.")
+    cost_bps: Optional[float] = Field(5.0, ge=0.0, le=500.0, description="Transaction cost in basis points per turnover.")
+    transaction_cost_bps: Optional[float] = Field(None, ge=0.0, le=500.0, description="Alias for cost_bps.")
     apply_trend_gate: Optional[bool] = Field(False, description="Apply Faber SMA-200 trend gating.")
 
 
