@@ -100,7 +100,11 @@ class _PopenWorker:
 
             def _reader() -> None:
                 try:
-                    result_box["value"] = pickle.load(self.proc.stdout)
+                    # Bandit B301: this deserializes the WORKER SUBPROCESS'S own
+                    # stdout pipe -- a local, same-user, same-trust-boundary
+                    # process this parent itself spawned (see the module
+                    # docstring), never network/attacker-controlled data.
+                    result_box["value"] = pickle.load(self.proc.stdout)  # nosec B301
                 except (EOFError, OSError) as exc:
                     result_box["error"] = exc
 

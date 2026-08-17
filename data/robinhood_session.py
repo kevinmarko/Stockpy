@@ -44,7 +44,10 @@ def _is_loadable_session(path: Path) -> bool:
         if not path.exists() or path.stat().st_size == 0:
             return False
         with path.open("rb") as fh:
-            data = pickle.load(fh)
+            # Bandit B301: this reads the operator's own local
+            # ~/.tokens/robinhood.pickle, written by robin_stocks on this
+            # same machine -- not externally-supplied data.
+            data = pickle.load(fh)  # nosec B301
         return isinstance(data, dict) and _REQUIRED_KEYS <= data.keys()
     except Exception:
         return False

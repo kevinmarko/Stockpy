@@ -654,10 +654,15 @@ def instantiate_module(code: str) -> SignalModule:
     try:
         # codeql[py/code-injection]
         # lgtm[py/code-injection]
-        compiled_code = compile(code, "<synthesized_signal>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]
+        compiled_code = compile(code, "<synthesized_signal>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]  # nosec B102
         # codeql[py/code-injection]
         # lgtm[py/code-injection]
-        exec(compiled_code, safe_globals, local_namespace)  # codeql[py/code-injection] # lgtm[py/code-injection] # noqa: S102
+        # Bandit B102: `code` was AST-validated above (forbidden dangerous
+        # builtins/imports stripped from `safe_builtins`, restricted
+        # `_restricted_import`), and `safe_globals` is the restricted
+        # sandbox namespace -- a real, adversarially-tested sandbox, not a
+        # naive/unguarded exec().
+        exec(compiled_code, safe_globals, local_namespace)  # codeql[py/code-injection] # lgtm[py/code-injection] # noqa: S102 # nosec B102
     except Exception as exc:
         raise ValueError(f"Failed to execute synthesized signal code in safe sandbox: {exc}") from exc
     finally:

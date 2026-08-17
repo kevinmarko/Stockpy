@@ -42,6 +42,17 @@ Design
   derived FROM the dataclass; the dataclass shape is never modified here.
 * **One module, one DB file**: all tables live in ``quant_platform.db`` alongside
   ``trades``, ``iv_history``, ``forecast_errors``.
+* **Bandit B608 (SQL injection) false positives, by design**: every query below
+  that Bandit's static scanner flags for f-string/``+``-built SQL only ever
+  interpolates a fixed-length ``?``-placeholder count string (``",".join("?" for
+  _ in ...)``) or one of a small set of hardcoded literal clause fragments
+  (``date_clause``, ``limit_clause``, column-name constants) selected by a plain
+  ``if``/ternary -- never a runtime VALUE. Every real value is bound through the
+  parameterized ``?`` placeholders passed as ``conn.execute()``'s second
+  argument, never string-interpolated. Reviewed and marked ``# nosec B608`` at
+  each site rather than skipped file-wide, so a genuine future SQL-injection
+  bug (a raw value interpolated directly into a query string) still trips the
+  scanner.
 
 Tables
 ------
@@ -2454,7 +2465,7 @@ class HistoricalStore:
                     conn = get_dbapi_connection(raw_conn)
                     target = conn.execute(
                         "SELECT MAX(as_of_date) FROM etf_holdings "
-                        f"WHERE etf_symbol = ?{date_clause}",
+                        f"WHERE etf_symbol = ?{date_clause}",  # nosec B608
                         tuple(params),
                     ).fetchone()
                     if not target or target[0] is None:
@@ -2624,7 +2635,7 @@ class HistoricalStore:
                         "SELECT symbol, as_of, target_consensus, target_median, "
                         "target_high, target_low, grade_score, source, fetched_at "
                         f"FROM analyst_history WHERE symbol = ?{date_clause} "
-                        "ORDER BY as_of DESC LIMIT 1",
+                        "ORDER BY as_of DESC LIMIT 1",  # nosec B608
                         tuple(params),
                     ).fetchone()
             if not row:
@@ -2784,7 +2795,7 @@ class HistoricalStore:
                     db_rows = conn.execute(
                         "SELECT symbol, event_date, eps_actual, eps_estimated, "
                         "revenue_actual, revenue_estimated, last_updated, source, fetched_at "
-                        f"FROM earnings_events WHERE symbol = ?{clauses}{order}{limit_clause}",
+                        f"FROM earnings_events WHERE symbol = ?{clauses}{order}{limit_clause}",  # nosec B608
                         tuple(params),
                     ).fetchall()
 
@@ -2946,7 +2957,7 @@ class HistoricalStore:
                         "disposed_transactions, acquired_disposed_ratio, total_acquired, "
                         "total_disposed, total_purchases, total_sales, source, fetched_at "
                         "FROM insider_stats WHERE symbol = ? "
-                        f"ORDER BY year DESC, quarter DESC{limit_clause}",
+                        f"ORDER BY year DESC, quarter DESC{limit_clause}",  # nosec B608
                         tuple(params),
                     ).fetchall()
 
@@ -3097,7 +3108,7 @@ class HistoricalStore:
                         "FROM sector_snapshots s "
                         "JOIN (SELECT sector, MAX(date) AS max_date FROM sector_snapshots"
                         f"{date_clause} GROUP BY sector) m "
-                        "ON s.sector = m.sector AND s.date = m.max_date",
+                        "ON s.sector = m.sector AND s.date = m.max_date",  # nosec B608
                         tuple(params),
                     ).fetchall()
 
@@ -3252,7 +3263,7 @@ class HistoricalStore:
                         INSERT INTO sentiment_ingestion_audit
                             ({_SENTIMENT_AUDIT_INSERT_COLS})
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
+                        """,  # nosec B608
                         rows,
                     )
             logger.debug(
@@ -3454,7 +3465,7 @@ class HistoricalStore:
                         FROM sentiment_ingestion_audit
                         WHERE trading_day >= ? AND trading_day <= ?
                           AND symbol IN ({placeholders})
-                        """,
+                        """,  # nosec B608
                         [start_day, end_day, *[str(s).upper() for s in symbols]],
                     )
                     rows = cursor.fetchall()
@@ -3590,7 +3601,7 @@ class HistoricalStore:
                       AND ingest_id NOT IN (SELECT ingest_id FROM rag_indexed_docs)
                     ORDER BY ingest_id ASC
                     """
-                    + (" LIMIT ?" if limit is not None else ""),
+                    + (" LIMIT ?" if limit is not None else ""),  # nosec B608
                     (since_str, limit) if limit is not None else (since_str,),
                 ).fetchall()
             return [
@@ -3629,7 +3640,7 @@ class HistoricalStore:
                     SELECT ingest_id, as_of, trading_day, symbol, source_name, text_content
                     FROM sentiment_ingestion_audit
                     WHERE ingest_id IN ({placeholders})
-                    """,
+                    """,  # nosec B608
                     tuple(int(i) for i in ingest_ids),
                 ).fetchall()
             return [
@@ -3730,7 +3741,7 @@ class HistoricalStore:
                     raw_conn = session.connection().connection
                     conn = get_dbapi_connection(raw_conn)
                     conn.execute(
-                        f"DELETE FROM rag_indexed_docs WHERE ingest_id IN ({placeholders})",
+                        f"DELETE FROM rag_indexed_docs WHERE ingest_id IN ({placeholders})",  # nosec B608
                         tuple(int(i) for i in ingest_ids),
                     )
             return True
@@ -3947,7 +3958,7 @@ class HistoricalStore:
                 FROM price_bars
                 WHERE symbol = ? AND date >= ?
                 ORDER BY date ASC
-                """,
+                """,  # nosec B608
                 (symbol, cutoff),
             ).fetchall()
 
