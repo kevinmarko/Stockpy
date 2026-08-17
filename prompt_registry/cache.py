@@ -222,10 +222,16 @@ class CacheManager:
         """
         try:
             d = self._prompt_dir(prompt_id)
-            if not d.is_dir():
+            # `d` was already confinement-checked inside _prompt_dir() above
+            # before being returned (falls back to a fixed "_invalid_"
+            # sentinel path on escape) -- CodeQL's py/path-injection query
+            # reports the alert at each downstream use of the tainted-looking
+            # value rather than at that check, so it re-flags every read here
+            # too (alerts #12/#13). Reviewed false positive, not a fresh one.
+            if not d.is_dir():  # codeql[py/path-injection]
                 return []
             files = sorted(
-                d.glob("*.json"),
+                d.glob("*.json"),  # codeql[py/path-injection]
                 key=lambda f: f.stat().st_mtime,
                 reverse=True,
             )
@@ -243,7 +249,10 @@ class CacheManager:
         """
         try:
             path = self._record_path(prompt_id, version)
-            with open(path, encoding="utf-8") as fh:
+            # Same reviewed false positive as list_versions() above (alert
+            # #14): `path` is confinement-checked inside _record_path()
+            # before being returned.
+            with open(path, encoding="utf-8") as fh:  # codeql[py/path-injection]
                 data = json.load(fh)
             return PromptRecord.from_dict(data)
         except FileNotFoundError:

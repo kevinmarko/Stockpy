@@ -48,7 +48,19 @@ FRED_ROTATION_URL = "https://fred.stlouisfed.org/docs/api/api_key.html"
 
 
 def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    # Not password/credential storage or verification -- this is a
+    # known-leaked-value canary check (see LEAKED_FRED_KEY_SHA256 above):
+    # the digest is only ever compared against ONE specific, already-public,
+    # already-compromised plaintext to detect whether an operator's env
+    # var still equals it. A slow/salted password hash (bcrypt/scrypt/
+    # Argon2) defends a *secret* value against offline brute force; there is
+    # no secret being protected here (the attacker, by definition, already
+    # has the leaked plaintext), so SHA-256 is the right tool, not a
+    # weakness. CodeQL's py/weak-sensitive-data-hashing query flags this
+    # call anyway (alert #5) because it classifies `FRED_API_KEY` as
+    # sensitive/credential-like data purely by name -- reviewed false
+    # positive.
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()  # codeql[py/weak-sensitive-data-hashing]
 
 
 # Shared interval-validation policy for the persistent orchestrator daemon's

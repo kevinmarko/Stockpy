@@ -17,8 +17,7 @@ subset (~100 emoji), not exhaustive of the ~3,700+ Unicode emoji that exist
 -- an emoji not in the table contributes nothing to a score (never a
 fabricated guess).
 """
-import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 EMOJI_SENTIMENT: Dict[str, float] = {
     # Strongly positive
@@ -52,17 +51,33 @@ EMOJI_SENTIMENT: Dict[str, float] = {
 # of every emoji-adjacent codepoint -- a practical net wide enough to find
 # characters worth looking up in EMOJI_SENTIMENT, not a Unicode-standard
 # emoji classifier.
-_EMOJI_PATTERN = re.compile(
-    "["
-    "\U0001F300-\U0001F5FF"
-    "\U0001F600-\U0001F64F"
-    "\U0001F680-\U0001F6FF"
-    "\U0001F900-\U0001F9FF"
-    "\U00002600-\U000027BF"
-    "\U0001FA70-\U0001FAFF"
-    "]",
-    flags=re.UNICODE,
+#
+# Deliberately plain ordinal (int, int) bounds checked via ord(), not a
+# compiled `re` character class -- CodeQL's py/overly-large-range query
+# models Python regex character-class ranges over its own UTF-16 code-unit
+# representation, and every one of these bounds is a supplementary-plane
+# (astral) codepoint above U+FFFF that only exists as a surrogate pair in
+# that representation. That mismatch made the query misreport each of these
+# ranges as "overlapping" a synthetic �-� (U+FFFD, the Unicode
+# replacement character) placeholder it substitutes for the un-representable
+# surrogate half -- a false positive against CodeQL alerts #17-#20, not a
+# real defect (the ranges below are correctly ordered and mutually disjoint;
+# Python 3 `str`/`ord()` addresses code points directly and has no surrogate
+# ambiguity to trip over). This form sidesteps the query's astral-range
+# blind spot entirely rather than relying on a suppression comment.
+_EMOJI_RANGES: Tuple[Tuple[int, int], ...] = (
+    (0x1F300, 0x1F5FF),
+    (0x1F600, 0x1F64F),
+    (0x1F680, 0x1F6FF),
+    (0x1F900, 0x1F9FF),
+    (0x2600, 0x27BF),
+    (0x1FA70, 0x1FAFF),
 )
+
+
+def _is_emoji_char(ch: str) -> bool:
+    codepoint = ord(ch)
+    return any(lo <= codepoint <= hi for lo, hi in _EMOJI_RANGES)
 
 
 def extract_emojis(text: str) -> List[str]:
@@ -71,7 +86,7 @@ def extract_emojis(text: str) -> List[str]:
     toward the average, matching ordinary sentiment-lexicon convention)."""
     if not text:
         return []
-    return _EMOJI_PATTERN.findall(text)
+    return [ch for ch in text if _is_emoji_char(ch)]
 
 
 def score_text_emojis(text: str) -> Optional[float]:
