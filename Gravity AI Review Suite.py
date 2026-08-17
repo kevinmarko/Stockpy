@@ -6752,7 +6752,10 @@ class GravityAIAuditor:
             )
 
             # Check 1: missing file → None
-            result1 = read_dead_letter(path=Path("/tmp/__nonexistent_dl__.json"))
+            # Bandit B108: this path is a deliberately-nonexistent negative-
+            # test fixture (verifying the missing-file → None contract), not
+            # a real temp-file write -- nothing is ever written here.
+            result1 = read_dead_letter(path=Path("/tmp/__nonexistent_dl__.json"))  # nosec B108
             c1 = result1 is None
             audit["checks"].append({
                 "check": "read_dead_letter returns None on missing file (CONSTRAINT #4 — no fabrication)",
@@ -7255,7 +7258,9 @@ class GravityAIAuditor:
                 from gui.strategy_health import read_gravity_report
 
                 # Check 4: missing file → []
-                c4_list = read_gravity_report(path=Path("/tmp/__no_gravity__.json"))
+                # Bandit B108: same deliberately-nonexistent negative-test
+                # fixture pattern as Check 1 above -- nothing is ever written.
+                c4_list = read_gravity_report(path=Path("/tmp/__no_gravity__.json"))  # nosec B108
                 c4 = c4_list == []
                 audit["checks"].append({
                     "check": "read_gravity_report returns [] on missing file (CONSTRAINT #4)",
@@ -7745,7 +7750,7 @@ class GravityAIAuditor:
             # ── 2. DecisionEntry is frozen dataclass ──────────────────────────
             e = DecisionEntry("AAPL", "acted", "BUY", 0.8, "", "2026-06-26T12:00:00+00:00", "")
             try:
-                exec("e.symbol = 'MSFT'")  # noqa: S102 — intentional freeze test
+                exec("e.symbol = 'MSFT'")  # noqa: S102 — intentional freeze test  # nosec B102 -- hardcoded literal string, zero external input
                 frozen_ok = False
             except (AttributeError, TypeError):
                 frozen_ok = True

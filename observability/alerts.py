@@ -464,7 +464,9 @@ def _send_discord(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # Bandit B310: `url` is settings.DISCORD_WEBHOOK_URL, an operator-set
+        # config value, never raw external input.
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
             if resp.status not in (200, 204):
                 raise RuntimeError(f"Discord returned HTTP {resp.status}")
     except Exception as exc:
@@ -505,7 +507,9 @@ def _send_slack(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # Bandit B310: `url` is settings.SLACK_WEBHOOK_URL, an operator-set
+        # config value, never raw external input.
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
             if resp.status not in (200, 204):
                 raise RuntimeError(f"Slack returned HTTP {resp.status}")
     except Exception as exc:

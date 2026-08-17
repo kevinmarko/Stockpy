@@ -18,6 +18,11 @@ name: CI
 # vitest, and a production build — so a break there is caught the same way as
 # a Python test failure. It runs offline against the mock API layer
 # (VITE_USE_MOCK defaults true), same as `npm run test`/`npm run build` locally.
+#
+# The `bandit` job runs a Python SAST scan independent of CodeQL Advanced
+# (.github/workflows/codeql.yml) and its GitHub code-scanning API dependency
+# — see docs/known_issues/codeql_advanced_outage_and_bandit_addition.md for
+# why. It reports via plain exit code, never uploads SARIF anywhere.
 
 on:
   push:
@@ -178,3 +183,50 @@ jobs:
 
       - name: Build (typecheck + production build)
         run: npm run build
+
+  bandit:
+    name: bandit (SAST)
+    runs-on: ubuntu-latest
+    # A plain lint step that reports via exit code -- deliberately does NOT
+    # upload SARIF to GitHub's code-scanning ingestion API the way
+    # codeql.yml's CodeQL Advanced workflow does. That API has its own
+    # availability risk independent of this repo (a live GitHub-side outage
+    # blocked CodeQL's SARIF uploads for days in August 2026 without any
+    # actual code defect involved), and Bandit is meant as a fast,
+    # always-available supplement to CodeQL, not a replacement -- see
+    # docs/known_issues/ (search "CodeQL Advanced" / "bandit") for the
+    # full incident writeup this addition follows from.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install bandit
+        run: python -m pip install --upgrade pip bandit
+
+      - name: Bandit SAST scan
+        run: |
+          # Scoped to medium+ severity AND medium+ confidence (-ll -ii) --
+          # not bandit's full default output, which surfaces hundreds of
+          # low-severity/low-confidence style-only findings this codebase
+          # has never triaged (same "genuine-bug rules only" posture as the
+          # ruff step in the `test` job above, not a full-ruleset gate).
+          # Excludes tests/ (test fixtures deliberately exercise unsafe
+          # patterns to prove a guard rejects them -- see
+          # tests/test_security_audit_fixes.py) and webapp/ (TypeScript,
+          # out of Bandit's scope; covered by the `webapp` job instead).
+          # Every finding Bandit's medium+/medium+ baseline surfaced as of
+          # this workflow's introduction was triaged and is either a
+          # confirmed false positive (documented inline via `# nosec BXXX`
+          # at the exact flagged line, never a blanket per-rule skip, so a
+          # genuine future instance of the same rule still trips this gate)
+          # or a real, already-sandboxed pattern (the two AST-validated
+          # exec() sandboxes in validation/autonomous_backtest_runner.py and
+          # llm/research_copilot.py) -- so this step starts EXIT-CODE
+          # BLOCKING (a fresh unreviewed finding fails the build), not
+          # report-only.
+          python -m bandit -r . -x './tests,./webapp,./.venv,./node_modules,./gui' -ll -ii

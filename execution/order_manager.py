@@ -564,7 +564,10 @@ class OrderManager:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            urllib.request.urlopen(req, timeout=5)
+            # Bandit B310: `self._alert_url` is settings.ALERT_WEBHOOK_URL,
+            # an operator-set config value (see __init__ above), never raw
+            # external input.
+            urllib.request.urlopen(req, timeout=5)  # nosec B310
             logger.info("Drift alert sent to webhook.")
         except Exception as exc:
             logger.warning("Failed to send drift alert: %s", exc)

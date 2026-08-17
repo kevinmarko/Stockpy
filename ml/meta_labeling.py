@@ -289,7 +289,9 @@ class MetaLabeler(Model):
     @classmethod
     def load(cls, path: Path) -> "MetaLabeler":
         with open(path, "rb") as f:
-            obj = pickle.load(f)
+            # Bandit B301: local model artifact this pipeline itself trained
+            # and wrote, not externally-supplied data -- see ml/models/base.py.
+            obj = pickle.load(f)  # nosec B301
         if not isinstance(obj, cls):
             raise TypeError(f"Loaded object is not MetaLabeler: {type(obj)}")
         return obj

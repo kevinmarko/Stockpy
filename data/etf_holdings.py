@@ -770,7 +770,10 @@ class ISharesCSVProvider(ETFHoldingsProvider):
             import urllib.request
 
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=15) as response:
+            # Bandit B310: `url` is always an internally-built SEC EDGAR
+            # N-PORT API URL, never raw external input -- same convention as
+            # data/edgar_fundamentals.py.
+            with urllib.request.urlopen(request, timeout=15) as response:  # nosec B310
                 raw = response.read()
             return parse_ishares_csv(raw.decode("utf-8-sig", errors="replace"), symbol)
         except Exception as exc:

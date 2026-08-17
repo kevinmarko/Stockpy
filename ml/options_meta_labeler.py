@@ -282,7 +282,10 @@ class OptionsMetaLabeler:
             return False
         try:
             with open(target, "rb") as f:
-                data = pickle.load(f)
+                # Bandit B301: local model artifact this pipeline itself
+                # trained and wrote, not externally-supplied data -- see
+                # ml/models/base.py.
+                data = pickle.load(f)  # nosec B301
                 self.model = data.get("model")
                 self.trained_at = data.get("trained_at")
                 self.n_samples = data.get("n_samples", 0)

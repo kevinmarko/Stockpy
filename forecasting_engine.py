@@ -354,7 +354,10 @@ class ForecastingEngine:
                     try:
                         import pickle
                         with open(artifact, "rb") as f:
-                            model = pickle.load(f)
+                            # Bandit B301: local model-cache artifact written
+                            # by this same pipeline's own prior cycle under
+                            # LOCAL_DATA_ROOT, not externally-supplied data.
+                            model = pickle.load(f)  # nosec B301
                     except Exception as exc:  # noqa: BLE001 - corrupt/unreadable cache -> refit
                         logger.debug("Prophet cache load failed for %s: %s. Refitting.", ticker, exc)
                         model = None
@@ -727,10 +730,13 @@ class ForecastingEngine:
                     and is_fresh(scaler_y_path, retrain_days)):
                 try:
                     import pickle
+                    # Bandit B301 (both loads below): same local model-cache
+                    # convention as the Prophet cache load above -- written by
+                    # this same pipeline's own prior cycle, not external data.
                     with open(scaler_x_path, "rb") as f:
-                        cached_scaler_X = pickle.load(f)
+                        cached_scaler_X = pickle.load(f)  # nosec B301
                     with open(scaler_y_path, "rb") as f:
-                        cached_scaler_y = pickle.load(f)
+                        cached_scaler_y = pickle.load(f)  # nosec B301
 
                     df_features = self.build_lstm_features(history_df)
                     feature_cols = self.LSTM_FEATURE_COLS

@@ -51,7 +51,10 @@ def _http_get(url: str) -> bytes:
     _throttle()
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        # Bandit B310: `url` is always an internally-built SEC EDGAR API URL
+        # (fixed https:// base + resolved CIK/accession), never raw external
+        # input.
+        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
             return response.read()
     except urllib.error.HTTPError as exc:
         logger.warning("HTTP %d for %s", exc.code, url)

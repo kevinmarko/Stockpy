@@ -757,6 +757,13 @@ def _forecast_stats_by_symbol(
     if not symbols:
         return {}
 
+    # Bandit's B608 flags every f-string-built SQL statement below purely on
+    # syntax; none of the three actually interpolate untrusted data. Only
+    # `placeholders` (a fixed-length string of `?,?,...` derived from
+    # len(symbols), never from symbol VALUES) and `_MIN_RMSE`-style column
+    # names are interpolated -- every real value flows through the
+    # parameterized `?` bindings passed as the second `conn.execute()` arg,
+    # same convention as data/historical_store.py. Reviewed false positive.
     placeholders = ",".join("?" for _ in symbols)
     since_iso = (datetime.now(timezone.utc) - _timedelta(days=window_days)).isoformat()
     conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
@@ -768,21 +775,21 @@ def _forecast_stats_by_symbol(
                   AND actual_price IS NOT NULL
                   AND forecast_ts  >= ?
                   AND symbol IN ({placeholders})
-                GROUP BY symbol, model_name""",
+                GROUP BY symbol, model_name""",  # nosec B608
             (horizon_days, since_iso, *symbols),
         ).fetchall()
         pending_rows = conn.execute(
             f"""SELECT symbol, COUNT(*) FROM forecast_errors
                 WHERE horizon_days = ? AND actual_price IS NULL
                   AND symbol IN ({placeholders})
-                GROUP BY symbol""",
+                GROUP BY symbol""",  # nosec B608
             (horizon_days, *symbols),
         ).fetchall()
         completed_rows = conn.execute(
             f"""SELECT symbol, COUNT(*) FROM forecast_errors
                 WHERE horizon_days = ? AND actual_price IS NOT NULL AND forecast_ts >= ?
                   AND symbol IN ({placeholders})
-                GROUP BY symbol""",
+                GROUP BY symbol""",  # nosec B608
             (horizon_days, since_iso, *symbols),
         ).fetchall()
     finally:

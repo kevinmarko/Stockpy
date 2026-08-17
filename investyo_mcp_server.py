@@ -4750,7 +4750,10 @@ def inspect_webapp_screen(route: str = "/") -> str:
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "InvestYo-DevTools-MCP/1.0"})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        # Bandit B310: `url` is f"http://localhost:5173{route}" -- the scheme
+        # and host are hardcoded literals; `route` can only extend the path,
+        # never change the scheme (the file:/ concern B310 checks for).
+        with urllib.request.urlopen(req, timeout=3.0) as resp:  # nosec B310
             status = resp.status
             reason = resp.reason
             body_bytes = resp.read()
@@ -4845,7 +4848,9 @@ def audit_webapp_vitals(route: str = "/") -> str:
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "InvestYo-Lighthouse-MCP/1.0"})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        # Bandit B310: same fixed "http://localhost:5173"-prefixed `url` as
+        # inspect_webapp_screen above -- scheme/host are hardcoded literals.
+        with urllib.request.urlopen(req, timeout=3.0) as resp:  # nosec B310
             is_online = True
             ttfb_ms = round((time.time() - start_time) * 1000, 1)
     except Exception:
@@ -4930,7 +4935,9 @@ def audit_all_pwa_screens() -> str:
         t0 = time.time()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "InvestYo-DevTools-MCP/1.0"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
+            # Bandit B310: same fixed "http://localhost:5173"-prefixed `url`
+            # pattern as above -- scheme/host are hardcoded literals.
+            with urllib.request.urlopen(req, timeout=1.5) as resp:  # nosec B310
                 elapsed = round((time.time() - t0) * 1000, 1)
                 results.append({"route": r, "status": resp.status, "ms": elapsed, "ok": True})
                 reachable += 1
@@ -4985,7 +4992,9 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
 
     try:
         req = urllib.request.Request(target_url, headers={"User-Agent": "StockpyDevTools/1.0"})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        # Bandit B310: `target_url` is f"{base_url}{route}" with a hardcoded
+        # "http://localhost:5173" base_url -- scheme/host are literals.
+        with urllib.request.urlopen(req, timeout=3.0) as resp:  # nosec B310
             status = resp.status
             elapsed = round((time.time() - start_t) * 1000, 1)
             reachable = True
@@ -5043,7 +5052,10 @@ def trace_webapp_network(route: str = "/", duration_seconds: int = 5) -> str:
         t0 = time.time()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "StockpyNetworkTrace/1.0"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
+            # Bandit B310: `url` comes from the hardcoded `endpoints_to_probe`
+            # literal list above -- a fully static "http://localhost:8602/..."
+            # URL, no dynamic component at all.
+            with urllib.request.urlopen(req, timeout=1.5) as resp:  # nosec B310
                 ms = round((time.time() - t0) * 1000, 1)
                 requests_captured.append({
                     "method": method,

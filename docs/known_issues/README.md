@@ -17,8 +17,9 @@ documentation library index.
 | [`2026_08_security_quality_review.md`](2026_08_security_quality_review.md) | **Findings fixed, documented.** A 2026-08-05 proactive security/quality review (no open GitHub issues existed at the time) |
 | [`forecast_tracker_local_data_root_split.md`](forecast_tracker_local_data_root_split.md) | **Code fixed (PR #720); data reconciliation still pending.** `ForecastTracker` kept writing `forecast_errors` to the old repo-relative DB after the `LOCAL_DATA_ROOT` migration, splitting it from every other table for hours undetected — see CLAUDE.md's `settings.LOCAL_DATA_ROOT` bullet |
 | [`webapp_memory_leak_investigation.md`](webapp_memory_leak_investigation.md) | **Resolved & Verified** — Memlab V8 heap profiling identified focus retention and WebSocket reconnect edge cases; hardened `useLiveTick.ts`, `LogStream.tsx`, `Modal.tsx`, and `CommandPaletteModal.tsx` with automated test coverage |
+| [`codeql_advanced_outage_and_bandit_addition.md`](codeql_advanced_outage_and_bandit_addition.md) | **Resolved.** CodeQL Advanced was blocked first by a real default-setup/advanced-setup config conflict (cleared on its own), then by a live GitHub.com code-scanning-ingestion outage (external, not a code defect). Added `bandit` as an independent CI SAST job that never depends on GitHub's code-scanning API; 44-finding baseline individually triaged and suppressed with `# nosec BXXX` |
 
 Three of these (`cnn_lstm_tf_deadlock.md`, `lightgbm_faiss_libomp_collision_segfault.md`,
 `robinhood_device_approval_login_hang_risk.md`) are also individually cross-linked from
 CLAUDE.md's own architecture bullets, since the production fixes they informed are
-load-bearing. The other five are indexed here only.
+load-bearing. The rest are indexed here only.

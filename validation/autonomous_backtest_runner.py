@@ -333,10 +333,16 @@ def compile_and_extract_strategy(
         clean_tree = ast.fix_missing_locations(tree)
         # codeql[py/code-injection]
         # lgtm[py/code-injection]
-        compiled_code = compile(clean_tree, "<candidate_strategy>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]
+        compiled_code = compile(clean_tree, "<candidate_strategy>", "exec")  # codeql[py/code-injection] # lgtm[py/code-injection]  # nosec B102
         # codeql[py/code-injection]
         # lgtm[py/code-injection]
-        exec(compiled_code, exec_globals, exec_locals)  # codeql[py/code-injection] # lgtm[py/code-injection] # noqa: S102
+        # Bandit B102: `compiled_code` only ever reaches here after
+        # ASTSecurityValidator.visit() above raised on any dunder-access/
+        # forbidden-import/forbidden-call violation, and `exec_globals` is
+        # create_safe_globals()'s restricted namespace -- a real,
+        # adversarially-tested sandbox (see this module's own docstring),
+        # not a naive/unguarded exec().
+        exec(compiled_code, exec_globals, exec_locals)  # codeql[py/code-injection] # lgtm[py/code-injection] # noqa: S102 # nosec B102
     except Exception as exc:
         raise RuntimeError(f"Failed to execute candidate strategy code: {exc}") from exc
 
