@@ -41,15 +41,16 @@ describe("ResearchCopilotView", () => {
     const onDeployMock = vi.fn();
 
     vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
-      synthesis_id: "syn_test_123",
-      prompt: "Test prompt",
-      synthesized_code: "def generate_signals(df):\n    return df['close'] * 0",
-      ast_safety_passed: true,
-      ast_violations: [],
-      suggested_parameters: { lookback: 20 },
+      success: true,
+      code: "def generate_signals(df):\n    return df['close'] * 0",
+      metadata: { lookback: 20 },
+      validation_passed: true,
+      validation_errors: [],
+      source_prompt: "Test prompt",
+      synthesis_mode: "hypothesis",
       explanation: "Vectorized Z-Score calculation with volatility targeting.",
-      model_used: "InvestYo-QuantSynthesizer-v4-DeepSeekR1",
-      confidence_score: 0.95,
+      target_asset_class: null,
+      strategy_type: "Mean Reversion",
     });
 
     vi.mocked(api.runAutonomousBacktest).mockResolvedValueOnce({
@@ -94,6 +95,15 @@ describe("ResearchCopilotView", () => {
     });
 
     expect(screen.getByText(/def generate_signals/)).toBeInTheDocument();
+    // Real ResearchSynthesizeRequest accepts only prompt/strategy_type/target_asset_class.
+    expect(api.synthesizeQuantResearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.any(String),
+        strategy_type: expect.any(String),
+      })
+    );
+    const sentRequest = vi.mocked(api.synthesizeQuantResearch).mock.calls[0][0];
+    expect(Object.keys(sentRequest).sort()).toEqual(["prompt", "strategy_type"]);
 
     const backtestBtn = screen.getByRole("button", { name: /Execute Autonomous Backtest/i });
     fireEvent.click(backtestBtn);
@@ -113,15 +123,16 @@ describe("ResearchCopilotView", () => {
 
   it("handles AST safety violations gracefully", async () => {
     vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
-      synthesis_id: "syn_unsafe",
-      prompt: "Malicious prompt",
-      synthesized_code: "# Rejected code",
-      ast_safety_passed: false,
-      ast_violations: ["Forbidden import: 'os' is explicitly blacklisted."],
-      suggested_parameters: {},
+      success: false,
+      code: "# Rejected code",
+      metadata: {},
+      validation_passed: false,
+      validation_errors: ["Forbidden import: 'os' is explicitly blacklisted."],
+      source_prompt: "Malicious prompt",
+      synthesis_mode: "hypothesis",
       explanation: "Security violation.",
-      model_used: "InvestYo-QuantSynthesizer-v4",
-      confidence_score: 0.1,
+      target_asset_class: null,
+      strategy_type: "Mean Reversion",
     });
 
     render(<ResearchCopilotView />);
@@ -140,15 +151,16 @@ describe("ResearchCopilotView", () => {
 
   it("renders multi-regime breakdown and stability score when present in backtest results", async () => {
     vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
-      synthesis_id: "syn_regime_test",
-      prompt: "Regime-aware strategy",
-      synthesized_code: "def generate_signals(df):\n    return (df['Close'] > df['Close'].rolling(20).mean()).astype(float)",
-      ast_safety_passed: true,
-      ast_violations: [],
-      suggested_parameters: { lookback: 20 },
+      success: true,
+      code: "def generate_signals(df):\n    return (df['Close'] > df['Close'].rolling(20).mean()).astype(float)",
+      metadata: { lookback: 20 },
+      validation_passed: true,
+      validation_errors: [],
+      source_prompt: "Regime-aware strategy",
+      synthesis_mode: "hypothesis",
       explanation: "Dual regime strategy.",
-      model_used: "InvestYo-QuantSynthesizer-v4",
-      confidence_score: 0.95,
+      target_asset_class: null,
+      strategy_type: "Mean Reversion",
     });
 
     vi.mocked(api.runAutonomousBacktest).mockResolvedValueOnce({

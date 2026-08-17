@@ -11,53 +11,32 @@ vi.mock("../../api/client", () => ({
 }));
 
 const mockLobResponse: LobQueueSimulationResponse = {
+  valid: true,
   symbol: "SPY",
-  strike: 540,
-  option_type: "CALL",
-  limit_price: 3.15,
+  price_level: 3.15,
   order_size: 5,
-  order_side: "BUY",
-  queue_priority_position: 3,
-  orders_ahead: 2,
-  size_ahead: 28,
-  fill_probability_30s: 0.824,
-  fill_probability_60s: 0.904,
-  fill_probability_300s: 0.965,
-  estimated_fill_time_seconds: 14.5,
-  fill_time_p50: 12.3,
-  fill_time_p95: 23.8,
-  bids: [
-    {
-      price: 3.15,
-      size: 45,
-      num_orders: 4,
-      is_user_level: true,
-      user_queue_position: 3,
-    },
-    {
-      price: 3.14,
-      size: 75,
-      num_orders: 5,
-      is_user_level: false,
-    },
-  ],
-  asks: [
-    {
-      price: 3.17,
-      size: 50,
-      num_orders: 4,
-      is_user_level: false,
-    },
-    {
-      price: 3.18,
-      size: 75,
-      num_orders: 6,
-      is_user_level: false,
-    },
-  ],
-  spread: 0.02,
-  mid_price: 3.16,
-  market_depth_summary: "Queue Priority #3 at $3.15 (2 orders / 28 contracts ahead). Expected fill latency: ~14.5s (30s P(Fill) = 82.4%).",
+  depth_ahead: 28,
+  time_horizon_sec: 60,
+  num_simulations: 500,
+  fill_probability: 0.824,
+  expected_fill_time_sec: 14.5,
+  expected_wait_time_sec: 14.5,
+  unconditional_fill_time_sec: 12.0,
+  median_fill_time_sec: 12.3,
+  prob_adverse_move_before_fill: 0.18,
+  expected_fill_ratio: 0.91,
+  queue_depletion_velocity: 0.42,
+  queue_progression_percentiles: {
+    p10: 5.1,
+    p25: 8.7,
+    p50: 12.3,
+    p75: 17.4,
+    p90: 23.2,
+    p95: 27.6,
+  },
+  cst_closed_form_fill_prob: 0.82,
+  reason: null,
+  timestamp: new Date().toISOString(),
   as_of: new Date().toISOString(),
 };
 
@@ -67,45 +46,40 @@ describe("LobDepthView", () => {
     vi.mocked(api.simulateLobQueue).mockResolvedValue(mockLobResponse);
   });
 
-  it("renders LOB desk title, Phase 21 badge, Queue Priority, and fill latency", async () => {
-    render(<LobDepthView initialSymbol="SPY" spotPrice={546.50} />);
+  it("renders LOB desk title, Phase 21 badge, and fill probability", async () => {
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
 
     expect(
       await screen.findByText(/Level-3 Limit Order Book \(LOB\) Depth & Queue Position Simulator/i)
     ).toBeInTheDocument();
     expect(screen.getByText("Phase 21")).toBeInTheDocument();
-    expect(screen.getByText("#3 in Line")).toBeInTheDocument();
+    expect(screen.getByText("82%")).toBeInTheDocument();
     expect(screen.getByText("~14.5s")).toBeInTheDocument();
   });
 
-  it("renders 30s fill probability gauge and depth spread metrics", async () => {
-    render(<LobDepthView initialSymbol="SPY" spotPrice={546.50} />);
+  it("renders queue depletion velocity, adverse-move risk, and expected fill ratio", async () => {
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
 
-    expect(await screen.findByText("82%")).toBeInTheDocument();
-    expect(screen.getByText("60s: 90%")).toBeInTheDocument();
-    expect(screen.getByText("300s: 97%")).toBeInTheDocument();
-    expect(screen.getByText("$0.02 Spread")).toBeInTheDocument();
-    expect(screen.getByText("Mid Price: $3.16")).toBeInTheDocument();
+    await screen.findByText("82%");
+    expect(screen.getByText("0.420 contracts/s")).toBeInTheDocument();
+    expect(screen.getByText("P(Adverse Move Before Fill): 18%")).toBeInTheDocument();
+    expect(screen.getByText("91.0%")).toBeInTheDocument();
   });
 
-  it("renders Level-3 Bid and Ask depth ladder with user queue indicator", async () => {
-    render(<LobDepthView initialSymbol="SPY" spotPrice={546.50} />);
+  it("renders queue position bar and time-to-fill percentile table", async () => {
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
 
-    expect(
-      await screen.findByText(/SPY \$540 CALL — Level-3 LOB Depth Ladder/i)
-    ).toBeInTheDocument();
-    expect(screen.getByText("★ You (#3)")).toBeInTheDocument();
-    expect(screen.getByText("$3.15")).toBeInTheDocument();
-    expect(screen.getByText("$3.17")).toBeInTheDocument();
+    expect(await screen.findByText(/SPY @ \$3\.15 — Queue Position/i)).toBeInTheDocument();
+    expect(screen.getByText("★ You (5)")).toBeInTheDocument();
+    expect(screen.getByText("28 ahead")).toBeInTheDocument();
+    expect(screen.getByText("P50")).toBeInTheDocument();
+    expect(screen.getByText("12.3s")).toBeInTheDocument();
   });
 
-  it("triggers simulation when parameters changed and simulate button clicked", async () => {
-    render(<LobDepthView initialSymbol="SPY" spotPrice={546.50} />);
+  it("triggers simulation with price_level/order_size/depth_ahead when simulate button clicked", async () => {
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
 
-    await screen.findByText("#3 in Line");
-
-    const putBtn = screen.getByRole("button", { name: "PUT" });
-    fireEvent.click(putBtn);
+    await screen.findByText("82%");
 
     const simBtn = screen.getByRole("button", { name: /⚡ Simulate Fill/i });
     fireEvent.click(simBtn);
@@ -113,17 +87,19 @@ describe("LobDepthView", () => {
     await waitFor(() => {
       expect(api.simulateLobQueue).toHaveBeenCalledWith(
         expect.objectContaining({
-          option_type: "PUT",
           symbol: "SPY",
+          price_level: 3.15,
+          order_size: 5,
+          depth_ahead: 28,
         })
       );
     });
   });
 
   it("switches ticker when ticker pill clicked", async () => {
-    render(<LobDepthView initialSymbol="SPY" spotPrice={546.50} />);
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
 
-    await screen.findByText("#3 in Line");
+    await screen.findByText("82%");
     const qqqBtn = screen.getByRole("button", { name: "QQQ" });
     fireEvent.click(qqqBtn);
 
