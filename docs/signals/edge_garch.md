@@ -94,3 +94,47 @@ Volatility Risk Premium (VRP = realized_vol / implied_vol). The `edge_garch` sig
 firing negatively (extreme GARCH vol) should correlate with a high IVR reading that
 redirects the options engine toward debit strategies (hedged plays) rather than
 premium-selling (naked short vol). See `docs/signals/news_catalyst.md` for the IVR gate.
+
+---
+
+## Backtest Validation (`garch_vol_target`, 2026-07 / 2026-08)
+
+The `STRATEGY_REGISTRY` proxy for this module — `garch_vol_target`, covering the
+GARCH-veto half only — originally failed the MaxDD gate at 34.3% (>30%). Fixed 2026-07
+by layering a de-risking trigger on top of the existing vol-target sizing: pure
+vol-targeting alone still eats the front of a calm-but-declining move before the EWMA
+vol forecast catches up.
+
+| Metric | Before (2026-07) | After (2026-07) | Gate |
+|---|---|---|---|
+| Sharpe | 0.776 | 0.767 | > 0.50 ✅ |
+| PBO | 0.444 | 0.422 | < 0.50 ✅ |
+| DSR | 1.000 (shortcut) | 1.000 (shortcut) | > 0.95 ✅ |
+| MaxDD | 34.3% | **18.8%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #310](https://github.com/kevinmarko/Stockpy/pull/310) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.
+
+### 2026-08 addendum: `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` re-validation
+
+`garch_vol_target` is a single-variant adapter (`n_trials=1`), so the `DSR = 1.000`
+above is the legacy shortcut value (`deflated_sharpe_ratio` never ran its real
+computation for `n_trials<=1`), not a genuinely computed result. Re-run under
+`settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED=True` (same
+2005-01-01–2024-12-31 window, real network-backed data) to close the gap left when
+that flag was enabled operator-side on 2026-08-14 with no follow-up validation:
+
+| Metric | Before (flag off) | After (flag on) | Gate |
+|---|---|---|---|
+| Sharpe | 0.767 | 0.767 | > 0.50 ✅ (unchanged) |
+| PBO | 0.422 | 0.422 | < 0.50 ✅ (unchanged) |
+| DSR | 1.000 (shortcut) | **0.999656** (real) | > 0.95 ✅ |
+| MaxDD | 18.8% | 18.8% | < 30% ✅ (unchanged) |
+| `deployable` | True | **True** (unchanged) | |
+
+A forward check through 2026-08-01 (~19 months more live data) gives DSR=0.9998509,
+the same conclusion. See
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s
+2026-08-17 entry for the full 5-strategy re-validation and methodology.
