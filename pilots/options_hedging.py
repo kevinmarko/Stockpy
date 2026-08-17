@@ -282,10 +282,40 @@ def execute_delta_hedge(
             "message": f"Delta hedge order rejected by store for {side.upper()} {qty} SPY.",
         }
 
-    # Dispatch delta hedge alert (non-blocking, deduped)
+    # Dispatch delta hedge alert (non-blocking, deduped). dispatch_delta_hedge_alert's
+    # qualifying gate reads `action`/`shares`/`required_action` (and, for the CRITICAL
+    # vs WARNING level, `tolerance_band_shares`) -- `order`'s own shape (from
+    # calculate_delta_hedge_order: `side`/`qty`/`shares_needed`) doesn't carry any of
+    # those keys, so passing `order` straight through left every one of them at its
+    # default (`action="HOLD"`, `required_action=False`) and the dispatcher's gate was
+    # always False here -- this call silently never fired. Build the same preview-shaped
+    # dict get_delta_hedge_preview() constructs instead, using values already resolved
+    # in this function (we already have a filled order at this point, so
+    # required_action=True is correct here).
     try:
         from pilots.options_alerts import dispatch_delta_hedge_alert
-        dispatch_delta_hedge_alert(order or {"symbol": "SPY", "side": side, "shares_needed": raw_qty, "current_beta_weighted_delta": getattr(portfolio_greeks, "beta_weighted_delta_spy", 0.0) if hasattr(portfolio_greeks, "beta_weighted_delta_spy") else (portfolio_greeks.get("beta_weighted_delta_spy", 0.0) if isinstance(portfolio_greeks, dict) else 0.0)})
+        if isinstance(portfolio_greeks, dict):
+            beta_delta = float(portfolio_greeks.get("beta_weighted_delta_spy", 0.0) or 0.0)
+            net_dollar_delta = float(portfolio_greeks.get("net_dollar_delta", 0.0) or 0.0)
+        else:
+            beta_delta = float(getattr(portfolio_greeks, "beta_weighted_delta_spy", 0.0) or 0.0)
+            net_dollar_delta = float(getattr(portfolio_greeks, "net_dollar_delta", 0.0) or 0.0)
+        resolved_tolerance = (
+            float(tolerance_band_shares) if tolerance_band_shares is not None
+            else float(getattr(settings, "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES", 25.0))
+        )
+        dispatch_delta_hedge_alert({
+            "symbol": "SPY",
+            "net_dollar_delta": round(net_dollar_delta, 2),
+            "beta_weighted_delta_spy": round(beta_delta, 2),
+            "target_hedge_shares": round(order["shares_needed"], 2) if order else round(raw_qty, 2),
+            "tolerance_band_shares": resolved_tolerance,
+            "action": side.upper(),
+            "shares": qty,
+            "required_action": True,
+            "reason": f"Delta hedge order executed: {side.upper()} {int(qty)} SPY @ ${fill_price:.2f}",
+            "spy_spot": spy_spot,
+        })
     except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
         logger.debug("Delta hedge execution alert dispatch failed: %s", exc)
 
