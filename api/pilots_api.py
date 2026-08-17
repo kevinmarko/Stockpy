@@ -6273,6 +6273,50 @@ def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]
     )
 
 
+class ZeroDteManageExitsRequest(BaseModel):
+    dry_run: bool = False
+    profit_target_pct: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    hard_exit_time: Optional[str] = None
+
+
+@app.post(
+    "/pilots/options/0dte/manage-exits",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_zero_dte_manage_exits(body: Optional[ZeroDteManageExitsRequest] = None) -> Dict[str, Any]:
+    """Evaluates open 0DTE (expiring-today) option positions against the mandatory
+    15:45 ET hard-time-stop, profit-target, and stop-loss rules, and executes
+    closing fills for any that trigger (unless dry_run).
+
+    Closes audit finding F5 (.claude/giant_master_plan_audit.md): the underlying
+    evaluate_0dte_exits/execute_0dte_exits logic was correctly implemented and
+    tested but had no live-callable path -- only entry (zero-dte/execute) was
+    wired. This endpoint gives the mandatory liquidation gate a real callable
+    path. It does NOT, by itself, make the gate fire automatically at 15:45 ET --
+    no scheduler anywhere in this codebase fires anything at a specific time of
+    day; a genuinely automatic trigger needs a separate scheduling primitive.
+    """
+    from pilots.zero_dte_engine import manage_0dte_exits
+    dry_run = body.dry_run if body else False
+    profit_target_pct = body.profit_target_pct if body else None
+    stop_loss_pct = body.stop_loss_pct if body else None
+    hard_exit_time = body.hard_exit_time if body else None
+    try:
+        return manage_0dte_exits(
+            dry_run=dry_run,
+            profit_target_pct=profit_target_pct,
+            stop_loss_pct=stop_loss_pct,
+            hard_exit_time=hard_exit_time,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: 0dte manage-exits failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while managing 0DTE exits; see server logs for detail."}
+
+
 @app.get("/pilots/options/vpin/metrics", dependencies=[Depends(require_read_token)])
 def get_options_vpin_metrics_endpoint(
     symbol: str = Query(..., min_length=1),
