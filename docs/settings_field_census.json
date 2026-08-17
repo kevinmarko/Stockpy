@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "0e4799e24a62a5e029dc44929b2ae9b6e810b069",
+    "git_commit": "5a0e5edd5d2279ba3b9dc414a4b505a2909559d1",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3857,7 +3857,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 315,
+      "total_reads": 316,
       "distinct_fields": 183,
       "counts": {
         "FMP_API_KEY": 11,
@@ -3884,6 +3884,7 @@
         "OPTIONS_0DTE_PROFIT_TARGET_PCT": 3,
         "OPTIONS_0DTE_STOP_LOSS_PCT": 3,
         "OPTIONS_AUTO_EXIT_ENABLED": 3,
+        "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES": 3,
         "OPTIONS_META_LABELER_ENABLED": 3,
         "OPTIONS_VPIN_TOXICITY_THRESHOLD": 3,
         "RAG_PORTFOLIO_CONTEXT_ENABLED": 3,
@@ -3911,7 +3912,6 @@
         "META_LABEL_MIN_CONFIDENCE": 2,
         "OPAL_RESEARCH_MODEL": 2,
         "OPAL_RESEARCH_PROVIDER": 2,
-        "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES": 2,
         "OPTIONS_DELTA_HEDGE_ENABLED": 2,
         "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED": 2,
         "SENTIMENT_LLM_VERIFICATION_ENABLED": 2,
