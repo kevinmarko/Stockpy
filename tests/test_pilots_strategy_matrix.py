@@ -391,10 +391,35 @@ def _import_roots(source: str) -> set:
     return roots
 
 
-@pytest.mark.parametrize(
-    "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals", "unusual_options_flow", "options_gex", "lob_simulator", "copula_stat_arb"],
+_PILOTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "pilots"
+
+# Deliberately excluded from the dependency-light guard: each of these modules
+# has its own documented, try/except-wrapped LAZY import of a genuinely heavy
+# engine, by design (dead-letter resilience -- "missing/broken dependency
+# degrades gracefully instead of breaking import of this module", per each
+# file's own docstring), not an accidental gap:
+#   - attribution.py    -> research_engine (lazy)
+#   - brinson.py        -> evaluation_engine (lazy) -- explicitly to avoid
+#                           pulling in report_viewer.py -> streamlit
+#   - calibration.py    -> evaluation_engine, transactions_store,
+#                           gui.decision_log, pandas, data.historical_store
+#   - models.py         -> gui.help_content, ml.registry_io, yaml
+#   - observability.py  -> evaluation_engine, gui.*, forecasting.forecast_tracker,
+#                           db_config, market_data_latency (heaviest — ~10
+#                           distinct guarded lazy imports)
+#   - simulation.py     -> evaluation_engine, data.historical_store, pandas
+#                           (also imports pilots.observability at top)
+_DEPENDENCY_LIGHT_EXEMPT = {
+    "attribution", "brinson", "calibration", "models", "observability", "simulation",
+}
+
+_ALL_PILOTS_MODULES = sorted(
+    p.stem for p in _PILOTS_DIR.glob("*.py")
+    if p.stem != "__init__" and p.stem not in _DEPENDENCY_LIGHT_EXEMPT
 )
+
+
+@pytest.mark.parametrize("module_name", _ALL_PILOTS_MODULES)
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
     pilots.strategy_health. The AST guard on pilots_api.py walks THAT file
@@ -403,7 +428,18 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     own future imports onto the API import path (the trap the guard's
     ``desktop`` entry exists for). This is an ALLOWLIST (stronger than a
     denylist): each module's docstring promises a specific, narrow import
-    surface, and nothing pinned that until now.
+    surface.
+
+    **Auto-discovered, not hand-maintained (2026-08)**: ``module_name`` is every
+    ``pilots/*.py`` file (via ``_ALL_PILOTS_MODULES``, a glob over ``pilots/``)
+    EXCEPT the ``_DEPENDENCY_LIGHT_EXEMPT`` set above — modules with their own
+    documented, guarded lazy heavy-engine imports by design. A prior version of
+    this test hardcoded a 21-module allowlist that silently stopped covering
+    new ``pilots/*.py`` files as they were added — a guard that "passes"
+    because it never looks at the new file is a false negative, not a real
+    check. Auto-discovery closes that: any new ``pilots/*.py`` module is
+    checked automatically unless explicitly added to the exemption set above
+    with a documented reason.
 
     ``pilots`` and ``validation`` are additionally allowed roots (beyond pure
     stdlib + ``settings``) for ``pilots.strategy_health`` specifically — it
@@ -515,6 +551,79 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "scipy"}
     if module_name == "copula_stat_arb":
         allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "pandas", "scipy", "data", "uuid"}
+    # --- newly auto-discovered modules (2026-08, verified via a throwaway
+    # AST-root scan over each file before adding its override block) ---
+    if module_name == "cache_long_short":
+        allowed = allowed | {"data"}
+    if module_name == "catalog":
+        allowed = allowed | {"dataclasses"}
+    if module_name == "feature_flags":
+        allowed = allowed | {"settings_keysets"}
+    if module_name == "follows_store":
+        allowed = allowed | {"datetime"}
+    if module_name == "forecast_skill":
+        # lazy forecasting.forecast_tracker.ForecastTracker -- NOT the
+        # AST-forbidden forecasting_engine.
+        allowed = allowed | {"forecasting"}
+    if module_name == "mirror":
+        # lazy execution.queue_builder/execution.compose,
+        # pilots.scoring/pilots.follows_store, sizing.kelly/sizing.vol_target,
+        # transactions_store.TransactionsStore, observability.alerts.send_alert.
+        allowed = allowed | {"dataclasses", "execution", "observability", "pilots", "sizing", "transactions_store"}
+    if module_name == "options_alerts":
+        # lazy observability.alerts.send_alert, x4 call sites.
+        allowed = allowed | {"datetime", "observability", "urllib"}
+    if module_name == "price_provider":
+        allowed = allowed | {"data"}
+    if module_name == "realized":
+        allowed = allowed | {"data", "pilots"}
+    if module_name == "rlhf_review_queue":
+        # lazy rlhf_calibration_store -- same lightweight db_config/settings/
+        # stdlib-only store api/pilots_api.py's own comment already calls out.
+        allowed = allowed | {"rlhf_calibration_store"}
+    if module_name == "rolling_beta":
+        allowed = allowed | {"data", "pandas"}
+    if module_name == "run_status":
+        allowed = allowed | {"datetime", "os", "re"}
+    if module_name == "scenario_matrix":
+        allowed = allowed | {"data", "datetime", "pilots"}
+    if module_name == "scoring":
+        allowed = allowed | {"datetime", "pilots", "scripts"}
+    if module_name == "settings_meta":
+        allowed = allowed | {"importlib", "runtime_flags", "settings_keysets", "threading"}
+    if module_name == "symbols":
+        allowed = allowed | {"data", "datetime", "pilots"}
+    if module_name == "multi_leg_pricing":
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "scipy"}
+    if module_name == "earnings_crush":
+        allowed = allowed | {"data", "datetime", "execution", "numpy", "pandas", "pilots", "uuid"}
+    if module_name == "har_volatility":
+        allowed = allowed | {"data", "datetime", "numpy", "pandas", "scipy"}
+    if module_name == "vol_mispricing":
+        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "scipy"}
+    if module_name == "gamma_scalper":
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
+    if module_name == "dispersion_trading":
+        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "scipy", "uuid"}
+    if module_name == "zero_dte_engine":
+        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "re", "uuid", "zoneinfo"}
+    if module_name == "options_vpin":
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pandas", "scipy"}
+    if module_name == "options_sor":
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
+    if module_name == "paper_broker_options_order":
+        allowed = allowed | {"data", "pilots", "uuid"}
+    if module_name == "options_risk":
+        allowed = allowed | {"data", "datetime", "numpy", "re", "scipy"}
+    if module_name == "options_hedging":
+        allowed = allowed | {"data", "pilots", "uuid"}
+    if module_name == "volatility_surface":
+        allowed = allowed | {"data", "datetime", "numpy", "pandas", "pilots", "scipy"}
+    if module_name == "performance":
+        # Referenced by pilots.strategy_health's docstring as "already
+        # confirmed dependency-light" but never had its own override block --
+        # auto-discovery now actually checks it. datetime only.
+        allowed = allowed | {"datetime"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 

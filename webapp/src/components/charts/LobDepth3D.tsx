@@ -1055,7 +1055,7 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
                 background: isFallbackActive ? "var(--caution)" : "var(--growth)",
               }}
             />
-            {isFallbackActive ? "Canvas 2.5D Fallback Mode" : "WebGL 3D Active"}
+            {isFallbackActive ? "Canvas 2.5D Fallback Mode" : "Canvas 2.5D Renderer"}
           </div>
 
           <Button
