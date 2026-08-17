@@ -473,7 +473,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:127",
+        "site": "alerting_mcp/notifier.py:131",
         "via": []
       }
     ],
@@ -484,7 +484,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:61",
+        "site": "alerting_mcp/notifier.py:63",
         "via": []
       }
     ],
@@ -495,7 +495,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:58",
+        "site": "alerting_mcp/notifier.py:60",
         "via": []
       }
     ],
@@ -506,7 +506,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:60",
+        "site": "alerting_mcp/notifier.py:62",
         "via": []
       }
     ],
@@ -517,7 +517,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:59",
+        "site": "alerting_mcp/notifier.py:61",
         "via": []
       }
     ],
@@ -528,7 +528,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:62",
+        "site": "alerting_mcp/notifier.py:64",
         "via": []
       }
     ],
@@ -550,7 +550,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting_mcp/notifier.py:92",
+        "site": "alerting_mcp/notifier.py:94",
         "via": []
       }
     ],
@@ -844,7 +844,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:743",
+        "site": "data/historical_store.py:754",
         "via": []
       },
       {
@@ -990,7 +990,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:754",
+        "site": "data/historical_store.py:765",
         "via": []
       },
       {
@@ -999,7 +999,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:757",
+        "site": "data/historical_store.py:768",
         "via": []
       },
       {
@@ -1208,7 +1208,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:754",
+        "site": "data/historical_store.py:765",
         "via": []
       },
       {
@@ -1217,7 +1217,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:757",
+        "site": "data/historical_store.py:768",
         "via": []
       },
       {
@@ -2134,7 +2134,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:754",
+        "site": "data/historical_store.py:765",
         "via": []
       },
       {
@@ -2217,7 +2217,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5257",
+        "site": "investyo_mcp_server.py:5269",
         "via": []
       }
     ],
@@ -2237,7 +2237,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5209",
+        "site": "investyo_mcp_server.py:5221",
         "via": []
       }
     ],
@@ -2277,7 +2277,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5217",
+        "site": "investyo_mcp_server.py:5229",
         "via": []
       }
     ],
@@ -2607,7 +2607,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11063",
+        "site": "Gravity AI Review Suite.py:11068",
         "via": []
       }
     ],
