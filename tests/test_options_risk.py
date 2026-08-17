@@ -227,3 +227,30 @@ def test_calculate_portfolio_greeks_per_symbol_beta():
         assert pytest.approx(g["beta_weighted_delta_spy"], abs=0.1) == 36.0
 
 
+def test_beta_weighted_delta_spy_calculation(monkeypatch):
+    """Verifies that beta-weighted SPY delta scales by each symbol's true regression beta."""
+    from pilots.options_risk import _resolve_symbol_beta
+
+    # Mock beta lookup
+    betas = {"AAPL": 1.20, "TSLA": 2.00, "SPY": 1.00}
+    monkeypatch.setattr("pilots.options_risk._resolve_symbol_beta", lambda sym: betas.get(sym, 1.0))
+
+    pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)  # Dollar Delta = 15,000 * 1.2 = 18,000
+    pos_tsla = PaperPosition(symbol="TSLA", qty=50.0, avg_entry_price=200.0)   # Dollar Delta = 10,000 * 2.0 = 20,000
+
+    mock_provider = MagicMock()
+    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=150.0 if sym == "AAPL" else 200.0)
+
+    # SPY Spot = 500.0
+    # Expected Beta Dollar Delta = 18,000 + 20,000 = 38,000
+    # Expected SPY Delta Shares = 38,000 / 500 = 76.0
+    greeks = calculate_portfolio_greeks(positions=[pos_aapl, pos_tsla], market_provider=mock_provider, spy_spot=500.0)
+
+    assert greeks["net_dollar_delta"] == 25000.0
+    assert greeks["beta_weighted_delta_spy"] == 76.0
+    assert greeks["positions"][0]["symbol_beta"] == 1.20
+    assert greeks["positions"][0]["beta_dollar_delta"] == 18000.0
+    assert greeks["positions"][1]["symbol_beta"] == 2.00
+    assert greeks["positions"][1]["beta_dollar_delta"] == 20000.0
+
+
