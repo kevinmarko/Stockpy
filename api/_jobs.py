@@ -34,7 +34,7 @@ from gui.orchestrator_runner import (
     launch_train_meta_labelers,
     launch_validation_run,
     launch_verify,
-    stop_run,
+    stop_run_detailed,
 )
 from settings import settings
 
@@ -207,12 +207,28 @@ class JobManager:
         return self._jobs.get(job_id)
 
     def cancel_job(self, job_id: str) -> bool:
-        """Returns True once the process is confirmed stopped. Raises
+        """Returns True once the process is confirmed stopped -- including
+        when it was already stopped by an earlier cancel_job call on this
+        same job (an honest "yes, it's cancelled", not a fresh kill). Raises
         KeyError if the job id is unknown (-> 404) and ValueError if the job
-        type isn't cancellable (-> 400). A confirmed-stop failure (rare —
-        stop_run() escalates SIGTERM->SIGKILL) surfaces as a plain False
-        rather than either exception, so the caller can report it honestly
-        instead of claiming success it didn't achieve."""
+        type isn't cancellable (-> 400). Returns False, never raises, in two
+        distinct cases the caller can't tell apart from this bool alone but
+        neither of which should ever claim a success it didn't achieve: the
+        job had already finished on its own (never cancelled), or a
+        confirmed-stop failed (rare — stop_run escalates SIGTERM->SIGKILL).
+
+        Uses stop_run_detailed() (not the plain stop_run()) as the SOLE
+        liveness check -- no separate is_running() pre-check, and no
+        post-hoc ``returncode() == 0`` guess -- so there is only one point
+        where "is it alive, and did WE kill it" gets decided, atomically
+        with the kill attempt itself. stop_run_detailed()'s already_stopped
+        flag is what distinguishes "it finished on its own" (any exit code,
+        not just 0) from "it was already cancelled by an earlier call",
+        which neither a bare stop_run() bool nor a returncode heuristic can
+        do reliably -- a process racing to a nonzero ("failed") exit right
+        as cancel_job examines it is exactly as much "not a cancellation" as
+        one racing to a zero ("success") exit.
+        """
         rec = self.get_job(job_id)
         if rec is None:
             raise KeyError(job_id)
@@ -222,17 +238,20 @@ class JobManager:
                 "process to cancel (daemon-hosted run — it will run to completion)"
             )
         with rec._lock:
-            if rec.cancelled:
-                return True
-            if not rec.handle.is_running():
-                return False
-            stopped = stop_run(rec.handle)
-            if stopped:
-                if rec.handle.returncode() == 0:
-                    return False
+            outcome = stop_run_detailed(rec.handle)
+            if outcome.already_stopped:
+                # Nothing was signalled by this call -- either the job
+                # finished on its own (rec.cancelled is still False: report
+                # False, honestly nothing to cancel) or an earlier call
+                # already cancelled it (rec.cancelled is already True:
+                # report True, it IS cancelled, just not by this call).
+                # Never flip rec.cancelled here -- that would be exactly
+                # the terminal-status-clobbering bug this guard exists to
+                # prevent.
+                return rec.cancelled
+            if outcome.stopped:
                 rec.cancelled = True
-                return True
-            return False
+            return outcome.stopped
 
 
 job_manager = JobManager()
