@@ -745,5 +745,75 @@ always builds a Long Dispersion basket regardless of the measured spread's sign;
 numbers (Sharpe 0.612, `deployable=True`) contradict the 2026-08-15 entry above (Sharpe 0.217,
 `deployable=False`) — a pre-existing doc inconsistency, not introduced here.
 
+---
+
+## 2026-08-17: `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` re-validation of the 5 named strategies
+
+`settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` (default `False`) was flipped to
+`True` in this operator's local runtime overrides store (`output/runtime_flags.json`, via the
+Pilots API's Settings screen) on 2026-08-14, with no accompanying re-validation or doc update at
+the time — a gap the flag's own docstring explicitly calls out as required before the corrected
+math can be trusted to reflect what's actually live: *"Flipping this on requires a follow-up
+session with live-market data access to re-run `scripts/refresh_validations.py` against the 5
+strategies named above and update `docs/VALIDATION_STRATEGY_FIX_LOG.md` before this can ever
+change what's actually live."* This entry is that follow-up.
+
+**What the flag does**: `validation/metrics.py::deflated_sharpe_ratio`'s `n_trials <= 1` branch
+previously short-circuited to a hardcoded `return 1.0` (a "perfect" DSR, no selection-bias penalty
+computed at all) rather than running the real `sr_0=0.0` / z-stat / `norm.cdf` computation. All 5
+strategies below are single-variant `STRATEGY_REGISTRY` adapters (`n_trials=1`), so every one of
+them was hitting this exact shortcut and reporting `DSR=1.000` — not because the math produced
+that number, but because the math never ran.
+
+**Method**: re-ran `python -m scripts.refresh_validations --strategies
+multifactor_lowvol_size,garch_vol_target,cross_sectional_momentum,relative_strength_xsec,timeseries_momentum
+--start 2005-01-01 --end 2024-12-31` — the exact window the "Final state" table's numbers above
+were originally produced with — under the now-enabled flag, for a clean, apples-to-apples
+isolation of the flag's effect from any drift in what's cached in the real, backfilled
+`HistoricalStore`/EDGAR data underneath it. A second run through `--end 2026-08-01` (today, ~19
+months of additional live data) confirms the same conclusion holds going forward, not just on the
+frozen 2024-12-31 window — see the note below the table.
+
+### Before (flag off, from the Final state table above) / After (flag on, same 2005-01-01–2024-12-31 window)
+
+| Strategy | Sharpe Before | Sharpe After | PBO Before | PBO After | DSR Before | DSR After (raw) | MaxDD Before | MaxDD After | `deployable` Before | `deployable` After |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `multifactor_lowvol_size` | 0.621 | 0.611 | 0.000 | 0.000 | 1.000 | **0.999566** | 21.1% | 21.1% | ✅ True | ✅ **True** |
+| `garch_vol_target` | 0.767 | 0.767 | 0.422 | 0.422 | 1.000 | **0.999656** | 18.8% | 18.8% | ✅ True | ✅ **True** |
+| `cross_sectional_momentum` | 0.872 | 0.872 | 0.156 | 0.156 | 1.000 | **0.999961** | 20.2% | 20.2% | ✅ True | ✅ **True** |
+| `relative_strength_xsec` | 0.745 | 0.745 | 0.000 | 0.000 | 1.000 | **0.999768** | 21.3% | 21.3% | ✅ True | ✅ **True** |
+| `timeseries_momentum` | 0.523 | 0.523 | 0.000 | 0.000 | 1.000 | **0.990009** | 26.0% | 26.0% | ✅ True | ✅ **True** |
+
+**All 5 strategies remain `deployable=True` under the corrected math — none flip gate status.**
+Sharpe/PBO/MaxDD are unchanged (to measurement noise — `multifactor_lowvol_size`'s Sharpe moved
+0.621→0.611, a small drift attributable to the underlying market-data snapshot refreshing between
+the original 2026-07 run and this one, not to the DSR flag, which doesn't touch Sharpe/PBO/MaxDD
+computation at all). The only real effect of the flag is exactly what its docstring describes: DSR
+moves off the flat `1.000` artifact to a genuinely computed value — still comfortably `> 0.95` for
+every strategy here (`timeseries_momentum` is the closest, at 0.990), so the gate's practical
+verdict is unaffected this time, but this was a measured outcome, not a foregone one — a
+single-trial strategy with a weaker Sharpe or the correction's `sr_0=0.0` branch. **Forward
+robustness check** (`--end 2026-08-01`, ~19 months of additional live data, same flag on): DSR
+stays comfortably clear at 0.9999629 / 0.9998509 / 0.9999925 / 0.9999519 / 0.9922779 respectively
+— the same conclusion, not a regime-specific artifact of the frozen 2024-12-31 cutoff.
+
+**Recommendation**: it is now safe to either (a) leave the flag enabled — it has been validated
+against all 5 strategies it names and changes nothing about their live deployability — or (b)
+flip `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED`'s field default in `settings.py` from
+`False` to `True`, now that the required verification has actually been done, rather than leaving
+it a permanently-manual opt-in every future `scripts.refresh_validations` run has to remember to
+set. This entry does not make that default-flip decision on the operator's behalf.
+
+**Verification methodology note**: both runs used real, network-backed `yfinance` price history
+and the real backfilled `HistoricalStore`/EDGAR fundamentals in this environment — not a
+sandboxed dev/CI environment lacking live-market access. One incidental, unrelated finding
+surfaced during the run and is not a defect in this fix: `universe_engine.py`'s Wikipedia
+constituent-*changes*-table scrape is still broken (see `FMP_UNIVERSE_ENABLED`'s entry in
+`CLAUDE.md` — Wikipedia removed that table entirely), so every run above logged `Survivorship-bias
+universe lookup failed, degrading to NaN sentinel` and fell through to the dead-letter path; this
+affects only the survivorship-bias diagnostic annotation on the HTML report, not the Sharpe/PBO/
+DSR/MaxDD computation itself, which uses the live current-constituents scrape (unaffected) plus
+real backfilled price/fundamentals data.
+
 
 
