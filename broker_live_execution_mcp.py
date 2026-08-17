@@ -42,6 +42,18 @@ class RateLimiter:
 _rate_limiter = RateLimiter(capacity=5, fill_rate=1.0/12.0)
 
 def _get_broker():
+    # If multi-broker failover engine is enabled, route through MultiBrokerGateway
+    # to inherit latency tracking and automated circuit-breaker failover.
+    if os.environ.get("USE_MULTI_BROKER_GATEWAY", "").lower() in ("true", "1", "yes"):
+        try:
+            from execution.multi_broker_gateway import MultiBrokerGateway
+            gw = MultiBrokerGateway.get_default_gateway()
+            active_adapter = gw.get_active_adapter()
+            if active_adapter is not None:
+                return active_adapter
+        except Exception:
+            pass
+
     # resolve_broker_backend() is the single source of truth for "which
     # broker should actually be used" -- shared with
     # main_orchestrator.py::_execute_broker_orders so the two call sites
