@@ -134,7 +134,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     preserving the original ValueError for a structural page-shape failure,
     matching this function's pre-existing exception contract)."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "InvestYoQuant/1.0 (stockpy@example.com)"}
 
     logger.info("Fetching S&P 500 constituents from Wikipedia...")
     try:
