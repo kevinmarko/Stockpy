@@ -598,23 +598,32 @@ def test_step_3_skips_cross_sectional_modules_with_no_meta_label_features():
     sector_quality_rank) can never reach step 5's training gate or
     export_results()'s _has_trained_model filter -- so step 3 must skip it
     BEFORE ever invoking the expensive per-date/per-ticker
-    _run_cross_sectional_module replay for it. cross_sectional_momentum
-    (the one cross-sectional module that DOES declare meta_label_features)
-    must still be the only one replayed."""
+    _run_cross_sectional_module replay for it. Every cross-sectional module
+    that DOES declare meta_label_features (as of this writing:
+    cross_sectional_momentum, sector_quality_rank, options_flow_sentiment)
+    must still be replayed -- computed dynamically from the live registry
+    below, not hardcoded, so this test doesn't go stale the next time a new
+    trainable cross-sectional module is registered (exactly what happened
+    to this test's previous single-name hardcoded assertion)."""
     from signals.registry import global_registry
     from signals.base import SignalModule
 
-    non_trainable_cross_sectional = [
+    all_cross_sectional = {
         name
         for name, module in global_registry.get_all().items()
         if type(module).pre_compute is not SignalModule.pre_compute
-        and not getattr(module, "meta_label_features", [])
-    ]
-    # Sanity check this test is actually exercising something -- if this
-    # list is ever empty (e.g. every cross-sectional module gains
-    # meta_label_features), the assertions below would trivially pass for
-    # the wrong reason.
+    }
+    trainable_cross_sectional = {
+        name
+        for name in all_cross_sectional
+        if getattr(global_registry.get_all()[name], "meta_label_features", [])
+    }
+    non_trainable_cross_sectional = all_cross_sectional - trainable_cross_sectional
+    # Sanity check this test is actually exercising both branches -- if either
+    # set is ever empty, the assertions below would trivially pass for the
+    # wrong reason.
     assert non_trainable_cross_sectional, "expected at least one non-trainable cross-sectional module"
+    assert trainable_cross_sectional, "expected at least one trainable cross-sectional module"
 
     tickers = ["AAA", "BBB", "CCC", "DDD"]
     engine = _synthetic_engine(tickers)
@@ -630,7 +639,8 @@ def test_step_3_skips_cross_sectional_modules_with_no_meta_label_features():
     with mock.patch.object(AgenticForecastBackfiller, "_run_cross_sectional_module", _spy):
         engine.step_3_generate_primary_signals()
 
-    assert call_log == ["cross_sectional_momentum"]
+    assert set(call_log) == trainable_cross_sectional
+    assert len(call_log) == len(trainable_cross_sectional), "no cross-sectional module should be replayed more than once per cycle"
     for name in non_trainable_cross_sectional:
         assert name not in engine.active_strategies
         assert f"{name}_Signal" not in engine.data.columns
