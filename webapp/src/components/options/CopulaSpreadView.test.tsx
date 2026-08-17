@@ -69,7 +69,7 @@ describe("CopulaSpreadView", () => {
       await screen.findByText(/Copula Statistical Arbitrage & Dynamic Kalman Beta/i)
     ).toBeInTheDocument();
     expect(screen.getByText("Phase 21")).toBeInTheDocument();
-    expect(screen.getByText("SHORT SPREAD")).toBeInTheDocument();
+    expect(await screen.findByText("SHORT SPREAD")).toBeInTheDocument();
   });
 
   it("renders key metrics: Kalman dynamic beta, Spread Z-Score, and OU Half-Life", async () => {

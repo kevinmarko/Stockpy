@@ -599,6 +599,7 @@ class OrchestratorDaemon:
             # OLD interval -- that ordering bug is exactly what this
             # comment exists to prevent from being "cleaned up" later.
             self._wake_event.clear()
+            self.maybe_refresh_settings()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -610,6 +611,7 @@ class OrchestratorDaemon:
                 continue  # interval changed OR shutting down -- re-check at the top
             if self._stop_event.is_set():
                 break
+            self.maybe_refresh_settings()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(

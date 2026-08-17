@@ -2188,13 +2188,12 @@ class Settings(BaseSettings):
     # effect on that daemon's next restart, exactly as before this setting
     # existed.
     RUNTIME_FLAGS_REFRESH_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Periodically re-check output/runtime_flags.json for changes "
             "written by another process and apply them onto this daemon's "
-            "live settings. False (default) preserves today's exact "
-            "behavior -- a cross-process write only takes effect on next "
-            "restart."
+            "live settings. True (default) enables cross-process hot-reloading "
+            "of live-safe settings without requiring a full restart."
         ),
     )
     # Poll cadence for the refresher above. Irrelevant when the flag is off.
