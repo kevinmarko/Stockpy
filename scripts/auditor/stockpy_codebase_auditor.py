@@ -815,9 +815,8 @@ class StockpyAuditor:
             #     train/test split in the forecasting engine.
             if "forecast" in info.rel.lower() and "scaler" in low:
                 if re.search(r"\.fit_transform\(", src) and "train" not in low.split("fit_transform")[0][-200:].lower():
-                    # weak signal only; low severity
                     self._add(
-                        "LOW", "Known Issues", "possible_scaler_leakage",
+                        "HIGH", "Known Issues", "possible_scaler_leakage",
                         "MinMaxScaler.fit_transform present — verify it is fit on the "
                         "train partition only (lookahead-bias risk).",
                         info.rel, None,
