@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDebounce } from "../hooks/useDebounce";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { api } from "../api/client";
 import type {
   AutomationSchedule,
@@ -508,7 +509,31 @@ function IntervalEditor({
 }) {
   const configuredValue = schedule.interval.configured_value ?? 0;
   const isEnabled = configuredValue > 0;
-  const [value, setValue] = useState(String(configuredValue > 0 ? configuredValue : 300));
+
+  // Remembers the last nonzero interval the operator actually configured,
+  // surviving a page reload -- the backend has exactly ONE
+  // ORCHESTRATOR_INTERVAL_SECONDS slot, overwritten with 0 the moment the
+  // schedule is disabled, so without this a remount while disabled (mount
+  // with configuredValue === 0) has no way to know what to restore on
+  // re-enable and previously fell back to a hardcoded 300s, silently
+  // discarding whatever the operator had actually configured (e.g. 3600s).
+  const [lastConfiguredInterval, setLastConfiguredInterval] = usePersistedState<number>(
+    "settings-data:last-configured-interval-seconds",
+    300
+  );
+  // Keep it in sync with ANY nonzero value the server reports as configured
+  // -- not just writes made from this component -- so a change made from
+  // another tab/the GUI Settings tab is remembered too.
+  useEffect(() => {
+    if (configuredValue > 0 && configuredValue !== lastConfiguredInterval) {
+      setLastConfiguredInterval(configuredValue);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configuredValue]);
+
+  const [value, setValue] = useState(
+    String(configuredValue > 0 ? configuredValue : lastConfiguredInterval)
+  );
   const { run, pending, error } = useMutation(
     (seconds: number) => api.setAutomationInterval(seconds),
     { successMessage: "Automation interval updated" }
@@ -525,12 +550,17 @@ function IntervalEditor({
     if (!isValidInterval(secToSave)) {
       return;
     }
-    await run(secToSave);
+    const res = await run(secToSave);
+    if (secToSave > 0 && res !== undefined) {
+      setLastConfiguredInterval(secToSave);
+    }
     onSaved();
   };
 
   const handleToggleSchedule = async (enabled: boolean) => {
-    const target = enabled ? (parsed >= 60 && parsed <= 86400 ? parsed : 300) : 0;
+    const target = enabled
+      ? (parsed >= 60 && parsed <= 86400 ? parsed : lastConfiguredInterval)
+      : 0;
     if (enabled) setValue(String(target));
     const res = await run(target);
     if (res === undefined) {

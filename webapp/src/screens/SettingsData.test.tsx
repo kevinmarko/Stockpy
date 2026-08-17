@@ -241,4 +241,28 @@ describe("SettingsData — Schedule and Data Auto-Refresh", () => {
 
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
+
+  it("restores the previously-configured interval (not a hardcoded 300s) on re-enable after a remount", async () => {
+    localStorage.setItem("settings-data:last-configured-interval-seconds", "900");
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue({
+      ...mockSchedule,
+      interval: { ...mockSchedule.interval, running_value: 0, configured_value: 0, drift: false },
+    });
+    const user = userEvent.setup();
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-schedule-master-toggle")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("pipeline-schedule-master-toggle"));
+
+    // A fresh mount with the schedule already disabled has no server-side
+    // memory of what it used to be configured to (ORCHESTRATOR_INTERVAL_SECONDS
+    // is a single slot, already overwritten with 0) -- only the persisted
+    // localStorage value carries that forward.
+    expect(api.setAutomationInterval).toHaveBeenCalledWith(900);
+
+    localStorage.removeItem("settings-data:last-configured-interval-seconds");
+  });
 });
