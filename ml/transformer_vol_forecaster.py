@@ -1,3 +1,10 @@
+"""
+ml/transformer_vol_forecaster.py
+================================
+Temporal Fusion Transformer (TFT) multi-horizon realized volatility forecaster
+with causal self-attention, gated residual networks, and quantile loss.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.special import softmax

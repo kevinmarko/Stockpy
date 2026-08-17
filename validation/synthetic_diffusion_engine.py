@@ -1,3 +1,10 @@
+"""
+validation/synthetic_diffusion_engine.py
+========================================
+Denoising Diffusion Probabilistic Model (DDPM) synthetic return trajectory generator
+for crisis stress scenario simulation and tail-risk resilience testing.
+"""
+
 import numpy as np
 from typing import Dict, Tuple
 

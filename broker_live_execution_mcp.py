@@ -1,3 +1,10 @@
+"""
+broker_live_execution_mcp.py
+============================
+FastMCP server exposing gated broker live and paper order execution tools,
+order lifecycle management, and pre-trade risk enforcement.
+"""
+
 import os
 import json
 import uuid

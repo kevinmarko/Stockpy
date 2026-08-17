@@ -1,3 +1,10 @@
+"""
+numba_backtest_loop.py
+======================
+High-performance Numba JIT sequential event-driven backtest simulation engine
+executing microsecond-latency bar-by-bar walk-forward strategy evaluations.
+"""
+
 import numpy as np
 import pandas as pd
 import time

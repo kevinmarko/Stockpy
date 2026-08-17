@@ -1,3 +1,10 @@
+"""
+sizing/hrp_cvar_optimizer.py
+============================
+Hierarchical Risk Parity (HRP) and Conditional Value-at-Risk (CVaR) portfolio
+optimizer using single-linkage tree clustering and SLSQP tail loss bounds.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import linkage, leaves_list

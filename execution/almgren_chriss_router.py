@@ -1,3 +1,10 @@
+"""
+execution/almgren_chriss_router.py
+==================================
+Almgren-Chriss optimal execution trajectory calculator balancing temporary
+and permanent market impact against volatility risk aversion.
+"""
+
 import numpy as np
 from typing import List, Dict
 
