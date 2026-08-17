@@ -59,6 +59,26 @@ Core Mathematical Framework:
    - `MarketMakingEnv`: Step-based Gym-compatible environment.
    - `train_market_maker_policy`: Policy optimizer tuning risk aversion $\\gamma$ and liquidity elasticity $\\kappa$.
 
+HONEST STATUS — Section 5 (Deep Reinforcement Learning & Policy Optimization):
+Despite the "DRL" framing in this module's name and in Phase 22 of the master plan document, there is
+NO neural network, NO PPO (Proximal Policy Optimization), NO SAC, and no gradient-based policy-learning
+method anywhere in this file. `train_market_maker_policy` -- its own docstring already says so
+("Lightweight heuristic and policy optimizer") -- is a 2-parameter (gamma, kappa) stochastic hill-climb:
+a Gaussian perturbation around the current best (gamma, kappa) pair, evaluated by simulating one full
+episode of `MarketMakingEnv` under the closed-form Avellaneda-Stoikov formulas from Sections 1-3 above,
+accepted or rejected via a simulated-annealing-style Metropolis criterion. It searches a 2-dimensional
+continuous parameter space of an already-fixed analytical policy; it does not learn a policy function,
+has no value network, no replay buffer, and no policy gradient of any kind.
+
+`MarketMakingEnv` is a real, correctly-implemented Gym-style step/reset environment and would be a valid
+substrate for an actual RL algorithm -- but no such algorithm is implemented here. `train_market_maker_policy`
+is also NOT called by `api/pilots_api.py` or any webapp component as of this writing; the only
+live-reachable path from the Pilots API is `simulate_market_maker_session` (the deterministic
+closed-form AS quoter). Building a real PPO/SAC agent over `MarketMakingEnv` -- a neural policy network,
+an advantage/value estimator, a proper on-policy or off-policy training loop -- is a separate, substantial
+RL engineering effort, out of scope for this fix; this note exists so nobody mistakes the hill-climb
+optimizer here for that.
+
 Design & Architectural Invariants:
 ----------------------------------
 * **AST-Safe (CONSTRAINT #1 & #3)**: Pure quantitative compute. NEVER imports heavy forbidden
