@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `3c5b1ba5f84912026a7e8b188ad6cee4b669a8f9`
+- Measured at commit: `50779de34b138ed644b5612a3c79257ed28be750`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -231,7 +231,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 730 | 231 |
-| (b) `getattr(settings, "KEY", default)` | 314 | 183 |
+| (b) `getattr(settings, "KEY", default)` | 315 | 183 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 24 | 17 |
 
@@ -381,7 +381,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |
 | `OPTIONS_ALERT_WEBHOOK_URL` | b | 4 | 0 |
 | `OPTIONS_AUTO_EXIT_ENABLED` | b | 3 | 0 |
-| `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | b | 2 | 0 |
+| `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | b | 3 | 0 |
 | `OPTIONS_DELTA_HEDGE_ENABLED` | b | 2 | 0 |
 | `OPTIONS_EARNINGS_MIN_EDGE` | b | 1 | 0 |
 | `OPTIONS_EARNINGS_WING_MULTIPLIER` | b | 1 | 0 |
