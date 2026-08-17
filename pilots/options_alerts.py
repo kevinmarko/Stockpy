@@ -60,6 +60,7 @@ __all__ = [
     "dispatch_uoa_whale_alert",
     "dispatch_earnings_crush_alert",
     "dispatch_delta_hedge_alert",
+    "dispatch_risk_limit_alert",
     "dispatch_options_alert",
     "format_options_alert_message",
     "post_webhook",
@@ -644,6 +645,105 @@ def dispatch_delta_hedge_alert(
     }
 
 
+def dispatch_risk_limit_alert(
+    breach: Union[Dict[str, Any], Any],
+    webhook_url: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Formats and dispatches high-priority alert for risk limit breaches.
+
+    Parameters
+    ----------
+    breach:
+        Risk limit breach dictionary or object.
+    webhook_url:
+        Optional direct webhook override or `settings.OPTIONS_ALERT_WEBHOOK_URL`.
+    force:
+        If True, dispatches regardless of evaluation.
+
+    Returns
+    -------
+    Dict[str, Any]
+        Result dictionary containing `{"dispatched": bool, "level": str, "message": str, ...}`.
+    """
+    if breach is None:
+        return {
+            "dispatched": False,
+            "reason": "No risk limit breach provided.",
+            "level": None,
+            "message": None,
+            "channels": [],
+            "webhook_status": None,
+            "extra": None,
+        }
+
+    symbol = str(_get_val(breach, "symbol", "PORTFOLIO")).upper().strip()
+    limit_name = str(_get_val(breach, "limit_name", "UNKNOWN")).strip()
+    current_value = float(_get_val(breach, "current_value", 0.0) or 0.0)
+    threshold_value = float(_get_val(breach, "threshold_value", 0.0) or 0.0)
+    action = str(_get_val(breach, "action", "HALT")).upper().strip()
+    severity = str(_get_val(breach, "severity", "CRITICAL")).upper().strip()
+    reason_str = str(_get_val(breach, "reason", "Risk limit exceeded.")).strip()
+
+    level = "CRITICAL" if severity == "CRITICAL" else "WARNING"
+    action_emoji = "🛑" if action == "HALT" else "⚠️"
+
+    lines = [
+        f"🚨 **[RISK LIMIT BREACH] {limit_name} limit exceeded**",
+        f"• **Entity**: **{symbol}**",
+        f"• **Limit Name**: **{limit_name}**",
+        f"• **Current vs Threshold**: **{current_value:,.2f}** vs **{threshold_value:,.2f}**",
+        f"• **Severity**: **{severity}**",
+        f"• **Recommended Action**: {action_emoji} **{action}**",
+        f"• **Details**: {reason_str}",
+    ]
+    message = "\n".join(lines)
+
+    extra = {
+        "type": "risk_limit_alert",
+        "symbol": symbol,
+        "limit_name": limit_name,
+        "current_value": current_value,
+        "threshold_value": threshold_value,
+        "action": action,
+        "severity": severity,
+        "reason": reason_str,
+    }
+
+    channels_dispatched: List[str] = []
+    dedup_key = f"risk_limit_breach_{symbol}_{limit_name}"
+
+    try:
+        from observability.alerts import send_alert
+        send_alert(level, message, extra=extra, dedup_key=dedup_key)
+        channels_dispatched.append("observability")
+    except Exception as exc:
+        logger.warning("Could not dispatch via observability.alerts: %s", exc)
+
+    target_webhook = webhook_url or getattr(settings, "OPTIONS_ALERT_WEBHOOK_URL", None)
+    webhook_res: Optional[Dict[str, Any]] = None
+    if target_webhook:
+        webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
+        if webhook_res.get("ok"):
+            channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "Risk limit alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
+
+    return {
+        "dispatched": True,
+        "level": level,
+        "message": message,
+        "channels": channels_dispatched,
+        "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
+        "extra": extra,
+        "reason": None,
+    }
+
+
 def format_options_alert_message(alert_type: str, payload: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
     """Constructs level, title, and formatted markdown message body for options alerts.
 
@@ -719,6 +819,24 @@ def format_options_alert_message(alert_type: str, payload: Optional[Dict[str, An
             f"• **Symbol**: `{symbol}`\n"
             f"• **IV Mispricing Spread**: `{spread:+.3f}` ({tag})\n"
             f"• **Recommendation**: `{data.get('recommendation', 'Sell Premium / Credit Spread')}`"
+        )
+        return level, title, message
+
+    elif type_key in ("risk_limit", "risk_breach", "risk"):
+        symbol = data.get("symbol", "PORTFOLIO")
+        limit_name = data.get("limit_name", "Max Drawdown")
+        current_val = float(data.get("current_value", 0.0))
+        threshold_val = float(data.get("threshold_value", 0.0))
+        action = str(data.get("action", "HALT")).upper()
+        severity = str(data.get("severity", "CRITICAL")).upper()
+        level = "CRITICAL" if severity == "CRITICAL" else "WARNING"
+        title = f"🚨 Risk Limit Breach: {symbol} ({limit_name})"
+        message = (
+            f"**{title}**\n"
+            f"• **Entity**: `{symbol}`\n"
+            f"• **Limit Name**: `{limit_name}`\n"
+            f"• **Current/Threshold**: `{current_val:,.2f}` vs `{threshold_val:,.2f}`\n"
+            f"• **Action Required**: `{action}`"
         )
         return level, title, message
 
