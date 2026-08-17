@@ -10,58 +10,62 @@ vi.mock("../../api/client", () => ({
   },
 }));
 
+// net_gex/call_gex/put_gex are raw DOLLAR figures on the real backend (not
+// pre-scaled to millions) -- values below are the "millions" magnitude from
+// the old fixture, scaled by 1e6, matching GexProfileView's own /1e6 display.
 const mockGexResponse: GexProfileResponse = {
   symbol: "SPY",
   spot_price: 546.50,
-  net_gex_dollars: 1245.80,
+  net_gex: 1245.80 * 1e6,
+  total_call_gex: 965.7 * 1e6,
+  total_put_gex: -705.2 * 1e6,
   zero_gamma_flip: 538.30,
-  call_gamma_wall: 555.00,
-  put_gamma_wall: 530.00,
-  volatility_regime: "VOL_DAMPENER",
+  call_wall_strike: 555.00,
+  put_wall_strike: 530.00,
+  gamma_regime: "POSITIVE_GAMMA",
+  regime_description: "Positive Gamma Regime ($1245.8M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility.",
+  dealer_hedging_flow: 12458000,
   strikes: [
     {
       strike: 530.00,
-      call_gex: 45.2,
-      put_gex: -380.0,
-      net_gex: -334.8,
-      open_interest_calls: 3200,
-      open_interest_puts: 14500,
-      gamma_calls: 0.012,
-      gamma_puts: 0.045,
+      call_gex: 45.2 * 1e6,
+      put_gex: -380.0 * 1e6,
+      net_gex: -334.8 * 1e6,
+      call_oi: 3200,
+      put_oi: 14500,
+      gamma_concentration_pct: 12.5,
     },
     {
       strike: 538.30,
-      call_gex: 180.0,
-      put_gex: -180.0,
+      call_gex: 180.0 * 1e6,
+      put_gex: -180.0 * 1e6,
       net_gex: 0.0,
-      open_interest_calls: 8500,
-      open_interest_puts: 8500,
-      gamma_calls: 0.035,
-      gamma_puts: 0.035,
+      call_oi: 8500,
+      put_oi: 8500,
+      gamma_concentration_pct: 15.0,
     },
     {
       strike: 546.50,
-      call_gex: 320.5,
-      put_gex: -110.2,
-      net_gex: 210.3,
-      open_interest_calls: 12000,
-      open_interest_puts: 4800,
-      gamma_calls: 0.052,
-      gamma_puts: 0.021,
+      call_gex: 320.5 * 1e6,
+      put_gex: -110.2 * 1e6,
+      net_gex: 210.3 * 1e6,
+      call_oi: 12000,
+      put_oi: 4800,
+      gamma_concentration_pct: 18.2,
     },
     {
       strike: 555.00,
-      call_gex: 420.0,
-      put_gex: -35.0,
-      net_gex: 385.0,
-      open_interest_calls: 15400,
-      open_interest_puts: 1200,
-      gamma_calls: 0.048,
-      gamma_puts: 0.008,
+      call_gex: 420.0 * 1e6,
+      put_gex: -35.0 * 1e6,
+      net_gex: 385.0 * 1e6,
+      call_oi: 15400,
+      put_oi: 1200,
+      gamma_concentration_pct: 21.4,
     },
   ],
   as_of: new Date().toISOString(),
-  dealer_positioning_bias: "Positive Gamma Regime ($1245.8M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility.",
+  spot_price_source: "live",
+  chain_source: "live",
 };
 
 describe("GexProfileView", () => {
@@ -77,7 +81,7 @@ describe("GexProfileView", () => {
       await screen.findByText(/Options Gamma Exposure \(GEX\) & Dealer Hedging Desk/i)
     ).toBeInTheDocument();
     expect(screen.getByText("Phase 20")).toBeInTheDocument();
-    expect(screen.getByText("+$1,245.8M")).toBeInTheDocument();
+    expect(screen.getByText("+$1245.8M")).toBeInTheDocument();
   });
 
   it("renders Volatility Regime indicator, Zero-Gamma Flip level, and Gamma Walls", async () => {
@@ -93,7 +97,7 @@ describe("GexProfileView", () => {
   it("allows switching between GEX Chart and Strike Ladder table", async () => {
     render(<GexProfileView initialSymbol="SPY" spotPrice={546.50} />);
 
-    await screen.findByText("+$1,245.8M");
+    await screen.findByText("+$1245.8M");
     const tableBtn = screen.getByRole("button", { name: "📋 Strike Ladder" });
     fireEvent.click(tableBtn);
 
@@ -105,7 +109,7 @@ describe("GexProfileView", () => {
   it("switches ticker when ticker pill clicked", async () => {
     render(<GexProfileView initialSymbol="SPY" spotPrice={546.50} />);
 
-    await screen.findByText("+$1,245.8M");
+    await screen.findByText("+$1245.8M");
     const qqqBtn = screen.getByRole("button", { name: "QQQ" });
     fireEvent.click(qqqBtn);
 
@@ -124,7 +128,7 @@ describe("GexProfileView", () => {
       />
     );
 
-    await screen.findByText("+$1,245.8M");
+    await screen.findByText("+$1245.8M");
     const strikeElement = screen.getByText("$555");
     fireEvent.click(strikeElement);
 

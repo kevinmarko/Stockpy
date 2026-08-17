@@ -42,7 +42,9 @@ def _send_ntfy(title: str, message: str, priority: str = "default") -> bool:
         req.add_header("Title", title)
         req.add_header("Priority", ntfy_priority)
         req.add_header("Tags", "chart_with_upwards_trend")
-        with urlopen(req, timeout=10) as resp:
+        # Bandit B310: `url` has a hardcoded "https://ntfy.sh/" scheme+host;
+        # only the path segment (from ALERT_NTFY_TOPIC) is operator-set.
+        with urlopen(req, timeout=10) as resp:  # nosec B310
             if resp.status == 200:
                 logger.info("Ntfy notification sent: %s", title)
                 return True
@@ -102,7 +104,9 @@ def _send_slack(title: str, message: str, priority: str = "default") -> bool:
     try:
         req = Request(webhook_url, data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=10) as resp:
+        # Bandit B310: `webhook_url` is ALERT_SLACK_WEBHOOK_URL, an
+        # operator-set env var (see above), never raw external input.
+        with urlopen(req, timeout=10) as resp:  # nosec B310
             if resp.status == 200:
                 logger.info("Slack notification sent: %s", title)
                 return True

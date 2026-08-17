@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
+import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -5856,3 +5857,372 @@ class TestLiveTradeExecutionReject:
         assert first.status_code == 200
         assert second.status_code == 409
         assert second.json()["detail"] == "already_decided"
+
+
+class TestHrpCvarOptimize:
+    """POST /pilots/portfolio/optimize/hrp-cvar previously used
+    np.random.randn as its `returns` input and hardcoded the response's
+    `cvar_95` to the same 0.05 ceiling it was constrained to (audit finding
+    F2). Fixed to fetch real historical bars via HistoricalStore.get_bars
+    and compute the real CVaR of the optimized portfolio's actual returns.
+    """
+
+    class _Store:
+        def __init__(self, series_by_symbol):
+            self._series = series_by_symbol
+
+        def get_bars(self, symbol, lookback_days=504):
+            closes = self._series.get(symbol)
+            if closes is None:
+                return pd.DataFrame()
+            idx = pd.bdate_range(end="2026-08-01", periods=len(closes))
+            return pd.DataFrame({"Close": closes}, index=idx)
+
+    @staticmethod
+    def _synthetic_closes(seed, n=120, start=100.0):
+        rng = np.random.default_rng(seed)
+        rets = rng.normal(loc=0.0003, scale=0.01, size=n)
+        return list(start * np.cumprod(1 + rets))
+
+    def test_cvar_varies_across_requests_and_is_positive(self):
+        series_a = {
+            "AAPL": self._synthetic_closes(1, start=150.0),
+            "MSFT": self._synthetic_closes(2, start=300.0),
+        }
+        series_b = {
+            "AAPL": self._synthetic_closes(3, start=150.0),
+            "MSFT": self._synthetic_closes(4, start=300.0),
+        }
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_a)):
+            resp_a = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_b)):
+            resp_b = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        cvar_a = resp_a.json()["cvar_95"]
+        cvar_b = resp_b.json()["cvar_95"]
+        assert cvar_a > 0.0
+        assert cvar_b > 0.0
+        # No longer the hardcoded 0.05 placeholder, and genuinely differs
+        # across two different real (here: synthetic-but-varied) return series.
+        assert cvar_a != 0.05
+        assert cvar_b != 0.05
+        assert cvar_a != cvar_b
+
+    def test_insufficient_history_returns_honest_422(self):
+        store = self._Store({"AAPL": [], "MSFT": self._synthetic_closes(5, start=300.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history"
+        assert "AAPL" in resp.json()["detail"]["symbols_missing"]
+
+    def test_too_few_overlapping_days_returns_honest_422(self):
+        store = self._Store({
+            "AAPL": self._synthetic_closes(6, n=10, start=150.0),
+            "MSFT": self._synthetic_closes(7, n=10, start=300.0),
+        })
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history"
+
+
+# ---------------------------------------------------------------------------
+# POST /pilots/options/meta-model/retrain -- previously fed the ML
+# meta-labeler hardcoded literals (ivr=50.0, vrp=0.02, vix=20.0,
+# credit_to_width_ratio=0.30, short_delta=0.30) for every simulated trade
+# regardless of its real entry conditions (audit finding F3). Fixed to read
+# validation.options_harness's real, computed entry-condition fields off
+# each OptionsTradeRecord and skip (not silently default) any trade missing
+# one of them.
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsMetaModelRetrain:
+    @staticmethod
+    def _trade(strategy="Put Credit Spread", pnl=10.0, ivr=50.0, vrp=0.02, vix=20.0, ctw=0.30, delta=0.30):
+        from validation.options_harness import OptionsTradeRecord
+
+        return OptionsTradeRecord(
+            entry_date="2023-01-01",
+            exit_date="2023-02-01",
+            strategy=strategy,
+            underlying_entry_price=100.0,
+            underlying_exit_price=101.0,
+            entry_net_premium=30.0,
+            exit_net_cost=10.0,
+            pnl_dollar=pnl,
+            pnl_pct=0.1,
+            exit_reason="profit_target",
+            holding_days=20,
+            contracts=1,
+            entry_ivr=ivr,
+            entry_vrp=vrp,
+            entry_short_delta=delta,
+            entry_credit_to_width_ratio=ctw,
+            entry_vix=vix,
+        )
+
+    def test_fails_closed_when_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", False):
+                resp = client.post(
+                    "/pilots/options/meta-model/retrain",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_with_wrong_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+                resp = client.post(
+                    "/pilots/options/meta-model/retrain",
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_features_vary_across_trades_not_constant(self):
+        from types import SimpleNamespace
+
+        trades = [
+            self._trade(ivr=10.0, vrp=0.01, vix=15.0, ctw=0.20, delta=0.20, pnl=5.0),
+            self._trade(ivr=90.0, vrp=0.05, vix=30.0, ctw=0.45, delta=0.40, pnl=-5.0),
+        ]
+        fake_res = SimpleNamespace(trades=trades)
+
+        captured = {}
+
+        def fake_train(samples):
+            captured["samples"] = list(samples)
+            return {"samples": len(samples), "accuracy": 0.75, "roc_auc": 0.8}
+
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+                with mock.patch(
+                    "validation.options_harness.OptionsValidationHarness.run_backtest",
+                    return_value=fake_res,
+                ):
+                    with mock.patch(
+                        "ml.options_meta_labeler.global_options_meta_labeler.train",
+                        side_effect=fake_train,
+                    ) as mock_train:
+                        resp = client.post(
+                            "/pilots/options/meta-model/retrain",
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert mock_train.called
+        # run_backtest is mocked identically for all 3 strategies
+        # ("Put Credit Spread", "Call Credit Spread", "Iron Condor"), so
+        # samples = 2 trades * 3 strategy calls = 6.
+        samples = captured["samples"]
+        assert len(samples) == 6
+        assert body["skipped_trades"] == 0
+
+        # The core assertion this test exists for: feature values genuinely
+        # differ across samples instead of every sample carrying the old
+        # hardcoded constants (ivr=50.0/vrp=0.02/vix=20.0/ctw=0.30/delta=0.30).
+        assert len({s.ivr for s in samples}) > 1
+        assert len({s.vrp for s in samples}) > 1
+        assert len({s.vix for s in samples}) > 1
+        assert len({s.credit_to_width_ratio for s in samples}) > 1
+        assert len({s.short_delta for s in samples}) > 1
+
+    def test_skips_trades_missing_a_real_field(self):
+        from types import SimpleNamespace
+
+        good_trade = self._trade(ivr=10.0, vrp=0.01, vix=15.0, ctw=0.20, delta=0.20)
+        missing_vix_trade = self._trade(ivr=20.0, vrp=0.02, vix=None, ctw=0.25, delta=0.25)
+        fake_res = SimpleNamespace(trades=[good_trade, missing_vix_trade])
+
+        captured = {}
+
+        def fake_train(samples):
+            captured["samples"] = list(samples)
+            return {"samples": len(samples), "accuracy": 0.7, "roc_auc": 0.7}
+
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+                with mock.patch(
+                    "validation.options_harness.OptionsValidationHarness.run_backtest",
+                    return_value=fake_res,
+                ):
+                    with mock.patch(
+                        "ml.options_meta_labeler.global_options_meta_labeler.train",
+                        side_effect=fake_train,
+                    ):
+                        resp = client.post(
+                            "/pilots/options/meta-model/retrain",
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        # 1 good trade * 3 strategies = 3 samples trained on;
+        # 1 missing-entry_vix trade * 3 strategies = 3 skipped.
+        assert len(captured["samples"]) == 3
+        assert body["skipped_trades"] == 3
+
+
+# ---------------------------------------------------------------------------
+# GET /pilots/options/ai/transformer-forecast -- previously fed the model
+# np.random.randn(...) noise as "market history" and never trained the
+# model's output weights at all (audit finding F7). Fixed to fetch real
+# historical bars, build a real causal feature/window pipeline, and train
+# before predicting.
+# ---------------------------------------------------------------------------
+
+
+class _OhlcvStore:
+    """Minimal HistoricalStore.get_bars stand-in returning a real-shaped
+    OHLCV DataFrame from a pre-baked Close series (matches
+    TestHrpCvarOptimize._Store's convention one section above)."""
+
+    def __init__(self, series_by_symbol):
+        self._series = series_by_symbol
+
+    def get_bars(self, symbol, lookback_days=504):
+        closes = self._series.get(symbol)
+        if closes is None:
+            return pd.DataFrame()
+        idx = pd.bdate_range(end="2026-08-01", periods=len(closes))
+        closes = pd.Series(closes, index=idx)
+        return pd.DataFrame(
+            {
+                "Open": closes.shift(1).fillna(closes.iloc[0]),
+                "High": closes * 1.01,
+                "Low": closes * 0.99,
+                "Close": closes,
+                "Volume": pd.Series(1_000_000.0, index=idx),
+            },
+            index=idx,
+        )
+
+
+def _synthetic_closes_walk(seed, n=400, start=100.0):
+    rng = np.random.default_rng(seed)
+    rets = rng.normal(loc=0.0003, scale=0.011, size=n)
+    return list(start * np.cumprod(1 + rets))
+
+
+class TestTransformerForecast:
+    def test_calls_get_bars_with_symbol_and_returns_trained_forecast(self):
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
+            resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        for h in ["1d", "5d", "21d", "60d"]:
+            assert h in body["forecast"]
+            assert isinstance(body["forecast"][h], float)
+        assert body["trained_samples"] >= 30
+        # get_bars was actually called -- the real-data path is exercised,
+        # not bypassed.
+        mock_hs.assert_called()
+
+    def test_two_different_series_produce_different_forecasts(self):
+        store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
+        store_b = _OhlcvStore({"AAPL": _synthetic_closes_walk(22, n=400, start=150.0)})
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
+            resp_a = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
+            resp_b = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+
+        assert resp_a.status_code == 200 and resp_b.status_code == 200
+        forecast_a = resp_a.json()["forecast"]
+        forecast_b = resp_b.json()["forecast"]
+        assert forecast_a != forecast_b
+
+    def test_insufficient_history_returns_honest_422(self):
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=50, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
+
+    def test_unknown_symbol_returns_honest_422(self):
+        store = _OhlcvStore({})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "ZZZZ"})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
+
+
+# ---------------------------------------------------------------------------
+# POST /pilots/options/ai/diffusion-stress-test -- previously fed the model
+# np.random.randn(...) * volatility + drift as "historical data" (audit
+# finding F7). Fixed to fetch real historical bars and window real log
+# returns. train_diffusion_model already fits its own score-network weights
+# via an internal Adam loop, so the real-input-data swap alone closes this
+# finding (no separate training call needed, unlike the transformer above).
+# ---------------------------------------------------------------------------
+
+
+class TestDiffusionStressTest:
+    def _base_request(self, symbol="AAPL"):
+        return {
+            "symbol": symbol,
+            "spot_price": 150.0,
+            "volatility": 0.25,
+            "num_paths": 50,
+            "horizon": 30,
+            "drift": 0.0,
+        }
+
+    def test_calls_get_bars_with_symbol_and_returns_real_data_driven_result(self):
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert len(body["paths"]) == 50
+        assert body["VaR_95"] >= 0.0
+        assert body["CVaR_95"] >= body["VaR_95"]
+        mock_hs.assert_called()
+
+    def test_two_different_series_produce_different_var(self):
+        store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
+        store_b = _OhlcvStore({"AAPL": _synthetic_closes_walk(22, n=400, start=150.0)})
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
+            resp_a = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
+            resp_b = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+
+        assert resp_a.status_code == 200 and resp_b.status_code == 200
+        assert resp_a.json()["VaR_95"] != resp_b.json()["VaR_95"]
+
+    def test_insufficient_history_returns_honest_422(self):
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=5, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
+
+    def test_unknown_symbol_returns_honest_422(self):
+        store = _OhlcvStore({})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"

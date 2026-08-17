@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `fe0835e6183ffad912b660ccdd8ec7cbb67aaedb`
+- Measured at commit: `5fdcf0618e607971653295b5165920ea0b9caa76`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -78,15 +78,15 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
-| `ALERT_FILE_PATH` | L1421 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L4756 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4033 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L3858 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LOCAL_DATA_ROOT` | L1673 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
-| `OUTPUT_DIR` | L1690 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4185 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L1695 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L3743 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `ALERT_FILE_PATH` | L1434 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
+| `GCLOUD_BIN` | L4768 | yes | Path to the gcloud binary for environment integrations. |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4045 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L3870 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L1686 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L1703 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4197 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L1708 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L3755 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -128,21 +128,21 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 | Field | Marker site(s) | In `ALLOWED_KEYS` now | In `SECRET_KEYS` | Claim holds |
 |---|---|---|---|---|
-| `FMP_API_KEY` | `settings.py:756` | no | yes | yes |
-| `FOLLOW_API_TOKEN` | `settings.py:394` | no | yes | yes |
-| `JULES_API_KEY` | `settings.py:564` | no | yes | yes |
-| `MCP_HTTP_BEARER_TOKEN` | `settings.py:408` | no | yes | yes |
-| `MCP_OAUTH_PASSWORD` | `settings.py:456` | no | yes | yes |
-| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:375` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4150` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4158` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4142` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4134` | no | yes | yes |
-| `STATE_API_TOKEN` | `settings.py:367` | no | yes | yes |
+| `FMP_API_KEY` | `settings.py:769` | no | yes | yes |
+| `FOLLOW_API_TOKEN` | `settings.py:407` | no | yes | yes |
+| `JULES_API_KEY` | `settings.py:577` | no | yes | yes |
+| `MCP_HTTP_BEARER_TOKEN` | `settings.py:421` | no | yes | yes |
+| `MCP_OAUTH_PASSWORD` | `settings.py:469` | no | yes | yes |
+| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:388` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4162` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4170` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4154` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4146` | no | yes | yes |
+| `STATE_API_TOKEN` | `settings.py:380` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **77**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **78**
 - routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
@@ -217,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **415** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **414** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -230,8 +230,8 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 729 | 232 |
-| (b) `getattr(settings, "KEY", default)` | 341 | 193 |
+| (a) `settings.KEY` | 731 | 232 |
+| (b) `getattr(settings, "KEY", default)` | 342 | 193 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 24 | 17 |
 
@@ -252,7 +252,7 @@ referenced by name somewhere and is probably read dynamically.
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4894`, `gui/panels/settings_manager.py:162` | likely read dynamically |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11052` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11068` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1239`, `pilots/feature_flags.py:49` | likely read dynamically |
 
@@ -396,7 +396,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_GEX_SEARCH_RANGE_PCT` | b | 1 | 0 |
 | `OPTIONS_MANAGE_DTE_THRESHOLD` | b | 1 | 0 |
 | `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
-| `OPTIONS_META_LABELER_ENABLED` | b | 2 | 0 |
+| `OPTIONS_META_LABELER_ENABLED` | b | 3 | 0 |
 | `OPTIONS_PROFIT_TARGET_PCT` | b | 1 | 0 |
 | `OPTIONS_RISK_FREE_RATE` | b | 9 | 0 |
 | `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | b | 1 | 0 |
@@ -428,7 +428,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 
 | Site | Expression |
 |---|---|
-| `Gravity AI Review Suite.py:2720` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
+| `Gravity AI Review Suite.py:2731` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:176` | `getattr(settings, flag_name, False)` |

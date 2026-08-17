@@ -242,9 +242,9 @@ import type {
   LeggingSimulationResponse,
   GexStrikePoint,
   GexProfileResponse,
-  LobLevel,
   LobQueueSimulationRequest,
   LobQueueSimulationResponse,
+  LobQueuePercentiles,
   CopulaPairsResponse,
   CopulaTailData,
   CopulaSeriesPoint,
@@ -10633,54 +10633,60 @@ export const mockApi = {
   async getTransformerForecast(symbol: string): Promise<TransformerForecastResponse> {
     if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol);
     const sym = symbol.toUpperCase();
-    const current_vol = 0.15 + (sym.length % 5) * 0.02;
-    const trajectory = [];
-    const lower = [];
-    const upper = [];
-    for (let i = 0; i < 30; i++) {
-      const v = current_vol * (1 + 0.05 * Math.sin(i / 5));
-      trajectory.push(v);
-      lower.push(v * 0.9);
-      upper.push(v * 1.1);
+    const baseVol = 0.15 + (sym.length % 5) * 0.02;
+    const horizons = ["1d", "5d", "21d", "60d"];
+    const horizonDays: Record<string, number> = { "1d": 1, "5d": 5, "21d": 21, "60d": 60 };
+    const forecast: Record<string, number> = {};
+    for (const h of horizons) {
+      forecast[h] = baseVol * (1 + 0.05 * Math.sin(horizonDays[h] / 10));
     }
-    const attention_weights = Array.from({ length: 30 }, () => Array.from({ length: 10 }, () => Math.random()));
-    const feature_importance = { "RSI": 0.25, "MACD": 0.15, "VIX": 0.3, "Sector": 0.1, "Flow": 0.2 };
-    
+    const attention_heatmap = Array.from({ length: 8 }, () =>
+      Array.from({ length: 8 }, () => Math.random())
+    );
+
     return delay<TransformerForecastResponse>({
       symbol: sym,
-      current_vol,
-      forecast_horizon: 30,
-      forecast_trajectory: trajectory,
-      cone_lower_bounds: lower,
-      cone_upper_bounds: upper,
-      attention_weights,
-      feature_importance,
+      forecast,
+      attention_heatmap,
     });
   },
 
   async runDiffusionStressTest(req: DiffusionStressRequest): Promise<DiffusionStressResponse> {
     const sym = req.symbol.toUpperCase();
-    const terminal = [];
-    const drawdowns = [];
-    for (let i = 0; i < 100; i++) {
-      terminal.push(100 * (1 + req.drift + req.volatility * (Math.random() - 0.5)));
-      drawdowns.push(req.volatility * Math.random());
+    const spot = req.spot_price;
+    const drift = req.drift ?? 0.0;
+    const horizon = req.horizon ?? 30;
+    const numPaths = Math.min(req.num_paths ?? 1000, 20); // small sample for the mock UI
+    const paths: number[][] = [];
+    const terminalReturns: number[] = [];
+    for (let p = 0; p < numPaths; p++) {
+      const path = [spot];
+      for (let i = 0; i < horizon; i++) {
+        const shock = (Math.random() - 0.5) * 2 * req.volatility * Math.sqrt(1 / 252);
+        const next = path[path.length - 1] * (1 + drift / 252 + shock);
+        path.push(next);
+      }
+      paths.push(path);
+      terminalReturns.push((path[path.length - 1] - spot) / spot);
     }
-    terminal.sort((a, b) => a - b);
-    drawdowns.sort((a, b) => a - b);
-    
-    return delay<DiffusionStressResponse>({
-      symbol: sym,
-      horizon_days: req.horizon_days,
-      paths_simulated: req.paths,
-      var_95: 0.12,
-      cvar_95: 0.18,
-      expected_shortfall: 0.15,
-      max_drawdown_distribution: drawdowns,
-      terminal_price_distribution: terminal,
-      crash_probabilities: { "-5%": 0.25, "-10%": 0.1, "-20%": 0.02 },
-      sample_paths: Array.from({ length: 5 }, () => Array.from({ length: req.horizon_days }, () => 100 + (Math.random() - 0.5) * 10)),
-    }, 500);
+    terminalReturns.sort((a, b) => a - b);
+    const idx95 = Math.max(0, Math.floor(terminalReturns.length * 0.05) - 1);
+    const var95Fraction = Math.abs(Math.min(0, terminalReturns[idx95] ?? terminalReturns[0]));
+    const tailLosses = terminalReturns.slice(0, idx95 + 1).filter((r) => r < 0).map((r) => -r);
+    const cvar95Fraction =
+      tailLosses.length > 0
+        ? tailLosses.reduce((a, b) => a + b, 0) / tailLosses.length
+        : var95Fraction;
+
+    return delay<DiffusionStressResponse>(
+      {
+        symbol: sym,
+        paths,
+        VaR_95: var95Fraction * spot,
+        CVaR_95: cvar95Fraction * spot,
+      },
+      500
+    );
   },
 
   async optimizeHrpCvar(req: HrpCvarOptimizeRequest): Promise<HrpCvarOptimizeResponse> {
@@ -13351,147 +13357,161 @@ export const mockApi = {
   async getOptionsGexProfile(symbol: string) {
     const sym = symbol.toUpperCase();
     const spot = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : sym === "AAPL" ? 224.20 : 500.0;
-    
+
     const step = sym === "NVDA" ? 2.5 : sym === "TSLA" ? 5.0 : sym === "SPY" ? 2.0 : sym === "QQQ" ? 2.0 : 5.0;
     const baseStrike = Math.round(spot / step) * step;
-    const strikes: GexStrikePoint[] = [];
-    
-    const zeroGammaFlip = Number((spot * (sym === "TSLA" ? 1.015 : 0.985)).toFixed(2));
+    // Real StrikeGex.call_gex/.put_gex/.net_gex are raw DOLLAR figures (not
+    // pre-scaled to millions) -- generate a "millions" magnitude internally
+    // (matches the shape of the real GEX formula's typical size) then scale
+    // by 1e6 before placing on the response, so the component's own /1e6
+    // display formatting is exercised against realistic magnitudes.
+    const rawStrikes: { strike: number; callGexM: number; putGexM: number; callOi: number; putOi: number }[] = [];
+
     let callWallStrike = baseStrike + step * 3;
     let putWallStrike = baseStrike - step * 3;
-    let maxCallGex = -Infinity;
-    let minPutGex = Infinity;
-    let totalNetGex = 0;
+    let maxCallGexM = -Infinity;
+    let minPutGexM = Infinity;
+    let totalNetGexM = 0;
+    let totalAbsGexM = 0;
 
     for (let i = -12; i <= 12; i++) {
       const strike = Number((baseStrike + i * step).toFixed(2));
-      
+
       const callWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 1.02)) / (spot * 0.04), 2)));
       const putWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 0.97)) / (spot * 0.04), 2)));
-      
-      const callGex = Number((callWeight * (sym === "SPY" ? 420 : 180) * (1 + Math.sin(i * 0.5) * 0.15)).toFixed(2));
-      const putGex = Number((-putWeight * (sym === "SPY" ? 380 : 160) * (1 + Math.cos(i * 0.5) * 0.15)).toFixed(2));
-      const netGex = Number((callGex + putGex).toFixed(2));
-      totalNetGex += netGex;
 
-      if (callGex > maxCallGex) {
-        maxCallGex = callGex;
+      const callGexM = Number((callWeight * (sym === "SPY" ? 420 : 180) * (1 + Math.sin(i * 0.5) * 0.15)).toFixed(2));
+      const putGexM = Number((-putWeight * (sym === "SPY" ? 380 : 160) * (1 + Math.cos(i * 0.5) * 0.15)).toFixed(2));
+      totalNetGexM += callGexM + putGexM;
+      totalAbsGexM += callGexM + Math.abs(putGexM);
+
+      if (callGexM > maxCallGexM) {
+        maxCallGexM = callGexM;
         callWallStrike = strike;
       }
-      if (putGex < minPutGex) {
-        minPutGex = putGex;
+      if (putGexM < minPutGexM) {
+        minPutGexM = putGexM;
         putWallStrike = strike;
       }
 
-      strikes.push({
+      rawStrikes.push({
         strike,
-        call_gex: callGex,
-        put_gex: putGex,
-        net_gex: netGex,
-        open_interest_calls: Math.round(callWeight * 15000 + 500),
-        open_interest_puts: Math.round(putWeight * 14000 + 400),
-        gamma_calls: Number((callWeight * 0.045).toFixed(4)),
-        gamma_puts: Number((putWeight * 0.042).toFixed(4)),
+        callGexM,
+        putGexM,
+        callOi: Math.round(callWeight * 15000 + 500),
+        putOi: Math.round(putWeight * 14000 + 400),
       });
     }
 
-    const isVolDampener = totalNetGex >= 0;
-    const regime: "VOL_DAMPENER" | "VOL_ACCELERATOR" = isVolDampener ? "VOL_DAMPENER" : "VOL_ACCELERATOR";
-    const bias = isVolDampener
-      ? `Positive Gamma Regime ($${totalNetGex.toFixed(1)}M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility (buy dips, sell rips).`
-      : `Negative Gamma Regime ($${totalNetGex.toFixed(1)}M Net GEX). Market makers short gamma; hedging flow accelerates trend momentum and downside volatility cascades.`;
+    const zeroGammaFlip = Number((spot * (sym === "TSLA" ? 1.015 : 0.985)).toFixed(2));
+    const strikes: GexStrikePoint[] = rawStrikes.map((s) => {
+      const callGex = Number((s.callGexM * 1e6).toFixed(2));
+      const putGex = Number((s.putGexM * 1e6).toFixed(2));
+      const netGex = Number((callGex + putGex).toFixed(2));
+      const absGex = callGex + Math.abs(putGex);
+      const gammaConcentrationPct = totalAbsGexM > 0 ? Number(((s.callGexM + Math.abs(s.putGexM)) / totalAbsGexM * 100).toFixed(2)) : 0;
+      return {
+        strike: s.strike,
+        call_gex: callGex,
+        put_gex: putGex,
+        net_gex: netGex,
+        total_oi: s.callOi + s.putOi,
+        call_oi: s.callOi,
+        put_oi: s.putOi,
+        call_volume: Math.round(s.callOi * 0.2),
+        put_volume: Math.round(s.putOi * 0.2),
+        abs_gex: Number(absGex.toFixed(2)),
+        gamma_concentration_pct: gammaConcentrationPct,
+      };
+    });
+
+    const totalNetGex = Number((totalNetGexM * 1e6).toFixed(2));
+    const isPositiveGamma = totalNetGexM >= 0;
+    const gammaRegime: "POSITIVE_GAMMA" | "NEGATIVE_GAMMA" = isPositiveGamma ? "POSITIVE_GAMMA" : "NEGATIVE_GAMMA";
+    const regimeDescription = isPositiveGamma
+      ? `Positive Gamma Regime ($${totalNetGexM.toFixed(1)}M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility (buy dips, sell rips).`
+      : `Negative Gamma Regime ($${totalNetGexM.toFixed(1)}M Net GEX). Market makers short gamma; hedging flow accelerates trend momentum and downside volatility cascades.`;
+    const dealerHedgingFlow = Number((totalNetGex * 0.01).toFixed(2));
 
     return delay<GexProfileResponse>({
       symbol: sym,
       spot_price: spot,
-      net_gex_dollars: Number(totalNetGex.toFixed(2)),
+      net_gex: totalNetGex,
+      total_call_gex: Number((rawStrikes.reduce((acc, s) => acc + s.callGexM, 0) * 1e6).toFixed(2)),
+      total_put_gex: Number((rawStrikes.reduce((acc, s) => acc + s.putGexM, 0) * 1e6).toFixed(2)),
       zero_gamma_flip: zeroGammaFlip,
-      call_gamma_wall: callWallStrike,
-      put_gamma_wall: putWallStrike,
-      volatility_regime: regime,
+      call_wall_strike: callWallStrike,
+      put_wall_strike: putWallStrike,
+      gamma_regime: gammaRegime,
+      regime_description: regimeDescription,
+      dealer_hedging_flow: dealerHedgingFlow,
+      dealer_hedging_per_1pct_move_dollars: dealerHedgingFlow,
+      dealer_hedging_shares_per_1pct_move: spot > 0 ? Number((dealerHedgingFlow / spot).toFixed(2)) : 0,
       strikes,
       as_of: new Date().toISOString(),
-      dealer_positioning_bias: bias,
+      spot_price_source: "mock",
+      chain_source: "mock",
     });
   },
 
   async simulateLobQueue(request: LobQueueSimulationRequest) {
-    const sym = request.symbol.toUpperCase();
-    const strike = request.strike || 540;
-    const optionType = request.option_type || "CALL";
-    const side = request.order_side || "BUY";
-    const limitPrice = request.limit_price || 3.15;
-    const orderSize = request.order_size || 5;
-    const latency = request.latency_ms || 25;
+    const sym = (request.symbol || "SPY").toUpperCase();
+    const priceLevel = request.price_level ?? 100.0;
+    const orderSize = request.order_size ?? 1.0;
+    const depthAhead = request.depth_ahead ?? 0.0;
+    const timeHorizonSec = request.time_horizon_sec ?? 60.0;
+    const numSimulations = request.num_simulations ?? 500;
+    const lambdaLimit = request.lambda_limit ?? 4.0;
+    const muCancel = request.mu_cancel ?? 0.05;
+    const thetaMarket = request.theta_market ?? 5.0;
 
-    const tick = 0.01;
-    const mid = limitPrice;
-    const spread = 0.04;
-    
-    const bids: LobLevel[] = [];
-    const asks: LobLevel[] = [];
+    // Deterministic-pseudo-random derivation from the request inputs (no
+    // literal order-book ladder in the real response -- CST(2010) queue-fill
+    // dynamics only): more depth ahead + a slower cancel/faster-limit-order
+    // mix => lower fill probability & longer expected wait.
+    const netFillRate = muCancel + thetaMarket / Math.max(1, lambdaLimit * 10);
+    const depletionVelocity = Number(Math.max(0.01, netFillRate * 2.0).toFixed(4));
+    const fillProbability = Number(
+      Math.max(0.02, Math.min(0.97, 1 - Math.exp(-depletionVelocity * timeHorizonSec / Math.max(1, depthAhead + orderSize)))).toFixed(4)
+    );
+    const expectedWaitTimeSec = Number(
+      Math.min(timeHorizonSec * 3, (depthAhead + orderSize) / depletionVelocity).toFixed(2)
+    );
+    const medianFillTimeSec = Number((expectedWaitTimeSec * 0.85).toFixed(2));
+    const unconditionalFillTimeSec = Number(Math.min(timeHorizonSec, expectedWaitTimeSec * fillProbability).toFixed(2));
 
-    const isBuy = side === "BUY";
-    const userBidLevel = isBuy ? limitPrice : Number((mid - 0.02).toFixed(2));
-    const userAskLevel = !isBuy ? limitPrice : Number((mid + 0.02).toFixed(2));
+    const percentiles: LobQueuePercentiles = {
+      p10: Number((expectedWaitTimeSec * 0.35).toFixed(2)),
+      p25: Number((expectedWaitTimeSec * 0.6).toFixed(2)),
+      p50: medianFillTimeSec,
+      p75: Number((expectedWaitTimeSec * 1.2).toFixed(2)),
+      p90: Number((expectedWaitTimeSec * 1.6).toFixed(2)),
+      p95: Number((expectedWaitTimeSec * 1.9).toFixed(2)),
+    };
 
-    for (let i = 0; i < 6; i++) {
-      const bidP = Number((userBidLevel - i * tick).toFixed(2));
-      const isUserLvl = isBuy && i === 0;
-      const baseOrders = 3 + i * 2;
-      const baseSize = 40 + i * 35;
-      
-      bids.push({
-        price: bidP,
-        size: isUserLvl ? baseSize + orderSize : baseSize,
-        num_orders: isUserLvl ? baseOrders + 1 : baseOrders,
-        is_user_level: isUserLvl,
-        user_queue_position: isUserLvl ? Math.min(3, baseOrders) : undefined,
-      });
-
-      const askP = Number((userAskLevel + i * tick).toFixed(2));
-      const isUserAskLvl = !isBuy && i === 0;
-      const baseAskOrders = 4 + i * 2;
-      const baseAskSize = 45 + i * 30;
-
-      asks.push({
-        price: askP,
-        size: isUserAskLvl ? baseAskSize + orderSize : baseAskSize,
-        num_orders: isUserAskLvl ? baseAskOrders + 1 : baseAskOrders,
-        is_user_level: isUserAskLvl,
-        user_queue_position: isUserAskLvl ? Math.min(3, baseAskOrders) : undefined,
-      });
-    }
-
-    const queuePos = 3;
-    const ordersAhead = 2;
-    const sizeAhead = 28;
-    const fillProb30s = Number(Math.max(0.1, Math.min(0.98, 0.88 - (latency / 1000) * 0.08 - (sizeAhead / 150))).toFixed(3));
-    const fillProb60s = Number(Math.min(0.99, fillProb30s + 0.08).toFixed(3));
-    const fillProb300s = Number(Math.min(0.999, fillProb60s + 0.03).toFixed(3));
-    const estFillTime = Number((8.4 + (sizeAhead * 0.35) + (latency * 0.01)).toFixed(1));
+    const probAdverseMove = Number(Math.max(0.01, Math.min(0.9, 1 - fillProbability * 0.7)).toFixed(4));
+    const expectedFillRatio = Number(Math.max(0.05, Math.min(1, fillProbability * 1.05)).toFixed(4));
 
     return delay<LobQueueSimulationResponse>({
+      valid: true,
       symbol: sym,
-      strike,
-      option_type: optionType,
-      limit_price: limitPrice,
+      price_level: priceLevel,
       order_size: orderSize,
-      order_side: side,
-      queue_priority_position: queuePos,
-      orders_ahead: ordersAhead,
-      size_ahead: sizeAhead,
-      fill_probability_30s: fillProb30s,
-      fill_probability_60s: fillProb60s,
-      fill_probability_300s: fillProb300s,
-      estimated_fill_time_seconds: estFillTime,
-      fill_time_p50: Number((estFillTime * 0.85).toFixed(1)),
-      fill_time_p95: Number((estFillTime * 1.65).toFixed(1)),
-      bids,
-      asks,
-      spread,
-      mid_price: mid,
-      market_depth_summary: `Queue Priority #${queuePos} at $${limitPrice.toFixed(2)} (${ordersAhead} orders / ${sizeAhead} contracts ahead). Expected fill latency: ~${estFillTime}s (30s P(Fill) = ${(fillProb30s * 100).toFixed(1)}%).`,
+      depth_ahead: depthAhead,
+      time_horizon_sec: timeHorizonSec,
+      num_simulations: numSimulations,
+      fill_probability: fillProbability,
+      expected_fill_time_sec: expectedWaitTimeSec,
+      expected_wait_time_sec: expectedWaitTimeSec,
+      unconditional_fill_time_sec: unconditionalFillTimeSec,
+      median_fill_time_sec: medianFillTimeSec,
+      prob_adverse_move_before_fill: probAdverseMove,
+      expected_fill_ratio: expectedFillRatio,
+      queue_depletion_velocity: depletionVelocity,
+      queue_progression_percentiles: percentiles,
+      cst_closed_form_fill_prob: fillProbability,
+      reason: null,
+      timestamp: new Date().toISOString(),
       as_of: new Date().toISOString(),
     });
   },
@@ -13722,22 +13742,23 @@ export const mockApi = {
   async synthesizeQuantResearch(request: ResearchSynthesizeRequest): Promise<ResearchSynthesizeResponse> {
     const p = (request.prompt || "").toLowerCase();
     const isUnsafe = p.includes("os.system") || p.includes("eval(") || p.includes("import os") || p.includes("subprocess");
+    const mode = request.strategy_type || "hypothesis";
 
     if (isUnsafe) {
       return delay<ResearchSynthesizeResponse>({
-        synthesis_id: `syn_${Math.random().toString(36).substring(2, 9)}`,
-        prompt: request.prompt,
-        synthesized_code: `# Rejected by AST Security Validator\n# Violations detected:\n# - Forbidden import: 'os' is explicitly blacklisted.\n# - Forbidden function call: 'eval()' is prohibited.`,
-        ast_safety_passed: false,
-        ast_violations: [
+        success: false,
+        code: `# Rejected by AST Security Validator\n# Violations detected:\n# - Forbidden import: 'os' is explicitly blacklisted.\n# - Forbidden function call: 'eval()' is prohibited.`,
+        metadata: {},
+        validation_passed: false,
+        validation_errors: [
           "Forbidden import: module 'os' is explicitly blacklisted.",
           "Forbidden function call: 'eval()' is prohibited in candidate strategy sandbox.",
         ],
-        suggested_parameters: {},
+        source_prompt: request.prompt,
+        synthesis_mode: mode,
         explanation: "Candidate code violates AST security sandbox rules. Forbidden imports or builtins detected.",
-        model_used: "InvestYo-QuantSynthesizer-v4",
-        created_at: new Date().toISOString(),
-        confidence_score: 0.12,
+        target_asset_class: request.target_asset_class ?? null,
+        strategy_type: request.strategy_type ?? null,
       }, 100);
     }
 
@@ -13748,23 +13769,21 @@ import scipy.stats as stats
 def generate_signals(df: pd.DataFrame) -> pd.Series:
     """
     Synthesized Alpha: Volatility-Adjusted Momentum & Mean Reversion Filter
-    Universe: ${(request.asset_universe || ["SPY", "QQQ", "AAPL", "MSFT"]).join(", ")}
-    Lookback: ${request.lookback_period_days || 20} days
-    Target Metric: ${request.target_metric || "Sharpe Ratio"}
+    Synthesis Mode: ${mode}
     """
     close = df["close"]
     ma_fast = close.rolling(window=10, min_periods=5).mean()
-    ma_slow = close.rolling(window=${request.lookback_period_days || 20}, min_periods=10).mean()
+    ma_slow = close.rolling(window=20, min_periods=10).mean()
     vol = close.pct_change().rolling(window=20).std()
-    
+
     # Normalized Z-Score Spread
     z_spread = (close - ma_slow) / (vol * close + 1e-6)
-    
+
     # Vectorized Alpha Signal (+1.0 Long, -1.0 Short)
     signals = pd.Series(0.0, index=df.index)
     signals[z_spread < -1.8] = 1.0
     signals[z_spread > 1.8] = -1.0
-    
+
     # Volatility targeting weight adjustment
     target_vol = 0.15
     scaling = np.clip(target_vol / (vol * np.sqrt(252) + 1e-4), 0.2, 2.0)
@@ -13772,22 +13791,22 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
 `;
 
     return delay<ResearchSynthesizeResponse>({
-      synthesis_id: `syn_${Math.random().toString(36).substring(2, 9)}`,
-      prompt: request.prompt,
-      synthesized_code: code,
-      ast_safety_passed: true,
-      ast_violations: [],
-      suggested_parameters: {
+      success: true,
+      code,
+      metadata: {
         lookback_fast: 10,
-        lookback_slow: request.lookback_period_days || 20,
+        lookback_slow: 20,
         z_threshold: 1.8,
         target_annual_vol: 0.15,
         rebalance_cadence: "1D",
       },
+      validation_passed: true,
+      validation_errors: [],
+      source_prompt: request.prompt,
+      synthesis_mode: mode,
       explanation: "Synthesized institutional-grade signal generating engine using AST-safe vectorized pandas/numpy computations. Incorporates dynamic volatility-targeting scaling and rolling Z-score mean reversion thresholds.",
-      model_used: "InvestYo-QuantSynthesizer-v4-DeepSeekR1",
-      created_at: new Date().toISOString(),
-      confidence_score: 0.94,
+      target_asset_class: request.target_asset_class ?? null,
+      strategy_type: request.strategy_type ?? null,
     }, 150);
   },
 
@@ -14103,7 +14122,6 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
 
     return delay<MultiBrokerStatusResponse>({
       active_broker_id: "alpaca",
-      failover_mode: "auto",
       manual_override_broker_id: null,
       priority_hierarchy: ["alpaca", "interactive_brokers", "tradier", "fmp_paper"],
       brokers,
@@ -14112,18 +14130,16 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
       last_failover_time: new Date(Date.now() - 480000).toISOString(),
       last_failover_reason: "High latency detected on primary adapter; automated failover to Alpaca.",
       recent_routing_audits: audits,
-      as_of: new Date().toISOString(),
     });
   },
 
   async triggerBrokerFailover(request: BrokerFailoverRequest): Promise<BrokerFailoverResponse> {
     return delay<BrokerFailoverResponse>({
-      success: true,
-      previous_broker_id: "alpaca",
-      active_broker_id: request.target_broker_id,
-      failover_timestamp: new Date().toISOString(),
-      reason: request.reason || "Manual operator failover triggered from MultiBrokerGatewayView.",
-      message: `Successfully switched active execution gateway to '${request.target_broker_id}'.`,
+      status: "ok",
+      active_broker: request.target_broker,
+      manual_override: request.target_broker,
+      reason: request.reason || "manual_operator_failover",
+      timestamp: new Date().toISOString(),
     });
   },
 

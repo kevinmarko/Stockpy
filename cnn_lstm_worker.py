@@ -303,7 +303,10 @@ def _run_worker_loop() -> None:
     stdout = sys.stdout.buffer
     while True:
         try:
-            job = pickle.load(stdin)
+            # Bandit B301: this reads from the PARENT process's own stdin pipe
+            # -- the counterpart to cnn_lstm_process_pool.py's read of this
+            # worker's stdout, same local same-trust-boundary IPC channel.
+            job = pickle.load(stdin)  # nosec B301
         except EOFError:
             break
         except Exception:  # noqa: BLE001 -- unrecoverable framing error, stop

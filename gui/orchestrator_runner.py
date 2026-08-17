@@ -808,7 +808,23 @@ def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHan
     )
     log_file.flush()
 
+    # `cmd` is built entirely from validated components: `sys.executable` and
+    # fixed literal flags; `cleaned_strategies` entries each matched
+    # `_strat_re` (must start with an alnum char, so a leading "-"/"--"
+    # argument-injection flag is structurally impossible) above; `start`/
+    # `end` each survived a strict `datetime.date.fromisoformat` parse above,
+    # which accepts only "YYYY-MM-DD" and raises on anything else (shell
+    # metacharacters, embedded newlines, extra flags). `subprocess.Popen`
+    # is also called with a list and no `shell=True`, so there is no shell
+    # to interpret metacharacters even if one slipped through. See
+    # tests/test_security_audit_fixes.py::TestLaunchValidationInputValidation
+    # for the adversarial-input regression coverage. CodeQL's
+    # py/command-line-injection query does not model this hand-written
+    # regex/fromisoformat validation as a sanitizer, so it still flags this
+    # call (alert #11) despite the input being fully controlled -- reviewed
+    # false positive.
     popen = subprocess.Popen(
+        # codeql[py/command-line-injection]
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,

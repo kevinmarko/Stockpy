@@ -155,7 +155,11 @@ def post_webhook(
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # Bandit B310: `url` (this function's `webhook_url` param) is always
+        # sourced from settings.OPTIONS_ALERT_WEBHOOK_URL by every real
+        # caller in this module, an operator-set config value, never raw
+        # external/request-body input.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             raw_status = getattr(resp, "status", None)
             if raw_status is None and hasattr(resp, "getcode"):
                 try:

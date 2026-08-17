@@ -327,7 +327,9 @@ class HTTPStore(PromptStore):
             req.add_header("If-None-Match", self._last_etag)
 
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            # Bandit B310: `self._url` is settings.PROMPT_REGISTRY_URL, an
+            # operator-set config value, never raw external input.
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # nosec B310
                 etag = resp.headers.get("ETag")
                 raw = resp.read().decode("utf-8")
 

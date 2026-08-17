@@ -2485,8 +2485,19 @@ class GravityAIAuditor:
             except TypeError:
                 audit["checks"]["model_abc_uninstantiable"] = {"status": "PASSED"}
 
-            # ── (c) ml/registry.yaml ─────────────────────────────────────────
-            registry_path = Path(__file__).parent / "ml" / "registry.yaml"
+            # ── (c) ML model registry ────────────────────────────────────────
+            # Resolves the SAME way pilots/models.py (the Pilots PWA's
+            # /models endpoint), gui/panels/analytics.py, gui/panels/analytics_signals.py,
+            # and investyo_mcp_server.py do: the machine-global
+            # settings.LOCAL_DATA_ROOT/ml_models/registry.yaml if it exists,
+            # else the repo-root ml/registry.yaml — so this audit checks the
+            # actual authoritative registry, not a copy that may have been
+            # reverted by a git operation (see docs/architecture/ml-and-reports.md).
+            try:
+                from ml.registry_io import resolve_registry_path
+                registry_path = resolve_registry_path()
+            except Exception:
+                registry_path = Path(__file__).parent / "ml" / "registry.yaml"
             if not registry_path.exists():
                 audit["checks"]["registry_yaml_parseable"] = {"status": "FAILED", "note": "file not found"}
             else:
@@ -6741,7 +6752,10 @@ class GravityAIAuditor:
             )
 
             # Check 1: missing file → None
-            result1 = read_dead_letter(path=Path("/tmp/__nonexistent_dl__.json"))
+            # Bandit B108: this path is a deliberately-nonexistent negative-
+            # test fixture (verifying the missing-file → None contract), not
+            # a real temp-file write -- nothing is ever written here.
+            result1 = read_dead_letter(path=Path("/tmp/__nonexistent_dl__.json"))  # nosec B108
             c1 = result1 is None
             audit["checks"].append({
                 "check": "read_dead_letter returns None on missing file (CONSTRAINT #4 — no fabrication)",
@@ -7244,7 +7258,9 @@ class GravityAIAuditor:
                 from gui.strategy_health import read_gravity_report
 
                 # Check 4: missing file → []
-                c4_list = read_gravity_report(path=Path("/tmp/__no_gravity__.json"))
+                # Bandit B108: same deliberately-nonexistent negative-test
+                # fixture pattern as Check 1 above -- nothing is ever written.
+                c4_list = read_gravity_report(path=Path("/tmp/__no_gravity__.json"))  # nosec B108
                 c4 = c4_list == []
                 audit["checks"].append({
                     "check": "read_gravity_report returns [] on missing file (CONSTRAINT #4)",
@@ -7734,7 +7750,7 @@ class GravityAIAuditor:
             # ── 2. DecisionEntry is frozen dataclass ──────────────────────────
             e = DecisionEntry("AAPL", "acted", "BUY", 0.8, "", "2026-06-26T12:00:00+00:00", "")
             try:
-                exec("e.symbol = 'MSFT'")  # noqa: S102 — intentional freeze test
+                exec("e.symbol = 'MSFT'")  # noqa: S102 — intentional freeze test  # nosec B102 -- hardcoded literal string, zero external input
                 frozen_ok = False
             except (AttributeError, TypeError):
                 frozen_ok = True

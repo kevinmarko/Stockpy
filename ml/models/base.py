@@ -85,7 +85,11 @@ class Model(ABC):
         Raises TypeError if the loaded object is not the expected class.
         """
         with open(path, "rb") as f:
-            obj = pickle.load(f)
+            # Bandit B301: loads a model artifact this same training pipeline
+            # wrote to local disk (LOCAL_DATA_ROOT), not externally-supplied
+            # data -- same convention as ml/lgbm_ranker.py, ml/meta_labeling.py,
+            # and ml/options_meta_labeler.py's own model-persistence loaders.
+            obj = pickle.load(f)  # nosec B301
         if not isinstance(obj, cls):
             raise TypeError(f"Expected {cls.__name__}, got {type(obj).__name__}")
         return obj

@@ -45,16 +45,15 @@ export const MultiBrokerGatewayView: React.FC<MultiBrokerGatewayViewProps> = ({
   const handleTriggerFailover = async (targetId: string, reasonText?: string) => {
     setActionMessage(null);
     const res = await failoverMutation.run({
-      target_broker_id: targetId,
+      target_broker: targetId,
       reason: reasonText || failoverReason || "Manual operator failover request",
-      force: true,
     });
 
-    if (res && res.success) {
-      setActionMessage(res.message);
+    if (res && res.status === "ok") {
+      setActionMessage(`Switched active broker to ${res.active_broker}`);
       reload();
       if (onFailoverSuccess) {
-        onFailoverSuccess(res.active_broker_id);
+        onFailoverSuccess(res.active_broker);
       }
     }
   };
@@ -227,7 +226,7 @@ export const MultiBrokerGatewayView: React.FC<MultiBrokerGatewayViewProps> = ({
             {activeBrokerId.toUpperCase()}
           </div>
           <div style={{ fontSize: "0.68rem", color: theme.textSecondary, marginTop: 2 }}>
-            Failover Mode: {status?.failover_mode.toUpperCase() || "AUTO"}
+            Failover Mode: {status?.manual_override_broker_id ? "MANUAL OVERRIDE ACTIVE" : "AUTO"}
           </div>
         </div>
 

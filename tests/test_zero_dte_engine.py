@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from unittest.mock import MagicMock, patch
+
 from pilots.zero_dte_engine import (
     OpeningRange,
     SqueezeResult,
@@ -22,6 +24,7 @@ from pilots.zero_dte_engine import (
     parse_chain_data,
     execute_0dte_trade,
     execute_0dte_exits,
+    manage_0dte_exits,
 )
 
 
@@ -541,3 +544,107 @@ def test_zero_dte_engine_ast_safety():
 
     overlap = imported_modules & forbidden_modules
     assert not overlap, f"pilots/zero_dte_engine.py must not import {overlap}"
+
+
+class TestManageZeroDteExits:
+    """manage_0dte_exits -- closes audit finding F5
+    (.claude/giant_master_plan_audit.md): evaluate_0dte_exits/execute_0dte_exits
+    were correctly implemented and tested but had no live-callable composition
+    path, unlike the sibling pilots/paper_broker.py::manage_position_exits.
+    """
+
+    @staticmethod
+    def _today_et_symbol(underlying="SPY", strike=500.0, option_type="CALL"):
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        return f"{underlying} {today} ${strike:.2f} {option_type}"
+
+    @staticmethod
+    def _far_future_symbol(underlying="QQQ", strike=400.0, option_type="PUT"):
+        return f"{underlying} 2099-12-31 ${strike:.2f} {option_type}"
+
+    def test_no_open_0dte_positions_returns_honest_empty_shape(self):
+        mock_store = MagicMock()
+        mock_pos = MagicMock(symbol=self._far_future_symbol())
+        mock_store.get_open_positions.return_value = [mock_pos]
+
+        result = manage_0dte_exits(store=mock_store)
+
+        assert result["reason"] == "no_0dte_positions_open"
+        assert result["signals"] == []
+        assert result["executed_count"] == 0
+        assert result["failed_count"] == 0
+
+    def test_filters_out_non_0dte_expiring_position(self):
+        mock_store = MagicMock()
+        today_pos = MagicMock(symbol=self._today_et_symbol(), qty=1.0, avg_entry_price=2.0, market_value=200.0)
+        future_pos = MagicMock(symbol=self._far_future_symbol(), qty=1.0, avg_entry_price=2.0, market_value=200.0)
+        mock_store.get_open_positions.return_value = [today_pos, future_pos]
+
+        with patch("pilots.zero_dte_engine.evaluate_0dte_exits", return_value=[]) as mock_eval:
+            manage_0dte_exits(store=mock_store)
+
+        # Only the today-expiring position should have been passed through to
+        # the evaluator -- the far-future position must be filtered out.
+        called_positions = mock_eval.call_args.kwargs["positions"]
+        assert len(called_positions) == 1
+        assert called_positions[0] is today_pos
+
+    def test_dry_run_returns_signals_without_executing(self):
+        mock_store = MagicMock()
+        today_pos = MagicMock(symbol=self._today_et_symbol(), qty=1.0, avg_entry_price=2.0, market_value=200.0)
+        mock_store.get_open_positions.return_value = [today_pos]
+
+        fake_signal = ZeroDteExitSignal(
+            exit_type="EXIT_HARD_TIME_STOP", exit_reason="HARD_TIME_STOP_1545",
+            symbol=self._today_et_symbol(), contract_symbol=self._today_et_symbol(),
+            position_id="pos_1", entry_price=2.0, current_price=2.5,
+            pnl_pct=0.25, unrealized_pl=50.0, quantity=1.0, urgent=True,
+        )
+        with patch("pilots.zero_dte_engine.evaluate_0dte_exits", return_value=[fake_signal]):
+            with patch("pilots.zero_dte_engine.execute_0dte_exits") as mock_execute:
+                result = manage_0dte_exits(dry_run=True, store=mock_store)
+
+        mock_execute.assert_not_called()
+        assert result["reason"] == "dry_run"
+        assert len(result["signals"]) == 1
+        assert result["signals"][0]["exit_reason"] == "HARD_TIME_STOP_1545"
+        assert result["executed_count"] == 0
+
+    def test_non_dry_run_executes_and_merges_result(self):
+        mock_store = MagicMock()
+        today_pos = MagicMock(symbol=self._today_et_symbol(), qty=1.0, avg_entry_price=2.0, market_value=200.0)
+        mock_store.get_open_positions.return_value = [today_pos]
+
+        fake_signal = ZeroDteExitSignal(
+            exit_type="EXIT_PROFIT_TARGET", exit_reason="PROFIT_TARGET_75",
+            symbol=self._today_et_symbol(), contract_symbol=self._today_et_symbol(),
+            position_id="pos_1", entry_price=2.0, current_price=3.5,
+            pnl_pct=0.75, unrealized_pl=150.0, quantity=1.0, urgent=False,
+        )
+        fake_execute_result = {
+            "executed_count": 1, "failed_count": 0,
+            "executed": [{"order_id": "x", "position_symbol": self._today_et_symbol(), "exit_reason": "PROFIT_TARGET_75", "net_cash_impact": 150.0}],
+            "failed": [],
+        }
+        with patch("pilots.zero_dte_engine.evaluate_0dte_exits", return_value=[fake_signal]):
+            with patch("pilots.zero_dte_engine.execute_0dte_exits", return_value=fake_execute_result) as mock_execute:
+                result = manage_0dte_exits(dry_run=False, store=mock_store)
+
+        mock_execute.assert_called_once_with([fake_signal], store=mock_store)
+        assert result["executed_count"] == 1
+        assert result["executed"] == fake_execute_result["executed"]
+        assert len(result["signals"]) == 1
+
+    def test_no_exit_conditions_triggered_returns_honest_shape(self):
+        mock_store = MagicMock()
+        today_pos = MagicMock(symbol=self._today_et_symbol(), qty=1.0, avg_entry_price=2.0, market_value=200.0)
+        mock_store.get_open_positions.return_value = [today_pos]
+
+        with patch("pilots.zero_dte_engine.evaluate_0dte_exits", return_value=[]):
+            with patch("pilots.zero_dte_engine.execute_0dte_exits") as mock_execute:
+                result = manage_0dte_exits(store=mock_store)
+
+        mock_execute.assert_not_called()
+        assert result["reason"] == "no_exit_conditions_triggered"
+        assert result["executed_count"] == 0

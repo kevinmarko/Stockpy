@@ -1,5 +1,7 @@
 from contextlib import contextmanager, ExitStack
 
+import numpy as np
+import pandas as pd
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -1955,13 +1957,39 @@ class TestMarketMakerSimulateEndpoint:
             )
         assert resp.status_code == 401
 
+def _synthetic_ai_forecast_bars(n: int = 750, base_price: float = 150.0, seed: int = 11) -> "pd.DataFrame":
+    """A real-shaped (Open/High/Low/Close/Volume), sufficiently-long synthetic
+    OHLCV panel for hermetically testing get_transformer_forecast/
+    post_diffusion_stress_test without touching HistoricalStore's real DB/live
+    fallback (audit finding F7 fix) -- both endpoints need >=750 lookback days
+    to clear their own real minimum-history/minimum-training-window gates.
+    """
+    rng = np.random.default_rng(seed)
+    rets = rng.normal(loc=0.0003, scale=0.012, size=n)
+    close = base_price * np.cumprod(1 + rets)
+    idx = pd.bdate_range(end="2026-08-01", periods=n)
+    return pd.DataFrame(
+        {
+            "Open": close * 0.999,
+            "High": close * 1.005,
+            "Low": close * 0.995,
+            "Close": close,
+            "Volume": 1_000_000.0,
+        },
+        index=idx,
+    )
+
+
 class TestAIForecastingEndpoints:
     def test_get_transformer_forecast_success(self):
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = _synthetic_ai_forecast_bars(seed=11)
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
-            resp = _client.get(
-                "/pilots/options/ai/transformer-forecast?symbol=AAPL",
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
-            )
+            with patch.object(pilots_api, "HistoricalStore", return_value=mock_store):
+                resp = _client.get(
+                    "/pilots/options/ai/transformer-forecast?symbol=AAPL",
+                    headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                )
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
@@ -1971,6 +1999,7 @@ class TestAIForecastingEndpoints:
         assert "21d" in body["forecast"]
         assert "60d" in body["forecast"]
         assert len(body["attention_heatmap"]) == 60
+        mock_store.get_bars.assert_called_once_with("AAPL", lookback_days=750)
 
     def test_get_transformer_forecast_fails_closed_with_wrong_token(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -1979,6 +2008,18 @@ class TestAIForecastingEndpoints:
                 headers={"Authorization": "Bearer WRONG"},
             )
         assert resp.status_code == 401
+
+    def test_get_transformer_forecast_insufficient_history_returns_honest_422(self):
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = pd.DataFrame()
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            with patch.object(pilots_api, "HistoricalStore", return_value=mock_store):
+                resp = _client.get(
+                    "/pilots/options/ai/transformer-forecast?symbol=ZZZZ",
+                    headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
     def test_post_diffusion_stress_test_success(self):
         payload = {
@@ -1989,12 +2030,15 @@ class TestAIForecastingEndpoints:
             "horizon": 10,
             "drift": 0.05
         }
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = _synthetic_ai_forecast_bars(seed=22, base_price=200.0)
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
-            resp = _client.post(
-                "/pilots/options/ai/diffusion-stress-test",
-                json=payload,
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
-            )
+            with patch.object(pilots_api, "HistoricalStore", return_value=mock_store):
+                resp = _client.post(
+                    "/pilots/options/ai/diffusion-stress-test",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                )
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "TSLA"
@@ -2002,6 +2046,21 @@ class TestAIForecastingEndpoints:
         assert len(body["paths"][0]) == 10
         assert "VaR_95" in body
         assert "CVaR_95" in body
+        mock_store.get_bars.assert_called_once_with("TSLA", lookback_days=750)
+
+    def test_post_diffusion_stress_test_insufficient_history_returns_honest_422(self):
+        payload = {"symbol": "ZZZZ", "spot_price": 200.0, "volatility": 0.5, "num_paths": 100, "horizon": 10, "drift": 0.05}
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = pd.DataFrame()
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            with patch.object(pilots_api, "HistoricalStore", return_value=mock_store):
+                resp = _client.post(
+                    "/pilots/options/ai/diffusion-stress-test",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
     def test_post_diffusion_stress_test_fails_closed_with_wrong_token(self):
         payload = {
@@ -2714,3 +2773,72 @@ class TestPilotsExecutionSec606Report:
         assert "summary" in resp.json()
 
 
+
+
+class TestPostOptionsZeroDteManageExits:
+    """POST /pilots/options/0dte/manage-exits -- closes audit finding F5
+    (.claude/giant_master_plan_audit.md): evaluate_0dte_exits/execute_0dte_exits
+    were correctly implemented and tested but had no live-callable path.
+    """
+
+    def test_fails_closed_when_writes_disabled(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=False):
+            resp = _client.post(
+                "/pilots/options/0dte/manage-exits",
+                json={},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/0dte/manage-exits",
+                json={},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_calls_through_to_manage_0dte_exits_with_expected_kwargs(self):
+        mock_result = {
+            "signals": [], "executed_count": 0, "failed_count": 0,
+            "executed": [], "failed": [], "reason": "no_0dte_positions_open",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            with patch("pilots.zero_dte_engine.manage_0dte_exits", return_value=mock_result) as mock_manage:
+                resp = _client.post(
+                    "/pilots/options/0dte/manage-exits",
+                    json={"dry_run": True, "profit_target_pct": 0.5, "stop_loss_pct": 0.25, "hard_exit_time": "15:30"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json() == mock_result
+        mock_manage.assert_called_once_with(
+            dry_run=True, profit_target_pct=0.5, stop_loss_pct=0.25, hard_exit_time="15:30",
+        )
+
+    def test_no_body_uses_defaults(self):
+        mock_result = {"signals": [], "executed_count": 0, "failed_count": 0, "executed": [], "failed": [], "reason": "no_0dte_positions_open"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            with patch("pilots.zero_dte_engine.manage_0dte_exits", return_value=mock_result) as mock_manage:
+                resp = _client.post(
+                    "/pilots/options/0dte/manage-exits",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        mock_manage.assert_called_once_with(
+            dry_run=False, profit_target_pct=None, stop_loss_pct=None, hard_exit_time=None,
+        )
+
+    def test_exception_dead_letters_instead_of_leaking(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            with patch("pilots.zero_dte_engine.manage_0dte_exits", side_effect=RuntimeError("boom")):
+                resp = _client.post(
+                    "/pilots/options/0dte/manage-exits",
+                    json={},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert "boom" not in body["error"]

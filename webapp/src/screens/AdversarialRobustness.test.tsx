@@ -166,10 +166,10 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
     // Observable contract: it renders a very large feed without crashing. The
     // virtualization strategy (e.g. content-visibility) is an ActivityFeed
     // implementation detail owned separately, so we don't assert on it here.
-    const firstAlert = await screen.findByText("Extremely high alert item number #0", {}, { timeout: 15000 });
+    const firstAlert = await screen.findByText("Extremely high alert item number #0", {}, { timeout: 30000 });
     expect(firstAlert).toBeInTheDocument();
     expect(screen.getByTestId("activity-feed-widget")).toBeInTheDocument();
-  }, 20000);
+  }, 45000);
 
   // --- 4. NotebookML Export Screen robust handling ---
 

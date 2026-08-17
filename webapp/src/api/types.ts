@@ -4740,66 +4740,76 @@ export interface GexStrikePoint {
   call_gex: number;
   put_gex: number;
   net_gex: number;
-  open_interest_calls?: number;
-  open_interest_puts?: number;
-  gamma_calls?: number;
-  gamma_puts?: number;
+  total_oi?: number;
+  call_oi?: number;
+  put_oi?: number;
+  call_volume?: number;
+  put_volume?: number;
+  abs_gex?: number;
+  gamma_concentration_pct?: number;
 }
 
 export interface GexProfileResponse {
   symbol: string;
   spot_price: number;
-  net_gex_dollars: number;
+  net_gex: number;
+  total_call_gex?: number;
+  total_put_gex?: number;
   zero_gamma_flip: number;
-  call_gamma_wall: number;
-  put_gamma_wall: number;
-  volatility_regime: "VOL_DAMPENER" | "VOL_ACCELERATOR";
+  call_wall_strike: number;
+  put_wall_strike: number;
+  gamma_regime: "POSITIVE_GAMMA" | "NEGATIVE_GAMMA" | "PIN_RISK_HIGH";
+  regime_description: string;
+  dealer_hedging_flow: number;
+  dealer_hedging_per_1pct_move_dollars?: number;
+  dealer_hedging_shares_per_1pct_move?: number;
   strikes: GexStrikePoint[];
   as_of?: string;
-  dealer_positioning_bias?: string;
-}
-
-export interface LobLevel {
-  price: number;
-  size: number;
-  num_orders: number;
-  is_user_level?: boolean;
-  user_queue_position?: number;
+  spot_price_source?: string;
+  chain_source?: string;
 }
 
 export interface LobQueueSimulationRequest {
-  symbol: string;
-  strike: number;
-  option_type: "CALL" | "PUT";
-  limit_price: number;
+  symbol?: string;
+  price_level: number;
   order_size: number;
-  order_side: "BUY" | "SELL";
-  latency_ms?: number;
-  arrival_rate_lambda?: number;
-  cancellation_rate_mu?: number;
+  depth_ahead: number;
+  lambda_limit?: number;
+  mu_cancel?: number;
+  theta_market?: number;
+  time_horizon_sec?: number;
+  num_simulations?: number;
+}
+
+export interface LobQueuePercentiles {
+  p10: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p90: number | null;
+  p95: number | null;
 }
 
 export interface LobQueueSimulationResponse {
+  valid: boolean;
   symbol: string;
-  strike: number;
-  option_type: "CALL" | "PUT";
-  limit_price: number;
+  price_level: number;
   order_size: number;
-  order_side: "BUY" | "SELL";
-  queue_priority_position: number;
-  orders_ahead: number;
-  size_ahead: number;
-  fill_probability_30s: number;
-  fill_probability_60s: number;
-  fill_probability_300s: number;
-  estimated_fill_time_seconds: number;
-  fill_time_p50: number;
-  fill_time_p95: number;
-  bids: LobLevel[];
-  asks: LobLevel[];
-  spread: number;
-  mid_price: number;
-  market_depth_summary: string;
+  depth_ahead: number;
+  time_horizon_sec: number;
+  num_simulations: number;
+  fill_probability: number;
+  expected_fill_time_sec: number | null;
+  expected_wait_time_sec: number;
+  unconditional_fill_time_sec: number;
+  median_fill_time_sec: number | null;
+  prob_adverse_move_before_fill: number;
+  expected_fill_ratio: number;
+  queue_depletion_velocity: number;
+  queue_progression_percentiles: LobQueuePercentiles;
+  cst_closed_form_fill_prob?: number | null;
+  reason?: string | null;
+  timestamp: string;
   as_of?: string;
 }
 
@@ -4841,6 +4851,7 @@ export interface CopulaPairsResponse {
   historical_series: CopulaSeriesPoint[];
   as_of?: string;
   status_note?: string;
+  is_synthetic?: boolean;
 }
 
 export interface MarketMakerStepPoint {
@@ -4889,39 +4900,24 @@ export interface MarketMakerSimResponse {
 
 export interface TransformerForecastResponse {
   symbol: string;
-  current_vol: number;
-  forecast_horizon: number;
-  cone_lower_bounds: number[];
-  cone_upper_bounds: number[];
-  forecast_trajectory: number[];
-  attention_weights: number[][];
-  feature_importance: Record<string, number>;
-  as_of?: string;
+  forecast: Record<string, number>;
+  attention_heatmap: number[][];
 }
 
 export interface DiffusionStressRequest {
   symbol: string;
-  drift: number;
+  spot_price: number;
   volatility: number;
-  jump_intensity: number;
-  jump_mean: number;
-  jump_std: number;
-  paths: number;
-  horizon_days: number;
+  drift?: number;
+  num_paths?: number;
+  horizon?: number;
 }
 
 export interface DiffusionStressResponse {
   symbol: string;
-  horizon_days: number;
-  paths_simulated: number;
-  cvar_95: number;
-  var_95: number;
-  expected_shortfall: number;
-  max_drawdown_distribution: number[];
-  terminal_price_distribution: number[];
-  crash_probabilities: Record<string, number>;
-  sample_paths: number[][];
-  as_of?: string;
+  paths: number[][];
+  VaR_95: number;
+  CVaR_95: number;
 }
 
 export interface HrpCvarOptimizeRequest {
@@ -5023,24 +5019,20 @@ export interface FixRouteOrderResponse {
 export interface ResearchSynthesizeRequest {
   prompt: string;
   strategy_type?: string;
-  asset_universe?: string[];
-  lookback_period_days?: number;
-  target_metric?: string;
-  enable_ast_security_scan?: boolean;
-  constraints?: Record<string, any>;
+  target_asset_class?: string;
 }
 
 export interface ResearchSynthesizeResponse {
-  synthesis_id: string;
-  prompt: string;
-  synthesized_code: string;
-  ast_safety_passed: boolean;
-  ast_violations: string[];
-  suggested_parameters: Record<string, any>;
+  success: boolean;
+  code: string;
+  metadata: Record<string, any>;
+  validation_passed: boolean;
+  validation_errors: string[];
+  source_prompt: string;
+  synthesis_mode: string;
   explanation: string;
-  model_used: string;
-  created_at?: string;
-  confidence_score: number;
+  target_asset_class?: string | null;
+  strategy_type?: string | null;
 }
 
 export interface AutonomousBacktestRequest {
@@ -5162,7 +5154,6 @@ export interface RoutingAuditDto {
 
 export interface MultiBrokerStatusResponse {
   active_broker_id: string;
-  failover_mode: "auto" | "manual" | "disabled";
   manual_override_broker_id?: string | null;
   priority_hierarchy: string[];
   brokers: Record<string, BrokerHealthStatusDto>;
@@ -5171,22 +5162,19 @@ export interface MultiBrokerStatusResponse {
   last_failover_time?: string | null;
   last_failover_reason?: string | null;
   recent_routing_audits?: RoutingAuditDto[];
-  as_of?: string;
 }
 
 export interface BrokerFailoverRequest {
-  target_broker_id: string;
+  target_broker: string;
   reason?: string;
-  force?: boolean;
 }
 
 export interface BrokerFailoverResponse {
-  success: boolean;
-  previous_broker_id: string;
-  active_broker_id: string;
-  failover_timestamp: string;
+  status: string;
+  active_broker: string;
+  manual_override: string;
   reason: string;
-  message: string;
+  timestamp: string;
 }
 
 // ============================================================================

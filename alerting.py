@@ -220,7 +220,10 @@ def notify(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=_NTFY_REQUEST_TIMEOUT_S) as resp:
+        # Bandit B310: `req` targets ntfy.sh, built from the operator's own
+        # NTFY_TOPIC env var (see the docstring above), never a raw/attacker-
+        # controlled URL or scheme.
+        with urllib.request.urlopen(req, timeout=_NTFY_REQUEST_TIMEOUT_S) as resp:  # nosec B310
             if resp.status not in (200, 201):
                 logger.warning(
                     "ntfy POST returned unexpected HTTP %d for topic '%s'.",
