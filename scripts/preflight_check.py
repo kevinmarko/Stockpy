@@ -1211,22 +1211,37 @@ def check_db_exists() -> CheckResult:
     An empty file (0 bytes) indicates that ``database_setup.py`` was not run
     after cloning the repository.  A missing file indicates the same.
 
-    This check always validates the local ``quant_platform.db`` file
-    regardless of ``settings.DATABASE_URL`` (see ``db_config.py``): the
-    SQLite-backed caches -- ``HistoricalStore``, ``ForecastTracker``, and the
-    ``DailySignals``/``ExecutionLogs`` tables from ``database_setup.py`` --
-    always live in this local file. Only the SQLAlchemy ORM stores
-    (``transactions_store.py``'s ``trades`` table and
-    ``volatility/iv_engine.py``'s ``iv_history`` table) honor ``DATABASE_URL``
-    and may instead live in Postgres.
+    This check validates the canonical ``quant_platform.db`` file
+    resolved via ``settings.DATABASE_URL`` / ``settings.LOCAL_DATA_ROOT``
+    (defaulting to ``~/.stockpy_local/quant_platform.db``), with a fallback to
+    the legacy repo-root location.
     """
     name = "db_exists"
-    db = _REPO_ROOT / "quant_platform.db"
+    try:
+        configured = getattr(settings, "DATABASE_URL", None)
+        if configured and str(configured).strip():
+            from sqlalchemy.engine import make_url
+            url = make_url(str(configured).strip())
+            if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+                db = Path(url.database).resolve()
+            else:
+                db = Path(settings.LOCAL_DATA_ROOT / "quant_platform.db").resolve()
+        else:
+            db = Path(settings.LOCAL_DATA_ROOT / "quant_platform.db").resolve()
+    except Exception:
+        db = Path(settings.LOCAL_DATA_ROOT / "quant_platform.db").resolve()
+
     if db.exists() and db.stat().st_size > 0:
         return CheckResult(name, True, f"Database found: {db}")
+
+    # Fallback to repo root for standalone legacy checkouts
+    legacy_db = _REPO_ROOT / "quant_platform.db"
+    if legacy_db.exists() and legacy_db.stat().st_size > 0:
+        return CheckResult(name, True, f"Database found: {legacy_db}")
+
     return CheckResult(
         name, False,
-        "quant_platform.db not found or empty — run: python3 database_setup.py",
+        f"quant_platform.db not found or empty at {db} — run: python3 database_setup.py",
     )
 
 

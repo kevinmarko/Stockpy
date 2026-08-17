@@ -253,7 +253,7 @@ def run_cpcv_evaluation(
             is_sr = sharpe_ratio(trial["train_returns"], freq=freq)
             oos_sr = sharpe_ratio(trial["test_returns"], freq=freq)
             is_sharpes.append(is_sr if not np.isnan(is_sr) else -999.0)
-            oos_sharpes.append(oos_sr if not np.isnan(oos_sr) else -999.0)
+            oos_sharpes.append(oos_sr)
 
         is_sharpe_matrix.append(is_sharpes)
         oos_sharpe_matrix.append(oos_sharpes)
@@ -358,7 +358,8 @@ def run_cpcv_evaluation(
     )
 
     distribution = oos_sharpe_matrix[:, best_overall_idx]
-    mean_oos_sharpe = float(np.mean(distribution))
+    valid_dist = distribution[~np.isnan(distribution)]
+    mean_oos_sharpe = float(np.mean(valid_dist)) if len(valid_dist) > 0 else float("nan")
 
     # Genuinely OOS drawdown/sortino/hit-rate/avg-trade/turnover for the
     # DSR-selected strategy — the mean of each metric computed independently

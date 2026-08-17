@@ -1,3 +1,9 @@
+"""InvestYo Quant Platform — Hierarchical Risk Parity (HRP) & CVaR Optimizer.
+
+Implements Lopez de Prado's Hierarchical Risk Parity portfolio allocation combined
+with Conditional Value at Risk (CVaR / Expected Shortfall) optimization.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import linkage, leaves_list

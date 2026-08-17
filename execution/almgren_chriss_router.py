@@ -1,3 +1,9 @@
+"""InvestYo Quant Platform — Almgren-Chriss Optimal Execution Router.
+
+Computes optimal trading trajectories and schedule slicing to minimize market impact
+and volatility risk under the Almgren-Chriss execution framework.
+"""
+
 import numpy as np
 from typing import List, Dict
 

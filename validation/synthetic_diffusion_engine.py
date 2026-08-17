@@ -1,3 +1,9 @@
+"""InvestYo Quant Platform — Synthetic Diffusion Stress Testing Engine.
+
+Generates non-Gaussian synthetic market return paths and volatility regimes
+using historical return window calibration for rigorous stress testing.
+"""
+
 import numpy as np
 from typing import Dict, Tuple
 

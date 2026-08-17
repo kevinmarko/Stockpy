@@ -1253,6 +1253,14 @@ class Settings(BaseSettings):
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
     DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
 
+    # --- Script bootstrap & venv isolation ---
+    # When True or set via environment, scripts/_bootstrap.py skips re-executing
+    # under .venv's python interpreter (useful in containers or nested CI runs).
+    NO_VENV_REEXEC: bool = Field(
+        default=False,
+        description="When True, disables scripts/_bootstrap.py automatic re-exec into repo .venv.",
+    )
+
     # --- Advisory-only mode (Tier 5.1, 2026-06) ---
     # When True (the project default), the entire broker-execution surface is
     # quarantined: main_orchestrator._execute_broker_orders() returns

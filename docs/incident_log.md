@@ -60,3 +60,25 @@ per-signal operator log.
     instances found so far (`data/historical_store.py` in PR #718,
     `forecasting/forecast_tracker.py` in PR #720) — worth a deliberate, dedicated sweep
     rather than assuming it's fully closed.
+
+### 2026-08-17 — Runtime Bug Hunter Audit: Settings Isolation, Preflight Database Resolution, & OOS NaN Metrics
+
+- **Detected:** automated Bug Hunter CLI (`scripts/bug_hunter.py --quick`) and targeted live test suite execution.
+- **Symptom:**
+  1. `conftest.py` instantiated `Settings()` directly, causing local `.env` keys (`STATE_API_TOKEN`) to leak into and fail unauthenticated test assertions across `test_state_api.py` and `test_pilots_api.py`.
+  2. `scripts/preflight_check.py::check_db_exists` checked `_REPO_ROOT / 'quant_platform.db'`, falsely failing on fresh worktrees where the canonical database resides under `settings.LOCAL_DATA_ROOT`.
+  3. `validation/metrics.py` injected `-999.0` sentinels into out-of-sample Sharpe arrays during CPCV, distorting `mean_oos_sharpe` when evaluating degenerate trials.
+  4. Undeclared environment variable `NO_VENV_REEXEC` in `scripts/_bootstrap.py`.
+- **Root cause:**
+  1. `conftest.py` settings reset invoked `Settings()` without `_env_file=None`.
+  2. `check_db_exists` missed the canonical `LOCAL_DATA_ROOT` migration.
+  3. Sentinel replacement in metric evaluations violated CONSTRAINT #4 (never fabricate metrics).
+  4. Bootstrap venv override was added without corresponding `settings.py` Field.
+- **Remediation:**
+  - `conftest.py` settings reset initialized with `Settings(_env_file=None)`.
+  - `check_db_exists` updated to resolve canonical database via `LOCAL_DATA_ROOT` / `DATABASE_URL` with repo-root fallback.
+  - `validation/metrics.py` and `validation/autonomous_backtest_runner.py` updated to preserve genuine `NaN` in OOS Sharpe arrays and compute robust nan-filtered means.
+  - `NO_VENV_REEXEC` declared in `settings.py` and documented in `.env.example`.
+  - Missing module docstrings added across 6 modules.
+- **Pause taken?** No — pre-production verification findings.
+- **Follow-up:** All 140 preflight tests and targeted API/validation test suites verified clean.

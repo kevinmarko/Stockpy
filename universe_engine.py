@@ -6,6 +6,7 @@ accounting for additions and deletions, to detect and report survivorship bias.
 """
 
 import os
+import io
 import logging
 import argparse
 from datetime import date, datetime, timedelta
@@ -140,7 +141,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        tables = pd.read_html(resp.text)
+        tables = pd.read_html(io.StringIO(resp.text))
 
         current_tickers = _parse_current_constituents(tables)
 

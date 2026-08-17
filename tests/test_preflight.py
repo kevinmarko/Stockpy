@@ -483,24 +483,35 @@ class TestDaemonConfirmedAliveHelper:
 class TestDbExists:
     """The SQLite database must exist and be non-empty."""
 
-    def test_passes_when_db_present(self, tmp_path):
-        """A non-zero-byte file at the expected path → PASS."""
+    def test_passes_when_db_present_in_local_data_root(self, tmp_path):
+        """A non-zero-byte file in LOCAL_DATA_ROOT → PASS."""
         from scripts.preflight_check import check_db_exists
         db = tmp_path / "quant_platform.db"
-        # Write enough bytes that ``st_size > 0`` is satisfied.
         db.write_bytes(b"SQLite" + b"\x00" * 100)
-        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+        s = _settings(tmp_path, LOCAL_DATA_ROOT=tmp_path)
+        with patch("scripts.preflight_check.settings", s), patch("scripts.preflight_check._REPO_ROOT", tmp_path / "repo"):
+            r = check_db_exists()
+        assert r.passed
+
+    def test_passes_when_db_present_in_repo_root_fallback(self, tmp_path):
+        """A non-zero-byte file in repo root fallback → PASS."""
+        from scripts.preflight_check import check_db_exists
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        db = repo_dir / "quant_platform.db"
+        db.write_bytes(b"SQLite" + b"\x00" * 100)
+        s = _settings(tmp_path, LOCAL_DATA_ROOT=tmp_path / "empty_local_data_root")
+        with patch("scripts.preflight_check.settings", s), patch("scripts.preflight_check._REPO_ROOT", repo_dir):
             r = check_db_exists()
         assert r.passed
 
     def test_fails_when_missing(self, tmp_path):
-        """No database file → FAIL with "not found" in the reason.
-
-        ``_REPO_ROOT`` is patched to ``tmp_path`` (which has no DB) so the
-        real repo database does not interfere with this failure test.
-        """
+        """No database file → FAIL with "not found" in the reason."""
         from scripts.preflight_check import check_db_exists
-        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+        empty_root = tmp_path / "empty_root"
+        empty_root.mkdir()
+        s = _settings(tmp_path, LOCAL_DATA_ROOT=empty_root)
+        with patch("scripts.preflight_check.settings", s), patch("scripts.preflight_check._REPO_ROOT", empty_root):
             r = check_db_exists()
         assert not r.passed
         assert "not found" in r.reason

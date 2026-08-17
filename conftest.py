@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 try:
     from settings import Settings, settings
     import runtime_flags
-    # Reset singleton to clean defaults
-    _defaults = Settings()
+    # Reset singleton to clean defaults without reading developer's local .env file
+    _defaults = Settings(_env_file=None)
     for field_name in type(_defaults).model_fields:
         setattr(settings, field_name, getattr(_defaults, field_name))
 except Exception:

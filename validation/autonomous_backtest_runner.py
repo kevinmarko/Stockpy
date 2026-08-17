@@ -809,7 +809,7 @@ class AutonomousBacktestRunner:
                 oos_sr = sharpe_ratio(te_ret, freq=self.freq)
 
                 path_is_sharpes.append(is_sr if not np.isnan(is_sr) else -999.0)
-                path_oos_sharpes.append(oos_sr if not np.isnan(oos_sr) else -999.0)
+                path_oos_sharpes.append(oos_sr)
 
             is_sharpe_matrix.append(path_is_sharpes)
             oos_sharpe_matrix.append(path_oos_sharpes)
@@ -846,8 +846,8 @@ class AutonomousBacktestRunner:
 
         # 2. DSR Calculation for candidate strategy (index 0)
         cand_oos_sharpes = oos_arr[:, 0]
-        valid_cand_sharpes = cand_oos_sharpes[cand_oos_sharpes > -900]
-        mean_oos_cand_sharpe = float(np.mean(valid_cand_sharpes)) if len(valid_cand_sharpes) > 0 else 0.0
+        valid_cand_sharpes = cand_oos_sharpes[~np.isnan(cand_oos_sharpes)]
+        mean_oos_cand_sharpe = float(np.mean(valid_cand_sharpes)) if len(valid_cand_sharpes) > 0 else float("nan")
 
         # Mean IS Sharpe across all evaluated strategies to get cross-trial variance
         mean_is_sharpes = np.mean(np.where(is_arr > -900, is_arr, 0.0), axis=0)

@@ -61,7 +61,7 @@ def resolve_database_url() -> str:
     configured = getattr(settings, "DATABASE_URL", None)
     if configured and str(configured).strip():
         return str(configured).strip()
-    return DEFAULT_DATABASE_URL
+    return f"sqlite:///{settings.LOCAL_DATA_ROOT / 'quant_platform.db'}"
 
 
 def create_db_engine(db_url: str | None = None) -> Engine:
