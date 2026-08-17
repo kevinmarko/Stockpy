@@ -133,3 +133,54 @@ to `http://localhost:11434/v1`). See `tests/test_data_api_chat.py`'s
 `test_local_routing_ignores_client_supplied_base_url` for the regression
 test, and `docs/architecture/webapp-and-gui.md`'s "Multi-Model & Open Source
 AI Chat" entry for the documented contract.
+
+---
+
+## Post-review fixes, round 2 (2026-08-17)
+
+Three more issues found in the same review pass were fixed in a follow-up
+commit:
+
+1. **Concurrent unsynchronized WebSocket writes** (`api/ws_api.py`) — the
+   two per-connection asyncio tasks (`client_to_gemini`, `gemini_to_client`)
+   both wrote to the same `websocket` with no synchronization. Every
+   outbound frame now goes through one `asyncio.Lock()`-backed `_send_json`
+   helper instead of calling `websocket.send_json` directly from either
+   task.
+
+2. **WS auth's unset-token fail-open didn't check loopback** (`api/ws_api.py`,
+   `api/auth.py`) — `_check_ws_token` allowed any connection through when
+   `STATE_API_TOKEN` was unset, regardless of where it came from, unlike
+   `api/auth.py::require_read_token`'s HTTP posture (fail-open only for a
+   loopback caller, 503 otherwise). This PR's own `scripts/Caddyfile`
+   addition proxies `/ws/chat/*` to a non-loopback-reachable route, so the
+   gap mattered more here than it did before. Fixed by extracting a shared
+   `api.auth.is_loopback_host(host)` helper and having `_check_ws_token`
+   check the WebSocket's `.client.host` against it.
+
+3. **`contextText` prop change disconnected an active Live voice session**
+   (`webapp/src/components/AIChatInterface.tsx`) — the connect/disconnect
+   effect listed `contextText` as a dependency, and `connectLive()` tears
+   down any existing connection first, so any change to that prop while a
+   live session was open silently reconnected mid-conversation. Fixed by
+   dropping `contextText` from that effect's dependencies (the initial
+   value is still threaded in via a ref) and adding
+   `useGeminiLive.ts::sendContext()` plus a second effect that pushes
+   subsequent context updates over the already-open connection instead of
+   reconnecting.
+
+A fourth, lower-confidence finding (transcript replace-vs-append) was also
+addressed as a real fix rather than left open: `input_transcription`/
+`output_transcription` events are now treated as incremental fragments to
+append, matching how Gemini's own transcription samples stream (each event
+is printed with no separator, implying the caller concatenates rather than
+replaces) — the sibling `text` (`part.text`) streaming path already did
+this. `onTurnComplete` now also seals the trailing live message so a new
+turn's fragments open a fresh bubble instead of appending into the
+finished one.
+
+See `docs/architecture/webapp-and-gui.md`'s Gemini Live entry for the full
+detail, and `tests/test_gemini_live_chat.py::TestLoopbackOnlyFailOpen`,
+`tests/test_auth.py::TestIsLoopbackHost`, and
+`webapp/src/components/AIChatInterface.liveTranscript.test.tsx` for the
+regression coverage.

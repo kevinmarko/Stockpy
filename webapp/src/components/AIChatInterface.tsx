@@ -52,6 +52,12 @@ interface ChatMessage {
   thoughts?: string;
   suggestions?: string[];
   isLive?: boolean;
+  // Set once this live message's turn has finished (Gemini's
+  // "turn_complete" event). A sealed message is never appended to again --
+  // the next transcript/thought fragment for that role starts a fresh
+  // bubble instead, so multi-turn conversations don't run all their text
+  // together into one ever-growing message.
+  turnComplete?: boolean;
 }
 
 export default function AIChatInterface({ isOpen, onClose, contextText }: AIChatInterfaceProps) {
@@ -96,27 +102,42 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
     disconnectLive,
     toggleMic,
     sendTextMessage,
+    sendContext,
   } = useGeminiLive({
+    // input_transcription events stream the user's speech as INCREMENTAL
+    // fragments (mirroring how Gemini's own audio-transcription samples
+    // print each chunk with no separator/newline) -- each fragment is
+    // concatenated directly onto the still-open live user message, not
+    // used to replace it, so a multi-fragment utterance renders as the
+    // full sentence instead of only its last fragment. `!last.turnComplete`
+    // keeps this from appending into an already-finished prior turn's
+    // message once a new one starts.
     onUserTranscript: (text) => {
       setMessages((prev) => {
         const last = prev[prev.length - 1];
-        if (last && last.role === 'user' && last.isLive) {
+        if (last && last.role === 'user' && last.isLive && !last.turnComplete) {
           const updated = [...prev];
-          updated[updated.length - 1] = { ...last, content: text };
+          updated[updated.length - 1] = { ...last, content: `${last.content}${text}` };
           return updated;
         }
         return [...prev, { role: 'user', content: text, isLive: true }];
       });
     },
+    // isPartial=true is the streamed `part.text` path (space-joined, as
+    // before); isPartial=false is output_transcription, which -- like
+    // input_transcription above -- streams incremental fragments rather
+    // than the full cumulative text each time, so it's now appended
+    // (direct concat, matching the ASR-fragment convention) instead of
+    // replacing the message outright.
     onModelTranscript: (text, isPartial) => {
       setMessages((prev) => {
         const last = prev[prev.length - 1];
-        if (last && last.role === 'model' && last.isLive) {
+        if (last && last.role === 'model' && last.isLive && !last.turnComplete) {
           const updated = [...prev];
-          updated[updated.length - 1] = {
-            ...last,
-            content: isPartial ? (last.content ? `${last.content} ${text}` : text) : text,
-          };
+          const appended = isPartial
+            ? (last.content ? `${last.content} ${text}` : text)
+            : `${last.content}${text}`;
+          updated[updated.length - 1] = { ...last, content: appended };
           return updated;
         }
         return [...prev, { role: 'model', content: text, isLive: true }];
@@ -125,7 +146,7 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
     onThought: (thought) => {
       setMessages((prev) => {
         const last = prev[prev.length - 1];
-        if (last && last.role === 'model' && last.isLive) {
+        if (last && last.role === 'model' && last.isLive && !last.turnComplete) {
           const updated = [...prev];
           const prevThoughts = last.thoughts || '';
           updated[updated.length - 1] = {
@@ -138,6 +159,20 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
           ...prev,
           { role: 'model', content: '', thoughts: thought, isLive: true },
         ];
+      });
+    },
+    // Seals the trailing live message so the NEXT turn's transcript/thought
+    // fragments open a fresh bubble instead of appending into this
+    // now-finished one.
+    onTurnComplete: () => {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.isLive && !last.turnComplete) {
+          const updated = [...prev];
+          updated[updated.length - 1] = { ...last, turnComplete: true };
+          return updated;
+        }
+        return prev;
       });
     },
     onError: (err) => {
@@ -161,14 +196,56 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
     }
   }, [input]);
 
-  // Connect/disconnect Live when toggling live mode or closing drawer
+  // Latest contextText, read (not subscribed to) by the connect effect
+  // below -- mirrors useGeminiLive.ts's own optionsRef pattern.
+  const contextTextRef = useRef(contextText);
+  useEffect(() => {
+    contextTextRef.current = contextText;
+  }, [contextText]);
+
+  // Connect/disconnect Live ONLY when the drawer opens/closes or Live Mode
+  // is toggled -- deliberately NOT when contextText changes. contextText
+  // can legitimately update while a live voice session is already open
+  // (e.g. the operator is mid-conversation as the viewed symbol/page
+  // changes), and connectLive() tears down any existing connection before
+  // opening a new one -- if this effect depended on contextText directly,
+  // every such update would silently disconnect and reconnect the live
+  // session, losing Gemini's turn state and any buffered audio. The most
+  // recent contextText is still threaded in as the initial connect-time
+  // context via contextTextRef; updates that happen AFTER connecting are
+  // sent over the already-open connection by the effect below instead.
   useEffect(() => {
     if (isOpen && isLiveMode) {
-      connectLive(contextText);
+      connectLive(contextTextRef.current);
     } else {
       disconnectLive();
     }
-  }, [isOpen, isLiveMode, connectLive, disconnectLive, contextText]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isLiveMode, connectLive, disconnectLive]);
+
+  // Push a context UPDATE over the already-open connection (instead of
+  // reconnecting) whenever contextText changes while live and connected.
+  // lastSentContextRef tracks what's already been sent for the CURRENT
+  // session so this doesn't re-send the same initial value connectLive
+  // already sent once on open; it's cleared whenever the session isn't
+  // live-connected, so the next connection starts the tracking over.
+  const lastSentContextRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!isLiveMode || liveStatus !== 'connected') {
+      lastSentContextRef.current = undefined;
+      return;
+    }
+    if (lastSentContextRef.current === undefined) {
+      // First render of this connected session -- connectLive already sent
+      // this exact value as the initial context; nothing new to push.
+      lastSentContextRef.current = contextText;
+      return;
+    }
+    if (contextText && contextText !== lastSentContextRef.current) {
+      lastSentContextRef.current = contextText;
+      sendContext(contextText);
+    }
+  }, [contextText, isLiveMode, liveStatus, sendContext]);
 
   const toggleThought = (idx: number) => {
     setExpandedThoughts((prev) => ({ ...prev, [idx]: !prev[idx] }));

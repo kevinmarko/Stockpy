@@ -37,7 +37,14 @@ from starlette.websockets import WebSocketDisconnect
 from api.data_api import app
 from settings import settings
 
-client = TestClient(app)
+# client=("127.0.0.1", ...) -- Starlette's TestClient defaults to
+# ("testclient", 50000), a non-loopback host. _check_ws_token's unset-token
+# fail-open branch now only applies to a loopback caller (matching
+# api/auth.py::require_read_token's HTTP posture -- see api/ws_api.py's
+# docstring), so tests exercising that default-unset-token path need a
+# TestClient that actually presents as loopback, same convention already
+# used by tests/test_data_api_chat.py.
+client = TestClient(app, client=("127.0.0.1", 54321))
 
 
 class TestAuthAndGating:
@@ -90,6 +97,47 @@ class TestAuthAndGating:
         monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
 
         with client.websocket_connect("/ws/chat/live") as ws:
+            msg = ws.receive_json()
+            assert msg["type"] == "error"
+            assert "GEMINI_API_KEY" in msg["message"]
+
+
+class TestLoopbackOnlyFailOpen:
+    """_check_ws_token's unset-STATE_API_TOKEN branch must FAIL CLOSED for a
+    non-loopback caller, matching api/auth.py::require_read_token's HTTP
+    posture -- an unset token must never mean "open" once this endpoint is
+    reachable from outside the box (e.g. via the scripts/Caddyfile
+    /ws/chat/* reverse-proxy route). Before this fix, _check_ws_token
+    ignored the connection's origin entirely and always allowed an
+    unset-token connection through."""
+
+    def test_non_loopback_caller_rejected_when_token_unset(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
+        non_loopback_client = TestClient(app, client=("203.0.113.5", 54321))
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with non_loopback_client.websocket_connect("/ws/chat/live"):
+                pass
+        assert exc_info.value.code == 4003
+
+    def test_loopback_caller_still_allowed_when_token_unset(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+
+        # client (module-level) is already configured as ("127.0.0.1", ...).
+        with client.websocket_connect("/ws/chat/live") as ws:
+            msg = ws.receive_json()
+            assert msg["type"] == "error"
+            assert "GEMINI_API_KEY" in msg["message"]
+
+    def test_non_loopback_caller_with_valid_token_still_allowed(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", "secret-token-123")
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+        non_loopback_client = TestClient(app, client=("203.0.113.5", 54321))
+
+        with non_loopback_client.websocket_connect(
+            "/ws/chat/live?token=secret-token-123"
+        ) as ws:
             msg = ws.receive_json()
             assert msg["type"] == "error"
             assert "GEMINI_API_KEY" in msg["message"]

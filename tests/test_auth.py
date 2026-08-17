@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from settings import settings
 from api.auth import (
+    is_loopback_host,
     make_command_token_guard,
     require_read_token,
     require_stream_token,
@@ -160,3 +161,43 @@ class TestMakeCommandTokenGuard:
              mock.patch.object(settings, "FOLLOW_API_TOKEN", "follow-tok"):
             resp = loopback_client.get("/command", headers={"Authorization": "Bearer follow-tok"})
         assert resp.status_code == 401
+
+
+class TestIsLoopbackHost:
+    """is_loopback_host is the shared "what counts as loopback" definition
+    behind both _is_loopback (HTTP Request, used above) and
+    api/ws_api.py::_check_ws_token (WebSocket -- which has no Request object,
+    only .client.host, so it can't call _is_loopback directly). Covered here
+    directly so the two callers can't independently drift on the
+    definition."""
+
+    def test_127_0_0_1_is_loopback(self):
+        assert is_loopback_host("127.0.0.1") is True
+
+    def test_ipv6_loopback_is_loopback(self):
+        assert is_loopback_host("::1") is True
+
+    def test_localhost_hostname_is_loopback(self):
+        assert is_loopback_host("localhost") is True
+
+    def test_none_is_treated_as_loopback(self):
+        """Some ASGI transports (and Starlette's own TestClient default of
+        ("testclient", 50000)) don't expose a real client address; None is
+        treated as loopback so zero-config local/test use isn't broken --
+        every fail-closed branch built on this only tightens things for a
+        REAL non-loopback client."""
+        assert is_loopback_host(None) is True
+
+    def test_lan_address_is_not_loopback(self):
+        assert is_loopback_host("192.168.1.42") is False
+
+    def test_public_address_is_not_loopback(self):
+        assert is_loopback_host("203.0.113.5") is False
+
+    def test_testclient_default_hostname_is_not_loopback(self):
+        """Starlette's TestClient.__init__ defaults to
+        client=("testclient", 50000) when no explicit client= tuple is
+        passed -- that literal string is NOT in _LOOPBACK_HOSTS, so a test
+        suite that forgets to pass client=("127.0.0.1", ...) exercises the
+        non-loopback branch, not loopback, even though it's "just a test"."""
+        assert is_loopback_host("testclient") is False

@@ -262,6 +262,25 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     []
   );
 
+  /**
+   * Push an updated grounding-context string over the ALREADY-OPEN
+   * connection (server-side handled identically to the "context" message
+   * connectLive's onopen sends once at connect time — see
+   * api/ws_api.py::ws_live_chat_endpoint's "context" branch). Callers should
+   * use this instead of tearing down and reconnecting the live session
+   * whenever their context text changes mid-conversation -- reconnecting
+   * would lose the Gemini Live session's turn state and any buffered audio.
+   * No-ops on an empty string or when there's no open connection (mock mode
+   * has nothing to relay context to, so it's a no-op there too).
+   */
+  const sendContext = useCallback((text: string) => {
+    if (!text || !text.trim()) return;
+    if (USE_MOCK) return;
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "context", text }));
+    }
+  }, []);
+
   const interruptPlayback = useCallback(() => {
     playerRef.current?.interrupt();
   }, []);
@@ -279,6 +298,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     stopMic,
     toggleMic,
     sendTextMessage,
+    sendContext,
     interruptPlayback,
   };
 }

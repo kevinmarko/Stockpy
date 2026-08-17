@@ -32,6 +32,12 @@ Auth: every endpoint here accepts either a ``?token=<STATE_API_TOKEN>``
 query parameter or an ``Authorization: Bearer <token>`` header, matching the
 same gate used on HTTP endpoints, but adapted for the WS upgrade
 handshake (headers are read from the initial HTTP upgrade request).
+``_check_ws_token`` additionally FAILS CLOSED for a non-loopback caller when
+no token is configured, mirroring ``api/auth.py::require_read_token``'s
+posture for HTTP endpoints -- see that function's docstring and
+``api.auth.is_loopback_host`` for why an unset token must never mean "open"
+once an endpoint is reachable from outside this machine (e.g. via the
+``scripts/Caddyfile`` reverse-proxy routes for ``/ws/ticks/*``/``/ws/chat/*``).
 """
 from __future__ import annotations
 
@@ -43,6 +49,7 @@ from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
+from api.auth import is_loopback_host
 from data.websocket_streamer import _STREAMER as _WS_STREAMER, _WS_AVAILABLE
 from settings import settings
 
@@ -52,16 +59,23 @@ tick_router = APIRouter()
 training_router = APIRouter()
 live_chat_router = APIRouter()
 
-def _check_ws_token(token: Optional[str], auth_header: Optional[str]) -> bool:
+def _check_ws_token(
+    token: Optional[str], auth_header: Optional[str], client_host: Optional[str]
+) -> bool:
     """Return True if the caller supplied the correct API token.
 
-    Accepts token via query-param or Authorization: Bearer header.
-    If no token is configured on the server side, all connections are allowed
-    (loopback-only dev mode).
+    Accepts token via query-param or Authorization: Bearer header. If no
+    token is configured on the server side, connections are allowed ONLY
+    from a loopback client (zero-config local dev/test) -- matching
+    ``api/auth.py::require_read_token``'s HTTP posture exactly, rather than
+    the earlier, looser "no token configured -> always open" rule this
+    function used to apply regardless of where the connection came from.
+    *client_host* is the WebSocket's ``.client.host`` (``None`` under some
+    ASGI transports, treated as loopback -- see ``is_loopback_host``).
     """
     server_token = getattr(settings, "STATE_API_TOKEN", None)
     if not server_token:
-        return True  # no token configured — open access (loopback dev)
+        return is_loopback_host(client_host)
     if token and token == server_token:
         return True
     if auth_header and auth_header.startswith("Bearer "):
@@ -160,7 +174,8 @@ async def ws_tick_endpoint(
     The connection is closed with 4003 if the auth token is invalid.
     """
     auth_header = websocket.headers.get("authorization")
-    if not _check_ws_token(token, auth_header):
+    client_host = websocket.client.host if websocket.client else None
+    if not _check_ws_token(token, auth_header, client_host):
         await websocket.close(code=4003)
         logger.warning("ws_tick_endpoint: rejected unauthenticated connection for %s", symbol)
         return
@@ -227,7 +242,8 @@ async def ws_training_status_endpoint(
     ?token= query param or Authorization: Bearer header, checked against
     the same STATE_API_TOKEN-derived gate."""
     auth_header = websocket.headers.get("authorization")
-    if not _check_ws_token(token, auth_header):
+    client_host = websocket.client.host if websocket.client else None
+    if not _check_ws_token(token, auth_header, client_host):
         await websocket.close(code=4003)
         logger.warning("ws_training_status_endpoint: rejected unauthenticated connection")
         return
@@ -303,7 +319,8 @@ async def ws_live_chat_endpoint(
     - Requires settings.GEMINI_API_KEY.
     """
     auth_header = websocket.headers.get("authorization")
-    if not _check_ws_token(token, auth_header):
+    client_host = websocket.client.host if websocket.client else None
+    if not _check_ws_token(token, auth_header, client_host):
         await websocket.close(code=4003)
         logger.warning("ws_live_chat_endpoint: rejected unauthenticated connection")
         return
@@ -367,6 +384,21 @@ async def ws_live_chat_endpoint(
         })
 
         async with client.aio.live.connect(model=model_name, config=config) as session:
+            # client_to_gemini (below) and gemini_to_client (further below)
+            # run as two independently-scheduled asyncio tasks that BOTH
+            # write to this same `websocket` (a ping's "pong" reply from the
+            # former can race with the latter's audio/text/transcription/
+            # tool-call stream). Starlette's WebSocket has no send-side
+            # locking of its own, so two concurrent send_json() calls could
+            # interleave partial writes on the wire; every outbound frame
+            # goes through this one lock instead of calling
+            # websocket.send_json directly.
+            send_lock = asyncio.Lock()
+
+            async def _send_json(payload: dict) -> None:
+                async with send_lock:
+                    await websocket.send_json(payload)
+
             async def client_to_gemini():
                 try:
                     while True:
@@ -375,7 +407,7 @@ async def ws_live_chat_endpoint(
                             data = json.loads(msg_text)
                             msg_type = data.get("type")
                             if msg_type == "ping":
-                                await websocket.send_json({"type": "pong"})
+                                await _send_json({"type": "pong"})
                             elif msg_type == "realtime_input":
                                 audio_b64 = data.get("audio")
                                 text_input = data.get("text")
@@ -416,7 +448,7 @@ async def ws_live_chat_endpoint(
                             function_responses = []
                             for call in response.tool_call.function_calls:
                                 fn = tool_map.get(call.name)
-                                await websocket.send_json({
+                                await _send_json({
                                     "type": "thought",
                                     "content": f"Querying {call.name}..."
                                 })
@@ -449,30 +481,30 @@ async def ws_live_chat_endpoint(
                                             audio_b64 = base64.b64encode(raw_audio).decode("ascii")
                                         else:
                                             audio_b64 = str(raw_audio)
-                                        await websocket.send_json({
+                                        await _send_json({
                                             "type": "audio",
                                             "data": audio_b64,
                                             "mimeType": "audio/pcm;rate=24000"
                                         })
                                     if part.text:
-                                        await websocket.send_json({
+                                        await _send_json({
                                             "type": "text",
                                             "content": part.text
                                         })
                             if server_content.input_transcription:
-                                await websocket.send_json({
+                                await _send_json({
                                     "type": "input_transcription",
                                     "text": server_content.input_transcription.text
                                 })
                             if server_content.output_transcription:
-                                await websocket.send_json({
+                                await _send_json({
                                     "type": "output_transcription",
                                     "text": server_content.output_transcription.text
                                 })
                             if getattr(server_content, "interrupted", False):
-                                await websocket.send_json({"type": "interrupted"})
+                                await _send_json({"type": "interrupted"})
                             if getattr(server_content, "turn_complete", False):
-                                await websocket.send_json({"type": "turn_complete"})
+                                await _send_json({"type": "turn_complete"})
                 except WebSocketDisconnect:
                     pass
                 except asyncio.CancelledError:
@@ -480,7 +512,7 @@ async def ws_live_chat_endpoint(
                 except Exception as e:
                     logger.warning("gemini_to_client exception: %s", type(e).__name__)
                     try:
-                        await websocket.send_json({
+                        await _send_json({
                             "type": "error",
                             "message": "Live connection encountered an issue."
                         })
