@@ -5957,32 +5957,60 @@ def get_options_meta_model_status() -> Dict[str, Any]:
     ],
 )
 def post_options_meta_model_retrain() -> Dict[str, Any]:
-    """Triggers retraining of the Stage 4 ML Options Meta-Labeler on simulated/paper trades."""
+    """Triggers retraining of the Stage 4 ML Options Meta-Labeler on simulated/paper trades.
+
+    Feature rows are built from each simulated trade's REAL entry-condition
+    fields (``entry_ivr``/``entry_vrp``/``entry_vix``/
+    ``entry_credit_to_width_ratio``/``entry_short_delta``), computed by
+    ``validation.options_harness.OptionsValidationHarness.run_backtest`` from
+    real in-scope backtest quantities (real IV proxy, real Black-Scholes
+    delta, real spread economics, real historical VIXCLS) -- never the
+    previous hardcoded literals (``ivr=50.0, vrp=0.02, vix=20.0, ...``). A
+    trade missing any one of these real fields (e.g. ``entry_vix`` on a date
+    with no real FRED observation) is SKIPPED, never silently defaulted
+    (CONSTRAINT #4); the skip count is logged and returned in the response.
+    """
     from ml.options_meta_labeler import global_options_meta_labeler, OptionsTradeFeatureRow
     from validation.options_harness import OptionsValidationHarness
-    
+
     # Generate multi-strategy training samples using historical backtests
     harness = OptionsValidationHarness()
     samples = []
+    skipped_count = 0
     for strat in ["Put Credit Spread", "Call Credit Spread", "Iron Condor"]:
         try:
             res = harness.run_backtest(strategy=strat, ticker="SPY", start_date="2020-01-01", end_date="2024-01-01")
             for t in res.trades:
+                if (
+                    t.entry_ivr is None
+                    or t.entry_vrp is None
+                    or t.entry_vix is None
+                    or t.entry_credit_to_width_ratio is None
+                    or t.entry_short_delta is None
+                ):
+                    skipped_count += 1
+                    continue
                 samples.append(
                     OptionsTradeFeatureRow(
                         strategy=t.strategy,
-                        ivr=50.0,
-                        vrp=0.02,
-                        vix=20.0,
+                        ivr=t.entry_ivr,
+                        vrp=t.entry_vrp,
+                        vix=t.entry_vix,
                         trend_bias=1.0 if "put" in t.strategy.lower() else -1.0,
                         target_dte=35,
-                        credit_to_width_ratio=0.30,
-                        short_delta=0.30,
+                        credit_to_width_ratio=t.entry_credit_to_width_ratio,
+                        short_delta=t.entry_short_delta,
                         outcome_win=1 if t.pnl_dollar > 0 else 0,
                     )
                 )
         except Exception as exc:
             logger.warning("Failed to extract training trades for %s: %s", strat, exc)
+
+    if skipped_count:
+        logger.info(
+            "post_options_meta_model_retrain: skipped %d trade(s) missing a real entry-condition field.",
+            skipped_count,
+        )
 
     if not samples:
         raise HTTPException(status_code=500, detail="Failed to generate training data for Meta-Labeler.")
@@ -5991,6 +6019,7 @@ def post_options_meta_model_retrain() -> Dict[str, Any]:
     return {
         "status": "success",
         "trained_samples": train_res["samples"],
+        "skipped_trades": skipped_count,
         "accuracy": round(train_res["accuracy"] * 100.0, 2),
         "roc_auc": round(train_res["roc_auc"], 3),
         "trained_at": global_options_meta_labeler.trained_at.isoformat() if global_options_meta_labeler.trained_at else None,
@@ -6595,21 +6624,89 @@ class DiffusionStressTestRequest(BaseModel):
     dependencies=[Depends(require_read_token)],
 )
 def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
-    from ml.transformer_vol_forecaster import build_tft_model, predict_multi_horizon_vol
-    import numpy as np
+    """Fits a fresh transformer-style multi-horizon vol forecaster on REAL
+    historical daily bars for ``symbol`` and predicts on the real most-recent
+    window (closes audit finding F7: this previously fed the model
+    ``np.random.randn(...)`` noise as "market history", and the model's
+    output weights were never trained at all -- real input alone into an
+    untrained model would still be a meaningless-output bug). Degrades to an
+    honest 422 (never fabricated data) when real history is insufficient."""
+    from ml.transformer_vol_forecaster import (
+        build_causal_vol_features,
+        build_training_windows,
+        train_vol_forecaster,
+        predict_multi_horizon_vol,
+    )
 
-    # Instantiate the numpy-based TFT engine
-    model = build_tft_model(seq_len=60, d_model=32, num_heads=4, horizons=[1, 5, 21, 60])
-    
-    # Dummy input sequence representing recent market history (batch_size=1, seq_len=60, features=32)
-    X = np.random.randn(1, 60, 32)
-    
-    forecasts, attn_weights = predict_multi_horizon_vol(X, model)
-    
+    SEQ_LEN = 60
+    D_MODEL = 32
+    NUM_HEADS = 4
+    HORIZONS = [1, 5, 21, 60]
+    MIN_TRAIN_SAMPLES = 30
+    TRAIN_STRIDE = 3
+
+    try:
+        bars = HistoricalStore().get_bars(symbol, lookback_days=750)
+    except Exception:  # noqa: BLE001 - a provider/network failure degrades to insufficient history, never fabricated data
+        bars = None
+    if bars is None or bars.empty or "Close" not in bars.columns:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history_for_symbol",
+                "symbol": symbol,
+                "message": f"No historical price data available for {symbol}.",
+            },
+        )
+
+    feat_df = build_causal_vol_features(bars, d_model=D_MODEL).dropna()
+    min_required = SEQ_LEN + max(HORIZONS) + MIN_TRAIN_SAMPLES
+    if len(feat_df) < min_required:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history_for_symbol",
+                "symbol": symbol,
+                "message": (
+                    f"Only {len(feat_df)} usable trading days of feature history for {symbol}; "
+                    f"need at least {min_required} to build a real training set."
+                ),
+            },
+        )
+
+    feat_matrix = feat_df.to_numpy()
+    close_arr = bars["Close"].astype(float).reindex(feat_df.index).to_numpy()
+
+    X_train, y_train, _ = build_training_windows(
+        feat_matrix, close_arr, seq_len=SEQ_LEN, horizons=HORIZONS, stride=TRAIN_STRIDE,
+    )
+    if len(X_train) < MIN_TRAIN_SAMPLES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history_for_symbol",
+                "symbol": symbol,
+                "message": (
+                    f"Only {len(X_train)} full training window(s) available for {symbol} after "
+                    f"requiring real future realized-vol labels; need at least {MIN_TRAIN_SAMPLES}."
+                ),
+            },
+        )
+
+    model = train_vol_forecaster(
+        X_train, y_train, seq_len=SEQ_LEN, d_model=D_MODEL, num_heads=NUM_HEADS, horizons=HORIZONS,
+    )
+
+    # The single real, most-recent window -- the only one with no future data
+    # required, i.e. the actual live inference input.
+    X_infer = feat_matrix[-SEQ_LEN:].reshape(1, SEQ_LEN, D_MODEL)
+    forecasts, attn_weights = predict_multi_horizon_vol(X_infer, model)
+
     return {
         "symbol": symbol,
         "forecast": {k: float(v[0]) for k, v in forecasts.items()},
-        "attention_heatmap": attn_weights[0].tolist()
+        "attention_heatmap": attn_weights[0].tolist(),
+        "trained_samples": int(len(X_train)),
     }
 
 @app.post(
@@ -6617,11 +6714,61 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
     dependencies=[Depends(require_read_token)],
 )
 def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any]:
-    from validation.synthetic_diffusion_engine import train_diffusion_model, generate_synthetic_crash_paths, compute_diffusion_var
+    """Trains the score-based diffusion model on REAL overlapping historical
+    log-return windows for ``req.symbol`` (closes audit finding F7: this
+    previously fed the model ``np.random.randn(...) * volatility + drift`` --
+    fabricated Gaussian noise dressed up with the request's own params, not
+    real market data). ``train_diffusion_model`` already fits its own score
+    network weights via an internal Adam loop (confirmed by reading the
+    module), so the real-input-data swap alone closes this finding -- no
+    separate "train" call is needed here, unlike the transformer forecaster
+    above. ``req.volatility``/``req.drift`` are still accepted for API
+    contract stability but no longer shape the training data (previously
+    their only use); ``generate_synthetic_crash_paths`` never took them as
+    parameters in the first place. Degrades to an honest 422 (never
+    fabricated data) when real history is insufficient."""
+    from validation.synthetic_diffusion_engine import (
+        train_diffusion_model,
+        generate_synthetic_crash_paths,
+        compute_diffusion_var,
+        build_return_windows,
+    )
     import numpy as np
 
-    # Generate small amount of historical pseudo-data to train the score network quickly (AST-safe fast init)
-    historical_data = np.random.randn(10, max(1, req.horizon - 1)) * req.volatility + req.drift
+    horizon_len = max(1, req.horizon - 1)
+    MIN_WINDOWS = 10
+
+    try:
+        bars = HistoricalStore().get_bars(req.symbol, lookback_days=750)
+    except Exception:  # noqa: BLE001 - a provider/network failure degrades to insufficient history, never fabricated data
+        bars = None
+    if bars is None or bars.empty or "Close" not in bars.columns:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history_for_symbol",
+                "symbol": req.symbol,
+                "message": f"No historical price data available for {req.symbol}.",
+            },
+        )
+
+    close = bars["Close"].astype(float)
+    log_ret = np.log(close / close.shift(1)).dropna().to_numpy()
+
+    historical_data = build_return_windows(log_ret, window_len=horizon_len, max_windows=200)
+    if len(historical_data) < MIN_WINDOWS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history_for_symbol",
+                "symbol": req.symbol,
+                "message": (
+                    f"Only {len(historical_data)} real overlapping return window(s) of length "
+                    f"{horizon_len} available for {req.symbol}; need at least {MIN_WINDOWS}."
+                ),
+            },
+        )
+
     model = train_diffusion_model(historical_data, epochs=10, lr=0.01)
 
     # Use Euler-Maruyama SDE solver to generate synthetic non-linear paths
