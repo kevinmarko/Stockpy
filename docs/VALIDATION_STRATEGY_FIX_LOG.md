@@ -815,5 +815,22 @@ affects only the survivorship-bias diagnostic annotation on the HTML report, not
 DSR/MaxDD computation itself, which uses the live current-constituents scrape (unaffected) plus
 real backfilled price/fundamentals data.
 
+---
 
+## 2026-08: High-Frequency Market Maker (Avellaneda-Stoikov) Validation Exemption & Evaluation Framework
 
+**Module**: `ml/drl_market_maker.py` (`MarketMakingEnv`, `simulate_market_maker_session`, `train_market_maker_policy`)
+
+**Architectural Role**: Institutional high-frequency quoting and inventory risk mitigation engine based on Avellaneda & Stoikov (2008) and Guéant, Lehalle & Fernandez-Tapia (2012).
+
+### Evaluation Framework & Validation Exemption
+Unlike directional trend or long/short cross-sectional strategies evaluated via daily-return CPCV (Sharpe $\ge 0.50$, PBO $< 0.50$, DSR $\ge 0.95$, MaxDD $\le 30\%$), High-Frequency Market Making operates on sub-second order book arrival intensities with non-directional inventory mean-reversion objectives.
+
+1. **Custom Quantitative Metrics**:
+   - **Spread Capture ($)**: $\sum_{\text{fills}} |P_{\text{fill}} - S_t| > 0$
+   - **Inventory Holding Variance**: $\text{Var}(q_t) \to 0$ (penalized via $\frac{1}{2} \gamma \sigma^2 q_t^2$)
+   - **Adverse Selection Loss ($)**: $\sum \mathbb{I}(q_{t+1} \Delta S_{t+1} < 0) |q_{t+1} \Delta S_{t+1}|$
+   - **Terminal Inventory**: $q_T \approx 0$
+2. **Policy Optimization Method**:
+   - Closed-form reservation price $R(s, q, t) = s - q \gamma \sigma^2 (T - t)$ paired with stochastic parameter tuning over $(\gamma, \kappa) \in [0.01, 10.0] \times [0.1, 20.0]$ via `train_market_maker_policy`.
+   - Exemption from standard daily-bar `STRATEGY_REGISTRY` backtesting is formally documented and covered by dedicated microstructure simulation tests (`tests/test_drl_market_maker.py`).
