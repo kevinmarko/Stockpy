@@ -1406,7 +1406,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
                 background: isFallbackActive ? "var(--caution)" : "var(--growth)",
               }}
             />
-            {isFallbackActive ? "Canvas 3D Fallback Mode" : "WebGL 3D Active"}
+            {isFallbackActive ? "Canvas 3D Fallback Mode" : "Canvas 3D Renderer"}
           </div>
 
           <Button

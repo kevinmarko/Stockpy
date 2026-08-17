@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `50779de34b138ed644b5612a3c79257ed28be750`
+- Measured at commit: `5a0e5edd5d2279ba3b9dc414a4b505a2909559d1`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -142,7 +142,7 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **77**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **78**
 - routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
@@ -217,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **415** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **414** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -231,7 +231,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 730 | 231 |
-| (b) `getattr(settings, "KEY", default)` | 315 | 183 |
+| (b) `getattr(settings, "KEY", default)` | 316 | 183 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 24 | 17 |
 
@@ -388,7 +388,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_GEX_SEARCH_RANGE_PCT` | b | 1 | 0 |
 | `OPTIONS_MANAGE_DTE_THRESHOLD` | b | 1 | 0 |
 | `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
-| `OPTIONS_META_LABELER_ENABLED` | b | 2 | 0 |
+| `OPTIONS_META_LABELER_ENABLED` | b | 3 | 0 |
 | `OPTIONS_PROFIT_TARGET_PCT` | b | 1 | 0 |
 | `OPTIONS_RISK_FREE_RATE` | b | 9 | 0 |
 | `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | b | 1 | 0 |

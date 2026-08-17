@@ -694,5 +694,56 @@ Comprehensive walk-forward validation across the options spread family (`put_cre
 3. **Options Flow Sentiment Validation Bridge**: Constructed `_build_options_flow_sentiment_adapter` on SPY (5d/20d momentum velocity and trend gating with 1-day lag zero lookahead) and registered `options_flow_sentiment` in `STRATEGY_REGISTRY` & `pilots/catalog.py`.
 4. **Commands & Forecasting Backfill Tabs**: Rebuilt `command_manifest.json` across all 27 strategies and exposed multi-horizon meta-labeling.
 
+---
+
+## 2026-08-17: Options Desk Deployability-Gate Coverage (giant-master-plan audit F4)
+
+`.claude/giant_master_plan_audit.md`'s finding F4: five live, user-executable options-selling
+pilot modules had never been run through this platform's mandatory deployability gate despite
+submitting real paper trades. Investigated all five individually rather than registering a
+uniform proxy across the board — this sandbox genuinely HAS live-market network access (real
+`yfinance` downloads confirmed, plus a deep local FRED/earnings/price-bar DB), so every number
+below is measured, not asserted; but there is exactly ONE real historical implied-volatility
+series anywhere in this codebase (`macro_history.VIXCLS`) — no single-name historical IV, and no
+historical options chain, exists at all. That single fact is what separates the one pilot below
+that could be honestly registered from the three that could not.
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Stress Gate | Deployable |
+|---|---|---|---|---|---|---|
+| `vol_mispricing` | **-0.499** | **0.000** | **0.027** | **100.7%** | ❌ FAIL (OCT_2008 blow-up, 203.8% DD) | ❌ False (measured, no tuning) |
+| `earnings_crush` | — | — | — | — | — | **not gateable** — no historical single-name IV exists anywhere in this repo (measured: gate needs ~66.8% IV, only a 25–40% realized-vol proxy is reachable; 8/10 test symbols hit the pilot's own rejected fallback constant) |
+| `dispersion_trading` | — | — | — | — | — | **not gateable** — index IV real (VIX), but 8 constituent IVs have no source; measured substitution bias +1.18 vol pts, which inflates implied correlation and drives the pilot's own ±0.15 threshold |
+| `zero_dte_engine` | — | — | — | — | — | **not gateable** — no intraday history exists in this repo, AND the four mandatory stress windows (2008/2018/2020/2024) are permanently outside yfinance's ~30-day 1-minute retention, so the tail-stress addendum can never run |
+| `gamma_scalper` | — | — | — | — | N/A | **excluded** — not a strategy (no scan/evaluate/execute path, no `PaperAccountStore` import, its only threshold is a hedge band on caller-supplied position+path inputs, not an entry rule) |
+
+**Fix levers / method**:
+1. `vol_mispricing` — new `validation/options_selling_backtest.py::simulate_vol_mispricing_returns`
+   (real VIX as `market_iv`, real `pilots.har_volatility.forecast_forward_volatility` as
+   `fair_iv`, the pilot's own unmodified RICH/CHEAP thresholds, delta-targeted strike selection),
+   registered via `_build_vol_mispricing_adapter` in `scripts/refresh_validations.py` and wired
+   into `_resolve_options_selling_stress_fn`. Genuinely measured `deployable=False` — the RICH
+   iron-condor branch blows up in the 2008 crisis window under a constant-entry-sigma
+   simplification with no credit-event regime gate. No threshold or delta target was tuned to
+   chase the gate. Full detail: `docs/signals/vol_mispricing.md`.
+2. `earnings_crush`, `dispersion_trading`, `zero_dte_engine` — deliberately left unregistered,
+   each with a measured (not asserted) "NOT GATEABLE" write-up in its own
+   `docs/signals/<name>.md`, following the `pilots/catalog.py` `validation_strategy_id=None`
+   precedent ("does NOT unblock a backtest today") rather than registering a proxy that would
+   measure the proxy's own assumptions instead of the pilot.
+3. `gamma_scalper` — excluded with reasoning in `docs/signals/gamma_scalper.md`; a fabrication
+   hazard was found in passing (calling it with no arguments invents a synthetic position and
+   price path and returns plausible-looking numbers for a trade that was never real).
+
+**Defects found in `pilots/*.py` while analysing these five, out of scope to fix here** (each
+also recorded in the relevant `docs/signals/<name>.md`): `zero_dte_engine.get_0dte_signals` is a
+dead path (`HistoricalStore` has no `get_intraday_bars`); `execute_0dte_trade` fabricates a
+`$1.50` fallback fill price; the module's own docstring overstates its TTM-squeeze "gate" and
+opening-range-reversal stop, neither of which exist in code; `dispersion_trading.get_dispersion_opportunities`
+applies the identical 8-stock basket to both QQQ and SPY; `execute_dispersion_trade(basket=None)`
+always builds a Long Dispersion basket regardless of the measured spread's sign; and
+`docs/signals/vrp_premium_selling.md` carries a duplicated `## Backtest Validation` heading whose
+numbers (Sharpe 0.612, `deployable=True`) contradict the 2026-08-15 entry above (Sharpe 0.217,
+`deployable=False`) — a pre-existing doc inconsistency, not introduced here.
+
 
 
