@@ -442,7 +442,7 @@ class TestMultiProviderRouting:
             assert captured["kwargs"]["model"] == "o3-mini"
             assert any(m["role"] == "system" and "Test context" in m["content"] for m in captured["kwargs"]["messages"])
 
-    def test_local_routing_uses_custom_base_url(self, monkeypatch):
+    def test_local_routing_uses_configured_base_url(self, monkeypatch):
         monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", True)
         monkeypatch.setattr(settings, "LOCAL_LLM_BASE_URL", "http://localhost:11434/v1")
 
@@ -482,10 +482,69 @@ class TestMultiProviderRouting:
                     "message": "Analyze stock",
                     "provider": "local",
                     "model": "deepseek-r1",
-                    "custom_base_url": "http://127.0.0.1:8000/v1",
                 },
             )
             raw = resp.text
             assert "Hello from DeepSeek" in raw
-            assert captured["client_kwargs"]["base_url"] == "http://127.0.0.1:8000/v1"
+            assert captured["client_kwargs"]["base_url"] == "http://localhost:11434/v1"
             assert captured["kwargs"]["model"] == "deepseek-r1"
+
+    def test_local_routing_ignores_client_supplied_base_url(self, monkeypatch):
+        """Security regression test: a request body cannot redirect the
+        "local" provider's outbound call to an arbitrary host. Sending a
+        (no-longer-part-of-the-schema) "custom_base_url" field must be
+        silently dropped by pydantic, not honored -- otherwise this
+        endpoint is an open SSRF / LOCAL_LLM_API_KEY-relay to any URL an
+        unauthenticated-or-loopback caller supplies (see the comment on
+        ChatMessageRequest.provider/model in api/data_api.py)."""
+        monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", True)
+        monkeypatch.setattr(settings, "LOCAL_LLM_BASE_URL", "http://localhost:11434/v1")
+        monkeypatch.setattr(settings, "LOCAL_LLM_API_KEY", "super-secret-local-key")
+
+        captured = {}
+
+        class _FakeDelta:
+            content = "Hello"
+
+        class _FakeChoice:
+            delta = _FakeDelta()
+
+        class _FakeChunk:
+            choices = [_FakeChoice()]
+
+        async def _fake_stream():
+            yield _FakeChunk()
+
+        class _FakeCompletions:
+            async def create(self, **kwargs):
+                captured["kwargs"] = kwargs
+                return _fake_stream()
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+                self.chat = _FakeChat()
+
+        monkeypatch.setattr("openai.AsyncOpenAI", _FakeAsyncOpenAI)
+
+        with TestClient(data_api.app, client=("127.0.0.1", 54125)) as test_client:
+            resp = test_client.post(
+                "/api/chat",
+                json={
+                    "message": "Analyze stock",
+                    "provider": "local",
+                    "model": "deepseek-r1",
+                    # An attacker-supplied field trying to redirect the
+                    # outbound call and exfiltrate LOCAL_LLM_API_KEY.
+                    "custom_base_url": "https://attacker.example/v1",
+                },
+            )
+            raw = resp.text
+            assert "Hello" in raw
+            # The attacker's URL must never be reached -- only the
+            # operator's own configured LOCAL_LLM_BASE_URL is ever used.
+            assert captured["client_kwargs"]["base_url"] == "http://localhost:11434/v1"
+            assert captured["client_kwargs"]["base_url"] != "https://attacker.example/v1"

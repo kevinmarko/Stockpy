@@ -1540,8 +1540,18 @@ class ChatMessageRequest(BaseModel):
     provider: Optional[str] = None
     # Optional model slug (e.g. 'claude-3-5-sonnet-20241022', 'gpt-4o', 'deepseek-r1', 'llama3.3')
     model: Optional[str] = None
-    # Optional custom OpenAI-compatible base URL for local or self-hosted LLMs
-    custom_base_url: Optional[str] = None
+    # Deliberately NO client-supplied base_url field. The "local" provider's
+    # outbound endpoint is always settings.LOCAL_LLM_BASE_URL (operator-set,
+    # server-side only) -- letting a request body pick an arbitrary base_url
+    # would make this endpoint an open SSRF/credential-relay: it would POST
+    # req.message/history/context (which can carry real portfolio/grounding
+    # data) to any URL an unauthenticated-or-loopback caller supplies, using
+    # settings.LOCAL_LLM_API_KEY (a real credential) as the bearer token. A
+    # pydantic BaseModel with no `extra="forbid"` silently drops unknown
+    # request fields, so a client that still sends "custom_base_url" is
+    # simply ignored, not rejected -- see
+    # TestMultiProviderRouting::test_local_routing_ignores_client_supplied_base_url
+    # in tests/test_data_api_chat.py.
 
 
 _ITER_BLOCKING_EXHAUSTED = object()
@@ -1978,7 +1988,11 @@ async def chat_endpoint(req: ChatMessageRequest):
                         yield _sse("MESSAGE", chunk.choices[0].delta.content)
 
             elif provider == "local":
-                base_url = (req.custom_base_url or getattr(settings, "LOCAL_LLM_BASE_URL", None) or "http://localhost:11434/v1").rstrip("/")
+                # base_url is ALWAYS the operator's own server-side setting,
+                # never anything from the request body -- see
+                # ChatMessageRequest's comment above for why a client-
+                # supplied base_url would be an SSRF/credential-relay risk.
+                base_url = (getattr(settings, "LOCAL_LLM_BASE_URL", None) or "http://localhost:11434/v1").rstrip("/")
                 model_name = req.model or getattr(settings, "LOCAL_LLM_MODEL", "llama3.3")
                 api_key = getattr(settings, "LOCAL_LLM_API_KEY", None) or "ollama"
 

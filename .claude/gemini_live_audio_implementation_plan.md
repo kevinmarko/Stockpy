@@ -110,3 +110,26 @@ Grouped by component:
 
 ### Independent Audits
 - Run `custom-parity-auditor` and `custom-honesty-auditor` to audit the multi-provider implementation.
+
+---
+
+## Post-review security fix (2026-08-17)
+
+A code review of this PR (before merge) found that the `custom_base_url` field
+on `ChatMessageRequest` — accepted from the raw request body with no
+validation and passed straight into `openai.AsyncOpenAI(base_url=..., ...)`
+in the `"local"` provider branch — made `POST /api/chat` an open SSRF /
+credential-relay: any caller able to reach the endpoint could redirect the
+server's outbound request to an attacker-controlled host and receive the
+forwarded chat content (including portfolio/grounding context) plus the
+operator's `LOCAL_LLM_API_KEY` as a bearer token.
+
+**Fixed by removing `custom_base_url` entirely** rather than
+allowlisting/validating it — the webapp never actually sent this field (no
+UI exposed it), so dropping it cost no real functionality. The `"local"`
+provider's outbound base URL is now unconditionally
+`settings.LOCAL_LLM_BASE_URL` (operator-set, server-side only, falling back
+to `http://localhost:11434/v1`). See `tests/test_data_api_chat.py`'s
+`test_local_routing_ignores_client_supplied_base_url` for the regression
+test, and `docs/architecture/webapp-and-gui.md`'s "Multi-Model & Open Source
+AI Chat" entry for the documented contract.

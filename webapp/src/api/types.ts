@@ -831,14 +831,21 @@ export interface ChatHistoryMessage {
   content: string;
 }
 
-/** Request payload for POST /api/chat. */
+/** Request payload for POST /api/chat.
+ *
+ * Deliberately has NO client-suppliable base-URL field: the backend's
+ * "local" provider always dispatches to the operator's own
+ * settings.LOCAL_LLM_BASE_URL, never anything from the request body --
+ * see api/data_api.py::ChatMessageRequest's comment for why a
+ * client-controlled outbound URL there would be an SSRF/credential-relay
+ * risk.
+ */
 export interface ChatMessageRequest {
   message: string;
   history?: ChatHistoryMessage[];
   context?: string;
   provider?: string;
   model?: string;
-  custom_base_url?: string;
 }
 
 // ---------------------------------------------------------------------------
