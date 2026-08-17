@@ -22,6 +22,10 @@ def test_forward_pass():
     preds, attn = forward_pass(X, model)
     assert preds.shape == (32, 4)
     assert attn.shape == (32, 10, 10)
+    # Strictly lower triangular: upper triangle (j > i) must have zero attention weight
+    for i in range(10):
+        for j in range(i + 1, 10):
+            np.testing.assert_allclose(attn[:, i, j], 0.0, atol=1e-5, err_msg=f"Future leak at ({i}, {j})")
 
 def test_train_and_predict():
     X_train = np.random.randn(100, 10, 16)
