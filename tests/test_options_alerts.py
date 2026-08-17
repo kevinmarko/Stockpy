@@ -470,6 +470,38 @@ def test_dispatch_delta_hedge_alert_rebalance_buy_spy():
 
 
 # ---------------------------------------------------------------------------
+# Risk Limit Breach Alerting (dispatch_risk_limit_alert)
+# ---------------------------------------------------------------------------
+
+def test_dispatch_risk_limit_alert_none_input():
+    """Passing None breach returns dispatched=False."""
+    from pilots.options_alerts import dispatch_risk_limit_alert
+    res = dispatch_risk_limit_alert(None)
+    assert res["dispatched"] is False
+    assert "No risk limit breach" in res["reason"]
+
+def test_dispatch_risk_limit_alert_success():
+    """Valid breach dictionary dispatches correctly."""
+    from pilots.options_alerts import dispatch_risk_limit_alert
+    breach = {
+        "symbol": "PORTFOLIO",
+        "limit_name": "Max Drawdown",
+        "current_value": 0.15,
+        "threshold_value": 0.10,
+        "action": "HALT",
+        "severity": "CRITICAL",
+        "reason": "Drawdown exceeded 10%",
+    }
+    with patch("observability.alerts.send_alert") as mock_send:
+        res = dispatch_risk_limit_alert(breach)
+        assert res["dispatched"] is True
+        assert res["level"] == "CRITICAL"
+        assert "PORTFOLIO" in res["message"]
+        assert "Max Drawdown" in res["message"]
+        assert "0.15" in res["message"]
+        assert mock_send.call_count == 1
+
+# ---------------------------------------------------------------------------
 # General Options Alert Dispatcher (dispatch_options_alert)
 # ---------------------------------------------------------------------------
 
@@ -480,6 +512,15 @@ def test_format_options_alert_message_mispricing():
     assert "Volatility Mispricing" in title
     assert "AAPL" in msg
     assert "+0.055" in msg
+
+
+def test_format_options_alert_message_risk_limit():
+    """format_options_alert_message formats risk_limit correctly."""
+    level, title, msg = format_options_alert_message("risk_limit", {"symbol": "AAPL", "limit_name": "Concentration Limit", "current_value": 0.25, "threshold_value": 0.20, "action": "REDUCE", "severity": "WARNING"})
+    assert level == "WARNING"
+    assert "Risk Limit Breach" in title
+    assert "AAPL" in msg
+    assert "0.25" in msg
 
 
 def test_dispatch_options_alert_custom_type():
