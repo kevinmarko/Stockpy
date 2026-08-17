@@ -292,6 +292,21 @@ def calculate_position_greeks(
     }
 
 
+def _resolve_symbol_beta(ticker: str) -> float:
+    """Resolves regression beta of ticker vs SPY. Defaults to 1.0 for SPY or missing data."""
+    if not ticker or str(ticker).upper() == "SPY":
+        return 1.0
+    try:
+        from data.historical_store import HistoricalStore
+        store = HistoricalStore()
+        beta = store.get_symbol_beta(str(ticker).upper())
+        if beta is not None and not math.isnan(beta) and beta > 0:
+            return float(beta)
+    except Exception:
+        pass
+    return 1.0
+
+
 def calculate_portfolio_greeks(
     store: Optional[PaperAccountStore] = None,
     positions: Optional[List[PaperPosition]] = None,
@@ -360,6 +375,7 @@ def calculate_portfolio_greeks(
     beta_excluded_symbols: List[str] = []
     net_delta_shares = 0.0
     net_dollar_delta = 0.0
+    net_beta_dollar_delta = 0.0
     net_gamma = 0.0
     net_theta_daily = 0.0
     net_vega_1pct = 0.0
@@ -372,16 +388,23 @@ def calculate_portfolio_greeks(
         opt_info = parse_option_symbol(pos.symbol)
         ticker = opt_info["ticker"] if opt_info else pos.symbol.strip().upper()
         spot = spot_map.get(ticker)
+        beta = _resolve_symbol_beta(ticker)
 
         if spot is None:
             positions_with_missing_data.append(pos.symbol)
 
         g = calculate_position_greeks(pos, spot_price=spot, now=now)
-        pos_breakdowns.append(g)
+        g["beta"] = beta
 
-        if not g.get("missing_data", False):
+        if not g.get("missing_data", False) and g.get("position_dollar_delta") is not None:
+            dollar_delta = float(g["position_dollar_delta"])
+            beta_dollar_delta = dollar_delta * beta
+            g["beta_dollar_delta"] = round(beta_dollar_delta, 2)
+            pos_breakdowns.append(g)
+
             net_delta_shares += g["position_delta"]
-            net_dollar_delta += g["position_dollar_delta"]
+            net_dollar_delta += dollar_delta
+            net_beta_dollar_delta += beta_dollar_delta
             net_gamma += g["position_gamma"]
             net_theta_daily += g["position_theta_daily"]
             net_vega_1pct += g["position_vega_1pct"]
@@ -391,10 +414,13 @@ def calculate_portfolio_greeks(
             else:
                 stock_count += 1
         else:
+            g["beta_dollar_delta"] = None
+            pos_breakdowns.append(g)
             beta_excluded_symbols.append(pos.symbol)
 
-    # Beta-weighted SPY Delta
-    beta_weighted_delta_spy = (net_dollar_delta / spy_spot) if spy_spot > 0 else 0.0
+
+    # Beta-weighted SPY Delta: (sum_i DollarDelta_i * Beta_i) / SPY_Spot
+    beta_weighted_delta_spy = (net_beta_dollar_delta / spy_spot) if spy_spot > 0 else 0.0
 
     return {
         "total_positions": len(positions),
@@ -410,4 +436,5 @@ def calculate_portfolio_greeks(
         "beta_excluded_symbols": beta_excluded_symbols,
         "positions": pos_breakdowns,
     }
+
 
