@@ -103,18 +103,13 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
   };
 
   const handleSynthesize = async () => {
-    const universe = universeInput
-      .split(",")
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
-
+    // universeInput/lookbackDays/targetMetric are local UI state consumed
+    // only by the (separate, already-correct) backtest request below -- the
+    // real ResearchSynthesizeRequest accepts only prompt/strategy_type/
+    // target_asset_class, so they're intentionally not sent here.
     const res = await synthesizeMutation.run({
       prompt: promptText,
       strategy_type: strategyType,
-      asset_universe: universe.length > 0 ? universe : ["SPY"],
-      lookback_period_days: Number(lookbackDays),
-      target_metric: targetMetric,
-      enable_ast_security_scan: true,
     });
 
     if (res) {
@@ -125,15 +120,18 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
   };
 
   const handleRunBacktest = async () => {
-    if (!synthesisResult?.synthesized_code) return;
+    if (!synthesisResult?.code) return;
     const universe = universeInput
       .split(",")
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
 
     const res = await backtestMutation.run({
-      strategy_code: synthesisResult.synthesized_code,
-      strategy_id: synthesisResult.synthesis_id,
+      strategy_code: synthesisResult.code,
+      // No synthesis_id exists on the real synthesize response -- generate a
+      // client-side id purely for UI/backtest bookkeeping (never implied to
+      // have come from the API).
+      strategy_id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined,
       symbols: universe,
       initial_capital: 100000,
       cpcv_folds: 6,
@@ -148,8 +146,8 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
   };
 
   const handleCopyCode = () => {
-    if (!synthesisResult?.synthesized_code) return;
-    navigator.clipboard.writeText(synthesisResult.synthesized_code);
+    if (!synthesisResult?.code) return;
+    navigator.clipboard.writeText(synthesisResult.code);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
   };
@@ -475,18 +473,18 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
               gap: 8,
               padding: "8px 12px",
               borderRadius: 6,
-              background: synthesisResult.ast_safety_passed
+              background: synthesisResult.validation_passed
                 ? "rgba(16, 185, 129, 0.1)"
                 : "rgba(239, 68, 68, 0.1)",
               border: `1px solid ${
-                synthesisResult.ast_safety_passed
+                synthesisResult.validation_passed
                   ? "rgba(16, 185, 129, 0.3)"
                   : "rgba(239, 68, 68, 0.3)"
               }`,
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {synthesisResult.ast_safety_passed ? (
+              {synthesisResult.validation_passed ? (
                 <>
                   <ShieldCheck size={18} color={theme.growth} />
                   <span style={{ fontSize: "0.8rem", fontWeight: 600, color: theme.growth }}>
@@ -504,13 +502,12 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
             </div>
 
             <div style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
-              Model: {synthesisResult.model_used} • Confidence:{" "}
-              {(synthesisResult.confidence_score * 100).toFixed(0)}%
+              Synthesis Mode: {synthesisResult.synthesis_mode}
             </div>
           </div>
 
-          {/* AST Violations List */}
-          {!synthesisResult.ast_safety_passed && synthesisResult.ast_violations.length > 0 && (
+          {/* Validation Errors List */}
+          {!synthesisResult.validation_passed && synthesisResult.validation_errors.length > 0 && (
             <div
               style={{
                 background: "rgba(239, 68, 68, 0.08)",
@@ -520,7 +517,7 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
                 color: theme.decline,
               }}
             >
-              {synthesisResult.ast_violations.map((v, i) => (
+              {synthesisResult.validation_errors.map((v, i) => (
                 <div key={i}>• {v}</div>
               ))}
             </div>
@@ -591,7 +588,7 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
               margin: 0,
             }}
           >
-            {synthesisResult.synthesized_code}
+            {synthesisResult.code}
           </pre>
 
           {/* Action Bar for Backtesting */}
@@ -612,20 +609,20 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
 
             <button
               onClick={handleRunBacktest}
-              disabled={backtestMutation.pending || !synthesisResult.ast_safety_passed}
+              disabled={backtestMutation.pending || !synthesisResult.validation_passed}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
-                background: synthesisResult.ast_safety_passed ? theme.growth : theme.border,
-                color: synthesisResult.ast_safety_passed ? "#000" : theme.textSecondary,
+                background: synthesisResult.validation_passed ? theme.growth : theme.border,
+                color: synthesisResult.validation_passed ? "#000" : theme.textSecondary,
                 border: "none",
                 borderRadius: 6,
                 padding: "8px 18px",
                 fontWeight: 700,
                 fontSize: "0.85rem",
                 cursor:
-                  backtestMutation.pending || !synthesisResult.ast_safety_passed
+                  backtestMutation.pending || !synthesisResult.validation_passed
                     ? "not-allowed"
                     : "pointer",
                 transition: "all 0.15s ease",

@@ -214,7 +214,7 @@ describe("VolSurface3D Component & Helpers Suite", () => {
       expect(screen.getByTestId("vol-colormap-legend")).toBeInTheDocument();
     });
 
-    it("renders WebGL 3D Active badge when WebGL is available", () => {
+    it("renders Canvas 3D Renderer badge when WebGL is available", () => {
       vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation((type: string) => {
         if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
           return { getParameter: vi.fn(() => "WebGL 2.0") } as any;
@@ -225,7 +225,7 @@ describe("VolSurface3D Component & Helpers Suite", () => {
       render(<VolSurface3D symbol="AAPL" forceFallback={false} />);
 
       const renderMode = screen.getByTestId("vol-render-mode");
-      expect(renderMode).toHaveTextContent("WebGL 3D Active");
+      expect(renderMode).toHaveTextContent("Canvas 3D Renderer");
     });
 
     it("renders with VolSurfaceResponse data and updates metrics HUD", () => {

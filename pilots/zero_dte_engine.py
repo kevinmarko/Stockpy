@@ -64,6 +64,7 @@ __all__ = [
     "evaluate_0dte_exits",
     "execute_0dte_trade",
     "execute_0dte_exits",
+    "manage_0dte_exits",
     "parse_option_symbol",
     "parse_chain_data",
     "OpeningRange",
@@ -1267,4 +1268,91 @@ def execute_0dte_exits(
         "failed_count": len(failed),
         "executed": executed,
         "failed": failed,
+    }
+
+
+def manage_0dte_exits(
+    dry_run: bool = False,
+    profit_target_pct: Optional[float] = None,
+    stop_loss_pct: Optional[float] = None,
+    hard_exit_time: Optional[str] = None,
+    store: Optional[PaperAccountStore] = None,
+) -> Dict[str, Any]:
+    """Evaluates open 0DTE (expiring-today) option positions against the
+    mandatory hard-time-stop / profit-target / stop-loss exit rules
+    (evaluate_0dte_exits) and executes closing fills for any that trigger
+    (execute_0dte_exits), unless dry_run.
+
+    Mirrors pilots/paper_broker.py::manage_position_exits's composition
+    shape for the regular (non-0DTE) position-lifecycle path. Filters to
+    ONLY genuinely-0DTE-expiring contracts (expiration == today, US/Eastern)
+    before evaluating -- applying the hard-stop rules to a position expiring
+    next month just because it's past 15:45 ET today would be a real
+    behavior bug, not the safety control this function exists to provide.
+
+    Audit note (.claude/giant_master_plan_audit.md, F5): this closes "never
+    callable at all" -- the endpoint wrapping this function now exists and
+    genuinely calls through to evaluate_0dte_exits/execute_0dte_exits. It
+    does NOT close "never actually triggered automatically" -- no scheduler
+    anywhere in this codebase fires anything at a specific time of day
+    (checked desktop/daemon_runtime.py's _timer_loop: flat-interval only, no
+    time-of-day concept). A genuinely automatic 15:45 ET trigger needs a new
+    scheduling primitive, out of scope here.
+    """
+    if store is None:
+        store = PaperAccountStore()
+
+    today_et = datetime.now(_ET).date().isoformat()
+    all_positions = store.get_open_positions()
+    zero_dte_positions = []
+    for pos in all_positions:
+        symbol = getattr(pos, "symbol", None) or (pos.get("symbol") if isinstance(pos, dict) else None)
+        opt_info = parse_option_symbol(symbol) if symbol else None
+        if opt_info is not None and opt_info["expiration"] == today_et:
+            zero_dte_positions.append(pos)
+
+    if not zero_dte_positions:
+        return {
+            "signals": [],
+            "executed_count": 0,
+            "failed_count": 0,
+            "executed": [],
+            "failed": [],
+            "reason": "no_0dte_positions_open",
+        }
+
+    exit_signals = evaluate_0dte_exits(
+        positions=zero_dte_positions,
+        profit_target_pct=profit_target_pct,
+        stop_loss_pct=stop_loss_pct,
+        hard_exit_time=hard_exit_time,
+    )
+
+    if dry_run:
+        return {
+            "signals": [s.to_dict() for s in exit_signals],
+            "executed_count": 0,
+            "failed_count": 0,
+            "executed": [],
+            "failed": [],
+            "reason": "dry_run",
+        }
+
+    if not exit_signals:
+        return {
+            "signals": [],
+            "executed_count": 0,
+            "failed_count": 0,
+            "executed": [],
+            "failed": [],
+            "reason": "no_exit_conditions_triggered",
+        }
+
+    result = execute_0dte_exits(exit_signals, store=store)
+    return {
+        "signals": [s.to_dict() for s in exit_signals],
+        "executed_count": result["executed_count"],
+        "failed_count": result["failed_count"],
+        "executed": result["executed"],
+        "failed": result["failed"],
     }

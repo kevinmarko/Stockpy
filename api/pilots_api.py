@@ -6273,6 +6273,50 @@ def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]
     )
 
 
+class ZeroDteManageExitsRequest(BaseModel):
+    dry_run: bool = False
+    profit_target_pct: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    hard_exit_time: Optional[str] = None
+
+
+@app.post(
+    "/pilots/options/0dte/manage-exits",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_zero_dte_manage_exits(body: Optional[ZeroDteManageExitsRequest] = None) -> Dict[str, Any]:
+    """Evaluates open 0DTE (expiring-today) option positions against the mandatory
+    15:45 ET hard-time-stop, profit-target, and stop-loss rules, and executes
+    closing fills for any that trigger (unless dry_run).
+
+    Closes audit finding F5 (.claude/giant_master_plan_audit.md): the underlying
+    evaluate_0dte_exits/execute_0dte_exits logic was correctly implemented and
+    tested but had no live-callable path -- only entry (zero-dte/execute) was
+    wired. This endpoint gives the mandatory liquidation gate a real callable
+    path. It does NOT, by itself, make the gate fire automatically at 15:45 ET --
+    no scheduler anywhere in this codebase fires anything at a specific time of
+    day; a genuinely automatic trigger needs a separate scheduling primitive.
+    """
+    from pilots.zero_dte_engine import manage_0dte_exits
+    dry_run = body.dry_run if body else False
+    profit_target_pct = body.profit_target_pct if body else None
+    stop_loss_pct = body.stop_loss_pct if body else None
+    hard_exit_time = body.hard_exit_time if body else None
+    try:
+        return manage_0dte_exits(
+            dry_run=dry_run,
+            profit_target_pct=profit_target_pct,
+            stop_loss_pct=stop_loss_pct,
+            hard_exit_time=hard_exit_time,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: 0dte manage-exits failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while managing 0DTE exits; see server logs for detail."}
+
+
 @app.get("/pilots/options/vpin/metrics", dependencies=[Depends(require_read_token)])
 def get_options_vpin_metrics_endpoint(
     symbol: str = Query(..., min_length=1),
@@ -6612,20 +6656,55 @@ class HRPCVaRRequest(BaseModel):
     dependencies=[Depends(require_read_token)],
 )
 def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
-    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar
+    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar, calculate_cvar
     import numpy as np
     import pandas as pd
     from scipy.cluster.hierarchy import linkage
     from scipy.spatial.distance import squareform
-    
+
     if not req.symbols:
         raise HTTPException(status_code=400, detail="Must provide at least one symbol.")
-        
+
     num_assets = len(req.symbols)
-    # Generate dummy returns (n_days, n_assets)
-    np.random.seed(42)
-    returns_np = np.random.randn(252, num_assets) * 0.02 + 0.0005
-    returns = pd.DataFrame(returns_np, columns=req.symbols)
+
+    # Real daily returns per symbol, DB-first (falls back to a live fetch
+    # internally) -- never fabricated. Aligned across symbols via an inner
+    # join on the date index, matching processing_engine.calculate_rolling_beta's
+    # alignment convention.
+    store = HistoricalStore()
+    close_series: Dict[str, "pd.Series"] = {}
+    symbols_missing: List[str] = []
+    for sym in req.symbols:
+        try:
+            bars = store.get_bars(sym, lookback_days=504)
+        except Exception:  # noqa: BLE001 - a provider/network failure degrades to "missing", never fabricated data
+            bars = None
+        if bars is None or bars.empty or "Close" not in bars.columns:
+            symbols_missing.append(sym)
+            continue
+        close_series[sym] = bars["Close"]
+
+    if symbols_missing:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history",
+                "symbols_missing": symbols_missing,
+                "message": "No historical price data available for the listed symbol(s); cannot compute a real covariance/CVaR without fabricating returns.",
+            },
+        )
+
+    closes = pd.concat(close_series, axis=1, join="inner")
+    returns = closes.pct_change().dropna(how="any")
+    if len(returns) < 60:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history",
+                "message": f"Only {len(returns)} overlapping trading days across {req.symbols}; need at least 60 for a real covariance estimate.",
+            },
+        )
+    returns_np = returns.to_numpy()
     cov = returns.cov()
     
     dist = compute_correlation_distance(cov)
@@ -6652,19 +6731,27 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
     
     sort_ix = quasi_diagonalization(dist)
     initial_w = recursive_bisection(cov, sort_ix)
-    
+
     # Constrain CVaR to an arbitrary realistic threshold
     final_w = constrain_cvar(returns, initial_w, max_cvar=0.05)
-    
+
     allocations = [{"symbol": k, "weight": v} for k, v in final_w.items()]
     port_ret = np.dot(returns_np.mean(axis=0) * 252, final_w.values)
     port_vol = np.sqrt(np.dot(final_w.values.T, np.dot(cov.values * 252, final_w.values)))
-    
+
+    # Real CVaR of the OPTIMIZED portfolio's actual daily returns, not the
+    # 0.05 constraint ceiling it was constrained to. final_w is indexed by
+    # symbol in the same order as returns.columns (recursive_bisection sorts
+    # by cov.columns, which matches returns.columns) -- reindex explicitly
+    # rather than relying on that ordering implicitly.
+    w_aligned = final_w.reindex(returns.columns).to_numpy()
+    real_cvar_95 = calculate_cvar(w_aligned, returns_np, alpha=0.05)
+
     return {
         "allocations": allocations,
         "dendrogram": dendrogram_tree,
         "expected_return": float(port_ret),
-        "cvar_95": float(0.05), # placeholder
+        "cvar_95": float(real_cvar_95),
         "sharpe_ratio": float(port_ret / port_vol) if port_vol > 0 else 0.0
     }
 

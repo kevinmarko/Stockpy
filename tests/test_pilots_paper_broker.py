@@ -2714,3 +2714,72 @@ class TestPilotsExecutionSec606Report:
         assert "summary" in resp.json()
 
 
+
+
+class TestPostOptionsZeroDteManageExits:
+    """POST /pilots/options/0dte/manage-exits -- closes audit finding F5
+    (.claude/giant_master_plan_audit.md): evaluate_0dte_exits/execute_0dte_exits
+    were correctly implemented and tested but had no live-callable path.
+    """
+
+    def test_fails_closed_when_writes_disabled(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=False):
+            resp = _client.post(
+                "/pilots/options/0dte/manage-exits",
+                json={},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/0dte/manage-exits",
+                json={},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_calls_through_to_manage_0dte_exits_with_expected_kwargs(self):
+        mock_result = {
+            "signals": [], "executed_count": 0, "failed_count": 0,
+            "executed": [], "failed": [], "reason": "no_0dte_positions_open",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            with patch("pilots.zero_dte_engine.manage_0dte_exits", return_value=mock_result) as mock_manage:
+                resp = _client.post(
+                    "/pilots/options/0dte/manage-exits",
+                    json={"dry_run": True, "profit_target_pct": 0.5, "stop_loss_pct": 0.25, "hard_exit_time": "15:30"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json() == mock_result
+        mock_manage.assert_called_once_with(
+            dry_run=True, profit_target_pct=0.5, stop_loss_pct=0.25, hard_exit_time="15:30",
+        )
+
+    def test_no_body_uses_defaults(self):
+        mock_result = {"signals": [], "executed_count": 0, "failed_count": 0, "executed": [], "failed": [], "reason": "no_0dte_positions_open"}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            with patch("pilots.zero_dte_engine.manage_0dte_exits", return_value=mock_result) as mock_manage:
+                resp = _client.post(
+                    "/pilots/options/0dte/manage-exits",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        mock_manage.assert_called_once_with(
+            dry_run=False, profit_target_pct=None, stop_loss_pct=None, hard_exit_time=None,
+        )
+
+    def test_exception_dead_letters_instead_of_leaking(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            with patch("pilots.zero_dte_engine.manage_0dte_exits", side_effect=RuntimeError("boom")):
+                resp = _client.post(
+                    "/pilots/options/0dte/manage-exits",
+                    json={},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert "boom" not in body["error"]

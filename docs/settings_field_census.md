@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `50779de34b138ed644b5612a3c79257ed28be750`
+- Measured at commit: `389544117ed10e327ee33d6458a1b8e0dda61d99`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -142,7 +142,7 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **77**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **78**
 - routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
@@ -217,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **415** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **414** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -231,7 +231,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 730 | 231 |
-| (b) `getattr(settings, "KEY", default)` | 315 | 183 |
+| (b) `getattr(settings, "KEY", default)` | 316 | 183 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 24 | 17 |
 
@@ -253,7 +253,7 @@ referenced by name somewhere and is probably read dynamically.
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4894`, `gui/panels/settings_manager.py:162` | likely read dynamically |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11052` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11063` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1238`, `pilots/feature_flags.py:49` | likely read dynamically |
 
@@ -388,7 +388,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_GEX_SEARCH_RANGE_PCT` | b | 1 | 0 |
 | `OPTIONS_MANAGE_DTE_THRESHOLD` | b | 1 | 0 |
 | `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
-| `OPTIONS_META_LABELER_ENABLED` | b | 2 | 0 |
+| `OPTIONS_META_LABELER_ENABLED` | b | 3 | 0 |
 | `OPTIONS_PROFIT_TARGET_PCT` | b | 1 | 0 |
 | `OPTIONS_RISK_FREE_RATE` | b | 9 | 0 |
 | `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | b | 1 | 0 |
@@ -420,7 +420,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 
 | Site | Expression |
 |---|---|
-| `Gravity AI Review Suite.py:2720` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
+| `Gravity AI Review Suite.py:2731` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:175` | `getattr(settings, flag_name, False)` |

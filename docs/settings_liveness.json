@@ -12,16 +12,16 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 294,
+    "live_safe": 293,
     "no_op": 3,
-    "restart_required": 94,
+    "restart_required": 95,
     "total": 391
   },
   "dynamic_sites": [
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2720,
+      "line": 2731,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 415,
+  "files_scanned": 414,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -326,7 +326,6 @@
     "OPTIONS_GEX_SEARCH_RANGE_PCT",
     "OPTIONS_MANAGE_DTE_THRESHOLD",
     "OPTIONS_MATRIX_ENABLED",
-    "OPTIONS_META_LABELER_ENABLED",
     "OPTIONS_PROFIT_TARGET_PCT",
     "OPTIONS_RISK_FREE_RATE",
     "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
@@ -445,7 +444,7 @@
   "read_forms": {
     "attr": 803,
     "factory_param": 4,
-    "getattr_const": 315,
+    "getattr_const": 316,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
@@ -2322,7 +2321,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "ml/drl_market_maker.py:88",
+        "site": "ml/drl_market_maker.py:108",
         "via": []
       }
     ],
@@ -2335,6 +2334,19 @@
         ],
         "site": "pilots/lob_simulator.py:81",
         "via": []
+      }
+    ],
+    "OPTIONS_META_LABELER_ENABLED": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "indirect_init_helper_d1"
+        ],
+        "site": "execution/options_paper_executor.py:105",
+        "via": [
+          127
+        ]
       }
     ],
     "OPTIONS_VRP_THRESHOLD": [
@@ -2595,7 +2607,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11052",
+        "site": "Gravity AI Review Suite.py:11063",
         "via": []
       }
     ],
@@ -2900,7 +2912,7 @@
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
-    "indirect_init_helper_d1": 11,
+    "indirect_init_helper_d1": 12,
     "init_body": 6,
     "init_self_assign": 41,
     "method_self_assign": 4,

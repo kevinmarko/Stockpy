@@ -287,7 +287,7 @@ describe("LobDepth3D Component Rendering & Interactions", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders WebGL Active badge when WebGL is supported", () => {
+  it("renders Canvas 2.5D Renderer badge when WebGL is supported", () => {
     // Mock WebGL context presence
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation((type: string) => {
       if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
@@ -299,7 +299,7 @@ describe("LobDepth3D Component Rendering & Interactions", () => {
     render(<LobDepth3D symbol="NVDA" forceFallback={false} autoPlayWaterfall={false} />);
 
     const renderMode = screen.getByTestId("lob-render-mode");
-    expect(renderMode).toHaveTextContent("WebGL 3D Active");
+    expect(renderMode).toHaveTextContent("Canvas 2.5D Renderer");
   });
 
   it("renders with custom bid/ask levels and calculates metrics correctly in DOM", () => {
