@@ -113,8 +113,6 @@ options-selling risk, not a duplicate of the general macro penalty.
 
 ## Backtest Validation (`STRATEGY_REGISTRY["vrp_premium_selling"]`, 2026-08)
 
-## Backtest Validation (`STRATEGY_REGISTRY["vrp_premium_selling"]`, 2026-08)
-
 The `vrp_premium_selling` adapter (`scripts/refresh_validations.py::_build_vrp_premium_selling_adapter` /
 `validation/options_selling_backtest.py`) implements a synthetic VRP Iron Condor premium-selling backtest
 with Black-Scholes daily mark-to-market and real macro gating.

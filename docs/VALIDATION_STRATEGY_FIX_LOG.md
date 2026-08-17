@@ -834,3 +834,32 @@ Unlike directional trend or long/short cross-sectional strategies evaluated via 
 2. **Policy Optimization Method**:
    - Closed-form reservation price $R(s, q, t) = s - q \gamma \sigma^2 (T - t)$ paired with stochastic parameter tuning over $(\gamma, \kappa) \in [0.01, 10.0] \times [0.1, 20.0]$ via `train_market_maker_policy`.
    - Exemption from standard daily-bar `STRATEGY_REGISTRY` backtesting is formally documented and covered by dedicated microstructure simulation tests (`tests/test_drl_market_maker.py`).
+
+---
+
+## 2026-08: Options-Desk Deployability Runtime Gap & Compounding Defect Remediation
+
+**PR**: `close-options-desk-deployability-gap`
+**Modules**: `pilots/zero_dte_engine.py`, `pilots/dispersion_trading.py`, `api/pilots_api.py`, `docs/signals/vrp_premium_selling.md`
+
+### 1. Architectural Role & Problem Addressed
+A comprehensive audit revealed runtime deployability enforcement gaps and five compounding defects across the options desk modules (`zero_dte_engine`, `dispersion_trading`, `earnings_crush`, `vol_mispricing`, and `vrp_premium_selling`). While strategies were documented in `docs/VALIDATION_STRATEGY_FIX_LOG.md` as failing the deployability gate or ungateable due to data gaps, the execution endpoints in `api/pilots_api.py` did not surface these gate statuses to callers, and underlying engines suffered from several mathematical and execution discrepancies.
+
+### 2. Remediated Compounding Defects
+1. **0DTE Fill Price Fabrication Eliminated (`pilots/zero_dte_engine.py`)**:
+   - *Previous state*: `execute_0dte_trade` fell back to a hardcoded `$1.50` fill price when `quote_price` and `limit_price` were missing, violating CONSTRAINT #4 (no data fabrication).
+   - *Remediation*: Replaced `$1.50` default with real Black-Scholes theoretical pricing from latest underlying spot, or explicit error rejection (`ok=False`, logged error) when no price data exists.
+2. **Distinct Constituent Baskets for SPY vs QQQ (`pilots/dispersion_trading.py`)**:
+   - *Previous state*: Both SPY and QQQ shared identical default constituent weightings.
+   - *Remediation*: Defined distinct `INDEX_CONSTITUENTS_MAP` and `INDEX_WEIGHTS_MAP` tailored to index-specific liquidity and weight profiles (e.g. higher tech concentration in QQQ).
+3. **Dynamic Dispersion Spread Sign Derivation (`pilots/dispersion_trading.py`)**:
+   - *Previous state*: `execute_dispersion_trade(basket=None)` hardcoded `is_long_dispersion=True`.
+   - *Remediation*: Evaluates `evaluate_dispersion_opportunity` dynamically to determine whether implied correlation exceeds realized correlation (rich $\to$ Long Dispersion) or is below realized (cheap $\to$ Short Dispersion).
+4. **Runtime Deployability Gate Enforcement (`api/pilots_api.py`)**:
+   - Defined `OPTIONS_DESK_DEPLOYABILITY_GATES` registry.
+   - Wired `gate_status` (`deployable: False`, `gate_status: "UNGATEABLE_DATA_GAP" | "MEASURED_FAIL"`, and honest reasons) into responses for `post_options_earnings_crush_execute`, `post_options_dispersion_execute`, and `post_options_zero_dte_execute`.
+5. **Documentation Deduplication (`docs/signals/vrp_premium_selling.md`)**:
+   - Removed duplicated `## Backtest Validation` header.
+
+### 3. Verification
+- All 48 targeted tests pass in `tests/test_options_desk_deployability_runtime_gap.py`, `tests/test_zero_dte_engine.py`, `tests/test_dispersion_trading.py`, and `tests/test_pilots_paper_broker.py`.
