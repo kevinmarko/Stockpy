@@ -156,6 +156,7 @@ output/runtime_flags.json.corrupt.*
 
 # React PWA (webapp/) build + dependency artifacts — Vite/npm regenerate these;
 # never committed.
+webapp/node_modules
 webapp/node_modules/
 webapp/dist/
 webapp/.vite/

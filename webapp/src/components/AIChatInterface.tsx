@@ -1,10 +1,27 @@
 import React, { useState, useRef, useEffect, Component } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Bot, User, Loader2, BrainCircuit, ChevronDown, ChevronRight, X } from 'lucide-react';
+import {
+  Send,
+  Bot,
+  User,
+  Loader2,
+  BrainCircuit,
+  ChevronDown,
+  ChevronRight,
+  X,
+  Mic,
+  MicOff,
+  Volume2,
+  Radio,
+  MessageSquare,
+  Sparkles,
+} from 'lucide-react';
 import { getEffectiveToken } from '../auth/apiToken';
-import { chatUrl } from '../api/client';
+import { chatUrl, api } from '../api/client';
+import type { AiModelsResponse } from '../api/types';
 import { theme } from '../theme';
+import { useGeminiLive } from '../chat/useGeminiLive';
 
 // Required component to catch ReactMarkdown v10+ crash parsing errors
 class ErrorBoundary extends Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
@@ -29,24 +46,111 @@ interface AIChatInterfaceProps {
   contextText?: string;
 }
 
+interface ChatMessage {
+  role: 'user' | 'model';
+  content: string;
+  thoughts?: string;
+  suggestions?: string[];
+  isLive?: boolean;
+}
+
 export default function AIChatInterface({ isOpen, onClose, contextText }: AIChatInterfaceProps) {
-  const [messages, setMessages] = useState<any[]>([
+  const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', content: "Hi! Ask me any questions about the data." }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isLiveMode, setIsLiveMode] = useState(false);
   const [expandedThoughts, setExpandedThoughts] = useState<Record<number, boolean>>({});
+  const [modelCatalog, setModelCatalog] = useState<AiModelsResponse | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string>('gemini');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash');
+  const [customModel, setCustomModel] = useState<string>('');
+  const [showCustomInput, setShowCustomInput] = useState<boolean>(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    // Optional chaining on the call itself, not just the ref: jsdom (used by
-    // the test suite) doesn't implement scrollIntoView at all, and this
-    // component is always mounted (App.tsx renders it unconditionally, just
-    // CSS-hidden), so an unguarded call here broke every test that mounts
-    // <App />.
+    if (isOpen) {
+      api.getAiModels().then((data) => {
+        setModelCatalog(data);
+        if (data?.default_provider && data.default_provider !== 'auto') {
+          setSelectedProvider(data.default_provider);
+          if (data.default_model) {
+            setSelectedModel(data.default_model);
+          }
+        }
+      }).catch((err) => {
+        console.warn('Failed to load AI model catalog:', err);
+      });
+    }
+  }, [isOpen]);
+
+  // Gemini Live Hook
+  const {
+    status: liveStatus,
+    isMicActive,
+    isSpeaking,
+    liveModel,
+    connectLive,
+    disconnectLive,
+    toggleMic,
+    sendTextMessage,
+  } = useGeminiLive({
+    onUserTranscript: (text) => {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === 'user' && last.isLive) {
+          const updated = [...prev];
+          updated[updated.length - 1] = { ...last, content: text };
+          return updated;
+        }
+        return [...prev, { role: 'user', content: text, isLive: true }];
+      });
+    },
+    onModelTranscript: (text, isPartial) => {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === 'model' && last.isLive) {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...last,
+            content: isPartial ? (last.content ? `${last.content} ${text}` : text) : text,
+          };
+          return updated;
+        }
+        return [...prev, { role: 'model', content: text, isLive: true }];
+      });
+    },
+    onThought: (thought) => {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === 'model' && last.isLive) {
+          const updated = [...prev];
+          const prevThoughts = last.thoughts || '';
+          updated[updated.length - 1] = {
+            ...last,
+            thoughts: prevThoughts ? `${prevThoughts}\n${thought}` : thought,
+          };
+          return updated;
+        }
+        return [
+          ...prev,
+          { role: 'model', content: '', thoughts: thought, isLive: true },
+        ];
+      });
+    },
+    onError: (err) => {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'model', content: `⚠️ Live Error: ${err}`, isLive: true },
+      ]);
+    },
+  });
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+  }, [messages, isLoading, isSpeaking]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -57,8 +161,17 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
     }
   }, [input]);
 
+  // Connect/disconnect Live when toggling live mode or closing drawer
+  useEffect(() => {
+    if (isOpen && isLiveMode) {
+      connectLive(contextText);
+    } else {
+      disconnectLive();
+    }
+  }, [isOpen, isLiveMode, connectLive, disconnectLive, contextText]);
+
   const toggleThought = (idx: number) => {
-    setExpandedThoughts(prev => ({ ...prev, [idx]: !prev[idx] }));
+    setExpandedThoughts((prev) => ({ ...prev, [idx]: !prev[idx] }));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -68,20 +181,32 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
     }
   };
 
-  const handleSend = async (e?: React.FormEvent | React.KeyboardEvent, overrideText: string | null = null) => {
+  const handleSend = async (
+    e?: React.FormEvent | React.KeyboardEvent,
+    overrideText: string | null = null
+  ) => {
     e?.preventDefault();
     const textToSend = overrideText || input;
     if (!textToSend.trim() || isLoading) return;
 
     if (!overrideText) setInput('');
+
+    if (isLiveMode) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: textToSend.trim(), isLive: true },
+      ]);
+      sendTextMessage(textToSend.trim());
+      return;
+    }
+
     setIsLoading(true);
 
-    const currentMessages = [...messages, { role: 'user', content: textToSend.trim() }];
-
+    const currentMessages = [...messages, { role: 'user' as const, content: textToSend.trim() }];
     const nextIdx = currentMessages.length;
     let thinking = '';
     let reply = '';
-    let suggestions: string[] = [];
+    const suggestions: string[] = [];
 
     setMessages([...currentMessages, { role: 'model', content: '', thoughts: '', suggestions: [] }]);
 
@@ -91,20 +216,18 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           message: textToSend.trim(),
           history: currentMessages.slice(0, -1),
-          // Threaded server-side into the LLM prompt as background context
-          // (see api/data_api.py::ChatMessageRequest.context) rather than
-          // folded into the message text here, so the user's literal
-          // question stays clean in the transcript and the backend decides
-          // how best to present grounding context to each provider.
           ...(contextText ? { context: contextText } : {}),
-        })
+          ...(selectedProvider !== 'auto' ? { provider: selectedProvider } : {}),
+          ...((showCustomInput && customModel.trim())
+            ? { model: customModel.trim() }
+            : (selectedModel ? { model: selectedModel } : {})),
+        }),
       });
-
 
       if (!response.body) throw new Error('No response body');
 
@@ -137,18 +260,18 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
                   reply += parsed.content;
                 }
 
-                setMessages(prev => {
+                setMessages((prev) => {
                   const updated = [...prev];
                   updated[nextIdx] = {
                     role: 'model',
                     content: reply,
                     thoughts: thinking,
-                    suggestions: suggestions
+                    suggestions: suggestions,
                   };
                   return updated;
                 });
-              } catch (e) {
-                console.error('JSON parse fail:', dataStr);
+              } catch (err) {
+                console.error('JSON parse fail:', dataStr, err);
               }
             }
           }
@@ -173,35 +296,251 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
         display: 'flex',
         flexDirection: 'column',
       }}
-      // The panel is only translated off-screen (for the slide transition),
-      // not unmounted, so its buttons/textarea/suggestions stay in the DOM
-      // while closed. `inert` (supported in all current major browsers)
-      // removes the whole subtree from the tab order and assistive-tech
-      // exposure without breaking the CSS transition the way conditionally
-      // unmounting would. aria-hidden is redundant with inert in modern
-      // browsers but kept as a defensive fallback for older AT/browser pairs.
       inert={!isOpen}
       aria-hidden={!isOpen}
     >
+      {/* Header */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: 'var(--s-4)',
+          padding: 'var(--s-3) var(--s-4)',
           borderBottom: `1px solid ${theme.border}`,
         }}
       >
-        <div style={{ fontWeight: 700, color: theme.textPrimary }}>AI Chat Interface</div>
-        <button
-          onClick={onClose}
-          aria-label="Close AI chat"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 'var(--s-1)', display: 'flex' }}
-        >
-          <X size={18} color={theme.textSecondary} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+          <div style={{ fontWeight: 700, color: theme.textPrimary, fontSize: 'var(--t-body)' }}>
+            AI Assistant
+          </div>
+          {isLiveMode && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 8px',
+                borderRadius: 'var(--r-pill)',
+                background: liveStatus === 'connected' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                color: liveStatus === 'connected' ? theme.growth : theme.caution,
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: liveStatus === 'connected' ? theme.growth : theme.caution,
+                  display: 'inline-block',
+                }}
+              />
+              Live Audio
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+          {/* Toggle Live Mode Button */}
+          <button
+            type="button"
+            onClick={() => setIsLiveMode(!isLiveMode)}
+            className="btn"
+            title={isLiveMode ? "Switch to Text Chat" : "Switch to Live Voice Chat"}
+            style={{
+              padding: '4px 10px',
+              fontSize: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              background: isLiveMode ? 'var(--c-accent-subtle, rgba(99, 102, 241, 0.15))' : theme.surface2,
+              color: isLiveMode ? theme.accent : theme.textSecondary,
+              border: `1px solid ${isLiveMode ? theme.accent : theme.border}`,
+              borderRadius: 'var(--r-pill)',
+              cursor: 'pointer',
+            }}
+          >
+            {isLiveMode ? <Radio size={13} className="icon-pulse" /> : <MessageSquare size={13} />}
+            <span>{isLiveMode ? "Voice Live" : "Text Chat"}</span>
+          </button>
+
+          <button
+            onClick={onClose}
+            aria-label="Close AI chat"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 'var(--s-1)',
+              display: 'flex',
+            }}
+          >
+            <X size={18} color={theme.textSecondary} />
+          </button>
+        </div>
       </div>
 
+      {/* Model Selection Bar (Text Chat Mode) */}
+      {!isLiveMode && (
+        <div
+          data-testid="ai-model-selector-bar"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: 'var(--s-2) var(--s-4)',
+            background: theme.surface2,
+            borderBottom: `1px solid ${theme.border}`,
+            fontSize: 'var(--t-caption)',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: theme.textSecondary }}>
+            <Sparkles size={13} style={{ color: theme.accent }} />
+            <span style={{ fontWeight: 500 }}>Model:</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, justifyContent: 'flex-end' }}>
+            {!showCustomInput ? (
+              <select
+                aria-label="AI Model Selector"
+                value={selectedModel ? `${selectedProvider}:${selectedModel}` : (selectedProvider === 'auto' ? 'auto:' : `${selectedProvider}:default`)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'custom') {
+                    setShowCustomInput(true);
+                    return;
+                  }
+                  if (val === 'auto:' || val === 'auto') {
+                    setSelectedProvider('auto');
+                    setSelectedModel('');
+                    return;
+                  }
+                  const [p, ...m] = val.split(':');
+                  setSelectedProvider(p);
+                  setSelectedModel(m.join(':') === 'default' ? '' : m.join(':'));
+                }}
+                style={{
+                  background: theme.surface,
+                  color: theme.textPrimary,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 'var(--r-sm)',
+                  padding: '3px 8px',
+                  fontSize: 12,
+                  maxWidth: '230px',
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="auto:">✨ Auto (Best Available)</option>
+                {modelCatalog?.providers ? (
+                  modelCatalog.providers.map((p) => (
+                    <optgroup key={p.id} label={`${p.name}${p.available ? '' : ' (Key not set)'}`}>
+                      {p.models.map((m) => (
+                        <option key={`${p.id}:${m}`} value={`${p.id}:${m}`}>
+                          {m}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                ) : (
+                  <>
+                    <optgroup label="Google Gemini">
+                      <option value="gemini:gemini-2.5-flash">Gemini 2.5 Flash</option>
+                      <option value="gemini:gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="gemini:gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    </optgroup>
+                    <optgroup label="Anthropic Claude">
+                      <option value="anthropic:claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                      <option value="anthropic:claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+                      <option value="anthropic:claude-3-opus-20240229">Claude 3 Opus</option>
+                    </optgroup>
+                    <optgroup label="OpenAI ChatGPT">
+                      <option value="openai:gpt-4o">GPT-4o</option>
+                      <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="openai:o3-mini">o3-mini</option>
+                      <option value="openai:o1">o1</option>
+                    </optgroup>
+                    <optgroup label="Local / Open Source (Ollama, vLLM)">
+                      <option value="local:llama3.3">Llama 3.3 (Local)</option>
+                      <option value="local:deepseek-r1">DeepSeek R1 (Local)</option>
+                      <option value="local:qwen2.5">Qwen 2.5 (Local)</option>
+                      <option value="local:mistral">Mistral (Local)</option>
+                    </optgroup>
+                  </>
+                )}
+                <option value="custom">✏️ Custom Model...</option>
+              </select>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, maxWidth: '240px' }}>
+                <input
+                  type="text"
+                  placeholder="e.g. deepseek-ai/DeepSeek-V3"
+                  value={customModel}
+                  onChange={(e) => setCustomModel(e.target.value)}
+                  style={{
+                    flex: 1,
+                    background: theme.surface,
+                    color: theme.textPrimary,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: 'var(--r-sm)',
+                    padding: '3px 8px',
+                    fontSize: 12,
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCustomInput(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: theme.textSecondary,
+                    cursor: 'pointer',
+                    padding: 2,
+                    fontSize: 11,
+                  }}
+                  title="Back to dropdown"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Live Audio Status Banner (when Live Mode is on) */}
+      {isLiveMode && (
+        <div
+          style={{
+            padding: 'var(--s-2) var(--s-4)',
+            background: 'var(--c-surface-elevated, #181c24)',
+            borderBottom: `1px solid ${theme.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: 'var(--t-caption)',
+            color: theme.textSecondary,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+            {isSpeaking ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: theme.accent, fontWeight: 600 }}>
+                <Volume2 size={14} className="icon-pulse" /> Speaking...
+              </span>
+            ) : isMicActive ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: theme.growth, fontWeight: 600 }}>
+                <Mic size={14} className="icon-pulse" /> Listening to you...
+              </span>
+            ) : (
+              <span>Mic paused • Tap mic below to speak</span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: theme.textMuted }}>{liveModel}</div>
+        </div>
+      )}
+
+      {/* Message List */}
       <div
         style={{
           flex: 1,
@@ -236,7 +575,6 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
               {m.role === 'user' ? <User size={16} color={theme.textSecondary} /> : <Bot size={16} color={theme.textSecondary} />}
             </div>
             <div style={{ maxWidth: '85%', display: 'flex', flexDirection: 'column', gap: 'var(--s-2)' }}>
-
               {m.role === 'model' && m.thoughts && m.thoughts.trim().length > 0 && (
                 <div
                   style={{
@@ -269,7 +607,7 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>
                       {(() => {
                         if (m.content && m.content.length > 0) return "View reasoning process";
-                        const lines = m.thoughts.split('\n').filter((l: string) => l.trim().length > 0);
+                        const lines = (m.thoughts || '').split('\n').filter((l: string) => l.trim().length > 0);
                         return lines.length > 0 ? lines[lines.length - 1] : "Analyzing context...";
                       })()}
                     </span>
@@ -290,7 +628,7 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
                         gap: 'var(--s-2)',
                       }}
                     >
-                      {m.thoughts.split('\n').filter((l: string) => l.trim().length > 0).map((line: string, idx: number) => (
+                      {(m.thoughts || '').split('\n').filter((l: string) => l.trim().length > 0).map((line: string, idx: number) => (
                         <div key={idx} style={{ display: 'flex', gap: 'var(--s-2)', alignItems: 'flex-start' }}>
                           <div style={{ color: theme.textMuted }}>&rsaquo;</div>
                           <div style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{line}</div>
@@ -352,7 +690,9 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-1-5)', marginTop: 'var(--s-2)' }}>
                   {m.suggestions.slice(0, 3).map((s: string, idx: number) => (
                     <button
-                      key={idx} onClick={() => handleSend(undefined, s)} disabled={isLoading}
+                      key={idx}
+                      onClick={() => handleSend(undefined, s)}
+                      disabled={isLoading}
                       className="btn"
                       style={{
                         textAlign: 'left',
@@ -364,62 +704,96 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
                         border: `1px solid ${theme.border}`,
                         justifyContent: 'flex-start',
                       }}
-                    >{s}</button>
+                    >
+                      {s}
+                    </button>
                   ))}
                 </div>
               )}
-
             </div>
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
 
+      {/* Input / Control Footer */}
       <form
         onSubmit={handleSend}
         style={{
-          padding: 'var(--s-4)',
+          padding: 'var(--s-3) var(--s-4)',
           borderTop: `1px solid ${theme.border}`,
           display: 'flex',
-          alignItems: 'flex-end',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
           background: theme.surface2,
-          position: 'relative',
         }}
       >
-        <textarea
-          ref={textareaRef}
-          value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} disabled={isLoading}
-          placeholder="Ask a question about your portfolio..."
-          rows={1}
-          className="textarea"
-          style={{
-            width: '100%',
-            paddingRight: 44,
-            resize: 'none',
-          }}
-        />
-        <button
-          type="submit"
-          disabled={!input.trim() || isLoading}
-          aria-label="Send message"
-          style={{
-            position: 'absolute',
-            right: 'var(--s-5)',
-            bottom: 'var(--s-5)',
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            background: theme.accent,
-            color: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: 'none',
-            opacity: (!input.trim() || isLoading) ? 0.5 : 1,
-          }}
-        >
-          <Send size={16} />
-        </button>
+        {/* Live Microphone Button when in Live Mode */}
+        {isLiveMode && (
+          <button
+            type="button"
+            onClick={toggleMic}
+            aria-label={isMicActive ? "Mute Microphone" : "Unmute Microphone"}
+            title={isMicActive ? "Mute Microphone" : "Speak to Gemini Live"}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: '50%',
+              background: isMicActive ? theme.decline : theme.surface,
+              color: isMicActive ? '#fff' : theme.textPrimary,
+              border: `1px solid ${isMicActive ? theme.decline : theme.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {isMicActive ? <Mic size={18} /> : <MicOff size={18} />}
+          </button>
+        )}
+
+        <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            placeholder={isLiveMode ? "Type or speak to Gemini Live..." : "Ask a question about your portfolio..."}
+            rows={1}
+            className="textarea"
+            style={{
+              width: '100%',
+              paddingRight: 40,
+              resize: 'none',
+              borderRadius: 'var(--r-md)',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={!input.trim() || isLoading}
+            aria-label="Send message"
+            style={{
+              position: 'absolute',
+              right: 6,
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              background: theme.accent,
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              cursor: 'pointer',
+              opacity: (!input.trim() || isLoading) ? 0.4 : 1,
+            }}
+          >
+            <Send size={14} />
+          </button>
+        </div>
       </form>
     </div>
   );

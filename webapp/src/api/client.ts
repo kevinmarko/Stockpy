@@ -15,6 +15,7 @@ import type {
   AgenticStatus,
   AiChartResponse,
   AiCommentaryResponse,
+  AiModelsResponse,
   AiResearchResponse,
   AlertsFeed,
   AutomationSchedule,
@@ -253,14 +254,29 @@ function baseFor(path: string): string {
   ) {
     return CONTROL_BASE_URL;
   }
-  // AI chat streaming and live-tick WS both live on the Data API (:8603)
-  // alongside the other "/data/*" Phase-6 endpoints, but keep their own
-  // top-level paths ("/api/chat", "/ws/ticks/*") rather than a "/data/"
-  // prefix, so they need an explicit match here.
-  if (path === "/api/chat" || path.startsWith("/ws/ticks/")) {
+  // AI chat streaming, live chat WebSocket, and live-tick WS all live on the
+  // Data API (:8603) alongside the other "/data/*" Phase-6 endpoints, but
+  // keep their own top-level paths ("/api/chat", "/ws/ticks/*", "/ws/chat/*")
+  // rather than a "/data/" prefix, so they need an explicit match here.
+  if (path === "/api/chat" || path.startsWith("/ws/ticks/") || path.startsWith("/ws/chat/")) {
     return DATA_BASE_URL;
   }
   return BASE_URL;
+}
+
+/**
+ * Full ws:// (or wss:// on an https origin) URL for the Gemini Live chat endpoint.
+ * The browser WebSocket API cannot set an Authorization header, so the token
+ * travels as a `?token=` query param.
+ */
+export function liveChatWsUrl(tokenOverride?: string): string {
+  const httpBase = baseFor("/ws/chat/live");
+  const wsBase = httpBase.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const params = new URLSearchParams();
+  const token = tokenOverride || TOKEN;
+  if (token) params.set("token", token);
+  const qs = params.toString();
+  return `${wsBase}/ws/chat/live${qs ? `?${qs}` : ""}`;
 }
 
 /**
@@ -897,6 +913,8 @@ const liveApi = {
     }),
   // ---- G15: durable per-symbol Claude-vs-Gemini disagreement (data base, :8603) ----
   getAiDisagreements: () => http<AiDisagreementsResponse>("/data/ai/disagreements"),
+  // ---- AI Models listing (data base, :8603) ----
+  getAiModels: () => http<AiModelsResponse>("/data/ai/models"),
   // ---- Report Library (G5) + Dead-Letter Queue (G6) ----
   getReports: () => http<ReportManifest>("/reports"),
   getReport: (name: string) =>

@@ -44,6 +44,9 @@
 	handle /ws/ticks/* {
 		reverse_proxy 127.0.0.1:8603
 	}
+	handle /ws/chat/* {
+		reverse_proxy 127.0.0.1:8603
+	}
 
 	# Metrics API (:8604)
 	handle /metrics/* {

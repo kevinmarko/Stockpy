@@ -138,10 +138,11 @@ install_redacting_exception_handler(app)
 # stream_job_logs call sites, so a /ws/training/status route mounted here
 # could never broadcast anything; see api/ws_api.py's module docstring.
 try:
-    from api.ws_api import tick_router
+    from api.ws_api import tick_router, live_chat_router
     app.include_router(tick_router)
+    app.include_router(live_chat_router)
 except Exception as _ws_e:
-    logger.warning("tick_router mount skipped: %s", _ws_e)
+    logger.warning("ws routers mount skipped: %s", _ws_e)
 
 
 def require_ai_capability_enabled(flag_name: str, capability_label: str):
@@ -1535,6 +1536,12 @@ class ChatMessageRequest(BaseModel):
     # omitted/empty produces byte-identical behavior to before this field
     # existed.
     context: Optional[str] = None
+    # Optional provider selection: 'auto', 'gemini', 'anthropic', 'openai', 'local'
+    provider: Optional[str] = None
+    # Optional model slug (e.g. 'claude-3-5-sonnet-20241022', 'gpt-4o', 'deepseek-r1', 'llama3.3')
+    model: Optional[str] = None
+    # Optional custom OpenAI-compatible base URL for local or self-hosted LLMs
+    custom_base_url: Optional[str] = None
 
 
 _ITER_BLOCKING_EXHAUSTED = object()
@@ -1737,57 +1744,141 @@ _CHAT_TOOLS = [
 ]
 
 
+@app.get(
+    "/data/ai/models",
+    dependencies=[Depends(require_token)],
+)
+async def list_ai_models_endpoint():
+    """Returns list of available and supported LLM providers and model presets."""
+    providers = [
+        {
+            "id": "gemini",
+            "name": "Google Gemini",
+            "available": bool(getattr(settings, "GEMINI_API_KEY", None)),
+            "default_model": getattr(settings, "GEMINI_CHAT_MODEL", "gemini-2.5-flash"),
+            "models": [
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "gemini-1.5-pro",
+                "gemini-3.1-flash-live-preview",
+            ],
+        },
+        {
+            "id": "anthropic",
+            "name": "Anthropic Claude",
+            "available": bool(getattr(settings, "ANTHROPIC_API_KEY", None)),
+            "default_model": "claude-3-5-sonnet-20241022",
+            "models": [
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-haiku-20241022",
+                "claude-3-opus-20240229",
+            ],
+        },
+        {
+            "id": "openai",
+            "name": "OpenAI ChatGPT",
+            "available": bool(getattr(settings, "OPENAI_API_KEY", None)),
+            "default_model": "gpt-4o",
+            "models": [
+                "gpt-4o",
+                "gpt-4o-mini",
+                "o1",
+                "o3-mini",
+            ],
+        },
+        {
+            "id": "local",
+            "name": "Local / Open Source (Ollama, vLLM)",
+            "available": bool(getattr(settings, "LOCAL_LLM_BASE_URL", None)),
+            "base_url": getattr(settings, "LOCAL_LLM_BASE_URL", "http://localhost:11434/v1"),
+            "default_model": getattr(settings, "LOCAL_LLM_MODEL", "llama3.3"),
+            "models": [
+                "llama3.3",
+                "deepseek-r1",
+                "qwen2.5",
+                "mistral",
+            ],
+        },
+    ]
+    return {
+        "default_provider": getattr(settings, "AI_CHAT_DEFAULT_PROVIDER", "auto"),
+        "default_model": getattr(settings, "AI_CHAT_DEFAULT_MODEL", None),
+        "providers": providers,
+    }
+
+
 @app.post(
     "/api/chat",
     dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
 )
 async def chat_endpoint(req: ChatMessageRequest):
-    """Streaming chat endpoint for AI Chat Interface.
+    """Streaming multi-model chat endpoint for AI Chat Interface.
 
     Gated by _require_ai_generation_enabled (settings.AI_GENERATION_API_ENABLED)
-    in addition to require_token, matching the three /data/ai/* generation
-    endpoints above -- this endpoint calls out to paid external LLM APIs
-    (Gemini/Anthropic) exactly like those do, and this API is fail-open by
-    design when STATE_API_TOKEN is unset, so the capability flag is the ONLY
-    thing stopping it from being remotely, repeatedly triggerable the moment
-    an operator sets GEMINI_API_KEY/ANTHROPIC_API_KEY for their own local use.
-
-    ``req.context``, when present, is a pre-formatted text block the caller
-    builds client-side from data it already has on screen (e.g. the Options
-    Matrix's currently displayed directives). This endpoint never fetches
-    anything to build it -- it only threads the string into the prompt, so
-    it stays free of any FMP/heavy-engine import surface. Omitted/empty is
-    byte-identical to the endpoint's behavior before this field existed.
-
-    The Gemini branch additionally grounds the model in REAL persisted
-    platform state via ``_CHAT_TOOLS`` -- a fixed, read-only set of Python
-    functions (list pilots, a pilot's holdings/recent trades, the operator's
-    real current portfolio, platform risk/regime status) wired in through
-    Gemini's automatic function calling. Every tool function is read-only
-    and never raises (an internal failure returns an honest
-    ``{"error": ...}`` dict instead) -- see the tool section's header
-    comment above ``chat_endpoint`` for the hard constraints. The Anthropic
-    branch does not yet have an equivalent tool-calling integration.
+    in addition to require_token. Supports multi-provider routing:
+    - Google Gemini (with automatic platform function calling)
+    - Anthropic Claude (with system context grounding)
+    - OpenAI ChatGPT (gpt-4o, o3-mini, etc.)
+    - Local / Open-source LLMs via OpenAI-compatible endpoints (Ollama, vLLM, DeepSeek, etc.)
     """
 
     async def stream_generator():
-        # Emit a thought to show activity
         yield _sse("THOUGHT", "Analyzing query...")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
 
         try:
-            if settings.GEMINI_API_KEY:
-                yield _sse("THOUGHT", "Routing to Gemini...")
+            # Resolve target provider
+            requested_provider = (req.provider or "").strip().lower()
+            if requested_provider in ("gemini", "google"):
+                provider = "gemini"
+            elif requested_provider in ("anthropic", "claude"):
+                provider = "anthropic"
+            elif requested_provider in ("openai", "chatgpt"):
+                provider = "openai"
+            elif requested_provider in ("local", "ollama", "vllm", "openrouter", "custom"):
+                provider = "local"
+            else:
+                # Auto / fallback detection
+                default_p = getattr(settings, "AI_CHAT_DEFAULT_PROVIDER", "auto").lower()
+
+                def _is_provider_available(p_name: str) -> bool:
+                    if p_name == "gemini":
+                        return bool(getattr(settings, "GEMINI_API_KEY", None))
+                    elif p_name in ("anthropic", "claude"):
+                        return bool(getattr(settings, "ANTHROPIC_API_KEY", None))
+                    elif p_name in ("openai", "chatgpt"):
+                        return bool(getattr(settings, "OPENAI_API_KEY", None))
+                    elif p_name in ("local", "ollama", "vllm"):
+                        return bool(getattr(settings, "LOCAL_LLM_BASE_URL", None))
+                    return False
+
+                if default_p != "auto" and _is_provider_available(default_p):
+                    provider = "gemini" if default_p == "google" else ("anthropic" if default_p == "claude" else default_p)
+                elif _is_provider_available("gemini"):
+                    provider = "gemini"
+                elif _is_provider_available("anthropic"):
+                    provider = "anthropic"
+                elif _is_provider_available("openai"):
+                    provider = "openai"
+                elif _is_provider_available("local"):
+                    provider = "local"
+                else:
+                    provider = "none"
+
+            if provider == "gemini":
+                if not getattr(settings, "GEMINI_API_KEY", None):
+                    yield _sse("MESSAGE", "Error: GEMINI_API_KEY is not configured in settings.")
+                    yield "data: [DONE]\n\n"
+                    return
+
+                model_name = req.model or getattr(settings, "GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+                yield _sse("THOUGHT", f"Routing to Gemini ({model_name})...")
                 from google import genai
                 from google.genai import types
                 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
                 contents = []
                 if req.context:
-                    # Grounding context goes in as its own leading turn
-                    # rather than folded into the query text, so the model
-                    # sees it as background data rather than part of the
-                    # user's literal question.
                     contents.append(
                         types.Content(
                             role="user",
@@ -1795,9 +1886,12 @@ async def chat_endpoint(req: ChatMessageRequest):
                         )
                     )
                 for msg in (req.history or []):
+                    role = msg.get("role", "user")
+                    if role == "assistant":
+                        role = "model"
                     contents.append(
                         types.Content(
-                            role=msg.get("role", "user"),
+                            role=role,
                             parts=[types.Part.from_text(text=msg.get("content", ""))]
                         )
                     )
@@ -1808,14 +1902,8 @@ async def chat_endpoint(req: ChatMessageRequest):
                     )
                 )
 
-                # Use generate_content_stream for streaming, with the
-                # read-only platform-grounding tool set wired in via Gemini's
-                # automatic function calling (the SDK introspects each
-                # callable's type hints + docstring to build its schema and
-                # invokes it automatically mid-turn -- see _CHAT_TOOLS'
-                # definition above for the hard read-only constraint).
                 response_stream = client.models.generate_content_stream(
-                    model='gemini-2.5-flash',
+                    model=model_name,
                     contents=contents,
                     config=types.GenerateContentConfig(tools=_CHAT_TOOLS),
                 )
@@ -1824,8 +1912,14 @@ async def chat_endpoint(req: ChatMessageRequest):
                     if chunk.text:
                         yield _sse("MESSAGE", chunk.text)
 
-            elif settings.ANTHROPIC_API_KEY:
-                yield _sse("THOUGHT", "Routing to Claude...")
+            elif provider == "anthropic":
+                if not getattr(settings, "ANTHROPIC_API_KEY", None):
+                    yield _sse("MESSAGE", "Error: ANTHROPIC_API_KEY is not configured in settings.")
+                    yield "data: [DONE]\n\n"
+                    return
+
+                model_name = req.model or "claude-3-5-sonnet-20241022"
+                yield _sse("THOUGHT", f"Routing to Claude ({model_name})...")
                 import anthropic
                 client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
@@ -1836,26 +1930,14 @@ async def chat_endpoint(req: ChatMessageRequest):
                     messages.append({"role": role, "content": msg.get("content", "")})
                 messages.append({"role": "user", "content": req.message})
 
-                # Anthropic's Messages API requires roles to strictly
-                # alternate user/assistant, so grounding context can't be
-                # prepended as its own leading "user" turn the way it is for
-                # Gemini above (that would create two consecutive user turns
-                # whenever history is empty). The `system` parameter carries
-                # background context outside the turn sequence entirely, so
-                # it's the correct fit here regardless of history length.
                 stream_kwargs: Dict[str, Any] = {
-                    "model": "claude-3-5-sonnet-20241022",
-                    "max_tokens": 800,
+                    "model": model_name,
+                    "max_tokens": 1024,
                     "messages": messages,
                 }
                 if req.context:
                     stream_kwargs["system"] = f"Context:\n{req.context}"
 
-                # client.messages.stream(...) itself just constructs the
-                # manager (no I/O), but __enter__ opens the connection and
-                # __exit__ waits for it to close -- both are blocking SDK
-                # calls, so both are offloaded to the executor too, not just
-                # the per-chunk iteration.
                 loop = asyncio.get_running_loop()
                 stream_cm = client.messages.stream(**stream_kwargs)
                 stream = await loop.run_in_executor(None, stream_cm.__enter__)
@@ -1864,21 +1946,74 @@ async def chat_endpoint(req: ChatMessageRequest):
                         yield _sse("MESSAGE", text)
                 finally:
                     await loop.run_in_executor(None, stream_cm.__exit__, None, None, None)
+
+            elif provider == "openai":
+                if not getattr(settings, "OPENAI_API_KEY", None):
+                    yield _sse("MESSAGE", "Error: OPENAI_API_KEY is not configured in settings.")
+                    yield "data: [DONE]\n\n"
+                    return
+
+                model_name = req.model or "gpt-4o"
+                yield _sse("THOUGHT", f"Routing to OpenAI ({model_name})...")
+                import openai
+                client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+                messages = []
+                if req.context:
+                    messages.append({"role": "system", "content": f"Platform Grounding Context:\n{req.context}"})
+                for msg in (req.history or []):
+                    role = msg.get("role", "user")
+                    if role == "model": role = "assistant"
+                    messages.append({"role": role, "content": msg.get("content", "")})
+                messages.append({"role": "user", "content": req.message})
+
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    stream=True,
+                )
+
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield _sse("MESSAGE", chunk.choices[0].delta.content)
+
+            elif provider == "local":
+                base_url = (req.custom_base_url or getattr(settings, "LOCAL_LLM_BASE_URL", None) or "http://localhost:11434/v1").rstrip("/")
+                model_name = req.model or getattr(settings, "LOCAL_LLM_MODEL", "llama3.3")
+                api_key = getattr(settings, "LOCAL_LLM_API_KEY", None) or "ollama"
+
+                yield _sse("THOUGHT", f"Routing to Local LLM ({model_name} at {base_url})...")
+                import openai
+                client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+                messages = []
+                if req.context:
+                    messages.append({"role": "system", "content": f"Platform Grounding Context:\n{req.context}"})
+                for msg in (req.history or []):
+                    role = msg.get("role", "user")
+                    if role == "model": role = "assistant"
+                    messages.append({"role": role, "content": msg.get("content", "")})
+                messages.append({"role": "user", "content": req.message})
+
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    stream=True,
+                )
+
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield _sse("MESSAGE", chunk.choices[0].delta.content)
+
             else:
-                err_msg = "Error: Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is configured in settings."
-                yield _sse("MESSAGE", err_msg)
+                yield _sse("MESSAGE", "Error: No AI model provider configured. Set GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or LOCAL_LLM_BASE_URL.")
 
             yield _sse("SUGGESTION", "Show portfolio risk")
             yield _sse("SUGGESTION", "Explain option overlay")
 
         except Exception as e:
-            # Full detail stays server-side (CodeQL: information exposure
-            # through an exception) -- the raw exception string can carry
-            # internal detail (a file path, part of a request payload, or an
-            # LLM SDK's own error body) that must never reach an external
-            # chat client. Only a generic, safe message is streamed back.
             logger.error("Chat streaming error: %s", e, exc_info=True)
-            yield _sse("MESSAGE", "\n\n**Error:** something went wrong generating a response. Please try again.")
+            yield _sse("MESSAGE", "**Error:** something went wrong generating a response. Please try again.")
 
         yield "data: [DONE]\n\n"
 

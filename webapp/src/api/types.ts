@@ -808,6 +808,39 @@ export interface LlmSettingUpdateResult {
   note: string;
 }
 
+/** One AI model provider entry from GET /data/ai/models. */
+export interface AiModelProvider {
+  id: string;
+  name: string;
+  available: boolean;
+  default_model: string;
+  models: string[];
+  base_url?: string;
+}
+
+/** GET /data/ai/models response. */
+export interface AiModelsResponse {
+  default_provider: string;
+  default_model: string | null;
+  providers: AiModelProvider[];
+}
+
+/** One message entry in chat history. */
+export interface ChatHistoryMessage {
+  role: 'user' | 'model' | 'assistant';
+  content: string;
+}
+
+/** Request payload for POST /api/chat. */
+export interface ChatMessageRequest {
+  message: string;
+  history?: ChatHistoryMessage[];
+  context?: string;
+  provider?: string;
+  model?: string;
+  custom_base_url?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Backend analytics surfaces (zero-PWA-presence gap) — one interface per
 // api/pilots_api.py endpoint added in this effort. Every leaf the backend
