@@ -254,3 +254,30 @@ def test_beta_weighted_delta_spy_calculation(monkeypatch):
     assert greeks["positions"][1]["beta_dollar_delta"] == 20000.0
 
 
+
+def test_black_scholes_greeks_exact_analytical_reference():
+    """Validates calculate_black_scholes_greeks against exact hand-computed closed-form reference values.
+
+    Parameters: S=100.0, K=100.0, T=1.0 yr, sigma=0.20, r=0.05
+    d1 = (0 + 0.05 + 0.02) / 0.20 = 0.35
+    d2 = 0.35 - 0.20 = 0.15
+    N(d1) = 0.63683065, N(d2) = 0.55961769, N'(d1) = 0.375240
+    """
+    g_call = calculate_black_scholes_greeks(spot=100.0, strike=100.0, t_years=1.0, sigma=0.20, r=0.05, option_type="call")
+    assert pytest.approx(g_call["price"], abs=0.02) == 10.45
+    assert pytest.approx(g_call["delta"], abs=0.005) == 0.637
+    assert pytest.approx(g_call["gamma"], abs=0.001) == 0.0188
+    assert pytest.approx(g_call["vega_1pct"], abs=0.01) == 0.38
+    assert pytest.approx(g_call["theta_daily"], abs=0.005) == -0.0255
+    assert pytest.approx(g_call["rho_1pct"], abs=0.01) == 0.53
+
+
+    g_put = calculate_black_scholes_greeks(spot=100.0, strike=100.0, t_years=1.0, sigma=0.20, r=0.05, option_type="put")
+    assert pytest.approx(g_put["price"], abs=0.02) == 5.57
+    assert pytest.approx(g_put["delta"], abs=0.005) == -0.363
+    assert pytest.approx(g_put["gamma"], abs=0.001) == 0.0188
+    assert pytest.approx(g_put["vega_1pct"], abs=0.01) == 0.38
+    assert pytest.approx(g_put["rho_1pct"], abs=0.01) == -0.42
+
+
+

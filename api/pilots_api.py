@@ -6669,9 +6669,42 @@ def post_market_maker_simulate(body: MarketMakerSimulateRequest) -> Dict[str, An
     return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 
+class MarketMakerTrainRequest(BaseModel):
+    episodes: Optional[int] = Field(50, gt=0, le=1000)
+    learning_rate: Optional[float] = Field(0.05, gt=0.0)
+    gamma_min: Optional[float] = Field(0.01, gt=0.0)
+    gamma_max: Optional[float] = Field(1.0, gt=0.0)
+    kappa_min: Optional[float] = Field(0.5, gt=0.0)
+    kappa_max: Optional[float] = Field(5.0, gt=0.0)
+    seed: Optional[int] = 42
+
+
+@app.post("/pilots/options/market-maker/train", dependencies=[Depends(require_read_token)])
+def post_market_maker_train(body: MarketMakerTrainRequest) -> Dict[str, Any]:
+    """Trains Avellaneda-Stoikov quoting policy parameters (gamma, kappa) via policy optimization."""
+    from ml.drl_market_maker import train_market_maker_policy
+    res = train_market_maker_policy(
+        episodes=body.episodes or 50,
+        learning_rate=body.learning_rate or 0.05,
+        gamma_bounds=(body.gamma_min or 0.01, body.gamma_max or 1.0),
+        kappa_bounds=(body.kappa_min or 0.5, body.kappa_max or 5.0),
+        seed=body.seed or 42,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else {
+        "best_gamma": float(res.best_gamma),
+        "best_kappa": float(res.best_kappa),
+        "best_reward": float(res.best_reward),
+        "best_sharpe": float(res.best_sharpe),
+        "best_pnl": float(res.best_pnl),
+        "best_max_inventory": int(res.best_max_inventory),
+        "episodes_trained": int(res.episodes_trained),
+        "training_history": res.training_history,
+        "converged": bool(res.converged),
+    }
 
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
+
 def get_live_trade_pending() -> Dict[str, Any]:
     from pilots.live_trade_proposals import get_pending_proposals
     return {"proposals": get_pending_proposals()}
