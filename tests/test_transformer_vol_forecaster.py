@@ -43,9 +43,9 @@ def test_train_and_predict():
     assert attn.shape == (5, 10, 10)
 
 
-<<<<<<< HEAD
 # ---------------------------------------------------------------------------
 # Real, causal feature/window construction (2026-08, closes audit finding
+
 # F7's "no lookahead-bias perturbation coverage" gap for this module).
 # api/pilots_api.py::get_transformer_forecast previously fed this model
 # np.random.randn(...) noise as "market history"; build_causal_vol_features/
