@@ -1225,16 +1225,26 @@ def generate_copula_stat_arb_signals(
             actions[t] = "Flat / Warming up"
             continue
 
-        # Causal trailing copula evaluation: strictly uses returns available at/before timestep t
+        # Causal trailing copula evaluation: strictly uses returns available at/before timestep t.
+        # Checks BOTH criteria the full-sample `tail_risk_acceptable` summary above checks --
+        # copula lower-tail dependence AND OU half-life mean-reversion -- each refit on the same
+        # trailing window, so neither criterion silently reverts to a full-sample (lookahead)
+        # read for the per-bar gate.
         if t >= 15:
             if t == n - 1:
                 step_tail_ok = tail_risk_acceptable
             elif last_step_fit is None or (t % copula_cache_interval == 0):
                 sub_y = ret_y.iloc[max(0, t - max(30, lookback)):t]
                 sub_x = ret_x.iloc[max(0, t - max(30, lookback)):t]
+                sub_spread = spread_df["spread"].iloc[max(0, t - max(30, lookback)):t]
                 if len(sub_y) >= 15:
                     c_fit = fit_best_copula(sub_y, sub_x)
-                    step_tail_ok = bool(c_fit.lower_tail_dependence <= tail_risk_lower_limit)
+                    step_copula_ok = bool(c_fit.lower_tail_dependence <= tail_risk_lower_limit)
+                    step_half_life = estimate_ou_half_life(sub_spread) if len(sub_spread) >= 10 else float("inf")
+                    step_half_life_ok = bool(
+                        np.isfinite(step_half_life) and half_life_min <= step_half_life <= half_life_max
+                    )
+                    step_tail_ok = step_copula_ok and step_half_life_ok
                     last_step_fit = c_fit
                     last_tail_risk_ok = step_tail_ok
                 else:

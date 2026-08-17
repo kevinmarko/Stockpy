@@ -411,6 +411,87 @@ class TestEvaluateEarningsCrushCandidates:
 
         assert len(candidates) == 0
 
+    def test_dispatch_alert_fires_for_recommended_candidate(self):
+        """A genuinely is_recommended=True candidate dispatches the earnings crush alert."""
+        today = date(2026, 8, 14)
+        earnings_date = date(2026, 8, 17)
+        exp_date = "2026-08-21"
+
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates)
+        events = [
+            {"symbol": "NVDA", "event_date": "2025-05-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-08-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-11-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStore(events, bars_df)
+        strikes = [80.0, 85.0, 90.0, 95.0, 100.0, 105.0, 110.0, 115.0, 120.0]
+        chain = MockOptionsChain(strikes, atm_iv=0.70)
+        options_provider = MockOptionsProvider(
+            expirations_map={"NVDA": [exp_date]},
+            chain_map={f"NVDA_{exp_date}": chain},
+        )
+
+        with mock.patch("pilots.options_alerts.dispatch_earnings_crush_alert") as mock_dispatch:
+            candidates = evaluate_earnings_crush_candidates(
+                universe=["NVDA"],
+                store=store,
+                options_provider=options_provider,
+                min_edge=1.25,
+                as_of=today,
+                upcoming_earnings={"NVDA": earnings_date.isoformat()},
+                spot_prices={"NVDA": 100.0},
+            )
+
+        assert len(candidates) == 1
+        assert candidates[0]["is_recommended"] is True
+        mock_dispatch.assert_called_once()
+        assert mock_dispatch.call_args[0][0]["symbol"] == "NVDA"
+
+    def test_dispatch_alert_not_fired_on_fallback_data_despite_high_edge_ratio(self):
+        """Regression test (PR #749 follow-up): a candidate whose realized-move history is
+        synthetic fallback data must NOT dispatch an alert, even when crush_edge_ratio alone
+        would clear the 1.35x threshold -- alerting off fabricated data violates CONSTRAINT #4.
+        The dispatch gate must be `is_recommended` alone, never `is_recommended or
+        crush_edge_ratio >= 1.35` (the latter bypasses the fallback-data exclusion entirely).
+        """
+        today = date(2026, 8, 14)
+        earnings_date = date(2026, 8, 17)
+        exp_date = "2026-08-21"
+
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates)
+        # No actuals -> get_historical_earnings_moves degrades to fallback=True,
+        # median_move_pct=FALLBACK_MEDIAN_MOVE_PCT (5.2%).
+        store = MockHistoricalStore([], bars_df)
+        # High ATM IV drives expected_move_pct high enough that
+        # expected_move_pct / FALLBACK_MEDIAN_MOVE_PCT >= 1.35 purely off the fallback constant.
+        strikes = [80.0, 85.0, 90.0, 95.0, 100.0, 105.0, 110.0, 115.0, 120.0]
+        chain = MockOptionsChain(strikes, atm_iv=0.70)
+        options_provider = MockOptionsProvider(
+            expirations_map={"FALLBACK_SYM": [exp_date]},
+            chain_map={f"FALLBACK_SYM_{exp_date}": chain},
+        )
+
+        with mock.patch("pilots.options_alerts.dispatch_earnings_crush_alert") as mock_dispatch:
+            candidates = evaluate_earnings_crush_candidates(
+                universe=["FALLBACK_SYM"],
+                store=store,
+                options_provider=options_provider,
+                min_edge=1.25,
+                as_of=today,
+                upcoming_earnings={"FALLBACK_SYM": earnings_date.isoformat()},
+                spot_prices={"FALLBACK_SYM": 100.0},
+            )
+
+        assert len(candidates) == 1
+        c = candidates[0]
+        assert c["is_recommended"] is False
+        assert c["historical_summary"]["fallback"] is True
+        # Confirm the scenario actually exercises the bug condition (high edge on fallback data).
+        assert c["crush_edge_ratio"] >= 1.35
+        mock_dispatch.assert_not_called()
+
     def test_candidate_sorting_by_edge(self):
         """Test multiple candidates are returned sorted by crush_edge_ratio descending."""
         today = date(2026, 8, 14)
