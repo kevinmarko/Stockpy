@@ -2182,19 +2182,18 @@ class Settings(BaseSettings):
     # A store write served by the daemon's OWN process (PILOTS_API_ENABLED=True,
     # hosting pilots_api inside the daemon) already applies immediately via
     # the settings-store write path's own in-process apply -- this
-    # flag only matters for a store write from a DIFFERENT process. False
-    # (the default) preserves today's exact behavior: a daemon never
-    # re-reads the store after startup, so a cross-process write only takes
-    # effect on that daemon's next restart, exactly as before this setting
-    # existed.
+    # flag only matters for a store write from a DIFFERENT process. True
+    # (the default) enables cross-process hot-reloading: the daemon
+    # periodically re-reads the store and applies changes without a
+    # restart. False reproduces the original behavior, where a
+    # cross-process write only took effect on the daemon's next restart.
     RUNTIME_FLAGS_REFRESH_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Periodically re-check output/runtime_flags.json for changes "
             "written by another process and apply them onto this daemon's "
-            "live settings. False (default) preserves today's exact "
-            "behavior -- a cross-process write only takes effect on next "
-            "restart."
+            "live settings. True (default) enables cross-process hot-reloading "
+            "of live-safe settings without requiring a full restart."
         ),
     )
     # Poll cadence for the refresher above. Irrelevant when the flag is off.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDebounce } from "../hooks/useDebounce";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { api } from "../api/client";
 import type {
   AutomationSchedule,
@@ -488,6 +489,17 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
  * only re-fetches the schedule to surface the resulting `drift` against
  * `running_value`, never claims the change is already live.
  */
+// Shared by IntervalEditor's `invalid` state and its `save()` guard so the
+// "0 (disabled) or 60..86400" business rule is defined in exactly one place.
+function isValidInterval(seconds: number): boolean {
+  return (
+    Number.isFinite(seconds) &&
+    seconds >= 0 &&
+    seconds <= 86400 &&
+    (seconds === 0 || seconds >= 60)
+  );
+}
+
 function IntervalEditor({
   schedule,
   onSaved,
@@ -495,19 +507,72 @@ function IntervalEditor({
   schedule: AutomationSchedule;
   onSaved: () => void;
 }) {
-  const [value, setValue] = useState(String(schedule.interval.configured_value));
+  const configuredValue = schedule.interval.configured_value ?? 0;
+  const isEnabled = configuredValue > 0;
+
+  // Remembers the last nonzero interval the operator actually configured,
+  // surviving a page reload -- the backend has exactly ONE
+  // ORCHESTRATOR_INTERVAL_SECONDS slot, overwritten with 0 the moment the
+  // schedule is disabled, so without this a remount while disabled (mount
+  // with configuredValue === 0) has no way to know what to restore on
+  // re-enable and previously fell back to a hardcoded 300s, silently
+  // discarding whatever the operator had actually configured (e.g. 3600s).
+  const [lastConfiguredInterval, setLastConfiguredInterval] = usePersistedState<number>(
+    "settings-data:last-configured-interval-seconds",
+    300
+  );
+  // Keep it in sync with ANY nonzero value the server reports as configured
+  // -- not just writes made from this component -- so a change made from
+  // another tab/the GUI Settings tab is remembered too.
+  useEffect(() => {
+    if (configuredValue > 0 && configuredValue !== lastConfiguredInterval) {
+      setLastConfiguredInterval(configuredValue);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configuredValue]);
+
+  const [value, setValue] = useState(
+    String(configuredValue > 0 ? configuredValue : lastConfiguredInterval)
+  );
   const { run, pending, error } = useMutation(
     (seconds: number) => api.setAutomationInterval(seconds),
     { successMessage: "Automation interval updated" }
   );
 
-  const parsed = Number(value);
-  const invalid =
-    !Number.isFinite(parsed) || parsed < 0 || parsed > 86400 || (parsed !== 0 && parsed < 60);
+  // An empty/whitespace-only field must never silently coerce to `Number("") === 0`
+  // (a legitimate, meaningful value -- 0 means "disabled") and pass validation as
+  // if the operator explicitly typed it.
+  const parsed = value.trim() === "" ? NaN : Number(value);
+  const invalid = !isValidInterval(parsed);
 
-  const save = async () => {
-    if (invalid) return;
-    await run(parsed);
+  const save = async (customSec?: number) => {
+    const secToSave = customSec !== undefined ? customSec : parsed;
+    if (!isValidInterval(secToSave)) {
+      return;
+    }
+    const res = await run(secToSave);
+    if (secToSave > 0 && res !== undefined) {
+      setLastConfiguredInterval(secToSave);
+    }
+    onSaved();
+  };
+
+  const handleToggleSchedule = async (enabled: boolean) => {
+    const target = enabled
+      ? (parsed >= 60 && parsed <= 86400 ? parsed : lastConfiguredInterval)
+      : 0;
+    if (enabled) setValue(String(target));
+    const res = await run(target);
+    if (res === undefined) {
+      // useMutation() swallows the underlying failure into its own `error`
+      // state (rendered below) and resolves rather than rejects. Toggle's
+      // optimistic-revert-and-toast UX (webapp/src/components/Toggle.tsx)
+      // only fires on a REJECTED onChange promise -- without this re-throw,
+      // a failed write leaves the switch visually flipped (and silently
+      // reverting only once the next schedule refetch lands) with no error
+      // toast, even though the write never actually took effect.
+      throw new Error("Failed to update the automation interval.");
+    }
     onSaved();
   };
 
@@ -519,26 +584,100 @@ function IntervalEditor({
     );
   }
 
+  const presets = [
+    { label: "1m", sec: 60 },
+    { label: "5m", sec: 300 },
+    { label: "15m", sec: 900 },
+    { label: "30m", sec: 1800 },
+    { label: "1h", sec: 3600 },
+  ];
+
   return (
     <div style={{ marginTop: "var(--s-2-5)" }}>
-      <Input
-        label="Configured interval (seconds)"
-        type="number"
-        inputMode="numeric"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        invalid={invalid}
-        hint={invalid ? "Must be 0 or between 60 and 86400." : schedule.interval.note}
-      />
-      <Button
-        variant="neutral"
-        onClick={save}
-        disabled={invalid}
-        pending={pending}
-        style={{ marginTop: "var(--s-2)" }}
+      {/* Master Toggle for Scheduled Pipeline Runs */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "var(--s-3)",
+          padding: "var(--s-2)",
+          background: "var(--surface-2)",
+          borderRadius: "var(--r-sm)",
+        }}
       >
-        Save
-      </Button>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>
+            Enable Scheduled Pipeline Runs
+          </div>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: 2 }}>
+            Automatically trigger analysis pipeline cycles on a background interval timer.
+          </div>
+        </div>
+        <Toggle
+          label="Enable Scheduled Pipeline Runs"
+          checked={isEnabled}
+          onChange={handleToggleSchedule}
+          pending={pending}
+          dataTestId="pipeline-schedule-master-toggle"
+        />
+      </div>
+
+      {/* Also shown during drift (configured > 0 but the running daemon
+          hasn't picked it up, or vice versa) so a drifted schedule never
+          hides the only controls that can fix it -- `isEnabled` alone,
+          derived from `configured_value`, can disagree with what's actually
+          running. */}
+      {(isEnabled || schedule.interval.drift) && (
+        <div style={{ marginTop: "var(--s-2-5)", paddingLeft: "var(--s-1)" }}>
+          <div style={{ marginBottom: "var(--s-2)" }}>
+            <span style={{ fontSize: "var(--t-caption)", color: theme.textSecondary, fontWeight: 500 }}>
+              Interval Presets:
+            </span>
+            <div style={{ display: "flex", gap: "var(--s-1-5)", flexWrap: "wrap", marginTop: "var(--s-1)" }}>
+              {presets.map((p) => (
+                <button
+                  key={p.sec}
+                  type="button"
+                  onClick={() => {
+                    setValue(String(p.sec));
+                    save(p.sec);
+                  }}
+                  disabled={pending}
+                  className={`btn btn-sm ${configuredValue === p.sec ? "btn-primary" : "btn-subtle"}`}
+                  style={{ minWidth: 48 }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <Input
+                label="Configured interval (seconds)"
+                type="number"
+                inputMode="numeric"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                invalid={invalid}
+                hint={invalid ? "Must be between 60 and 86400 seconds." : schedule.interval.note}
+              />
+            </div>
+            <Button
+              variant="neutral"
+              onClick={() => save()}
+              disabled={invalid || pending || Number(value) === configuredValue}
+              pending={pending}
+              style={{ marginBottom: invalid ? 20 : 0 }}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
@@ -578,39 +717,50 @@ function ScheduleSection({
 
   const handleUpdateTunable = async (val: boolean) => {
     const res = await updateTunable(val);
-    // saveOutcomeMessage (webapp/src/settingsLiveness.ts) is the same helper
-    // GenericSettingsEditor.tsx uses to report a real, backend-sourced outcome
-    // -- reused here instead of a second hand-written "what just happened"
-    // sentence, so this toggle's result reporting can't drift from the
-    // shared editor's.
     setUpdateOutcome(res ? saveOutcomeMessage(res) : null);
     if (res) onReloadTunables?.();
   };
+
+  // `running_value` is `number | null` -- null means "we genuinely don't
+  // know" (no daemon info at all), which is a different, honest state from
+  // "we know it's parked at exactly 0s". Collapsing both into a fabricated
+  // "Paused (0s)" would misreport an unknown state as a known one.
+  const runningValueKnown = schedule != null && schedule.interval.running_value != null;
+  const isScheduleActive = (schedule?.interval?.running_value ?? 0) > 0;
+  const statusBadgeValue = !runningValueKnown
+    ? "Unknown"
+    : isScheduleActive
+    ? `Active (${schedule!.interval.running_value}s)`
+    : "Paused (0s)";
+
   return (
-    <SectionCard title="Schedule">
+    <SectionCard title="Pipeline Schedule">
       {loading && <Loading lines={2} />}
       {!loading && error && (
         <ErrorState message={error} status={httpStatus} onRetry={onRetry} />
       )}
       {!loading && !error && schedule && (
         <>
-          <div className="list">
-            <div className="row">
-              <span className="row-title">Interval</span>
-              <span style={{ color: theme.textSecondary, fontSize: "var(--t-body)" }}>
-                {schedule.interval.running_value == null
-                  ? "unknown"
-                  : `${schedule.interval.running_value}s`}
-              </span>
-            </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-2)" }}>
+            <span style={{ color: theme.textSecondary, fontSize: "var(--t-body)" }}>
+              Background Pipeline Timer
+            </span>
+            <MetricBadge
+              label="Schedule"
+              value={statusBadgeValue}
+              good={runningValueKnown ? isScheduleActive : null}
+            />
           </div>
+
           {schedule.interval.drift && (
-            <Notice variant="info" style={{ marginTop: "var(--s-2-5)" }}>
+            <Notice variant="info" style={{ marginTop: "var(--s-2-5)", marginBottom: "var(--s-2-5)" }}>
               <span>ℹ️</span>
               <span>
                 Running: {schedule.interval.running_value}s · Configured:{" "}
                 {schedule.interval.configured_value}s. Restart the daemon to
-                apply the configured value.
+                apply the configured value — a schedule write only takes
+                effect on the daemon's next restart, it doesn't sync on its
+                own.
               </span>
             </Notice>
           )}
@@ -618,56 +768,51 @@ function ScheduleSection({
           <IntervalEditor schedule={schedule} onSaved={onRetry} />
 
           {extendedHoursField && (
-            <div className="list" style={{ marginTop: "var(--s-3-5)" }}>
-              <div className="row" style={{ alignItems: "center" }}>
-                <div className="row-main">
-                  <span className="row-title">Extended Market Hours Only</span>
-                  <span className="row-sub">
-                    Skip automatic interval runs outside 4am-8pm ET weekdays.
-                    {/* This field is always classified live_safe ("applies: immediately"),
-                        which only means the process serving this write picks it up right
-                        away -- it does NOT mean every automatic-trigger process does. A
-                        plain `main.py --interval` subprocess (the default,
-                        ORCHESTRATOR_DAEMON_ENABLED=False, topology) never re-polls settings
-                        after startup. A standalone `api/pilots_api.py` process fronting a
-                        separately-running daemon only forwards the write live if
-                        RUNTIME_FLAGS_REFRESH_ENABLED is also on (default off) -- otherwise
-                        the daemon keeps its stale value until restarted too. Show a fixed,
-                        always-visible caveat instead of trusting `liveness.applies` for
-                        this specific field. */}
-                    <span style={{ display: "block", color: theme.accent, marginTop: 2 }}>
-                      Applies immediately only to the process handling this request. A
-                      plain <code>main.py --interval</code> process, or a daemon running
-                      behind a separate Pilots API without RUNTIME_FLAGS_REFRESH_ENABLED,
-                      only picks this up on its next restart.
-                    </span>
-                  </span>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginTop: "var(--s-3)",
+                padding: "var(--s-2)",
+                background: "var(--surface-2)",
+                borderRadius: "var(--r-sm)",
+              }}
+            >
+              <div style={{ paddingRight: "var(--s-3)" }}>
+                <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>
+                  Limit to Extended Market Hours (4 AM – 8 PM ET)
                 </div>
-                <Toggle
-                  label="Extended Market Hours Only"
-                  checked={Boolean(extendedHoursField.value)}
-                  onChange={(val) => handleUpdateTunable(val)}
-                  pending={updatingTunables}
-                />
+                <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: 2 }}>
+                  Only run automatic pipeline cycles during extended market hours (4:00 AM – 8:00 PM ET, weekdays). When disabled, automatic runs occur 24/7.
+                </div>
               </div>
-              {updateTunableError && (
-                <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
-                  <span>⚠️</span>
-                  <span>{updateTunableError}</span>
-                </Notice>
-              )}
-              {!updateTunableError && updateOutcome && (
-                <Notice variant={updateOutcome.variant} style={{ marginTop: "var(--s-2)" }}>
-                  <span>{updateOutcome.variant === "success" ? "✅" : "ℹ️"}</span>
-                  <span>{updateOutcome.text}</span>
-                </Notice>
-              )}
+              <Toggle
+                label="Limit to Extended Market Hours"
+                checked={Boolean(extendedHoursField.value)}
+                onChange={(val) => handleUpdateTunable(val)}
+                pending={updatingTunables}
+                dataTestId="extended-hours-only-toggle"
+              />
             </div>
+          )}
+
+          {updateTunableError && (
+            <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
+              <span>⚠️</span>
+              <span>{updateTunableError}</span>
+            </Notice>
+          )}
+          {!updateTunableError && updateOutcome && updateOutcome.variant !== "success" && (
+            <Notice variant={updateOutcome.variant} style={{ marginTop: "var(--s-2)" }}>
+              <span>ℹ️</span>
+              <span>{updateOutcome.text}</span>
+            </Notice>
           )}
 
           <div style={{ marginTop: "var(--s-3-5)" }}>
             <div className="row-sub" style={{ marginBottom: "var(--s-1-5)" }}>
-              Cron ({schedule.cron.source})
+              Cron Schedule ({schedule.cron.source})
             </div>
             <div className="list">
               {schedule.cron.entries.map((entry, i) => (

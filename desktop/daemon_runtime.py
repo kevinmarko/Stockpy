@@ -491,11 +491,13 @@ class OrchestratorDaemon:
         re-apply — this method exists for the write served by a DIFFERENT
         process (the far more common topology, where ``pilots_api.py`` runs
         standalone). Called periodically, on a poll interval, by the
-        standalone entrypoint (``desktop/orchestrator_daemon.py``); never
-        invoked automatically by this class itself, which stays free of any
-        opinion about polling cadence or whether cross-process refresh is
-        wanted at all (``settings.RUNTIME_FLAGS_REFRESH_ENABLED`` is the
-        caller's concern, not this method's).
+        standalone entrypoint (``desktop/orchestrator_daemon.py``), AND from
+        ``_timer_loop`` below on every wake -- both call sites gate the call
+        on ``settings.RUNTIME_FLAGS_REFRESH_ENABLED`` themselves rather than
+        this method checking it internally, so a caller that forgets the
+        gate would silently poll/apply the store regardless of the flag;
+        this method itself stays free of any opinion about polling cadence
+        or whether cross-process refresh is wanted at all.
 
         Deferred (returns ``None``, no-op) while a pipeline cycle is in
         flight — a value changing mid-cycle must not partially apply and
@@ -599,6 +601,16 @@ class OrchestratorDaemon:
             # OLD interval -- that ordering bug is exactly what this
             # comment exists to prevent from being "cleaned up" later.
             self._wake_event.clear()
+            # Gated on the SAME flag desktop/orchestrator_daemon.py's
+            # standalone refresher thread checks before it is even spawned
+            # (settings.RUNTIME_FLAGS_REFRESH_ENABLED) -- maybe_refresh_settings()
+            # itself has no opinion on whether cross-process refresh is
+            # wanted at all (see its own docstring), so an unconditional
+            # call here would silently keep polling/applying
+            # output/runtime_flags.json on every timer wake even when an
+            # operator has explicitly set the flag to False to opt out.
+            if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
+                self.maybe_refresh_settings()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -610,6 +622,8 @@ class OrchestratorDaemon:
                 continue  # interval changed OR shutting down -- re-check at the top
             if self._stop_event.is_set():
                 break
+            if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
+                self.maybe_refresh_settings()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(

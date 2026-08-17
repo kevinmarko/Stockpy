@@ -578,9 +578,9 @@ class TestSettingsRefresherHosting(BaseDaemonEntrypointTest):
         self._sigmask_patcher.start()
         self.addCleanup(self._sigmask_patcher.stop)
 
-    def test_disabled_by_default_no_refresher_thread(self):
+    def test_enabled_by_default_starts_refresher_thread(self):
         from settings import settings
-        self.assertFalse(settings.RUNTIME_FLAGS_REFRESH_ENABLED)  # precondition: real default
+        self.assertTrue(settings.RUNTIME_FLAGS_REFRESH_ENABLED)  # precondition: real default is True
 
         daemon_cls, instance = self._make_mock_daemon_class()
         with self._patch_daemon_class(daemon_cls), \
@@ -588,9 +588,22 @@ class TestSettingsRefresherHosting(BaseDaemonEntrypointTest):
              patch.object(self.mod, "_write_daemon_file"):
             self.mod.run_forever(60)
 
-        self.assertEqual(len(_FakeWatcherThread.refresher_instances()), 0)
+        self.assertEqual(len(_FakeWatcherThread.refresher_instances()), 1)
         # The other three threads (Control API + watcher; Pilots API is
         # separately gated and off here too) are completely unaffected.
+        self.assertEqual(len(_FakeWatcherThread.watcher_instances()), 1)
+
+    def test_disabled_spawns_no_refresher_thread(self):
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with patch.object(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", False), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        self.assertEqual(len(_FakeWatcherThread.refresher_instances()), 0)
         self.assertEqual(len(_FakeWatcherThread.watcher_instances()), 1)
 
     def test_enabled_starts_a_daemon_thread_with_the_expected_name(self):
@@ -958,7 +971,7 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
 
             class _JoinTriggeringThread(_FakeWatcherThread):
                 def join(self_inner, timeout=None):
-                    if self_inner.name != "OrchestratorControlAPI":
+                    if self_inner.name not in _FakeWatcherThread._API_THREAD_NAMES:
                         _join_side_effect()
 
             with patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
