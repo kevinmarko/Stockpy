@@ -180,4 +180,65 @@ describe("SettingsData — Schedule and Data Auto-Refresh", () => {
     await user.click(screen.getByRole("button", { name: "1m" }));
     expect(api.setAutomationInterval).toHaveBeenCalledWith(60);
   });
+
+  it("reverts the master toggle when the interval write fails", async () => {
+    vi.spyOn(api, "setAutomationInterval").mockRejectedValue(new Error("network error"));
+    const user = userEvent.setup();
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-schedule-master-toggle")).toBeInTheDocument();
+    });
+
+    const masterToggle = screen.getByTestId("pipeline-schedule-master-toggle");
+    expect(masterToggle).toHaveAttribute("aria-checked", "true");
+
+    await user.click(masterToggle);
+
+    // A failed write must revert the optimistic flip rather than leave the
+    // switch showing "off" for a write that never actually took effect.
+    await waitFor(() => {
+      expect(masterToggle).toHaveAttribute("aria-checked", "true");
+    });
+  });
+
+  it("shows the daemon-restart notice, not a false 'syncs automatically' claim, when the schedule has drifted", async () => {
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue({
+      ...mockSchedule,
+      interval: { ...mockSchedule.interval, running_value: 900, configured_value: 300, drift: true },
+    });
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Restart the daemon to/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/will sync on next daemon cycle/i)).not.toBeInTheDocument();
+  });
+
+  it("reports an unknown (not fabricated 'Paused (0s)') status badge when running_value is null", async () => {
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue({
+      ...mockSchedule,
+      interval: { ...mockSchedule.interval, running_value: null, configured_value: 0, drift: false },
+    });
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByText("Schedule Unknown")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Schedule Paused (0s)")).not.toBeInTheDocument();
+  });
+
+  it("treats a cleared interval field as invalid rather than a silent 0", async () => {
+    const user = userEvent.setup();
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Configured interval (seconds)")).toBeInTheDocument();
+    });
+
+    const input = screen.getByLabelText("Configured interval (seconds)");
+    await user.clear(input);
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
 });

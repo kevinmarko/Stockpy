@@ -488,6 +488,17 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
  * only re-fetches the schedule to surface the resulting `drift` against
  * `running_value`, never claims the change is already live.
  */
+// Shared by IntervalEditor's `invalid` state and its `save()` guard so the
+// "0 (disabled) or 60..86400" business rule is defined in exactly one place.
+function isValidInterval(seconds: number): boolean {
+  return (
+    Number.isFinite(seconds) &&
+    seconds >= 0 &&
+    seconds <= 86400 &&
+    (seconds === 0 || seconds >= 60)
+  );
+}
+
 function IntervalEditor({
   schedule,
   onSaved,
@@ -503,13 +514,15 @@ function IntervalEditor({
     { successMessage: "Automation interval updated" }
   );
 
-  const parsed = Number(value);
-  const invalid =
-    !Number.isFinite(parsed) || parsed < 0 || parsed > 86400 || (parsed !== 0 && parsed < 60);
+  // An empty/whitespace-only field must never silently coerce to `Number("") === 0`
+  // (a legitimate, meaningful value -- 0 means "disabled") and pass validation as
+  // if the operator explicitly typed it.
+  const parsed = value.trim() === "" ? NaN : Number(value);
+  const invalid = !isValidInterval(parsed);
 
   const save = async (customSec?: number) => {
     const secToSave = customSec !== undefined ? customSec : parsed;
-    if (!Number.isFinite(secToSave) || secToSave < 0 || secToSave > 86400 || (secToSave !== 0 && secToSave < 60)) {
+    if (!isValidInterval(secToSave)) {
       return;
     }
     await run(secToSave);
@@ -517,15 +530,20 @@ function IntervalEditor({
   };
 
   const handleToggleSchedule = async (enabled: boolean) => {
-    if (!enabled) {
-      await run(0);
-      onSaved();
-    } else {
-      const target = parsed >= 60 && parsed <= 86400 ? parsed : 300;
-      setValue(String(target));
-      await run(target);
-      onSaved();
+    const target = enabled ? (parsed >= 60 && parsed <= 86400 ? parsed : 300) : 0;
+    if (enabled) setValue(String(target));
+    const res = await run(target);
+    if (res === undefined) {
+      // useMutation() swallows the underlying failure into its own `error`
+      // state (rendered below) and resolves rather than rejects. Toggle's
+      // optimistic-revert-and-toast UX (webapp/src/components/Toggle.tsx)
+      // only fires on a REJECTED onChange promise -- without this re-throw,
+      // a failed write leaves the switch visually flipped (and silently
+      // reverting only once the next schedule refetch lands) with no error
+      // toast, even though the write never actually took effect.
+      throw new Error("Failed to update the automation interval.");
     }
+    onSaved();
   };
 
   if (!schedule.interval.writable) {
@@ -575,7 +593,12 @@ function IntervalEditor({
         />
       </div>
 
-      {isEnabled && (
+      {/* Also shown during drift (configured > 0 but the running daemon
+          hasn't picked it up, or vice versa) so a drifted schedule never
+          hides the only controls that can fix it -- `isEnabled` alone,
+          derived from `configured_value`, can disagree with what's actually
+          running. */}
+      {(isEnabled || schedule.interval.drift) && (
         <div style={{ marginTop: "var(--s-2-5)", paddingLeft: "var(--s-1)" }}>
           <div style={{ marginBottom: "var(--s-2)" }}>
             <span style={{ fontSize: "var(--t-caption)", color: theme.textSecondary, fontWeight: 500 }}>
@@ -668,11 +691,16 @@ function ScheduleSection({
     if (res) onReloadTunables?.();
   };
 
+  // `running_value` is `number | null` -- null means "we genuinely don't
+  // know" (no daemon info at all), which is a different, honest state from
+  // "we know it's parked at exactly 0s". Collapsing both into a fabricated
+  // "Paused (0s)" would misreport an unknown state as a known one.
+  const runningValueKnown = schedule != null && schedule.interval.running_value != null;
   const isScheduleActive = (schedule?.interval?.running_value ?? 0) > 0;
-  const statusBadgeValue = !schedule
+  const statusBadgeValue = !runningValueKnown
     ? "Unknown"
     : isScheduleActive
-    ? `Active (${schedule.interval.running_value}s)`
+    ? `Active (${schedule!.interval.running_value}s)`
     : "Paused (0s)";
 
   return (
@@ -690,7 +718,7 @@ function ScheduleSection({
             <MetricBadge
               label="Schedule"
               value={statusBadgeValue}
-              good={isScheduleActive}
+              good={runningValueKnown ? isScheduleActive : null}
             />
           </div>
 
@@ -699,7 +727,10 @@ function ScheduleSection({
               <span>ℹ️</span>
               <span>
                 Running: {schedule.interval.running_value}s · Configured:{" "}
-                {schedule.interval.configured_value}s. Changes will sync on next daemon cycle.
+                {schedule.interval.configured_value}s. Restart the daemon to
+                apply the configured value — a schedule write only takes
+                effect on the daemon's next restart, it doesn't sync on its
+                own.
               </span>
             </Notice>
           )}
