@@ -6612,20 +6612,55 @@ class HRPCVaRRequest(BaseModel):
     dependencies=[Depends(require_read_token)],
 )
 def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
-    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar
+    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar, calculate_cvar
     import numpy as np
     import pandas as pd
     from scipy.cluster.hierarchy import linkage
     from scipy.spatial.distance import squareform
-    
+
     if not req.symbols:
         raise HTTPException(status_code=400, detail="Must provide at least one symbol.")
-        
+
     num_assets = len(req.symbols)
-    # Generate dummy returns (n_days, n_assets)
-    np.random.seed(42)
-    returns_np = np.random.randn(252, num_assets) * 0.02 + 0.0005
-    returns = pd.DataFrame(returns_np, columns=req.symbols)
+
+    # Real daily returns per symbol, DB-first (falls back to a live fetch
+    # internally) -- never fabricated. Aligned across symbols via an inner
+    # join on the date index, matching processing_engine.calculate_rolling_beta's
+    # alignment convention.
+    store = HistoricalStore()
+    close_series: Dict[str, "pd.Series"] = {}
+    symbols_missing: List[str] = []
+    for sym in req.symbols:
+        try:
+            bars = store.get_bars(sym, lookback_days=504)
+        except Exception:  # noqa: BLE001 - a provider/network failure degrades to "missing", never fabricated data
+            bars = None
+        if bars is None or bars.empty or "Close" not in bars.columns:
+            symbols_missing.append(sym)
+            continue
+        close_series[sym] = bars["Close"]
+
+    if symbols_missing:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history",
+                "symbols_missing": symbols_missing,
+                "message": "No historical price data available for the listed symbol(s); cannot compute a real covariance/CVaR without fabricating returns.",
+            },
+        )
+
+    closes = pd.concat(close_series, axis=1, join="inner")
+    returns = closes.pct_change().dropna(how="any")
+    if len(returns) < 60:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "insufficient_history",
+                "message": f"Only {len(returns)} overlapping trading days across {req.symbols}; need at least 60 for a real covariance estimate.",
+            },
+        )
+    returns_np = returns.to_numpy()
     cov = returns.cov()
     
     dist = compute_correlation_distance(cov)
@@ -6652,19 +6687,27 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
     
     sort_ix = quasi_diagonalization(dist)
     initial_w = recursive_bisection(cov, sort_ix)
-    
+
     # Constrain CVaR to an arbitrary realistic threshold
     final_w = constrain_cvar(returns, initial_w, max_cvar=0.05)
-    
+
     allocations = [{"symbol": k, "weight": v} for k, v in final_w.items()]
     port_ret = np.dot(returns_np.mean(axis=0) * 252, final_w.values)
     port_vol = np.sqrt(np.dot(final_w.values.T, np.dot(cov.values * 252, final_w.values)))
-    
+
+    # Real CVaR of the OPTIMIZED portfolio's actual daily returns, not the
+    # 0.05 constraint ceiling it was constrained to. final_w is indexed by
+    # symbol in the same order as returns.columns (recursive_bisection sorts
+    # by cov.columns, which matches returns.columns) -- reindex explicitly
+    # rather than relying on that ordering implicitly.
+    w_aligned = final_w.reindex(returns.columns).to_numpy()
+    real_cvar_95 = calculate_cvar(w_aligned, returns_np, alpha=0.05)
+
     return {
         "allocations": allocations,
         "dendrogram": dendrogram_tree,
         "expected_return": float(port_ret),
-        "cvar_95": float(0.05), # placeholder
+        "cvar_95": float(real_cvar_95),
         "sharpe_ratio": float(port_ret / port_vol) if port_vol > 0 else 0.0
     }
 

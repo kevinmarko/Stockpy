@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
+import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -5856,3 +5857,86 @@ class TestLiveTradeExecutionReject:
         assert first.status_code == 200
         assert second.status_code == 409
         assert second.json()["detail"] == "already_decided"
+
+
+class TestHrpCvarOptimize:
+    """POST /pilots/portfolio/optimize/hrp-cvar previously used
+    np.random.randn as its `returns` input and hardcoded the response's
+    `cvar_95` to the same 0.05 ceiling it was constrained to (audit finding
+    F2). Fixed to fetch real historical bars via HistoricalStore.get_bars
+    and compute the real CVaR of the optimized portfolio's actual returns.
+    """
+
+    class _Store:
+        def __init__(self, series_by_symbol):
+            self._series = series_by_symbol
+
+        def get_bars(self, symbol, lookback_days=504):
+            closes = self._series.get(symbol)
+            if closes is None:
+                return pd.DataFrame()
+            idx = pd.bdate_range(end="2026-08-01", periods=len(closes))
+            return pd.DataFrame({"Close": closes}, index=idx)
+
+    @staticmethod
+    def _synthetic_closes(seed, n=120, start=100.0):
+        rng = np.random.default_rng(seed)
+        rets = rng.normal(loc=0.0003, scale=0.01, size=n)
+        return list(start * np.cumprod(1 + rets))
+
+    def test_cvar_varies_across_requests_and_is_positive(self):
+        series_a = {
+            "AAPL": self._synthetic_closes(1, start=150.0),
+            "MSFT": self._synthetic_closes(2, start=300.0),
+        }
+        series_b = {
+            "AAPL": self._synthetic_closes(3, start=150.0),
+            "MSFT": self._synthetic_closes(4, start=300.0),
+        }
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_a)):
+            resp_a = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_b)):
+            resp_b = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        cvar_a = resp_a.json()["cvar_95"]
+        cvar_b = resp_b.json()["cvar_95"]
+        assert cvar_a > 0.0
+        assert cvar_b > 0.0
+        # No longer the hardcoded 0.05 placeholder, and genuinely differs
+        # across two different real (here: synthetic-but-varied) return series.
+        assert cvar_a != 0.05
+        assert cvar_b != 0.05
+        assert cvar_a != cvar_b
+
+    def test_insufficient_history_returns_honest_422(self):
+        store = self._Store({"AAPL": [], "MSFT": self._synthetic_closes(5, start=300.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history"
+        assert "AAPL" in resp.json()["detail"]["symbols_missing"]
+
+    def test_too_few_overlapping_days_returns_honest_422(self):
+        store = self._Store({
+            "AAPL": self._synthetic_closes(6, n=10, start=150.0),
+            "MSFT": self._synthetic_closes(7, n=10, start=300.0),
+        })
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["AAPL", "MSFT"]},
+            )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "insufficient_history"
