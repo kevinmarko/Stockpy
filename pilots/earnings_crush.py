@@ -888,9 +888,14 @@ def evaluate_earnings_crush_candidates(
     # Sort candidates by crush_edge_ratio descending
     candidates.sort(key=lambda c: float(c.get("crush_edge_ratio", 0.0)), reverse=True)
 
-    # Dispatch alerts for qualifying candidates (non-blocking, condition-deduped)
+    # Dispatch alerts for qualifying candidates (non-blocking, condition-deduped).
+    # Gate on `is_recommended` alone -- it already encodes crush_edge_ratio >= min_edge
+    # AND excludes synthetic/fallback-data candidates (see step 6 above, CONSTRAINT #4).
+    # An `or crush_edge_ratio >= 1.35` fallback here would defeat that exclusion: a
+    # candidate whose realized-move history is fabricated fallback data can still post a
+    # high edge ratio purely from the fallback constant, and would then alert anyway.
     for cand in candidates:
-        if cand.get("is_recommended") or float(cand.get("crush_edge_ratio", 0.0)) >= 1.35:
+        if cand.get("is_recommended"):
             try:
                 from pilots.options_alerts import dispatch_earnings_crush_alert
                 dispatch_earnings_crush_alert(cand)

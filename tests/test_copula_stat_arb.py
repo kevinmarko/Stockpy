@@ -322,6 +322,51 @@ def test_generate_copula_stat_arb_signals_short_spread():
         assert "Sell GOOGL, Long META" in res.action
 
 
+def test_generate_copula_stat_arb_signals_requires_causal_half_life_not_only_copula(monkeypatch):
+    """
+    Regression test (PR #749 follow-up): the per-bar causal gate in
+    generate_copula_stat_arb_signals must require BOTH the causal copula lower-tail-dependence
+    check AND a causal OU half-life mean-reversion check -- mirroring the (previously
+    non-causal) full-sample `tail_risk_acceptable` gate, which always checked both. The PR that
+    made the copula fit causal per-bar silently dropped the half-life half of the gate for
+    every bar except the last, so a pair whose tail-dependence looks fine but whose spread is
+    not actually mean-reverting could still open a position on tail-dependence alone.
+
+    Forces a deterministic reproduction by monkeypatching `fit_best_copula` to always report a
+    low (passing) lower-tail-dependence and `estimate_ou_half_life` to always report an
+    infinite (non-mean-reverting) half-life, then engineers a large Z-score dislocation that
+    would trigger LONG_SPREAD entry if the half-life criterion were not enforced.
+    """
+    np.random.seed(42)
+    n = 150
+    x = pd.Series(np.linspace(100, 120, n))
+    spread = np.zeros(n)
+    spread[-1] = -5.0  # Same trigger pattern as test_generate_copula_stat_arb_signals_long_spread
+    y = pd.Series(1.0 * x + spread)
+
+    fake_fit = CopulaFitResult(
+        family="Gaussian", theta=0.1, log_likelihood=0.0, aic=10.0, bic=10.0,
+        lower_tail_dependence=0.05, upper_tail_dependence=0.05, kendall_tau=0.1,
+    )
+    monkeypatch.setattr("pilots.copula_stat_arb.fit_best_copula", lambda *a, **k: fake_fit)
+    monkeypatch.setattr("pilots.copula_stat_arb.estimate_ou_half_life", lambda *a, **k: float("inf"))
+
+    res = generate_copula_stat_arb_signals("AAPL", "MSFT", y, x, z_entry=2.0, z_exit=0.0)
+
+    # Confirm the scenario actually reaches the trigger condition (else this test would pass
+    # vacuously without exercising the gate at all). This construction's z-score comes out
+    # strongly positive (SHORT_SPREAD-triggering), not negative -- confirmed empirically, since
+    # the per-bar beta re-estimate absorbs part of the dislocation.
+    assert res.current_zscore >= 2.0
+    # Copula tail-dependence alone passes (fake_fit is far below tail_risk_lower_limit=0.85),
+    # but half-life is forced non-mean-reverting -- no position should ever open. (Sanity-checked
+    # against the counterfactual: patching estimate_ou_half_life to return an in-bounds value
+    # instead of infinity, with everything else identical, DOES open a SHORT_SPREAD position --
+    # confirming this test genuinely exercises the half-life half of the gate.)
+    assert (res.signals_df["position"] != 0.0).sum() == 0
+    assert res.current_signal in ("FLAT", "HOLD")
+
+
 def test_generate_copula_stat_arb_signals_exit_crossing():
     """Verifies Exit is triggered when position reverts to mean (Z crosses 0.0)."""
     np.random.seed(42)
