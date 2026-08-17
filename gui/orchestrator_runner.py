@@ -824,7 +824,8 @@ def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHan
     # call (alert #11) despite the input being fully controlled -- reviewed
     # false positive.
     popen = subprocess.Popen(
-        cmd,  # codeql[py/command-line-injection]
+        # codeql[py/command-line-injection]
+        cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,

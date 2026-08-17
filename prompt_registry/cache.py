@@ -228,10 +228,12 @@ class CacheManager:
             # reports the alert at each downstream use of the tainted-looking
             # value rather than at that check, so it re-flags every read here
             # too (alerts #12/#13). Reviewed false positive, not a fresh one.
-            if not d.is_dir():  # codeql[py/path-injection]
+            # codeql[py/path-injection]
+            if not d.is_dir():
                 return []
             files = sorted(
-                d.glob("*.json"),  # codeql[py/path-injection]
+                # codeql[py/path-injection]
+                d.glob("*.json"),
                 key=lambda f: f.stat().st_mtime,
                 reverse=True,
             )
@@ -252,7 +254,8 @@ class CacheManager:
             # Same reviewed false positive as list_versions() above (alert
             # #14): `path` is confinement-checked inside _record_path()
             # before being returned.
-            with open(path, encoding="utf-8") as fh:  # codeql[py/path-injection]
+            # codeql[py/path-injection]
+            with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
             return PromptRecord.from_dict(data)
         except FileNotFoundError:

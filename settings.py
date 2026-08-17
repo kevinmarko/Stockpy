@@ -60,7 +60,8 @@ def _sha256(value: str) -> str:
     # call anyway (alert #5) because it classifies `FRED_API_KEY` as
     # sensitive/credential-like data purely by name -- reviewed false
     # positive.
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()  # codeql[py/weak-sensitive-data-hashing]
+    # codeql[py/weak-sensitive-data-hashing]
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 # Shared interval-validation policy for the persistent orchestrator daemon's
