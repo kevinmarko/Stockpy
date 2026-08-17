@@ -4,9 +4,13 @@ on:
   push:
     paths:
       - 'ml/**'
+      - 'forecasting_engine.py'
+      - 'cnn_lstm_worker.py'
   pull_request:
     paths:
       - 'ml/**'
+      - 'forecasting_engine.py'
+      - 'cnn_lstm_worker.py'
 
 permissions:
   contents: read
@@ -24,4 +28,4 @@ jobs:
           python-version: '3.12'
 
       - name: Run Stockpy Codebase Auditor
-        run: python scripts/auditor/stockpy_codebase_auditor.py --root ml/ --fail-on HIGH
+        run: python scripts/auditor/stockpy_codebase_auditor.py --root . --fail-on HIGH
