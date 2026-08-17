@@ -23,6 +23,16 @@ may be worked on by whichever agent is assigned the task at hand. Branch naming 
    Never commit these directly to `main`.
 4. Open a PR when a feature-branch change is complete; do not squash or amend published commits.
 5. **PR Artifacts & Unique Naming**: When submitting a Pull Request, you must copy and commit the implementation plan, task tracker, and walkthrough from your local brain artifacts directory to the `.claude/` folder on your branch. To prevent collisions and accidental overwrites when multiple plans or concurrent agent tasks run in parallel across the repository, artifact and plan files must use unique, project/feature-scoped names matching the task or branch (e.g., `.claude/fmp_pipeline_optimization_implementation_plan.md`, `.claude/fmp_pipeline_optimization_task.md`, `.claude/fmp_pipeline_optimization_walkthrough.md`) alongside standard base files. Test files created for a feature must likewise carry clear, project-scoped names.
+   **This rule is not limited to PR-submission time and applies to every AI agent working in this
+   repo (Claude Code, Antigravity, or any other), not just whichever one authored a given file.**
+   Bare, unscoped filenames — `plan.md`, `implementation_plan.md`, `walkthrough.md`, `task.md`,
+   `tracker.md`, or any other generic name with no task/feature/branch qualifier — must never be
+   created anywhere in the repo (`.claude/`, `.agents/`, docs, scratch dirs, or elsewhere the
+   repo tracks), including transient ones an agent intends to clean up later: a second concurrent
+   agent can read, edit, or collide with it before that happens. Always prefix with the
+   task/feature/branch slug the same way the `.claude/fmp_pipeline_optimization_*` example above
+   does, for every plan, implementation plan, walkthrough, and task-tracker file, whether it's a
+   local working artifact or one committed with a PR.
 6. **After merging any PR**, sync the local main checkout so the next session (in this or any
    other worktree) starts from the merged state instead of a stale `main`:
    `git -C <main-checkout-path> fetch origin && git -C <main-checkout-path> merge --ff-only origin/main`.
