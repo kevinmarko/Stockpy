@@ -1,3 +1,10 @@
+"""
+Hierarchical Risk Parity (HRP) with Conditional Value at Risk (CVaR) Optimization.
+
+Provides single-linkage tree clustering, quasi-diagonalization matrix sorting, and
+recursive bisection with convex CVaR loss bounds.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import linkage, leaves_list

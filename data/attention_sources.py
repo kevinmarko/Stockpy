@@ -118,7 +118,10 @@ from urllib.parse import quote
 
 import requests
 
+from data.trends_stitcher import ASVICalculator, GoogleTrendsStitcher
+
 logger = logging.getLogger(__name__)
+
 
 # Identifies this platform to the Wikimedia REST API per its API etiquette
 # policy (https://meta.wikimedia.org/wiki/User-Agent_policy) -- a generic,

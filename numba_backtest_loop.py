@@ -1,3 +1,10 @@
+"""
+High-Performance Numba JIT Event-Driven Simulation Loop with Margin and Dynamic Friction.
+
+Executes ultra-fast, zero-lookahead sequential backtest simulations modeling
+volatility-scaled margin requirements and panic slippage.
+"""
+
 import numpy as np
 import pandas as pd
 import time

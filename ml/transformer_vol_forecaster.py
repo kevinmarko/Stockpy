@@ -1,3 +1,11 @@
+"""
+Temporal Fusion Transformer (TFT) Volatility Forecaster.
+
+Provides pure-NumPy multi-head self-attention and gated residual networks for
+multi-horizon forward volatility forecasting (1d, 5d, 21d, 60d) with ridge regression
+extreme learning machine training.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.special import softmax

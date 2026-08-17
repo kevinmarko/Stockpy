@@ -1,3 +1,10 @@
+"""
+Generative Score-Based Diffusion Engine for Tail-Risk Stress Testing.
+
+Implements reverse-time Stochastic Differential Equations (SDE) and Euler-Maruyama
+numerical discretization for synthetic multi-asset path generation and CVaR estimation.
+"""
+
 import numpy as np
 from typing import Dict, Tuple
 

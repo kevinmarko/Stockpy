@@ -80,6 +80,24 @@ def test_compute_implied_correlation():
     rho = compute_implied_correlation(index_iv=0.20, constituent_ivs=const_ivs, weights=weights)
     assert pytest.approx(rho, 0.01) == 1.0
 
+    # Non-trivial analytical reference checks for Driessen-Maenhout-Vilkov formula
+    # Let w1=0.5, w2=0.5, sigma1=0.30, sigma2=0.40
+    # weighted_var_sum = 0.5^2*0.3^2 + 0.5^2*0.4^2 = 0.0625
+    # weighted_vol_sum_sq = (0.5*0.3 + 0.5*0.4)^2 = 0.35^2 = 0.1225
+    # denominator = 0.1225 - 0.0625 = 0.0600
+    ivs_mixed = {"AAPL": 0.30, "MSFT": 0.40}
+    # For target rho = 0.50 -> index_iv^2 = 0.0625 + 0.06*0.50 = 0.0925 -> index_iv = sqrt(0.0925) ~ 0.304138
+    target_iv_50 = np.sqrt(0.0925)
+    rho_50 = compute_implied_correlation(index_iv=target_iv_50, constituent_ivs=ivs_mixed, weights=weights)
+    assert rho_50 is not None
+    assert pytest.approx(rho_50, abs=1e-4) == 0.50
+
+    # For target rho = 0.75 -> index_iv^2 = 0.0625 + 0.06*0.75 = 0.1075 -> index_iv = sqrt(0.1075) ~ 0.327872
+    target_iv_75 = np.sqrt(0.1075)
+    rho_75 = compute_implied_correlation(index_iv=target_iv_75, constituent_ivs=ivs_mixed, weights=weights)
+    assert rho_75 is not None
+    assert pytest.approx(rho_75, abs=1e-4) == 0.75
+
     # If index IV is significantly lower than individual IVs, implied correlation is lower
     rho_low = compute_implied_correlation(index_iv=0.14, constituent_ivs=const_ivs, weights=weights)
     assert 0.0 <= rho_low < 1.0

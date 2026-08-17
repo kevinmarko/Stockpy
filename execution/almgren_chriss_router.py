@@ -1,3 +1,10 @@
+"""
+Almgren-Chriss Optimal Execution Router & Market Impact Modeling.
+
+Calculates optimal liquidation trajectories balancing permanent and temporary
+market impact with risk-aversion inventory decay.
+"""
+
 import numpy as np
 from typing import List, Dict
 

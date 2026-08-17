@@ -614,7 +614,7 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "paper_broker_options_order":
         allowed = allowed | {"data", "pilots", "uuid"}
     if module_name == "options_risk":
-        allowed = allowed | {"data", "datetime", "numpy", "re", "scipy"}
+        allowed = allowed | {"data", "datetime", "numpy", "pilots", "re", "scipy"}
     if module_name == "options_hedging":
         allowed = allowed | {"data", "pilots", "uuid"}
     if module_name == "volatility_surface":
