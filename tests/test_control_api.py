@@ -883,6 +883,7 @@ class TestDaemonRestart:
 # ---------------------------------------------------------------------------
 
 import api._jobs as jobs_module
+from gui.orchestrator_runner import StopOutcome
 
 
 class _FakeHandle:
@@ -1073,7 +1074,10 @@ class TestJobsApi:
     def test_cancel_subprocess_backed_job_succeeds(self, monkeypatch):
         handle = _FakeHandle(running=True, backend="subprocess")
         monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
-        monkeypatch.setattr(jobs_module, "stop_run", lambda h: True)
+        monkeypatch.setattr(
+            jobs_module, "stop_run_detailed",
+            lambda h: StopOutcome(stopped=True, already_stopped=False),
+        )
         with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
              mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             headers = {"Authorization": "Bearer cmd-tok"}
@@ -1087,7 +1091,10 @@ class TestJobsApi:
     def test_cancel_unconfirmed_stop_reports_false_not_success(self, monkeypatch):
         handle = _FakeHandle(running=True, backend="subprocess")
         monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
-        monkeypatch.setattr(jobs_module, "stop_run", lambda h: False)
+        monkeypatch.setattr(
+            jobs_module, "stop_run_detailed",
+            lambda h: StopOutcome(stopped=False, already_stopped=False),
+        )
         with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
              mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             headers = {"Authorization": "Bearer cmd-tok"}
@@ -1143,7 +1150,11 @@ class TestJobsApi:
     def test_double_cancel_running_job_returns_true_and_preserves_cancelled(self, monkeypatch):
         handle = _FakeHandle(running=True, rc=None, backend="subprocess")
         monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
-        monkeypatch.setattr(jobs_module, "stop_run", lambda h: True)
+        outcomes = iter([
+            StopOutcome(stopped=True, already_stopped=False),  # 1st cancel: genuinely stops it
+            StopOutcome(stopped=True, already_stopped=True),  # 2nd cancel: already dead
+        ])
+        monkeypatch.setattr(jobs_module, "stop_run_detailed", lambda h: next(outcomes))
         with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
              mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             headers = {"Authorization": "Bearer cmd-tok"}
@@ -1174,11 +1185,25 @@ class TestJobsApi:
             assert data["exit_code"] == -15
             assert data["is_running"] is False
 
-    def test_cancel_race_with_clean_completion_returns_false_and_preserves_status(self, monkeypatch):
-        # Process was running when cancel was initiated, but exited cleanly with rc=0 during stop_run
-        handle = _FakeHandle(running=True, rc=0, backend="subprocess")
+    @pytest.mark.parametrize("rc", [0, 1])
+    def test_cancel_race_with_natural_completion_returns_false_and_preserves_status(
+        self, monkeypatch, rc
+    ):
+        # The process was running when cancel_job examined it, but had ALREADY
+        # finished on its own -- with either a clean (rc=0, "success") or a
+        # nonzero (rc=1, "failed") exit code -- by the time
+        # stop_run_detailed() actually checked. Regression coverage for the
+        # residual TOCTOU gap: a prior fix (guard 3, `returncode() == 0`)
+        # only caught the rc==0 half of this race, so a job that raced to a
+        # nonzero exit was still mislabeled "cancelled". stop_run_detailed()
+        # reports already_stopped=True regardless of exit code, so cancel_job
+        # must never flip rec.cancelled in EITHER case.
+        handle = _FakeHandle(running=True, rc=rc, backend="subprocess")
         monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
-        monkeypatch.setattr(jobs_module, "stop_run", lambda h: True)
+        monkeypatch.setattr(
+            jobs_module, "stop_run_detailed",
+            lambda h: StopOutcome(stopped=True, already_stopped=True),
+        )
         with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
              mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             headers = {"Authorization": "Bearer cmd-tok"}
@@ -1190,15 +1215,15 @@ class TestJobsApi:
             assert resp.status_code == 200
             assert resp.json() == {"job_id": job_id, "cancelled": False}
 
-            # Status should be success, not cancelled
             handle._running = False
             status_resp = client.get(
                 f"/jobs/{job_id}", headers={"Authorization": "Bearer cmd-tok"}
             )
             assert status_resp.status_code == 200
             data = status_resp.json()
-            assert data["status"] == "success"
-            assert data["exit_code"] == 0
+            assert data["status"] == ("success" if rc == 0 else "failed")
+            assert data["status"] != "cancelled"
+            assert data["exit_code"] == rc
 
     def test_stream_unknown_job_is_404(self):
         with mock.patch.object(settings, "JOBS_API_ENABLED", True):

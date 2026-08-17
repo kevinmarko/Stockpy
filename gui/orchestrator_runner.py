@@ -1186,6 +1186,24 @@ def launch_manifest_command(
     )
 
 
+@dataclass(frozen=True)
+class StopOutcome:
+    """Detailed result of :func:`stop_run_detailed`, distinguishing "the
+    process was already dead when we looked -- we sent no signal" from "we
+    sent a signal and confirmed it died". ``stop_run()``'s plain ``bool``
+    return conflates the two into a single ``True`` (see its docstring's
+    "or was never running" clause) -- a caller that infers "I just stopped
+    it" from a bare ``True`` can misattribute causation when the process
+    actually finished on its own moments before the check (e.g.
+    ``api/_jobs.py::JobManager.cancel_job`` mislabeling a job that finished
+    naturally as "cancelled"). ``stopped`` is ``True`` in both cases;
+    ``already_stopped`` is the disambiguator.
+    """
+
+    stopped: bool
+    already_stopped: bool
+
+
 def stop_run(handle: Optional[RunHandle], *, timeout: float = 5.0) -> bool:
     """Terminate a launched subprocess (operator "Stop" button).
 
@@ -1200,9 +1218,25 @@ def stop_run(handle: Optional[RunHandle], *, timeout: float = 5.0) -> bool:
     cancel/abort endpoint, so an in-flight daemon-hosted cycle always runs to
     completion. This is logged clearly and returns ``False`` (not stopped)
     rather than pretending to cancel something it can't.
+
+    This is a thin bool-returning wrapper over :func:`stop_run_detailed`,
+    kept for every existing caller that only needs "stopped or not" (the
+    GUI's Stop buttons in ``gui/panels/ai_control_center.py`` and
+    ``gui/panels/launcher.py``, and ``desktop/engine_supervisor.py``). A
+    caller that needs to tell "I just killed it" apart from "it was already
+    dead" -- e.g. to avoid mislabeling a job that finished on its own as
+    "cancelled" -- should call ``stop_run_detailed()`` directly instead.
     """
+    return stop_run_detailed(handle, timeout=timeout).stopped
+
+
+def stop_run_detailed(handle: Optional[RunHandle], *, timeout: float = 5.0) -> StopOutcome:
+    """Like :func:`stop_run`, but returns a :class:`StopOutcome` that also
+    reports whether the process was already dead *before* this call did
+    anything (``already_stopped=True``) rather than collapsing that case
+    into the same bare ``True`` a genuine kill would report."""
     if handle is None:
-        return True
+        return StopOutcome(stopped=True, already_stopped=True)
     if getattr(handle, "backend", "subprocess") == "daemon":
         logger.warning(
             "stop_run: cannot cancel a daemon-hosted run (run_id=%s) — the "
@@ -1210,40 +1244,40 @@ def stop_run(handle: Optional[RunHandle], *, timeout: float = 5.0) -> bool:
             "completion.",
             getattr(handle, "daemon_run_id", None),
         )
-        return False
+        return StopOutcome(stopped=False, already_stopped=False)
     try:
         popen = getattr(handle, "_popen", None)
         if popen is not None:
             if popen.poll() is not None:
-                return True  # already exited
+                return StopOutcome(stopped=True, already_stopped=True)  # already exited
             popen.terminate()
             try:
                 popen.wait(timeout=timeout)
             except Exception:
                 popen.kill()
-            return popen.poll() is not None
+            return StopOutcome(stopped=popen.poll() is not None, already_stopped=False)
         # Reconstructed across a Streamlit rerun without the Popen object:
         # fall back to a PID-level signal.
         pid = getattr(handle, "pid", None)
         if not pid or not _pid_alive(int(pid)):
-            return True
+            return StopOutcome(stopped=True, already_stopped=True)
         import signal as _signal  # noqa: PLC0415
 
         os.kill(int(pid), _signal.SIGTERM)
         deadline = time.time() + timeout
         while time.time() < deadline:
             if not _pid_alive(int(pid)):
-                return True
+                return StopOutcome(stopped=True, already_stopped=False)
             time.sleep(0.2)
         try:
             os.kill(int(pid), _signal.SIGKILL)
         except Exception:
             pass
-        return not _pid_alive(int(pid))
+        return StopOutcome(stopped=not _pid_alive(int(pid)), already_stopped=False)
     except Exception as exc:
         logger.warning("stop_run failed for handle pid=%s: %s",
                        getattr(handle, "pid", "?"), exc)
-        return False
+        return StopOutcome(stopped=False, already_stopped=False)
 
 
 def _read_tail(path: Path, max_lines: int, idle_hint: str) -> str:
