@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `5a0e5edd5d2279ba3b9dc414a4b505a2909559d1`
+- Measured at commit: `389544117ed10e327ee33d6458a1b8e0dda61d99`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -253,7 +253,7 @@ referenced by name somewhere and is probably read dynamically.
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4894`, `gui/panels/settings_manager.py:162` | likely read dynamically |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11052` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11063` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1238`, `pilots/feature_flags.py:49` | likely read dynamically |
 
@@ -420,7 +420,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 
 | Site | Expression |
 |---|---|
-| `Gravity AI Review Suite.py:2720` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
+| `Gravity AI Review Suite.py:2731` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:175` | `getattr(settings, flag_name, False)` |
