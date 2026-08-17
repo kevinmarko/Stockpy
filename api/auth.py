@@ -37,14 +37,24 @@ bearer_scheme = HTTPBearer(auto_error=False)
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def is_loopback_host(host: Optional[str]) -> bool:
+    """True if *host* is a loopback address, or ``None`` (some ASGI
+    transports don't expose a client address at all — treated as loopback so
+    today's zero-config local/test behavior is unaffected; every fail-closed
+    branch built on this only ever tightens things for a REAL non-loopback
+    client). The shared definition behind :func:`_is_loopback` (HTTP
+    ``Request``) AND ``api/ws_api.py``'s WebSocket auth gate
+    (``_check_ws_token``) — a WebSocket upgrade has no ``Request`` object,
+    only ``WebSocket.client.host``, so it can't call ``_is_loopback``
+    directly; this is the piece both protocols share instead, so the
+    definition of "loopback" can't drift between them."""
+    return host is None or host in _LOOPBACK_HOSTS
+
+
 def _is_loopback(request: Request) -> bool:
     """True if the request's client host is loopback. ``request.client`` can
-    be ``None`` under some ASGI transports — treated as loopback so today's
-    zero-config local behavior is unaffected; the fail-closed branch below
-    only ever tightens things for a REAL non-loopback bind."""
-    if request.client is None:
-        return True
-    return request.client.host in _LOOPBACK_HOSTS
+    be ``None`` under some ASGI transports — see :func:`is_loopback_host`."""
+    return is_loopback_host(request.client.host if request.client else None)
 
 
 def require_read_token(

@@ -3908,8 +3908,68 @@ class Settings(BaseSettings):
             "Google AI Studio key for the Gemini provider.  Required whenever "
             "either LLM_COMMENTARY_RATIONALE_PROVIDER or "
             "LLM_COMMENTARY_ALERT_PROVIDER is set to 'gemini' (also used for "
-            "chart-pattern vision).  Unset → that job's LLM disabled, "
+            "chart-pattern vision and Gemini Live chat).  Unset → that job's LLM disabled, "
             "template fallback kicks in."
+        ),
+    )
+    GEMINI_LIVE_CHAT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the Gemini Live bidirectional WebSocket voice/audio "
+            "streaming endpoint (/ws/chat/live). Active by default when GEMINI_API_KEY is present."
+        ),
+    )
+    GEMINI_LIVE_CHAT_MODEL: str = Field(
+        default="gemini-3.1-flash-live-preview",
+        description=(
+            "Gemini model for real-time bidirectional WebSocket live streaming "
+            "conversations over the Live API."
+        ),
+    )
+    GEMINI_LIVE_VOICE_NAME: str = Field(
+        default="Aoede",
+        description=(
+            "Voice preset name for Gemini Live audio output (e.g. Aoede, Puck, "
+            "Charon, Fenrir, Kore)."
+        ),
+    )
+    GEMINI_CHAT_MODEL: str = Field(
+        default="gemini-2.5-flash",
+        description=(
+            "Default Gemini model name for the REST Server-Sent Events (SSE) "
+            "text chat endpoint (POST /api/chat)."
+        ),
+    )
+    LOCAL_LLM_BASE_URL: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base URL for OpenAI-compatible local or open-source LLM server "
+            "(e.g. http://localhost:11434/v1 for Ollama, vLLM, LM Studio, OpenRouter)."
+        ),
+    )
+    LOCAL_LLM_MODEL: str = Field(
+        default="llama3.3",
+        description=(
+            "Default model slug for local or open-source LLM requests "
+            "(e.g. llama3.3, deepseek-r1, qwen2.5, mistral)."
+        ),
+    )
+    LOCAL_LLM_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional API key or bearer token for local/self-hosted LLM server or OpenRouter."
+        ),
+    )
+    AI_CHAT_DEFAULT_PROVIDER: str = Field(
+        default="gemini",
+        description=(
+            "Default AI chat provider routing: 'gemini', 'anthropic', 'openai', 'local', or 'auto'."
+        ),
+    )
+    AI_CHAT_DEFAULT_MODEL: Optional[str] = Field(
+        default="gemini-2.5-flash",
+        description=(
+            "Optional explicit override for default chat model slug across all providers."
         ),
     )
 
