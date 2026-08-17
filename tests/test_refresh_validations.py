@@ -158,6 +158,7 @@ class TestRegistryStructure:
             "signal_replay_balanced_blend",
             "put_credit_spread", "call_credit_spread", "call_debit_spread",
             "put_debit_spread", "covered_call", "vrp_premium_selling",
+            "vol_mispricing",
         ):
             assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
 
@@ -1016,6 +1017,7 @@ class TestBuildOptionsStrategiesAdapters:
             (rv._build_put_debit_spread_adapter, "PutDebitSpread"),
             (rv._build_covered_call_adapter, "CoveredCall"),
             (rv._build_vrp_premium_selling_adapter, "VRP_IronCondor"),
+            (rv._build_vol_mispricing_adapter, "VolMispricing"),
         ]
         for adapter_fn, pre_key in adapters:
             X, y, pre = adapter_fn(spy)
@@ -1035,6 +1037,7 @@ class TestBuildOptionsStrategiesAdapters:
         assert rv._resolve_options_selling_stress_fn("covered_call") is not None
         assert rv._resolve_options_selling_stress_fn("vrp_premium_selling") is not None
         assert rv._resolve_options_selling_stress_fn("iron_condor") is not None
+        assert rv._resolve_options_selling_stress_fn("vol_mispricing") is not None
         # Non-selling or equity strategies resolve to None
         assert rv._resolve_options_selling_stress_fn("call_debit_spread") is None
         assert rv._resolve_options_selling_stress_fn("put_debit_spread") is None

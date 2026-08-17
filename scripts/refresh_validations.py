@@ -3154,6 +3154,44 @@ def _build_vrp_premium_selling_adapter(
     return X, y, precomputed
 
 
+def _build_vol_mispricing_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """``pilots/vol_mispricing.py``'s market_iv-vs-fair_iv mispricing signal
+    on SPY (``vol-mispricing`` Pilot). Unlike the proxy-IVR strategies above,
+    every input is real -- market_iv is the real VIX, fair_iv is the pilot's
+    own Corsi HAR-RV forecast on real SPY log-returns. See
+    ``validation/options_selling_backtest.py``'s honesty-contract comment
+    block immediately above ``simulate_vol_mispricing_returns`` for the full
+    write-up, including the one documented narrowing (delta-targeted strikes
+    in place of a historically-unreplayable live chain rank).
+    """
+    from validation.options_selling_backtest import simulate_vol_mispricing_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_vol_mispricing_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "VolMispricing": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
 def _build_options_spread_adapter(
     spy_close: pd.Series,
     sim_fn: Callable[..., pd.Series],
@@ -3451,6 +3489,11 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # (forecast_direction_arima_hw), not an independent measurement of this
     # adapter's own weight series.
     "vrp_premium_selling": (_build_vrp_premium_selling_adapter, 0.05, ["SPY"]),
+    # Real VIX-vs-HAR-RV mispricing signal (audit F4 fix, 2026-08) -- see
+    # _build_vol_mispricing_adapter's docstring. turnover=0.05: same
+    # ~21-trading-day cycle cadence as vrp_premium_selling above, same
+    # reasoning (not an independent measurement).
+    "vol_mispricing": (_build_vol_mispricing_adapter, 0.05, ["SPY"]),
     "put_credit_spread": (_build_put_credit_spread_adapter, 0.05, ["SPY"]),
     "call_credit_spread": (_build_call_credit_spread_adapter, 0.05, ["SPY"]),
     "call_debit_spread": (_build_call_debit_spread_adapter, 0.05, ["SPY"]),
@@ -3479,6 +3522,10 @@ def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str
         from validation.options_selling_backtest import simulate_vrp_iron_condor_returns
 
         return simulate_vrp_iron_condor_returns
+    if name == "vol_mispricing":
+        from validation.options_selling_backtest import simulate_vol_mispricing_returns
+
+        return simulate_vol_mispricing_returns
     if name == "put_credit_spread":
         from validation.options_selling_backtest import simulate_put_credit_spread_returns
 
