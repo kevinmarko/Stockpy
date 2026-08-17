@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "34e8f91f7cc06138ac22812dc84d3fb369d887e7",
+    "git_commit": "d60f5ebe3d2167f12f4e826cd4d4e47ba48fbac3",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4541,7 +4541,7 @@
       {
         "field": "PROMPT_REGISTRY_REFRESH_SECONDS",
         "name_literal_sites": [
-          "Gravity AI Review Suite.py:11063"
+          "Gravity AI Review Suite.py:11068"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
