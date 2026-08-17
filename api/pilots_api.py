@@ -5605,39 +5605,39 @@ class RollOrderRequest(BaseModel):
 
 class DeltaHedgeExecuteRequest(BaseModel):
     dry_run: bool = False
-    shares: Optional[float] = None
+    shares: Optional[float] = Field(default=None, ge=-100000.0, le=100000.0)
 
 class ScenarioMatrixRequest(BaseModel):
-    spot_shifts: Optional[List[float]] = None
-    iv_shifts: Optional[List[float]] = None
-    time_shifts: Optional[List[int]] = None
-    time_days_forward: Optional[int] = 0
+    spot_shifts: Optional[List[float]] = Field(default=None, max_length=50)
+    iv_shifts: Optional[List[float]] = Field(default=None, max_length=50)
+    time_shifts: Optional[List[int]] = Field(default=None, max_length=50)
+    time_days_forward: Optional[int] = Field(default=0, ge=0, le=365)
 
 class EarningsCrushExecuteRequest(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, max_length=10)
     strategy: Optional[str] = "Iron Condor"
     expiration: Optional[str] = None
-    contracts: Optional[int] = 1
+    contracts: Optional[int] = Field(default=1, ge=1, le=1000)
     legs: Optional[List[Dict[str, Any]]] = None
-    limit_price: Optional[float] = None
+    limit_price: Optional[float] = Field(default=None, gt=0.0)
     dry_run: bool = False
     is_live: bool = False
 
 class DispersionExecuteRequest(BaseModel):
-    index_symbol: str = "QQQ"
+    index_symbol: str = Field(default="QQQ", min_length=1, max_length=10)
     basket: Optional[Dict[str, Any]] = None
     dry_run: bool = False
     is_live: bool = False
 
 class ZeroDteExecuteRequest(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, max_length=10)
     option_type: Optional[str] = "CALL"
-    strike: float
+    strike: float = Field(..., gt=0.0)
     expiration: Optional[str] = None
-    contracts: Optional[int] = 1
-    limit_price: Optional[float] = None
-    stop_loss_pct: Optional[float] = 0.30
-    profit_target_pct: Optional[float] = 0.75
+    contracts: Optional[int] = Field(default=1, ge=1, le=1000)
+    limit_price: Optional[float] = Field(default=None, gt=0.0)
+    stop_loss_pct: Optional[float] = Field(default=0.30, ge=0.01, le=1.0)
+    profit_target_pct: Optional[float] = Field(default=0.75, ge=0.01, le=5.0)
     dry_run: bool = False
     is_live: bool = False
 
