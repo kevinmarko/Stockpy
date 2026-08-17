@@ -76,3 +76,48 @@ RS = stock_return_12M - spy_return_12M
   advisory. A negative RS score (`−10 pts`) reduces the aggregate toward HOLD or
   RISK REDUCE, not a short signal. Never interpret a negative RS as a recommendation
   to go short.
+
+---
+
+## Backtest Validation (`relative_strength_xsec`, 2026-07 / 2026-08)
+
+The `STRATEGY_REGISTRY` proxy for this module — `relative_strength_xsec` — originally
+failed the MaxDD gate at 46.9% (>30%, the worst starting MaxDD in the registry) and
+PBO. `SPY` was already a benchmark-only input here; fixed 2026-07 via a variant-count
+reduction backed by measurement (see
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s Category B
+for the general method).
+
+| Metric | Before (2026-07) | After (2026-07) | Gate |
+|---|---|---|---|
+| Sharpe | 0.707 | 0.745 | > 0.50 ✅ |
+| PBO | 0.644 | 0.000 | < 0.50 ✅ (was FAIL) |
+| DSR | 1.000 (shortcut) | 1.000 (shortcut) | > 0.95 ✅ |
+| MaxDD | 46.9% | **21.3%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #311](https://github.com/kevinmarko/Stockpy/pull/311) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.
+
+### 2026-08 addendum: `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` re-validation
+
+`relative_strength_xsec` is a single-variant adapter (`n_trials=1`), so the `DSR =
+1.000` above is the legacy shortcut value (`deflated_sharpe_ratio` never ran its real
+computation for `n_trials<=1`), not a genuinely computed result. Re-run under
+`settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED=True` (same
+2005-01-01–2024-12-31 window, real network-backed data) to close the gap left when
+that flag was enabled operator-side on 2026-08-14 with no follow-up validation:
+
+| Metric | Before (flag off) | After (flag on) | Gate |
+|---|---|---|---|
+| Sharpe | 0.745 | 0.745 | > 0.50 ✅ (unchanged) |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ (unchanged) |
+| DSR | 1.000 (shortcut) | **0.999768** (real) | > 0.95 ✅ |
+| MaxDD | 21.3% | 21.3% | < 30% ✅ (unchanged) |
+| `deployable` | True | **True** (unchanged) | |
+
+A forward check through 2026-08-01 (~19 months more live data) gives DSR=0.9999519,
+the same conclusion. See
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s
+2026-08-17 entry for the full 5-strategy re-validation and methodology.

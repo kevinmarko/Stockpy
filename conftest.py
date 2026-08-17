@@ -108,27 +108,43 @@ def _clean_meta_registry_between_tests():
 @pytest.fixture(autouse=True)
 def _clean_settings_between_tests(monkeypatch):
     """Reset mutable settings attributes between tests so tests that mutate
-    settings (e.g. weights, disabled modules, kill switch) don't leak state."""
+    settings (e.g. weights, disabled modules) don't leak state.
+
+    Dead-letter-per-key (CONSTRAINT #6, matching runtime_flags.py's own
+    convention): each key is reset independently so one bad/renamed field
+    name can never silently abort the reset of every key listed after it.
+    A prior version reset all keys in a single try/except around the whole
+    loop with "KILL_SWITCH_ACTIVE" first in the tuple -- that name was never
+    a real Settings field (the kill switch is file-based state owned by
+    execution/kill_switch.py, not a Settings field) and its getattr()
+    silently raised AttributeError every single test, caught by the outer
+    except and aborting before ever resetting
+    VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED, META_LABELING_ENABLED,
+    or META_LABEL_MIN_CONFIDENCE for the entire session. Dropped the bogus
+    key rather than trying to resolve it to a real field, since no such
+    field exists."""
     try:
         import copy
         from settings import Settings, settings
         _clean = Settings(_env_file=None)
-        for k in (
-            "SIGNAL_WEIGHTS",
-            "DISABLED_SIGNAL_MODULES",
-            "REGIME_SIGNAL_WEIGHTS",
-            "HISTORICAL_STORE_ENABLED",
-            "KILL_SWITCH_ACTIVE",
-            "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
-            "META_LABELING_ENABLED",
-            "META_LABEL_MIN_CONFIDENCE",
-        ):
+    except Exception:
+        return
+    for k in (
+        "SIGNAL_WEIGHTS",
+        "DISABLED_SIGNAL_MODULES",
+        "REGIME_SIGNAL_WEIGHTS",
+        "HISTORICAL_STORE_ENABLED",
+        "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
+        "META_LABELING_ENABLED",
+        "META_LABEL_MIN_CONFIDENCE",
+    ):
+        try:
             val = getattr(_clean, k)
             if isinstance(val, (dict, list, set)):
                 val = copy.deepcopy(val)
             monkeypatch.setattr(settings, k, val, raising=False)
-    except Exception:
-        pass
+        except Exception:
+            continue
 
 
 @pytest.fixture(autouse=True)

@@ -119,6 +119,33 @@ See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
 [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
 full 12-strategy series this fix was part of.
 
+### 2026-08 addendum: `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` re-validation
+
+The `DSR = 1.000` above is the exact legacy shortcut value —
+`timeseries_momentum` is a single-variant adapter (`n_trials=1`), so
+`deflated_sharpe_ratio` previously took its `n_trials<=1` shortcut and
+returned a flat `1.0` without running the real computation at all. Re-run
+under `settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED=True` (same
+2005-01-01–2024-12-31 window, real network-backed data) to close the gap
+left when that flag was enabled operator-side on 2026-08-14 with no
+follow-up validation:
+
+| Metric | Before (flag off) | After (flag on) | Gate |
+|---|---|---|---|
+| Sharpe | 0.523 | 0.523 | > 0.50 ✅ (unchanged) |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ (unchanged) |
+| DSR | 1.000 (shortcut) | **0.990009** (real) | > 0.95 ✅ |
+| MaxDD | 26.0% | 26.0% | < 30% ✅ (unchanged) |
+| `deployable` | True | **True** (unchanged) | |
+
+`timeseries_momentum` is the closest of the 5 flag-named strategies to the
+0.95 gate under the real computation (0.990 vs. e.g. `cross_sectional_momentum`'s
+0.9999) — expected, since it also has the lowest Sharpe of the five — but
+still clears with meaningful margin. A forward check through 2026-08-01
+(~19 months more live data) gives DSR=0.9922779, the same conclusion. See
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s
+2026-08-17 entry for the full 5-strategy re-validation and methodology.
+
 ---
 
 ## Regime Interaction
