@@ -18,7 +18,6 @@ vi.mock("../../api/client", async (importOriginal) => {
 
 const mockGatewayData: MultiBrokerStatusResponse = {
   active_broker_id: "alpaca",
-  failover_mode: "auto",
   manual_override_broker_id: null,
   priority_hierarchy: ["alpaca", "interactive_brokers", "tradier", "fmp_paper"],
   brokers: {
@@ -125,12 +124,11 @@ describe("MultiBrokerGatewayView", () => {
     const onFailoverMock = vi.fn();
     vi.mocked(api.getMultiBrokerStatus).mockResolvedValue(mockGatewayData);
     vi.mocked(api.triggerBrokerFailover).mockResolvedValueOnce({
-      success: true,
-      previous_broker_id: "alpaca",
-      active_broker_id: "interactive_brokers",
-      failover_timestamp: "2026-08-15T14:30:00Z",
+      status: "ok",
+      active_broker: "interactive_brokers",
+      manual_override: "interactive_brokers",
       reason: "Manual switch",
-      message: "Successfully switched active gateway to interactive_brokers",
+      timestamp: "2026-08-15T14:30:00Z",
     });
 
     render(<MultiBrokerGatewayView onFailoverSuccess={onFailoverMock} />);
@@ -144,9 +142,8 @@ describe("MultiBrokerGatewayView", () => {
 
     await waitFor(() => {
       expect(api.triggerBrokerFailover).toHaveBeenCalledWith({
-        target_broker_id: "interactive_brokers",
+        target_broker: "interactive_brokers",
         reason: "Manual override route request",
-        force: true,
       });
       expect(onFailoverMock).toHaveBeenCalledWith("interactive_brokers");
     });

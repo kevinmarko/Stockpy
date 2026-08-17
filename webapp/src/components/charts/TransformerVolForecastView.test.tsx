@@ -13,13 +13,11 @@ describe("TransformerVolForecastView", () => {
   it("renders loading state then data", async () => {
     (api.getTransformerForecast as any).mockResolvedValue({
       symbol: "AAPL",
-      current_vol: 0.15,
-      forecast_horizon: 30,
-      forecast_trajectory: [0.15, 0.16, 0.17],
-      cone_lower_bounds: [0.14, 0.15, 0.16],
-      cone_upper_bounds: [0.16, 0.17, 0.18],
-      attention_weights: [[0.1, 0.9]],
-      feature_importance: { "RSI": 0.5, "MACD": 0.5 },
+      forecast: { "1d": 0.15, "5d": 0.16, "21d": 0.17, "60d": 0.18 },
+      attention_heatmap: [
+        [0.1, 0.9],
+        [0.5, 0.4],
+      ],
     });
 
     render(<TransformerVolForecastView symbol="AAPL" />);
@@ -30,8 +28,26 @@ describe("TransformerVolForecastView", () => {
       expect(screen.getByText("🤖 Transformer Volatility Forecast: AAPL")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Cone Forecast (Horizon: 30d)")).toBeInTheDocument();
-    expect(screen.getByText("Current Vol: 15.0%")).toBeInTheDocument();
-    expect(screen.getByText("RSI")).toBeInTheDocument();
+    expect(screen.getByText("Multi-Horizon Volatility Forecast")).toBeInTheDocument();
+    expect(screen.getByText("1d")).toBeInTheDocument();
+    expect(screen.getByText("60d")).toBeInTheDocument();
+    expect(screen.getByText("15.0%")).toBeInTheDocument();
+    expect(screen.getByTestId("attention-heatmap")).toBeInTheDocument();
+  });
+
+  it("renders an honest empty state when attention_heatmap is empty", async () => {
+    (api.getTransformerForecast as any).mockResolvedValue({
+      symbol: "MSFT",
+      forecast: { "1d": 0.12 },
+      attention_heatmap: [],
+    });
+
+    render(<TransformerVolForecastView symbol="MSFT" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("🤖 Transformer Volatility Forecast: MSFT")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("No attention data available.")).toBeInTheDocument();
   });
 });

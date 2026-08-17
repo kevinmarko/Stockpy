@@ -15,12 +15,9 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
   onClose,
 }) => {
   const [symbol, setSymbol] = useState<string>(initialSymbol);
-  const [strike, setStrike] = useState<number>(540);
-  const [optionType, setOptionType] = useState<"CALL" | "PUT">("CALL");
-  const [orderSide, setOrderSide] = useState<"BUY" | "SELL">("BUY");
-  const [limitPrice, setLimitPrice] = useState<number>(3.15);
+  const [priceLevel, setPriceLevel] = useState<number>(3.15);
   const [orderSize, setOrderSize] = useState<number>(5);
-  const [latencyMs, setLatencyMs] = useState<number>(25);
+  const [depthAhead, setDepthAhead] = useState<number>(28);
 
   const [simResult, setSimResult] = useState<LobQueueSimulationResponse | null>(null);
   const [simulating, setSimulating] = useState<boolean>(false);
@@ -34,12 +31,9 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
     try {
       const res = await api.simulateLobQueue({
         symbol,
-        strike,
-        option_type: optionType,
-        order_side: orderSide,
-        limit_price: limitPrice,
+        price_level: priceLevel,
         order_size: orderSize,
-        latency_ms: latencyMs,
+        depth_ahead: depthAhead,
       });
       setSimResult(res);
     } catch (err: any) {
@@ -52,20 +46,25 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
   // Run initial simulation on mount or symbol change
   useEffect(() => {
     handleSimulate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol]);
 
-  const fill30Pct = simResult ? Math.round(simResult.fill_probability_30s * 100) : 75;
-  const fill60Pct = simResult ? Math.round(simResult.fill_probability_60s * 100) : 88;
-  const fill300Pct = simResult ? Math.round(simResult.fill_probability_300s * 100) : 96;
+  const fillPct = simResult ? Math.round(simResult.fill_probability * 100) : 0;
+  const adverseMovePct = simResult ? Math.round(simResult.prob_adverse_move_before_fill * 100) : 0;
 
-  const maxDepthSize = React.useMemo(() => {
-    if (!simResult) return 100;
-    const allSizes = [
-      ...simResult.bids.map((b) => b.size),
-      ...simResult.asks.map((a) => a.size),
-    ];
-    return Math.max(...allSizes, 100);
-  }, [simResult]);
+  const queueBarTotal = depthAhead + orderSize;
+  const depthAheadPct = queueBarTotal > 0 ? (depthAhead / queueBarTotal) * 100 : 0;
+
+  const percentileRows: { label: string; value: number | null }[] = simResult
+    ? [
+        { label: "P10", value: simResult.queue_progression_percentiles.p10 },
+        { label: "P25", value: simResult.queue_progression_percentiles.p25 },
+        { label: "P50", value: simResult.queue_progression_percentiles.p50 },
+        { label: "P75", value: simResult.queue_progression_percentiles.p75 },
+        { label: "P90", value: simResult.queue_progression_percentiles.p90 },
+        { label: "P95", value: simResult.queue_progression_percentiles.p95 },
+      ]
+    : [];
 
   return (
     <div
@@ -115,7 +114,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
               marginTop: 4,
             }}
           >
-            Level-3 Order Book Depth Ladder, Resting Queue Rank Estimator, and Ingress Latency Probability of Fill.
+            Cont-Stoikov-Talreja (2010) Markovian queue-fill simulator — resting queue fill probability, expected wait time, and time-to-fill percentile distribution.
           </div>
         </div>
 
@@ -209,121 +208,19 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
           border: `1px solid ${theme.border}`,
           padding: 16,
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
           gap: 12,
           alignItems: "flex-end",
         }}
       >
         <div>
           <label style={{ display: "block", fontSize: "0.75rem", color: theme.textSecondary, marginBottom: 4 }}>
-            Option Type
-          </label>
-          <div style={{ display: "flex", background: theme.surface2, borderRadius: 6, padding: 2 }}>
-            <button
-              onClick={() => setOptionType("CALL")}
-              style={{
-                flex: 1,
-                padding: "6px 0",
-                background: optionType === "CALL" ? theme.growth : "transparent",
-                color: optionType === "CALL" ? "#000" : theme.textSecondary,
-                border: "none",
-                borderRadius: 4,
-                fontWeight: 700,
-                fontSize: "0.8rem",
-                cursor: "pointer",
-              }}
-            >
-              CALL
-            </button>
-            <button
-              onClick={() => setOptionType("PUT")}
-              style={{
-                flex: 1,
-                padding: "6px 0",
-                background: optionType === "PUT" ? theme.decline : "transparent",
-                color: optionType === "PUT" ? "#fff" : theme.textSecondary,
-                border: "none",
-                borderRadius: 4,
-                fontWeight: 700,
-                fontSize: "0.8rem",
-                cursor: "pointer",
-              }}
-            >
-              PUT
-            </button>
-          </div>
-        </div>
-
-        <div>
-          <label style={{ display: "block", fontSize: "0.75rem", color: theme.textSecondary, marginBottom: 4 }}>
-            Order Side
-          </label>
-          <div style={{ display: "flex", background: theme.surface2, borderRadius: 6, padding: 2 }}>
-            <button
-              onClick={() => setOrderSide("BUY")}
-              style={{
-                flex: 1,
-                padding: "6px 0",
-                background: orderSide === "BUY" ? theme.growth : "transparent",
-                color: orderSide === "BUY" ? "#000" : theme.textSecondary,
-                border: "none",
-                borderRadius: 4,
-                fontWeight: 700,
-                fontSize: "0.8rem",
-                cursor: "pointer",
-              }}
-            >
-              BUY (Bid)
-            </button>
-            <button
-              onClick={() => setOrderSide("SELL")}
-              style={{
-                flex: 1,
-                padding: "6px 0",
-                background: orderSide === "SELL" ? theme.decline : "transparent",
-                color: orderSide === "SELL" ? "#fff" : theme.textSecondary,
-                border: "none",
-                borderRadius: 4,
-                fontWeight: 700,
-                fontSize: "0.8rem",
-                cursor: "pointer",
-              }}
-            >
-              SELL (Ask)
-            </button>
-          </div>
-        </div>
-
-        <div>
-          <label style={{ display: "block", fontSize: "0.75rem", color: theme.textSecondary, marginBottom: 4 }}>
-            Strike ($)
+            Price Level ($)
           </label>
           <input
             type="number"
-            value={strike}
-            onChange={(e) => setStrike(Number(e.target.value))}
-            step={1}
-            style={{
-              width: "100%",
-              padding: "7px 10px",
-              background: theme.base,
-              border: `1px solid ${theme.border}`,
-              color: theme.textPrimary,
-              borderRadius: 6,
-              fontSize: "0.85rem",
-              fontWeight: 600,
-            }}
-          />
-        </div>
-
-        <div>
-          <label style={{ display: "block", fontSize: "0.75rem", color: theme.textSecondary, marginBottom: 4 }}>
-            Limit Price ($)
-          </label>
-          <input
-            type="number"
-            value={limitPrice}
-            onChange={(e) => setLimitPrice(Number(e.target.value))}
+            value={priceLevel}
+            onChange={(e) => setPriceLevel(Number(e.target.value))}
             step={0.05}
             style={{
               width: "100%",
@@ -340,7 +237,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
 
         <div>
           <label style={{ display: "block", fontSize: "0.75rem", color: theme.textSecondary, marginBottom: 4 }}>
-            Contracts
+            Order Size (contracts)
           </label>
           <input
             type="number"
@@ -362,16 +259,23 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
 
         <div>
           <label style={{ display: "block", fontSize: "0.75rem", color: theme.textSecondary, marginBottom: 4 }}>
-            Ingress Latency ({latencyMs}ms)
+            Depth Ahead (contracts resting ahead)
           </label>
           <input
-            type="range"
-            min={5}
-            max={500}
-            step={5}
-            value={latencyMs}
-            onChange={(e) => setLatencyMs(Number(e.target.value))}
-            style={{ width: "100%", accentColor: theme.accent }}
+            type="number"
+            value={depthAhead}
+            onChange={(e) => setDepthAhead(Math.max(0, Number(e.target.value)))}
+            min={0}
+            style={{
+              width: "100%",
+              padding: "7px 10px",
+              background: theme.base,
+              border: `1px solid ${theme.border}`,
+              color: theme.textPrimary,
+              borderRadius: 6,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
           />
         </div>
 
@@ -402,7 +306,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
 
       {simResult && (
         <>
-          {/* Queue Priority & Fill Estimation KPIs */}
+          {/* Fill Probability & Wait Time KPIs */}
           <div
             style={{
               display: "grid",
@@ -410,53 +314,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
               gap: 12,
             }}
           >
-            {/* KPI 1: Queue Priority Position */}
-            <div
-              style={{
-                background: theme.surface,
-                borderRadius: 10,
-                padding: "14px 16px",
-                border: `1px solid ${theme.border}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
-              }}
-            >
-              <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
-                Queue Priority Rank
-              </span>
-              <div style={{ fontSize: "1.6rem", fontWeight: 800, color: theme.accent }}>
-                #{simResult.queue_priority_position} in Line
-              </div>
-              <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
-                {simResult.orders_ahead} orders ({simResult.size_ahead} contracts) ahead
-              </span>
-            </div>
-
-            {/* KPI 2: Estimated Fill Time */}
-            <div
-              style={{
-                background: theme.surface,
-                borderRadius: 10,
-                padding: "14px 16px",
-                border: `1px solid ${theme.border}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
-              }}
-            >
-              <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
-                Expected Fill Latency
-              </span>
-              <div style={{ fontSize: "1.6rem", fontWeight: 800, color: theme.growth }}>
-                ~{simResult.estimated_fill_time_seconds}s
-              </div>
-              <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
-                P50: {simResult.fill_time_p50}s | P95: {simResult.fill_time_p95}s
-              </span>
-            </div>
-
-            {/* KPI 3: 30s / 60s Fill Probability Gauge */}
+            {/* KPI 1: Fill Probability */}
             <div
               style={{
                 background: theme.surface,
@@ -468,24 +326,18 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
                 gap: 6,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
-                  30s Fill Probability
-                </span>
-                <span style={{ fontSize: "0.95rem", fontWeight: 800, color: fill30Pct >= 70 ? theme.growth : theme.caution }}>
-                  {fill30Pct}%
-                </span>
+              <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
+                Fill Probability (within {simResult.time_horizon_sec}s)
+              </span>
+              <div style={{ fontSize: "1.6rem", fontWeight: 800, color: fillPct >= 70 ? theme.growth : theme.caution }}>
+                {fillPct}%
               </div>
               <div style={{ height: 6, width: "100%", background: theme.surface2, borderRadius: 3, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${fill30Pct}%`, background: fill30Pct >= 70 ? theme.growth : theme.caution }} />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: theme.textMuted }}>
-                <span>60s: {fill60Pct}%</span>
-                <span>300s: {fill300Pct}%</span>
+                <div style={{ height: "100%", width: `${fillPct}%`, background: fillPct >= 70 ? theme.growth : theme.caution }} />
               </div>
             </div>
 
-            {/* KPI 4: Market Mid & Spread */}
+            {/* KPI 2: Expected / Median Wait Time */}
             <div
               style={{
                 background: theme.surface,
@@ -498,19 +350,65 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
               }}
             >
               <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
-                Spread & Liquidity
+                Expected Wait Time
               </span>
-              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: theme.textPrimary }}>
-                ${simResult.spread.toFixed(2)} Spread
+              <div style={{ fontSize: "1.6rem", fontWeight: 800, color: theme.growth }}>
+                ~{simResult.expected_wait_time_sec.toFixed(1)}s
               </div>
               <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
-                Mid Price: ${simResult.mid_price.toFixed(2)}
+                Median: {simResult.median_fill_time_sec != null ? `${simResult.median_fill_time_sec.toFixed(1)}s` : "—"}
+              </span>
+            </div>
+
+            {/* KPI 3: Queue Depletion Velocity & Adverse Move Risk */}
+            <div
+              style={{
+                background: theme.surface,
+                borderRadius: 10,
+                padding: "14px 16px",
+                border: `1px solid ${theme.border}`,
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
+                Queue Depletion Velocity
+              </span>
+              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: theme.textPrimary }}>
+                {simResult.queue_depletion_velocity.toFixed(3)} contracts/s
+              </div>
+              <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
+                P(Adverse Move Before Fill): {adverseMovePct}%
+              </span>
+            </div>
+
+            {/* KPI 4: Expected Fill Ratio */}
+            <div
+              style={{
+                background: theme.surface,
+                borderRadius: 10,
+                padding: "14px 16px",
+                border: `1px solid ${theme.border}`,
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <span style={{ fontSize: "0.75rem", color: theme.textSecondary, fontWeight: 600 }}>
+                Expected Fill Ratio
+              </span>
+              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: theme.textPrimary }}>
+                {(simResult.expected_fill_ratio * 100).toFixed(1)}%
+              </div>
+              <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
+                Unconditional Fill Time: {simResult.unconditional_fill_time_sec.toFixed(1)}s
               </span>
             </div>
           </div>
 
-          {/* Depth Summary Alert */}
-          {simResult.market_depth_summary && (
+          {/* Reason Alert (only present when the simulation degraded / fell back) */}
+          {simResult.reason && (
             <div
               style={{
                 padding: "10px 14px",
@@ -521,11 +419,11 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
                 color: theme.textSecondary,
               }}
             >
-              ℹ️ {simResult.market_depth_summary}
+              ℹ️ {simResult.reason}
             </div>
           )}
 
-          {/* Level-3 Limit Order Book Depth Ladder */}
+          {/* Queue Position Visual + Time-to-Fill Percentile Distribution */}
           <div
             style={{
               background: theme.surface,
@@ -537,179 +435,78 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
               gap: 16,
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <span style={{ fontSize: "1.05rem", fontWeight: 700 }}>
-                  {symbol} ${strike} {optionType} — Level-3 LOB Depth Ladder
-                </span>
-                <div style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
-                  Real-time visual queue priority and resting liquidity distribution
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 12, fontSize: "0.75rem" }}>
-                <span style={{ color: theme.growth }}>■ Bid Depth</span>
-                <span style={{ color: theme.decline }}>■ Ask Depth</span>
-                <span style={{ color: theme.accent }}>★ User Queue Position</span>
+            <div>
+              <span style={{ fontSize: "1.05rem", fontWeight: 700 }}>
+                {symbol} @ ${priceLevel.toFixed(2)} — Queue Position
+              </span>
+              <div style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
+                {simResult.depth_ahead} contracts resting ahead vs. your {simResult.order_size}-contract order.
               </div>
             </div>
 
-            {/* Depth Ladder Grid: Bids vs Asks */}
+            {/* Queue Position Bar */}
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 16,
+                display: "flex",
+                width: "100%",
+                height: 32,
+                borderRadius: 8,
+                overflow: "hidden",
+                border: `1px solid ${theme.borderStrong}`,
               }}
             >
-              {/* Left Column: Bids (Buy Orders) */}
               <div
                 style={{
+                  width: `${depthAheadPct}%`,
+                  background: theme.surface3,
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                  background: theme.surface2,
-                  padding: 12,
-                  borderRadius: 8,
-                  border: `1px solid ${theme.border}`,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "0.75rem",
+                  color: theme.textSecondary,
+                  fontWeight: 600,
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    fontSize: "0.75rem",
-                    color: theme.textSecondary,
-                    fontWeight: 700,
-                    paddingBottom: 6,
-                    borderBottom: `1px solid ${theme.border}`,
-                  }}
-                >
-                  <span>Orders</span>
-                  <span>Size</span>
-                  <span>Bid Price</span>
-                </div>
-
-                {simResult.bids.map((b, idx) => {
-                  const barWidth = Math.min(100, (b.size / maxDepthSize) * 100);
-                  const isUser = b.is_user_level;
-
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        position: "relative",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "6px 8px",
-                        borderRadius: 4,
-                        fontSize: "0.82rem",
-                        background: isUser ? "rgba(56, 189, 248, 0.15)" : "transparent",
-                        border: isUser ? `1px solid ${theme.accent}` : "1px solid transparent",
-                      }}
-                    >
-                      {/* Depth Bar (Right-aligned background) */}
-                      <div
-                        style={{
-                          position: "absolute",
-                          right: 0,
-                          top: 0,
-                          bottom: 0,
-                          width: `${barWidth}%`,
-                          background: `${theme.growth}18`,
-                          borderRadius: 4,
-                          zIndex: 0,
-                        }}
-                      />
-                      <span style={{ zIndex: 1, color: theme.textSecondary }}>
-                        {b.num_orders} ord
-                      </span>
-                      <span style={{ zIndex: 1, fontWeight: 600 }}>
-                        {b.size} sh
-                      </span>
-                      <span style={{ zIndex: 1, fontWeight: 700, color: theme.growth }}>
-                        ${b.price.toFixed(2)}{" "}
-                        {isUser && <span style={{ color: theme.accent, fontSize: "0.7rem" }}>★ You (#3)</span>}
-                      </span>
-                    </div>
-                  );
-                })}
+                {depthAhead > 0 ? `${depthAhead} ahead` : ""}
               </div>
-
-              {/* Right Column: Asks (Sell Orders) */}
               <div
                 style={{
+                  width: `${100 - depthAheadPct}%`,
+                  background: theme.accent,
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                  background: theme.surface2,
-                  padding: 12,
-                  borderRadius: 8,
-                  border: `1px solid ${theme.border}`,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "0.75rem",
+                  color: "#000",
+                  fontWeight: 700,
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    fontSize: "0.75rem",
-                    color: theme.textSecondary,
-                    fontWeight: 700,
-                    paddingBottom: 6,
-                    borderBottom: `1px solid ${theme.border}`,
-                  }}
-                >
-                  <span>Ask Price</span>
-                  <span>Size</span>
-                  <span>Orders</span>
-                </div>
-
-                {simResult.asks.map((a, idx) => {
-                  const barWidth = Math.min(100, (a.size / maxDepthSize) * 100);
-                  const isUser = a.is_user_level;
-
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        position: "relative",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "6px 8px",
-                        borderRadius: 4,
-                        fontSize: "0.82rem",
-                        background: isUser ? "rgba(56, 189, 248, 0.15)" : "transparent",
-                        border: isUser ? `1px solid ${theme.accent}` : "1px solid transparent",
-                      }}
-                    >
-                      {/* Depth Bar (Left-aligned background) */}
-                      <div
-                        style={{
-                          position: "absolute",
-                          left: 0,
-                          top: 0,
-                          bottom: 0,
-                          width: `${barWidth}%`,
-                          background: `${theme.decline}18`,
-                          borderRadius: 4,
-                          zIndex: 0,
-                        }}
-                      />
-                      <span style={{ zIndex: 1, fontWeight: 700, color: theme.decline }}>
-                        ${a.price.toFixed(2)}{" "}
-                        {isUser && <span style={{ color: theme.accent, fontSize: "0.7rem" }}>★ You (#3)</span>}
-                      </span>
-                      <span style={{ zIndex: 1, fontWeight: 600 }}>
-                        {a.size} sh
-                      </span>
-                      <span style={{ zIndex: 1, color: theme.textSecondary }}>
-                        {a.num_orders} ord
-                      </span>
-                    </div>
-                  );
-                })}
+                ★ You ({orderSize})
               </div>
+            </div>
+
+            {/* Time-to-Fill Percentile Table */}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", textAlign: "left" }}>
+                <thead>
+                  <tr style={{ background: theme.surface2, borderBottom: `1px solid ${theme.border}`, color: theme.textSecondary }}>
+                    {percentileRows.map((row) => (
+                      <th key={row.label} style={{ padding: "8px 12px", textAlign: "right" }}>
+                        {row.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    {percentileRows.map((row) => (
+                      <td key={row.label} style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>
+                        {row.value != null ? `${row.value.toFixed(1)}s` : "—"}
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
             </div>
 
             {/* Microstructure Math Card */}
@@ -723,7 +520,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
                 lineHeight: 1.4,
               }}
             >
-              📐 <b>Queue Dynamics:</b> Price-Time Priority (FIFO) queue allocation models the Markov arrival rate (λ={0.45}) and order cancellation intensity (μ={0.12}). High-frequency queue priority reduces adverse selection by ~38% relative to market order taker crossings.
+              📐 <b>Queue Dynamics:</b> Cont-Stoikov-Talreja (2010) Markovian queue-fill model — Poisson limit-order arrival (λ), exponential cancellation (μ), and market-order consumption (θ) govern how quickly the {depthAhead}-contract queue ahead of a resting order at ${priceLevel.toFixed(2)} depletes within the {simResult.time_horizon_sec}s horizon.
             </div>
           </div>
         </>

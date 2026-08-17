@@ -31,8 +31,11 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
 
   const data = query.data;
   const currentSpot = data?.spot_price || initialSpot || 500;
-  const netGex = data?.net_gex_dollars ?? 0;
-  const isVolDampener = data?.volatility_regime === "VOL_DAMPENER";
+  // net_gex is a raw dollar figure (not pre-scaled to millions) -- divide by
+  // 1e6 for the existing "$...M" display convention.
+  const netGex = data?.net_gex ?? 0;
+  const netGexM = netGex / 1e6;
+  const isVolDampener = data?.gamma_regime === "POSITIVE_GAMMA";
   const regimeColor = isVolDampener ? theme.growth : theme.decline;
   const regimeBg = isVolDampener ? `${theme.growth}20` : `${theme.decline}20`;
 
@@ -328,7 +331,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                   color: netGex >= 0 ? theme.growth : theme.decline,
                 }}
               >
-                {netGex >= 0 ? "+" : ""}${netGex.toLocaleString()}M
+                {netGex >= 0 ? "+" : ""}${netGexM.toFixed(1)}M
               </div>
               <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
                 Spot Price: <b>${currentSpot.toFixed(2)}</b>
@@ -416,7 +419,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
               </span>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "0.8rem", color: theme.growth, fontWeight: 600 }}>
-                  📈 Call Wall: ${data.call_gamma_wall.toFixed(2)}
+                  📈 Call Wall: ${data.call_wall_strike.toFixed(2)}
                 </span>
                 <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
                   Pin Resistance
@@ -424,7 +427,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "0.8rem", color: theme.decline, fontWeight: 600 }}>
-                  📉 Put Wall: ${data.put_gamma_wall.toFixed(2)}
+                  📉 Put Wall: ${data.put_wall_strike.toFixed(2)}
                 </span>
                 <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
                   Support Floor
@@ -434,7 +437,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
           </div>
 
           {/* Positioning Bias Banner */}
-          {data.dealer_positioning_bias && (
+          {data.regime_description && (
             <div
               style={{
                 padding: "10px 14px",
@@ -446,7 +449,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                 lineHeight: 1.5,
               }}
             >
-              💡 <b>Hedging Dynamics:</b> {data.dealer_positioning_bias}
+              💡 <b>Hedging Dynamics:</b> {data.regime_description} Dealer hedging flow: ${(data.dealer_hedging_flow / 1e6).toFixed(2)}M per 1% move.
             </div>
           )}
 
@@ -508,8 +511,8 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                 }}
               >
                 {data.strikes.map((s) => {
-                  const isCallWall = s.strike === data.call_gamma_wall;
-                  const isPutWall = s.strike === data.put_gamma_wall;
+                  const isCallWall = s.strike === data.call_wall_strike;
+                  const isPutWall = s.strike === data.put_wall_strike;
                   const isFlipStrike = Math.abs(s.strike - data.zero_gamma_flip) < 2.5;
                   const isNearSpot = Math.abs(s.strike - currentSpot) < 2.0;
                   const isHovered = hoveredStrike?.strike === s.strike;
@@ -669,19 +672,19 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                       Strike: <b style={{ fontSize: "0.95rem" }}>${hoveredStrike.strike.toFixed(2)}</b>
                     </span>
                     <span>
-                      Call GEX: <b style={{ color: theme.growth }}>+${hoveredStrike.call_gex.toFixed(1)}M</b> (OI: {hoveredStrike.open_interest_calls?.toLocaleString() ?? "—"})
+                      Call GEX: <b style={{ color: theme.growth }}>+${(hoveredStrike.call_gex / 1e6).toFixed(1)}M</b> (OI: {hoveredStrike.call_oi?.toLocaleString() ?? "—"})
                     </span>
                     <span>
-                      Put GEX: <b style={{ color: theme.decline }}>${hoveredStrike.put_gex.toFixed(1)}M</b> (OI: {hoveredStrike.open_interest_puts?.toLocaleString() ?? "—"})
+                      Put GEX: <b style={{ color: theme.decline }}>${(hoveredStrike.put_gex / 1e6).toFixed(1)}M</b> (OI: {hoveredStrike.put_oi?.toLocaleString() ?? "—"})
                     </span>
                     <span>
                       Net GEX:{" "}
                       <b style={{ color: hoveredStrike.net_gex >= 0 ? theme.growth : theme.decline }}>
-                        {hoveredStrike.net_gex >= 0 ? "+" : ""}${hoveredStrike.net_gex.toFixed(1)}M
+                        {hoveredStrike.net_gex >= 0 ? "+" : ""}${(hoveredStrike.net_gex / 1e6).toFixed(1)}M
                       </b>
                     </span>
                     <span>
-                      Call Γ: <b>{hoveredStrike.gamma_calls?.toFixed(4) ?? "—"}</b> | Put Γ: <b>{hoveredStrike.gamma_puts?.toFixed(4) ?? "—"}</b>
+                      Gamma Concentration: <b>{hoveredStrike.gamma_concentration_pct?.toFixed(1) ?? "—"}%</b>
                     </span>
                   </>
                 ) : (
@@ -721,8 +724,8 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                   </thead>
                   <tbody>
                     {data.strikes.map((s) => {
-                      const isCallWall = s.strike === data.call_gamma_wall;
-                      const isPutWall = s.strike === data.put_gamma_wall;
+                      const isCallWall = s.strike === data.call_wall_strike;
+                      const isPutWall = s.strike === data.put_wall_strike;
                       const isZeroFlip = Math.abs(s.strike - data.zero_gamma_flip) < 2.5;
                       const isNearSpot = Math.abs(s.strike - currentSpot) < 2.0;
 
@@ -740,16 +743,16 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                             ${s.strike.toFixed(2)} {isNearSpot && <span style={{ color: theme.accent, fontSize: "0.75rem" }}>(Spot)</span>}
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "right", color: theme.growth, fontWeight: 600 }}>
-                            +${s.call_gex.toFixed(1)}M
+                            +${(s.call_gex / 1e6).toFixed(1)}M
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "right" }}>
-                            {s.open_interest_calls?.toLocaleString() ?? "—"}
+                            {s.call_oi?.toLocaleString() ?? "—"}
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "right", color: theme.decline, fontWeight: 600 }}>
-                            ${s.put_gex.toFixed(1)}M
+                            ${(s.put_gex / 1e6).toFixed(1)}M
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "right" }}>
-                            {s.open_interest_puts?.toLocaleString() ?? "—"}
+                            {s.put_oi?.toLocaleString() ?? "—"}
                           </td>
                           <td
                             style={{
@@ -759,7 +762,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                               color: s.net_gex >= 0 ? theme.growth : theme.decline,
                             }}
                           >
-                            {s.net_gex >= 0 ? "+" : ""}${s.net_gex.toFixed(1)}M
+                            {s.net_gex >= 0 ? "+" : ""}${(s.net_gex / 1e6).toFixed(1)}M
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "center" }}>
                             {isCallWall && (

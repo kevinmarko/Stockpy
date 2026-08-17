@@ -13,21 +13,19 @@ describe("GenerativeDiffusionStressView", () => {
   it("renders form, runs simulation, and shows results", async () => {
     (api.runDiffusionStressTest as any).mockResolvedValue({
       symbol: "AAPL",
-      horizon_days: 30,
-      paths_simulated: 1000,
-      cvar_95: 0.18,
-      var_95: 0.12,
-      expected_shortfall: 0.15,
-      max_drawdown_distribution: [0.1, 0.2, 0.3],
-      terminal_price_distribution: [80, 100, 120],
-      crash_probabilities: { "-10%": 0.1 },
-      sample_paths: [],
+      paths: [
+        [100, 98, 95, 90],
+        [100, 102, 105, 110],
+        [100, 99, 97, 92],
+      ],
+      VaR_95: 8.5,
+      CVaR_95: 10.2,
     });
 
-    render(<GenerativeDiffusionStressView symbol="AAPL" />);
+    render(<GenerativeDiffusionStressView symbol="AAPL" spotPrice={100} />);
 
     expect(screen.getByText("🌪️ Generative Diffusion Stress Test: AAPL")).toBeInTheDocument();
-    
+
     const runBtn = screen.getByText("Run Stress Test");
     fireEvent.click(runBtn);
 
@@ -37,17 +35,15 @@ describe("GenerativeDiffusionStressView", () => {
       expect(screen.getByText("Value at Risk (95%)")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("12.00%")).toBeInTheDocument();
-    expect(screen.getByText("-10% drop")).toBeInTheDocument();
+    expect(screen.getByText("$8.50")).toBeInTheDocument();
+    expect(screen.getByText("$10.20")).toBeInTheDocument();
     expect(api.runDiffusionStressTest).toHaveBeenCalledWith({
       symbol: "AAPL",
-      drift: 0,
+      spot_price: 100,
       volatility: 0.2,
-      jump_intensity: 0.01,
-      jump_mean: -0.05,
-      jump_std: 0.1,
-      paths: 1000,
-      horizon_days: 30,
+      drift: 0,
+      num_paths: 1000,
+      horizon: 30,
     });
   });
 });
