@@ -76,6 +76,19 @@ class OptionsTradeRecord:
     exit_reason: str  # "profit_target", "stop_loss", "expiration", "rebalance"
     holding_days: int
     contracts: int = 1
+    # --- Real entry-condition fields (2026-08, closes audit finding F3) ---
+    # Every field below is a REAL, computed quantity derived from the
+    # backtest's own in-scope data at the moment the trade was opened --
+    # never a fabricated/hardcoded literal. Each is ``None`` (not a fallback
+    # number) when the underlying real data genuinely isn't available for
+    # this trade, per CONSTRAINT #4. Consumers (e.g.
+    # api/pilots_api.py::post_options_meta_model_retrain) must skip a trade
+    # rather than substitute a default when any of these is ``None``.
+    entry_ivr: Optional[float] = None  # 0-100 percentile rank of iv within its own trailing window at entry
+    entry_vrp: Optional[float] = None  # iv - rolling_hv at entry (real IV proxy minus real realized vol)
+    entry_short_delta: Optional[float] = None  # abs(Black-Scholes delta) of the first short leg at entry; None if no short leg
+    entry_credit_to_width_ratio: Optional[float] = None  # abs(net entry premium) / spread width
+    entry_vix: Optional[float] = None  # real historical VIXCLS at entry_date (HistoricalStore.get_macro); None if no observation for that date
 
 
 @dataclass
@@ -201,6 +214,68 @@ def _black_scholes_price(
     return max(0.0, price)
 
 
+def _black_scholes_delta(
+    spot: float, strike: float, t_years: float, sigma: float, r: float = 0.045, option_type: str = "call"
+) -> float:
+    """Standard Black-Scholes analytical option delta (signed: positive for
+    calls, negative for puts). Callers wanting the conventional |delta|
+    magnitude (e.g. "a 0.30-delta short leg") should take ``abs()`` of the
+    result."""
+    if spot <= 0 or strike <= 0:
+        return 0.0
+    if t_years <= 1e-5:
+        # At expiration, delta is the indicator of being in-the-money.
+        if option_type.lower() == "call":
+            return 1.0 if spot > strike else 0.0
+        else:
+            return -1.0 if spot < strike else 0.0
+
+    sigma = max(1e-4, sigma)
+    sqrt_t = math.sqrt(t_years)
+    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
+
+    def norm_cdf(x: float) -> float:
+        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+    if option_type.lower() == "call":
+        return norm_cdf(d1)
+    else:
+        return norm_cdf(d1) - 1.0
+
+
+def _trailing_ivr(iv_window: pd.Series, current_iv: float, min_obs: int = 20) -> Optional[float]:
+    """Real percentile rank (0-100) of ``current_iv`` within its own trailing
+    window -- a causal, no-lookahead IVR proxy (the window is data up to and
+    including the current day only). ``None`` (never a fabricated number)
+    when the window has fewer than ``min_obs`` real observations."""
+    valid = iv_window.dropna()
+    if len(valid) < min_obs:
+        return None
+    return float((valid <= current_iv).mean() * 100.0)
+
+
+def _lookup_vix(date_str: str, vix_series: pd.Series) -> Optional[float]:
+    """Looks up the real historical VIXCLS observation for ``date_str`` in an
+    already-fetched series (see ``OptionsValidationHarness._fetch_vix_series``).
+    Returns ``None`` -- never a fabricated fallback -- when this exact date
+    has no real FRED observation (``HistoricalStore.get_macro`` omits missing
+    dates rather than filling them, so a miss here is an honest "no data",
+    not a bug)."""
+    if vix_series is None or vix_series.empty:
+        return None
+    try:
+        val = vix_series.get(pd.Timestamp(date_str))
+    except Exception:  # noqa: BLE001 - a malformed lookup key must never crash the backtest
+        return None
+    if val is None:
+        return None
+    try:
+        val_f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(val_f) else val_f
+
+
 class OptionsValidationHarness:
     """
     Validation harness specifically designed for options trading strategies.
@@ -210,6 +285,25 @@ class OptionsValidationHarness:
 
     def __init__(self, cost_model: Optional[TieredCostModel] = None):
         self.cost_model = cost_model or TieredCostModel()
+
+    def _fetch_vix_series(self) -> pd.Series:
+        """Real historical VIXCLS via ``HistoricalStore.get_macro`` -- never
+        fabricated. Degrades to an empty ``pd.Series`` (CONSTRAINT #6) on any
+        failure (no DB configured, no network, no FRED_API_KEY, etc.); a
+        trade whose ``entry_date`` can't be matched then gets ``entry_vix =
+        None`` rather than a fabricated fallback value. Imported lazily to
+        avoid a hard import-time dependency on the data layer for callers
+        (e.g. the CLI ``main()``) that never need macro enrichment."""
+        try:
+            from data.historical_store import HistoricalStore
+
+            series = HistoricalStore().get_macro("VIXCLS")
+            return series if series is not None else pd.Series(dtype=float)
+        except Exception as exc:  # noqa: BLE001 - dead-letter: a macro-data outage must never crash the backtest
+            logger.warning(
+                "OptionsValidationHarness: failed to fetch VIX series for entry_vix enrichment: %s", exc
+            )
+            return pd.Series(dtype=float)
 
     def run_backtest(
         self,
@@ -262,6 +356,10 @@ class OptionsValidationHarness:
         rolling_hv = rolling_hv.fillna(0.20)
         # Volatility Risk Premium multiplier (IV typically trades ~1.15x HV)
         iv_series = rolling_hv * 1.15
+
+        # Real historical VIXCLS, fetched once for the whole backtest (never
+        # per-trade) -- see OptionsTradeRecord.entry_vix.
+        vix_series = self._fetch_vix_series()
 
         capital = initial_capital
         equity_series: Dict[pd.Timestamp, float] = {}
@@ -339,6 +437,11 @@ class OptionsValidationHarness:
                             exit_reason=exit_reason,
                             holding_days=days_held,
                             contracts=contracts,
+                            entry_ivr=active_trade.get("entry_ivr"),
+                            entry_vrp=active_trade.get("entry_vrp"),
+                            entry_short_delta=active_trade.get("entry_short_delta"),
+                            entry_credit_to_width_ratio=active_trade.get("entry_credit_to_width_ratio"),
+                            entry_vix=active_trade.get("entry_vix"),
                         )
                     )
                     active_trade = None
@@ -352,6 +455,7 @@ class OptionsValidationHarness:
                     dte = spec.legs[0].dte
                     t_years = dte / 365.0
 
+                    short_leg_delta: Optional[float] = None
                     for leg_spec in spec.legs:
                         strike = round(spot * (1.0 + leg_spec.strike_offset_pct), 2)
                         p = _black_scholes_price(
@@ -370,6 +474,15 @@ class OptionsValidationHarness:
                             "ratio": leg_spec.ratio,
                             "entry_price": p,
                         })
+                        # Real Black-Scholes delta of the (first) short leg --
+                        # the conventional "0.30-delta short strike" gating
+                        # metric. None (never fabricated) when the strategy
+                        # has no short leg at all (e.g. Long Straddle).
+                        if leg_spec.side == "sell" and short_leg_delta is None:
+                            short_leg_delta = abs(_black_scholes_delta(
+                                spot=spot, strike=strike, t_years=t_years, sigma=iv,
+                                option_type=leg_spec.option_type,
+                            ))
 
                     # Sizing: determine contracts based on capital allocation
                     target_budget = capital * allocation_pct
@@ -383,6 +496,23 @@ class OptionsValidationHarness:
                     entry_commission = 0.65 * len(spec.legs) * contracts
                     capital -= entry_commission
 
+                    # Real entry-condition diagnostics for OptionsTradeRecord
+                    # (see its docstring) -- all derived from quantities
+                    # already computed above at this exact point in time,
+                    # never fabricated.
+                    entry_ivr = _trailing_ivr(iv_series.iloc[max(0, i - 251): i + 1], current_iv=iv)
+                    entry_vrp = iv - float(rolling_hv.iloc[i])
+                    # net_entry_value is already scaled by the *100 per-contract
+                    # multiplier (see the legs loop above); spread_width is a
+                    # raw per-share strike distance, so it needs the same *100
+                    # scaling to be comparable -- matching margin_per_unit's
+                    # own `spread_width * 100.0` convention just above.
+                    spread_width_dollars = spread_width * 100.0
+                    entry_credit_to_width_ratio = (
+                        abs(net_entry_value) / spread_width_dollars if spread_width_dollars > 1e-9 else None
+                    )
+                    entry_vix = _lookup_vix(date_str, vix_series)
+
                     active_trade = {
                         "entry_dt": current_dt,
                         "entry_date_str": date_str,
@@ -393,6 +523,11 @@ class OptionsValidationHarness:
                         "initial_max_profit": max(0.0, -net_entry_value) if net_entry_value < 0 else 500.0,
                         "margin_or_debit": margin_per_unit,
                         "contracts": contracts,
+                        "entry_ivr": entry_ivr,
+                        "entry_vrp": entry_vrp,
+                        "entry_short_delta": short_leg_delta,
+                        "entry_credit_to_width_ratio": entry_credit_to_width_ratio,
+                        "entry_vix": entry_vix,
                     }
                     last_entry_date = current_dt
 

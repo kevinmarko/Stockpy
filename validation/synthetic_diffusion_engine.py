@@ -1,6 +1,33 @@
 import numpy as np
 from typing import Dict, Tuple
 
+
+def build_return_windows(returns: np.ndarray, window_len: int, max_windows: int = 200) -> np.ndarray:
+    """
+    Builds overlapping windows of REAL historical returns for
+    ``train_diffusion_model``'s ``historical_data`` argument (closes audit
+    finding F7: this previously fed the model
+    ``np.random.randn(...) * volatility + drift`` -- fabricated Gaussian
+    noise, not real market data).
+
+    Uses the MOST RECENT ``max_windows`` windows when more are available
+    (most relevant to the current volatility regime); uses every available
+    window otherwise. Purely a windowing utility over an already-real,
+    already-ordered array -- introduces no lookahead of its own, since every
+    window is a contiguous slice of ``returns`` and never derives a value
+    from outside the array it's given.
+
+    Returns an ``(N, window_len)`` array; ``N == 0`` (never fabricated
+    padding) when ``returns`` is shorter than ``window_len``.
+    """
+    n_available = len(returns) - window_len + 1
+    if n_available <= 0:
+        return np.zeros((0, window_len))
+    n_windows = min(n_available, max_windows)
+    start = n_available - n_windows
+    return np.stack([returns[i: i + window_len] for i in range(start, start + n_windows)], axis=0)
+
+
 def train_diffusion_model(historical_data: np.ndarray, epochs: int = 1000, lr: float = 1e-2) -> Dict:
     """
     Train a score-based generative diffusion model on historical market paths.
