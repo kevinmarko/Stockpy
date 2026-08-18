@@ -109,7 +109,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from api._redact import install_redacting_exception_handler, redact_line
 
 from dotenv import load_dotenv as _load_dotenv
@@ -6563,31 +6563,48 @@ class MarketMakerTrainRequest(BaseModel):
     gamma_max: Optional[float] = Field(1.0, gt=0.0)
     kappa_min: Optional[float] = Field(0.5, gt=0.0)
     kappa_max: Optional[float] = Field(5.0, gt=0.0)
+    # No Field(gt=...) constraint deliberately: 0 is a legitimate RNG seed,
+    # and body.seed or 42 (below) would otherwise silently discard it -- see
+    # the model_validator, which also cross-checks the two bound pairs.
     seed: Optional[int] = 42
+
+    @model_validator(mode="after")
+    def _check_bounds_ordered(self) -> "MarketMakerTrainRequest":
+        # np.clip(value, a_min, a_max) does not raise when a_min > a_max --
+        # it silently returns a_max, collapsing the search to a degenerate
+        # fixed value with no indication the request was malformed. Catch it
+        # here instead of downstream inside train_market_maker_policy.
+        if self.gamma_min is not None and self.gamma_max is not None and self.gamma_min > self.gamma_max:
+            raise ValueError(f"gamma_min ({self.gamma_min}) must be <= gamma_max ({self.gamma_max})")
+        if self.kappa_min is not None and self.kappa_max is not None and self.kappa_min > self.kappa_max:
+            raise ValueError(f"kappa_min ({self.kappa_min}) must be <= kappa_max ({self.kappa_max})")
+        return self
 
 
 @app.post("/pilots/options/market-maker/train", dependencies=[Depends(require_read_token)])
 def post_market_maker_train(body: MarketMakerTrainRequest) -> Dict[str, Any]:
-    """Trains Avellaneda-Stoikov quoting policy parameters (gamma, kappa) via policy optimization."""
+    """Trains Avellaneda-Stoikov quoting policy parameters (gamma, kappa) via policy optimization.
+
+    NOTE -- synthetic data, not a real backtest: this endpoint never passes
+    ``env``/real price history to ``train_market_maker_policy``, so training
+    always runs against ``MarketMakingEnv``'s default synthetic random-walk
+    price path (config-driven sigma/drift), not actual market microstructure.
+    The reported ``best_sharpe``/``best_pnl`` reflect policy-parameter fit
+    quality on that synthetic path only, not a genuine backtest result --
+    see ``pilots/dispersion_trading.py``-style callers before treating this
+    as validated performance.
+    """
     from ml.drl_market_maker import train_market_maker_policy
     res = train_market_maker_policy(
         episodes=body.episodes or 50,
         learning_rate=body.learning_rate or 0.05,
         gamma_bounds=(body.gamma_min or 0.01, body.gamma_max or 1.0),
         kappa_bounds=(body.kappa_min or 0.5, body.kappa_max or 5.0),
-        seed=body.seed or 42,
+        seed=body.seed if body.seed is not None else 42,
     )
-    return res.to_dict() if hasattr(res, "to_dict") else {
-        "best_gamma": float(res.best_gamma),
-        "best_kappa": float(res.best_kappa),
-        "best_reward": float(res.best_reward),
-        "best_sharpe": float(res.best_sharpe),
-        "best_pnl": float(res.best_pnl),
-        "best_max_inventory": int(res.best_max_inventory),
-        "episodes_trained": int(res.episodes_trained),
-        "training_history": res.training_history,
-        "converged": bool(res.converged),
-    }
+    result = res.to_dict() if hasattr(res, "to_dict") else dict(res)
+    result["data_source"] = "synthetic"  # never a real backtest -- see docstring above
+    return result
 
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])

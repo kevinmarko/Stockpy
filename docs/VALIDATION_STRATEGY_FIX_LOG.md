@@ -832,5 +832,5 @@ Unlike directional trend or long/short cross-sectional strategies evaluated via 
    - **Adverse Selection Loss ($)**: $\sum \mathbb{I}(q_{t+1} \Delta S_{t+1} < 0) |q_{t+1} \Delta S_{t+1}|$
    - **Terminal Inventory**: $q_T \approx 0$
 2. **Policy Optimization Method**:
-   - Closed-form reservation price $R(s, q, t) = s - q \gamma \sigma^2 (T - t)$ paired with stochastic parameter tuning over $(\gamma, \kappa) \in [0.01, 10.0] \times [0.1, 20.0]$ via `train_market_maker_policy`.
+   - Closed-form reservation price $R(s, q, t) = s - q \gamma \sigma^2 (T - t)$ paired with stochastic parameter tuning via `train_market_maker_policy`, whose bounds are caller-configurable (`gamma_bounds`/`kappa_bounds`) rather than fixed. `train_market_maker_policy`'s own defaults are $(\gamma, \kappa) \in [0.01, 1.0] \times [0.5, 5.0]$ (corrected 2026-08-17 -- this entry previously stated $[0.01, 10.0] \times [0.1, 20.0]$, a range that does not match the defaults, the `POST /pilots/options/market-maker/train` endpoint's own Pydantic defaults, or `tests/test_drl_market_maker.py`'s $[0.01, 0.50] \times [0.5, 3.0]$ test range -- it was never actually run against any of them).
    - Exemption from standard daily-bar `STRATEGY_REGISTRY` backtesting is formally documented and covered by dedicated microstructure simulation tests (`tests/test_drl_market_maker.py`).

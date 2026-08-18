@@ -1957,6 +1957,98 @@ class TestMarketMakerSimulateEndpoint:
             )
         assert resp.status_code == 401
 
+
+# ---------------------------------------------------------------------------
+# 13b. POST /pilots/options/market-maker/train
+# ---------------------------------------------------------------------------
+
+
+class TestMarketMakerTrainEndpoint:
+    def test_post_market_maker_train_success_discloses_synthetic_data_source(self):
+        payload = {"episodes": 3}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/train",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "best_gamma" in body
+        assert "best_kappa" in body
+        assert "best_sharpe" in body
+        assert "best_pnl" in body
+        assert body["episodes_trained"] == 3
+        # Regression guard: the response must disclose that training ran
+        # against a synthetic random walk, not a real backtest -- this
+        # endpoint never plumbs real price history into
+        # train_market_maker_policy(). See its docstring.
+        assert body["data_source"] == "synthetic"
+
+    def test_post_market_maker_train_rejects_inverted_gamma_bounds(self):
+        """gamma_min > gamma_max used to silently pass Field(gt=0.0) on each
+        field individually and collapse np.clip to a degenerate fixed value
+        instead of erroring -- regression test for the added model_validator."""
+        payload = {"episodes": 2, "gamma_min": 0.5, "gamma_max": 0.01}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/train",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_post_market_maker_train_rejects_inverted_kappa_bounds(self):
+        payload = {"episodes": 2, "kappa_min": 5.0, "kappa_max": 0.5}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/train",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_post_market_maker_train_seed_zero_is_honored_not_discarded(self):
+        """Regression test for `seed=body.seed or 42`, which silently
+        discarded an explicit seed=0 (a legitimate RNG seed) because
+        `0 or 42` evaluates to 42 in Python."""
+        from unittest.mock import patch as _mock_patch
+        from ml.drl_market_maker import train_market_maker_policy as _real_train
+
+        captured = {}
+
+        def _fake_train(**kwargs):
+            captured.update(kwargs)
+            return _real_train(**kwargs)
+
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            with _mock_patch("ml.drl_market_maker.train_market_maker_policy", side_effect=_fake_train):
+                resp = _client.post(
+                    "/pilots/options/market-maker/train",
+                    json={"episodes": 2, "seed": 0},
+                    headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert captured.get("seed") == 0
+
+    def test_post_market_maker_train_no_token_fail_open(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.post(
+                "/pilots/options/market-maker/train",
+                json={"episodes": 2},
+            )
+        assert resp.status_code == 200
+
+    def test_post_market_maker_train_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/train",
+                json={"episodes": 2},
+                headers={"Authorization": "Bearer INVALID_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+
 def _synthetic_ai_forecast_bars(n: int = 750, base_price: float = 150.0, seed: int = 11) -> "pd.DataFrame":
     """A real-shaped (Open/High/Low/Close/Volume), sufficiently-long synthetic
     OHLCV panel for hermetically testing get_transformer_forecast/
