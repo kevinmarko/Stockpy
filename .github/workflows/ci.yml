@@ -108,9 +108,9 @@ jobs:
           path: |
             ${{ env.pythonLocation }}/bin
             ${{ env.pythonLocation }}/lib/python3.12/site-packages
-          key: python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+          key: python-install-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            python-install-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
@@ -199,9 +199,9 @@ jobs:
           path: |
             ${{ env.pythonLocation }}/bin
             ${{ env.pythonLocation }}/lib/python3.12/site-packages
-          key: python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+          key: python-install-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            python-install-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
@@ -325,9 +325,9 @@ jobs:
           path: |
             ${{ env.pythonLocation }}/bin
             ${{ env.pythonLocation }}/lib/python3.12/site-packages
-          key: python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+          key: python-install-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            python-install-v2-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
