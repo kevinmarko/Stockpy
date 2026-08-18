@@ -126,3 +126,15 @@ with evidence rather than assumed to help.
 See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
 [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
 full 12-strategy series this fix was part of.
+
+
+### 2026-08-17 Full Validation Run (`dividend_yield_edgar_pit`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.6188 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.0000 |
+| **Max Drawdown** | 44.56% |
+| **Deployable** | ❌ False |
+

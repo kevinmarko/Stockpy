@@ -141,3 +141,15 @@ A forward check through 2026-08-01 (~19 months more live data) gives DSR=0.99999
 the same conclusion. See
 [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s
 2026-08-17 entry for the full 5-strategy re-validation and methodology.
+
+
+### 2026-08-17 Full Validation Run (`cross_sectional_momentum`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.9491 |
+| **PBO** | 0.1111 |
+| **DSR** | 1.0000 |
+| **Max Drawdown** | 20.19% |
+| **Deployable** | ✅ True |
+

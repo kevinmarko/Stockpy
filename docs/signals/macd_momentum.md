@@ -82,3 +82,15 @@ intentional and validated by the strategy harness.
 - For MACD parameters, the 12/26/9 default is used. Changing these is not recommended
   without re-running the validation harness — the aroon chop filter was calibrated
   against the default MACD period settings.
+
+
+### 2026-08-17 Full Validation Run (`macd_trend`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.5119 |
+| **PBO** | 0.0222 |
+| **DSR** | 0.9783 |
+| **Max Drawdown** | 23.70% |
+| **Deployable** | ✅ True |
+

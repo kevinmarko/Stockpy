@@ -79,3 +79,15 @@ Validation via `validation.harness.StrategyValidationHarness` with Combinatorial
 | **Deployable** | `True` | **`True`** | ✅ PASS |
 
 *Notes:* Single literature-fixed specification (entry at $|Z| > 2.0$, stop at $|Z| > 4.0$, dynamic Kalman hedge ratio) structurally eliminates variant selection bias ($PBO = 0.0, DSR = 1.0$).
+
+
+### 2026-08-17 Full Validation Run (`pairs_trading`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | -0.8223 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.1912 |
+| **Max Drawdown** | 29.69% |
+| **Deployable** | ❌ False |
+

@@ -889,8 +889,6 @@ The sibling hardcoded-Long defect (item 5 above) is fully fixed and is not part 
 gap.
 
 
-
-
 ---
 
 ## 2026-08-18 (cont.): vol_mispricing Live Paper-Execution Endpoint — Enforced Override Gate
@@ -969,3 +967,43 @@ documented instructions). `tests/test_vol_mispricing.py` gained direct coverage 
 `execute_vol_mispricing_trade` (symbol validation, `is_live` refusal, dry-run preview,
 missing/empty-candidate refusal, the leg-translation worked example, and the no-fabrication
 refusal path).
+
+---
+
+## 2026-08-17: Full 28-Strategy Walk-Forward Validation Suite Run
+
+**[PLACEHOLDER -- being re-run against rebased main, see follow-up commit for final numbers]**
+
+**What was done**: Executed a full 28-strategy CPCV walk-forward validation suite via `python -m scripts.refresh_validations --workers 4 --json` to generate fresh HTML reports, history ledgers, and JSON summaries. 
+**Fix**: `scripts/refresh_validations.py` was updated to safely parse EDGAR PIT fundamental fields to handle occasional double-encoded or string-literal JSON to prevent a crash during `signal_replay_balanced_blend` backtesting.
+
+| Strategy | PBO | DSR | Sharpe | MaxDD | Deployable |
+|---|---|---|---|---|---|
+| aroon_trend | 0.0000 | 0.9995 | 0.6733 | 16.96% | ✅ True |
+| call_credit_spread | 0.0000 | 0.0001 | -0.0325 | 22.51% | ❌ False |
+| call_debit_spread | 0.0000 | 0.9506 | 0.3816 | 100.00% | ❌ False |
+| coppock_momentum | 0.1778 | 0.9952 | 0.6518 | 25.10% | ✅ True |
+| covered_call | 0.0000 | 0.0000 | -0.3124 | 10.83% | ❌ False |
+| cross_sectional_momentum | 0.1111 | 1.0000 | 0.9491 | 20.19% | ✅ True |
+| deep_value_edgar_pit | 0.0000 | 0.0000 | 0.5226 | 44.82% | ❌ False |
+| dividend_yield_edgar_pit | 0.0000 | 0.0000 | 0.6188 | 44.56% | ❌ False |
+| forecast_direction_arima_hw | 0.0000 | 0.8683 | 0.4821 | 32.82% | ❌ False |
+| garch_vol_target | 0.3333 | 0.9999 | 0.7869 | 18.76% | ✅ True |
+| lgbm_ranker | 0.0000 | 0.8598 | 5.1808 | 2.44% | ❌ False |
+| macd_trend | 0.0222 | 0.9783 | 0.5119 | 23.70% | ✅ True |
+| macro_regime_pit | 0.0000 | 1.0000 | 0.8359 | 14.76% | ✅ True |
+| multifactor_lowvol_size | 0.0000 | 1.0000 | 0.7321 | 21.14% | ✅ True |
+| options_flow_sentiment | 0.1111 | 0.9063 | 0.2311 | 27.72% | ❌ False |
+| pairs_trading | 0.0000 | 0.1912 | -0.8223 | 29.69% | ❌ False |
+| put_credit_spread | 0.0000 | 0.0008 | -0.4459 | 72.16% | ❌ False |
+| put_debit_spread | 0.0000 | 0.0000 | -0.3989 | 100.02% | ❌ False |
+| relative_strength_xsec | 0.0000 | 1.0000 | 0.8093 | 21.31% | ✅ True |
+| rsi14_extremes | 0.0000 | 0.9560 | 0.2961 | 28.71% | ❌ False |
+| rsi2_mean_reversion | 0.0000 | 0.9978 | 0.5911 | 17.12% | ✅ True |
+| sector_quality_rank | 0.0000 | 0.0000 | 0.9555 | 28.37% | ❌ False |
+| signal_replay_balanced_blend | 0.0000 | 1.0000 | 0.8371 | 19.90% | ✅ True |
+| sortino_drawdown | 0.0889 | 0.9846 | 0.7048 | 26.61% | ✅ True |
+| timeseries_momentum | 0.0000 | 0.9934 | 0.5292 | 25.95% | ✅ True |
+| value_quality_edgar_pit | 0.0000 | 0.0000 | 0.5539 | 43.60% | ❌ False |
+| vol_mispricing | 0.0000 | 0.4966 | -0.0369 | 100.00% | ❌ False |
+| vrp_premium_selling | 0.0000 | 0.0000 | 0.2172 | 17.92% | ❌ False |

@@ -109,3 +109,15 @@ to clear the Sharpe, PBO, DSR, and MaxDD deployability gates net of transaction 
 Wilder 30/70 thresholds.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
+
+
+### 2026-08-17 Full Validation Run (`rsi14_extremes`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.2961 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9560 |
+| **Max Drawdown** | 28.71% |
+| **Deployable** | ❌ False |
+

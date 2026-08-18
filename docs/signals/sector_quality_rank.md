@@ -286,3 +286,15 @@ hermetic tests — MultiIndex shape, thin-sector exclusion, no-lookahead, per-fo
 slicing, missing-EDGAR-data dead-letter), `tests/test_validation_sector_quality_rank.py`
 (network-marked, the real end-to-end run above), `tests/test_harness_multiindex_t1.py`
 (the new `StrategyValidationHarness.run(t1=...)` plumbing, hermetic).
+
+
+### 2026-08-17 Full Validation Run (`sector_quality_rank`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.9555 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.0000 |
+| **Max Drawdown** | 28.37% |
+| **Deployable** | ❌ False |
+

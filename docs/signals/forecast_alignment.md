@@ -124,3 +124,15 @@ losses during market downturns, improving net Sharpe from −0.128 to 0.562 and 
 achieving full deployability without modifying the underlying forecasting math or violating point-in-time constraints.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
+
+
+### 2026-08-17 Full Validation Run (`forecast_direction_arima_hw`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.4821 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.8683 |
+| **Max Drawdown** | 32.82% |
+| **Deployable** | ❌ False |
+

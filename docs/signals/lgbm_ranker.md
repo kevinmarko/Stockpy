@@ -162,3 +162,15 @@ fabricated; a future re-run with multiple hyperparameter candidates, the full un
 and/or real point-in-time fundamentals could plausibly move this result but was not performed
 here — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08 entry for the full writeup and
 `tests/test_validation_lgbm_ranker_registry.py` for the adapter's own regression coverage.
+
+
+### 2026-08-17 Full Validation Run (`lgbm_ranker`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 5.1808 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.8598 |
+| **Max Drawdown** | 2.44% |
+| **Deployable** | ❌ False |
+

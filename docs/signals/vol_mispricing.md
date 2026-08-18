@@ -118,3 +118,18 @@ section previously left open between "document only" and "build with an enforced
   Crush"` in every call regardless of caller — now controllable via the new `strategy_name=`
   parameter (default `None` preserves the exact historical `"Earnings Crush"` behavior for every
   pre-existing caller).
+
+### 2026-08-17 Full Validation Run (`vol_mispricing`)
+
+**[PLACEHOLDER -- being re-run against rebased main, see follow-up commit for final numbers.
+The prior run below disagrees with the Sharpe -0.499/DSR 0.027 cited in "Live Paper-Execution
+Status" above; this needs reconciling against a fresh run before being trusted, not silently
+carried forward.]**
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | -0.0369 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.4966 |
+| **Max Drawdown** | 100.00% |
+| **Deployable** | ❌ False |

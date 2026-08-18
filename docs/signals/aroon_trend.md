@@ -111,3 +111,15 @@ The strategy is registered in `scripts/refresh_validations.py` as `STRATEGY_REGI
 | **Deployable** | `True` | **`True`** | ✅ PASS |
 
 *Notes:* By employing a single literature-standard specification (25-day lookback, SMA-200 trend gate), the adapter structurally eliminates multi-hypothesis selection bias ($PBO = 0.0, DSR = 1.0$) while the SMA-200 trend filter caps max drawdown during market downturns.
+
+
+### 2026-08-17 Full Validation Run (`aroon_trend`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.6733 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9995 |
+| **Max Drawdown** | 16.96% |
+| **Deployable** | ✅ True |
+
