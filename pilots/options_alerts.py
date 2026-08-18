@@ -655,11 +655,16 @@ def dispatch_risk_limit_alert(
     Parameters
     ----------
     breach:
-        Risk limit breach dictionary or object.
+        Risk limit breach dictionary or object. Unlike `dispatch_delta_hedge_alert`'s
+        `preview` (a raw computation the caller may or may not act on), a `breach`
+        argument here means the caller has already determined the limit was
+        exceeded -- there is no internal qualifying threshold to bypass.
     webhook_url:
         Optional direct webhook override or `settings.OPTIONS_ALERT_WEBHOOK_URL`.
     force:
-        If True, dispatches regardless of evaluation.
+        Unused. Kept for signature symmetry with the other `dispatch_*_alert`
+        functions in this module; a risk limit breach always dispatches once
+        `breach` is non-None, so there is nothing for `force` to override.
 
     Returns
     -------

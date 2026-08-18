@@ -207,6 +207,19 @@ class Settings(BaseSettings):
         "docs/architecture/execution.md's 'Future extension point — automated "
         "Robinhood execution (not implemented)' section.",
     )
+    MULTI_BROKER_GATEWAY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, broker_live_execution_mcp.py::_get_broker() routes live-order "
+            "MCP calls through execution.multi_broker_gateway.MultiBrokerGateway "
+            "(health monitoring, latency tracking, automated circuit-breaker "
+            "failover across the configured broker adapters) instead of "
+            "execution.broker_selection.resolve_broker_backend()'s single-broker "
+            "resolution. False (default) preserves today's exact single-broker "
+            "behavior; falls back to resolve_broker_backend() if the gateway has "
+            "no active adapter or raises."
+        ),
+    )
     PAPER_BROKER_WRITES_ENABLED: bool = Field(
         default=True,
         description="Gates POST /pilots/paper-broker/reset endpoint. If False, resets are blocked."
