@@ -905,6 +905,8 @@ def _write_state_snapshot(
             # display live recession-indicator telemetry without a live FRED call.
             "sahm_rule": float(macro_raw.get("SAHMREALTIME", 0.0) or 0.0),
             "high_yield_oas": float(macro_raw.get("BAMLH0A0HYM2", 0.0) or 0.0),
+            "hmm_risk_on_probability": _safe_float_or_none(macro_raw.get("HMM_Risk_On_Probability")),
+            "hmm_regime_state": str(macro_raw.get("HMM_Regime_State")).strip() or None if pd.notna(macro_raw.get("HMM_Regime_State")) else None,
             # Live MacroEconomicDTO.killSwitch verdict, passed in by the caller
             # -- never reconstructed from macro_raw here (see this function's
             # docstring). None (never a fabricated False) when the caller had

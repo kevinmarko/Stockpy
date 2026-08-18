@@ -193,7 +193,10 @@ class OptionsAnalysisStep(PipelineStep):
         sahm_val = me.calculate_sahm_rule()
         macro_data = me.run_macro_killswitch(ctx.macro_raw, sahm_val)
         
-        hmm_risk_on_probability = me.compute_hmm_risk_on_probability(ctx.tech_raw.get('SPY'))
+        hmm_result = me.compute_hmm_risk_on_probability(ctx.tech_raw.get('SPY'))
+        hmm_risk_on_probability = hmm_result["risk_on_probability"] if hmm_result else None
+        hmm_regime_state = hmm_result["regime_state_label"] if hmm_result else None
+        
         ctx.macro_dto = MacroEconomicDTO(
             yield_curve_10y_2y=float(ctx.macro_raw.get('T10Y2Y', 0.5)),
             high_yield_oas=float(ctx.macro_raw.get('BAMLH0A0HYM2', 3.5)),
@@ -202,6 +205,7 @@ class OptionsAnalysisStep(PipelineStep):
             vix_value=float(ctx.macro_raw.get('VIXCLS', 15.0)),
             sahm_rule_indicator=sahm_val,
             hmm_risk_on_probability=hmm_risk_on_probability,
+            hmm_regime_state=hmm_regime_state,
         )
 
         # Technical Options Analysis
