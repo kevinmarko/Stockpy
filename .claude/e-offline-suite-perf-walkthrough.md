@@ -84,3 +84,36 @@ as a fourth member of the group.
 | Drop `--cov-report=term-missing` | 5–15 s (300+ file table) |
 | `--durations=50` → `--durations=10` | ~1 s (minor) |
 | `xdist_group` on `test_settings_keysets.py` | Prevents duplicate class-fixture setup across workers |
+
+## Follow-on: cache the installed virtualenv (2026-08-18, same day)
+
+After the above merged (PR #796), real timing data from two live CI runs
+showed the **`Install dependencies` step now dominates the `test` job's
+wall-clock time** — consistently ~70–80s in every job that installs the
+full `requirements.txt` (`test`, `test-slow`, `security`), even though
+`actions/setup-python`'s `cache: pip` was already warm. That cache layer
+only speeds up *downloading* wheels; it does nothing for the cost of
+unpacking/linking ~500+ MB of compiled packages (lightgbm, scipy,
+statsmodels, scikit-learn, prophet's bundled cmdstan, pyarrow, ...) into
+site-packages on every run.
+
+**Fix:** each of the three heavy-install jobs now creates its Python
+environment as an explicit `.venv` and caches that directory via
+`actions/cache@v4`, keyed on `hashFiles('requirements.txt')`. All three jobs
+share the same cache key and a `restore-keys` fallback, so:
+- **Cache hit** (requirements.txt unchanged since last run): venv creation
+  is skipped, and `pip install -r requirements.txt` is a fast up-to-date
+  check instead of a full install — collapses ~75s down to a few seconds.
+- **Partial hit** (requirements.txt changed, restore-keys fallback):
+  most packages are already present; pip only installs what actually
+  changed.
+- **Cold cache** (first run, or cache evicted): behaves exactly like
+  today — full fresh install, no regression.
+
+Every later step in each job (`ruff`, `pytest`, `pip-audit`) calls plain
+`python`/`pip` unprefixed; the venv's `bin/` directory is prepended to
+`$GITHUB_PATH` right after install so those calls resolve unchanged.
+
+This was NOT applied to the `webapp` job (npm install is already ~7s with
+a warm `cache: npm`) or `bandit` (installs only the `bandit` package
+itself, ~2–3s) — neither has meaningful room left to cut.

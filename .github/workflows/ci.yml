@@ -23,6 +23,13 @@ name: CI
 # (.github/workflows/codeql.yml) and its GitHub code-scanning API dependency
 # — see docs/known_issues/codeql_advanced_outage_and_bandit_addition.md for
 # why. It reports via plain exit code, never uploads SARIF anywhere.
+#
+# `test`, `test-slow`, and `security` each cache their fully-INSTALLED
+# virtualenv (`.venv`, keyed on a hash of requirements.txt), not just pip's
+# download cache -- see the `test` job's "Cache virtualenv" step for the full
+# rationale. All three jobs share the same cache key, so whichever finishes
+# installing first on a cold cache primes it for the other two on their next
+# run.
 
 on:
   push:
@@ -50,10 +57,39 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      # Caches the fully-INSTALLED virtualenv, not just pip's download cache
+      # (setup-python's `cache: pip` above already covers that layer). The
+      # ~500+ MB of compiled wheels this project depends on (lightgbm, scipy,
+      # statsmodels, scikit-learn, prophet's bundled cmdstan, pyarrow, ...)
+      # still cost ~70-80s to unpack/link on every run even with a warm
+      # download cache -- that unpack cost is what this second cache layer
+      # removes. restore-keys falls back to the most recent venv for this OS
+      # even when requirements.txt changed, so a routine dependency bump only
+      # pays the install cost for the packages that actually changed, not a
+      # full rebuild.
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py312-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py312-
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Skip venv creation if one was restored from cache (a fresh
+          # `python -m venv` on a non-empty target is unnecessary, not
+          # harmful, but this avoids depending on that behavior).
+          if [ ! -f .venv/pyvenv.cfg ]; then
+            python -m venv .venv
+          fi
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          # Every later step in this job calls plain `python`/`pip`/`ruff`/
+          # `pytest` -- putting the venv's bin dir first on PATH means those
+          # calls resolve here with zero changes to the commands below.
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint (ruff)
         run: |
@@ -127,10 +163,25 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      # See the `test` job's "Cache virtualenv" step above for the full
+      # rationale (caches the installed venv, not just pip's download cache).
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py312-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py312-
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ ! -f .venv/pyvenv.cfg ]; then
+            python -m venv .venv
+          fi
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run slow-marked test suite
         run: |
@@ -238,10 +289,24 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      # See the `test` job's "Cache virtualenv" step for the full rationale.
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py312-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py312-
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ ! -f .venv/pyvenv.cfg ]; then
+            python -m venv .venv
+          fi
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Dependency vulnerability audit (pip-audit)
         run: |
