@@ -6229,13 +6229,15 @@ class TestDiffusionStressTest:
 
 
 # ---------------------------------------------------------------------------
-# vol_mispricing has no live paper-execute path (explicit, documented decision
-# -- see docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
+# vol_mispricing HAS a live paper-execute path as of 2026-08-18 (`POST
+# /pilots/options/mispricing/execute`) -- but unlike earnings_crush/
+# dispersion_trading/zero_dte_engine (each an UNGATEABLE_DATA_GAP whose
+# gate_status is surfaced but never blocks), vol_mispricing is a MEASURED
+# deployability failure, so the endpoint BLOCKS execution by default and only
+# proceeds when the request explicitly sets override_deployability_gate=True.
+# See docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
 # and the comment above OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in
-# api/pilots_api.py). pilots/vol_mispricing.py has scan/evaluate functions
-# only (evaluate_strike_mispricing, build_candidate_strategy_trades) and no
-# execute_* function / PaperAccountStore import; its only route is the
-# read-only GET /pilots/options/forecast/mispricing.
+# api/pilots_api.py.
 # ---------------------------------------------------------------------------
 
 
@@ -6259,18 +6261,132 @@ def _all_pilots_api_route_paths_and_methods(app) -> set:
     return pairs
 
 
-def test_vol_mispricing_has_no_paper_execute_endpoint():
-    """Regression guard for vol_mispricing's documented informational-only
-    deployability-gate status: no POST route whose path contains both
-    'mispricing' and 'execute' exists on the Pilots API. If this ever
-    fails, a live execute endpoint was added for vol_mispricing -- update
-    docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
-    and wire OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] into its
-    response (matching earnings_crush/dispersion_trading/zero_dte_engine)
-    instead of deleting this test."""
-    offending = [
-        (path, method)
-        for path, method in _all_pilots_api_route_paths_and_methods(pilots_api.app)
-        if method == "POST" and "mispricing" in path and "execute" in path
-    ]
-    assert offending == []
+def test_vol_mispricing_has_a_paper_execute_endpoint():
+    """`POST /pilots/options/mispricing/execute` exists (superseding the prior
+    "no execute endpoint" regression guard now that this closes
+    docs/VALIDATION_STRATEGY_FIX_LOG.md's follow-up decision to build a
+    gated execute path for vol_mispricing rather than leave it
+    documentation-only)."""
+    pairs = _all_pilots_api_route_paths_and_methods(pilots_api.app)
+    assert ("/pilots/options/mispricing/execute", "POST") in pairs
+
+
+_VOL_MISPRICING_CANDIDATE = {
+    "strategy_type": "bull_put_spread",
+    "name": "Bull Put Credit Spread ($185.00/$190.00P)",
+    "legs": [
+        {
+            "symbol": "AAPL 2026-09-18 $190.00 PUT",
+            "action": "sell",
+            "type": "PUT",
+            "strike": 190.0,
+            "expiration": "2026-09-18",
+            "unit_price": 2.50,
+        },
+        {
+            "symbol": "AAPL 2026-09-18 $185.00 PUT",
+            "action": "buy",
+            "type": "PUT",
+            "strike": 185.0,
+            "expiration": "2026-09-18",
+            "unit_price": 1.00,
+        },
+    ],
+}
+
+
+class TestVolMispricingExecuteDeployabilityGate:
+    """POST /pilots/options/mispricing/execute is blocked-by-default (MEASURED_FAIL
+    deployability gate) and only proceeds with an explicit per-request override."""
+
+    def test_blocked_without_override_never_executes_a_trade(self):
+        """Without override_deployability_gate, the endpoint refuses -- and never
+        even calls execute_vol_mispricing_trade (no PaperAccountStore write)."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True), \
+             mock.patch("pilots.vol_mispricing.execute_vol_mispricing_trade") as mock_exec:
+            resp = client.post(
+                "/pilots/options/mispricing/execute",
+                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["blocked"] is True
+        mock_exec.assert_not_called()
+
+    def test_override_true_with_dry_run_proceeds_to_dry_run_path(self):
+        """override_deployability_gate=True does not block; dry_run=True reaches
+        the real execute_vol_mispricing_trade dry-run preview path (no fill)."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+            resp = client.post(
+                "/pilots/options/mispricing/execute",
+                json={
+                    "symbol": "AAPL",
+                    "candidate": _VOL_MISPRICING_CANDIDATE,
+                    "dry_run": True,
+                    "override_deployability_gate": True,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("blocked") is not True
+        assert body["ok"] is True
+        assert body["dry_run"] is True
+        assert body["override_applied"] is True
+
+    def test_response_always_includes_real_gate_status_blocked(self):
+        expected_gate = pilots_api.OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+            resp = client.post(
+                "/pilots/options/mispricing/execute",
+                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        body = resp.json()
+        assert body["gate_status"] == expected_gate
+        assert expected_gate["deployable"] is False
+        assert expected_gate["gate_status"] == "MEASURED_FAIL"
+        assert "-0.499" in expected_gate["reason"]
+        assert "0.027" in expected_gate["reason"]
+
+    def test_response_always_includes_real_gate_status_overridden(self):
+        expected_gate = pilots_api.OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+            resp = client.post(
+                "/pilots/options/mispricing/execute",
+                json={
+                    "symbol": "AAPL",
+                    "candidate": _VOL_MISPRICING_CANDIDATE,
+                    "dry_run": True,
+                    "override_deployability_gate": True,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        body = resp.json()
+        assert body["gate_status"] == expected_gate
+
+    def test_fails_closed_when_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", False):
+            resp = client.post(
+                "/pilots/options/mispricing/execute",
+                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_fails_closed_with_wrong_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
+            resp = client.post(
+                "/pilots/options/mispricing/execute",
+                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401

@@ -890,3 +890,82 @@ gap.
 
 
 
+
+---
+
+## 2026-08-18 (cont.): vol_mispricing Live Paper-Execution Endpoint — Enforced Override Gate
+
+Closes the decision the 2026-08-18 "Runtime Wiring Follow-Up & Doc-Drift Correction" entry above
+(item 4) explicitly left open: `vol_mispricing` previously had `OPTIONS_DESK_DEPLOYABILITY_GATES`
+data but no live consumer, by deliberate choice, since it is a **measured** deployability failure
+(Sharpe -0.499, DSR 0.027, fails the Oct-2008 stress window) rather than an unmeasurable data gap
+like its three siblings (`earnings_crush`, `dispersion_trading`, `zero_dte_engine`, each
+`UNGATEABLE_DATA_GAP`). This entry documents the follow-up decision to build the execute path
+anyway, gated so the measured failure cannot be silently reached.
+
+**Design**: `POST /pilots/options/mispricing/execute` (new, `api/pilots_api.py`) checks
+`OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]["gate_status"] == "MEASURED_FAIL"` before
+calling `pilots.vol_mispricing.execute_vol_mispricing_trade`. If the gate is failing and the
+request body does not set `override_deployability_gate: true`, the endpoint returns
+`{"ok": False, "blocked": True, "gate_status": {...}}` and never calls the execution path (no
+`PaperAccountStore` write). Setting `override_deployability_gate: true` is a deliberate,
+**per-request** bypass — there is no settings flag anywhere that disables this check globally,
+and every response (blocked or not) echoes the real `gate_status` plus whether an override was
+applied, so the caller can never be surprised about which mode ran.
+
+**New execution primitive**: `pilots/vol_mispricing.py::execute_vol_mispricing_trade` executes a
+single caller-selected candidate trade (one element of `build_candidate_strategy_trades()`'s
+output — the caller must explicitly choose the candidate; the endpoint never silently picks "the
+best" one). It reuses `execution/options_paper_executor.py::OptionsPaperExecutor
+.execute_earnings_crush_trade` as the shared multi-leg fill primitive rather than duplicating
+`apply_multi_leg_fill`/collateral-calculation logic.
+
+**Leg price translation ($/share → $/contract), the one place a units error would be a genuine
+financial-correctness bug**: `_create_strategy_leg` produces `unit_price` as a per-share premium
+(e.g. `$2.50`); one option contract is 100 shares, so `fill_price = unit_price * 100.0`. Verified
+with a hand-computed worked example in `tests/test_vol_mispricing.py`
+(`test_execute_vol_mispricing_trade_leg_price_translation_dollar_per_share_to_dollar_per_contract`):
+a $190 short PUT at $2.50/share and a $185 long PUT at $1.00/share, 2 contracts, commission
+$0.65 × 2 contracts × 2 legs = $2.60 → `net_cash_impact = (250.00×2 − 100.00×2) − 2.60 = $297.40`,
+asserted exactly and confirmed against the real `PaperAccountStore` cash delta after the fill.
+
+**Two latent bugs fixed in the shared executor as a prerequisite**, both in
+`execution/options_paper_executor.py::OptionsPaperExecutor.execute_earnings_crush_trade`:
+
+1. **CONSTRAINT #4 fabrication bug**: a leg with no resolvable `fill_price`/`raw_price` was
+   silently assigned a fabricated `raw_price = 1.50` / `fill_price = 150.0` sentinel instead of
+   refusing the trade — the same bug class already fixed this session in
+   `pilots/zero_dte_engine.py::execute_0dte_trade`'s old `$1.50` fallback. Fixed: an unpriced leg
+   is now skipped and its reason accumulated; if any leg ends up unpriced, the whole trade is
+   refused (`{"success": False, "reason": "..."}`) before ever calling `apply_multi_leg_fill`,
+   matching the function's existing `if not parsed_legs: return {"success": False, ...}` pattern.
+   Regression: `tests/test_options_paper_executor.py::test_execute_earnings_crush_trade_never_fabricates_price`,
+   `tests/test_vol_mispricing.py::test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly`.
+2. **Hardcoded `strategy_name` mislabeling**: the function computed a real per-candidate
+   `strategy = str(candidate.get("strategy") or "Earnings Crush")` local variable but never
+   actually used it — `apply_multi_leg_fill(...)` hardcoded `strategy_name="Earnings Crush"`
+   regardless, so any caller passing a different `candidate["strategy"]` (or, as of this PR, a
+   different pilot module entirely) would have every trade mislabeled "Earnings Crush" in the
+   paper-broker blotter. Fixed via a new `strategy_name: Optional[str] = None` parameter — `None`
+   (the default) preserves the exact historical always-"Earnings Crush" behavior for every
+   pre-existing caller (verified against `tests/test_options_lifecycle.py`'s existing coverage,
+   unchanged); an explicit value (e.g. `"Vol Mispricing"`) overrides it in both the returned
+   `res["strategy"]` field and the parent order's blotter label. Regression:
+   `tests/test_options_paper_executor.py::test_execute_earnings_crush_trade_default_strategy_name_is_unchanged`,
+   `::test_execute_earnings_crush_trade_explicit_strategy_name_overrides_label`.
+
+**Documentation**: `docs/signals/vol_mispricing.md`'s "Live Paper-Execution Status" section
+rewritten to describe the new gated endpoint (previously stated "no live paper-execution path —
+an explicit, considered decision"). `CLAUDE.md`/`AGENTS.md`'s options-desk summary bullet
+corrected to match (no longer states vol_mispricing "has no live execute path at all").
+
+**Test coverage**: `tests/test_pilots_api.py::TestVolMispricingExecuteDeployabilityGate` (blocked
+without override, and — the load-bearing assertion — `execute_vol_mispricing_trade` is never
+even called in that path; proceeds to the dry-run path with override; `gate_status` always
+echoed with the real Sharpe/DSR numbers; fails closed on writes-disabled and wrong-token) plus
+`tests/test_pilots_api.py::test_vol_mispricing_has_a_paper_execute_endpoint` (supersedes the
+prior `test_vol_mispricing_has_no_paper_execute_endpoint` regression guard, per that test's own
+documented instructions). `tests/test_vol_mispricing.py` gained direct coverage of
+`execute_vol_mispricing_trade` (symbol validation, `is_live` refusal, dry-run preview,
+missing/empty-candidate refusal, the leg-translation worked example, and the no-fabrication
+refusal path).

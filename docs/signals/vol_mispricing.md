@@ -75,21 +75,46 @@ registry fix history and the `.claude/giant_master_plan_audit.md` F4 finding thi
 
 ## Live Paper-Execution Status
 
-Unlike `earnings_crush`, `dispersion_trading`, and `zero_dte_engine`, `pilots/vol_mispricing.py`
-has **no live paper-execution path** — an explicit, considered decision, not an oversight.
+As of 2026-08-18, `pilots/vol_mispricing.py` has a live paper-execution path — but unlike
+`earnings_crush`, `dispersion_trading`, and `zero_dte_engine` (each an `UNGATEABLE_DATA_GAP`
+whose deployability gate is surfaced for transparency but never blocks execution),
+`vol_mispricing` is a **MEASURED** deployability failure (Sharpe -0.499, DSR 0.027, fails the
+Oct-2008 stress window — see the Backtest Validation section above), so its execute endpoint is
+**blocked by default** and only proceeds on an explicit, per-request override. This was a
+deliberate, considered design choice, not an oversight, and closes out the decision this
+section previously left open between "document only" and "build with an enforced gate."
 
-- It has no `execute_*` function and no `PaperAccountStore` import anywhere in the module. Its
-  `__all__` exposes scan/evaluate surfaces only (`evaluate_strike_mispricing`,
-  `build_candidate_strategy_trades`, `get_volatility_mispricing_data`, etc.) — it identifies and
-  classifies mispriced strikes and constructs candidate multi-leg trade objects, but never
-  submits an order.
-- Its only API surface is the read-only `GET /pilots/options/forecast/mispricing` endpoint. There
-  is no `POST .../execute` route for this module anywhere in `api/pilots_api.py`.
-- `OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]` in `api/pilots_api.py` therefore has **no
-  live consumer today** — unlike its three sibling entries (`earnings_crush`,
-  `dispersion_trading`, `zero_dte_engine`), which each get stamped onto their own
-  `POST .../execute` response as `gate_status`. It is kept as an informational record matching
-  this doc's own measured `deployable=False` result above, not a runtime-enforced gate.
-- If a live execute path is ever added for `vol_mispricing`, it should read
-  `OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]` the same way the other three pilots
-  already do, rather than re-deriving the PBO/DSR/Sharpe/MaxDD numbers.
+- `pilots/vol_mispricing.py::execute_vol_mispricing_trade(symbol, *, candidate, contracts=1,
+  dry_run=False, is_live=False)` executes a single, caller-selected candidate trade (one element
+  of `build_candidate_strategy_trades()`'s output — the caller must explicitly choose which
+  trade, this function never silently picks "the best" one). It validates the symbol, refuses in
+  `is_live=True` mode (this platform never routes live options orders), returns a dry-run preview
+  when `dry_run=True`, and otherwise reuses the shared
+  `execution.options_paper_executor.OptionsPaperExecutor.execute_earnings_crush_trade` multi-leg
+  fill primitive (now generalized via its new `strategy_name=` parameter, so the paper-broker
+  blotter correctly labels these trades `"Vol Mispricing"` instead of the executor's old
+  hardcoded `"Earnings Crush"` default) to submit an atomic multi-leg fill into
+  `PaperAccountStore`. `__all__` now includes `execute_vol_mispricing_trade`.
+- **Leg price translation ($/share → $/contract)**: `_create_strategy_leg` produces
+  `unit_price` as a per-share option premium (e.g. `2.50`); the paper executor expects
+  `fill_price` as a per-contract dollar amount. Since one contract represents 100 shares,
+  `fill_price = unit_price * 100.0`. A leg with no resolvable `unit_price` is left unpriced
+  rather than assigned a fabricated price — the shared executor's own `CONSTRAINT #4` guard (see
+  below) refuses the whole trade if any leg ends up unpriced.
+- The new route is `POST /pilots/options/mispricing/execute` in `api/pilots_api.py`, gated the
+  same way as its three siblings (`require_command_token` + `require_paper_broker_writes_enabled`)
+  **plus** an enforced deployability check: `OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]`'s
+  `gate_status == "MEASURED_FAIL"` blocks the request (`{"ok": False, "blocked": True, ...}`,
+  `gate_status` always echoed so the caller sees exactly why) unless the request body sets
+  `override_deployability_gate: true`. This is a **per-request** override only — there is no
+  standing settings flag that disables the gate globally, and the override is always visible in
+  the response (`override_applied`), never silent.
+- Two latent bugs in the shared `execute_earnings_crush_trade` executor were fixed as a
+  prerequisite for reusing it safely here (both in `execution/options_paper_executor.py`):
+  (1) a `CONSTRAINT #4` violation where a leg with no resolvable `fill_price`/`raw_price` was
+  silently assigned a fabricated `$1.50`/`$150.00` sentinel instead of refusing the trade — now
+  fixed to refuse the whole trade honestly instead; (2) the function computed a real
+  per-candidate `strategy` label but never actually used it, hardcoding `strategy_name="Earnings
+  Crush"` in every call regardless of caller — now controllable via the new `strategy_name=`
+  parameter (default `None` preserves the exact historical `"Earnings Crush"` behavior for every
+  pre-existing caller).
