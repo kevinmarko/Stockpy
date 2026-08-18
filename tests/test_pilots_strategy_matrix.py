@@ -600,7 +600,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "har_volatility":
         allowed = allowed | {"data", "datetime", "numpy", "pandas", "scipy"}
     if module_name == "vol_mispricing":
-        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "scipy"}
+        # execute_vol_mispricing_trade (2026-08-18) added a lazy, function-scoped
+        # `from execution.options_paper_executor import OptionsPaperExecutor` --
+        # same shared multi-leg paper-broker executor already allowed for
+        # earnings_crush/dispersion_trading/zero_dte_engine above -- plus a
+        # module-top `import uuid` for the fallback order_id, matching those
+        # same three siblings' precedent exactly.
+        allowed = allowed | {"data", "dataclasses", "datetime", "execution", "numpy", "pandas", "pilots", "scipy", "uuid"}
     if module_name == "gamma_scalper":
         allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
     if module_name == "dispersion_trading":
