@@ -111,36 +111,31 @@ options-selling risk, not a duplicate of the general macro penalty.
 
 ---
 
-## Backtest Validation (`STRATEGY_REGISTRY["vrp_premium_selling"]`, 2026-08)
-
-## Backtest Validation (`STRATEGY_REGISTRY["vrp_premium_selling"]`, 2026-08)
+## Backtest Validation (`STRATEGY_REGISTRY["vrp_premium_selling"]`, 2026-08-15)
 
 The `vrp_premium_selling` adapter (`scripts/refresh_validations.py::_build_vrp_premium_selling_adapter` /
 `validation/options_selling_backtest.py`) implements a synthetic VRP Iron Condor premium-selling backtest
-with Black-Scholes daily mark-to-market and real macro gating.
-
-**Phase 3 Optimizations (2026-08):**
-1. **Trend-Aware Strike-Side Reclassification (SMA-50):** The recommender's `trend_bias` (previously hardcoded
-   `'Neutral'`) is now derived each cycle from the underlying's own trailing 50-day SMA (a +/-1% band around
-   `SMA(50)` → Bullish/Bearish/Neutral), not a fixed `SPY > SMA-200` gate. This changes WHICH side is sold in a
-   bearish regime (a Call Credit Spread instead of a Put Credit Spread) — it does not block premium selling
-   during a downtrend the way an earlier draft of this entry described.
-2. **Tightened Stop-Loss Multiple (1.0x Credit):** Reduced `STOP_LOSS_CREDIT_MULTIPLE` from 2.0x to 1.0x,
-   ensuring any adverse intraday or trending move is halted before accumulating large drawdowns.
-3. **Stress Gate Verification:** Evaluated across all four dated shock windows (`OCT_2008`, `FEB_2018`,
-   `MAR_2020`, `AUG_2024`) in `validation/stress_scenarios.py`, passing with 0% drawdown and 100% account survival.
+with Black-Scholes daily mark-to-market and real macro gating, walk-forward validated across the full
+options backfill (2005-present) as part of the 2026-08-15 multi-strategy validation pass.
 
 | Metric | Value | Gate | Result |
 |---|---|---|---|
-| Sharpe | **0.612** | > 0.50 | ✅ PASS |
-| PBO | **0.000** | < 0.50 | ✅ PASS (single specification) |
-| DSR | **1.000** | > 0.95 | ✅ PASS |
-| MaxDD | **4.8%** | < 30% | ✅ PASS |
-| Stress gate (4 shock windows) | **PASS** (100% survival, <50% DD) | must pass | ✅ PASS |
-| `deployable` | **True** | | ✅ **DEPLOYABLE** |
+| Sharpe | **0.217** | > 0.50 | ❌ FAIL |
+| PBO | **0.000** | < 0.50 | ✅ PASS |
+| DSR | **0.000** | > 0.95 | ❌ FAIL |
+| MaxDD | **17.9%** | < 30% | ✅ PASS |
+| Stress gate (4 shock windows) | **PASS** (100% survival) | must pass | ✅ PASS |
+| `deployable` | **False** | | ❌ **NOT DEPLOYABLE** (full-window macro regime gating) |
 
-**Verdict:** The combination of Faber SMA-200 market trend filtering (preventing premium selling into bear markets)
-and a disciplined 1.0x credit stop-loss eliminates the tail loss of the 2022 bear market while preserving premium
-harvesting during healthy volatility expansions in bull markets, bringing `vrp_premium_selling` to `deployable=True`.
+**Verdict:** `vrp_premium_selling` clears PBO, MaxDD, and the mandatory options-selling tail-stress gate
+(100% account survival across all four dated shock windows), but its full-window Sharpe (0.217) and DSR
+(0.000) both fall well short of the > 0.50 / > 0.95 deployability thresholds. The shortfall traces to the
+strategy's own macro regime gate (VIX >= 30 / CREDIT EVENT suppression) being measured over the same full
+2005-present window rather than any single crisis period, so `deployable` stays honestly `False` pending
+further work.
+
+**This corrects an earlier version of this section**, which duplicated the `## Backtest Validation` heading
+and carried a stale, mismatched result (Sharpe 0.612, DSR 1.000, `deployable=True`) that did not reflect the
+platform's actual measured numbers.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.

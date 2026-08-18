@@ -5778,8 +5778,8 @@ def post_paper_broker_strategy_options_execute(body: Optional[StrategyOptionsExe
     max_notional = body.max_notional if body else None
     try:
         return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: strategy-options/execute failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: strategy-options/execute failed", exc_info=True)
         return {"ok": False, "error": "Internal error while executing strategy options; see server logs for detail."}
 
 @app.get("/pilots/paper-broker/greeks", dependencies=[Depends(require_read_token)])
@@ -5809,8 +5809,8 @@ def post_paper_broker_manage_exits(body: Optional[ManageExitsRequest] = None) ->
             stop_loss_multiple=stop_loss_multiple,
             manage_dte_threshold=manage_dte_threshold,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: manage-exits failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: manage-exits failed", exc_info=True)
         return {"ok": False, "error": "Internal error while managing position exits; see server logs for detail."}
 
 @app.post(
@@ -6061,6 +6061,44 @@ def get_options_earnings_crush_candidates(
     return {"count": len(candidates), "candidates": candidates}
 
 
+# ---------------------------------------------------------------------------
+# Options Desk Deployability Gates & Honest Disclosure Status
+# (Sourced from docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-17 investigation)
+# ---------------------------------------------------------------------------
+OPTIONS_DESK_DEPLOYABILITY_GATES = {
+    # NOTE (2026-08-18): unlike the three entries below, this key has no live consumer today.
+    # `earnings_crush`/`dispersion_trading`/`zero_dte_engine` each get this dict's entry stamped
+    # onto their POST .../execute response as "gate_status" (see those endpoints below); no such
+    # wiring exists for vol_mispricing because pilots/vol_mispricing.py has no execute_* function
+    # and no PaperAccountStore import -- its __all__ exposes scan/evaluate (evaluate_strike_mispricing,
+    # build_candidate_strategy_trades) only, and its sole API surface is the read-only
+    # GET /pilots/options/forecast/mispricing. See docs/signals/vol_mispricing.md's "Live
+    # Paper-Execution Status" section. This entry is kept anyway as the single source of truth for
+    # vol_mispricing's measured deployability, so that IF a live execute endpoint is ever added,
+    # its gate_status wiring is "read this," not "re-derive the numbers."
+    "vol_mispricing": {
+        "deployable": False,
+        "gate_status": "MEASURED_FAIL",
+        "reason": "Registered, measured deployable=False (Sharpe -0.499, DSR 0.027, fails Oct-2008 stress window).",
+    },
+    "earnings_crush": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_DATA_GAP",
+        "reason": "Not gateable: No historical single-name IV exists in data layer to perform walk-forward validation.",
+    },
+    "dispersion_trading": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_DATA_GAP",
+        "reason": "Not gateable: Index IV (VIX) is historical; constituent single-name IVs are substituted (+1.18 vol-pt substitution bias).",
+    },
+    "zero_dte_engine": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_DATA_GAP",
+        "reason": "Not gateable: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention.",
+    },
+}
+
+
 @app.post(
     "/pilots/options/earnings-crush/execute",
     dependencies=[
@@ -6069,9 +6107,9 @@ def get_options_earnings_crush_candidates(
     ],
 )
 def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Dict[str, Any]:
-    """Executes an earnings crush multi-leg trade in the paper broker."""
+    """Executes an earnings crush multi-leg trade in the paper broker with honest deployability gate status."""
     from pilots.earnings_crush import execute_earnings_crush_trade
-    return execute_earnings_crush_trade(
+    res = execute_earnings_crush_trade(
         symbol=body.symbol,
         strategy=body.strategy or "Iron Condor",
         expiration=body.expiration,
@@ -6081,6 +6119,9 @@ def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Di
         dry_run=body.dry_run,
         is_live=body.is_live,
     )
+    if isinstance(res, dict):
+        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["earnings_crush"]
+    return res
 
 
 @app.get("/pilots/options/flow/unusual", dependencies=[Depends(require_read_token)])
@@ -6165,8 +6206,8 @@ def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
             payload=body.payload,
             channels=body.channels,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: alerts/test failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: alerts/test failed", exc_info=True)
         return {"ok": False, "error": "Internal error while dispatching test alert; see server logs for detail."}
 
 
@@ -6254,17 +6295,24 @@ def get_options_dispersion_opportunities(
     ],
 )
 def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
-    """Executes a vega-neutral dispersion basket into the paper broker."""
+    """Executes a vega-neutral dispersion basket into the paper broker with honest deployability gate status."""
     from pilots.dispersion_trading import execute_dispersion_trade
     try:
-        return execute_dispersion_trade(
+        res = execute_dispersion_trade(
             index_symbol=body.index_symbol,
             basket=body.basket,
             dry_run=body.dry_run,
             is_live=body.is_live,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: dispersion/execute failed: %s", exc, exc_info=True)
+        if isinstance(res, dict):
+            res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["dispersion_trading"]
+        return res
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        # exc_info=True already renders the full exception + traceback into the log record
+        # via the logging module's own formatter; passing the exception object again as a
+        # %s format argument was a redundant taint-flow edge CodeQL's py/stack-trace-exposure
+        # query tracks -- dropping it removes the flagged path with no change in what's logged.
+        logger.error("pilots_api: dispersion/execute failed", exc_info=True)
         return {"ok": False, "error": "Internal error while executing dispersion trade; see server logs for detail."}
 
 
@@ -6286,9 +6334,9 @@ def get_options_zero_dte_signals(
     ],
 )
 def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]:
-    """Executes 0DTE momentum option trade into the paper broker."""
+    """Executes 0DTE momentum option trade into the paper broker with honest deployability gate status."""
     from pilots.zero_dte_engine import execute_0dte_trade
-    return execute_0dte_trade(
+    res = execute_0dte_trade(
         symbol=body.symbol,
         option_type=body.option_type or "CALL",
         strike=body.strike,
@@ -6300,6 +6348,9 @@ def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]
         dry_run=body.dry_run,
         is_live=body.is_live,
     )
+    if isinstance(res, dict):
+        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["zero_dte_engine"]
+    return res
 
 
 class ZeroDteManageExitsRequest(BaseModel):
@@ -6341,8 +6392,8 @@ def post_options_zero_dte_manage_exits(body: Optional[ZeroDteManageExitsRequest]
             stop_loss_pct=stop_loss_pct,
             hard_exit_time=hard_exit_time,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: 0dte manage-exits failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: 0dte manage-exits failed", exc_info=True)
         return {"ok": False, "error": "Internal error while managing 0DTE exits; see server logs for detail."}
 
 

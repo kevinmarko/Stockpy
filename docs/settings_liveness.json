@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 416,
+  "files_scanned": 417,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -461,7 +461,7 @@
   "read_forms": {
     "attr": 825,
     "factory_param": 4,
-    "getattr_const": 348,
+    "getattr_const": 349,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {

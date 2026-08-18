@@ -3,6 +3,7 @@ Tests for pilots/zero_dte_engine.py (0DTE ORB & Volatility Squeeze Breakout Engi
 """
 
 import ast
+import inspect
 from datetime import datetime, timedelta
 from pathlib import Path
 import numpy as np
@@ -10,6 +11,8 @@ import pandas as pd
 import pytest
 
 from unittest.mock import MagicMock, patch
+
+from settings import settings
 
 from pilots.zero_dte_engine import (
     OpeningRange,
@@ -25,6 +28,7 @@ from pilots.zero_dte_engine import (
     execute_0dte_trade,
     execute_0dte_exits,
     manage_0dte_exits,
+    get_0dte_signals,
 )
 
 
@@ -508,6 +512,45 @@ def test_execute_0dte_exits_closing():
     res = execute_0dte_exits(exits, store=store)
     assert res["executed_count"] == 1
     assert len(store.get_open_positions()) == 0
+
+
+# ---------------------------------------------------------------------------
+# 4b. get_0dte_signals -- dead intraday-bars lookup regression tests
+# ---------------------------------------------------------------------------
+
+def test_get_0dte_signals_no_intraday_source_degrades_honestly(monkeypatch):
+    """`get_0dte_signals` has no real intraday/1-minute bar source anywhere in this repo
+    (HistoricalStore is daily-OHLCV-only). It must degrade honestly to NO_SIGNAL /
+    is_actionable=False with an explanatory reason, rather than fabricating an opening
+    range from daily bars -- never hit the network for the spot price, per this repo's
+    `-m "not network"` CI convention."""
+    monkeypatch.setattr(settings, "OPTIONS_0DTE_ENABLED", True)
+
+    with patch("pilots.price_provider.get_current_price", return_value=123.45):
+        result = get_0dte_signals(symbol="SPY", range_minutes=15)
+
+    assert result["signal"] == "NO_SIGNAL"
+    assert result["action"] == "NO_ACTION"
+    assert result["is_actionable"] is False
+    assert "no intraday" in result["reason"].lower()
+    assert result["opening_range"]["valid"] is False
+    assert result["opening_range"]["is_valid"] is False
+    assert result["selected_contract"] is None
+
+
+def test_get_0dte_signals_source_has_no_dead_historical_store_lookup():
+    """Regression guard: `get_0dte_signals` must never call a `HistoricalStore` method that
+    does not exist. `HistoricalStore` has no `get_intraday_bars` -- only `get_bars`/
+    `get_bars_bulk` (daily-only) -- so an `hasattr(store, "get_intraday_bars")` guarded call
+    site is always a dead, always-False pretense of a lookup. Ensures this dead pattern can
+    never silently reappear."""
+    from data.historical_store import HistoricalStore
+    from pilots import zero_dte_engine
+
+    source = inspect.getsource(zero_dte_engine.get_0dte_signals)
+    assert "get_intraday_bars" not in source
+
+    assert not hasattr(HistoricalStore, "get_intraday_bars")
 
 
 # ---------------------------------------------------------------------------

@@ -72,3 +72,24 @@ to avoid retroactively tuning this measurement.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for strategy
 registry fix history and the `.claude/giant_master_plan_audit.md` F4 finding this closes.
+
+## Live Paper-Execution Status
+
+Unlike `earnings_crush`, `dispersion_trading`, and `zero_dte_engine`, `pilots/vol_mispricing.py`
+has **no live paper-execution path** — an explicit, considered decision, not an oversight.
+
+- It has no `execute_*` function and no `PaperAccountStore` import anywhere in the module. Its
+  `__all__` exposes scan/evaluate surfaces only (`evaluate_strike_mispricing`,
+  `build_candidate_strategy_trades`, `get_volatility_mispricing_data`, etc.) — it identifies and
+  classifies mispriced strikes and constructs candidate multi-leg trade objects, but never
+  submits an order.
+- Its only API surface is the read-only `GET /pilots/options/forecast/mispricing` endpoint. There
+  is no `POST .../execute` route for this module anywhere in `api/pilots_api.py`.
+- `OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]` in `api/pilots_api.py` therefore has **no
+  live consumer today** — unlike its three sibling entries (`earnings_crush`,
+  `dispersion_trading`, `zero_dte_engine`), which each get stamped onto their own
+  `POST .../execute` response as `gate_status`. It is kept as an informational record matching
+  this doc's own measured `deployable=False` result above, not a runtime-enforced gate.
+- If a live execute path is ever added for `vol_mispricing`, it should read
+  `OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]` the same way the other three pilots
+  already do, rather than re-deriving the PBO/DSR/Sharpe/MaxDD numbers.

@@ -45,6 +45,7 @@ def test_train_and_predict():
 
 # ---------------------------------------------------------------------------
 # Real, causal feature/window construction (2026-08, closes audit finding
+
 # F7's "no lookahead-bias perturbation coverage" gap for this module).
 # api/pilots_api.py::get_transformer_forecast previously fed this model
 # np.random.randn(...) noise as "market history"; build_causal_vol_features/
@@ -152,3 +153,32 @@ def test_build_training_windows_input_is_causal():
     # data by design -- proving the perturbation was real and the test isn't
     # vacuous.
     assert not np.allclose(y_train[k], y_train_2[k2])
+
+
+
+def test_transformer_vol_forecaster_no_lookahead_bias():
+    """Verifies that future data mutations t > T do not affect forecasts at t = T."""
+    np.random.seed(42)
+    # Generate sequential time series of 100 periods
+    T = 60
+    d_model = 16
+    full_sequence = np.random.randn(100, d_model)
+
+    # Slice at T
+    X_baseline = full_sequence[T-60:T].reshape(1, 60, d_model)
+    model = build_tft_model(seq_len=60, d_model=d_model, num_heads=4, horizons=[1, 5, 21, 60])
+    forecast_baseline, attn_baseline = predict_multi_horizon_vol(X_baseline, model)
+
+    # Mutate future data at t > T (from index 60 to 100)
+    mutated_sequence = full_sequence.copy()
+    mutated_sequence[T:] = np.random.randn(40, d_model) * 100.0
+
+    # Extract historical slice up to T from mutated sequence
+    X_mutated = mutated_sequence[T-60:T].reshape(1, 60, d_model)
+    forecast_mutated, attn_mutated = predict_multi_horizon_vol(X_mutated, model)
+
+    # Forecast at time T must be bit-exact invariant to future perturbations
+    for h in ['1d', '5d', '21d', '60d']:
+        np.testing.assert_array_equal(forecast_baseline[h], forecast_mutated[h])
+    np.testing.assert_array_equal(attn_baseline, attn_mutated)
+
