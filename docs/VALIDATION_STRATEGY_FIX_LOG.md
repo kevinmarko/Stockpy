@@ -815,5 +815,78 @@ affects only the survivorship-bias diagnostic annotation on the HTML report, not
 DSR/MaxDD computation itself, which uses the live current-constituents scrape (unaffected) plus
 real backfilled price/fundamentals data.
 
+---
+
+## 2026-08-18: Options Desk Deployability Gate -- Runtime Wiring Follow-Up & Doc-Drift Correction
+
+Closes out the five items the 2026-08-17 "Options Desk Deployability-Gate Coverage" entry above
+explicitly listed as "out of scope to fix here." Each item below was verified against the actual
+current file state (not merely re-asserted from that entry's own wording) before being recorded.
+
+1. **`gate_status` now live on all three executable pilots' `POST .../execute` responses.**
+   `api/pilots_api.py`'s `OPTIONS_DESK_DEPLOYABILITY_GATES` dict (defined at line ~6068) is
+   stamped as `res["gate_status"]` onto the response of `post_options_earnings_crush_execute`
+   (line ~6123), `post_options_dispersion_execute` (line ~6308), and `post_options_zero_dte_execute`
+   (line ~6348) — verified by reading each handler directly, not merely trusting the dict's
+   existence. `vol_mispricing` has no such wiring because `pilots/vol_mispricing.py` has no
+   `execute_*` function and no `POST .../execute` route exists for it at all (confirmed by
+   `grep`); its dict entry is kept as a documentation-only record, exactly as
+   `docs/signals/vol_mispricing.md`'s "Live Paper-Execution Status" section (added in the prior
+   entry) already states. Runtime coverage: `tests/test_options_desk_deployability_runtime_gap.py::test_earnings_crush_execute_surfaces_gate_status`,
+   `::test_dispersion_execute_surfaces_gate_status`, `::test_zero_dte_execute_surfaces_gate_status`.
+
+2. **`get_0dte_signals`'s dead `HistoricalStore.get_intraday_bars` path removed.** Verified by
+   reading `pilots/zero_dte_engine.py::get_0dte_signals` directly — the function contains no
+   reference to `get_intraday_bars` or `hasattr(store, ...)` anywhere; it calls
+   `scan_0dte_breakouts(symbol=sym, intraday_bars=None, range_minutes=range_minutes)` with an
+   inline comment explaining that no intraday/1-minute bar source exists anywhere in this repo.
+   Regression-guarded by `tests/test_zero_dte_engine.py::test_get_0dte_signals_source_has_no_dead_historical_store_lookup`.
+
+3. **`docs/signals/vrp_premium_selling.md`'s duplicate-header/stale-numbers defect corrected.**
+   Verified the file now has exactly one `## Backtest Validation` heading (`grep -c` confirms a
+   single match, at the section titled `## Backtest Validation (\`STRATEGY_REGISTRY["vrp_premium_selling"]\`, 2026-08-15)`),
+   carrying the platform's actual measured numbers (Sharpe 0.217, PBO 0.000, DSR 0.000, MaxDD
+   17.9%, `deployable=False`) matching the 2026-08-15 entry's table above — not the stale,
+   contradictory Sharpe 0.612/DSR 1.000/`deployable=True` the 2026-08-17 entry flagged. The
+   section explicitly notes it corrects "an earlier version of this section, which duplicated the
+   `## Backtest Validation` heading."
+
+4. **`vol_mispricing`'s gate-entry disposition documented as informational-only.**
+   `docs/signals/vol_mispricing.md`'s "Live Paper-Execution Status" section states plainly that
+   `pilots/vol_mispricing.py` has no `execute_*` function and no `PaperAccountStore` import
+   (verified: its `__all__` exposes scan/evaluate surfaces only —
+   `evaluate_strike_mispricing`, `build_candidate_strategy_trades`,
+   `get_volatility_mispricing_data`), that its only API surface is the read-only
+   `GET /pilots/options/forecast/mispricing`, and that `OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]`
+   therefore "has no live consumer today" unlike its three executable siblings — matching
+   `api/pilots_api.py`'s own inline comment immediately above the dict definition.
+
+5. **Two previously-dropped tests restored, plus one new direction-sign coverage pair added.**
+   `tests/test_options_desk_deployability_runtime_gap.py::test_execute_0dte_trade_refuses_when_price_missing_and_never_fabricates_1_50`
+   and `::test_dispersion_trading_baskets_distinct_for_spy_and_qqq` both existed in the module's
+   introducing commit (`f3f63003`) but were silently dropped when a later commit
+   (`89308aa9`) overwrote the file with a narrower 4-test version; both are restored (verified via
+   `git log --oneline -- tests/test_options_desk_deployability_runtime_gap.py`, comparing
+   `f3f63003`'s original content against `89308aa9`'s replacement). New coverage for
+   `execute_dispersion_trade`'s direction-derivation path was added to
+   `tests/test_dispersion_trading.py` as **two** tests (the 2026-08-17 entry's own "Defects found"
+   list undersold this as a single fix) —
+   `test_execute_dispersion_trade_none_basket_derives_short_direction_from_real_data` and
+   `test_execute_dispersion_trade_none_basket_derives_long_direction_from_real_data` — each
+   monkeypatching `_source_real_dispersion_inputs` to supply a spread strongly past the ±0.15
+   threshold in one direction and asserting the resulting basket's `is_long_dispersion` flag and
+   per-leg `side` values (`"buy"`/`"sell"`) match the measured spread's sign, not a hardcoded
+   default.
+
+**One item from the 2026-08-17 entry's "Defects found" list is corrected here for accuracy
+rather than fully closed** (see `docs/signals/dispersion_trading.md`'s "Defects found" section
+for the full detail): `dispersion_trading`'s identical-8-stock-basket defect is only **half**
+fixed — `pilots/dispersion_trading.py`'s `INDEX_CONSTITUENTS_MAP` for `SPY` and `QQQ` still list
+the same 8 tickers (`AAPL`/`MSFT`/`NVDA`/`AMZN`/`GOOGL`/`META`/`TSLA`/`AVGO`, just reordered), so
+the two indices' baskets remain set-identical; only the per-symbol `INDEX_WEIGHTS_MAP`
+allocations genuinely differ between the two indices (verified by reading both dicts directly).
+The sibling hardcoded-Long defect (item 5 above) is fully fixed and is not part of this remaining
+gap.
+
 
 

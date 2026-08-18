@@ -44,3 +44,9 @@ genuinely gateable without any proxy.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) and
 `.claude/giant_master_plan_audit.md`'s finding F4.
+
+`POST /pilots/options/earnings-crush/execute`'s response body now includes a `gate_status` field
+(sourced from `OPTIONS_DESK_DEPLOYABILITY_GATES["earnings_crush"]` in `api/pilots_api.py`) —
+`"UNGATEABLE_DATA_GAP"` — echoing this doc's `deployable=False` verdict inline on every execution
+attempt, so an operator hitting the live endpoint sees the same honest gate status documented
+here without cross-referencing this file.
