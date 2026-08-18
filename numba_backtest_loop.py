@@ -1,3 +1,9 @@
+"""InvestYo Quant Platform — Numba-Accelerated Event-Driven Backtest Loop.
+
+Provides JIT-compiled bar-by-bar execution loops simulating slippage, transaction fees,
+and strict causal trade execution without lookahead bias.
+"""
+
 import numpy as np
 import pandas as pd
 import time

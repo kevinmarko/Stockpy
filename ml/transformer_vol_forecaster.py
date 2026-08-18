@@ -1,3 +1,9 @@
+"""InvestYo Quant Platform — Transformer Volatility Forecaster.
+
+Implements a Temporal Fusion Transformer (TFT) architecture in pure NumPy/SciPy
+for multi-horizon point volatility prediction.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.special import softmax

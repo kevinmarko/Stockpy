@@ -171,6 +171,17 @@ def probability_of_backtest_overfitting(
         # OOS performance of the best IS strategy
         oos_perf_of_best_is = out_of_sample_sharpes[s, best_is_idx]
 
+        # The in-sample-best trial's own OOS performance can be individually
+        # NaN even when in_sample_sharpes[s] wasn't all-NaN (e.g. a
+        # degenerate/constant test window for that one trial). NaN
+        # comparisons are always False in Python/numpy, so `oos_perf_of_best_is
+        # < median_oos_perf` would silently evaluate False and this path
+        # would count as "not overfit" for the wrong reason -- excluded here
+        # instead, matching the all-NaN-row skip above (CONSTRAINT #4:
+        # unmeasurable is excluded, never guessed in either direction).
+        if np.isnan(oos_perf_of_best_is):
+            continue
+
         # Median OOS performance of all strategies on path s
         median_oos_perf = np.nanmedian(out_of_sample_sharpes[s])
 
