@@ -1434,11 +1434,14 @@ def execute_copula_spread_trade(
     try:
         paper_store = store or PaperAccountStore()
     except Exception as exc:
+        # Detail stays server-side (logger.exception); the returned dict is client-facing
+        # (unwired today, but see the dispersion_trading.py sibling fix for the same
+        # py/stack-trace-exposure pattern once an endpoint returns this dict directly).
         logger.exception("Failed to initialize PaperAccountStore for copula trade: %s", exc)
         return {
             "ok": False,
             "trade_id": trade_id,
-            "message": f"Paper account storage unavailable: {exc}",
+            "message": "Paper account storage unavailable; see server logs for detail.",
         }
 
     strategy_name = "Copula Stat Arb"

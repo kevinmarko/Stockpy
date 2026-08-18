@@ -957,11 +957,16 @@ def execute_dispersion_trade(
     try:
         paper_store = store or PaperAccountStore()
     except Exception as exc:
+        # Full exception + traceback goes to the server log only (never echoed back to the
+        # caller) -- CodeQL py/stack-trace-exposure flagged this dict flowing straight through
+        # api/pilots_api.py's post_options_dispersion_execute `return res`, matching the same
+        # generic-message-to-client / detail-to-log-only convention execute_vol_mispricing_trade
+        # already follows for its own store-failure path.
         logger.exception("Failed to initialize PaperAccountStore for dispersion trade: %s", exc)
         return {
             "ok": False,
             "basket_id": basket_id,
-            "message": f"Paper account storage unavailable: {exc}",
+            "message": "Paper account storage unavailable; see server logs for detail.",
         }
 
     strategy_name = "Dispersion Arbitrage"
