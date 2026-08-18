@@ -1874,16 +1874,16 @@ def _pit_row_to_fundamentals_dto(ticker: str, sector: str, raw: Dict[str, Any]):
     sector_str = str(sector) if sector is not None and not (isinstance(sector, float) and np.isnan(sector)) else "N/A"
     return FundamentalDataDTO(
         ticker=ticker,
-        pe_ratio=raw.get("pe_ratio") if isinstance(raw, dict) else None,
-        pb_ratio=raw.get("pb_ratio") if isinstance(raw, dict) else None,
-        dividend_yield=raw.get("dividend_yield", float("nan")) if isinstance(raw, dict) else float("nan"),
+        pe_ratio=raw.get("pe_ratio"),
+        pb_ratio=raw.get("pb_ratio"),
+        dividend_yield=raw.get("dividend_yield", float("nan")),
         book_value=float("nan"),  # see docstring -- not safely derivable from PIT data
-        eps_trailing=raw.get("eps", float("nan")) if isinstance(raw, dict) else float("nan"),
+        eps_trailing=raw.get("eps", float("nan")),
         dividend_growth_rate=0.02,  # module default; not read by any surviving module
         payout_ratio=float("nan"),  # see docstring -- not available in EDGAR PIT raw_json
         sector=sector_str,
         company_name=ticker,
-        market_cap=raw.get("market_cap", float("nan")) if isinstance(raw, dict) else float("nan"),
+        market_cap=raw.get("market_cap", float("nan")),
     )
 
 

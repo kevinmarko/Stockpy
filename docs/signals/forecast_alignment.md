@@ -136,3 +136,5 @@ See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) f
 | **Max Drawdown** | 32.82% |
 | **Deployable** | ❌ False |
 
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

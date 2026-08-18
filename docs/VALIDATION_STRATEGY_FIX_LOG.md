@@ -1007,3 +1007,12 @@ refusal path).
 | value_quality_edgar_pit | 0.0000 | 0.0000 | 0.5539 | 43.60% | ❌ False |
 | vol_mispricing | 0.0000 | 0.4966 | -0.0369 | 100.00% | ❌ False |
 | vrp_premium_selling | 0.0000 | 0.0000 | 0.2172 | 17.92% | ❌ False |
+
+**[PLACEHOLDER -- being re-run against rebased main; the note and table above will be
+replaced/corrected in a follow-up commit once fresh numbers land. The original note here
+claimed "the causal levers and evidence-backed reasoning remain exactly as documented in their
+original failure entries earlier in this log" for every `False` row -- that claim is false for
+`pairs_trading`, `rsi14_extremes`, and `forecast_direction_arima_hw`, each of which flips from a
+previously-verified `deployable=True` (see their earlier dated entries in this log) to `False`
+here with no reconciling explanation. This needs investigating against a fresh run, not
+re-asserted uncorrected.]**

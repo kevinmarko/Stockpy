@@ -159,3 +159,5 @@ full 12-strategy series this fix was part of.
 | **Max Drawdown** | 44.82% |
 | **Deployable** | ❌ False |
 
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

@@ -298,3 +298,5 @@ slicing, missing-EDGAR-data dead-letter), `tests/test_validation_sector_quality_
 | **Max Drawdown** | 28.37% |
 | **Deployable** | ❌ False |
 
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
