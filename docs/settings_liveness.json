@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 309,
+    "live_safe": 310,
     "no_op": 3,
-    "restart_required": 98,
-    "total": 410
+    "restart_required": 99,
+    "total": 412
   },
   "dynamic_sites": [
     {
@@ -281,6 +281,7 @@
     "HMM_INFLATION_FEATURE_ENABLED",
     "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
     "HMM_RISK_ON_DOWNGRADE_THRESHOLD",
+    "HMM_STANDARDIZE_FEATURES_ENABLED",
     "HMM_VOL_TERM_SPREAD_FEATURE_ENABLED",
     "JOBS_API_ENABLED",
     "JULES_API_KEY",
@@ -458,13 +459,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 823,
+    "attr": 825,
     "factory_param": 4,
     "getattr_const": 348,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 240,
+    "attr": 242,
     "factory_param": 4,
     "getattr_const": 198,
     "os_environ": 17
@@ -1865,6 +1866,17 @@
         "via": []
       }
     ],
+    "HMM_N_INITS": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:90",
+        "via": []
+      }
+    ],
     "HMM_N_ITER": [
       {
         "discarded": false,
@@ -2955,7 +2967,7 @@
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
     "init_body": 6,
-    "init_self_assign": 44,
+    "init_self_assign": 45,
     "method_self_assign": 4,
     "module_level": 77,
     "os_environ": 24
