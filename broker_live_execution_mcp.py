@@ -1,3 +1,9 @@
+"""InvestYo Quant Platform — Broker Live Execution MCP Server.
+
+Provides FastMCP tools for proposing, reviewing, and executing live equity orders
+under risk gates and kill-switch constraints.
+"""
+
 import os
 import json
 import uuid

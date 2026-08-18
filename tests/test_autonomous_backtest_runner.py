@@ -317,6 +317,33 @@ class TestCPCVAndPBO:
         assert 0.0 <= dsr <= 1.0
         assert not np.isnan(dsr)
 
+    def test_degenerate_flat_price_series_never_leaks_fabricated_sentinel(self):
+        """
+        A flat (zero-volatility) price series makes every strategy's Sharpe
+        genuinely undefined (std == 0 -> NaN, not a crash) on every CPCV
+        path -- both the candidate strategy and the built-in benchmark
+        variants. run_cpcv() must return honest NaN/float outputs rather
+        than a fabricated -999.0/0.0 sentinel leaking into
+        is_sharpe_matrix/oos_sharpe_matrix or the resulting pbo/dsr
+        (CONSTRAINT #4).
+        """
+        runner = AutonomousBacktestRunner(n_splits=5, n_test_splits=2)
+        df = runner.generate_synthetic_ohlcv(n_bars=250, mu=0.0, sigma=0.0, regime="flat", seed=42)
+
+        def flat_strategy(d):
+            return pd.Series(1.0, index=d.index)
+
+        res = runner.run_cpcv(flat_strategy, df)
+
+        # Every entry in both matrices must be NaN (unmeasurable) or a real
+        # finite value -- never the historical -999.0 sentinel.
+        assert not np.any(res["is_sharpe_matrix"] == -999.0)
+        assert not np.any(res["oos_sharpe_matrix"] == -999.0)
+        # No crash, and both remain honest floats (NaN is an acceptable,
+        # honest answer here -- every path is genuinely degenerate).
+        assert isinstance(res["pbo"], float)
+        assert isinstance(res["dsr"], float)
+
 
 # ---------------------------------------------------------------------------
 # 5. Deployability Gates & Full End-to-End Evaluation Tests

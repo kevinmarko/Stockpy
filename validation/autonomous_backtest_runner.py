@@ -808,8 +808,14 @@ class AutonomousBacktestRunner:
                 is_sr = sharpe_ratio(tr_ret, freq=self.freq)
                 oos_sr = sharpe_ratio(te_ret, freq=self.freq)
 
-                path_is_sharpes.append(is_sr if not np.isnan(is_sr) else -999.0)
-                path_oos_sharpes.append(oos_sr if not np.isnan(oos_sr) else -999.0)
+                # Preserve the real value (including NaN) here -- these lists
+                # feed is_sharpe_matrix/oos_sharpe_matrix directly, which are
+                # returned for introspection and drive pbo/mean_oos_cand_sharpe
+                # below. A finite -999.0 placeholder would fabricate a metric
+                # for a genuinely unmeasurable (degenerate/constant-returns)
+                # trial (CONSTRAINT #4).
+                path_is_sharpes.append(is_sr)
+                path_oos_sharpes.append(oos_sr)
 
             is_sharpe_matrix.append(path_is_sharpes)
             oos_sharpe_matrix.append(path_oos_sharpes)
@@ -846,12 +852,20 @@ class AutonomousBacktestRunner:
 
         # 2. DSR Calculation for candidate strategy (index 0)
         cand_oos_sharpes = oos_arr[:, 0]
-        valid_cand_sharpes = cand_oos_sharpes[cand_oos_sharpes > -900]
-        mean_oos_cand_sharpe = float(np.mean(valid_cand_sharpes)) if len(valid_cand_sharpes) > 0 else 0.0
+        valid_cand_sharpes = cand_oos_sharpes[~np.isnan(cand_oos_sharpes)]
+        mean_oos_cand_sharpe = float(np.mean(valid_cand_sharpes)) if len(valid_cand_sharpes) > 0 else float("nan")
 
-        # Mean IS Sharpe across all evaluated strategies to get cross-trial variance
-        mean_is_sharpes = np.mean(np.where(is_arr > -900, is_arr, 0.0), axis=0)
-        sr_var = float(np.var(mean_is_sharpes))
+        # Mean IS Sharpe across all evaluated strategies to get cross-trial
+        # variance. NaN-aware per strategy column (a genuinely all-degenerate
+        # column stays honestly NaN rather than being pulled toward a
+        # fabricated 0.0 -- CONSTRAINT #4); the variance itself then skips
+        # any such NaN column rather than letting it poison sr_var.
+        mean_is_sharpes = np.array([
+            np.nanmean(col) if not np.all(np.isnan(col)) else np.nan
+            for col in is_arr.T
+        ])
+        finite_mean_is_sharpes = [v for v in mean_is_sharpes if not np.isnan(v)]
+        sr_var = float(np.var(finite_mean_is_sharpes)) if finite_mean_is_sharpes else 0.0
         if sr_var < 1e-12:
             sr_var = 1e-6
 
