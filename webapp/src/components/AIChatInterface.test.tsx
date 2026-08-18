@@ -115,3 +115,75 @@ describe("AIChatInterface context wiring", () => {
     expect(body.context).toBe(contextText);
   });
 });
+
+describe("AIChatInterface Live Mode controls", () => {
+  it("toggles between text chat and live voice mode", () => {
+    render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+    const toggleBtn = screen.getByTitle("Switch to Live Voice Chat");
+    expect(toggleBtn).toBeInTheDocument();
+
+    // Toggle to Live Voice
+    fireEvent.click(toggleBtn);
+    expect(screen.getByText("Voice Live")).toBeInTheDocument();
+    expect(screen.getByText("Live Audio")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Type or speak to Gemini Live...")).toBeInTheDocument();
+    expect(screen.getByTitle("Speak to Gemini Live")).toBeInTheDocument();
+
+    // Toggle back to Text Chat
+    fireEvent.click(screen.getByTitle("Switch to Text Chat"));
+    expect(screen.getByText("Text Chat")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask a question about your portfolio...")).toBeInTheDocument();
+  });
+});
+
+describe("AIChatInterface model selector", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the model selection dropdown bar in text chat mode", () => {
+    render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+    const bar = screen.getByTestId("ai-model-selector-bar");
+    expect(bar).toBeInTheDocument();
+    expect(screen.getByLabelText("AI Model Selector")).toBeInTheDocument();
+  });
+
+  it("threads chosen model and provider into request body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeSseResponse([{ type: "MESSAGE", content: "response" }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+
+    const select = screen.getByLabelText("AI Model Selector");
+    fireEvent.change(select, { target: { value: "anthropic:claude-3-5-sonnet-20241022" } });
+
+    await sendMessage("Analyze risk");
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.provider).toBe("anthropic");
+    expect(body.model).toBe("claude-3-5-sonnet-20241022");
+  });
+
+  it("allows switching to custom model input", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeSseResponse([{ type: "MESSAGE", content: "response" }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+
+    const select = screen.getByLabelText("AI Model Selector");
+    fireEvent.change(select, { target: { value: "custom" } });
+
+    const input = screen.getByPlaceholderText("e.g. deepseek-ai/DeepSeek-V3");
+    expect(input).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "meta-llama/Llama-3-70b-chat" } });
+
+    await sendMessage("Summarize macro");
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.model).toBe("meta-llama/Llama-3-70b-chat");
+  });
+});

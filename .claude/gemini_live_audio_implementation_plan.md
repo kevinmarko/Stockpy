@@ -42,8 +42,8 @@ Grouped by component:
   - `LOCAL_LLM_BASE_URL: Optional[str] = Field(default="http://localhost:11434/v1", description="Base URL for OpenAI-compatible local open-source LLM server (Ollama, vLLM, LM Studio).")`
   - `LOCAL_LLM_MODEL: str = Field(default="llama3.3", description="Default model name for local LLM requests.")`
   - `LOCAL_LLM_API_KEY: Optional[str] = Field(default=None, description="Optional API key for local or self-hosted LLM server (e.g. OpenRouter / vLLM token).")`
-  - `AI_CHAT_DEFAULT_PROVIDER: str = Field(default="gemini", description="Default AI chat provider: 'gemini', 'anthropic', 'openai', 'local', or 'auto'.")`
-  - `AI_CHAT_DEFAULT_MODEL: Optional[str] = Field(default="gemini-2.5-flash", description="Optional explicit override for default chat model across all providers.")`
+  - `AI_CHAT_DEFAULT_PROVIDER: str = Field(default="auto", description="Default AI chat provider: 'auto', 'gemini', 'anthropic', 'openai', 'local'.")`
+  - `AI_CHAT_DEFAULT_MODEL: Optional[str] = Field(default=None, description="Optional explicit override for default chat model across all providers.")`
 - Register `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, `AI_CHAT_DEFAULT_PROVIDER`, and `AI_CHAT_DEFAULT_MODEL` in `ALLOWED_KEYS` in [`gui/env_io.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_gemini_live_audio/gui/env_io.py).
 
 ---
@@ -110,3 +110,77 @@ Grouped by component:
 
 ### Independent Audits
 - Run `custom-parity-auditor` and `custom-honesty-auditor` to audit the multi-provider implementation.
+
+---
+
+## Post-review security fix (2026-08-17)
+
+A code review of this PR (before merge) found that the `custom_base_url` field
+on `ChatMessageRequest` — accepted from the raw request body with no
+validation and passed straight into `openai.AsyncOpenAI(base_url=..., ...)`
+in the `"local"` provider branch — made `POST /api/chat` an open SSRF /
+credential-relay: any caller able to reach the endpoint could redirect the
+server's outbound request to an attacker-controlled host and receive the
+forwarded chat content (including portfolio/grounding context) plus the
+operator's `LOCAL_LLM_API_KEY` as a bearer token.
+
+**Fixed by removing `custom_base_url` entirely** rather than
+allowlisting/validating it — the webapp never actually sent this field (no
+UI exposed it), so dropping it cost no real functionality. The `"local"`
+provider's outbound base URL is now unconditionally
+`settings.LOCAL_LLM_BASE_URL` (operator-set, server-side only, falling back
+to `http://localhost:11434/v1`). See `tests/test_data_api_chat.py`'s
+`test_local_routing_ignores_client_supplied_base_url` for the regression
+test, and `docs/architecture/webapp-and-gui.md`'s "Multi-Model & Open Source
+AI Chat" entry for the documented contract.
+
+---
+
+## Post-review fixes, round 2 (2026-08-17)
+
+Three more issues found in the same review pass were fixed in a follow-up
+commit:
+
+1. **Concurrent unsynchronized WebSocket writes** (`api/ws_api.py`) — the
+   two per-connection asyncio tasks (`client_to_gemini`, `gemini_to_client`)
+   both wrote to the same `websocket` with no synchronization. Every
+   outbound frame now goes through one `asyncio.Lock()`-backed `_send_json`
+   helper instead of calling `websocket.send_json` directly from either
+   task.
+
+2. **WS auth's unset-token fail-open didn't check loopback** (`api/ws_api.py`,
+   `api/auth.py`) — `_check_ws_token` allowed any connection through when
+   `STATE_API_TOKEN` was unset, regardless of where it came from, unlike
+   `api/auth.py::require_read_token`'s HTTP posture (fail-open only for a
+   loopback caller, 503 otherwise). This PR's own `scripts/Caddyfile`
+   addition proxies `/ws/chat/*` to a non-loopback-reachable route, so the
+   gap mattered more here than it did before. Fixed by extracting a shared
+   `api.auth.is_loopback_host(host)` helper and having `_check_ws_token`
+   check the WebSocket's `.client.host` against it.
+
+3. **`contextText` prop change disconnected an active Live voice session**
+   (`webapp/src/components/AIChatInterface.tsx`) — the connect/disconnect
+   effect listed `contextText` as a dependency, and `connectLive()` tears
+   down any existing connection first, so any change to that prop while a
+   live session was open silently reconnected mid-conversation. Fixed by
+   dropping `contextText` from that effect's dependencies (the initial
+   value is still threaded in via a ref) and adding
+   `useGeminiLive.ts::sendContext()` plus a second effect that pushes
+   subsequent context updates over the already-open connection instead of
+   reconnecting.
+
+A fourth, lower-confidence finding (transcript replace-vs-append) was also
+addressed as a real fix rather than left open: `input_transcription`/
+`output_transcription` events are now treated as incremental fragments to
+append, matching how Gemini's own transcription samples stream (each event
+is printed with no separator, implying the caller concatenates rather than
+replaces) — the sibling `text` (`part.text`) streaming path already did
+this. `onTurnComplete` now also seals the trailing live message so a new
+turn's fragments open a fresh bubble instead of appending into the
+finished one.
+
+See `docs/architecture/webapp-and-gui.md`'s Gemini Live entry for the full
+detail, and `tests/test_gemini_live_chat.py::TestLoopbackOnlyFailOpen`,
+`tests/test_auth.py::TestIsLoopbackHost`, and
+`webapp/src/components/AIChatInterface.liveTranscript.test.tsx` for the
+regression coverage.

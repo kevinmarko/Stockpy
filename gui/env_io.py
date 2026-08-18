@@ -269,6 +269,16 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "OPAL_RESEARCH_ENABLED",             # bool — Opal research agent (OpenAI or Gemini)
     "OPAL_RESEARCH_PROVIDER",            # "openai" | "gemini" | "none"
     "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o" or "gemini-2.5-flash"
+    # Gemini Live & Chat model tunables (non-secret). GEMINI_API_KEY is in SECRET_KEYS.
+    "GEMINI_LIVE_CHAT_ENABLED",
+    "GEMINI_LIVE_CHAT_MODEL",
+    "GEMINI_LIVE_VOICE_NAME",
+    "GEMINI_CHAT_MODEL",
+    # Multi-model & Local Open Source LLM tunables (non-secret). LOCAL_LLM_API_KEY is in SECRET_KEYS.
+    "LOCAL_LLM_BASE_URL",
+    "LOCAL_LLM_MODEL",
+    "AI_CHAT_DEFAULT_PROVIDER",
+    "AI_CHAT_DEFAULT_MODEL",
     # AI-Assisted Credibility Filtering (Sentiment Pipeline Phase 2 PR2,
     # signals/credibility.py). Non-secret; provider credentials (ANTHROPIC/
     # GEMINI/OPENAI keys) stay in SECRET_KEYS below — CONSTRAINT #3.
@@ -493,6 +503,18 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS",
     "HMM_N_STATES",
     "HMM_RETRAIN_FREQ_DAYS",
+    "HMM_COVARIANCE_TYPE",
+    "HMM_N_ITER",
+    "HMM_TOL",
+    "HMM_RISK_ON_DOWNGRADE_THRESHOLD",
+    "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
+    "HMM_CREDIT_SPREAD_FEATURE_ENABLED",
+    "HMM_INFLATION_FEATURE_ENABLED",
+    "HMM_VOL_TERM_SPREAD_FEATURE_ENABLED",
+    "HMM_STANDARDIZE_FEATURES_ENABLED",
+    "HMM_N_INITS",
+    "KILLSWITCH_VIX_THRESHOLD_AGREED",
+    "KILLSWITCH_SAHM_THRESHOLD_AGREED",
     "OPTIONS_VRP_THRESHOLD",
     "LLM_COMMENTARY_TIMEOUT_SECONDS",
     "MARKET_DATA_WS_RECONNECT_BASE_SECONDS",
@@ -698,6 +720,8 @@ SECRET_KEYS: tuple[str, ...] = (
     # OpenAI credential for Opal, the research agent (Tier 9 Scope 4,
     # llm/research.py).  CONSTRAINT #3 — never GUI-writable; hand-edit .env.
     "OPENAI_API_KEY",
+    # Optional API key for local or self-hosted OpenAI-compatible server (OpenRouter, vLLM).
+    "LOCAL_LLM_API_KEY",
     # data/sentiment_sources.py's RedditSource OAuth2 script-app credentials
     # (Sentiment Pipeline Phase 3). CONSTRAINT #3 — never GUI-writable.
     "REDDIT_CLIENT_ID",

@@ -808,6 +808,46 @@ export interface LlmSettingUpdateResult {
   note: string;
 }
 
+/** One AI model provider entry from GET /data/ai/models. */
+export interface AiModelProvider {
+  id: string;
+  name: string;
+  available: boolean;
+  default_model: string;
+  models: string[];
+  base_url?: string;
+}
+
+/** GET /data/ai/models response. */
+export interface AiModelsResponse {
+  default_provider: string;
+  default_model: string | null;
+  providers: AiModelProvider[];
+}
+
+/** One message entry in chat history. */
+export interface ChatHistoryMessage {
+  role: 'user' | 'model' | 'assistant';
+  content: string;
+}
+
+/** Request payload for POST /api/chat.
+ *
+ * Deliberately has NO client-suppliable base-URL field: the backend's
+ * "local" provider always dispatches to the operator's own
+ * settings.LOCAL_LLM_BASE_URL, never anything from the request body --
+ * see api/data_api.py::ChatMessageRequest's comment for why a
+ * client-controlled outbound URL there would be an SSRF/credential-relay
+ * risk.
+ */
+export interface ChatMessageRequest {
+  message: string;
+  history?: ChatHistoryMessage[];
+  context?: string;
+  provider?: string;
+  model?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Backend analytics surfaces (zero-PWA-presence gap) — one interface per
 // api/pilots_api.py endpoint added in this effort. Every leaf the backend

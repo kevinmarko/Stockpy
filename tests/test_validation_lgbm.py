@@ -170,7 +170,18 @@ def test_lgbm_validation_harness_runs_end_to_end(tmp_path, monkeypatch):
     # regression test in tests/test_metrics_sharpe_ratio.py.
     assert np.isnan(report.sharpe), "Sharpe should be honestly NaN for this degenerate zero-signal fixture"
     assert not np.isnan(report.max_dd), "MaxDD is NaN"
-    assert not np.isnan(report.pbo), "PBO is NaN"
+    # PBO should likewise be honestly NaN here, for the same reason as
+    # report.sharpe above: every CPCV path's single trial has a degenerate
+    # (exactly-zero, near-zero-std) return series, so its IS/OOS Sharpe is
+    # unmeasurable on every path. probability_of_backtest_overfitting() used
+    # to receive a -999.0 placeholder in place of each NaN Sharpe (a
+    # CONSTRAINT #4 violation -- see validation/metrics.py's
+    # run_cpcv_evaluation), which made every path spuriously "measurable"
+    # and fabricated a PBO of 0.0. It now honestly reports NaN when zero
+    # paths have a measurable best-in-sample strategy, rather than fabricate
+    # a "definitely not overfit" verdict about something that was never
+    # actually measured.
+    assert np.isnan(report.pbo), "PBO should be honestly NaN for this degenerate zero-signal fixture"
     assert not np.isnan(report.dsr), "DSR is NaN"
     assert isinstance(report.deployable, bool)
 

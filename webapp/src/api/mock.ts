@@ -14,6 +14,7 @@ import type {
   AgentLoopStatus,
   AiChartResponse,
   AiCommentaryResponse,
+  AiModelsResponse,
   AiResearchResponse,
   AlertsFeed,
   AutomationSchedule,
@@ -11128,6 +11129,53 @@ export const mockApi = {
   // ---- G15: durable per-symbol Claude-vs-Gemini disagreement ----
   async getAiDisagreements(): Promise<AiDisagreementsResponse> {
     return delay(mockAiDisagreements());
+  },
+
+  async getAiModels(): Promise<AiModelsResponse> {
+    return delay({
+      default_provider: "gemini",
+      default_model: "gemini-2.5-flash",
+      providers: [
+        {
+          id: "gemini",
+          name: "Google Gemini",
+          available: true,
+          default_model: "gemini-2.5-flash",
+          models: [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-1.5-pro",
+            "gemini-3.1-flash-live-preview",
+          ],
+        },
+        {
+          id: "anthropic",
+          name: "Anthropic Claude",
+          available: true,
+          default_model: "claude-3-5-sonnet-20241022",
+          models: [
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+            "claude-3-opus-20240229",
+          ],
+        },
+        {
+          id: "openai",
+          name: "OpenAI ChatGPT",
+          available: true,
+          default_model: "gpt-4o",
+          models: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+        },
+        {
+          id: "local",
+          name: "Local / Open Source (Ollama, vLLM)",
+          available: true,
+          base_url: "http://localhost:11434/v1",
+          default_model: "llama3.3",
+          models: ["llama3.3", "deepseek-r1", "qwen2.5", "mistral"],
+        },
+      ],
+    });
   },
 
   // ---- Report Library (G5) + Dead-Letter Queue (G6) ----

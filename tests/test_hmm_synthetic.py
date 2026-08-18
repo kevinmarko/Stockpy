@@ -184,3 +184,63 @@ def test_near_constant_feature_column_does_not_explode_scaled_values():
     X_scaled = (X - detector.feature_means_) / detector.feature_stds_
     assert np.all(np.isfinite(X_scaled[:, near_constant_idx]))
     assert np.all(np.abs(X_scaled[:, near_constant_idx]) < 1e6)
+
+
+def test_hmm_covariance_types_fit_and_predict():
+    """Verifies that HMMRegimeDetector correctly supports full, spherical, and tied covariance types."""
+    n = 150
+    rng = np.random.default_rng(42)
+    dates = pd.bdate_range(end=pd.Timestamp("2024-01-01"), periods=n)
+    features_df = pd.DataFrame(
+        {
+            "spy_return": rng.normal(0.0005, 0.01, size=n),
+            "realized_vol_20d": rng.uniform(0.10, 0.25, size=n),
+            "vix_level": rng.uniform(12, 28, size=n),
+            "yield_curve_spread": rng.normal(0.5, 0.3, size=n),
+        },
+        index=dates,
+    )
+
+    for cov in ["full", "spherical", "tied"]:
+        detector = HMMRegimeDetector(n_states=3, covariance_type=cov, random_state=42)
+        detector.fit(features_df)
+        assert detector.model is not None
+        assert len(detector.state_labels) == 3
+        assert "bull" in detector.state_labels.values()
+
+        proba = detector.predict_proba(features_df)
+        assert "risk_on_probability" in proba
+        assert 0.0 <= proba["risk_on_probability"] <= 1.0
+
+
+def test_hmm_compute_diagnostics():
+    """Verifies that compute_diagnostics returns AIC, BIC, transition matrix, and state metrics."""
+    n = 150
+    rng = np.random.default_rng(42)
+    dates = pd.bdate_range(end=pd.Timestamp("2024-01-01"), periods=n)
+    features_df = pd.DataFrame(
+        {
+            "spy_return": rng.normal(0.0005, 0.01, size=n),
+            "realized_vol_20d": rng.uniform(0.10, 0.25, size=n),
+            "vix_level": rng.uniform(12, 28, size=n),
+            "yield_curve_spread": rng.normal(0.5, 0.3, size=n),
+        },
+        index=dates,
+    )
+
+    detector = HMMRegimeDetector(n_states=3, covariance_type="diag", random_state=42)
+    detector.fit(features_df)
+
+    diag = detector.compute_diagnostics(features_df)
+    assert diag["n_states"] == 3
+    assert diag["covariance_type"] == "diag"
+    assert "log_likelihood" in diag
+    assert "aic" in diag
+    assert "bic" in diag
+    assert "transition_matrix" in diag
+    assert "expected_durations_days" in diag
+    assert "state_metrics" in diag
+
+    assert len(diag["transition_matrix"]) == 3
+    assert len(diag["expected_durations_days"]) == 3
+

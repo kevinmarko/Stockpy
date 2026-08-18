@@ -128,11 +128,25 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     settings.FMP_UNIVERSE_ENABLED is set (see data/fmp_universe.py), and
     caches the combined data to a parquet file.
 
-    Any failure to produce a fresh combined_df -- a network failure or a
-    Wikipedia page-shape change alike -- falls back to a stale cache if one
-    exists, else raises (RuntimeError for network/transport failures,
-    preserving the original ValueError for a structural page-shape failure,
-    matching this function's pre-existing exception contract)."""
+    Any failure to produce fresh current_tickers -- a network failure or a
+    Wikipedia page-shape change that breaks even table[0] -- falls back to a
+    stale cache if one exists, else raises (RuntimeError for network/transport
+    failures, preserving the original ValueError for a structural page-shape
+    failure, matching this function's pre-existing exception contract).
+
+    The historical CHANGES table is treated less strictly: if a second table
+    exists but its columns no longer match any recognized shape (Wikipedia
+    permanently removed its "Selected changes to the list of S&P 500
+    components" table in 2026-08 -- confirmed, not a transient glitch -- and
+    FMP's changes feed is entitlement-gated on non-Ultimate accounts), this
+    function proceeds with current_tickers and an EMPTY (never fabricated)
+    change_records list rather than discarding an otherwise-good scrape of
+    500+ current tickers over a supplementary field. This is loudly logged
+    since survivorship-bias correction is INCOMPLETE without it -- callers
+    consuming the bias report should treat that as informational, not silent.
+    A genuinely missing second table (``len(tables) < 2``) stays fatal and
+    unwinds to the stale-cache/raise contract below unchanged, since that
+    signals a much larger page-shape break with nothing recoverable."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     headers = {"User-Agent": "InvestYoQuant/1.0 (stockpy@example.com)"}
 
@@ -156,7 +170,20 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             change_records = []
 
         if not change_records:
-            change_records = _parse_wikipedia_changes_table(tables)
+            try:
+                change_records = _parse_wikipedia_changes_table(tables)
+            except ValueError as changes_exc:
+                if len(tables) < 2:
+                    # No second table at all -- nothing recoverable; let the
+                    # outer handler apply the stale-cache/raise contract.
+                    raise
+                logger.warning(
+                    "Historical S&P 500 changes table unavailable/unrecognized "
+                    f"({changes_exc}); proceeding with current constituents "
+                    "only. Survivorship-bias change history will be "
+                    "INCOMPLETE for this cache refresh."
+                )
+                change_records = []
     except Exception as e:
         logger.error(f"Error scraping/parsing Wikipedia S&P 500 page: {e}")
         if os.path.exists(CACHE_PATH):

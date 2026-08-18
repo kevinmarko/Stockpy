@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 293,
+    "live_safe": 310,
     "no_op": 3,
-    "restart_required": 95,
-    "total": 391
+    "restart_required": 99,
+    "total": 412
   },
   "dynamic_sites": [
     {
@@ -35,14 +35,14 @@
     {
       "expr": "getattr(settings, token_setting_name, None)",
       "file": "api/auth.py",
-      "line": 140,
+      "line": 150,
       "resolved_by_factory": "make_command_token_guard",
       "rules": []
     },
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 175,
+      "line": 176,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
@@ -138,13 +138,15 @@
       "rules": []
     }
   ],
-  "files_scanned": 415,
+  "files_scanned": 417,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
     "ADVISORY_REUSE_PIPELINE_COMPUTE",
     "AGENTIC_DISCOVERY_ENABLED",
     "AGENTIC_MAX_CANDIDATES",
+    "AI_CHAT_DEFAULT_MODEL",
+    "AI_CHAT_DEFAULT_PROVIDER",
     "AI_GENERATION_API_ENABLED",
     "ALERT_DEDUP_WINDOW_SECONDS",
     "ALERT_FILE_PATH",
@@ -265,18 +267,30 @@
     "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
     "GDELT_RETRY_BACKOFF_SECONDS",
     "GEMINI_API_KEY",
+    "GEMINI_CHAT_MODEL",
+    "GEMINI_LIVE_CHAT_ENABLED",
+    "GEMINI_LIVE_CHAT_MODEL",
+    "GEMINI_LIVE_VOICE_NAME",
     "GENERAL_SETTINGS_WRITES_ENABLED",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
     "GRAVITY_AI_RUNNER_ENABLED",
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "GRAVITY_REQUIRE_NATIVE",
     "HISTORICAL_STORE_ENABLED",
+    "HMM_CREDIT_SPREAD_FEATURE_ENABLED",
+    "HMM_INFLATION_FEATURE_ENABLED",
+    "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
+    "HMM_RISK_ON_DOWNGRADE_THRESHOLD",
+    "HMM_STANDARDIZE_FEATURES_ENABLED",
+    "HMM_VOL_TERM_SPREAD_FEATURE_ENABLED",
     "JOBS_API_ENABLED",
     "JULES_API_KEY",
     "JULES_ENABLED",
     "JULES_REQUEST_TIMEOUT_SECONDS",
     "KELLY_CAP",
     "KELLY_FRACTION",
+    "KILLSWITCH_SAHM_THRESHOLD_AGREED",
+    "KILLSWITCH_VIX_THRESHOLD_AGREED",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
     "LIVE_TRADE_APPROVAL_ENABLED",
     "LIVE_TRADE_EXECUTION_ENABLED",
@@ -287,6 +301,9 @@
     "LLM_COMMENTARY_TIMEOUT_SECONDS",
     "LLM_STATUS_MAX_AGE_HOURS",
     "LLM_WRITES_ENABLED",
+    "LOCAL_LLM_API_KEY",
+    "LOCAL_LLM_BASE_URL",
+    "LOCAL_LLM_MODEL",
     "MACRO_GATE_WRITES_ENABLED",
     "MACRO_REFRESH_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
@@ -442,15 +459,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 805,
+    "attr": 825,
     "factory_param": 4,
-    "getattr_const": 317,
+    "getattr_const": 349,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 234,
+    "attr": 242,
     "factory_param": 4,
-    "getattr_const": 183,
+    "getattr_const": 198,
     "os_environ": 17
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1838,6 +1855,39 @@
         "via": []
       }
     ],
+    "HMM_COVARIANCE_TYPE": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:87",
+        "via": []
+      }
+    ],
+    "HMM_N_INITS": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:90",
+        "via": []
+      }
+    ],
+    "HMM_N_ITER": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:88",
+        "via": []
+      }
+    ],
     "HMM_N_STATES": [
       {
         "discarded": false,
@@ -1868,6 +1918,17 @@
           "init_self_assign"
         ],
         "site": "execution/risk_gate.py:154",
+        "via": []
+      }
+    ],
+    "HMM_TOL": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:89",
         "via": []
       }
     ],
@@ -2829,15 +2890,6 @@
         ],
         "site": "api/state_api.py:94",
         "via": []
-      },
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "module_level"
-        ],
-        "site": "api/ws_api.py:54",
-        "via": []
       }
     ],
     "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
@@ -2847,7 +2899,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:560",
+        "site": "pipeline/production_steps.py:564",
         "via": []
       }
     ],
@@ -2904,7 +2956,8 @@
     "FOLLOW_API_TOKEN",
     "MCP_OAUTH_ENABLED",
     "MCP_OAUTH_PASSWORD",
-    "ORCHESTRATOR_DAEMON_TOKEN"
+    "ORCHESTRATOR_DAEMON_TOKEN",
+    "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
@@ -2914,9 +2967,9 @@
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
     "init_body": 6,
-    "init_self_assign": 41,
+    "init_self_assign": 45,
     "method_self_assign": 4,
-    "module_level": 78,
+    "module_level": 77,
     "os_environ": 24
   },
   "restart_required_via_name_literal_only": [

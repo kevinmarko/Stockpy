@@ -339,13 +339,23 @@ class TestFetchAndCacheUniverseMalformedTable:
             with pytest.raises(ValueError, match="Symbol/Ticker column"):
                 universe_engine.fetch_and_cache_universe()
 
-    def test_missing_changes_columns_raises_value_error(self):
+    def test_missing_changes_columns_degrades_to_current_tickers_only(self):
+        """Unlike a broken current-constituents table (unrecoverable --
+        raises unconditionally, see the two tests above), a changes table
+        that EXISTS but whose columns are unrecognized is the exact live
+        2026-08 break: Wikipedia permanently removed its "Selected changes"
+        table, and current_tickers is still solid, fully-parsed data.
+        fetch_and_cache_universe() must proceed with current_tickers and an
+        EMPTY change_records list rather than discarding a good scrape --
+        with no stale cache required to survive this, since the fresh data
+        it does have is better than stale data, not worse."""
         current_df = pd.DataFrame({"Symbol": ["AAPL"]})
         changes_no_cols = pd.DataFrame({"Something": ["irrelevant"]})
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
              mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]):
-            with pytest.raises(ValueError, match="Date, Added Ticker, or Removed Ticker"):
-                universe_engine.fetch_and_cache_universe()
+            result = universe_engine.fetch_and_cache_universe()
+        assert list(result["added_ticker"]) == ["AAPL"]
+        assert list(result["type"]) == ["current"]
 
     def _changes_table(self):
         return _changes_table()
@@ -379,17 +389,21 @@ class TestFetchAndCacheUniverseMalformedTable:
             result = universe_engine.fetch_and_cache_universe()
         pd.testing.assert_frame_equal(result.reset_index(drop=True), cached.reset_index(drop=True))
 
-    def test_missing_changes_columns_with_cache_present_falls_back_to_stale_cache(self):
+    def test_missing_changes_columns_prefers_fresh_current_tickers_over_stale_cache(self):
         """This is the exact live-production failure mode (Wikipedia's
-        changes table removed entirely, 2026-08): with a stale cache present,
-        fetch_and_cache_universe() must degrade to it instead of raising."""
-        cached = self._write_stale_cache()
+        changes table removed entirely, 2026-08). A stale cache being present
+        must NOT cause fetch_and_cache_universe() to serve the stale data in
+        preference to a fresh, successfully-parsed current-tickers scrape --
+        the fresh (if partial) result is strictly better than a stale one, so
+        it must win."""
+        self._write_stale_cache()
         current_df = pd.DataFrame({"Symbol": ["AAPL"]})
         changes_no_cols = pd.DataFrame({"Something": ["irrelevant"]})
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
              mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]):
             result = universe_engine.fetch_and_cache_universe()
-        pd.testing.assert_frame_equal(result.reset_index(drop=True), cached.reset_index(drop=True))
+        assert list(result["added_ticker"]) == ["AAPL"]
+        assert list(result["type"]) == ["current"]
 
     def test_single_malformed_change_row_is_skipped_not_raised(self):
         """A bad DATE on one row (not a missing column) must be logged and

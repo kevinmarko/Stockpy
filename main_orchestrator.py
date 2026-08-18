@@ -705,6 +705,7 @@ def _write_state_snapshot(
     final_df: "pd.DataFrame",
     tickers: list,
     macro_kill_switch: Optional[bool] = None,
+    hmm_regime_state: Optional[str] = None,
 ) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
@@ -720,6 +721,11 @@ def _write_state_snapshot(
     ``macro_raw``'s raw fields (which don't carry the HMM-agreement branch's
     inputs and would silently under-report the kill switch). ``None`` (never
     a fabricated ``False``) when the caller had no live DTO in scope.
+
+    ``hmm_regime_state`` is likewise the live ``MacroEconomicDTO.hmm_regime_state``
+    label, threaded through verbatim for the same reason: ``macro_raw`` is the
+    raw pre-DTO fetch dict and never carries an ``"HMM_Regime_State"`` key, so
+    deriving it from ``macro_raw`` here would always resolve to ``None``.
     """
     import json
     try:
@@ -905,6 +911,11 @@ def _write_state_snapshot(
             # display live recession-indicator telemetry without a live FRED call.
             "sahm_rule": float(macro_raw.get("SAHMREALTIME", 0.0) or 0.0),
             "high_yield_oas": float(macro_raw.get("BAMLH0A0HYM2", 0.0) or 0.0),
+            "hmm_risk_on_probability": _safe_float_or_none(macro_raw.get("HMM_Risk_On_Probability")),
+            # Threaded through verbatim from the caller's live MacroEconomicDTO
+            # (see this function's docstring) -- never derived from macro_raw,
+            # which never carries an "HMM_Regime_State" key.
+            "hmm_regime_state": (str(hmm_regime_state).strip() or None) if hmm_regime_state is not None else None,
             # Live MacroEconomicDTO.killSwitch verdict, passed in by the caller
             # -- never reconstructed from macro_raw here (see this function's
             # docstring). None (never a fabricated False) when the caller had

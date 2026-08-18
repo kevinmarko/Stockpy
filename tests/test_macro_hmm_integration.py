@@ -17,6 +17,7 @@ import pytest
 from data_engine import MockDataEngine
 from dto_models import MacroEconomicDTO
 from macro_engine import MacroEngine
+from regime.hmm_regime import build_feature_matrix
 
 
 @pytest.fixture(autouse=True)
@@ -176,7 +177,8 @@ def test_compute_hmm_risk_on_probability_succeeds_with_sufficient_aligned_data()
 
     result = me.compute_hmm_risk_on_probability(spy_df)
     assert result is not None
-    assert 0.0 <= result <= 1.0
+    assert "risk_on_probability" in result
+    assert 0.0 <= result["risk_on_probability"] <= 1.0
 
 
 # =============================================================================
@@ -271,3 +273,69 @@ def test_hmm_n_states_and_retrain_freq_days_read_from_settings(monkeypatch):
 
     assert me._hmm_detector.n_states == 4
     assert me._hmm_detector.retrain_freq_days == 14
+
+
+def test_hmm_covariance_and_iter_read_from_settings(monkeypatch):
+    """MacroEngine must construct its HMMRegimeDetector with settings.HMM_COVARIANCE_TYPE,
+    HMM_N_ITER, and HMM_TOL."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "HMM_COVARIANCE_TYPE", "full")
+    monkeypatch.setattr(_settings, "HMM_N_ITER", 200)
+    monkeypatch.setattr(_settings, "HMM_TOL", 1e-5)
+
+    mde = MockDataEngine()
+    me = MacroEngine(data_engine=mde)
+
+    assert me._hmm_detector.covariance_type == "full"
+    assert me._hmm_detector.n_iter == 200
+    assert me._hmm_detector.tol == 1e-5
+
+
+def test_hmm_feature_matrix_credit_and_vol_term_flags():
+    """Verifies build_feature_matrix includes credit spread and vol term spread when provided."""
+    dates = pd.date_range("2023-01-01", periods=100, freq="B")
+    spy_df = pd.DataFrame({"Close": np.linspace(100, 150, 100)}, index=dates)
+    vix = pd.Series(np.linspace(15, 25, 100), index=dates)
+    yc = pd.Series(np.linspace(0.5, 1.0, 100), index=dates)
+    credit = pd.Series(np.linspace(3.5, 4.5, 100), index=dates)
+
+    f_base = build_feature_matrix(spy_df, vix, yc)
+    assert "credit_spread" not in f_base.columns
+    assert "vol_term_spread" not in f_base.columns
+
+    f_ext = build_feature_matrix(
+        spy_df,
+        vix,
+        yc,
+        credit_spread_series=credit,
+        include_vol_term_spread=True,
+    )
+    assert "credit_spread" in f_ext.columns
+    assert "vol_term_spread" in f_ext.columns
+    assert len(f_ext) > 0
+
+
+def test_macro_dto_dynamic_threshold_override(monkeypatch):
+    """MacroEconomicDTO must respect settings overrides for downgrade and agreement thresholds."""
+    from settings import settings as _settings
+
+    # By default, p=0.35 is >= default 0.30 downgrade threshold (stays RISK ON)
+    dto = MacroEconomicDTO(
+        yield_curve_10y_2y=0.5,
+        high_yield_oas=2.0,
+        inflation_rate=2.0,
+        hmm_risk_on_probability=0.35,
+    )
+    assert dto.market_regime == "RISK ON"
+
+    # Override threshold to 0.40 -> p=0.35 < 0.40 -> downgrades to NEUTRAL
+    monkeypatch.setattr(_settings, "HMM_RISK_ON_DOWNGRADE_THRESHOLD", 0.40)
+    dto_overridden = MacroEconomicDTO(
+        yield_curve_10y_2y=0.5,
+        high_yield_oas=2.0,
+        inflation_rate=2.0,
+        hmm_risk_on_probability=0.35,
+    )
+    assert dto_overridden.market_regime == "NEUTRAL"
+
