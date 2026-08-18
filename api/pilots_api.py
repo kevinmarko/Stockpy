@@ -5642,6 +5642,22 @@ class ZeroDteExecuteRequest(BaseModel):
     is_live: bool = False
 
 
+class VolMispricingExecuteRequest(BaseModel):
+    symbol: str
+    # The specific candidate trade the caller selected (one element of a prior
+    # GET /pilots/options/forecast/mispricing call's candidate_trades list). This
+    # endpoint never silently picks "the best" candidate itself.
+    candidate: Dict[str, Any]
+    contracts: Optional[int] = 1
+    dry_run: bool = False
+    is_live: bool = False
+    # vol_mispricing is a MEASURED deployability failure (Sharpe -0.499, DSR 0.027,
+    # fails the Oct-2008 stress window) -- execution is blocked by default and only
+    # proceeds when this is explicitly set True on a per-request basis. Never a
+    # standing settings flag -- see OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"].
+    override_deployability_gate: bool = False
+
+
 
 
 class MultiLegOptionLeg(BaseModel):
@@ -6066,16 +6082,17 @@ def get_options_earnings_crush_candidates(
 # (Sourced from docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-17 investigation)
 # ---------------------------------------------------------------------------
 OPTIONS_DESK_DEPLOYABILITY_GATES = {
-    # NOTE (2026-08-18): unlike the three entries below, this key has no live consumer today.
-    # `earnings_crush`/`dispersion_trading`/`zero_dte_engine` each get this dict's entry stamped
-    # onto their POST .../execute response as "gate_status" (see those endpoints below); no such
-    # wiring exists for vol_mispricing because pilots/vol_mispricing.py has no execute_* function
-    # and no PaperAccountStore import -- its __all__ exposes scan/evaluate (evaluate_strike_mispricing,
-    # build_candidate_strategy_trades) only, and its sole API surface is the read-only
-    # GET /pilots/options/forecast/mispricing. See docs/signals/vol_mispricing.md's "Live
-    # Paper-Execution Status" section. This entry is kept anyway as the single source of truth for
-    # vol_mispricing's measured deployability, so that IF a live execute endpoint is ever added,
-    # its gate_status wiring is "read this," not "re-derive the numbers."
+    # NOTE (2026-08-18, updated): unlike the three entries below, this key's gate is
+    # ENFORCING, not merely informational. `pilots/vol_mispricing.py::execute_vol_mispricing_trade`
+    # now exists (with a real PaperAccountStore write path via the shared
+    # OptionsPaperExecutor.execute_earnings_crush_trade, strategy_name="Vol Mispricing"), and
+    # POST /pilots/options/mispricing/execute (below) is a real, live consumer of this entry --
+    # but because vol_mispricing is a MEASURED deployability failure (not merely an unmeasurable
+    # data gap like its three siblings), that endpoint BLOCKS execution by default whenever this
+    # entry's gate_status is "MEASURED_FAIL", refusing unless the request explicitly sets
+    # override_deployability_gate=True (a deliberate, per-request, never-silent override -- never
+    # a standing settings flag). See docs/signals/vol_mispricing.md's "Live Paper-Execution
+    # Status" section for the full design rationale.
     "vol_mispricing": {
         "deployable": False,
         "gate_status": "MEASURED_FAIL",
@@ -6162,6 +6179,51 @@ def get_options_forecast_mispricing(symbol: str = Query(..., min_length=1)) -> D
     """Returns strike-by-strike market IV vs fair IV spread and Rich/Cheap candidate recommendations."""
     from pilots.vol_mispricing import get_volatility_mispricing_data
     return get_volatility_mispricing_data(symbol=symbol)
+
+
+@app.post(
+    "/pilots/options/mispricing/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_mispricing_execute(body: VolMispricingExecuteRequest) -> Dict[str, Any]:
+    """Executes a caller-selected vol_mispricing candidate multi-leg trade in the paper
+    broker with an enforced deployability gate.
+
+    Unlike earnings_crush/dispersion_trading/zero_dte_engine (each an UNGATEABLE_DATA_GAP
+    whose gate_status is surfaced but never blocks), vol_mispricing is a MEASURED
+    deployability failure (Sharpe -0.499, DSR 0.027, fails the Oct-2008 stress window --
+    see docs/signals/vol_mispricing.md). Execution is therefore blocked by default and
+    proceeds only when the request explicitly sets override_deployability_gate=True -- a
+    deliberate, per-request, always-visible override, never a silent bypass or a
+    standing settings flag.
+    """
+    gate = OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]
+    if gate["gate_status"] == "MEASURED_FAIL" and not body.override_deployability_gate:
+        return {
+            "ok": False,
+            "blocked": True,
+            "message": (
+                "Execution blocked: vol_mispricing is a measured deployability failure. "
+                "Set override_deployability_gate=true to proceed anyway."
+            ),
+            "gate_status": gate,
+        }
+
+    from pilots.vol_mispricing import execute_vol_mispricing_trade
+    res = execute_vol_mispricing_trade(
+        symbol=body.symbol,
+        candidate=body.candidate,
+        contracts=body.contracts or 1,
+        dry_run=body.dry_run,
+        is_live=body.is_live,
+    )
+    if isinstance(res, dict):
+        res["gate_status"] = gate
+        res["override_applied"] = body.override_deployability_gate
+    return res
 
 
 class GammaScalpSimulateRequest(BaseModel):

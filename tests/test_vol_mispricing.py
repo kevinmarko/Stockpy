@@ -18,11 +18,14 @@ import ast
 import math
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from data.paper_account_store import PaperAccountStore
+from execution.options_paper_executor import OptionsPaperExecutor
 from pilots.vol_mispricing import (
     DEFAULT_CHEAP_VOL_THRESHOLD,
     DEFAULT_RICH_VOL_THRESHOLD,
@@ -36,6 +39,7 @@ from pilots.vol_mispricing import (
     calculate_strike_mispricing_spread,
     classify_strike_mispricing,
     evaluate_strike_mispricing,
+    execute_vol_mispricing_trade,
     extract_chain_contracts,
     implied_volatility_from_price,
 )
@@ -474,3 +478,137 @@ def test_mispricing_analysis_to_dict_and_indexing():
     assert "summary" in data
     assert "candidate_trades" in data
     assert "diagnostics" in data
+
+
+# ---------------------------------------------------------------------------
+# 10. execute_vol_mispricing_trade
+# ---------------------------------------------------------------------------
+
+
+_BULL_PUT_CANDIDATE: Dict[str, Any] = {
+    "strategy_type": "bull_put_spread",
+    "name": "Bull Put Credit Spread ($185.00/$190.00P)",
+    "legs": [
+        {
+            "symbol": "AAPL 2026-09-18 $190.00 PUT",
+            "action": "sell",
+            "type": "PUT",
+            "strike": 190.0,
+            "expiration": "2026-09-18",
+            "unit_price": 2.50,
+        },
+        {
+            "symbol": "AAPL 2026-09-18 $185.00 PUT",
+            "action": "buy",
+            "type": "PUT",
+            "strike": 185.0,
+            "expiration": "2026-09-18",
+            "unit_price": 1.00,
+        },
+    ],
+}
+
+
+def test_execute_vol_mispricing_trade_requires_symbol():
+    res = execute_vol_mispricing_trade("", candidate=dict(_BULL_PUT_CANDIDATE))
+    assert res["ok"] is False
+    assert "Symbol" in res["message"]
+
+
+def test_execute_vol_mispricing_trade_is_live_refuses():
+    res = execute_vol_mispricing_trade("AAPL", candidate=dict(_BULL_PUT_CANDIDATE), is_live=True)
+    assert res["ok"] is False
+    assert "Advisory-Only" in res["message"]
+
+
+def test_execute_vol_mispricing_trade_missing_candidate_refuses():
+    res = execute_vol_mispricing_trade("AAPL", candidate=None)
+    assert res["ok"] is False
+    assert "candidate" in res["message"].lower()
+
+
+def test_execute_vol_mispricing_trade_empty_legs_refuses():
+    res = execute_vol_mispricing_trade("AAPL", candidate={"strategy_type": "bull_put_spread", "legs": []})
+    assert res["ok"] is False
+    assert "candidate" in res["message"].lower()
+
+
+def test_execute_vol_mispricing_trade_dry_run_preview():
+    res = execute_vol_mispricing_trade("AAPL", candidate=dict(_BULL_PUT_CANDIDATE), dry_run=True, contracts=3)
+    assert res["ok"] is True
+    assert res["dry_run"] is True
+    assert res["symbol"] == "AAPL"
+    assert res["strategy"] == "bull_put_spread"
+    assert res["contracts"] == 3
+
+
+def test_execute_vol_mispricing_trade_leg_price_translation_dollar_per_share_to_dollar_per_contract():
+    """Worked-example check on the $/share -> $/contract leg translation math:
+    unit_price (per-share option premium) * 100.0 == fill_price (per-contract).
+    Short $190 PUT @ $2.50/share sold (100 sh/contract) => $250.00/contract credit.
+    Long $185 PUT @ $1.00/share bought => $100.00/contract debit.
+    contracts=2, commission = 0.65 * 2 contracts * 2 legs = $2.60.
+    net_cash_impact = (250.00*2 - 100.00*2) - 2.60 = 300.00 - 2.60 = $297.40.
+    """
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    initial_cash = store.get_account().cash
+
+    with mock.patch("execution.options_paper_executor.OptionsPaperExecutor") as MockExecutorCls:
+        real_executor = OptionsPaperExecutor(store=store)
+        MockExecutorCls.return_value = real_executor
+
+        res = execute_vol_mispricing_trade(
+            "AAPL", candidate=dict(_BULL_PUT_CANDIDATE), contracts=2,
+        )
+
+    assert res["ok"] is True, res
+    details = res["details"]
+    assert details["success"] is True
+
+    fill_prices = {leg["symbol"]: leg["fill_price"] for leg in details["legs"]}
+    assert fill_prices["AAPL 2026-09-18 $190.00 PUT"] == pytest.approx(250.0)
+    assert fill_prices["AAPL 2026-09-18 $185.00 PUT"] == pytest.approx(100.0)
+
+    expected_net_cash_impact = (250.0 * 2 - 100.0 * 2) - (0.65 * 2 * 2)
+    assert details["net_cash_impact"] == pytest.approx(expected_net_cash_impact)
+    assert expected_net_cash_impact == pytest.approx(297.40)
+
+    assert store.get_account().cash == pytest.approx(initial_cash + 297.40)
+
+    # Trade must be labeled "Vol Mispricing" in the paper-broker blotter, not
+    # "Earnings Crush" (the shared executor's own hardcoded default).
+    orders = store.get_full_orders()
+    parent_order = next(o for o in orders if o["order_id"] == details["order_id"])
+    assert parent_order["symbol"] == "VOL MISPRICING AAPL"
+
+
+def test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly():
+    """A leg with no unit_price must never fall back to a fabricated fill price
+    (CONSTRAINT #4) -- the underlying executor refuses the whole trade."""
+    candidate = {
+        "strategy_type": "bull_put_spread",
+        "legs": [
+            {
+                "symbol": "AAPL 2026-09-18 $190.00 PUT",
+                "action": "sell",
+                "strike": 190.0,
+                "expiration": "2026-09-18",
+                "unit_price": 2.50,
+            },
+            {
+                "symbol": "AAPL 2026-09-18 $185.00 PUT",
+                "action": "buy",
+                "strike": 185.0,
+                "expiration": "2026-09-18",
+                # unit_price intentionally omitted
+            },
+        ],
+    }
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+
+    with mock.patch("execution.options_paper_executor.OptionsPaperExecutor") as MockExecutorCls:
+        MockExecutorCls.return_value = OptionsPaperExecutor(store=store)
+        res = execute_vol_mispricing_trade("AAPL", candidate=candidate, contracts=1)
+
+    assert res["ok"] is False
+    assert store.get_open_positions() == []

@@ -335,3 +335,90 @@ def test_executor_construction_no_model_file_is_honest_and_non_crashing(
     assert singleton.model is None
     assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.65
     assert singleton.get_sizing_multiplier(0.65) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# execute_earnings_crush_trade: strategy_name param + no-fabrication fix
+# ---------------------------------------------------------------------------
+
+
+def _iron_condor_candidate(symbol="NVDA"):
+    return {
+        "symbol": symbol,
+        "strategy": "Iron Condor",
+        "expiration": "2026-08-21",
+        "earnings_date": "2026-08-20",
+        "legs": [
+            {"symbol": f"{symbol} 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": f"{symbol} 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": f"{symbol} 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": f"{symbol} 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+        ],
+        "net_credit": 2.70,
+    }
+
+
+def test_execute_earnings_crush_trade_default_strategy_name_is_unchanged():
+    """strategy_name=None (the default, matching every pre-existing caller) must
+    preserve the exact historical "Earnings Crush" label, regardless of
+    candidate["strategy"]."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    res = executor.execute_earnings_crush_trade(_iron_condor_candidate(), contracts=1)
+
+    assert res["success"] is True
+    assert res["strategy"] == "Earnings Crush"
+
+
+def test_execute_earnings_crush_trade_explicit_strategy_name_overrides_label():
+    """A caller passing strategy_name= gets that label instead of the hardcoded
+    "Earnings Crush" -- both in the returned dict and in the parent order's
+    symbol label (via apply_multi_leg_fill's strategy_name kwarg, recorded as
+    f"{strategy_name} {symbol}")."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    res = executor.execute_earnings_crush_trade(
+        _iron_condor_candidate(symbol="AAPL"), contracts=1, strategy_name="Vol Mispricing",
+    )
+
+    assert res["success"] is True
+    assert res["strategy"] == "Vol Mispricing"
+
+    positions = store.get_open_positions()
+    assert len(positions) == 4
+
+    orders = store.get_full_orders()
+    parent_order = next(o for o in orders if o["order_id"] == res["order_id"])
+    assert parent_order["symbol"] == "VOL MISPRICING AAPL"
+
+
+def test_execute_earnings_crush_trade_never_fabricates_price():
+    """A leg with no resolvable fill_price/raw_price must NOT be filled with the
+    old fabricated $1.50/$150.00 sentinel -- the trade is refused honestly
+    instead (CONSTRAINT #4), and no partial fill is submitted."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    initial_cash = store.get_account().cash
+
+    candidate = {
+        "symbol": "NVDA",
+        "strategy": "Iron Condor",
+        "expiration": "2026-08-21",
+        "legs": [
+            {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            # No fill_price, no price/raw_price anywhere on this leg.
+            {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0},
+        ],
+    }
+
+    res = executor.execute_earnings_crush_trade(candidate, contracts=1)
+
+    assert res["success"] is False
+    assert "150" not in res["reason"] and "1.5" not in res["reason"]
+    assert "NVDA 2026-08-21 $115.00 PUT" in res["reason"]
+
+    # No partial fill was ever submitted.
+    assert store.get_open_positions() == []
+    assert store.get_account().cash == initial_cash

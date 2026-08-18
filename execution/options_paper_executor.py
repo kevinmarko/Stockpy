@@ -699,10 +699,18 @@ class OptionsPaperExecutor:
         self,
         candidate: Dict[str, Any],
         contracts: int = 1,
+        strategy_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Executes a multi-leg Earnings Crush options strategy (Iron Condor, Short Straddle,
-        Short Strangle) into PaperAccountStore with strategy_name="Earnings Crush".
+        Executes a multi-leg options strategy (Iron Condor, Short Straddle, Short Strangle,
+        credit/debit spreads, ...) into PaperAccountStore.
+
+        `strategy_name` controls the label written to `apply_multi_leg_fill`'s
+        `strategy_name=` (and thus the paper-broker blotter). Defaults to `None`, which
+        preserves the historical behavior of this function exactly: the fill is always
+        labeled "Earnings Crush" regardless of `candidate["strategy"]`. Pass an explicit
+        `strategy_name` (e.g. "Vol Mispricing") to correctly label trades submitted by a
+        different caller reusing this same generic multi-leg executor.
 
         Candidate format:
         {
@@ -736,15 +744,17 @@ class OptionsPaperExecutor:
         strikes = []
         signed_prices = []
 
+        unpriced_legs: List[str] = []
+
         if raw_legs:
             for idx, leg in enumerate(raw_legs):
                 leg_sym = leg.get("symbol")
                 side = str(leg.get("side", leg.get("Side", "BUY"))).lower()
                 ratio = float(leg.get("ratio_qty", leg.get("Ratio", leg.get("qty", 1.0))))
-                
+
                 strike = float(leg.get("strike", 0.0) or leg.get("Strike", 0.0))
                 opt_type = str(leg.get("type", leg.get("Type", "CALL"))).upper()
-                
+
                 if leg_sym:
                     opt_info = parse_option_symbol(leg_sym)
                     if opt_info:
@@ -759,14 +769,17 @@ class OptionsPaperExecutor:
                 # Price in $/contract (fill_price) or $/share (raw_price)
                 fill_price = float(leg.get("fill_price", 0.0) or 0.0)
                 raw_price = float(leg.get("price", leg.get("Price", 0.0) or leg.get("raw_price", 0.0)) or 0.0)
-                
+
                 if fill_price <= 0 and raw_price > 0:
                     fill_price = raw_price * 100.0 if raw_price < 50.0 else raw_price
                 elif fill_price > 0 and raw_price <= 0:
                     raw_price = fill_price / 100.0
                 elif fill_price <= 0 and raw_price <= 0:
-                    raw_price = 1.50
-                    fill_price = 150.0
+                    # CONSTRAINT #4: never fabricate a price. A leg with no resolvable
+                    # fill_price/raw_price is skipped here and the whole trade is refused
+                    # below (rather than submitting a partially-fabricated multi-leg fill).
+                    unpriced_legs.append(leg_sym)
+                    continue
 
                 signed_price = (raw_price * ratio) if side == "buy" else (-raw_price * ratio)
                 signed_prices.append(signed_price)
@@ -779,6 +792,15 @@ class OptionsPaperExecutor:
                     "fill_price": fill_price,
                     "raw_price": raw_price,
                 })
+
+        if unpriced_legs:
+            return {
+                "success": False,
+                "reason": (
+                    f"No real price available for leg(s) {unpriced_legs} in {sym} trade; "
+                    "refusing to fabricate a fill price."
+                ),
+            }
         else:
             # Construct from strikes in candidate dict
             # Support Iron Condor (short_put, long_put, short_call, long_call)
@@ -837,10 +859,16 @@ class OptionsPaperExecutor:
             "fill_price": l["fill_price"],
         } for l in parsed_legs]
 
+        # `strategy_name=None` preserves the historical, always-"Earnings Crush" label
+        # exactly (matching every existing caller/test). An explicit `strategy_name`
+        # (e.g. "Vol Mispricing") overrides it so a non-earnings-crush caller reusing this
+        # generic multi-leg executor gets a correctly-labeled paper-broker blotter entry.
+        effective_strategy_name = strategy_name if strategy_name is not None else "Earnings Crush"
+
         success = self.store.apply_multi_leg_fill(
             client_order_id=client_order_id,
             symbol=sym,
-            strategy_name="Earnings Crush",
+            strategy_name=effective_strategy_name,
             contracts=contracts,
             legs=fill_legs,
             net_cash_impact=net_cash_impact,
@@ -852,7 +880,7 @@ class OptionsPaperExecutor:
             "success": bool(success),
             "order_id": client_order_id,
             "symbol": sym,
-            "strategy": "Earnings Crush",
+            "strategy": effective_strategy_name,
             "contracts": contracts,
             "net_cash_impact": net_cash_impact,
             "commission": commission,
