@@ -25,6 +25,7 @@ from pilots.zero_dte_engine import (
     execute_0dte_trade,
     execute_0dte_exits,
     manage_0dte_exits,
+    is_0dte_auto_exit_enabled,
 )
 
 
@@ -648,3 +649,30 @@ class TestManageZeroDteExits:
         mock_execute.assert_not_called()
         assert result["reason"] == "no_exit_conditions_triggered"
         assert result["executed_count"] == 0
+
+
+class TestIs0dteAutoExitEnabled:
+    """Regression coverage for the single source-of-truth gate helper --
+    previously the identical `OPTIONS_0DTE_ENABLED or OPTIONS_AUTO_EXIT_ENABLED`
+    expression was duplicated at each automatic call site (main.py,
+    desktop/daemon_runtime.py) and one copy silently drifted (main.py nested
+    it inside a third, unrelated gate), so OPTIONS_0DTE_ENABLED alone never
+    reached manage_0dte_exits() via main.py's orchestrator path."""
+
+    def test_false_when_neither_flag_set(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.OPTIONS_0DTE_ENABLED", False)
+        monkeypatch.setattr("settings.settings.OPTIONS_AUTO_EXIT_ENABLED", False)
+        assert is_0dte_auto_exit_enabled() is False
+
+    def test_true_when_only_0dte_flag_set(self, monkeypatch):
+        """The exact scenario the main.py bug broke: OPTIONS_0DTE_ENABLED
+        alone, with every other options-automation flag left at its default
+        False, must still enable the automatic 0DTE exit pass."""
+        monkeypatch.setattr("settings.settings.OPTIONS_0DTE_ENABLED", True)
+        monkeypatch.setattr("settings.settings.OPTIONS_AUTO_EXIT_ENABLED", False)
+        assert is_0dte_auto_exit_enabled() is True
+
+    def test_true_when_only_auto_exit_flag_set(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.OPTIONS_0DTE_ENABLED", False)
+        monkeypatch.setattr("settings.settings.OPTIONS_AUTO_EXIT_ENABLED", True)
+        assert is_0dte_auto_exit_enabled() is True

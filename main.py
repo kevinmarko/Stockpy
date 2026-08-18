@@ -1400,10 +1400,13 @@ def main() -> None:
             )
 
         # ── Automated Strategy Options Paper Execution & Lifecycle ────────────
+        from pilots.zero_dte_engine import is_0dte_auto_exit_enabled
+
         if (
             getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
             or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
             or getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False)
+            or is_0dte_auto_exit_enabled()
         ):
             try:
                 from execution.options_paper_executor import OptionsPaperExecutor
@@ -1420,7 +1423,7 @@ def main() -> None:
                     )
 
                 # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
-                if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+                if is_0dte_auto_exit_enabled():
                     try:
                         from pilots.zero_dte_engine import manage_0dte_exits
                         _0dte_res = manage_0dte_exits(store=_executor.store)
@@ -1432,7 +1435,7 @@ def main() -> None:
                                 _0dte_res.get("failed_count", 0),
                             )
                     except Exception as _0dte_exc:
-                        logger.debug("0DTE exit lifecycle evaluation: %s", _0dte_exc)
+                        logger.warning("0DTE exit lifecycle evaluation failed: %s", _0dte_exc)
 
                 # 2. Open New Strategy Option Positions
 

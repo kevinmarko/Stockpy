@@ -65,6 +65,7 @@ __all__ = [
     "execute_0dte_trade",
     "execute_0dte_exits",
     "manage_0dte_exits",
+    "is_0dte_auto_exit_enabled",
     "parse_option_symbol",
     "parse_chain_data",
     "OpeningRange",
@@ -1269,6 +1270,26 @@ def execute_0dte_exits(
         "executed": executed,
         "failed": failed,
     }
+
+
+def is_0dte_auto_exit_enabled() -> bool:
+    """Whether an AUTOMATIC pipeline cycle (main.py / desktop/daemon_runtime.py)
+    should call ``manage_0dte_exits()`` this cycle.
+
+    Single source of truth for the two settings that gate automatic 0DTE
+    liquidation, so a caller can't silently bypass the gate by re-deriving
+    (and getting wrong) this same boolean expression inline -- exactly what
+    happened when this expression was duplicated at both automatic call
+    sites and one of the two copies was nested inside a third, unrelated
+    gate. Deliberately NOT consulted by ``manage_0dte_exits`` itself: a
+    manual/on-demand caller (e.g. a future webapp-triggered endpoint) should
+    always be able to invoke it directly regardless of whether automatic
+    per-cycle execution is enabled.
+    """
+    return bool(
+        getattr(settings, "OPTIONS_0DTE_ENABLED", False)
+        or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
+    )
 
 
 def manage_0dte_exits(

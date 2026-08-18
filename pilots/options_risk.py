@@ -10,6 +10,7 @@ Calculates position-level and portfolio-wide net Greeks:
 """
 
 from datetime import datetime, timezone
+import logging
 import math
 import re
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,8 @@ from scipy.stats import norm
 
 from data.paper_account_store import PaperAccountStore, PaperPosition
 from settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 # Regex matching option symbol format: AAPL 2026-09-18 $150.00 CALL
@@ -292,19 +295,63 @@ def calculate_position_greeks(
     }
 
 
-def _resolve_symbol_beta(ticker: str) -> float:
-    """Resolves regression beta of ticker vs SPY. Defaults to 1.0 for SPY or missing data."""
-    if not ticker or str(ticker).upper() == "SPY":
-        return 1.0
+def _resolve_symbol_betas(tickers: "set[str]") -> Dict[str, float]:
+    """Batch-resolves regression beta vs SPY (``Cov(returns, spy_returns) /
+    Var(spy_returns)``) for every ticker in ``tickers``, sharing ONE
+    ``HistoricalStore(readonly=True)`` and ONE SPY bars fetch across all of
+    them rather than constructing a fresh store per position.
+
+    Reuses ``data/fmp_fundamentals.py::compute_beta`` -- this codebase's own
+    reference implementation of this exact formula (see that function's
+    docstring: "Deliberate duplication of data/yahoo_fundamentals.py's beta
+    computation... to keep this module's diff isolated") -- instead of a
+    third reimplementation.
+
+    Returns ``float("nan")`` for any ticker whose beta can't be measured
+    (no cached bars, insufficient overlapping history) -- NEVER a fabricated
+    neutral default. This matches ``data/market_data.py``'s
+    ``FMPProvider._compute_beta`` convention: "Never fabricates a neutral
+    1.0 on failure -- degrades to NaN." SPY's own beta vs itself is exactly
+    1.0 by mathematical definition, not a fallback.
+    """
+    betas: Dict[str, float] = {}
+    upper = {str(t).upper().strip() for t in tickers if t}
+    if "SPY" in upper:
+        betas["SPY"] = 1.0
+    non_spy = sorted(upper - {"SPY"})
+    if not non_spy:
+        return betas
+
     try:
         from data.historical_store import HistoricalStore
-        store = HistoricalStore()
-        beta = store.get_symbol_beta(str(ticker).upper())
-        if beta is not None and not math.isnan(beta) and beta > 0:
-            return float(beta)
-    except Exception:
-        pass
-    return 1.0
+        from data.fmp_fundamentals import compute_beta
+
+        store = HistoricalStore(readonly=True)
+        lookback_days = max(int(settings.BETA_LOOKBACK_DAYS), 60)
+        spy_df = store.get_bars("SPY", lookback_days=lookback_days)
+        spy_returns = (
+            spy_df["Close"].pct_change(fill_method=None)
+            if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns
+            else None
+        )
+        for t in non_spy:
+            try:
+                price_df = store.get_bars(t, lookback_days=lookback_days)
+                stock_returns = (
+                    price_df["Close"].pct_change(fill_method=None)
+                    if price_df is not None and not price_df.empty and "Close" in price_df.columns
+                    else None
+                )
+                betas[t] = compute_beta(stock_returns, spy_returns)
+            except Exception as exc:
+                logger.debug("_resolve_symbol_betas(%s): per-symbol beta failed: %s", t, exc)
+                betas[t] = float("nan")
+    except Exception as exc:
+        logger.debug("_resolve_symbol_betas: batch beta resolution unavailable: %s", exc)
+        for t in non_spy:
+            betas.setdefault(t, float("nan"))
+
+    return betas
 
 
 def calculate_portfolio_greeks(
@@ -316,6 +363,15 @@ def calculate_portfolio_greeks(
     """
     Computes aggregate portfolio Greeks across all open paper positions.
     Excludes positions with missing quotes/IV from sums and reports them in positions_with_missing_data.
+
+    ``beta_weighted_delta_spy``/``net_beta_dollar_delta`` are computed only
+    over positions with a measurable regression beta (see
+    ``_resolve_symbol_betas``) -- a position whose beta can't be measured
+    (no cached bars / insufficient history) still counts toward every OTHER
+    aggregate (net_delta_shares, net_dollar_delta, greeks), but is excluded
+    from the beta-weighted sum and reported in
+    ``beta_data_unavailable_symbols`` rather than silently defaulting its
+    beta to a fabricated 1.0.
     """
     if store is None and positions is None:
         store = PaperAccountStore()
@@ -336,6 +392,7 @@ def calculate_portfolio_greeks(
             "beta_weighted_delta_spy": 0.0,
             "positions_with_missing_data": [],
             "beta_excluded_symbols": [],
+            "beta_data_unavailable_symbols": [],
             "positions": [],
         }
 
@@ -369,10 +426,15 @@ def calculate_portfolio_greeks(
     if spy_spot is None:
         spy_spot = spot_map.get("SPY") or 500.0
 
+    # Resolve regression betas for all distinct tickers in ONE batched pass
+    # (one HistoricalStore, one SPY bars fetch) rather than per-position.
+    beta_map = _resolve_symbol_betas(distinct_tickers)
+
     # Position calculations & aggregates
     pos_breakdowns: List[Dict[str, Any]] = []
     positions_with_missing_data: List[str] = []
     beta_excluded_symbols: List[str] = []
+    beta_data_unavailable_symbols: List[str] = []
     net_delta_shares = 0.0
     net_dollar_delta = 0.0
     net_beta_dollar_delta = 0.0
@@ -388,23 +450,28 @@ def calculate_portfolio_greeks(
         opt_info = parse_option_symbol(pos.symbol)
         ticker = opt_info["ticker"] if opt_info else pos.symbol.strip().upper()
         spot = spot_map.get(ticker)
-        beta = _resolve_symbol_beta(ticker)
+        beta = beta_map.get(ticker, float("nan"))
+        beta_known = not math.isnan(beta)
 
         if spot is None:
             positions_with_missing_data.append(pos.symbol)
 
         g = calculate_position_greeks(pos, spot_price=spot, now=now)
-        g["beta"] = beta
+        g["beta"] = beta if beta_known else None
 
         if not g.get("missing_data", False) and g.get("position_dollar_delta") is not None:
             dollar_delta = float(g["position_dollar_delta"])
-            beta_dollar_delta = dollar_delta * beta
-            g["beta_dollar_delta"] = round(beta_dollar_delta, 2)
+            if beta_known:
+                beta_dollar_delta = dollar_delta * beta
+                g["beta_dollar_delta"] = round(beta_dollar_delta, 2)
+                net_beta_dollar_delta += beta_dollar_delta
+            else:
+                g["beta_dollar_delta"] = None
+                beta_data_unavailable_symbols.append(pos.symbol)
             pos_breakdowns.append(g)
 
             net_delta_shares += g["position_delta"]
             net_dollar_delta += dollar_delta
-            net_beta_dollar_delta += beta_dollar_delta
             net_gamma += g["position_gamma"]
             net_theta_daily += g["position_theta_daily"]
             net_vega_1pct += g["position_vega_1pct"]
@@ -434,6 +501,7 @@ def calculate_portfolio_greeks(
         "beta_weighted_delta_spy": round(beta_weighted_delta_spy, 2),
         "positions_with_missing_data": positions_with_missing_data,
         "beta_excluded_symbols": beta_excluded_symbols,
+        "beta_data_unavailable_symbols": beta_data_unavailable_symbols,
         "positions": pos_breakdowns,
     }
 

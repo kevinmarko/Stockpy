@@ -338,12 +338,14 @@ class OrchestratorDaemon:
             state = RunState.SUCCEEDED
             error = None
 
-            if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+            from pilots.zero_dte_engine import is_0dte_auto_exit_enabled
+
+            if is_0dte_auto_exit_enabled():
                 try:
                     from pilots.zero_dte_engine import manage_0dte_exits
                     manage_0dte_exits()
                 except Exception as _0dte_err:
-                    logger.debug("Daemon 0DTE exit lifecycle pass: %s", _0dte_err)
+                    logger.warning("Daemon 0DTE exit lifecycle pass failed: %s", _0dte_err)
         except main_orchestrator.PipelineFatalError as exc:
 
             state = RunState.FAILED
