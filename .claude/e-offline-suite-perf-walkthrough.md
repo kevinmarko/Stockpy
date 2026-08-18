@@ -85,7 +85,7 @@ as a fourth member of the group.
 | `--durations=50` → `--durations=10` | ~1 s (minor) |
 | `xdist_group` on `test_settings_keysets.py` | Prevents duplicate class-fixture setup across workers |
 
-## Follow-on: cache the installed virtualenv (2026-08-18, same day)
+## Follow-on: cache the installed dependencies (2026-08-18, same day)
 
 After the above merged (PR #796), real timing data from two live CI runs
 showed the **`Install dependencies` step now dominates the `test` job's
@@ -97,23 +97,61 @@ unpacking/linking ~500+ MB of compiled packages (lightgbm, scipy,
 statsmodels, scikit-learn, prophet's bundled cmdstan, pyarrow, ...) into
 site-packages on every run.
 
-**Fix:** each of the three heavy-install jobs now creates its Python
-environment as an explicit `.venv` and caches that directory via
-`actions/cache@v4`, keyed on `hashFiles('requirements.txt')`. All three jobs
-share the same cache key and a `restore-keys` fallback, so:
-- **Cache hit** (requirements.txt unchanged since last run): venv creation
-  is skipped, and `pip install -r requirements.txt` is a fast up-to-date
-  check instead of a full install — collapses ~75s down to a few seconds.
-- **Partial hit** (requirements.txt changed, restore-keys fallback):
-  most packages are already present; pip only installs what actually
-  changed.
-- **Cold cache** (first run, or cache evicted): behaves exactly like
-  today — full fresh install, no regression.
+### First attempt (reverted): explicit `.venv`, cached separately
 
-Every later step in each job (`ruff`, `pytest`, `pip-audit`) calls plain
-`python`/`pip` unprefixed; the venv's `bin/` directory is prepended to
-`$GITHUB_PATH` right after install so those calls resolve unchanged.
+The first version of this fix had each of the three heavy-install jobs
+create its Python environment as an explicit `.venv` inside the checkout
+and cache that directory via `actions/cache@v4`, keyed on
+`hashFiles('requirements.txt')`, with the venv's `bin/` prepended to
+`$GITHUB_PATH` so later steps resolved into it unchanged.
+
+**This measured worse, not better, in PR #797's own CI run.** Comparing the
+actual `pytest` execution step (not the install step) across three runs, all
+with an identical 11375-passed/25-skipped result:
+
+| Run | site-packages location | pytest wall-clock |
+|---|---|---|
+| Pre-caching baseline (×2) | `/opt/hostedtoolcache/...` | 705.10s (11:45) |
+| `.venv`-based caching | `$GITHUB_WORKSPACE/.venv/...` | 841.60s (14:01) |
+
+A ~19% slowdown in the test run itself — on the very run meant to prove the
+change out — more than erasing the ~75s meant to be saved on install. The
+`slowest 10 durations` list was the same shape in both runs (same tests
+topping it: `test_orchestrator_e2e` setup, `test_backtest_sector_configs_cli`,
+etc.), just uniformly worse — pointing at a systemic cause, not one flaky
+test. Working theory: `/opt/hostedtoolcache` is GitHub's pre-provisioned,
+pre-warmed tool-cache volume; `$GITHUB_WORKSPACE/.venv` sits on the checkout
+workspace disk instead, and every xdist worker's imports paid that I/O
+difference across the whole suite.
+
+### Actual fix: cache the interpreter's own site-packages directly
+
+Instead of relocating installs into a new `.venv`, the cache now targets
+`${{ env.pythonLocation }}/lib/python3.12/site-packages` — the exact
+directory `pip install -r requirements.txt` already writes into on the
+setup-python-provisioned interpreter, on the same fast disk the pre-caching
+baseline always used. No `.venv`, no `$GITHUB_PATH` manipulation — `python`/
+`pip`/`ruff`/`pytest` calls in every later step are completely unchanged.
+
+The cache key includes the exact resolved Python patch version
+(`steps.setup-python.outputs.python-version`, e.g. `3.12.13`), not just
+`3.12` — so a future GitHub-side interpreter bump can never restore compiled
+extensions built against a different patch release; it just misses cleanly
+and falls through to a normal fresh install.
+
+- **Cache hit** (requirements.txt unchanged since last run): most of
+  site-packages is already in place; `pip install -r requirements.txt`
+  becomes a fast up-to-date check instead of a full install.
+- **Partial hit** (requirements.txt changed, restore-keys fallback): most
+  packages already present; pip only installs what actually changed.
+- **Cold cache** (first run, patch-version bump, or cache eviction): behaves
+  exactly like the pre-caching baseline — full fresh install, no regression.
 
 This was NOT applied to the `webapp` job (npm install is already ~7s with
 a warm `cache: npm`) or `bandit` (installs only the `bandit` package
 itself, ~2–3s) — neither has meaningful room left to cut.
+
+**Lesson:** a passing CI status is not the same as a performance win —
+verify the actual timing data from the run meant to prove a speedup out
+before trusting it, especially when relocating where a heavy directory
+lives.

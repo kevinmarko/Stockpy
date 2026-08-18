@@ -24,12 +24,15 @@ name: CI
 # — see docs/known_issues/codeql_advanced_outage_and_bandit_addition.md for
 # why. It reports via plain exit code, never uploads SARIF anywhere.
 #
-# `test`, `test-slow`, and `security` each cache their fully-INSTALLED
-# virtualenv (`.venv`, keyed on a hash of requirements.txt), not just pip's
-# download cache -- see the `test` job's "Cache virtualenv" step for the full
-# rationale. All three jobs share the same cache key, so whichever finishes
-# installing first on a cold cache primes it for the other two on their next
-# run.
+# `test`, `test-slow`, and `security` each cache the interpreter's own
+# fully-INSTALLED site-packages tree (keyed on a hash of requirements.txt),
+# not just pip's download cache -- see the `test` job's "Cache site-packages"
+# step for the full rationale, including why this deliberately targets
+# setup-python's own install location rather than a separate `.venv` (an
+# earlier version of this cache did that and measured ~19% SLOWER pytest
+# execution as a result -- see git history / PR discussion for the numbers).
+# All three jobs share the same cache key, so whichever finishes installing
+# first on a cold cache primes it for the other two on their next run.
 
 on:
   push:
@@ -52,44 +55,53 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
 
-      # Caches the fully-INSTALLED virtualenv, not just pip's download cache
-      # (setup-python's `cache: pip` above already covers that layer). The
-      # ~500+ MB of compiled wheels this project depends on (lightgbm, scipy,
-      # statsmodels, scikit-learn, prophet's bundled cmdstan, pyarrow, ...)
-      # still cost ~70-80s to unpack/link on every run even with a warm
-      # download cache -- that unpack cost is what this second cache layer
-      # removes. restore-keys falls back to the most recent venv for this OS
-      # even when requirements.txt changed, so a routine dependency bump only
-      # pays the install cost for the packages that actually changed, not a
-      # full rebuild.
-      - name: Cache virtualenv
-        id: venv-cache
+      # Caches the fully-INSTALLED site-packages tree, not just pip's
+      # download cache (setup-python's `cache: pip` above already covers
+      # that layer). The ~500+ MB of compiled wheels this project depends on
+      # (lightgbm, scipy, statsmodels, scikit-learn, prophet's bundled
+      # cmdstan, pyarrow, ...) still cost ~70-80s to unpack/link on every run
+      # even with a warm download cache -- that unpack cost is what this
+      # second cache layer removes.
+      #
+      # Deliberately targets `$pythonLocation/lib/python3.12/site-packages`
+      # -- the exact directory `pip install -r requirements.txt` already
+      # writes into on the setup-python-provisioned interpreter -- rather
+      # than a separate workspace-relative `.venv`. An earlier version of
+      # this cache created its own `.venv` inside the checkout; measured
+      # CI data showed that relocated site-packages onto a slower disk than
+      # `/opt/hostedtoolcache` (where setup-python provisions the
+      # interpreter), costing ~19% MORE wall-clock in the actual pytest run
+      # itself (705s -> 842s on an identical 11375-test suite) -- enough to
+      # erase the ~75s saved on install. Restoring into the interpreter's
+      # own site-packages keeps everything on the same fast disk the
+      # baseline (pre-caching) runs always used.
+      #
+      # The cache key includes the exact resolved Python patch version
+      # (`steps.setup-python.outputs.python-version`, not just `3.12`) so a
+      # future GitHub-side interpreter bump can never restore compiled
+      # extensions built against a different patch release -- it just misses
+      # and falls through to a normal fresh install. restore-keys falls back
+      # to the most recent site-packages cache for this OS+version even when
+      # requirements.txt changed, so a routine dependency bump only pays the
+      # install cost for the packages that actually changed.
+      - name: Cache site-packages
         uses: actions/cache@v4
         with:
-          path: .venv
-          key: venv-${{ runner.os }}-py312-${{ hashFiles('requirements.txt') }}
+          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages
+          key: site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            venv-${{ runner.os }}-py312-
+            site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
-          # Skip venv creation if one was restored from cache (a fresh
-          # `python -m venv` on a non-empty target is unnecessary, not
-          # harmful, but this avoids depending on that behavior).
-          if [ ! -f .venv/pyvenv.cfg ]; then
-            python -m venv .venv
-          fi
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/pip install -r requirements.txt
-          # Every later step in this job calls plain `python`/`pip`/`ruff`/
-          # `pytest` -- putting the venv's bin dir first on PATH means those
-          # calls resolve here with zero changes to the commands below.
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Lint (ruff)
         run: |
@@ -158,30 +170,27 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
 
-      # See the `test` job's "Cache virtualenv" step above for the full
-      # rationale (caches the installed venv, not just pip's download cache).
-      - name: Cache virtualenv
-        id: venv-cache
+      # See the `test` job's "Cache site-packages" step above for the full
+      # rationale, including why this targets the interpreter's own
+      # site-packages rather than a workspace-relative `.venv`.
+      - name: Cache site-packages
         uses: actions/cache@v4
         with:
-          path: .venv
-          key: venv-${{ runner.os }}-py312-${{ hashFiles('requirements.txt') }}
+          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages
+          key: site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            venv-${{ runner.os }}-py312-
+            site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
-          if [ ! -f .venv/pyvenv.cfg ]; then
-            python -m venv .venv
-          fi
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/pip install -r requirements.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run slow-marked test suite
         run: |
@@ -279,40 +288,39 @@ jobs:
     # then makes a network call to the PyPA advisory DB; running it in its own
     # job removes that sequential overhead (~30-60 s) from the test job's
     # wall-clock time. See docs/known_issues/pip_audit_stale_ambient_env_false_positive.md
-    # for why we pin the venv first and audit against it, not the system Python.
+    # for why we install the real requirements.txt into this job's own
+    # interpreter first and audit against that, not an ambient Python.
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
 
-      # See the `test` job's "Cache virtualenv" step for the full rationale.
-      - name: Cache virtualenv
-        id: venv-cache
+      # See the `test` job's "Cache site-packages" step for the full
+      # rationale, including why this targets the interpreter's own
+      # site-packages rather than a workspace-relative `.venv`.
+      - name: Cache site-packages
         uses: actions/cache@v4
         with:
-          path: .venv
-          key: venv-${{ runner.os }}-py312-${{ hashFiles('requirements.txt') }}
+          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages
+          key: site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            venv-${{ runner.os }}-py312-
+            site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
-          if [ ! -f .venv/pyvenv.cfg ]; then
-            python -m venv .venv
-          fi
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/pip install -r requirements.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Dependency vulnerability audit (pip-audit)
         run: |
           # Audits the packages actually resolved from requirements.txt in
-          # THIS job's venv against the PyPA advisory DB -- not an ambient/
-          # unrelated Python install, which is what produced the misleading
+          # THIS job's interpreter against the PyPA advisory DB -- not an
+          # ambient/unrelated Python install, which is what produced the misleading
           # 36-"vulnerability" report documented in
           # docs/known_issues/pip_audit_stale_ambient_env_false_positive.md
           # (every flagged package was already safe here once pinned
