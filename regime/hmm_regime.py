@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -63,8 +63,13 @@ def build_feature_matrix(
     spy_price_df: pd.DataFrame,
     vix_series: pd.Series,
     yield_curve_series: pd.Series,
+    credit_spread_series: Optional[pd.Series] = None,
+    inflation_expectation_series: Optional[pd.Series] = None,
+    include_vol_term_spread: bool = False,
+    standardize_features: bool = False,
+    feature_columns: Optional[List[str]] = None,
 ) -> pd.DataFrame:
-    """Builds the 4-feature matrix consumed by HMMRegimeDetector.
+    """Builds the feature matrix consumed by HMMRegimeDetector.
 
     Parameters
     ----------
@@ -74,13 +79,19 @@ def build_feature_matrix(
         Daily VIX level, indexed by date (e.g. DataEngine.fetch_macro_history()['VIXCLS']).
     yield_curve_series : pd.Series
         Daily 10Y-2Y yield curve spread, indexed by date.
+    credit_spread_series : Optional[pd.Series]
+        Optional daily High-Yield OAS credit spread (BAMLH0A0HYM2).
+    include_vol_term_spread : bool
+        If True, computes and includes the 20D minus 60D realized volatility spread.
+    feature_columns : Optional[List[str]]
+        Optional explicit subset of columns to retain in the returned DataFrame.
 
     Returns
     -------
     pd.DataFrame
-        Columns: spy_return, realized_vol_20d, vix_level, yield_curve_spread.
-        Rows with any NaN (e.g. the first 20 days, before the realized-vol
-        window fills) are dropped -- never fabricated.
+        Columns: spy_return, realized_vol_20d, vix_level, yield_curve_spread,
+        and optionally credit_spread, vol_term_spread.
+        Rows with any NaN are dropped -- never fabricated.
 
     Notes
     -----
@@ -114,18 +125,41 @@ def build_feature_matrix(
     spy_return = close.pct_change()
     realized_vol_20d = spy_return.rolling(window=20).std() * math.sqrt(252)
 
-    features = pd.DataFrame({
+    data_dict: Dict[str, Any] = {
         "spy_return": spy_return,
         "realized_vol_20d": realized_vol_20d,
         "vix_level": vix_series,
         "yield_curve_spread": yield_curve_series,
-    })
+    }
+
+    if credit_spread_series is not None:
+        data_dict["credit_spread"] = _normalize_index(credit_spread_series)
+
+    if inflation_expectation_series is not None:
+        data_dict["inflation_expectation"] = _normalize_index(inflation_expectation_series)
+
+    if include_vol_term_spread:
+        realized_vol_60d = spy_return.rolling(window=60).std() * math.sqrt(252)
+        data_dict["vol_term_spread"] = realized_vol_20d - realized_vol_60d
+
+    features = pd.DataFrame(data_dict)
+
+    if feature_columns is not None:
+        valid_cols = [c for c in feature_columns if c in features.columns]
+        if valid_cols:
+            features = features[valid_cols]
+
+    if standardize_features:
+        roll_mean = features.rolling(window=252, min_periods=20).mean()
+        roll_std = features.rolling(window=252, min_periods=20).std()
+        features = (features - roll_mean) / roll_std
+
     features = features.dropna(how="any")
     return features
 
 
 class HMMRegimeDetector:
-    """3-state Gaussian HMM regime detector (Hamilton 1989 regime-switching).
+    """Gaussian HMM regime detector (Hamilton 1989 regime-switching).
 
     Parameters
     ----------
@@ -136,19 +170,43 @@ class HMMRegimeDetector:
         fit() calls within this window of the last real fit are no-ops.
     random_state : int
         Seed for hmmlearn's EM initialization, for deterministic tests.
+    covariance_type : str
+        Covariance structure: 'diag' (default), 'full', 'spherical', 'tied'.
+    n_iter : int
+        Maximum EM iterations for Gaussian HMM fitting (default 150).
+    tol : float
+        Convergence threshold for Gaussian HMM EM fitting (default 1e-4).
     """
 
-    def __init__(self, n_states: int = 3, retrain_freq_days: int = 7, random_state: int = 42):
+    def __init__(
+        self,
+        n_states: int = 3,
+        retrain_freq_days: int = 7,
+        random_state: int = 42,
+        covariance_type: str = "diag",
+        n_iter: int = 150,
+        tol: float = 1e-4,
+        n_inits: int = 1,
+        min_covar: float = 1e-3,
+    ):
         if n_states < 2:
             raise ValueError("n_states must be >= 2")
         self.n_states = n_states
         self.retrain_freq_days = retrain_freq_days
         self.random_state = random_state
+        self.covariance_type = str(covariance_type or "diag").lower().strip()
+        if self.covariance_type not in {"diag", "full", "spherical", "tied"}:
+            self.covariance_type = "diag"
+        self.n_iter = max(10, int(n_iter))
+        self.tol = max(1e-8, float(tol))
+        self.n_inits = max(1, int(n_inits))
+        self.min_covar = float(min_covar)
 
         self.model: Optional[GaussianHMM] = None
         self.last_fit_date: Optional[pd.Timestamp] = None
         self.feature_means_: Optional[np.ndarray] = None
         self.feature_stds_: Optional[np.ndarray] = None
+        self.feature_names_: Optional[List[str]] = None
         self.state_labels: Dict[int, str] = {}
 
     def fit(self, features_df: pd.DataFrame) -> None:
@@ -179,6 +237,7 @@ class HMMRegimeDetector:
                 )
                 return
 
+        self.feature_names_ = list(features_df.columns)
         X = features_df.to_numpy(dtype=float)
         self.feature_means_ = X.mean(axis=0)
         self.feature_stds_ = X.std(axis=0)
@@ -191,24 +250,81 @@ class HMMRegimeDetector:
         self.feature_stds_[self.feature_stds_ < 1e-12] = 1.0
         X_scaled = (X - self.feature_means_) / self.feature_stds_
 
-        model = GaussianHMM(
-            n_components=self.n_states,
-            covariance_type="diag",
-            n_iter=100,
-            random_state=self.random_state,
-        )
-        model.fit(X_scaled)
+        best_score = -float("inf")
+        best_model = None
+
+        for init_idx in range(self.n_inits):
+            seed = self.random_state + init_idx if self.random_state is not None else None
+            model = GaussianHMM(
+                n_components=self.n_states,
+                covariance_type=self.covariance_type,
+                n_iter=self.n_iter,
+                tol=self.tol,
+                random_state=seed,
+                min_covar=self.min_covar,
+            )
+            if self.model is not None and init_idx == 0:
+                # Warm start the EM algorithm using the previous fit
+                model.init_params = ""
+                model.startprob_ = self.model.startprob_.copy()
+                model.transmat_ = self.model.transmat_.copy()
+                model.means_ = self.model.means_.copy()
+                # hmmlearn's covars_ getter expands to full matrices, but the setter 
+                # expects the compact shape. Use _covars_ directly to bypass.
+                model.covars_ = self.model._covars_.copy()
+                
+            try:
+                model.fit(X_scaled)
+                score = model.score(X_scaled)
+                if score > best_score:
+                    best_score = score
+                    best_model = model
+            except Exception as e:
+                logger.debug("HMM fit failed for seed %s: %s", seed, e)
+
+        if best_model is None:
+            # Fallback if all fail
+            model = GaussianHMM(
+                n_components=self.n_states,
+                covariance_type=self.covariance_type,
+                n_iter=self.n_iter,
+                tol=self.tol,
+                random_state=self.random_state,
+                min_covar=self.min_covar,
+            )
+            model.fit(X_scaled)
+        else:
+            model = best_model
+
+        # Repair zero-sum rows in transmat_ to guarantee valid Markov transitions
+        # and prevent downstream hmmlearn _check_sum_1 failures on edge datasets.
+        if hasattr(model, "transmat_"):
+            model.transmat_ = np.maximum(model.transmat_, 0.0)
+            row_sums = model.transmat_.sum(axis=1)
+            zero_rows = row_sums < 1e-12
+            if np.any(zero_rows):
+                model.transmat_[zero_rows] = 1.0 / self.n_states
+            # Re-normalize rows to ensure exact sum to 1.0
+            model.transmat_ = model.transmat_ / model.transmat_.sum(axis=1, keepdims=True)
+
+        if hasattr(model, "startprob_"):
+            model.startprob_ = np.maximum(model.startprob_, 0.0)
+            sp_sum = model.startprob_.sum()
+            if sp_sum < 1e-12:
+                model.startprob_ = np.ones(self.n_states) / self.n_states
+            else:
+                model.startprob_ = model.startprob_ / sp_sum
 
         self.model = model
         self.last_fit_date = last_date
         self.identify_states_by_vol()
         logger.info(
-            "HMMRegimeDetector.fit: refit on %d rows through %s. State labels: %s",
-            len(features_df), last_date.date(), self.state_labels,
+            "HMMRegimeDetector.fit: refit on %d rows through %s (cov=%s, iter=%d). State labels: %s",
+            len(features_df), last_date.date(), self.covariance_type, self.n_iter, self.state_labels,
         )
 
     def identify_states_by_vol(self) -> Dict[int, str]:
-        """Post-fit: sorts hidden states by total fitted (diagonal) variance,
+        """Post-fit: sorts hidden states by total fitted variance,
         ascending, and labels them semantically.
 
         For n_states == 3: ["bull", "sideways", "bear"] (lowest variance ->
@@ -224,8 +340,25 @@ class HMMRegimeDetector:
         if self.model is None:
             raise RuntimeError("HMMRegimeDetector.identify_states_by_vol: model not fit yet.")
 
-        # covars_ shape for covariance_type='diag' is (n_states, n_features)
-        variances = np.asarray(self.model.covars_).reshape(self.n_states, -1).sum(axis=1)
+        # Variance calculation depending on covariance structure:
+        if self.covariance_type == "full":
+            # Trace of covariance matrix per state
+            variances = np.array([float(np.trace(c)) for c in self.model.covars_])
+        elif self.covariance_type == "spherical":
+            variances = np.asarray(self.model.covars_, dtype=float).flatten()
+        elif self.covariance_type == "tied":
+            # Tied covariance has a single shared matrix (n_features, n_features) across all states.
+            # Differentiate states by their mean volatility/feature magnitude:
+            variances = np.linalg.norm(self.model.means_, axis=1)
+        else:  # diag: covars_ shape is (n_states, n_features)
+            variances = np.asarray(self.model.covars_, dtype=float).reshape(self.n_states, -1).sum(axis=1)
+            
+        # Enforce min_covar regularization / conditioning on extracted variances
+        variances = np.maximum(variances, self.min_covar)
+
+        if len(variances) != self.n_states:
+            variances = np.arange(self.n_states, dtype=float)
+
         order = np.argsort(variances)  # ascending: lowest variance first
 
         if self.n_states == 3:
@@ -240,7 +373,7 @@ class HMMRegimeDetector:
         self.state_labels = state_labels
         return state_labels
 
-    def predict_proba(self, features_df: pd.DataFrame) -> Dict[str, float]:
+    def predict_proba(self, features_df: pd.DataFrame) -> Dict[str, Any]:
         """Returns FORWARD (filtered) state probabilities at the LAST ROW of
         features_df only -- see module docstring for why hmmlearn's
         predict_proba()[-1] equals pure forward filtering.
@@ -254,7 +387,7 @@ class HMMRegimeDetector:
         Returns
         -------
         dict
-            {p_state_0, ..., p_state_{n-1}, dominant_state, risk_on_probability}.
+            {p_state_0, ..., p_state_{n-1}, dominant_state, risk_on_probability, regime_state_label}.
             risk_on_probability is the probability mass on the state(s)
             labeled "bull" (the lowest-variance state).
         """
@@ -271,7 +404,7 @@ class HMMRegimeDetector:
         posteriors = self.model.predict_proba(X_scaled)  # shape (n_rows, n_states)
         last_probs = posteriors[-1]  # forward-filtered prob at the final row (see docstring)
 
-        result: Dict[str, float] = {f"p_state_{i}": float(last_probs[i]) for i in range(self.n_states)}
+        result: Dict[str, Any] = {f"p_state_{i}": float(last_probs[i]) for i in range(self.n_states)}
         result["dominant_state"] = int(np.argmax(last_probs))
 
         if not self.state_labels:
@@ -282,4 +415,118 @@ class HMMRegimeDetector:
             if label == "bull"
         )
         result["risk_on_probability"] = float(risk_on_prob)
+        result["regime_state_label"] = self.state_labels[result["dominant_state"]]
         return result
+
+    def compute_diagnostics(self, features_df: pd.DataFrame) -> Dict[str, Any]:
+        """Computes comprehensive regime model diagnostics including Log-Likelihood,
+        AIC, BIC, transition matrix, expected durations, and empirical regime metrics.
+
+        Parameters
+        ----------
+        features_df : pd.DataFrame
+            Feature dataset with datetime index and features columns.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Diagnostic summary dictionary.
+        """
+        if self.model is None:
+            raise RuntimeError("HMMRegimeDetector.compute_diagnostics: model not fit yet.")
+        if features_df is None or features_df.empty:
+            raise ValueError("HMMRegimeDetector.compute_diagnostics: features_df is empty.")
+
+        X = features_df.to_numpy(dtype=float)
+        X_scaled = (X - self.feature_means_) / self.feature_stds_
+
+        n_samples, n_features = X_scaled.shape
+        log_likelihood = float(self.model.score(X_scaled))
+
+        # Parameter count calculation:
+        # Initial probas: n_states - 1
+        # Transition matrix: n_states * (n_states - 1)
+        # Means: n_states * n_features
+        # Covariances:
+        if self.covariance_type == "diag":
+            cov_params = self.n_states * n_features
+        elif self.covariance_type == "full":
+            cov_params = self.n_states * (n_features * (n_features + 1) // 2)
+        elif self.covariance_type == "spherical":
+            cov_params = self.n_states
+        elif self.covariance_type == "tied":
+            cov_params = n_features * (n_features + 1) // 2
+        else:
+            cov_params = self.n_states * n_features
+
+        num_params = (
+            (self.n_states - 1)
+            + self.n_states * (self.n_states - 1)
+            + self.n_states * n_features
+            + cov_params
+        )
+
+        if not math.isfinite(log_likelihood):
+            log_likelihood = float("-inf")
+            aic = float("inf")
+            bic = float("inf")
+        else:
+            aic = float(2 * num_params - 2 * log_likelihood)
+            bic = float(num_params * np.log(max(1, n_samples)) - 2 * log_likelihood)
+
+        trans_mat = np.asarray(self.model.transmat_, dtype=float)
+        diag_trans = np.diag(trans_mat)
+        expected_durations = {}
+        for s_idx, p_self in enumerate(diag_trans):
+            lbl = self.state_labels.get(s_idx, f"state_{s_idx}")
+            # Guard against p_self >= 1.0
+            dur = 1.0 / (1.0 - p_self) if (1.0 - p_self) > 1e-12 else float("inf")
+            expected_durations[lbl] = float(dur)
+
+        # Compute empirical return and vol by state if spy_return is in features
+        state_metrics: Dict[str, Dict[str, float]] = {}
+        posteriors = self.model.predict_proba(X_scaled)
+        dominant_seq = np.argmax(posteriors, axis=1)
+
+        has_return = "spy_return" in features_df.columns
+        spy_ret = features_df["spy_return"].to_numpy(dtype=float) if has_return else None
+
+        for s_idx in range(self.n_states):
+            lbl = self.state_labels.get(s_idx, f"state_{s_idx}")
+            mask = dominant_seq == s_idx
+            count = int(np.sum(mask))
+            freq = float(count / max(1, n_samples))
+
+            m_dict: Dict[str, float] = {
+                "state_index": s_idx,
+                "count": count,
+                "frequency": freq,
+                "expected_duration_days": expected_durations.get(lbl, 0.0),
+            }
+
+            if has_return and spy_ret is not None and count > 1:
+                ret_subset = spy_ret[mask]
+                mean_ret = float(np.mean(ret_subset) * 252)
+                vol_ret = float(np.std(ret_subset) * math.sqrt(252))
+                sharpe = float(mean_ret / vol_ret) if vol_ret > 1e-12 else 0.0
+                m_dict["ann_return"] = mean_ret
+                m_dict["ann_volatility"] = vol_ret
+                m_dict["sharpe_ratio"] = sharpe if math.isfinite(sharpe) else 0.0
+
+            state_metrics[lbl] = m_dict
+
+        return {
+            "n_states": self.n_states,
+            "covariance_type": self.covariance_type,
+            "n_features": n_features,
+            "n_samples": n_samples,
+            "n_parameters": num_params,
+            "log_likelihood": log_likelihood,
+            "aic": aic,
+            "bic": bic,
+            "transition_matrix": trans_mat.tolist(),
+            "state_labels": self.state_labels,
+            "expected_durations_days": expected_durations,
+            "state_metrics": state_metrics,
+        }
+

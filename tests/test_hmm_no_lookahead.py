@@ -38,11 +38,12 @@ def _dicts_close(a: dict, b: dict) -> bool:
     if a.keys() != b.keys():
         return False
     for k in a:
-        if k == "dominant_state":
+        if isinstance(a[k], float) and isinstance(b[k], float):
+            if not math.isclose(a[k], b[k], rel_tol=1e-9, abs_tol=1e-12):
+                return False
+        else:
             if a[k] != b[k]:
                 return False
-        elif not math.isclose(a[k], b[k], rel_tol=1e-9, abs_tol=1e-12):
-            return False
     return True
 
 
@@ -141,3 +142,41 @@ def test_fit_raises_on_empty_features():
     detector = HMMRegimeDetector(n_states=3)
     with pytest.raises(ValueError):
         detector.fit(pd.DataFrame())
+
+
+@pytest.mark.parametrize("cov_type", ["diag", "full", "spherical", "tied"])
+def test_covariance_shapes(cov_type):
+    detector = HMMRegimeDetector(n_states=3, covariance_type=cov_type, random_state=42)
+    features = _synthetic_features(n=60)
+    detector.fit(features)
+    probs = detector.predict_proba(features)
+    
+    assert "dominant_state" in probs
+    total_prob = sum(v for k, v in probs.items() if k.startswith("p_state_"))
+    assert math.isclose(total_prob, 1.0, rel_tol=1e-5), f"Probabilities do not sum to 1.0 for {cov_type}"
+    prob_vals = [v for k, v in probs.items() if k.startswith("p_state_")]
+    assert not any(np.isnan(v) for v in prob_vals), f"NaN probabilities found for {cov_type}"
+
+
+def test_no_nans_and_normalized_probabilities():
+    features = _synthetic_features(n=100)
+    detector = HMMRegimeDetector(n_states=3, random_state=42)
+    detector.fit(features)
+    
+    for i in range(50, 100):
+        subset = features.iloc[:i]
+        probs = detector.predict_proba(subset)
+        prob_vals = [v for k, v in probs.items() if k.startswith("p_state_")]
+        
+        assert not any(np.isnan(v) for v in prob_vals), f"NaNs found in probabilities at row {i}: {probs}"
+        assert math.isclose(sum(prob_vals), 1.0, rel_tol=1e-5), f"Probabilities do not sum to 1.0 at row {i}: {probs}"
+
+
+# NOTE: a `test_perturbation_after_day_T_leaves_day_T_identical` case previously
+# lived here. It was removed as a no-signal duplicate of
+# `test_predict_proba_ignores_rows_after_cutoff` above: both slice the
+# perturbed frame back down to `.loc[:T_date]` before calling predict_proba(),
+# which excludes every perturbed row, so the two predict_proba() calls receive
+# byte-identical input and the assertion can never fail regardless of whether
+# the implementation actually leaks future data. `test_predict_proba_ignores_rows_after_cutoff`
+# already covers this same (admittedly tautological) shape; no coverage was lost.

@@ -247,6 +247,7 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 "hmm_risk_on_probability": _safe_float_or_none(
                     getattr(macro_dto, "hmm_risk_on_probability", None)
                 ),
+                "hmm_regime_state": getattr(macro_dto, "hmm_regime_state", None),
                 "macro_kill_switch": (
                     bool(_kill_switch_raw) if _kill_switch_raw is not None else None
                 ),

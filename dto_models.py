@@ -260,19 +260,50 @@ class MacroEconomicDTO(BaseDTO):
     Represents systemic macroeconomic risk indicators captured from raw economic databases.
     Houses the top-down risk assessment models.
     """
-    # HMM disagreement thresholds (regime/hmm_regime.py second opinion).
-    # See market_regime/killSwitch docstrings below for how these are applied.
+    # Default HMM disagreement thresholds (regime/hmm_regime.py second opinion).
+    # Dynamically sourced from settings when available (see properties below).
     HMM_RISK_ON_DOWNGRADE_THRESHOLD: float = 0.3
     HMM_RISK_OFF_AGREEMENT_THRESHOLD: float = 0.7
-    # Lowered (more sensitive) kill-switch thresholds used only when the
-    # rules-based regime is RECESSION AND the HMM agrees (see killSwitch).
     KILLSWITCH_VIX_THRESHOLD_AGREED: float = 25.0
     KILLSWITCH_SAHM_THRESHOLD_AGREED: float = 0.3
+
+    @property
+    def _hmm_risk_on_downgrade_threshold(self) -> float:
+        try:
+            from settings import settings
+            return float(getattr(settings, "HMM_RISK_ON_DOWNGRADE_THRESHOLD", self.HMM_RISK_ON_DOWNGRADE_THRESHOLD))
+        except Exception:
+            return self.HMM_RISK_ON_DOWNGRADE_THRESHOLD
+
+    @property
+    def _hmm_risk_off_agreement_threshold(self) -> float:
+        try:
+            from settings import settings
+            return float(getattr(settings, "HMM_RISK_OFF_AGREEMENT_THRESHOLD", self.HMM_RISK_OFF_AGREEMENT_THRESHOLD))
+        except Exception:
+            return self.HMM_RISK_OFF_AGREEMENT_THRESHOLD
+
+    @property
+    def _killswitch_vix_threshold_agreed(self) -> float:
+        try:
+            from settings import settings
+            return float(getattr(settings, "KILLSWITCH_VIX_THRESHOLD_AGREED", self.KILLSWITCH_VIX_THRESHOLD_AGREED))
+        except Exception:
+            return self.KILLSWITCH_VIX_THRESHOLD_AGREED
+
+    @property
+    def _killswitch_sahm_threshold_agreed(self) -> float:
+        try:
+            from settings import settings
+            return float(getattr(settings, "KILLSWITCH_SAHM_THRESHOLD_AGREED", self.KILLSWITCH_SAHM_THRESHOLD_AGREED))
+        except Exception:
+            return self.KILLSWITCH_SAHM_THRESHOLD_AGREED
 
     def __init__(self, yield_curve_10y_2y: float, high_yield_oas: float,
                  inflation_rate: float, nominal_10y: float = 4.0,
                  date: Optional[datetime] = None, sahm_rule_indicator: float = 0.0,
-                 vix_value: float = 15.0, hmm_risk_on_probability: Optional[float] = None):
+                 vix_value: float = 15.0, hmm_risk_on_probability: Optional[float] = None,
+                 hmm_regime_state: Optional[str] = None):
         self.date = date if date is not None else datetime.now()
         self.sahm_rule_indicator = sahm_rule_indicator
         self.yield_curve: float = self._to_float(yield_curve_10y_2y) # Yield spread (Negative = Inverted)
@@ -289,6 +320,7 @@ class MacroEconomicDTO(BaseDTO):
         self.hmm_risk_on_probability: Optional[float] = (
             self._to_float(hmm_risk_on_probability, None) if hmm_risk_on_probability is not None else None
         )
+        self.hmm_regime_state: Optional[str] = hmm_regime_state
 
     @property
     def _rules_based_regime(self) -> str:
@@ -329,10 +361,10 @@ class MacroEconomicDTO(BaseDTO):
             return base_kill
 
         hmm_risk_off_probability = 1.0 - self.hmm_risk_on_probability
-        if hmm_risk_off_probability > self.HMM_RISK_OFF_AGREEMENT_THRESHOLD:
+        if hmm_risk_off_probability > self._hmm_risk_off_agreement_threshold:
             agreed_kill = (
-                self.sahm_rule_indicator >= self.KILLSWITCH_SAHM_THRESHOLD_AGREED
-                or self.vix > self.KILLSWITCH_VIX_THRESHOLD_AGREED
+                self.sahm_rule_indicator >= self._killswitch_sahm_threshold_agreed
+                or self.vix > self._killswitch_vix_threshold_agreed
             )
             return base_kill or agreed_kill
 
@@ -369,16 +401,17 @@ class MacroEconomicDTO(BaseDTO):
         (100+ near-duplicate log lines per run for no functional reason).
         """
         rules_regime = self._rules_based_regime
+        downgrade_threshold = self._hmm_risk_on_downgrade_threshold
 
         if (
             rules_regime == "RISK ON"
             and self.hmm_risk_on_probability is not None
-            and self.hmm_risk_on_probability < self.HMM_RISK_ON_DOWNGRADE_THRESHOLD
+            and self.hmm_risk_on_probability < downgrade_threshold
         ):
             logger.warning(
                 "MacroEconomicDTO.market_regime: rules-based regime is RISK ON but HMM "
                 "risk_on_probability=%.3f < %.2f -- downgrading to NEUTRAL.",
-                self.hmm_risk_on_probability, self.HMM_RISK_ON_DOWNGRADE_THRESHOLD,
+                self.hmm_risk_on_probability, downgrade_threshold,
             )
             return "NEUTRAL"
 

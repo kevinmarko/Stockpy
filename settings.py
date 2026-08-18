@@ -1409,6 +1409,54 @@ class Settings(BaseSettings):
         default=7,
         description="Minimum days between HMM refits; fit() calls within this window of the last real fit are no-ops. A lower number means the model adapts faster to sudden market shifts (like flash crashes), but increases computational overhead and may cause temporary over-sensitivity to noise.",
     )
+    HMM_COVARIANCE_TYPE: str = Field(
+        default="diag",
+        description="Covariance structure for Gaussian HMM (diag, full, spherical, tied). 'diag' assumes diagonal covariance; 'full' models cross-feature correlations.",
+    )
+    HMM_N_ITER: int = Field(
+        default=150,
+        description="Maximum number of EM iterations when fitting the Gaussian HMM.",
+    )
+    HMM_TOL: float = Field(
+        default=1e-4,
+        description="Convergence threshold for Gaussian HMM EM fitting algorithm.",
+    )
+    HMM_RISK_ON_DOWNGRADE_THRESHOLD: float = Field(
+        default=0.30,
+        description="Threshold below which rules-based RISK ON regime is downgraded to NEUTRAL if HMM risk-on probability is low.",
+    )
+    HMM_RISK_OFF_AGREEMENT_THRESHOLD: float = Field(
+        default=0.70,
+        description="HMM risk-off agreement threshold (1 - risk_on_prob) above which lowered kill-switch thresholds trigger during RECESSION.",
+    )
+    HMM_CREDIT_SPREAD_FEATURE_ENABLED: bool = Field(
+        default=False,
+        description="Whether to include High Yield OAS credit spread (BAMLH0A0HYM2) in the HMM feature matrix.",
+    )
+    HMM_INFLATION_FEATURE_ENABLED: bool = Field(
+        default=False,
+        description="Whether to include 10-Year Breakeven Inflation Rate (T10YIE) in the HMM feature matrix.",
+    )
+    HMM_VOL_TERM_SPREAD_FEATURE_ENABLED: bool = Field(
+        default=False,
+        description="Whether to include 20D-60D volatility term structure spread in the HMM feature matrix.",
+    )
+    HMM_STANDARDIZE_FEATURES_ENABLED: bool = Field(
+        default=False,
+        description="Whether to causally rolling-z-score standardize the HMM feature matrix (252d rolling window, min_periods=20) before fitting, on top of HMMRegimeDetector's own full-sample scaling.",
+    )
+    HMM_N_INITS: int = Field(
+        default=1,
+        description="Number of random-restart EM fits per HMM refit; the best-scoring fit (by in-sample log-likelihood) is kept. Higher values reduce sensitivity to poor EM local optima at the cost of proportionally more compute per refit.",
+    )
+    KILLSWITCH_VIX_THRESHOLD_AGREED: float = Field(
+        default=25.0,
+        description="Lowered VIX threshold for kill switch activation when rules-based regime is RECESSION and HMM confirms risk-off.",
+    )
+    KILLSWITCH_SAHM_THRESHOLD_AGREED: float = Field(
+        default=0.30,
+        description="Lowered Sahm rule threshold for kill switch activation when rules-based regime is RECESSION and HMM confirms risk-off.",
+    )
     OPTIONS_VRP_THRESHOLD: float = Field(
         default=0.02,
         description="Minimum Volatility Risk Premium (VRP) required to authorize premium selling (e.g. credit spreads). VRP is the difference between Implied Volatility and Realized Volatility. A higher threshold (e.g. 0.03 = 3%) demands a larger premium buffer before entering trades, increasing selectivity and safety but reducing trade frequency.",
@@ -4680,6 +4728,49 @@ class Settings(BaseSettings):
             if entry is not None:
                 cleaned[sector] = entry
         return cleaned
+
+    @field_validator("HMM_COVARIANCE_TYPE")
+    @classmethod
+    def _coerce_hmm_covariance_type(cls, value: str) -> str:
+        """Coerce HMM covariance type to lower-case, falling back to 'diag' if invalid."""
+        v = str(value or "").strip().lower()
+        return v if v in {"diag", "full", "spherical", "tied"} else "diag"
+
+    @field_validator("HMM_N_ITER")
+    @classmethod
+    def _validate_hmm_n_iter(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("HMM_N_ITER must be greater than 0")
+        return value
+
+    @field_validator("HMM_TOL")
+    @classmethod
+    def _validate_hmm_tol(cls, value: float) -> float:
+        if value <= 0.0:
+            raise ValueError("HMM_TOL must be greater than 0")
+        return value
+
+    @field_validator("HMM_N_INITS")
+    @classmethod
+    def _validate_hmm_n_inits(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("HMM_N_INITS must be greater than 0")
+        return value
+
+    @field_validator("HMM_RISK_ON_DOWNGRADE_THRESHOLD", "HMM_RISK_OFF_AGREEMENT_THRESHOLD")
+    @classmethod
+    def _validate_hmm_probability_thresholds(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Probability thresholds must be between 0.0 and 1.0")
+        return value
+
+    @field_validator("KILLSWITCH_VIX_THRESHOLD_AGREED", "KILLSWITCH_SAHM_THRESHOLD_AGREED")
+    @classmethod
+    def _validate_killswitch_thresholds(cls, value: float) -> float:
+        if value < 0.0:
+            raise ValueError("Killswitch thresholds must be non-negative")
+        return value
+
 
     CACHE_LONG_SHORT_ENABLED: bool = Field(
         default=False,

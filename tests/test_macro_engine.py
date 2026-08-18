@@ -284,7 +284,7 @@ class TestComputeHmmRiskOnProbabilityGaps:
     def test_historical_store_disabled_uses_direct_fetch(self, engine, disable_historical_store):
         spy_df = self._spy_df()
         result = engine.compute_hmm_risk_on_probability(spy_df)
-        assert result is None or (0.0 <= result <= 1.0)
+        assert result is None or (0.0 <= result["risk_on_probability"] <= 1.0)
 
     def test_historical_store_failure_falls_back_to_direct_fetch(self, engine):
         """When HISTORICAL_STORE_ENABLED=True but HistoricalStore construction
@@ -297,7 +297,7 @@ class TestComputeHmmRiskOnProbabilityGaps:
         # Falls through to MockDataEngine.fetch_macro_history(), which returns
         # a usable 500-row synthetic series -- so this must succeed, not None.
         assert result is not None
-        assert 0.0 <= result <= 1.0
+        assert 0.0 <= result["risk_on_probability"] <= 1.0
 
     def test_fetch_macro_history_exception_returns_none(self, engine, disable_historical_store):
         spy_df = self._spy_df()
