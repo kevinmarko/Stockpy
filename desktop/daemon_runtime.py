@@ -631,6 +631,14 @@ class OrchestratorDaemon:
             ):
                 logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
                 continue
+            # Periodically evaluate and manage 0DTE exits (F5) during market hours
+            if getattr(settings, "OPTIONS_0DTE_ENABLED", False):
+                try:
+                    from pilots.zero_dte_engine import manage_0dte_exits
+                    manage_0dte_exits()
+                except Exception as exc:  # noqa: BLE001 - defensive only (CONSTRAINT #6)
+                    logger.debug("0DTE daemon periodic exit evaluation skipped: %s", exc)
+
             self.trigger_run(reason="interval")
 
     # ------------------------------------------------------------------

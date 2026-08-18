@@ -12,7 +12,7 @@ Calculates position-level and portfolio-wide net Greeks:
 from datetime import datetime, timezone
 import math
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 from scipy.stats import norm

@@ -10689,10 +10689,16 @@ export const mockApi = {
   },
 
   async optimizeHrpCvar(req: HrpCvarOptimizeRequest): Promise<HrpCvarOptimizeResponse> {
-    const allocations = req.symbols.map((sym, _i) => ({
+    const rawWeights = req.symbols.map(() => Math.max(0.01, 1 / req.symbols.length + (Math.random() - 0.5) * 0.1));
+    const totalWeight = rawWeights.reduce((a, b) => a + b, 0);
+    const allocations = req.symbols.map((sym, i) => ({
       symbol: sym,
-      weight: 1 / req.symbols.length + (Math.random() - 0.5) * 0.1
+      weight: Number((rawWeights[i] / totalWeight).toFixed(4)),
     }));
+    const expectedReturn = Number((req.target_return ?? (0.08 + allocations.reduce((acc, a) => acc + a.weight * 0.05, 0))).toFixed(4));
+    const cvar95 = Number(Math.max(0.02, (req.risk_aversion ? req.risk_aversion * 0.1 : 0.065) + (Math.random() * 0.02)).toFixed(4));
+    const sharpeRatio = Number((expectedReturn / (cvar95 * 1.2)).toFixed(2));
+
     return delay<HrpCvarOptimizeResponse>({
       allocations,
       dendrogram: {
@@ -10700,9 +10706,9 @@ export const mockApi = {
         distance: 1.0,
         children: req.symbols.map(sym => ({ name: sym, distance: 0 }))
       },
-      expected_return: 0.12,
-      cvar_95: 0.08,
-      sharpe_ratio: 1.5,
+      expected_return: expectedReturn,
+      cvar_95: cvar95,
+      sharpe_ratio: sharpeRatio,
       as_of: new Date().toISOString()
     }, 500);
   },
@@ -10724,13 +10730,19 @@ export const mockApi = {
       });
     }
 
+    const tempImpact = req.liquidity ? 1 / Math.max(1, req.liquidity) : 0.001;
+    const totalImpact = Math.max(0.01, (req.quantity * tempImpact + (req.risk_aversion || 1e-6) * (req.volatility || 0.20) * 100));
+    const expectedShortfall = Number((totalImpact * (1 + Math.random() * 0.1)).toFixed(2));
+    const variance = Number((Math.pow((req.volatility || 0.20), 2) * (req.horizon_steps || 10) * 0.5).toFixed(2));
+    const halfLife = Number((Math.log(2) / Math.max(1e-4, Math.sqrt((req.risk_aversion || 1e-6) / tempImpact))).toFixed(2));
+
     return delay<AlmgrenChrissOptimizeResponse>({
       symbol: req.symbol,
       trajectory: t,
       expected_trajectory: t,
-      expected_shortfall: 15.42,
-      variance: 2.15,
-      half_life: 3.4,
+      expected_shortfall: expectedShortfall,
+      variance: variance,
+      half_life: halfLife,
       as_of: new Date().toISOString(),
     }, 400);
   },

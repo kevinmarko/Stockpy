@@ -6061,6 +6061,34 @@ def get_options_earnings_crush_candidates(
     return {"count": len(candidates), "candidates": candidates}
 
 
+# ---------------------------------------------------------------------------
+# Options Desk Deployability Gates & Honest Disclosure Status
+# (Sourced from docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-17 investigation)
+# ---------------------------------------------------------------------------
+OPTIONS_DESK_DEPLOYABILITY_GATES = {
+    "vol_mispricing": {
+        "deployable": False,
+        "gate_status": "MEASURED_FAIL",
+        "reason": "Registered, measured deployable=False (Sharpe -0.499, DSR 0.027, fails Oct-2008 stress window).",
+    },
+    "earnings_crush": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_DATA_GAP",
+        "reason": "Not gateable: No historical single-name IV exists in data layer to perform walk-forward validation.",
+    },
+    "dispersion_trading": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_DATA_GAP",
+        "reason": "Not gateable: Index IV (VIX) is historical; constituent single-name IVs are substituted (+1.18 vol-pt substitution bias).",
+    },
+    "zero_dte_engine": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_DATA_GAP",
+        "reason": "Not gateable: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention.",
+    },
+}
+
+
 @app.post(
     "/pilots/options/earnings-crush/execute",
     dependencies=[
@@ -6069,9 +6097,9 @@ def get_options_earnings_crush_candidates(
     ],
 )
 def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Dict[str, Any]:
-    """Executes an earnings crush multi-leg trade in the paper broker."""
+    """Executes an earnings crush multi-leg trade in the paper broker with honest deployability gate status."""
     from pilots.earnings_crush import execute_earnings_crush_trade
-    return execute_earnings_crush_trade(
+    res = execute_earnings_crush_trade(
         symbol=body.symbol,
         strategy=body.strategy or "Iron Condor",
         expiration=body.expiration,
@@ -6081,6 +6109,9 @@ def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Di
         dry_run=body.dry_run,
         is_live=body.is_live,
     )
+    if isinstance(res, dict):
+        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["earnings_crush"]
+    return res
 
 
 @app.get("/pilots/options/flow/unusual", dependencies=[Depends(require_read_token)])
@@ -6254,15 +6285,18 @@ def get_options_dispersion_opportunities(
     ],
 )
 def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
-    """Executes a vega-neutral dispersion basket into the paper broker."""
+    """Executes a vega-neutral dispersion basket into the paper broker with honest deployability gate status."""
     from pilots.dispersion_trading import execute_dispersion_trade
     try:
-        return execute_dispersion_trade(
+        res = execute_dispersion_trade(
             index_symbol=body.index_symbol,
             basket=body.basket,
             dry_run=body.dry_run,
             is_live=body.is_live,
         )
+        if isinstance(res, dict):
+            res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["dispersion_trading"]
+        return res
     except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
         logger.error("pilots_api: dispersion/execute failed: %s", exc, exc_info=True)
         return {"ok": False, "error": "Internal error while executing dispersion trade; see server logs for detail."}
@@ -6286,9 +6320,9 @@ def get_options_zero_dte_signals(
     ],
 )
 def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]:
-    """Executes 0DTE momentum option trade into the paper broker."""
+    """Executes 0DTE momentum option trade into the paper broker with honest deployability gate status."""
     from pilots.zero_dte_engine import execute_0dte_trade
-    return execute_0dte_trade(
+    res = execute_0dte_trade(
         symbol=body.symbol,
         option_type=body.option_type or "CALL",
         strike=body.strike,
@@ -6300,6 +6334,9 @@ def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]
         dry_run=body.dry_run,
         is_live=body.is_live,
     )
+    if isinstance(res, dict):
+        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["zero_dte_engine"]
+    return res
 
 
 class ZeroDteManageExitsRequest(BaseModel):

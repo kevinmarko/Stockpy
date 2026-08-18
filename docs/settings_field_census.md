@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `25d90ff6e81bef12e37834fdf4f65c42d65a6485`
+- Measured at commit: `a091b86d71bfed2bb001a65faef6c19b7e8f17d2`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -231,7 +231,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 732 | 231 |
-| (b) `getattr(settings, "KEY", default)` | 316 | 183 |
+| (b) `getattr(settings, "KEY", default)` | 317 | 183 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 24 | 17 |
 
@@ -375,7 +375,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
 | `OPENAI_API_KEY` | b | 4 | 0 |
-| `OPTIONS_0DTE_ENABLED` | b | 1 | 0 |
+| `OPTIONS_0DTE_ENABLED` | b | 2 | 0 |
 | `OPTIONS_0DTE_HARD_EXIT_TIME` | b | 4 | 0 |
 | `OPTIONS_0DTE_PROFIT_TARGET_PCT` | b | 3 | 0 |
 | `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |

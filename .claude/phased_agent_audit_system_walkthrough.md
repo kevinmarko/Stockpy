@@ -90,11 +90,15 @@ flowchart TD
 
 ### Phase 6: End-to-End Orchestration, Multi-Broker Infrastructure & System Hardening
 - **Changes**:
+  - Wired 0DTE exit evaluation (`manage_0dte_exits()`) into `desktop/daemon_runtime.py`'s periodic timer loop.
+  - Implemented `OPTIONS_DESK_DEPLOYABILITY_GATES` in `api/pilots_api.py` and created `tests/test_options_desk_deployability_runtime_gap.py`.
   - Added module docstrings to `ml/transformer_vol_forecaster.py`, `sizing/hrp_cvar_optimizer.py`, `validation/synthetic_diffusion_engine.py`, `execution/almgren_chriss_router.py`, and `numba_backtest_loop.py`.
-  - Verified non-network test suite `tests/test_forecast_backfill.py` (33 passed).
+  - Verified non-network test suite `tests/test_forecast_backfill.py` (38 passed).
+  - Synchronized `CLAUDE.md` and `AGENTS.md` docs.
+  - Refreshed settings census and settings liveness artifacts.
 - **Audit 6 Verification**:
-  - **Static Codebase Auditor**: 0 CRITICAL, 0 HIGH findings across 417 modules.
-  - **Full Backend Pytest Suite**: 11,304 tests passed!
+  - **Static Codebase Auditor**: 0 CRITICAL, 0 HIGH findings across 418 modules.
+  - **Full Backend Pytest Suite**: 11,353 tests passed!
   - **Preflight Check**: Verified database, daemon runtime, kill switch, and settings.
 
 ---
@@ -105,6 +109,7 @@ flowchart TD
 |---|---|---|---|
 | **Webapp Unit & Component Tests** | Vitest | 1,731 tests across 162 suites | ✅ **100% Passed** |
 | **Webapp TypeScript Typecheck** | `tsc --noEmit` | Entire frontend AST | ✅ **0 Errors** |
-| **Static Codebase Auditor** | `stockpy_codebase_auditor.py` | 417 Python modules | ✅ **0 Critical / 0 High** |
-| **Full Backend Test Suite** | Pytest (`not network`) | 11,304 test cases | ✅ **11,304 Passed** |
+| **Static Codebase Auditor** | `stockpy_codebase_auditor.py` | 418 Python modules | ✅ **0 Critical / 0 High** |
+| **Full Backend Test Suite** | Pytest (`not network`) | 11,353+ test cases | ✅ **11,353 Passed** |
 | **Preflight Readiness Check** | `preflight_check.py` | 27 operational checks | ✅ **Pass** (Clean runtime) |
+

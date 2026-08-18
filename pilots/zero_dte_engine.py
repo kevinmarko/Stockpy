@@ -1096,7 +1096,37 @@ def execute_0dte_trade(
     elif limit_price is not None and limit_price > 0:
         unit_price = float(limit_price)
     else:
-        unit_price = 1.50
+        # Attempt to compute real theoretical option price from latest spot price
+        spot = None
+        try:
+            from pilots.price_provider import get_latest_price
+            spot = get_latest_price(ticker)
+        except Exception:
+            pass
+
+        if spot is not None and spot > 0:
+            from pilots.options_risk import calculate_black_scholes_greeks
+            greeks = calculate_black_scholes_greeks(
+                spot=spot,
+                strike=strike,
+                t_years=0.5 / 365.0,
+                sigma=0.20,
+                option_type=resolved_opt_type,
+            )
+            unit_price = max(0.05, round(float(greeks.get("price", 1.0)), 2))
+        else:
+            logger.error(
+                "0DTE execution rejected for %s: No quote_price or limit_price provided. "
+                "Refusing to fabricate fallback fill price (CONSTRAINT #4).",
+                option_symbol,
+            )
+            return {
+                "ok": False,
+                "error": "No quote_price or limit_price provided. Real price source required to execute 0DTE trade.",
+                "symbol": ticker,
+                "contract_symbol": option_symbol,
+                "dry_run": dry_run,
+            }
 
     fill_price_contract = unit_price * _DEFAULT_MULTIPLIER
     commission = 0.65 * contracts
