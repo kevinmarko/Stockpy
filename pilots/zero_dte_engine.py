@@ -797,17 +797,19 @@ def get_0dte_signals(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    bars = None
-    try:
-        from data.historical_store import HistoricalStore
-        store = HistoricalStore()
-        bars = store.get_intraday_bars(sym) if hasattr(store, "get_intraday_bars") else None
-    except Exception as exc:
-        logger.debug("0DTE Historical store bars lookup error: %s", exc)
-
+    # No intraday/1-minute bar source exists anywhere in this repo -- `HistoricalStore`
+    # (data/historical_store.py) is daily-OHLCV-only (`get_bars`/`get_bars_bulk`); it exposes
+    # no per-minute intraday accessor at all. This is a structural data-availability gap, not
+    # a fixable lookup bug -- see docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-17 entry, which
+    # also notes the 4 mandatory 0DTE stress windows fall outside yfinance's ~30-day 1-minute
+    # retention. `scan_0dte_breakouts` already degrades honestly when `intraday_bars=None`
+    # (opening_range marked invalid, signal_type="NO_SIGNAL", an explanatory `reason`) rather
+    # than fabricating a synthetic range from daily bars -- so pass `None` explicitly instead
+    # of pretending to look one up. (Regression-guarded by
+    # tests/test_zero_dte_engine.py::test_get_0dte_signals_source_has_no_dead_historical_store_lookup.)
     res = scan_0dte_breakouts(
         symbol=sym,
-        intraday_bars=bars,
+        intraday_bars=None,
         range_minutes=range_minutes,
     )
     return {

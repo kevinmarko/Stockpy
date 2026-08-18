@@ -12,6 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 from settings import settings
 from api.pilots_api import app, OPTIONS_DESK_DEPLOYABILITY_GATES
+from pilots.zero_dte_engine import execute_0dte_trade
+from pilots.dispersion_trading import INDEX_WEIGHTS_MAP
 
 
 @pytest.fixture
@@ -62,6 +64,31 @@ def test_dispersion_execute_surfaces_gate_status(client, monkeypatch):
     assert "gate_status" in data
     assert data["gate_status"]["deployable"] is False
     assert data["gate_status"]["gate_status"] == "UNGATEABLE_DATA_GAP"
+
+
+def test_execute_0dte_trade_refuses_when_price_missing_and_never_fabricates_1_50(monkeypatch):
+    """A 0DTE trade with no quote_price/limit_price and no resolvable spot must fail
+    explicitly (CONSTRAINT #4) rather than silently fabricating a fallback fill price."""
+    import pilots.price_provider as price_provider
+    monkeypatch.setattr(price_provider, "get_latest_price", lambda symbol: 0.0)
+
+    res = execute_0dte_trade(
+        symbol="SPY", option_type="CALL", strike=500.0, expiration="2026-08-21",
+        contracts=1, quote_price=None, limit_price=None, dry_run=True,
+    )
+    assert res["ok"] is False
+    assert "No quote_price or limit_price provided" in res["error"]
+    assert "unit_price" not in res
+    assert "fill_price" not in res
+
+
+def test_dispersion_trading_baskets_distinct_for_spy_and_qqq():
+    """SPY and QQQ dispersion weight maps must not be identical -- each index carries its
+    own constituent weight allocation, not a shared/copy-pasted default."""
+    spy_weights = INDEX_WEIGHTS_MAP["SPY"]
+    qqq_weights = INDEX_WEIGHTS_MAP["QQQ"]
+    assert spy_weights != qqq_weights
+    assert spy_weights["TSLA"] != qqq_weights["TSLA"]
 
 
 def test_zero_dte_execute_surfaces_gate_status(client, monkeypatch):

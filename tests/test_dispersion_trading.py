@@ -8,10 +8,12 @@ import pandas as pd
 
 from data.paper_account_store import PaperAccountStore
 from execution.options_paper_executor import OptionsPaperExecutor
+import pilots.dispersion_trading as dispersion_trading
 from pilots.dispersion_trading import (
     DEFAULT_DISPERSION_CONSTITUENTS,
     DEFAULT_DISPERSION_INDEX,
     DEFAULT_WEIGHTS,
+    INDEX_CONSTITUENTS_MAP,
     DispersionBasket,
     build_dispersion_basket,
     calculate_default_expiration,
@@ -329,6 +331,93 @@ def test_execute_dispersion_trade_executor_delegation():
     res = executor.execute_dispersion_trade(basket, dry_run=False)
     assert res["ok"] is True
     assert len(store.get_open_positions()) == 6
+
+
+# ---------------------------------------------------------------------------
+# 4b. execute_dispersion_trade(basket=None) real-data-sourcing path: direction
+#     must be derived from the measured spread's actual sign.
+# ---------------------------------------------------------------------------
+
+def test_execute_dispersion_trade_none_basket_derives_short_direction_from_real_data():
+    """When implied correlation is well BELOW realized correlation (spread strongly
+    negative, past the 0.15 default threshold), execute_dispersion_trade(basket=None) must
+    source real data via `_source_real_dispersion_inputs` and build a SHORT dispersion
+    basket: index leg becomes 'buy' (long index straddle), constituent legs become 'sell'
+    (short constituent straddles) -- per build_dispersion_basket's documented convention."""
+    idx_sym = "SPY"
+    constituents = INDEX_CONSTITUENTS_MAP[idx_sym]
+
+    spot_map = {idx_sym: 500.0}
+    spot_map.update({s: 200.0 for s in constituents})
+    # Low index IV relative to high, uniform constituent IV => low implied correlation.
+    iv_map = {idx_sym: 0.12}
+    iv_map.update({s: 0.30 for s in constituents})
+    # High realized correlation => spread = implied - realized is strongly negative.
+    realized_correlation = 0.90
+
+    def fake_source_inputs(sym, consts, w):
+        assert sym == idx_sym
+        return dict(spot_map), dict(iv_map), realized_correlation
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(dispersion_trading, "_source_real_dispersion_inputs", fake_source_inputs)
+
+        res = execute_dispersion_trade(basket=None, index_symbol=idx_sym, dry_run=True)
+
+    assert res["ok"] is True
+    basket = res["basket"]
+    assert basket is not None
+    assert basket["is_long_dispersion"] is False
+    assert basket["correlation_spread"] < -0.15
+
+    # Short Dispersion => Long Index Straddle (buy), Short Constituent Straddles (sell).
+    assert basket["index_leg_requests"][0]["side"] == "buy"
+    assert basket["index_leg_requests"][1]["side"] == "buy"
+    for sym in constituents:
+        legs = basket["constituent_leg_requests"][sym]
+        assert legs[0]["side"] == "sell"
+        assert legs[1]["side"] == "sell"
+
+
+def test_execute_dispersion_trade_none_basket_derives_long_direction_from_real_data():
+    """When implied correlation is well ABOVE realized correlation (spread strongly
+    positive, past the 0.15 default threshold), execute_dispersion_trade(basket=None) must
+    source real data via `_source_real_dispersion_inputs` and build a LONG dispersion
+    basket: index leg becomes 'sell' (short index straddle), constituent legs become 'buy'
+    (long constituent straddles) -- per build_dispersion_basket's documented convention."""
+    idx_sym = "SPY"
+    constituents = INDEX_CONSTITUENTS_MAP[idx_sym]
+
+    spot_map = {idx_sym: 500.0}
+    spot_map.update({s: 200.0 for s in constituents})
+    # High index IV relative to low, uniform constituent IV => high implied correlation.
+    iv_map = {idx_sym: 0.32}
+    iv_map.update({s: 0.20 for s in constituents})
+    # Low realized correlation => spread = implied - realized is strongly positive.
+    realized_correlation = 0.20
+
+    def fake_source_inputs(sym, consts, w):
+        assert sym == idx_sym
+        return dict(spot_map), dict(iv_map), realized_correlation
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(dispersion_trading, "_source_real_dispersion_inputs", fake_source_inputs)
+
+        res = execute_dispersion_trade(basket=None, index_symbol=idx_sym, dry_run=True)
+
+    assert res["ok"] is True
+    basket = res["basket"]
+    assert basket is not None
+    assert basket["is_long_dispersion"] is True
+    assert basket["correlation_spread"] > 0.15
+
+    # Long Dispersion => Short Index Straddle (sell), Long Constituent Straddles (buy).
+    assert basket["index_leg_requests"][0]["side"] == "sell"
+    assert basket["index_leg_requests"][1]["side"] == "sell"
+    for sym in constituents:
+        legs = basket["constituent_leg_requests"][sym]
+        assert legs[0]["side"] == "buy"
+        assert legs[1]["side"] == "buy"
 
 
 # ---------------------------------------------------------------------------

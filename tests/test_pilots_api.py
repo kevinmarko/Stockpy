@@ -6226,3 +6226,51 @@ class TestDiffusionStressTest:
             resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
+
+
+# ---------------------------------------------------------------------------
+# vol_mispricing has no live paper-execute path (explicit, documented decision
+# -- see docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
+# and the comment above OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in
+# api/pilots_api.py). pilots/vol_mispricing.py has scan/evaluate functions
+# only (evaluate_strike_mispricing, build_candidate_strategy_trades) and no
+# execute_* function / PaperAccountStore import; its only route is the
+# read-only GET /pilots/options/forecast/mispricing.
+# ---------------------------------------------------------------------------
+
+
+def _all_pilots_api_route_paths_and_methods(app) -> set:
+    """Recursively collect every (path, method) pair served by *app*,
+    unwrapping FastAPI's lazy sub-router mount wrapper -- mirrors
+    ``tests/test_control_api.py::_all_route_paths`` / ``tests/test_data_api.py``'s
+    equivalent so a mounted sub-router's routes are never silently missed."""
+    pairs: set = set()
+    stack = list(app.routes)
+    while stack:
+        route = stack.pop()
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path and methods:
+            for method in methods:
+                pairs.add((path, method))
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            stack.extend(original_router.routes)
+    return pairs
+
+
+def test_vol_mispricing_has_no_paper_execute_endpoint():
+    """Regression guard for vol_mispricing's documented informational-only
+    deployability-gate status: no POST route whose path contains both
+    'mispricing' and 'execute' exists on the Pilots API. If this ever
+    fails, a live execute endpoint was added for vol_mispricing -- update
+    docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
+    and wire OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] into its
+    response (matching earnings_crush/dispersion_trading/zero_dte_engine)
+    instead of deleting this test."""
+    offending = [
+        (path, method)
+        for path, method in _all_pilots_api_route_paths_and_methods(pilots_api.app)
+        if method == "POST" and "mispricing" in path and "execute" in path
+    ]
+    assert offending == []

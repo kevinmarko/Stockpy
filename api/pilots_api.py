@@ -6066,6 +6066,16 @@ def get_options_earnings_crush_candidates(
 # (Sourced from docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-17 investigation)
 # ---------------------------------------------------------------------------
 OPTIONS_DESK_DEPLOYABILITY_GATES = {
+    # NOTE (2026-08-18): unlike the three entries below, this key has no live consumer today.
+    # `earnings_crush`/`dispersion_trading`/`zero_dte_engine` each get this dict's entry stamped
+    # onto their POST .../execute response as "gate_status" (see those endpoints below); no such
+    # wiring exists for vol_mispricing because pilots/vol_mispricing.py has no execute_* function
+    # and no PaperAccountStore import -- its __all__ exposes scan/evaluate (evaluate_strike_mispricing,
+    # build_candidate_strategy_trades) only, and its sole API surface is the read-only
+    # GET /pilots/options/forecast/mispricing. See docs/signals/vol_mispricing.md's "Live
+    # Paper-Execution Status" section. This entry is kept anyway as the single source of truth for
+    # vol_mispricing's measured deployability, so that IF a live execute endpoint is ever added,
+    # its gate_status wiring is "read this," not "re-derive the numbers."
     "vol_mispricing": {
         "deployable": False,
         "gate_status": "MEASURED_FAIL",
