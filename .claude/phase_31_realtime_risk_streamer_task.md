@@ -1,0 +1,23 @@
+# Phase 31: Real-Time Portfolio Risk Streamer Task Tracker
+
+- [ ] **Step 1: Memory & Hygiene Polish**
+  - [ ] Add `AbortController` in `AIChatInterface.tsx` SSE streaming reader.
+  - [ ] Declare `NO_VENV_REEXEC: bool = False` in `settings.py`.
+  - [ ] Run Independent Audit Agent 1 (Lifecycle & Settings AST audit).
+- [ ] **Step 2: Real-Time Risk Streamer Core Engine**
+  - [ ] Implement `pilots/realtime_risk_streamer.py`.
+  - [ ] Write unit test `tests/test_realtime_risk_streamer.py`.
+  - [ ] Run Independent Audit Agent 2 (AST boundary, degenerate-std guards, math correctness).
+- [ ] **Step 3: WebSocket Streaming Endpoint**
+  - [ ] Add `/ws/risk/portfolio` in `api/ws_api.py`.
+  - [ ] Write integration test `tests/test_ws_risk_stream.py`.
+  - [ ] Run Independent Audit Agent 3 (WebSocket lifecycle, authentication, task cancellation).
+- [ ] **Step 4: Webapp Client & RealTimeRiskRadar UI**
+  - [ ] Add `PortfolioRiskStreamEvent` in `webapp/src/api/types.ts`.
+  - [ ] Add `portfolioRiskWsUrl()` in `webapp/src/api/client.ts` & `webapp/src/api/mock.ts`.
+  - [ ] Implement `webapp/src/components/options/RealTimeRiskRadar.tsx`.
+  - [ ] Write Vitest test `webapp/src/components/options/RealTimeRiskRadar.test.tsx`.
+  - [ ] Run Independent Audit Agent 4 (Mock/Live API parity, Webapp typecheck, memory cleanup).
+- [ ] **Step 5: Full Suite Verification & Final Audit**
+  - [ ] Run full pytest suite + webapp test suite + typecheck.
+  - [ ] Run Independent Audit Agent 5 (End-to-end integration & quality gate).

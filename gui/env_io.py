@@ -237,6 +237,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ADVISORY_ONLY",              # bool — execution quarantine
     # Universe / signals (JSON-encoded)
     "DEFAULT_TICKERS",
+    "NO_VENV_REEXEC",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
     # Sector->model/horizon forecast config (JSON-encoded; see _JSON_KEYS).

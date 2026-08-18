@@ -5941,6 +5941,40 @@ class TestHrpCvarOptimize:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history"
 
+    def test_turnover_regularization_and_telemetry_fields(self):
+        series = {
+            "AAPL": self._synthetic_closes(10, start=150.0),
+            "MSFT": self._synthetic_closes(11, start=300.0),
+        }
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
+            resp = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={
+                    "symbols": ["AAPL", "MSFT"],
+                    "current_weights": {"AAPL": 0.8, "MSFT": 0.2},
+                    "lambda_turnover": 0.1,
+                    "sector_map": {"AAPL": "Tech", "MSFT": "Tech"},
+                    "sector_caps": {"Tech": 1.0},
+                    "asset_betas": {"AAPL": 1.2, "MSFT": 0.9},
+                    "target_beta_range": [0.8, 1.3],
+                },
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "turnover" in data
+        assert "portfolio_beta" in data
+        assert "sector_exposures" in data
+        assert "diversification_ratio" in data
+        assert "allocations" in data
+        assert "expected_return" in data
+        assert "cvar_95" in data
+        assert "sharpe_ratio" in data
+        assert "as_of" in data
+        assert data["turnover"] >= 0.0
+        assert data["portfolio_beta"] >= 0.0
+        assert "Tech" in data["sector_exposures"]
+        assert data["diversification_ratio"] >= 1.0
+
 
 # ---------------------------------------------------------------------------
 # POST /pilots/options/meta-model/retrain -- previously fed the ML
@@ -6135,6 +6169,13 @@ class TestTransformerForecast:
             assert h in body["forecast"]
             assert isinstance(body["forecast"][h], float)
         assert body["trained_samples"] >= 30
+        assert "quantile_forecast" in body
+        for h in ["1d", "5d", "21d", "60d"]:
+            assert h in body["quantile_forecast"]
+            q_h = body["quantile_forecast"][h]
+            assert "q10" in q_h and "q50" in q_h and "q90" in q_h
+            assert q_h["q10"] <= q_h["q50"] <= q_h["q90"]
+        assert "macro_conditioned" in body
         # get_bars was actually called -- the real-data path is exercised,
         # not bypassed.
         mock_hs.assert_called()
@@ -6179,7 +6220,7 @@ class TestTransformerForecast:
 
 
 class TestDiffusionStressTest:
-    def _base_request(self, symbol="AAPL"):
+    def _base_request(self, symbol="AAPL", regime="vol_shock", guidance_scale=2.0):
         return {
             "symbol": symbol,
             "spot_price": 150.0,
@@ -6187,6 +6228,8 @@ class TestDiffusionStressTest:
             "num_paths": 50,
             "horizon": 30,
             "drift": 0.0,
+            "regime": regime,
+            "guidance_scale": guidance_scale,
         }
 
     def test_calls_get_bars_with_symbol_and_returns_real_data_driven_result(self):
@@ -6196,10 +6239,31 @@ class TestDiffusionStressTest:
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
+        assert body["regime"] == "vol_shock"
+        assert body["guidance_scale"] == 2.0
         assert len(body["paths"]) == 50
         assert body["VaR_95"] >= 0.0
         assert body["CVaR_95"] >= body["VaR_95"]
+        assert body["VaR_99"] >= 0.0
+        assert body["CVaR_99"] >= body["VaR_99"]
+        assert body["trained_windows"] > 0
         mock_hs.assert_called()
+
+    def test_custom_regime_and_guidance_scale(self):
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(5, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json=self._base_request(regime="stagflation", guidance_scale=3.5),
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert body["regime"] == "stagflation"
+        assert body["guidance_scale"] == 3.5
+        assert len(body["paths"]) == 50
+        assert "VaR_99" in body
+        assert "CVaR_99" in body
 
     def test_two_different_series_produce_different_var(self):
         store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
@@ -6226,3 +6290,103 @@ class TestDiffusionStressTest:
             resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
+
+
+# ---------------------------------------------------------------------------
+# FIX 4.4 Protocol Gateway Session Management Endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestFixGatewaySessionEndpoints:
+    def test_get_fix_session_status_success(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get(
+                "/pilots/execution/fix/session/status",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "session_id" in body
+        assert body["sender_comp_id"] == "INVESTYO_PWA"
+        assert body["target_comp_id"] == "FIX_GATEWAY"
+        assert body["state"] in {
+            "ACTIVE", "CONNECTING", "LOGON_SENT", "LOGON_RECEIVED",
+            "RESEND_REQUESTED", "GAP_FILL_PROCESSING", "LOGOUT_SENT", "DISCONNECTED", "SUSPENDED"
+        }
+        assert isinstance(body["in_seq_num"], int)
+        assert isinstance(body["out_seq_num"], int)
+        assert isinstance(body["gap_queue_depth"], int)
+        assert isinstance(body["venues_active"], list)
+        assert "NYSE" in body["venues_active"]
+        assert "NASDAQ" in body["venues_active"]
+        assert "venue_stats" in body
+        assert len(body["venue_stats"]) >= 5
+        assert "audit_log" in body
+        assert len(body["audit_log"]) > 0
+
+    def test_get_fix_session_status_fail_open_without_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/pilots/execution/fix/session/status")
+        assert resp.status_code == 200
+        assert resp.json()["session_id"].startswith("FIX.4.4:")
+
+    def test_post_fix_session_test_request_success(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={"test_req_id": "TEST-UNIT-01"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["test_req_id"] == "TEST-UNIT-01"
+        assert "Heartbeat" in body["message"]
+        assert body["session_state"] == "ACTIVE"
+        assert "round_trip_ms" in body
+
+    def test_post_fix_session_reset_seq_hard_and_gap_fill(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            # Hard reset
+            resp1 = client.post(
+                "/pilots/execution/fix/session/reset-seq",
+                json={"new_seq_num": 500, "gap_fill": False},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+            assert resp1.status_code == 200
+            body1 = resp1.json()
+            assert body1["status"] == "ok"
+            assert body1["new_seq_num"] == 500
+            assert body1["out_seq_num"] == 500
+
+            # Gap fill
+            resp2 = client.post(
+                "/pilots/execution/fix/session/reset-seq",
+                json={"new_seq_num": 600, "gap_fill": True},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+            assert resp2.status_code == 200
+            body2 = resp2.json()
+            assert body2["status"] == "ok"
+            assert body2["new_seq_num"] == 600
+            assert body2["out_seq_num"] == 600
+
+    def test_post_fix_session_reconnect_success(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/reconnect",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["session_state"] == "ACTIVE"
+
+    def test_post_fix_session_command_auth_required(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={},
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401

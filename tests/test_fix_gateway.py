@@ -29,12 +29,14 @@ from execution.fix_gateway import (
     CxlRejReason,
     SessionRejectReason,
     FixSession,
+    FixSessionManager,
     FixSessionState,
     FixChecksumError,
     FixParseError,
     compute_checksum,
     format_fix_timestamp,
     MultiVenueAggregator,
+    SmartOrderRouter,
     RoutingPolicy,
     VenueConfig,
     SOH,
@@ -704,4 +706,244 @@ async def test_zero_liquidity_venue_routing():
     # No fills should happen
     assert res["total_filled_qty"] == 0.0
     assert len(res["fills"]) == 0
+
+
+# --- 7. Phase 36 Resilient Session Recovery & Production Engine Tests ---
+
+def test_fix_session_state_enum_coverage():
+    """Verify all FixSessionState enum members and backward-compatibility aliases."""
+    expected_states = {
+        "DISCONNECTED",
+        "CONNECTING",
+        "LOGON_SENT",
+        "LOGON_RECEIVED",
+        "ACTIVE",
+        "RESEND_REQUESTED",
+        "GAP_FILL_PROCESSING",
+        "LOGOUT_SENT",
+        "SUSPENDED",
+    }
+    for state_name in expected_states:
+        member = FixSessionState(state_name)
+        assert member.value == state_name
+
+    # Check aliases
+    assert FixSessionState.CONNECTED == FixSessionState.ACTIVE
+    assert FixSessionState.LOGGING_ON == FixSessionState.LOGON_SENT
+    assert FixSessionState.LOGGING_OFF == FixSessionState.LOGOUT_SENT
+    assert FixSessionState.RESEND_PROCESSING == FixSessionState.RESEND_REQUESTED
+
+
+def test_logon_handshake_bidirectional():
+    """Test full logon handshake and sequence reset flag."""
+    initiator = FixSession("CLIENT_DESK", "EXCHANGE_BROKER", heartbeat_int=10)
+    assert initiator.state == FixSessionState.DISCONNECTED
+
+    # Initiator receives inbound logon with ResetSeqNum
+    inbound_logon = Logon("EXCHANGE_BROKER", "CLIENT_DESK", seq_num=1, heartbeat_int=10, reset_seq_num=True)
+    initiator.simulate_receive(inbound_logon)
+    
+    assert initiator.state == FixSessionState.ACTIVE
+    assert initiator.in_seq_num == 2
+    assert initiator.out_seq_num == 1
+
+
+def test_sequence_gap_detection_detailed():
+    """
+    Test sequence gap detection:
+    Incoming MsgSeqNum > expected -> state becomes RESEND_REQUESTED,
+    ResendRequest (35=2) emitted with 7=expected and 16=0,
+    out-of-order messages buffered in gap_queue.
+    """
+    session = FixSession("DESK_A", "VENUE_B")
+    session.in_seq_num = 10
+    session.out_seq_num = 5
+
+    # Inbound message with seq=14 arrives (gap from 10 to 13)
+    msg14 = ExecutionReport(
+        "VENUE_B", "DESK_A", 14, "ORD_14", "CL_14", "EXEC_14",
+        ExecType.NEW, OrdStatus.NEW, "SPY", Side.BUY, 100.0, 0.0, 500.0
+    )
+    session.simulate_receive(msg14)
+
+    assert session.state == FixSessionState.RESEND_REQUESTED
+    assert session.pending_resend_range == (10, 13)
+    assert 14 in session.gap_queue
+    assert session.in_seq_num == 10  # Must not advance until gap filled
+
+    # Verify ResendRequest emitted
+    last_sent = session.sent_messages[-1]
+    assert isinstance(last_sent, ResendRequest)
+    assert last_sent.begin_seq_no == 10
+    assert last_sent.end_seq_no == 0
+
+
+def test_sequence_reset_gap_fill_and_contiguous_draining():
+    """
+    Test receiving SequenceReset (35=4, 123=Y) fast-forwards sequence,
+    drains contiguous buffered messages from gap_queue, and returns state to ACTIVE.
+    """
+    session = FixSession("DESK_A", "VENUE_B")
+    session.in_seq_num = 20
+
+    # Peer sends out-of-order seq=23 and seq=24
+    msg23 = ExecutionReport("VENUE_B", "DESK_A", 23, "ORD_23", "CL_23", "E23", ExecType.NEW, OrdStatus.NEW, "AAPL", Side.BUY, 50, 0, 150)
+    msg24 = ExecutionReport("VENUE_B", "DESK_A", 24, "ORD_24", "CL_24", "E24", ExecType.NEW, OrdStatus.NEW, "AAPL", Side.BUY, 50, 0, 150)
+    session.simulate_receive(msg23)
+    session.simulate_receive(msg24)
+
+    assert session.state == FixSessionState.RESEND_REQUESTED
+    assert len(session.gap_queue) == 2
+    assert session.in_seq_num == 20
+
+    # Peer responds with GapFill (SequenceReset 35=4, 123=Y, 36=23)
+    gap_fill = SequenceReset("VENUE_B", "DESK_A", seq_num=20, new_seq_no=23, gap_fill=True)
+    session.simulate_receive(gap_fill)
+
+    # Gap filled from 20->23, then contiguous 23 and 24 drained!
+    assert len(session.gap_queue) == 0
+    assert session.in_seq_num == 25
+    assert session.state == FixSessionState.ACTIVE
+    assert session.pending_resend_range is None
+    assert "CL_23" in session.order_book
+    assert "CL_24" in session.order_book
+
+
+def test_heartbeat_and_test_request_watchdog_timers():
+    """Test idle heartbeat emission and inactivity TestRequest watchdog triggers."""
+    session = FixSession("TRADER", "BROKER", heartbeat_int=10)
+    session.state = FixSessionState.ACTIVE
+    t0 = 1000.0
+    session.last_sent_at = t0
+    session.last_heard_at = t0
+
+    # 1. Check before heartbeat interval: no messages emitted
+    emitted = session.check_watchdog(now=t0 + 5.0)
+    assert len(emitted) == 0
+
+    # 2. Check at heartbeat interval (>= 10s idle on outbound): Heartbeat emitted
+    emitted = session.check_watchdog(now=t0 + 10.5)
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], Heartbeat)
+    assert emitted[0].msg_type == FixMsgType.HEARTBEAT
+
+    # 3. Check at inactivity threshold (>= 15s without inbound message): TestRequest emitted
+    emitted = session.check_watchdog(now=t0 + 15.5)
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], TestRequest)
+    assert emitted[0].msg_type == FixMsgType.TEST_REQUEST
+    assert emitted[0].test_req_id.startswith("TEST-")
+
+
+def test_test_request_roundtrip_immediate_response():
+    """Test that incoming TestRequest triggers immediate Heartbeat response with matching TestReqID."""
+    session = FixSession("TRADER", "BROKER")
+    test_req = TestRequest("BROKER", "TRADER", seq_num=1, test_req_id="PING-98765")
+    session.simulate_receive(test_req)
+
+    last_sent = session.sent_messages[-1]
+    assert isinstance(last_sent, Heartbeat)
+    assert last_sent.test_req_id == "PING-98765"
+
+
+def test_session_state_atomic_persistence_and_recovery(tmp_path):
+    """Test atomic state serialization and recovery on engine restart."""
+    state_file = str(tmp_path / "fix_session_state.json")
+    
+    session = FixSession("PRIMARY_DESK", "CBOE_DIRECT", heartbeat_int=15)
+    session.state = FixSessionState.ACTIVE
+    session.in_seq_num = 45
+    session.out_seq_num = 60
+    session.pending_resend_range = (40, 44)
+    
+    # Place an active order
+    cl_ord_id = session.send_order("SPY", Side.BUY, 200, 500.0)
+    
+    # Persist state atomically
+    saved = session.persist_state(state_file)
+    assert saved["in_seq_num"] == 45
+    assert saved["out_seq_num"] == 61
+    assert saved["state"] == "ACTIVE"
+    assert saved["session_id"] == "PRIMARY_DESK->CBOE_DIRECT"
+    assert cl_ord_id in saved["order_book"]
+
+    # Instantiate new session and restore state (simulating engine reboot)
+    recovered_session = FixSession("PRIMARY_DESK", "CBOE_DIRECT")
+    assert recovered_session.in_seq_num == 1
+    
+    success = recovered_session.restore_state(state_file)
+    assert success is True
+    assert recovered_session.session_id == "PRIMARY_DESK->CBOE_DIRECT"
+    assert recovered_session.state == FixSessionState.ACTIVE
+    assert recovered_session.in_seq_num == 45
+    assert recovered_session.out_seq_num == 61
+    assert recovered_session.pending_resend_range == (40, 44)
+    assert recovered_session.heartbeat_int == 15
+    assert cl_ord_id in recovered_session.order_book
+    assert recovered_session.order_book[cl_ord_id]["qty"] == 200.0
+
+
+def test_fix_session_manager(tmp_path):
+    """Test FixSessionManager multi-session management, persistence, and recovery."""
+    mgr = FixSessionManager(state_dir=str(tmp_path))
+
+    # Create two distinct sessions
+    s1 = mgr.get_or_create_session("DESK_US", "CBOE", heartbeat_int=20, auto_restore=False)
+    s2 = mgr.get_or_create_session("DESK_EU", "EUREX", heartbeat_int=30, auto_restore=False)
+
+    s1.in_seq_num = 12
+    s1.out_seq_num = 15
+    s1.state = FixSessionState.ACTIVE
+    s1.send_order("AAPL", Side.BUY, 100, 150.0)
+
+    s2.in_seq_num = 88
+    s2.out_seq_num = 99
+    s2.state = FixSessionState.ACTIVE
+
+    sessions_list = mgr.list_sessions()
+    assert len(sessions_list) == 2
+
+    # Persist all
+    mgr.persist_all()
+
+    # Create new manager and restore
+    new_mgr = FixSessionManager(state_dir=str(tmp_path))
+    restored_count = new_mgr.restore_all()
+    assert restored_count >= 1
+
+    restored_s1 = new_mgr.get_session("DESK_US->CBOE")
+    if restored_s1:
+        assert restored_s1.in_seq_num == 12
+        assert restored_s1.out_seq_num == 16
+
+
+@pytest.mark.anyio
+async def test_smart_order_router_fix_execution_reports():
+    """Test SmartOrderRouter (alias of MultiVenueAggregator) routing and FIX execution reports."""
+    router = SmartOrderRouter()
+    
+    result = await router.route_order(
+        symbol="QQQ",
+        side=Side.BUY,
+        qty=600.0,
+        limit_price=450.0,
+        routing_policy=RoutingPolicy.SMART_SWEEP,
+        detailed=True
+    )
+    
+    assert isinstance(result, dict)
+    assert result["status"] in {"FILLED", "PARTIALLY_FILLED"}
+    assert len(result["fills"]) > 0
+    assert len(result["fix_audit_log"]) == len(result["fills"])
+    
+    # Verify raw FIX message in audit log
+    first_fix = result["fix_audit_log"][0]
+    assert first_fix.startswith("8=FIX.4.4\x019=")
+    assert "35=8\x01" in first_fix  # ExecutionReport
+    
+    parsed_report = FixMessage.from_fix_str(first_fix)
+    assert isinstance(parsed_report, ExecutionReport)
+    assert parsed_report.symbol == "QQQ"
+    assert parsed_report.side == Side.BUY
+
 

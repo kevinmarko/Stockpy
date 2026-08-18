@@ -27,6 +27,11 @@ from execution.broker_base import (
     OrderType,
     PositionSnapshot,
 )
+from execution.dynamic_circuit_breaker import (
+    CircuitBreakerMetrics,
+    CircuitBreakerState,
+    DynamicCircuitBreaker,
+)
 from execution.risk_gate import PreTradeRiskGate, RiskContext
 from settings import settings
 
@@ -94,6 +99,71 @@ def _rth_timestamp() -> datetime:
 def _afterhours_timestamp() -> datetime:
     """An after-hours timestamp: Wednesday 9 PM ET → UTC."""
     return datetime(2024, 1, 17, 2, 0, 0, tzinfo=timezone.utc)  # 21:00 ET previous day UTC
+
+
+# ---------------------------------------------------------------------------
+# 0. dynamic_circuit_breaker_check
+# ---------------------------------------------------------------------------
+
+class TestDynamicCircuitBreakerCheck:
+    def test_passes_when_normal(self):
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(circuit_breaker_state=CircuitBreakerState.NORMAL)
+        result = gate.dynamic_circuit_breaker_check(_buy(), ctx)
+        assert result.passed
+
+    def test_passes_when_caution(self):
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(circuit_breaker_state=CircuitBreakerState.CAUTION)
+        result = gate.dynamic_circuit_breaker_check(_buy(), ctx)
+        assert result.passed
+
+    def test_soft_halt_blocks_buy(self):
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(
+            circuit_breaker_state=CircuitBreakerState.SOFT_HALT,
+            circuit_breaker_reason="VOLATILITY_BURST_HALT",
+        )
+        result = gate.dynamic_circuit_breaker_check(_buy("AAPL"), ctx)
+        assert not result.passed
+        assert "SOFT_HALT active" in result.reason
+        assert "BUY orders blocked" in result.reason
+
+    def test_soft_halt_permits_sell(self):
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(
+            circuit_breaker_state=CircuitBreakerState.SOFT_HALT,
+            circuit_breaker_reason="FLASH_CRASH_SHIELD",
+        )
+        result = gate.dynamic_circuit_breaker_check(_sell("AAPL"), ctx)
+        assert result.passed
+        assert "SELL allowed" in result.reason
+
+    def test_hard_halt_blocks_both_buy_and_sell(self):
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(
+            circuit_breaker_state=CircuitBreakerState.HARD_HALT,
+            circuit_breaker_reason="LOSS_VELOCITY_BREACH",
+        )
+        buy_res = gate.dynamic_circuit_breaker_check(_buy("AAPL"), ctx)
+        assert not buy_res.passed
+        assert "HARD_HALT active" in buy_res.reason
+
+        sell_res = gate.dynamic_circuit_breaker_check(_sell("AAPL"), ctx)
+        assert not sell_res.passed
+        assert "HARD_HALT active" in sell_res.reason
+
+    def test_dynamic_circuit_breaker_instance_evaluation(self):
+        cb = DynamicCircuitBreaker()
+        cb.update_metrics(volatility_zscore=4.0, persist=False)
+        assert cb.current_state == CircuitBreakerState.SOFT_HALT
+
+        gate = PreTradeRiskGate(circuit_breaker=cb)
+        buy_res = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
+        assert not buy_res.passed
+
+        sell_res = gate.dynamic_circuit_breaker_check(_sell(), RiskContext())
+        assert sell_res.passed
 
 
 # ---------------------------------------------------------------------------
@@ -629,18 +699,31 @@ class TestRunAll:
         passed, results = gate.run_all(_buy(), self._valid_context())
         assert passed
         assert all(r.passed for r in results)
-        assert len(results) == 10  # all 10 checks ran
+        assert len(results) == 11  # all 11 checks ran (Check #0 through Check #10)
 
     def test_short_circuit_on_first_failure(self):
         gate = PreTradeRiskGate(enforce_market_hours=True)
-        # Trigger macro kill switch (check 5); checks 6–10 must not run
+        # Trigger macro kill switch (check 5, 0-indexed pos 5); checks 6–10 must not run
         ctx = self._valid_context()
         ctx.macro = _macro(kill_switch=True)
         passed, results = gate.run_all(_buy(), ctx)
         assert not passed
-        # Only checks 1–5 ran (short-circuit)
-        assert len(results) == 5
+        # Checks 0-5 ran (6 checks total, short-circuit)
+        assert len(results) == 6
         assert not results[-1].passed
+        assert results[-1].check_name == "macro_kill_switch"
+
+    def test_short_circuit_on_circuit_breaker_soft_halt(self):
+        gate = PreTradeRiskGate(enforce_market_hours=True)
+        ctx = self._valid_context()
+        ctx.circuit_breaker_state = CircuitBreakerState.SOFT_HALT
+        ctx.circuit_breaker_reason = "VOLATILITY_BURST_HALT"
+        passed, results = gate.run_all(_buy(), ctx)
+        assert not passed
+        # Short-circuit on Check #0
+        assert len(results) == 1
+        assert not results[0].passed
+        assert results[0].check_name == "dynamic_circuit_breaker"
 
     def test_rate_limit_not_charged_on_blocked_order(self):
         """Rate counter must only increment on full-pass — blocked orders waste no budget."""

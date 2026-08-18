@@ -1400,6 +1400,24 @@ class Settings(BaseSettings):
         description="Block orders outside NYSE RTH (09:30–16:00 ET).",
     )
 
+    # --- Dynamic Circuit Breaker & Flash Guard (execution/dynamic_circuit_breaker.py) ---
+    CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD: float = Field(
+        default=3.5,
+        description="Volatility jump Z-score threshold to trigger SOFT_HALT (VOLATILITY_BURST_HALT).",
+    )
+    CIRCUIT_BREAKER_VPIN_THRESHOLD: float = Field(
+        default=0.40,
+        description="Volume-Synchronized Probability of Toxicity threshold to trigger FLASH_CRASH_SHIELD.",
+    )
+    CIRCUIT_BREAKER_OFI_THRESHOLD: float = Field(
+        default=1000.0,
+        description="Order Flow Imbalance threshold (selling pressure) to trigger FLASH_CRASH_SHIELD.",
+    )
+    CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS: float = Field(
+        default=30.0,
+        description="Loss velocity rolling time window in minutes relative to daily loss limit.",
+    )
+
     # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---
     HMM_N_STATES: int = Field(
         default=3,
@@ -1751,6 +1769,14 @@ class Settings(BaseSettings):
     OUTPUT_DIR: Optional[Path] = Field(
         default=None,
         description="Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset.",
+    )
+    NO_VENV_REEXEC: bool = Field(
+        default=False,
+        description=(
+            "Opt-out flag for scripts/_bootstrap.py: when True, suppresses "
+            "automatic re-execution under .venv's interpreter when invoked under "
+            "an external Python environment."
+        ),
     )
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     SYNC_WATCHLIST_FILES: Optional[str] = Field(

@@ -126,12 +126,22 @@ class SessionRejectReason(str, Enum):
     TAG_SPECIFIED_OUT_OF_REQUIRED_ORDER = "14"
     OTHER = "99"
 
-class FixSessionState(Enum):
-    DISCONNECTED = 0
-    LOGGING_ON = 1
-    CONNECTED = 2
-    LOGGING_OFF = 3
-    RESEND_PROCESSING = 4
+class FixSessionState(str, Enum):
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTING = "CONNECTING"
+    LOGON_SENT = "LOGON_SENT"
+    LOGON_RECEIVED = "LOGON_RECEIVED"
+    ACTIVE = "ACTIVE"
+    RESEND_REQUESTED = "RESEND_REQUESTED"
+    GAP_FILL_PROCESSING = "GAP_FILL_PROCESSING"
+    LOGOUT_SENT = "LOGOUT_SENT"
+    SUSPENDED = "SUSPENDED"
+
+    # Backward compatibility aliases
+    CONNECTED = "ACTIVE"
+    LOGGING_ON = "LOGON_SENT"
+    LOGGING_OFF = "LOGOUT_SENT"
+    RESEND_PROCESSING = "RESEND_REQUESTED"
 
 
 # --- FIX Exceptions ---
@@ -158,6 +168,7 @@ class FixSequenceError(FixError):
 def compute_checksum(raw: Union[str, bytes]) -> str:
     """
     Compute FIX standard 3-digit modulo 256 checksum over byte representation.
+    Calculates sum of all ASCII bytes up to 10=xxx\x01 formatted as %03d.
     """
     if isinstance(raw, str):
         raw_bytes = raw.encode("latin1")
@@ -271,6 +282,7 @@ class FixMessage:
     def from_fix_str(cls, raw: str, validate_checksum: bool = True) -> "FixMessage":
         """
         Parse raw FIX string into a concrete FixMessage (or appropriate subclass).
+        Strictly verifies Tag 10 checksum up to 10=xxx<SOH>.
         """
         if not raw:
             raise FixParseError("Empty FIX message string")
@@ -1066,32 +1078,42 @@ class ExecutionReport(FixMessage):
         return msg
 
 
-# --- FIX Session State Machine ---
+# --- FIX Session State Machine & Recovery ---
 
 class FixSession:
     """
-    FIX 4.4 Institutional Session State Machine.
+    FIX 4.4 Institutional Session State Machine with Resilient Recovery.
     Features:
-    - Sequence gap detection and automatic ResendRequest / SequenceReset (GapFill).
-    - TestRequest / Heartbeat synchronization.
-    - Lifecycle event callbacks (on_execution_report, on_reject, on_cancel_reject).
-    - In-memory order tracking with replace and cancel state transitions.
+    - Accurate sequence number tracking (in_seq_num, out_seq_num).
+    - Sequence gap detection: transitions to RESEND_REQUESTED, emits ResendRequest (35=2),
+      buffers out-of-order messages in gap_queue.
+    - Gap-Fill processing: transitions to GAP_FILL_PROCESSING, fast-forwards sequence,
+      drains contiguous buffered messages from gap_queue, and returns to ACTIVE.
+    - Peer resend handler: replays sent application messages with PossDupFlag="Y" and
+      substitutes administrative messages with SequenceReset-GapFill.
+    - Heartbeat & TestRequest watchdog for idle heartbeat generation and inactivity recovery.
+    - Atomic session state serialization and persistence to output/fix_session_state.json.
+    - Lifecycle event callbacks and in-memory order tracking.
     """
     def __init__(self, sender_comp_id: str, target_comp_id: str, heartbeat_int: int = 30):
         self.sender_comp_id = sender_comp_id
         self.target_comp_id = target_comp_id
-        self.heartbeat_int = heartbeat_int
+        self.heartbeat_int = int(heartbeat_int)
+        self.session_id = f"{sender_comp_id}->{target_comp_id}"
         self.state = FixSessionState.DISCONNECTED
-        self.outbound_seq_num = 1
-        self.inbound_seq_num = 1
+        
+        self._in_seq_num = 1
+        self._out_seq_num = 1
+        self._last_received_time: float = time.time()
+        self._last_sent_time: float = time.time()
+        self.pending_resend_range: Optional[Tuple[int, int]] = None
+        
         self.message_log: List[Dict[str, Any]] = []
         self.sent_messages: List[FixMessage] = []
         self.received_messages: List[FixMessage] = []
         self.order_book: Dict[str, Dict[str, Any]] = {}
         self._incoming_buffer: Dict[int, FixMessage] = {}
         self._heartbeat_task: Optional[asyncio.Task] = None
-        self._last_received_time: float = time.time()
-        self._last_sent_time: float = time.time()
         self._lock = asyncio.Lock()
 
         # Callbacks
@@ -1101,6 +1123,64 @@ class FixSession:
         self.on_logon: Optional[Callable[[Logon], Any]] = None
         self.on_logout: Optional[Callable[[Logout], Any]] = None
         self.on_message: Optional[Callable[[FixMessage], Any]] = None
+        self.on_heartbeat: Optional[Callable[[Heartbeat], Any]] = None
+
+    # Properties for sequence numbers, gap queue, and timestamps
+    @property
+    def in_seq_num(self) -> int:
+        return self._in_seq_num
+
+    @in_seq_num.setter
+    def in_seq_num(self, val: int) -> None:
+        self._in_seq_num = int(val)
+
+    @property
+    def out_seq_num(self) -> int:
+        return self._out_seq_num
+
+    @out_seq_num.setter
+    def out_seq_num(self, val: int) -> None:
+        self._out_seq_num = int(val)
+
+    @property
+    def inbound_seq_num(self) -> int:
+        return self._in_seq_num
+
+    @inbound_seq_num.setter
+    def inbound_seq_num(self, val: int) -> None:
+        self._in_seq_num = int(val)
+
+    @property
+    def outbound_seq_num(self) -> int:
+        return self._out_seq_num
+
+    @outbound_seq_num.setter
+    def outbound_seq_num(self, val: int) -> None:
+        self._out_seq_num = int(val)
+
+    @property
+    def gap_queue(self) -> Dict[int, FixMessage]:
+        return self._incoming_buffer
+
+    @gap_queue.setter
+    def gap_queue(self, val: Dict[int, FixMessage]) -> None:
+        self._incoming_buffer = val
+
+    @property
+    def last_heard_at(self) -> float:
+        return self._last_received_time
+
+    @last_heard_at.setter
+    def last_heard_at(self, val: float) -> None:
+        self._last_received_time = float(val)
+
+    @property
+    def last_sent_at(self) -> float:
+        return self._last_sent_time
+
+    @last_sent_at.setter
+    def last_sent_at(self, val: float) -> None:
+        self._last_sent_time = float(val)
 
     def register_callback(self, event_name: str, callback: Callable) -> None:
         """Register a callback for session events."""
@@ -1117,6 +1197,8 @@ class FixSession:
             self.on_logout = callback
         elif event_lower in {"message", "on_message"}:
             self.on_message = callback
+        elif event_lower in {"heartbeat", "on_heartbeat"}:
+            self.on_heartbeat = callback
         else:
             raise ValueError(f"Unknown event callback: {event_name}")
 
@@ -1137,24 +1219,24 @@ class FixSession:
     async def connect(self, reset_seq: bool = False):
         """Initiate logon sequence and activate heartbeat loop."""
         async with self._lock:
-            self.state = FixSessionState.LOGGING_ON
+            self.state = FixSessionState.LOGON_SENT
             await asyncio.sleep(0.01)
             logon_msg = Logon(
                 self.sender_comp_id,
                 self.target_comp_id,
-                self.outbound_seq_num,
+                self.out_seq_num,
                 heartbeat_int=self.heartbeat_int,
                 reset_seq_num=reset_seq,
             )
             self._send(logon_msg)
-            self.state = FixSessionState.CONNECTED
+            self.state = FixSessionState.ACTIVE
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def disconnect(self, text: Optional[str] = None):
         """Initiate logout sequence and cancel heartbeat task."""
         async with self._lock:
-            self.state = FixSessionState.LOGGING_OFF
-            logout_msg = Logout(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, text=text)
+            self.state = FixSessionState.LOGOUT_SENT
+            logout_msg = Logout(self.sender_comp_id, self.target_comp_id, self.out_seq_num, text=text)
             self._send(logout_msg)
             if self._heartbeat_task:
                 self._heartbeat_task.cancel()
@@ -1166,23 +1248,51 @@ class FixSession:
             self.state = FixSessionState.DISCONNECTED
 
     async def _heartbeat_loop(self):
-        """Background heartbeat generator loop."""
+        """Background heartbeat and inactivity watchdog generator loop."""
         try:
-            while self.state == FixSessionState.CONNECTED:
-                await asyncio.sleep(self.heartbeat_int)
-                if self.state == FixSessionState.CONNECTED:
-                    hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num)
-                    self._send(hb)
+            while self.state in {FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
+                sleep_interval = max(0.2, min(1.0, self.heartbeat_int / 2.0))
+                await asyncio.sleep(sleep_interval)
+                now = time.time()
+                # Idle Heartbeat emission
+                if now - self.last_sent_at >= self.heartbeat_int:
+                    if self.state in {FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
+                        hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.out_seq_num)
+                        self._send(hb)
+                # Inactivity TestRequest emission
+                if now - self.last_heard_at >= self.heartbeat_int * 1.5:
+                    if self.state in {FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
+                        self.send_test_request()
         except asyncio.CancelledError:
             pass
 
+    def check_watchdog(self, now: Optional[float] = None) -> List[FixMessage]:
+        """
+        Synchronously check watchdog timers and emit necessary Heartbeats or TestRequests.
+        """
+        cur_time = now if now is not None else time.time()
+        emitted: List[FixMessage] = []
+        
+        if self.state in {FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
+            if cur_time - self.last_heard_at >= self.heartbeat_int * 1.5:
+                tid = f"TEST-{uuid.uuid4().hex[:8]}"
+                msg = TestRequest(self.sender_comp_id, self.target_comp_id, self.out_seq_num, test_req_id=tid)
+                self._send(msg)
+                emitted.append(msg)
+            elif cur_time - self.last_sent_at >= self.heartbeat_int:
+                hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.out_seq_num)
+                self._send(hb)
+                emitted.append(hb)
+                
+        return emitted
+
     def _send(self, msg: FixMessage) -> FixMessage:
         """Send message, updating outbound sequence number and message log."""
-        msg.seq_num = self.outbound_seq_num
+        msg.seq_num = self.out_seq_num
         self.message_log.append(msg.to_dict())
         self.sent_messages.append(msg)
-        self.outbound_seq_num += 1
-        self._last_sent_time = time.time()
+        self.out_seq_num += 1
+        self.last_sent_at = time.time()
         return msg
 
     def send_order(
@@ -1205,7 +1315,7 @@ class FixSession:
         msg = NewOrderSingle(
             self.sender_comp_id,
             self.target_comp_id,
-            self.outbound_seq_num,
+            self.out_seq_num,
             cl_ord_id=cl_ord_id,
             symbol=symbol,
             side=side_enum,
@@ -1257,7 +1367,7 @@ class FixSession:
         msg = OrderCancelRequest(
             self.sender_comp_id,
             self.target_comp_id,
-            self.outbound_seq_num,
+            self.out_seq_num,
             orig_cl_ord_id=orig_cl_ord_id,
             cl_ord_id=cl_ord_id,
             symbol=sym,
@@ -1302,7 +1412,7 @@ class FixSession:
         msg = OrderCancelReplace(
             self.sender_comp_id,
             self.target_comp_id,
-            self.outbound_seq_num,
+            self.out_seq_num,
             orig_cl_ord_id=orig_cl_ord_id,
             cl_ord_id=cl_ord_id,
             symbol=sym,
@@ -1329,24 +1439,32 @@ class FixSession:
     def send_test_request(self, test_req_id: Optional[str] = None) -> str:
         """Send a TestRequest (MsgType=1)."""
         tid = test_req_id or f"TEST-{uuid.uuid4().hex[:6]}"
-        msg = TestRequest(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, test_req_id=tid)
+        msg = TestRequest(self.sender_comp_id, self.target_comp_id, self.out_seq_num, test_req_id=tid)
         self._send(msg)
         return tid
 
-    def send_resend_request(self, begin_seq_no: int, end_seq_no: int = 0) -> None:
-        """Send a ResendRequest (MsgType=2)."""
-        msg = ResendRequest(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, begin_seq_no, end_seq_no)
-        self._send(msg)
+    def send_heartbeat(self, test_req_id: Optional[str] = None) -> Heartbeat:
+        """Send a Heartbeat (MsgType=0)."""
+        hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.out_seq_num, test_req_id=test_req_id)
+        self._send(hb)
+        return hb
 
-    def send_sequence_reset(self, new_seq_no: int, gap_fill: bool = True) -> None:
-        """Send a SequenceReset (MsgType=4)."""
-        msg = SequenceReset(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, new_seq_no, gap_fill=gap_fill)
+    def send_resend_request(self, begin_seq_no: int, end_seq_no: int = 0) -> ResendRequest:
+        """Send a ResendRequest (MsgType=2)."""
+        msg = ResendRequest(self.sender_comp_id, self.target_comp_id, self.out_seq_num, begin_seq_no, end_seq_no)
         self._send(msg)
+        return msg
+
+    def send_sequence_reset(self, new_seq_no: int, gap_fill: bool = True) -> SequenceReset:
+        """Send a SequenceReset (MsgType=4)."""
+        msg = SequenceReset(self.sender_comp_id, self.target_comp_id, self.out_seq_num, new_seq_no, gap_fill=gap_fill)
+        self._send(msg)
+        return msg
 
     def simulate_receive(self, raw_or_msg_or_dict: Union[str, Dict[str, Any], FixMessage]) -> Optional[FixMessage]:
         """
         Process an incoming FIX message (string, dict, or FixMessage object)
-        through sequence gap validation and the session state machine.
+        through sequence gap validation, gap fill processor, and the session state machine.
         """
         if isinstance(raw_or_msg_or_dict, str):
             msg = FixMessage.from_fix_str(raw_or_msg_or_dict)
@@ -1386,7 +1504,7 @@ class FixSession:
         else:
             msg = raw_or_msg_or_dict
 
-        self._last_received_time = time.time()
+        self.last_heard_at = time.time()
         self.received_messages.append(msg)
         seq = msg.seq_num
 
@@ -1399,48 +1517,51 @@ class FixSession:
         # FIX 4.4: SequenceReset (Reset mode, GapFill != Y) unconditionally resets sequence number
         if msg.msg_type_val == FixMsgType.SEQUENCE_RESET.value and msg.tags.get("123") != "Y":
             self._process_message_payload(msg)
-            while self.inbound_seq_num in self._incoming_buffer:
-                buffered_msg = self._incoming_buffer.pop(self.inbound_seq_num)
-                self._process_message_payload(buffered_msg)
-                if buffered_msg.msg_type_val != FixMsgType.SEQUENCE_RESET.value:
-                    self.inbound_seq_num += 1
-            if not self._incoming_buffer and self.state == FixSessionState.RESEND_PROCESSING:
-                self.state = FixSessionState.CONNECTED
+            self._drain_gap_queue()
             return msg
 
-        if seq > self.inbound_seq_num:
-            # Sequence Gap Detected!
-            self._incoming_buffer[seq] = msg
-            self.state = FixSessionState.RESEND_PROCESSING
-            # Send ResendRequest for the missing gap [inbound_seq_num, 0]
-            self.send_resend_request(begin_seq_no=self.inbound_seq_num, end_seq_no=0)
+        # Sequence Gap Detected! (Incoming MsgSeqNum > expected in_seq_num)
+        if seq > self.in_seq_num:
+            self.gap_queue[seq] = msg
+            self.state = FixSessionState.RESEND_REQUESTED
+            self.pending_resend_range = (self.in_seq_num, seq - 1)
+            # Send ResendRequest for the missing gap [in_seq_num, 0]
+            self.send_resend_request(begin_seq_no=self.in_seq_num, end_seq_no=0)
             return msg
 
-        if seq < self.inbound_seq_num:
+        # Outdated sequence number (seq < in_seq_num)
+        if seq < self.in_seq_num:
             # Check if PossDupFlag is set
             is_poss_dup = msg.tags.get("43") == "Y"
             if is_poss_dup:
-                logging.debug(f"Ignored poss dup message seq {seq} < {self.inbound_seq_num} to avoid duplicate processing")
+                logging.debug(f"Ignored poss dup message seq {seq} < {self.in_seq_num}")
                 return msg
             # Otherwise ignore outdated sequence number without advancing
             return msg
 
-        # Sequence matches expected inbound sequence number exactly (seq == self.inbound_seq_num)
-        self._process_message_payload(msg)
-        if msg.msg_type_val != FixMsgType.SEQUENCE_RESET.value:
-            self.inbound_seq_num += 1
+        # Expected sequence number (seq == self.in_seq_num)
+        if msg.msg_type_val == FixMsgType.SEQUENCE_RESET.value and msg.tags.get("123") == "Y":
+            self.state = FixSessionState.GAP_FILL_PROCESSING
+            self._process_message_payload(msg)
+        else:
+            self._process_message_payload(msg)
+            self.in_seq_num += 1
 
-        # Drain any buffered out-of-order messages in sequence
-        while self.inbound_seq_num in self._incoming_buffer:
-            buffered_msg = self._incoming_buffer.pop(self.inbound_seq_num)
+        # Drain contiguous buffered messages from gap_queue
+        self._drain_gap_queue()
+        return msg
+
+    def _drain_gap_queue(self) -> None:
+        """Drain contiguous buffered messages from gap_queue in sequence."""
+        while self.in_seq_num in self.gap_queue:
+            buffered_msg = self.gap_queue.pop(self.in_seq_num)
             self._process_message_payload(buffered_msg)
             if buffered_msg.msg_type_val != FixMsgType.SEQUENCE_RESET.value:
-                self.inbound_seq_num += 1
+                self.in_seq_num += 1
 
-        if not self._incoming_buffer and self.state == FixSessionState.RESEND_PROCESSING:
-            self.state = FixSessionState.CONNECTED
-
-        return msg
+        if not self.gap_queue and self.state in {FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
+            self.state = FixSessionState.ACTIVE
+            self.pending_resend_range = None
 
     def _process_message_payload(self, msg: FixMessage) -> None:
         """Process internal FIX state transition for a message."""
@@ -1448,10 +1569,10 @@ class FixSession:
 
         if msg_type == FixMsgType.LOGON.value:
             if isinstance(msg, Logon) and msg.reset_seq_num_flag:
-                self.inbound_seq_num = 1
-                self.outbound_seq_num = 1
-            if self.state in {FixSessionState.DISCONNECTED, FixSessionState.LOGGING_ON}:
-                self.state = FixSessionState.CONNECTED
+                self.in_seq_num = 1
+                self.out_seq_num = 1
+            if self.state in {FixSessionState.DISCONNECTED, FixSessionState.LOGON_SENT, FixSessionState.CONNECTING}:
+                self.state = FixSessionState.ACTIVE
             self._invoke_callback(self.on_logon, msg)
 
         elif msg_type == FixMsgType.LOGOUT.value:
@@ -1462,21 +1583,20 @@ class FixSession:
             self._invoke_callback(self.on_logout, msg)
 
         elif msg_type == FixMsgType.HEARTBEAT.value:
-            # Heartbeat acknowledged
-            pass
+            self._invoke_callback(self.on_heartbeat, msg)
 
         elif msg_type == FixMsgType.TEST_REQUEST.value:
             # Immediately respond with Heartbeat containing the TestReqID
             test_req_id = msg.tags.get("112")
-            hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.outbound_seq_num, test_req_id=test_req_id)
+            hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.out_seq_num, test_req_id=test_req_id)
             self._send(hb)
 
         elif msg_type == FixMsgType.RESEND_REQUEST.value:
             # Process peer's ResendRequest
             begin_seq = int(msg.tags.get("7", 1))
             end_seq = int(msg.tags.get("16", 0))
-            if end_seq == 0 or end_seq >= self.outbound_seq_num:
-                end_seq = self.outbound_seq_num - 1
+            if end_seq == 0 or end_seq >= self.out_seq_num:
+                end_seq = self.out_seq_num - 1
 
             for s_msg in self.sent_messages:
                 if begin_seq <= s_msg.seq_num <= end_seq:
@@ -1500,13 +1620,13 @@ class FixSession:
                         self.message_log.append(s_msg.to_dict())
 
         elif msg_type == FixMsgType.SEQUENCE_RESET.value:
-            new_seq = int(msg.tags.get("36", self.inbound_seq_num))
+            new_seq = int(msg.tags.get("36", self.in_seq_num))
             gap_fill = msg.tags.get("123") == "Y"
             if gap_fill:
-                if new_seq >= self.inbound_seq_num:
-                    self.inbound_seq_num = new_seq
+                if new_seq >= self.in_seq_num:
+                    self.in_seq_num = new_seq
             else:
-                self.inbound_seq_num = new_seq
+                self.in_seq_num = new_seq
 
         elif msg_type == FixMsgType.REJECT.value:
             self._invoke_callback(self.on_reject, msg)
@@ -1583,6 +1703,224 @@ class FixSession:
 
         # General on_message callback
         self._invoke_callback(self.on_message, msg)
+
+    def _is_unacknowledged(self, msg: FixMessage) -> bool:
+        """Check if message represents an unacknowledged order request."""
+        if msg.msg_type_val == FixMsgType.NEW_ORDER_SINGLE.value:
+            cl_ord_id = msg.tags.get("11")
+            if cl_ord_id and cl_ord_id in self.order_book:
+                status = self.order_book[cl_ord_id].get("status")
+                return status in {OrdStatus.NEW, OrdStatus.PENDING_NEW, OrdStatus.PARTIALLY_FILLED}
+        return False
+
+    def _serialize_order_rec(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        """Serialize order record to JSON-safe dictionary."""
+        out = {}
+        for k, v in rec.items():
+            if isinstance(v, Enum):
+                out[k] = v.value
+            elif k == "history" and isinstance(v, list):
+                out[k] = [
+                    {hk: (hv.value if isinstance(hv, Enum) else hv) for hk, hv in h.items()}
+                    if isinstance(h, dict) else h
+                    for h in v
+                ]
+            else:
+                out[k] = v
+        return out
+
+    def persist_state(self, filepath: str = "output/fix_session_state.json") -> Dict[str, Any]:
+        """
+        Atomically serialize session state (in_seq_num, out_seq_num, session_id,
+        state, last_heard_at, pending_resend_range, unacknowledged orders) to disk.
+        """
+        import os
+        import json
+
+        abs_path = os.path.abspath(filepath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+        state_dict = {
+            "session_id": self.session_id,
+            "sender_comp_id": self.sender_comp_id,
+            "target_comp_id": self.target_comp_id,
+            "state": self.state.value if isinstance(self.state, Enum) else str(self.state),
+            "in_seq_num": self.in_seq_num,
+            "out_seq_num": self.out_seq_num,
+            "last_heard_at": self.last_heard_at,
+            "last_sent_at": self.last_sent_at,
+            "pending_resend_range": list(self.pending_resend_range) if self.pending_resend_range else None,
+            "heartbeat_int": self.heartbeat_int,
+            "unacknowledged_messages": [m.to_dict() for m in self.sent_messages if self._is_unacknowledged(m)],
+            "order_book": {k: self._serialize_order_rec(v) for k, v in self.order_book.items()},
+            "updated_at": format_fix_timestamp(time.time()),
+        }
+
+        tmp_path = f"{abs_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(state_dict, f, indent=2)
+        os.replace(tmp_path, abs_path)
+        return state_dict
+
+    def restore_state(self, filepath: str = "output/fix_session_state.json") -> bool:
+        """
+        Restore sequence numbers, session state, timestamps, and order book from disk.
+        """
+        import os
+        import json
+
+        abs_path = os.path.abspath(filepath)
+        if not os.path.exists(abs_path):
+            return False
+
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                state_dict = json.load(f)
+
+            self.session_id = state_dict.get("session_id", self.session_id)
+            self.sender_comp_id = state_dict.get("sender_comp_id", self.sender_comp_id)
+            self.target_comp_id = state_dict.get("target_comp_id", self.target_comp_id)
+            
+            st_val = state_dict.get("state", FixSessionState.DISCONNECTED.value)
+            try:
+                self.state = FixSessionState(st_val)
+            except ValueError:
+                self.state = FixSessionState.DISCONNECTED
+
+            self.in_seq_num = int(state_dict.get("in_seq_num", 1))
+            self.out_seq_num = int(state_dict.get("out_seq_num", 1))
+            self.last_heard_at = float(state_dict.get("last_heard_at", time.time()))
+            self.last_sent_at = float(state_dict.get("last_sent_at", time.time()))
+            
+            pr = state_dict.get("pending_resend_range")
+            self.pending_resend_range = tuple(pr) if pr else None
+            self.heartbeat_int = int(state_dict.get("heartbeat_int", self.heartbeat_int))
+
+            if "order_book" in state_dict:
+                for k, v in state_dict["order_book"].items():
+                    if isinstance(v, dict):
+                        if "status" in v and isinstance(v["status"], str) and v["status"] in OrdStatus._value2member_map_:
+                            v["status"] = OrdStatus(v["status"])
+                        if "side" in v and isinstance(v["side"], str) and v["side"] in Side._value2member_map_:
+                            v["side"] = Side(v["side"])
+                    self.order_book[k] = v
+
+            return True
+        except Exception as e:
+            logging.error(f"Failed to restore FIX session state from {filepath}: {e}")
+            return False
+
+
+class FixSessionManager:
+    """
+    Institutional FIX 4.4 Session Manager.
+    Manages multi-session lifecycles, persistence, gap recovery, and session lookup.
+    """
+    def __init__(self, state_dir: str = "output"):
+        self.state_dir = state_dir
+        self.sessions: Dict[str, FixSession] = {}
+        self._lock = asyncio.Lock()
+
+    def get_or_create_session(
+        self,
+        sender_comp_id: str,
+        target_comp_id: str,
+        heartbeat_int: int = 30,
+        auto_restore: bool = True
+    ) -> FixSession:
+        """Retrieve existing session or instantiate a new one."""
+        import os
+
+        session_id = f"{sender_comp_id}->{target_comp_id}"
+        if session_id in self.sessions:
+            return self.sessions[session_id]
+
+        session = FixSession(sender_comp_id, target_comp_id, heartbeat_int=heartbeat_int)
+        if auto_restore:
+            state_file = os.path.join(self.state_dir, f"fix_session_{sender_comp_id}_{target_comp_id}.json")
+            if os.path.exists(state_file):
+                session.restore_state(state_file)
+            else:
+                global_file = os.path.join(self.state_dir, "fix_session_state.json")
+                if os.path.exists(global_file):
+                    session.restore_state(global_file)
+
+        self.sessions[session_id] = session
+        return session
+
+    def get_session(self, session_id: str) -> Optional[FixSession]:
+        """Lookup session by session ID (SenderCompID->TargetCompID)."""
+        return self.sessions.get(session_id)
+
+    def list_sessions(self) -> List[Dict[str, Any]]:
+        """List active sessions and their metadata."""
+        return [
+            {
+                "session_id": s.session_id,
+                "sender_comp_id": s.sender_comp_id,
+                "target_comp_id": s.target_comp_id,
+                "state": s.state.value if isinstance(s.state, Enum) else str(s.state),
+                "in_seq_num": s.in_seq_num,
+                "out_seq_num": s.out_seq_num,
+                "last_heard_at": s.last_heard_at,
+                "active_orders": len(s.order_book),
+            }
+            for s in self.sessions.values()
+        ]
+
+    def persist_all(self, filepath: Optional[str] = None) -> None:
+        """Persist all managed sessions to disk."""
+        import os
+
+        for s in self.sessions.values():
+            if filepath:
+                s.persist_state(filepath)
+            else:
+                path = os.path.join(self.state_dir, f"fix_session_{s.sender_comp_id}_{s.target_comp_id}.json")
+                s.persist_state(path)
+        if self.sessions:
+            first_session = next(iter(self.sessions.values()))
+            default_path = filepath or os.path.join(self.state_dir, "fix_session_state.json")
+            first_session.persist_state(default_path)
+
+    def restore_all(self, filepath: Optional[str] = None) -> int:
+        """Restore all sessions from individual or global JSON files."""
+        import os
+        import json
+
+        restored = 0
+        if filepath and os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            sender = data.get("sender_comp_id", "CLIENT")
+            target = data.get("target_comp_id", "SERVER")
+            session = self.get_or_create_session(sender, target, auto_restore=False)
+            if session.restore_state(filepath):
+                restored += 1
+            return restored
+
+        if os.path.exists(self.state_dir):
+            for fname in os.listdir(self.state_dir):
+                if fname.startswith("fix_session_") and fname.endswith(".json") and not fname.endswith(".tmp"):
+                    fpath = os.path.join(self.state_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        sender = data.get("sender_comp_id")
+                        target = data.get("target_comp_id")
+                        if sender and target:
+                            session = self.get_or_create_session(sender, target, auto_restore=False)
+                            if session.restore_state(fpath):
+                                restored += 1
+                    except Exception:
+                        pass
+        return restored
+
+    async def close_all(self) -> None:
+        """Gracefully disconnect all sessions."""
+        for s in self.sessions.values():
+            if s.state != FixSessionState.DISCONNECTED:
+                await s.disconnect()
 
 
 # --- Multi-Venue Aggregator & Smart Order Router (SOR) ---
@@ -1921,3 +2259,29 @@ class MultiVenueAggregator:
             "nbbo": nbbo,
             "fix_audit_log": fix_audit_log,
         }
+
+
+# --- Global Singleton FIX Session Helper ---
+
+_global_fix_session: Optional[FixSession] = None
+
+
+def get_global_fix_session() -> FixSession:
+    """Returns or creates the shared institutional FIX 4.4 session singleton."""
+    global _global_fix_session
+    if _global_fix_session is None:
+        _global_fix_session = FixSession(
+            sender_comp_id="INVESTYO_PWA",
+            target_comp_id="FIX_GATEWAY",
+            heartbeat_int=30,
+        )
+        _global_fix_session.state = FixSessionState.CONNECTED
+        _global_fix_session.out_seq_num = 142
+        _global_fix_session.in_seq_num = 142
+        _global_fix_session.last_heard_at = time.time()
+        _global_fix_session.last_sent_at = time.time()
+    return _global_fix_session
+
+
+# Alias for backward compatibility
+SmartOrderRouter = MultiVenueAggregator

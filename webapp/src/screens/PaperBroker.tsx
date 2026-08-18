@@ -24,6 +24,7 @@ import { AlmgrenChrissRouterView } from "../components/execution/AlmgrenChrissRo
 import { ResearchCopilotView } from "../components/ai/ResearchCopilotView";
 import { MultiBrokerGatewayView } from "../components/execution/MultiBrokerGatewayView";
 import { SecRule606ReportView } from "../components/execution/SecRule606ReportView";
+import { FixGatewayStatusRadar } from "../components/execution/FixGatewayStatusRadar";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -56,6 +57,7 @@ export function PaperBroker() {
   const [showAiCopilot, setShowAiCopilot] = useState(false);
   const [showMultiBroker, setShowMultiBroker] = useState(false);
   const [showSec606, setShowSec606] = useState(false);
+  const [showFixGateway, setShowFixGateway] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -501,6 +503,21 @@ export function PaperBroker() {
             🌊 Vol Surface
           </button>
           <button
+            onClick={() => setShowFixGateway(!showFixGateway)}
+            style={{
+              padding: "8px 14px",
+              background: showFixGateway ? theme.accent : theme.surface,
+              border: `1px solid ${showFixGateway ? theme.accent : theme.border}`,
+              color: showFixGateway ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            📡 FIX Gateway Radar
+          </button>
+          <button
             onClick={handleSettleExpired}
             disabled={settleMutation.pending}
             style={{
@@ -653,6 +670,19 @@ export function PaperBroker() {
               positions.reload();
               orders.reload();
             }} />
+          </div>
+        )}
+
+        {/* FIX 4.4 Institutional Gateway & Routing Radar */}
+        {showFixGateway && (
+          <div style={{ position: "relative" }}>
+            <button 
+              onClick={() => setShowFixGateway(false)}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
+            >
+              ✕
+            </button>
+            <FixGatewayStatusRadar onClose={() => setShowFixGateway(false)} />
           </div>
         )}
 

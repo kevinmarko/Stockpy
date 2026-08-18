@@ -125,6 +125,8 @@ def read_block_log(path: Path, max_lines: int = 500) -> List[dict]:
 # editing the trip logic below.
 _KNOWN_CHECKS: Mapping[str, tuple[str, str, str]] = {
     # name -> (breaker_name, severity, summary_template)
+    "dynamic_circuit_breaker": ("dynamic_circuit_breaker", "CRITICAL",
+                                "Dynamic circuit breaker active — {symbol}"),
     "max_position_size":     ("max_position_size",   "WARNING",
                               "Position size limit blocked {symbol}"),
     "portfolio_heat":        ("portfolio_heat",      "CRITICAL",

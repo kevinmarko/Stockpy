@@ -810,3 +810,65 @@ def test_mounts_tick_ws_route_but_not_the_unrelated_training_status_route():
     paths = _all_route_paths(data_api.app)
     assert "/ws/ticks/{symbol}" in paths
     assert "/ws/training/status" not in paths
+
+
+class TestCircuitBreakerStatus:
+    """Tests for GET /risk/circuit-breaker/status."""
+
+    def test_degrades_to_normal_when_uninitialized(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        resp = client.get("/risk/circuit-breaker/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "NORMAL"
+        assert data["volatility_zscore"] == 0.0
+        assert data["vpin"] == 0.0
+        assert data["ofi"] == 0.0
+        assert data["loss_velocity_per_min"] == 0.0
+        assert data["reason"] is None
+        assert "updated_at" in data
+
+    def test_reads_persisted_circuit_breaker_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        cb_file = tmp_path / "circuit_breaker_state.json"
+        import json
+        cb_file.write_text(
+            json.dumps({
+                "state": "SOFT_HALT",
+                "volatility_zscore": 3.82,
+                "vpin": 0.46,
+                "ofi": -1250.0,
+                "loss_velocity_per_min": -210.0,
+                "reason": "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > 3.50",
+                "updated_at": "2026-08-17T12:00:00Z",
+            }),
+            encoding="utf-8",
+        )
+
+        resp = client.get("/risk/circuit-breaker/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "SOFT_HALT"
+        assert data["volatility_zscore"] == 3.82
+        assert data["vpin"] == 0.46
+        assert data["ofi"] == -1250.0
+        assert data["loss_velocity_per_min"] == -210.0
+        assert data["reason"] == "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > 3.50"
+        assert data["updated_at"] == "2026-08-17T12:00:00Z"
+
+    def test_auth_read_token(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            resp = client.get(
+                "/risk/circuit-breaker/status",
+                headers={"Authorization": "Bearer wrong-tok"},
+            )
+            assert resp.status_code == 401
+
+            resp_ok = client.get(
+                "/risk/circuit-breaker/status",
+                headers={"Authorization": "Bearer secret-tok"},
+            )
+            assert resp_ok.status_code == 200
+            assert resp_ok.json()["state"] == "NORMAL"
+

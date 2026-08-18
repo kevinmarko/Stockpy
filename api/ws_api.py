@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 tick_router = APIRouter()
 training_router = APIRouter()
 live_chat_router = APIRouter()
+risk_router = APIRouter()
 
 def _check_ws_token(
     token: Optional[str], auth_header: Optional[str], client_host: Optional[str]
@@ -541,4 +542,83 @@ async def ws_live_chat_endpoint(
             await websocket.close(code=1011)
         except Exception:
             pass
+
+
+@risk_router.websocket("/ws/risk/portfolio")
+async def ws_portfolio_risk_endpoint(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+):
+    """Stream aggregate and position-level portfolio Greeks in real-time (1 Hz).
+
+    Pushes JSON payload computed by pilots.realtime_risk_streamer.
+    The connection is closed with 4003 if the auth token is invalid.
+    """
+    auth_header = websocket.headers.get("authorization")
+    client_host = websocket.client.host if websocket.client else None
+    if not _check_ws_token(token, auth_header, client_host):
+        await websocket.close(code=4003)
+        logger.warning("ws_portfolio_risk_endpoint: rejected unauthenticated connection")
+        return
+
+    await websocket.accept()
+    logger.info("ws_portfolio_risk_endpoint: client connected")
+
+    try:
+        from data.paper_account_store import PaperAccountStore
+        from pilots.realtime_risk_streamer import compute_portfolio_risk_stream, parse_option_symbol
+        store = PaperAccountStore()
+
+        while True:
+            open_positions = store.get_open_positions()
+            positions = [
+                {
+                    "symbol": p.symbol,
+                    "qty": p.qty,
+                    "spot_price": (p.market_value / p.qty) if p.qty != 0 else p.avg_entry_price,
+                    "avg_cost": p.avg_entry_price,
+                }
+                for p in open_positions
+            ]
+
+            quotes: dict[str, float] = {}
+            if positions:
+                try:
+                    from data.market_data import get_provider
+                    provider = get_provider()
+                    underlyings = {"SPY"}
+                    for p in positions:
+                        parsed = parse_option_symbol(p["symbol"])
+                        underlyings.add(parsed["ticker"] if parsed else p["symbol"].upper())
+
+                    for sym in underlyings:
+                        try:
+                            price = provider.get_latest_price(sym)
+                            if price is not None and price > 0:
+                                quotes[sym] = float(price)
+                        except Exception:
+                            pass
+                except Exception as prov_exc:
+                    logger.debug("ws_portfolio_risk quote fetch error: %s", prov_exc)
+
+            risk_summary = compute_portfolio_risk_stream(
+                positions=positions,
+                quotes=quotes,
+                spy_price=quotes.get("SPY", 500.0),
+            )
+
+            await websocket.send_text(json.dumps(risk_summary.to_dict()))
+            await asyncio.sleep(1.0)
+
+    except WebSocketDisconnect:
+        logger.info("ws_portfolio_risk_endpoint: client disconnected")
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.error("ws_portfolio_risk_endpoint error: %s", exc)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
 

@@ -624,6 +624,8 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # confirmed dependency-light" but never had its own override block --
         # auto-discovery now actually checks it. datetime only.
         allowed = allowed | {"datetime"}
+    if module_name == "realtime_risk_streamer":
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "re", "scipy"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 
