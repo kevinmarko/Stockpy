@@ -151,7 +151,53 @@ This was NOT applied to the `webapp` job (npm install is already ~7s with
 a warm `cache: npm`) or `bandit` (installs only the `bandit` package
 itself, ~2–3s) — neither has meaningful room left to cut.
 
-**Lesson:** a passing CI status is not the same as a performance win —
-verify the actual timing data from the run meant to prove a speedup out
-before trusting it, especially when relocating where a heavy directory
-lives.
+### Real bug found on the first genuine warm-cache run: `bin/` was missing
+
+The site-packages-only cache above got its first real warm-cache exercise
+via a manual re-run of the same commit (the cache had just been populated
+by another job in the prior run). It broke two jobs outright:
+
+```
+ruff._find_ruff.RuffNotFound: Could not find the ruff binary in any of
+the following locations:
+ - /opt/hostedtoolcache/Python/3.12.13/x64/bin
+ ...
+```
+```
+/home/runner/.../86c5e9a5....sh: line 12: pip-audit: command not found
+##[error]Process completed with exit code 127.
+```
+
+Root cause: `ruff`'s `__main__.py` calls `find_ruff_bin()`, which needs the
+actual Rust binary from `bin/ruff` — `python -m ruff` still depends on a
+binary outside site-packages, contrary to the earlier assumption that
+module-invoked tools never need `bin/`. `pip-audit`'s own console-script
+entry point lives in `bin/` too. Neither was ever part of the cached path.
+On the cache-populating run, `pip install pip-audit` had already put
+pip-audit's package files in the (then being-saved) site-packages tree; on
+the warm-cache run, `pip install pip-audit` saw the dist-info already
+present and reported "already satisfied" — skipping the step that would
+normally regenerate the missing `bin/pip-audit` wrapper script. `ruff`
+never gets *reinstalled* to fail this way (it's not invoked in a step that
+reinstalls it), but the same absent-`bin/` gap applies to it directly:
+`bin/ruff` simply was never restored from cache to begin with.
+
+**Fix:** cache `${{ env.pythonLocation }}/bin` alongside site-packages, as
+two paths in the same cache step (not the whole `$pythonLocation` directory,
+which would also duplicate the base interpreter/stdlib setup-python's own
+tool-cache already manages — `bin/` itself is small, wrapper scripts and
+symlinks, not multi-hundred-MB packages, so this doesn't meaningfully grow
+the cache).
+
+**This also likely explains the earlier "~19% slower pytest" and "worse
+than the `.venv` attempt" measurements** — those were real numbers, but the
+disk-location causal story built on them (from n=1-per-variant samples) was
+never verified against a genuine warm-cache run before being written down.
+The one comparison that would have actually distinguished "disk location"
+from "cache correctness bug" from "plain runner noise" — a real warm-cache
+hit — didn't happen until this bug surfaced it.
+
+**Lesson:** a passing CI status is not the same as a performance win, and
+a plausible-sounding causal story fit to n=1 samples is not confirmation —
+verify the actual timing data AND get a genuine cache hit (not just a
+cache miss with different code paths) before trusting either.

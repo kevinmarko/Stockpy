@@ -25,12 +25,12 @@ name: CI
 # why. It reports via plain exit code, never uploads SARIF anywhere.
 #
 # `test`, `test-slow`, and `security` each cache the interpreter's own
-# fully-INSTALLED site-packages tree (keyed on a hash of requirements.txt),
-# not just pip's download cache -- see the `test` job's "Cache site-packages"
-# step for the full rationale, including why this deliberately targets
-# setup-python's own install location rather than a separate `.venv` (an
-# earlier version of this cache did that and measured ~19% SLOWER pytest
-# execution as a result -- see git history / PR discussion for the numbers).
+# fully-INSTALLED `bin/` + site-packages (keyed on a hash of
+# requirements.txt), not just pip's download cache -- see the `test` job's
+# "Cache Python install" step for the full rationale, including why this
+# deliberately targets setup-python's own install location rather than a
+# separate `.venv`, and why it covers `bin/` (console scripts / native
+# binaries like ruff's) as well as site-packages, not site-packages alone.
 # All three jobs share the same cache key, so whichever finishes installing
 # first on a cold cache primes it for the other two on their next run.
 
@@ -61,7 +61,7 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      # Caches the fully-INSTALLED site-packages tree, not just pip's
+      # Caches the fully-INSTALLED Python environment, not just pip's
       # download cache (setup-python's `cache: pip` above already covers
       # that layer). The ~500+ MB of compiled wheels this project depends on
       # (lightgbm, scipy, statsmodels, scikit-learn, prophet's bundled
@@ -69,34 +69,48 @@ jobs:
       # even with a warm download cache -- that unpack cost is what this
       # second cache layer removes.
       #
-      # Deliberately targets `$pythonLocation/lib/python3.12/site-packages`
-      # -- the exact directory `pip install -r requirements.txt` already
-      # writes into on the setup-python-provisioned interpreter -- rather
-      # than a separate workspace-relative `.venv`. An earlier version of
-      # this cache created its own `.venv` inside the checkout; measured
-      # CI data showed that relocated site-packages onto a slower disk than
-      # `/opt/hostedtoolcache` (where setup-python provisions the
-      # interpreter), costing ~19% MORE wall-clock in the actual pytest run
-      # itself (705s -> 842s on an identical 11375-test suite) -- enough to
-      # erase the ~75s saved on install. Restoring into the interpreter's
-      # own site-packages keeps everything on the same fast disk the
-      # baseline (pre-caching) runs always used.
+      # Caches BOTH `$pythonLocation/bin` and `.../site-packages` -- not
+      # just site-packages alone. An earlier version of this cache covered
+      # site-packages only, and a real warm-cache run failed both `ruff`
+      # (its `__main__.py` calls `find_ruff_bin()`, which needs the actual
+      # Rust binary from `bin/ruff`, not just the Python wrapper in
+      # site-packages) and `pip-audit` (its own console-script entry point
+      # also lives in `bin/`) with "binary not found" / "command not
+      # found" -- `pip install` sees the package's dist-info already
+      # present in the restored site-packages and skips regenerating the
+      # `bin/` entry point that was never part of the cached path to begin
+      # with. `bin/` is small (executables and wrapper scripts, not
+      # multi-hundred-MB packages) so this doesn't meaningfully grow the
+      # cache; caching the whole `$pythonLocation` directory instead was
+      # considered and rejected -- that would also duplicate the base
+      # interpreter/stdlib setup-python's own tool-cache already manages.
+      #
+      # (An even earlier version relocated installs into a separate
+      # workspace-relative `.venv` instead of `$pythonLocation` at all;
+      # reverted after a measured ~19% slower pytest run pointed at a
+      # slower disk under the checkout workspace vs. `/opt/hostedtoolcache`
+      # -- see git history for the numbers. That comparison turned out to
+      # be confounded by run-to-run variance and the bin/ bug above, but
+      # restoring into the interpreter's own install location is still the
+      # right call: it's the same disk and path every non-cached run uses.)
       #
       # The cache key includes the exact resolved Python patch version
       # (`steps.setup-python.outputs.python-version`, not just `3.12`) so a
-      # future GitHub-side interpreter bump can never restore compiled
-      # extensions built against a different patch release -- it just misses
-      # and falls through to a normal fresh install. restore-keys falls back
-      # to the most recent site-packages cache for this OS+version even when
-      # requirements.txt changed, so a routine dependency bump only pays the
-      # install cost for the packages that actually changed.
-      - name: Cache site-packages
+      # future GitHub-side interpreter bump can never restore a binary built
+      # against a different patch release -- it just misses and falls
+      # through to a normal fresh install. restore-keys falls back to the
+      # most recent cache for this OS+version even when requirements.txt
+      # changed, so a routine dependency bump only pays the install cost for
+      # the packages that actually changed.
+      - name: Cache Python install
         uses: actions/cache@v4
         with:
-          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages
-          key: site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+          path: |
+            ${{ env.pythonLocation }}/bin
+            ${{ env.pythonLocation }}/lib/python3.12/site-packages
+          key: python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
@@ -176,16 +190,18 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      # See the `test` job's "Cache site-packages" step above for the full
-      # rationale, including why this targets the interpreter's own
-      # site-packages rather than a workspace-relative `.venv`.
-      - name: Cache site-packages
+      # See the `test` job's "Cache Python install" step above for the full
+      # rationale, including why this covers both `bin/` and site-packages
+      # rather than site-packages alone, or a workspace-relative `.venv`.
+      - name: Cache Python install
         uses: actions/cache@v4
         with:
-          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages
-          key: site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+          path: |
+            ${{ env.pythonLocation }}/bin
+            ${{ env.pythonLocation }}/lib/python3.12/site-packages
+          key: python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
@@ -300,16 +316,18 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      # See the `test` job's "Cache site-packages" step for the full
-      # rationale, including why this targets the interpreter's own
-      # site-packages rather than a workspace-relative `.venv`.
-      - name: Cache site-packages
+      # See the `test` job's "Cache Python install" step for the full
+      # rationale, including why this covers both `bin/` and site-packages
+      # rather than site-packages alone, or a workspace-relative `.venv`.
+      - name: Cache Python install
         uses: actions/cache@v4
         with:
-          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages
-          key: site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+          path: |
+            ${{ env.pythonLocation }}/bin
+            ${{ env.pythonLocation }}/lib/python3.12/site-packages
+          key: python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            site-packages-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+            python-install-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
         run: |
