@@ -5794,8 +5794,8 @@ def post_paper_broker_strategy_options_execute(body: Optional[StrategyOptionsExe
     max_notional = body.max_notional if body else None
     try:
         return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: strategy-options/execute failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: strategy-options/execute failed", exc_info=True)
         return {"ok": False, "error": "Internal error while executing strategy options; see server logs for detail."}
 
 @app.get("/pilots/paper-broker/greeks", dependencies=[Depends(require_read_token)])
@@ -5825,8 +5825,8 @@ def post_paper_broker_manage_exits(body: Optional[ManageExitsRequest] = None) ->
             stop_loss_multiple=stop_loss_multiple,
             manage_dte_threshold=manage_dte_threshold,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: manage-exits failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: manage-exits failed", exc_info=True)
         return {"ok": False, "error": "Internal error while managing position exits; see server logs for detail."}
 
 @app.post(
@@ -6268,8 +6268,8 @@ def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
             payload=body.payload,
             channels=body.channels,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: alerts/test failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: alerts/test failed", exc_info=True)
         return {"ok": False, "error": "Internal error while dispatching test alert; see server logs for detail."}
 
 
@@ -6454,8 +6454,8 @@ def post_options_zero_dte_manage_exits(body: Optional[ZeroDteManageExitsRequest]
             stop_loss_pct=stop_loss_pct,
             hard_exit_time=hard_exit_time,
         )
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: 0dte manage-exits failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: 0dte manage-exits failed", exc_info=True)
         return {"ok": False, "error": "Internal error while managing 0DTE exits; see server logs for detail."}
 
 
