@@ -481,7 +481,23 @@ class TestDaemonConfirmedAliveHelper:
 # ---------------------------------------------------------------------------
 
 class TestDbExists:
-    """The SQLite database must exist and be non-empty."""
+    """The SQLite database must exist and be non-empty.
+
+    ``check_db_exists()`` resolves its PRIMARY candidate via
+    ``db_config.resolve_database_url()`` (itself derived from
+    ``settings.LOCAL_DATA_ROOT``, a machine-global root shared across every
+    worktree/checkout -- see PR #718) and only falls back to a legacy
+    ``_REPO_ROOT``-relative path. Patching ``_REPO_ROOT`` alone therefore
+    only redirects the fallback candidate -- on any machine with a real
+    ``quant_platform.db`` already present at ``settings.LOCAL_DATA_ROOT``
+    (e.g. ``~/.stockpy_local/quant_platform.db``), the primary candidate
+    still resolves to that real, present file and the "missing" simulation
+    silently fails to hide it. Both tests below also patch
+    ``db_config.resolve_database_url`` directly (patched on ``db_config``
+    itself, since the check imports it lazily inside the function body),
+    mirroring the same isolation pattern ``TestNoStrayDatabaseFiles`` uses
+    for the sibling check below.
+    """
 
     def test_passes_when_db_present(self, tmp_path):
         """A non-zero-byte file at the expected path → PASS."""
@@ -489,18 +505,24 @@ class TestDbExists:
         db = tmp_path / "quant_platform.db"
         # Write enough bytes that ``st_size > 0`` is satisfied.
         db.write_bytes(b"SQLite" + b"\x00" * 100)
-        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{db}"):
             r = check_db_exists()
         assert r.passed
 
     def test_fails_when_missing(self, tmp_path):
         """No database file → FAIL with "not found" in the reason.
 
-        ``_REPO_ROOT`` is patched to ``tmp_path`` (which has no DB) so the
-        real repo database does not interfere with this failure test.
+        Both the primary (``db_config.resolve_database_url``) and legacy
+        (``_REPO_ROOT``-relative) candidates are redirected into ``tmp_path``
+        -- which has no DB -- so the real repo/machine database (wherever
+        ``settings.LOCAL_DATA_ROOT`` actually points on this host) cannot
+        interfere with this failure test.
         """
         from scripts.preflight_check import check_db_exists
-        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+        missing_db = tmp_path / "quant_platform.db"  # deliberately never created
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{missing_db}"):
             r = check_db_exists()
         assert not r.passed
         assert "not found" in r.reason
