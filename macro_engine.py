@@ -77,22 +77,28 @@ class MacroEngine:
         # process invocation (one _main_body() call per launch, no internal
         # loop), so that context always "refits" once per launch -- expected
         # for a one-shot script, not a bug (see regime/hmm_regime.py).
-        # n_states / retrain_freq_days are operator-tunable via settings so
-        # this is not a hardcoded literal (see settings.HMM_N_STATES /
-        # settings.HMM_RETRAIN_FREQ_DAYS).
+        # n_states / retrain_freq_days / covariance_type / n_iter / tol /
+        # n_inits are operator-tunable via settings so this is not a
+        # hardcoded literal (see settings.HMM_*).
         from settings import settings as _settings
         self._hmm_detector = HMMRegimeDetector(
             n_states=_settings.HMM_N_STATES,
             retrain_freq_days=_settings.HMM_RETRAIN_FREQ_DAYS,
+            covariance_type=_settings.HMM_COVARIANCE_TYPE,
+            n_iter=_settings.HMM_N_ITER,
+            tol=_settings.HMM_TOL,
+            n_inits=_settings.HMM_N_INITS,
         )
 
-    # Minimum rows required for a numerically stable 3-state Gaussian HMM fit.
+    # Minimum rows required for a numerically stable Gaussian HMM fit.
     HMM_MIN_FIT_ROWS = 100
 
-    def compute_hmm_risk_on_probability(self, spy_price_df: Optional[pd.DataFrame]) -> Optional[float]:
+    def compute_hmm_risk_on_probability(self, spy_price_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
         """
         Computes the HMM second opinion's risk_on_probability at the latest
         available date, for use as MacroEconomicDTO.hmm_risk_on_probability.
+        Now returns the full predict_proba result dictionary containing probabilities
+        and regime state labels.
 
         Returns None (never a fabricated probability) if:
         - spy_price_df is unavailable/empty,
@@ -112,6 +118,8 @@ class MacroEngine:
         # up only the delta from FRED and serves the rest from quant_platform.db.
         # The single-snapshot _build_macro_dto path (current-state reads) is NOT
         # touched here — only the historical series used by the HMM are cached.
+        credit_series: Optional[pd.Series] = None
+        inflation_series: Optional[pd.Series] = None
         try:
             from settings import settings as _s
             if _s.HISTORICAL_STORE_ENABLED:
@@ -123,15 +131,26 @@ class MacroEngine:
                 t10y2y_series = _store.get_macro(
                     "T10Y2Y", data_engine=self.data_engine
                 )
+                if _s.HMM_CREDIT_SPREAD_FEATURE_ENABLED:
+                    credit_series = _store.get_macro(
+                        "BAMLH0A0HYM2", data_engine=self.data_engine
+                    )
+                if getattr(_s, "HMM_INFLATION_FEATURE_ENABLED", False):
+                    inflation_series = _store.get_macro(
+                        "T10YIE", data_engine=self.data_engine
+                    )
                 if vix_series.empty or t10y2y_series.empty:
                     logger.warning(
                         "HMM regime: HistoricalStore returned empty macro series; "
                         "falling back to direct DataEngine fetch."
                     )
                     raise RuntimeError("empty series from HistoricalStore")
-                macro_history = pd.DataFrame(
-                    {"VIXCLS": vix_series, "T10Y2Y": t10y2y_series}
-                )
+                macro_history_dict = {"VIXCLS": vix_series, "T10Y2Y": t10y2y_series}
+                if credit_series is not None and not credit_series.empty:
+                    macro_history_dict["BAMLH0A0HYM2"] = credit_series
+                if inflation_series is not None and not inflation_series.empty:
+                    macro_history_dict["T10YIE"] = inflation_series
+                macro_history = pd.DataFrame(macro_history_dict)
                 logger.debug(
                     "HMM regime: macro history from HistoricalStore "
                     "(%d rows, VIXCLS=%d, T10Y2Y=%d).",
@@ -156,8 +175,17 @@ class MacroEngine:
             return None
 
         try:
+            from settings import settings as _s
+            credit_spread_arg = macro_history.get('BAMLH0A0HYM2') if _s.HMM_CREDIT_SPREAD_FEATURE_ENABLED else None
+            inflation_arg = macro_history.get('T10YIE') if getattr(_s, "HMM_INFLATION_FEATURE_ENABLED", False) else None
             features = build_feature_matrix(
-                spy_price_df, macro_history['VIXCLS'], macro_history['T10Y2Y']
+                spy_price_df,
+                macro_history['VIXCLS'],
+                macro_history['T10Y2Y'],
+                credit_spread_series=credit_spread_arg,
+                inflation_expectation_series=inflation_arg,
+                include_vol_term_spread=_s.HMM_VOL_TERM_SPREAD_FEATURE_ENABLED,
+                standardize_features=_s.HMM_STANDARDIZE_FEATURES_ENABLED,
             )
         except Exception as e:
             logger.warning(f"HMM regime: feature matrix construction failed: {e}; skipping.")
@@ -173,7 +201,7 @@ class MacroEngine:
         try:
             self._hmm_detector.fit(features)
             result = self._hmm_detector.predict_proba(features)
-            return float(result["risk_on_probability"])
+            return result
         except Exception as e:
             logger.error(f"HMM regime: fit/predict failed: {e}. Falling back to None (rules-based stays primary).")
             return None

@@ -463,7 +463,9 @@ def _build_macro_dto() -> MacroEconomicDTO:
             except Exception as spy_exc:
                 logger.debug("SPY history for HMM unavailable: %s", spy_exc)
 
-        hmm_prob = me.compute_hmm_risk_on_probability(spy_df)
+        hmm_result = me.compute_hmm_risk_on_probability(spy_df)
+        hmm_prob = hmm_result["risk_on_probability"] if hmm_result else None
+        hmm_state = hmm_result["regime_state_label"] if hmm_result else None
 
         dto = MacroEconomicDTO(
             yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
@@ -473,6 +475,7 @@ def _build_macro_dto() -> MacroEconomicDTO:
             vix_value=float(macro_raw.get("VIXCLS", 18.0)),
             sahm_rule_indicator=float(macro_raw.get("SAHMREALTIME", 0.0)),
             hmm_risk_on_probability=hmm_prob,
+            hmm_regime_state=hmm_state,
         )
         logger.info(
             "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f.",

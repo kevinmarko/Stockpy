@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
+from dto_models import MacroEconomicDTO
 from execution.broker_base import (
     AccountSnapshot,
     OrderIntent,
@@ -72,7 +73,12 @@ def _macro(
     market_regime: str = "RISK ON",
     hmm_risk_on_probability: float | None = None,
 ) -> MagicMock:
-    m = MagicMock()
+    # spec=MacroEconomicDTO so attribute access this mock was never told
+    # about (e.g. hmm_risk_off_block_threshold, which the real DTO never
+    # defines) raises AttributeError like the real class, instead of
+    # auto-vivifying a child MagicMock -- see execution/risk_gate.py's
+    # hmm_regime_check for why that distinction matters.
+    m = MagicMock(spec=MacroEconomicDTO)
     m.killSwitch = kill_switch
     m.vix = vix
     m.market_regime = market_regime

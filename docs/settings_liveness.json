@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 302,
+    "live_safe": 310,
     "no_op": 3,
-    "restart_required": 95,
-    "total": 400
+    "restart_required": 99,
+    "total": 412
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 414,
+  "files_scanned": 416,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -277,12 +277,20 @@
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "GRAVITY_REQUIRE_NATIVE",
     "HISTORICAL_STORE_ENABLED",
+    "HMM_CREDIT_SPREAD_FEATURE_ENABLED",
+    "HMM_INFLATION_FEATURE_ENABLED",
+    "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
+    "HMM_RISK_ON_DOWNGRADE_THRESHOLD",
+    "HMM_STANDARDIZE_FEATURES_ENABLED",
+    "HMM_VOL_TERM_SPREAD_FEATURE_ENABLED",
     "JOBS_API_ENABLED",
     "JULES_API_KEY",
     "JULES_ENABLED",
     "JULES_REQUEST_TIMEOUT_SECONDS",
     "KELLY_CAP",
     "KELLY_FRACTION",
+    "KILLSWITCH_SAHM_THRESHOLD_AGREED",
+    "KILLSWITCH_VIX_THRESHOLD_AGREED",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
     "LIVE_TRADE_APPROVAL_ENABLED",
     "LIVE_TRADE_EXECUTION_ENABLED",
@@ -451,15 +459,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 804,
+    "attr": 825,
     "factory_param": 4,
-    "getattr_const": 342,
+    "getattr_const": 348,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 235,
+    "attr": 242,
     "factory_param": 4,
-    "getattr_const": 193,
+    "getattr_const": 198,
     "os_environ": 17
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1847,6 +1855,39 @@
         "via": []
       }
     ],
+    "HMM_COVARIANCE_TYPE": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:87",
+        "via": []
+      }
+    ],
+    "HMM_N_INITS": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:90",
+        "via": []
+      }
+    ],
+    "HMM_N_ITER": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:88",
+        "via": []
+      }
+    ],
     "HMM_N_STATES": [
       {
         "discarded": false,
@@ -1877,6 +1918,17 @@
           "init_self_assign"
         ],
         "site": "execution/risk_gate.py:154",
+        "via": []
+      }
+    ],
+    "HMM_TOL": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:89",
         "via": []
       }
     ],
@@ -2847,7 +2899,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:560",
+        "site": "pipeline/production_steps.py:564",
         "via": []
       }
     ],
@@ -2915,7 +2967,7 @@
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
     "init_body": 6,
-    "init_self_assign": 41,
+    "init_self_assign": 45,
     "method_self_assign": 4,
     "module_level": 77,
     "os_environ": 24

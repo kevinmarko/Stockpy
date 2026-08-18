@@ -270,6 +270,11 @@ class OptionsPricingRecommender:
             if vix >= 30.0 or regime == 'CREDIT EVENT':
                 sell_premium_allowed = False
 
+            # If HMM indicates high bear probability while market is not in full RECESSION, adapt options strategy pricing
+            risk_on_prob = getattr(macro_dto, 'hmm_risk_on_probability', 1.0)
+            if risk_on_prob is not None and risk_on_prob < 0.30 and regime != 'RECESSION':
+                trend_bias = 'Bearish'
+
         if true_ivr > ivr_sell_threshold:
             if not sell_premium_allowed:
                 return directive  # high IV but gated -> Cash / Wait (do not buy expensive options)
