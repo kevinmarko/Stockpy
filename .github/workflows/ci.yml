@@ -55,21 +55,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Dependency vulnerability audit (pip-audit)
-        run: |
-          # Audits the packages actually resolved from requirements.txt in
-          # THIS job's venv against the PyPA advisory DB -- not an ambient/
-          # unrelated Python install, which is what produced the misleading
-          # 36-"vulnerability" report documented in
-          # docs/known_issues/pip_audit_stale_ambient_env_false_positive.md
-          # (every flagged package was already safe here once pinned
-          # versions were actually installed). A real regression here means
-          # someone loosened a pin in requirements.txt to a genuinely
-          # vulnerable version, which is exactly what this step exists to
-          # catch.
-          pip install pip-audit
-          pip-audit --desc
-
       - name: Lint (ruff)
         run: |
           # Scoped to genuine-bug rules only (undefined names, syntax errors)
@@ -87,21 +72,25 @@ jobs:
           # regression below that floor fails this step even if every test
           # passes; coverage.json is still written first, so the summary step
           # below still runs (it's `if: always()`).
+          # --cov-report=json is the only coverage report written here; the
+          # expensive --cov-report=term-missing table (300+ source files) was
+          # dropped because the CI summary step reads only coverage.json and
+          # the fail_under gate is enforced by the run itself, not the table.
           #
           # -n auto (pytest-xdist) fans the suite out across the runner's CPUs.
           # pytest-cov auto-detects xdist and combines each worker's coverage
           # data before writing the reports below, so --cov-report output is
-          # unaffected; no .coveragerc changes are needed. --durations=50
-          # (pytest.ini) still prints the 50 slowest tests, aggregated across
-          # workers, at the end of the run.
+          # unaffected; no .coveragerc changes are needed. --durations=10
+          # (pytest.ini) prints the 10 slowest tests, aggregated across workers,
+          # at the end of the run.
           #
           # --dist loadgroup keeps every @pytest.mark.xdist_group("...")-tagged
           # test together on one worker (currently: test_settings_liveness.py,
           # test_train_lgbm.py, test_backtest_sector_configs_cli.py's
-          # TestOfflineCLIRun) so their module/class-scoped fixtures build
-          # once, not once per worker that happens to get a split share of the
-          # group. Every other (unmarked) test still balances freely across
-          # workers exactly as under the default `load` distribution.
+          # TestOfflineCLIRun, test_settings_keysets.py) so their module/class-
+          # scoped fixtures build once, not once per worker that happens to get a
+          # split share of the group. Every other (unmarked) test still balances
+          # freely across workers exactly as under the default `load` distribution.
           #
           # --timeout=180 --timeout-method=thread (pytest-timeout) turns a
           # hang into a fast failure instead of burning the full 6h job
@@ -114,7 +103,7 @@ jobs:
           # (see nightly.yml); slow tests run in the parallel `test-slow` job
           # below instead of serially in this one.
           python -m pytest -m "not network and not slow" -v --tb=short \
-            --cov --cov-report=term-missing --cov-report=json \
+            --cov --cov-report=json \
             -n auto --dist loadgroup --timeout=180 --timeout-method=thread
 
       - name: Coverage summary
@@ -230,3 +219,41 @@ jobs:
           # BLOCKING (a fresh unreviewed finding fails the build), not
           # report-only.
           python -m bandit -r . -x './tests,./webapp,./.venv,./node_modules,./gui' -ll -ii
+
+  security:
+    name: security (pip-audit)
+    runs-on: ubuntu-latest
+    # Runs concurrently with `test`, `test-slow`, `webapp`, and `bandit` so it
+    # is no longer on the test job's critical path. pip-audit installs itself
+    # then makes a network call to the PyPA advisory DB; running it in its own
+    # job removes that sequential overhead (~30-60 s) from the test job's
+    # wall-clock time. See docs/known_issues/pip_audit_stale_ambient_env_false_positive.md
+    # for why we pin the venv first and audit against it, not the system Python.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Dependency vulnerability audit (pip-audit)
+        run: |
+          # Audits the packages actually resolved from requirements.txt in
+          # THIS job's venv against the PyPA advisory DB -- not an ambient/
+          # unrelated Python install, which is what produced the misleading
+          # 36-"vulnerability" report documented in
+          # docs/known_issues/pip_audit_stale_ambient_env_false_positive.md
+          # (every flagged package was already safe here once pinned
+          # versions were actually installed). A real regression here means
+          # someone loosened a pin in requirements.txt to a genuinely
+          # vulnerable version, which is exactly what this step exists to
+          # catch.
+          pip install pip-audit
+          pip-audit --desc
