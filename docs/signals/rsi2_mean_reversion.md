@@ -147,13 +147,13 @@ minimal drawdown (7.5%), fully clearing all four validation gates without parame
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
 
 
-### 2026-08-17 Full Validation Run (`rsi2_mean_reversion`)
+### 2026-08-18 Full Validation Run (`rsi2_mean_reversion`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.5911 |
+| **Sharpe Ratio (net)** | 0.5925 |
 | **PBO** | 0.0000 |
-| **DSR** | 0.9978 |
-| **Max Drawdown** | 17.12% |
+| **DSR** | 0.9957 |
+| **Max Drawdown** | 8.13% |
 | **Deployable** | ✅ True |
 

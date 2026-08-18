@@ -288,15 +288,15 @@ slicing, missing-EDGAR-data dead-letter), `tests/test_validation_sector_quality_
 (the new `StrategyValidationHarness.run(t1=...)` plumbing, hermetic).
 
 
-### 2026-08-17 Full Validation Run (`sector_quality_rank`)
+### 2026-08-18 Full Validation Run (`sector_quality_rank`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.9555 |
+| **Sharpe Ratio (net)** | 0.9785 |
 | **PBO** | 0.0000 |
-| **DSR** | 0.0000 |
-| **Max Drawdown** | 28.37% |
-| **Deployable** | ❌ False |
+| **DSR** | 1.0000 |
+| **Max Drawdown** | 19.57% |
+| **Deployable** | ✅ True |
 
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

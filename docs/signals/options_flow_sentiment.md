@@ -99,14 +99,14 @@ To enable machine learning and confidence gating, `meta_label_features` (`ROC_12
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for strategy registry fix history.
 
 
-### 2026-08-17 Full Validation Run (`options_flow_sentiment`)
+### 2026-08-18 Full Validation Run (`options_flow_sentiment`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.2311 |
-| **PBO** | 0.1111 |
-| **DSR** | 0.9063 |
-| **Max Drawdown** | 27.72% |
+| **Sharpe Ratio (net)** | 0.2132 |
+| **PBO** | 0.2000 |
+| **DSR** | 0.7497 |
+| **Max Drawdown** | 14.17% |
 | **Deployable** | ❌ False |
 
 

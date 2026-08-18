@@ -141,14 +141,14 @@ platform's actual measured numbers.
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
 
 
-### 2026-08-17 Full Validation Run (`vrp_premium_selling`)
+### 2026-08-18 Full Validation Run (`vrp_premium_selling`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.2172 |
+| **Sharpe Ratio (net)** | 0.3769 |
 | **PBO** | 0.0000 |
-| **DSR** | 0.0000 |
-| **Max Drawdown** | 17.92% |
+| **DSR** | 0.9759 |
+| **Max Drawdown** | 8.14% |
 | **Deployable** | ❌ False |
 
 

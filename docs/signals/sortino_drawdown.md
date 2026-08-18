@@ -78,13 +78,13 @@ deep current drawdown tells you about present capital damage.
   and low drawdown can tilt the final score from HOLD to BUY.
 
 
-### 2026-08-17 Full Validation Run (`sortino_drawdown`)
+### 2026-08-18 Full Validation Run (`sortino_drawdown`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.7048 |
+| **Sharpe Ratio (net)** | 0.7061 |
 | **PBO** | 0.0889 |
-| **DSR** | 0.9846 |
-| **Max Drawdown** | 26.61% |
+| **DSR** | 0.9766 |
+| **Max Drawdown** | 17.03% |
 | **Deployable** | ✅ True |
 

@@ -123,13 +123,13 @@ the same conclusion. See
 2026-08-17 entry for the full 5-strategy re-validation and methodology.
 
 
-### 2026-08-17 Full Validation Run (`relative_strength_xsec`)
+### 2026-08-18 Full Validation Run (`relative_strength_xsec`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.8093 |
+| **Sharpe Ratio (net)** | 0.8035 |
 | **PBO** | 0.0000 |
-| **DSR** | 1.0000 |
-| **Max Drawdown** | 21.31% |
+| **DSR** | 0.9998 |
+| **Max Drawdown** | 16.02% |
 | **Deployable** | ✅ True |
 

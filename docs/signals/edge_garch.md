@@ -140,13 +140,13 @@ the same conclusion. See
 2026-08-17 entry for the full 5-strategy re-validation and methodology.
 
 
-### 2026-08-17 Full Validation Run (`garch_vol_target`)
+### 2026-08-18 Full Validation Run (`garch_vol_target`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.7869 |
-| **PBO** | 0.3333 |
-| **DSR** | 0.9999 |
-| **Max Drawdown** | 18.76% |
+| **Sharpe Ratio (net)** | 0.7821 |
+| **PBO** | 0.2889 |
+| **DSR** | 0.9997 |
+| **Max Drawdown** | 13.64% |
 | **Deployable** | ✅ True |
 

@@ -170,13 +170,13 @@ or recently-IPO'd stocks where 12-month return windows are truncated and survivo
 bias may distort the signal.
 
 
-### 2026-08-17 Full Validation Run (`timeseries_momentum`)
+### 2026-08-18 Full Validation Run (`timeseries_momentum`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.5292 |
+| **Sharpe Ratio (net)** | 0.5394 |
 | **PBO** | 0.0000 |
-| **DSR** | 0.9934 |
-| **Max Drawdown** | 25.95% |
+| **DSR** | 0.9921 |
+| **Max Drawdown** | 17.15% |
 | **Deployable** | ✅ True |
 

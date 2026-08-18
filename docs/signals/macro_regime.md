@@ -120,13 +120,13 @@ recommended without also re-validating the strategy harness (`python -m validati
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for full cross-strategy validation history.
 
 
-### 2026-08-17 Full Validation Run (`macro_regime_pit`)
+### 2026-08-18 Full Validation Run (`macro_regime_pit`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.8359 |
+| **Sharpe Ratio (net)** | 0.8339 |
 | **PBO** | 0.0000 |
-| **DSR** | 1.0000 |
-| **Max Drawdown** | 14.76% |
+| **DSR** | 0.9999 |
+| **Max Drawdown** | 11.89% |
 | **Deployable** | ✅ True |
 

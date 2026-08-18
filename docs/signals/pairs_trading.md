@@ -81,15 +81,39 @@ Validation via `validation.harness.StrategyValidationHarness` with Combinatorial
 *Notes:* Single literature-fixed specification (entry at $|Z| > 2.0$, stop at $|Z| > 4.0$, dynamic Kalman hedge ratio) structurally eliminates variant selection bias ($PBO = 0.0, DSR = 1.0$).
 
 
-### 2026-08-17 Full Validation Run (`pairs_trading`)
+### 2026-08-18 Full Validation Run (`pairs_trading`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | -0.8223 |
+| **Sharpe Ratio (net)** | -0.8538 |
 | **PBO** | 0.0000 |
-| **DSR** | 0.1912 |
-| **Max Drawdown** | 29.69% |
+| **DSR** | 0.0000 |
+| **Max Drawdown** | 7.46% |
 | **Deployable** | ❌ False |
 
 
-*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
+**Regression from the `deployable=True` result above — investigated, not silently reasserted.**
+This strategy's code (`signals/pairs_trading.py`, `_build_pairs_trading_adapter` in
+`scripts/refresh_validations.py`) is unchanged since the 2026-08-14 `True` measurement above; the
+regression traces to two harness/settings-level changes, not a code defect in the strategy itself:
+1. **Extended backtest window.** The 2026-08-14 measurement used a fixed `--end 2024-12-31`; both
+   the 2026-08-17 and 2026-08-18 full-suite runs use the CLI's default end date
+   (`date.today()`, `scripts/refresh_validations.py`), extending the full-sample window by ~20
+   months. `StrategyValidationHarness.run()`'s reported Sharpe/MaxDD are computed in-sample over
+   the full curve (`validation/harness.py`), so a longer window directly changes these numbers.
+2. **`VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED=True`** (confirmed active for this run via
+   `output/runtime_flags.json`). This adapter returns a single precomputed variant (`n_trials=1`);
+   `deflated_sharpe_ratio()` (`validation/metrics.py`) previously short-circuited any `n_trials<=1`
+   strategy to a hardcoded `DSR=1.0` unless this flag is set, in which case it computes the real
+   DSR from the strategy's actual (now negative) Sharpe — exactly the correction mechanism
+   documented in this log's 2026-08-17 "5 named strategies" entry, here extended in effect to
+   `pairs_trading` as well.
+
+**Not fully explained**: MaxDD alone swung from 29.69% (2026-08-17 run) to 7.46% (this run) for
+~1 additional calendar day of data on a 20+-year full-sample curve — larger than either mechanism
+above obviously accounts for. `execution/cost_model.py` and `validation/harness.py`'s core `run()`
+math are unchanged since 2026-08-14 (only concurrency-safety fixes landed), and `validation/purged_cv.py`'s
+CPCV vectorization ships its own bit-identical parity test suite. No further code-level cause was
+found; a human should diff the two runs' actual equity-curve artifacts
+(`reports/validation_pairs_trading_*.html`) before treating either MaxDD figure as more reliable
+than the other.

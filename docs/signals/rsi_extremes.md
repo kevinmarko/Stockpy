@@ -111,15 +111,28 @@ Wilder 30/70 thresholds.
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
 
 
-### 2026-08-17 Full Validation Run (`rsi14_extremes`)
+### 2026-08-18 Full Validation Run (`rsi14_extremes`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.2961 |
+| **Sharpe Ratio (net)** | 0.4222 |
 | **PBO** | 0.0000 |
-| **DSR** | 0.9560 |
-| **Max Drawdown** | 28.71% |
+| **DSR** | 0.9289 |
+| **Max Drawdown** | 12.40% |
 | **Deployable** | ❌ False |
 
 
-*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
+**Regression from an earlier `deployable=True` result — investigated, not silently reasserted.**
+`_build_rsi14_extremes_adapter` (`scripts/refresh_validations.py`) is unchanged in code since the
+prior `True` measurement; this adapter returns three precomputed variants
+(`RSI14_OversoldLong`/`RSI14_LongShort`/`RSI14_TrendFilteredLong`, `n_trials=3`), so
+`VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` does not apply here (consistent with DSR only
+drifting mildly, 0.962 → 0.956 → 0.929, across successive runs, rather than collapsing the way a
+single-trial adapter's does). The larger Sharpe/MaxDD swings across runs are best explained by the
+harness's own documented behavior: it deploys whichever variant has the highest in-sample Sharpe
+over the full window, and this adapter's own docstring records the race between variants as close.
+Extending the full-sample window (each run's default `--end` is `date.today()`, so successive runs
+cover different amounts of trailing data) can flip which variant wins that race, swapping in a
+variant with a different net-of-cost Sharpe/MaxDD profile. This mechanism is plausible and grounded
+in the adapter's documented behavior, but the exact magnitude of any single swing was not pinned to
+a specific trigger — treat this as a medium-confidence explanation, not a closed investigation.

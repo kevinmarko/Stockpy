@@ -143,13 +143,13 @@ the same conclusion. See
 2026-08-17 entry for the full 5-strategy re-validation and methodology.
 
 
-### 2026-08-17 Full Validation Run (`cross_sectional_momentum`)
+### 2026-08-18 Full Validation Run (`cross_sectional_momentum`, rebased onto `main`)
 
 | Metric | Result |
 |---|---|
-| **Sharpe Ratio (net)** | 0.9491 |
-| **PBO** | 0.1111 |
+| **Sharpe Ratio (net)** | 0.9478 |
+| **PBO** | 0.1333 |
 | **DSR** | 1.0000 |
-| **Max Drawdown** | 20.19% |
+| **Max Drawdown** | 14.43% |
 | **Deployable** | ✅ True |
 

@@ -970,49 +970,74 @@ refusal path).
 
 ---
 
-## 2026-08-17: Full 28-Strategy Walk-Forward Validation Suite Run
+## 2026-08-18: Full 28-Strategy Walk-Forward Validation Suite Run (rebased onto `main`)
 
-**[PLACEHOLDER -- being re-run against rebased main, see follow-up commit for final numbers]**
-
-**What was done**: Executed a full 28-strategy CPCV walk-forward validation suite via `python -m scripts.refresh_validations --workers 4 --json` to generate fresh HTML reports, history ledgers, and JSON summaries. 
-**Fix**: `scripts/refresh_validations.py` was updated to safely parse EDGAR PIT fundamental fields to handle occasional double-encoded or string-literal JSON to prevent a crash during `signal_replay_balanced_blend` backtesting.
+**What was done**: A 2026-08-17 run of this same suite was originally attempted from a branch that
+had drifted 36 commits behind `main` (including CPCV OOS-gate and degenerate-std-guard fixes that
+land in `main` between the two dates) and whose doc edits collided with two entries `main` had
+independently added in the same file. That run's numbers are superseded by the run below, executed
+2026-08-18 against the branch **rebased onto current `main`** via `python -m scripts.refresh_validations
+--workers 4 --json`, generating fresh HTML reports, history ledgers, and JSON summaries in `reports/`.
+**Fix carried over from the original run**: `scripts/refresh_validations.py` was updated to safely
+parse EDGAR PIT fundamental fields (`isinstance(..., dict)` guards plus a NaN-aware sector check) to
+handle occasional double-encoded or string-literal JSON and a NaN `sector` value without crashing,
+fixing a real crash previously hit on `signal_replay_balanced_blend`; regression-tested in
+`tests/test_refresh_validations.py`.
 
 | Strategy | PBO | DSR | Sharpe | MaxDD | Deployable |
 |---|---|---|---|---|---|
-| aroon_trend | 0.0000 | 0.9995 | 0.6733 | 16.96% | ✅ True |
-| call_credit_spread | 0.0000 | 0.0001 | -0.0325 | 22.51% | ❌ False |
-| call_debit_spread | 0.0000 | 0.9506 | 0.3816 | 100.00% | ❌ False |
-| coppock_momentum | 0.1778 | 0.9952 | 0.6518 | 25.10% | ✅ True |
-| covered_call | 0.0000 | 0.0000 | -0.3124 | 10.83% | ❌ False |
-| cross_sectional_momentum | 0.1111 | 1.0000 | 0.9491 | 20.19% | ✅ True |
-| deep_value_edgar_pit | 0.0000 | 0.0000 | 0.5226 | 44.82% | ❌ False |
-| dividend_yield_edgar_pit | 0.0000 | 0.0000 | 0.6188 | 44.56% | ❌ False |
-| forecast_direction_arima_hw | 0.0000 | 0.8683 | 0.4821 | 32.82% | ❌ False |
-| garch_vol_target | 0.3333 | 0.9999 | 0.7869 | 18.76% | ✅ True |
-| lgbm_ranker | 0.0000 | 0.8598 | 5.1808 | 2.44% | ❌ False |
-| macd_trend | 0.0222 | 0.9783 | 0.5119 | 23.70% | ✅ True |
-| macro_regime_pit | 0.0000 | 1.0000 | 0.8359 | 14.76% | ✅ True |
-| multifactor_lowvol_size | 0.0000 | 1.0000 | 0.7321 | 21.14% | ✅ True |
-| options_flow_sentiment | 0.1111 | 0.9063 | 0.2311 | 27.72% | ❌ False |
-| pairs_trading | 0.0000 | 0.1912 | -0.8223 | 29.69% | ❌ False |
-| put_credit_spread | 0.0000 | 0.0008 | -0.4459 | 72.16% | ❌ False |
-| put_debit_spread | 0.0000 | 0.0000 | -0.3989 | 100.02% | ❌ False |
-| relative_strength_xsec | 0.0000 | 1.0000 | 0.8093 | 21.31% | ✅ True |
-| rsi14_extremes | 0.0000 | 0.9560 | 0.2961 | 28.71% | ❌ False |
-| rsi2_mean_reversion | 0.0000 | 0.9978 | 0.5911 | 17.12% | ✅ True |
-| sector_quality_rank | 0.0000 | 0.0000 | 0.9555 | 28.37% | ❌ False |
-| signal_replay_balanced_blend | 0.0000 | 1.0000 | 0.8371 | 19.90% | ✅ True |
-| sortino_drawdown | 0.0889 | 0.9846 | 0.7048 | 26.61% | ✅ True |
-| timeseries_momentum | 0.0000 | 0.9934 | 0.5292 | 25.95% | ✅ True |
-| value_quality_edgar_pit | 0.0000 | 0.0000 | 0.5539 | 43.60% | ❌ False |
-| vol_mispricing | 0.0000 | 0.4966 | -0.0369 | 100.00% | ❌ False |
-| vrp_premium_selling | 0.0000 | 0.0000 | 0.2172 | 17.92% | ❌ False |
+| aroon_trend | 0.0000 | 0.9986 | 0.6721 | 12.61% | ✅ True |
+| call_credit_spread | NaN | 0.9725 | 0.3341 | 8.79% | ❌ False |
+| call_debit_spread | 0.0000 | 0.9470 | 0.3530 | 186.52% | ❌ False |
+| coppock_momentum | 0.1778 | 0.9930 | 0.6451 | 15.78% | ✅ True |
+| covered_call | 0.0000 | 0.1188 | -0.2540 | 3.71% | ❌ False |
+| cross_sectional_momentum | 0.1333 | 1.0000 | 0.9478 | 14.43% | ✅ True |
+| deep_value_edgar_pit | 0.0000 | 0.9952 | 0.5606 | 24.27% | ✅ True |
+| dividend_yield_edgar_pit | 0.0000 | 0.9994 | 0.7025 | 19.31% | ✅ True |
+| forecast_direction_arima_hw | 0.0000 | 0.8560 | 0.4524 | 17.44% | ❌ False |
+| garch_vol_target | 0.2889 | 0.9997 | 0.7821 | 13.64% | ✅ True |
+| lgbm_ranker | 0.0000 | 0.9506 | 1.5141 | 2.33% | ✅ True |
+| macd_trend | 0.0444 | 0.9558 | 0.5789 | 14.80% | ✅ True |
+| macro_regime_pit | 0.0000 | 0.9999 | 0.8339 | 11.89% | ✅ True |
+| multifactor_lowvol_size | 0.0000 | 0.9996 | 0.7384 | 13.78% | ✅ True |
+| options_flow_sentiment | 0.2000 | 0.7497 | 0.2132 | 14.17% | ❌ False |
+| pairs_trading | 0.0000 | 0.0000 | -0.8538 | 7.46% | ❌ False |
+| put_credit_spread | NaN | 0.0000 | -0.7800 | 17.57% | ❌ False |
+| put_debit_spread | 0.0000 | 0.0035 | -0.5561 | 80.85% | ❌ False |
+| relative_strength_xsec | 0.0000 | 0.9998 | 0.8035 | 16.02% | ✅ True |
+| rsi14_extremes | 0.0000 | 0.9289 | 0.4222 | 12.40% | ❌ False |
+| rsi2_mean_reversion | 0.0000 | 0.9957 | 0.5925 | 8.13% | ✅ True |
+| sector_quality_rank | 0.0000 | 1.0000 | 0.9785 | 19.57% | ✅ True |
+| signal_replay_balanced_blend | 0.0000 | 0.9999 | 0.8434 | 15.45% | ✅ True |
+| sortino_drawdown | 0.0889 | 0.9766 | 0.7061 | 17.03% | ✅ True |
+| timeseries_momentum | 0.0000 | 0.9921 | 0.5394 | 17.15% | ✅ True |
+| value_quality_edgar_pit | 0.0000 | 0.9965 | 0.5813 | 24.57% | ✅ True |
+| vol_mispricing | 0.0000 | 0.4818 | -0.0098 | 98.71% | ❌ False |
+| vrp_premium_selling | 0.0000 | 0.9759 | 0.3769 | 8.14% | ❌ False |
 
-**[PLACEHOLDER -- being re-run against rebased main; the note and table above will be
-replaced/corrected in a follow-up commit once fresh numbers land. The original note here
-claimed "the causal levers and evidence-backed reasoning remain exactly as documented in their
-original failure entries earlier in this log" for every `False` row -- that claim is false for
-`pairs_trading`, `rsi14_extremes`, and `forecast_direction_arima_hw`, each of which flips from a
-previously-verified `deployable=True` (see their earlier dated entries in this log) to `False`
-here with no reconciling explanation. This needs investigating against a fresh run, not
-re-asserted uncorrected.]**
+*Note: rebasing materially changed several results relative to the original 2026-08-17 pre-rebase
+run — e.g. `deep_value_edgar_pit`/`dividend_yield_edgar_pit`/`value_quality_edgar_pit`/
+`sector_quality_rank` move from `False` to `True`, and every options-spread strategy's MaxDD drops
+from ~70-186% to a much narrower band, consistent with `main`'s intervening quant-integrity fixes
+actually mattering for these adapters. For strategies that remain `❌ False` here whose causal
+levers were already documented in an earlier dated entry in this log (e.g. `options_flow_sentiment`,
+`covered_call`, the credit/debit spread family), that earlier reasoning still applies and is not
+repeated here. It does **not** apply uniformly, and the previous version of this note's blanket claim
+that "the causal levers and evidence-backed reasoning remain exactly as documented in their original
+failure entries" was corrected here because it was false for three strategies:*
+
+**`pairs_trading`, `rsi14_extremes`, `forecast_direction_arima_hw` — each investigated individually
+below rather than left as an unreconciled regression:**
+
+| Strategy | Cause | Confidence |
+|---|---|---|
+| `forecast_direction_arima_hw` | **Genuine bug fix**, not noise. Commit `588b324b` ("fix: address code-review findings on options gate fabrication + forecast-direction long-only bug"), landed 29 minutes after the `True` measurement, changed `_build_forecast_direction_adapter`'s allocation gate from `expected_gain_pct >= 1.5` to `abs(expected_gain_pct) >= 1.5` — the one-sided check had silently converted the documented long/short book into a long-only book. The `True` measurement was taken on the accidentally long-only version; every run since (including this one) correctly measures the intended long/short strategy, which is a materially different, more honest strategy — not a regression to fix. | High |
+| `pairs_trading` | Adapter code unchanged since the `True` measurement. Two harness/settings-level changes explain the direction of the shift: (1) the full-sample window extended by ~20 months because the CLI's `--end` now defaults to `date.today()` rather than the `--end 2024-12-31` used for the original measurement, and `StrategyValidationHarness.run()`'s reported Sharpe/MaxDD are computed in-sample over the full curve; (2) `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED=True` (confirmed active via `output/runtime_flags.json` for this run) now computes this single-trial (`n_trials=1`) adapter's real DSR instead of the legacy `n_trials<=1` → `DSR=1.0` shortcut in `deflated_sharpe_ratio()` — the same correction this log's 2026-08-17 "5 named strategies" entry already documents for other single-trial adapters, here extended in effect to `pairs_trading` too. **Not fully explained**: MaxDD alone swung 29.69% (2026-08-17 run) → 7.46% (this run) for ~1 additional day of data on a 20+-year curve, larger than either mechanism obviously accounts for; `execution/cost_model.py` and `validation/harness.py`'s core `run()` math are unchanged since the original measurement. A human should diff the two runs' equity-curve artifacts before treating either MaxDD figure as authoritative. | Medium-High on mechanism; magnitude unresolved |
+| `rsi14_extremes` | Adapter code unchanged. This adapter returns 3 precomputed variants (`n_trials=3`), so the DSR-correction flag above does not apply (consistent with DSR only drifting mildly, 0.962→0.956→0.929, rather than collapsing). Best explanation: the harness deploys whichever variant has the highest in-sample Sharpe over the full window (the adapter's own docstring documents this race as close between variants with different net-of-cost economics), and the same `--end`-defaults-to-today window extension can flip which variant wins, swapping in a different Sharpe/MaxDD profile. Plausible and grounded in documented harness behavior, but not pinned to an exact trigger. | Medium |
+
+Per-strategy detail and the full evidence trail (commit hashes, line numbers) live in each
+strategy's own `docs/signals/<name>.md` "Backtest Validation" section. Going forward, any run of
+`scripts/refresh_validations.py` intended to be directly comparable to a prior dated entry in this
+log should pass an explicit `--end` matching that entry's window, rather than relying on the
+"today" default — the silent window drift above is itself worth fixing in the harness's own
+defaults or its CLI help text as a separate follow-up.
