@@ -1,9 +1,7 @@
-"""
-Temporal Fusion Transformer (TFT) Volatility Forecaster.
+"""InvestYo Quant Platform — Transformer Volatility Forecaster.
 
-Provides pure-NumPy multi-head self-attention and gated residual networks for
-multi-horizon forward volatility forecasting (1d, 5d, 21d, 60d) with ridge regression
-extreme learning machine training.
+Implements a Temporal Fusion Transformer (TFT) architecture in pure NumPy/SciPy
+for multi-horizon point volatility prediction.
 """
 
 import numpy as np

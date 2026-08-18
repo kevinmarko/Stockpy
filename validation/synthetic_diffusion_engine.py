@@ -1,8 +1,7 @@
-"""
-Generative Score-Based Diffusion Engine for Tail-Risk Stress Testing.
+"""InvestYo Quant Platform — Synthetic Diffusion Stress Testing Engine.
 
-Implements reverse-time Stochastic Differential Equations (SDE) and Euler-Maruyama
-numerical discretization for synthetic multi-asset path generation and CVaR estimation.
+Generates non-Gaussian synthetic market return paths and volatility regimes
+using historical return window calibration for rigorous stress testing.
 """
 
 import numpy as np

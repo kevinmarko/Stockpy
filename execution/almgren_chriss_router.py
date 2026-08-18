@@ -1,8 +1,7 @@
-"""
-Almgren-Chriss Optimal Execution Router & Market Impact Modeling.
+"""InvestYo Quant Platform — Almgren-Chriss Optimal Execution Router.
 
-Calculates optimal liquidation trajectories balancing permanent and temporary
-market impact with risk-aversion inventory decay.
+Computes optimal trading trajectories and schedule slicing to minimize market impact
+and volatility risk under the Almgren-Chriss execution framework.
 """
 
 import numpy as np

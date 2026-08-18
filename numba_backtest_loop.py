@@ -1,8 +1,7 @@
-"""
-High-Performance Numba JIT Event-Driven Simulation Loop with Margin and Dynamic Friction.
+"""InvestYo Quant Platform — Numba-Accelerated Event-Driven Backtest Loop.
 
-Executes ultra-fast, zero-lookahead sequential backtest simulations modeling
-volatility-scaled margin requirements and panic slippage.
+Provides JIT-compiled bar-by-bar execution loops simulating slippage, transaction fees,
+and strict causal trade execution without lookahead bias.
 """
 
 import numpy as np
