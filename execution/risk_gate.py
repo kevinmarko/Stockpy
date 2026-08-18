@@ -389,14 +389,11 @@ class PreTradeRiskGate:
             return RiskCheckResult(name, True, "SELL — HMM check skipped")
         risk_off = 1.0 - context.macro.hmm_risk_on_probability
         threshold_attr = getattr(context.macro, "hmm_risk_off_block_threshold", self.hmm_risk_off_block_threshold)
-        if type(threshold_attr).__name__ in ("MagicMock", "Mock"):
+        try:
+            threshold = float(threshold_attr)
+        except (TypeError, ValueError):
             threshold = float(self.hmm_risk_off_block_threshold)
-        else:
-            try:
-                threshold = float(threshold_attr)
-            except (TypeError, ValueError):
-                threshold = float(self.hmm_risk_off_block_threshold)
-            
+
         if risk_off > threshold:
             return RiskCheckResult(
                 name, False,

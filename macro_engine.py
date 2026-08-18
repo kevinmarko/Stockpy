@@ -77,9 +77,9 @@ class MacroEngine:
         # process invocation (one _main_body() call per launch, no internal
         # loop), so that context always "refits" once per launch -- expected
         # for a one-shot script, not a bug (see regime/hmm_regime.py).
-        # n_states / retrain_freq_days / covariance_type / n_iter / tol
-        # are operator-tunable via settings so this is not a hardcoded literal
-        # (see settings.HMM_*).
+        # n_states / retrain_freq_days / covariance_type / n_iter / tol /
+        # n_inits are operator-tunable via settings so this is not a
+        # hardcoded literal (see settings.HMM_*).
         from settings import settings as _settings
         self._hmm_detector = HMMRegimeDetector(
             n_states=_settings.HMM_N_STATES,
@@ -87,6 +87,7 @@ class MacroEngine:
             covariance_type=_settings.HMM_COVARIANCE_TYPE,
             n_iter=_settings.HMM_N_ITER,
             tol=_settings.HMM_TOL,
+            n_inits=_settings.HMM_N_INITS,
         )
 
     # Minimum rows required for a numerically stable Gaussian HMM fit.
@@ -184,6 +185,7 @@ class MacroEngine:
                 credit_spread_series=credit_spread_arg,
                 inflation_expectation_series=inflation_arg,
                 include_vol_term_spread=_s.HMM_VOL_TERM_SPREAD_FEATURE_ENABLED,
+                standardize_features=_s.HMM_STANDARDIZE_FEATURES_ENABLED,
             )
         except Exception as e:
             logger.warning(f"HMM regime: feature matrix construction failed: {e}; skipping.")

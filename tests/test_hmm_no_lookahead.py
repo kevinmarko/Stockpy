@@ -172,19 +172,11 @@ def test_no_nans_and_normalized_probabilities():
         assert math.isclose(sum(prob_vals), 1.0, rel_tol=1e-5), f"Probabilities do not sum to 1.0 at row {i}: {probs}"
 
 
-def test_perturbation_after_day_T_leaves_day_T_identical():
-    """Perturbing features after day T must leave predict_proba() and state label at day T completely identical."""
-    features = _synthetic_features(n=200)
-    T_idx = 100
-    T_date = features.index[T_idx]
-    
-    detector = HMMRegimeDetector(n_states=3, random_state=42)
-    detector.fit(features.loc[:T_date])
-    probs_baseline = detector.predict_proba(features.loc[:T_date])
-    
-    perturbed = features.copy()
-    perturbed.iloc[T_idx + 1:] = 99999.9
-    probs_perturbed = detector.predict_proba(perturbed.loc[:T_date])
-    
-    assert _dicts_close(probs_baseline, probs_perturbed)
-    assert probs_baseline["dominant_state"] == probs_perturbed["dominant_state"]
+# NOTE: a `test_perturbation_after_day_T_leaves_day_T_identical` case previously
+# lived here. It was removed as a no-signal duplicate of
+# `test_predict_proba_ignores_rows_after_cutoff` above: both slice the
+# perturbed frame back down to `.loc[:T_date]` before calling predict_proba(),
+# which excludes every perturbed row, so the two predict_proba() calls receive
+# byte-identical input and the assertion can never fail regardless of whether
+# the implementation actually leaks future data. `test_predict_proba_ignores_rows_after_cutoff`
+# already covers this same (admittedly tautological) shape; no coverage was lost.

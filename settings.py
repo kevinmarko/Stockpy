@@ -1441,6 +1441,14 @@ class Settings(BaseSettings):
         default=False,
         description="Whether to include 20D-60D volatility term structure spread in the HMM feature matrix.",
     )
+    HMM_STANDARDIZE_FEATURES_ENABLED: bool = Field(
+        default=False,
+        description="Whether to causally rolling-z-score standardize the HMM feature matrix (252d rolling window, min_periods=20) before fitting, on top of HMMRegimeDetector's own full-sample scaling.",
+    )
+    HMM_N_INITS: int = Field(
+        default=1,
+        description="Number of random-restart EM fits per HMM refit; the best-scoring fit (by in-sample log-likelihood) is kept. Higher values reduce sensitivity to poor EM local optima at the cost of proportionally more compute per refit.",
+    )
     KILLSWITCH_VIX_THRESHOLD_AGREED: float = Field(
         default=25.0,
         description="Lowered VIX threshold for kill switch activation when rules-based regime is RECESSION and HMM confirms risk-off.",
@@ -4740,6 +4748,13 @@ class Settings(BaseSettings):
     def _validate_hmm_tol(cls, value: float) -> float:
         if value <= 0.0:
             raise ValueError("HMM_TOL must be greater than 0")
+        return value
+
+    @field_validator("HMM_N_INITS")
+    @classmethod
+    def _validate_hmm_n_inits(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("HMM_N_INITS must be greater than 0")
         return value
 
     @field_validator("HMM_RISK_ON_DOWNGRADE_THRESHOLD", "HMM_RISK_OFF_AGREEMENT_THRESHOLD")

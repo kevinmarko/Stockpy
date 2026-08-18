@@ -2889,6 +2889,7 @@ class StateSnapshotStep(PipelineStep):
         _write_state_snapshot(
             ctx.macro_raw, ctx.dashboard_df, ctx.symbols,
             macro_kill_switch=getattr(ctx.macro_dto, "killSwitch", None),
+            hmm_regime_state=getattr(ctx.macro_dto, "hmm_regime_state", None),
         )
 
         # Persist the optional Pilots-PWA analytics artifacts (options premium
