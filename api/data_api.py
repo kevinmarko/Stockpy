@@ -138,9 +138,10 @@ install_redacting_exception_handler(app)
 # stream_job_logs call sites, so a /ws/training/status route mounted here
 # could never broadcast anything; see api/ws_api.py's module docstring.
 try:
-    from api.ws_api import tick_router, live_chat_router
+    from api.ws_api import tick_router, live_chat_router, risk_router
     app.include_router(tick_router)
     app.include_router(live_chat_router)
+    app.include_router(risk_router)
 except Exception as _ws_e:
     logger.warning("ws routers mount skipped: %s", _ws_e)
 

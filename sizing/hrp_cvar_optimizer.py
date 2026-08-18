@@ -9,7 +9,7 @@ import pandas as pd
 from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
 from scipy.optimize import minimize
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any, Union
 
 def compute_correlation_distance(cov: pd.DataFrame) -> pd.DataFrame:
     """
