@@ -21,6 +21,12 @@ from validation.sector_forecast_backtest import (
 )
 from validation.sector_forecast_types import BacktestConfig, ForecastError
 
+# Keep every test in this file on a single xdist worker so the module-scoped
+# backtest_result fixture (real ARIMA/Holt-Winters/Monte-Carlo walk-forward
+# fits) builds once, not once per worker that happens to get a split share
+# of TestRunSectorBacktest's methods.
+pytestmark = pytest.mark.xdist_group("sector_forecast_backtest")
+
 np.random.seed(42)
 
 

@@ -149,8 +149,10 @@ jobs:
           # --dist loadgroup keeps every @pytest.mark.xdist_group("...")-tagged
           # test together on one worker (currently: test_settings_liveness.py,
           # test_train_lgbm.py, test_backtest_sector_configs_cli.py's
-          # TestOfflineCLIRun, test_settings_keysets.py) so their module/class-
-          # scoped fixtures build once, not once per worker that happens to get a
+          # TestOfflineCLIRun, test_settings_keysets.py, test_orchestrator_e2e.py,
+          # test_etf_transmission_sensitivity_sweep.py,
+          # test_sector_forecast_backtest.py) so their module/class-scoped
+          # fixtures build once, not once per worker that happens to get a
           # split share of the group. Every other (unmarked) test still balances
           # freely across workers exactly as under the default `load` distribution.
           #

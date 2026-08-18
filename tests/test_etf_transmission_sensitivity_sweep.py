@@ -102,6 +102,12 @@ import pytest
 from risk.etf_transmission import build_transmission_adjusted_cov, transmission_multiplier
 from sizing.position_sizer import apply_portfolio_gross_cap
 
+# Keep every test in this file on a single xdist worker so the module-scoped
+# sweep_results fixture (a real 2-D grid sweep over MAX_DERATE_GRID x
+# COV_INFLATION_GRID) builds once, not once per worker that happens to get a
+# split share of the file's 3 classes.
+pytestmark = pytest.mark.xdist_group("etf_transmission_sensitivity_sweep")
+
 logger = logging.getLogger(__name__)
 
 # Shipped defaults held fixed across the whole sweep (settings.py).
