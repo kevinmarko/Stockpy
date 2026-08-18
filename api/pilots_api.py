@@ -6369,8 +6369,12 @@ def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str,
         if isinstance(res, dict):
             res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["dispersion_trading"]
         return res
-    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
-        logger.error("pilots_api: dispersion/execute failed: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        # exc_info=True already renders the full exception + traceback into the log record
+        # via the logging module's own formatter; passing the exception object again as a
+        # %s format argument was a redundant taint-flow edge CodeQL's py/stack-trace-exposure
+        # query tracks -- dropping it removes the flagged path with no change in what's logged.
+        logger.error("pilots_api: dispersion/execute failed", exc_info=True)
         return {"ok": False, "error": "Internal error while executing dispersion trade; see server logs for detail."}
 
 
