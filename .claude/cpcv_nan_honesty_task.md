@@ -7,5 +7,5 @@
 - [x] Add regression tests (`tests/test_pbo.py`, `tests/test_autonomous_backtest_runner.py`) <!-- id: 5 -->
 - [x] Update `docs/architecture/ml-and-reports.md` and `docs/architecture/validation-and-signals.md` <!-- id: 6 -->
 - [x] Run targeted + full offline test suite, ruff genuine-bug lint <!-- id: 7 -->
-- [ ] Commit and open Pull Request <!-- id: 8 -->
+- [x] Commit and open Pull Request <!-- id: 8 --> (#793)
 - [ ] Comment on #786 pointing to this PR, then close #786 as superseded <!-- id: 9 -->
