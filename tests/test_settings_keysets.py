@@ -63,6 +63,10 @@ from settings import Settings
 import gui.env_io as env_io
 import api.pilots_api as pilots_api
 
+# Keep all tests in this file on a single xdist worker so the class-scoped
+# fixtures (which import api.pilots_api and settings at class scope) are built
+# once, not once per worker that gets a split share of the file.
+pytestmark = pytest.mark.xdist_group("settings_keysets")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "settings_keysets.py"
