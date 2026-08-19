@@ -1096,6 +1096,20 @@ def _bars_frame(closes):
 
 
 class TestPortfolioAttribution:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """This machine's real .env sets a live STATE_API_TOKEN secret, which
+        would otherwise make every fail-open GET /portfolio/attribution call
+        below 401 instead of 200/422 (none of these tests exercise the auth
+        gate itself, so none patch it locally). Reset to the coded default
+        (unset) before each test so this class's outcome doesn't depend on
+        this machine's local .env, matching a fresh clone. Should be
+        superseded once conftest.py's per-test settings reset is extended to
+        cover secret string fields too (see gui.env_io.SECRET_KEYS) -- kept
+        local here per this task's scoping rules (conftest.py is out of
+        bounds -- other agents own classes in the same file)."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_cold_start_no_account_snapshot(self, tmp_path):
         class _EmptyStore:
             def latest_account_snapshot(self):
@@ -1306,6 +1320,14 @@ class TestForecastSkill:
 
 
 class TestSectorSelection:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale -- this machine's real .env sets a live
+        STATE_API_TOKEN, which would otherwise 401 every call below (none of
+        these tests exercise the auth gate itself)."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_shape_stable(self):
         resp = client.get("/sector/selection?target=NIO&n=3")
         assert resp.status_code == 200
@@ -1369,6 +1391,16 @@ class _RollingBetaStore:
 
 
 class TestRollingBeta:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale. The two tests below that DO exercise the auth gate
+        (test_read_token_gates_the_endpoint, test_read_token_unset_is_open)
+        already patch STATE_API_TOKEN themselves inside their own bodies, so
+        this outer reset is simply overridden for the duration of those
+        `with` blocks -- harmless."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_shape_stable_and_default_window(self):
         """Real, non-trivial beta values from a synthetic correlated series --
         proves the endpoint wires pilots.rolling_beta through end-to-end, not
@@ -1573,6 +1605,14 @@ class TestObservabilitySummary:
     pilots/observability.py in tests/test_pilots_observability.py; these tests
     only confirm the FastAPI wiring — auth, query params, snapshot threading,
     and the composite shape — is correct end-to-end."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale. test_read_token_gates_endpoint already patches
+        STATE_API_TOKEN itself inside its own body, so this outer reset is
+        simply overridden for the duration of that `with` block -- harmless."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
 
     def test_cold_start_shape(self, tmp_path):
         class _EmptyStore:
@@ -3324,13 +3364,30 @@ class TestExecutionModeConfirmation:
 
 def _full_weights_from_matrix():
     """Fetch the matrix (read-only, fail-open) and build a full-coverage weight
-    map (every known module -> its weight, 0.0 where None), as the PWA would."""
-    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
-        matrix = client.get("/strategy/matrix").json()
+    map (every known module -> its weight, 0.0 where None), as the PWA would.
+
+    STATE_API_TOKEN is explicitly reset to the coded default (unset) here --
+    this helper relies on GET /strategy/matrix's fail-open behavior, which a
+    real operator .env setting a live STATE_API_TOKEN secret would otherwise
+    break (every call would 401 instead of returning the matrix), independent
+    of anything TestStrategyModulesWrite's own tests patch."""
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+            matrix = client.get("/strategy/matrix").json()
     return {m["name"]: (m["weight"] if m["weight"] is not None else 0.0) for m in matrix["modules"]}
 
 
 class TestStrategyMatrixRead:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale. The two tests below that DO exercise the auth gate
+        (test_fail_open_read_with_no_token, test_401_on_wrong_read_token)
+        already patch STATE_API_TOKEN themselves inside their own bodies, so
+        this outer reset is simply overridden for the duration of those
+        `with` blocks -- harmless."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_shape_and_modules(self):
         with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
             resp = client.get("/strategy/matrix")
@@ -3535,6 +3592,15 @@ class TestStrategyWritesInvariants:
 
 
 class TestStrategyHealth:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale. test_fail_open_read_with_no_token /
+        test_401_on_wrong_read_token already patch STATE_API_TOKEN
+        themselves inside their own bodies, so this outer reset is simply
+        overridden for the duration of those `with` blocks -- harmless."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_shape_and_all_gates_pass_for_fixture_backed_pilot(self, monkeypatch):
         _point_reports_at_fixtures(monkeypatch)
         resp = client.get("/strategy/health")
@@ -4275,6 +4341,15 @@ class TestDecisionsRead:
     symbol detail page needs (distinct from GET /calibration/summary's
     fixed-size bundled recent_decisions preview)."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale. test_no_auth_token_required_read_tier already
+        patches STATE_API_TOKEN itself inside its own body, so this outer
+        reset is simply overridden for the duration of that `with` block --
+        harmless."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_empty_log_returns_empty_list_never_404(self, tmp_path):
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             resp = client.get("/decisions")
@@ -4405,6 +4480,15 @@ def _fake_queue_snapshot(**overrides):
 
 
 class TestAgenticStatus:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        """See TestPortfolioAttribution's identical fixture above for the
+        full rationale. test_fail_open_read_with_no_token /
+        test_401_on_wrong_read_token already patch STATE_API_TOKEN
+        themselves inside their own bodies, so this outer reset is simply
+        overridden for the duration of those `with` blocks -- harmless."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
     def test_shape_and_composition(self, tmp_path):
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             with mock.patch.object(
