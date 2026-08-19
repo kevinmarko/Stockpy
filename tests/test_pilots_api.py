@@ -448,8 +448,14 @@ class TestUniverseReinclude:
     def test_command_token_required_unset_disables(self):
         """Fail-closed require_command_token ALONE (matches POST /decisions /
         POST /automation/pause's tier — see the pilots-endpoint auth
-        taxonomy): FOLLOW_API_TOKEN unset means the endpoint is fully disabled."""
-        resp = client.post("/universe/XOM/reinclude")
+        taxonomy): FOLLOW_API_TOKEN unset means the endpoint is fully disabled.
+
+        FOLLOW_API_TOKEN must be EXPLICITLY unset here, not assumed ambient —
+        see TestAutomationIntervalWrite.test_command_token_required's comment for why:
+        its value otherwise depends on whatever real .env happens to be on
+        the machine running pytest."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            resp = client.post("/universe/XOM/reinclude")
         assert resp.status_code == 403
 
     def test_command_token_wrong_401(self):
@@ -932,22 +938,32 @@ class TestFollowAuthorized:
         # would report cold-start and route around kelly_sizing_for_strategy
         # entirely -- so both must be stubbed together for this stub to have
         # any effect.
+        #
+        # ROBINHOOD_MAX_NOTIONAL_PER_ORDER must be EXPLICITLY pinned to the
+        # "unset" default (0.0) here, not assumed ambient: execution/compose.py's
+        # per-order notional cap clamps every intent's target_notional to this
+        # value when it's a positive real number, which is exactly what a real
+        # operator .env configures for live trading -- and would otherwise
+        # silently truncate this test's $1000 proportional split down to
+        # 5 * min-per-leg-cap, breaking the total-notional assertion below on
+        # whatever machine happens to be running pytest.
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-                    with mock.patch(
-                        "sizing.kelly.estimate_win_rate_and_payoff_per_strategy",
-                        return_value=(0.6, 1.5, 999),
-                    ):
+            with mock.patch.object(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0):
+                with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
                         with mock.patch(
-                            "sizing.kelly.kelly_sizing_for_strategy",
-                            return_value=(1.0, "test_stub_no_ceiling"),
+                            "sizing.kelly.estimate_win_rate_and_payoff_per_strategy",
+                            return_value=(0.6, 1.5, 999),
                         ):
-                            resp = client.post(
-                                "/pilots/trend-following/follow",
-                                json={"amount": 1000.0},
-                                headers=self._auth(),
-                            )
+                            with mock.patch(
+                                "sizing.kelly.kelly_sizing_for_strategy",
+                                return_value=(1.0, "test_stub_no_ceiling"),
+                            ):
+                                resp = client.post(
+                                    "/pilots/trend-following/follow",
+                                    json={"amount": 1000.0},
+                                    headers=self._auth(),
+                                )
         assert resp.status_code == 200
         body = resp.json()
         assert body["follow"]["pilot_id"] == "trend-following"
@@ -1055,7 +1071,10 @@ class TestRealizedPerformance:
         import data.robinhood_orders as rho
 
         monkeypatch.setattr(rho, "_CACHE_PATH", tmp_path / "no_such_cache.json")
-        resp = client.get("/portfolio/realized")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/portfolio/realized")
         assert resp.status_code == 200
         body = resp.json()
         assert set(body) == {"summary", "trades", "n_fills", "available"}
@@ -1260,6 +1279,9 @@ class TestPortfolioAttribution:
 class TestAlertsFeed:
     def test_unconfigured_is_honest_empty(self, monkeypatch):
         monkeypatch.setattr(settings, "ALERT_FILE_PATH", None, raising=False)
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
         resp = client.get("/alerts")
         assert resp.status_code == 200
         body = resp.json()
@@ -1279,6 +1301,9 @@ class TestAlertsFeed:
             encoding="utf-8",
         )
         monkeypatch.setattr(settings, "ALERT_FILE_PATH", str(path), raising=False)
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
         resp = client.get("/alerts?limit=10")
         assert resp.status_code == 200
         body = resp.json()
@@ -1291,7 +1316,10 @@ class TestAlertsFeed:
 
 class TestForecastSkill:
     def test_shape_stable(self):
-        resp = client.get("/symbols/AAPL/forecast?horizon=30")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/symbols/AAPL/forecast?horizon=30")
         assert resp.status_code == 200
         body = resp.json()
         assert set(body) == {
@@ -1495,8 +1523,11 @@ class TestModelsRegistry:
 
 class TestOptionsMatrix:
     def test_disabled_is_honest_empty(self, tmp_path):
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/options")
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                resp = client.get("/options")
         assert resp.status_code == 200
         body = resp.json()
         assert body["directives"] == []
@@ -1519,9 +1550,10 @@ class TestOptionsMatrix:
             encoding="utf-8",
         )
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/options")
-            sym = client.get("/symbols/AAPL/options")
-            miss = client.get("/symbols/ZZZ/options")
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                resp = client.get("/options")
+                sym = client.get("/symbols/AAPL/options")
+                miss = client.get("/symbols/ZZZ/options")
         assert resp.json()["directives"][0]["Symbol"] == "AAPL"
         assert resp.json()["as_of"] == "2026-07-15T00:00:00+00:00"
         assert sym.json()["directive"]["Strategy"] == "Put Credit Spread"
@@ -1533,8 +1565,11 @@ class TestOptionsMatrix:
 
 class TestPairsRadar:
     def test_disabled_is_honest_empty(self, tmp_path):
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/pairs")
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                resp = client.get("/pairs")
         assert resp.status_code == 200
         body = resp.json()
         assert body["pairs"] == []
@@ -1559,7 +1594,8 @@ class TestPairsRadar:
             encoding="utf-8",
         )
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/pairs")
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                resp = client.get("/pairs")
         body = resp.json()
         assert body["pairs"][0]["ticker1"] == "XOM"
         assert body["pairs"][0]["signal"] == "ENTER SHORT spread"
@@ -1846,8 +1882,11 @@ class TestObservabilityLogs:
 
     def test_missing_log_file_is_honest_empty(self, tmp_path):
         missing = tmp_path / "investyo.log"
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
-            resp = client.get("/observability/logs")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+                resp = client.get("/observability/logs")
         assert resp.status_code == 200
         body = resp.json()
         assert body["entries"] == []
@@ -1862,8 +1901,9 @@ class TestObservabilityLogs:
             "2026-07-26 08:40:29,500  ERROR     data_engine — FRED unavailable\n",
             encoding="utf-8",
         )
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
-            resp = client.get("/observability/logs")
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+                resp = client.get("/observability/logs")
         assert resp.status_code == 200
         body = resp.json()
         assert body["total_lines"] == 2
@@ -1879,8 +1919,9 @@ class TestObservabilityLogs:
             f"2026-07-26 08:40:{i:02d},000  INFO      main — line {i}" for i in range(10)
         ]
         log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
-            resp = client.get("/observability/logs?limit=2")
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+                resp = client.get("/observability/logs?limit=2")
         assert resp.status_code == 200
         body = resp.json()
         assert body["total_lines"] == 10
@@ -1888,8 +1929,11 @@ class TestObservabilityLogs:
         assert len(body["entries"]) == 2
 
     def test_limit_out_of_bounds_422(self):
-        assert client.get("/observability/logs?limit=0").status_code == 422
-        assert client.get("/observability/logs?limit=1001").status_code == 422
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            assert client.get("/observability/logs?limit=0").status_code == 422
+            assert client.get("/observability/logs?limit=1001").status_code == 422
 
     def test_read_token_gates_endpoint(self, tmp_path):
         missing = tmp_path / "investyo.log"
@@ -2636,7 +2680,11 @@ class TestAutomationRun:
         assert r1.json() == r2.json()
 
     def test_command_token_required_unset_disables(self):
-        resp = client.post("/automation/run")
+        # FOLLOW_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment
+        # for why.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            resp = client.post("/automation/run")
         assert resp.status_code == 403
 
     def test_command_token_wrong_401(self):
@@ -2697,7 +2745,11 @@ class TestAutomationPause:
         assert resp.status_code == 200
 
     def test_pause_command_token_required(self):
-        resp = client.post("/automation/pause", json={"reason": "x"})
+        # FOLLOW_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment
+        # for why.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            resp = client.post("/automation/pause", json={"reason": "x"})
         assert resp.status_code == 403
 
 
@@ -2773,8 +2825,12 @@ class TestAutomationResume:
         assert resp.status_code == 422
 
     def test_resume_command_token_required(self):
+        # FOLLOW_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment
+        # for why.
         with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
-            resp = client.post("/automation/resume", json={"confirm": True, "reason": "x"})
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+                resp = client.post("/automation/resume", json={"confirm": True, "reason": "x"})
         assert resp.status_code == 403
 
 
@@ -2950,8 +3006,14 @@ class TestAutomationIntervalWrite:
         assert resp.status_code == 403
 
     def test_command_token_required(self):
+        # FOLLOW_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # there is no conftest fixture or test .env pinning it, so its value
+        # otherwise depends on whatever real .env (if any) happens to be on the
+        # machine running pytest (see TestExecutionModeWrite.test_command_token_required's
+        # comment for the sibling "configured but missing header -> 401" case).
         with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
-            resp = client.put("/automation/schedule/interval", json={"interval_seconds": 300})
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+                resp = client.put("/automation/schedule/interval", json={"interval_seconds": 300})
         assert resp.status_code == 403
 
 
@@ -3844,6 +3906,9 @@ class TestLlmStatus:
         monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
         monkeypatch.setattr(settings, "OPAL_RESEARCH_ENABLED", False, raising=False)
         monkeypatch.setattr(settings, "GRAVITY_AI_RUNNER_ENABLED", False, raising=False)
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             resp = client.get("/llm/status")
         assert resp.status_code == 200
@@ -3863,6 +3928,9 @@ class TestLlmStatus:
         monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", True, raising=False)
         monkeypatch.setattr(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "claude", raising=False)
         monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-x", raising=False)
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             # Record a real auth failure for the current key.
             exc = type("AuthenticationError", (Exception,), {})("bad key")
@@ -3882,6 +3950,9 @@ class TestLlmStatus:
         _clear_llm_keys(monkeypatch)
         monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
         monkeypatch.setattr(settings, "OPAL_RESEARCH_ENABLED", False, raising=False)
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             resp = client.get("/llm/status")
         assert resp.status_code == 200
@@ -3914,6 +3985,9 @@ class TestLlmStatus:
         monkeypatch.setattr(
             router, "get_research_provider", lambda: (_ for _ in ()).throw(AssertionError("constructed!"))
         )
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             resp = client.get("/llm/status")
         assert resp.status_code == 200
@@ -4056,18 +4130,21 @@ class TestCalibrationSummaryEndpoint:
     query params, snapshot threading, and the composite shape — end-to-end."""
 
     def test_cold_start_shape(self, tmp_path):
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch(
-                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
-            ):
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 with mock.patch(
-                    "evaluation_engine.recommendation_tracking_report",
-                    return_value=_EMPTY_TRACKING_REPORT,
+                    "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
                 ):
                     with mock.patch(
-                        "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                        "evaluation_engine.recommendation_tracking_report",
+                        return_value=_EMPTY_TRACKING_REPORT,
                     ):
-                        resp = client.get("/calibration/summary")
+                        with mock.patch(
+                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                        ):
+                            resp = client.get("/calibration/summary")
 
         assert resp.status_code == 200
         body = resp.json()
@@ -4087,18 +4164,21 @@ class TestCalibrationSummaryEndpoint:
 
     def test_reads_mfe_mae_from_persisted_snapshot_fixture(self, tmp_path):
         (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch(
-                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
-            ):
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 with mock.patch(
-                    "evaluation_engine.recommendation_tracking_report",
-                    return_value=_EMPTY_TRACKING_REPORT,
+                    "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
                 ):
                     with mock.patch(
-                        "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                        "evaluation_engine.recommendation_tracking_report",
+                        return_value=_EMPTY_TRACKING_REPORT,
                     ):
-                        resp = client.get("/calibration/summary")
+                        with mock.patch(
+                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                        ):
+                            resp = client.get("/calibration/summary")
 
         assert resp.status_code == 200
         # mfe_mae is a pure snapshot read — its shape must always be present
@@ -4106,18 +4186,21 @@ class TestCalibrationSummaryEndpoint:
         assert "points" in resp.json()["mfe_mae"]
 
     def test_horizon_threads_through(self, tmp_path):
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch(
-                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
-            ):
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 with mock.patch(
-                    "evaluation_engine.recommendation_tracking_report",
-                    return_value={**_EMPTY_TRACKING_REPORT, "horizon_days": 60},
-                ) as mock_report:
+                    "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
+                ):
                     with mock.patch(
-                        "gui.decision_log.decisions_df", return_value=pd.DataFrame()
-                    ):
-                        resp = client.get("/calibration/summary?horizon=60")
+                        "evaluation_engine.recommendation_tracking_report",
+                        return_value={**_EMPTY_TRACKING_REPORT, "horizon_days": 60},
+                    ) as mock_report:
+                        with mock.patch(
+                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                        ):
+                            resp = client.get("/calibration/summary?horizon=60")
 
         assert resp.status_code == 200
         assert resp.json()["recommendation_tracking"]["horizon_days"] == 60
@@ -4125,8 +4208,11 @@ class TestCalibrationSummaryEndpoint:
         assert mock_report.call_args.kwargs["horizon_days"] == 60
 
     def test_bad_horizon_422(self):
-        assert client.get("/calibration/summary?horizon=0").status_code == 422
-        assert client.get("/calibration/summary?horizon=999").status_code == 422
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            assert client.get("/calibration/summary?horizon=0").status_code == 422
+            assert client.get("/calibration/summary?horizon=999").status_code == 422
 
     def test_read_token_gates_endpoint(self, tmp_path):
         with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
@@ -4153,10 +4239,13 @@ class TestCalibrationSummaryEndpoint:
 
 class TestEdgeByStrategyEndpoint:
     def test_no_trades_honest_empty(self):
-        with mock.patch(
-            "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
-        ):
-            resp = client.get("/calibration/edge-by-strategy")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch(
+                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
+            ):
+                resp = client.get("/calibration/edge-by-strategy")
         assert resp.status_code == 200
         body = resp.json()
         assert body["rows"] == []
@@ -4186,11 +4275,14 @@ class TestEdgeByStrategyEndpoint:
                 )
 
         edge_ret = {"MFE": 0.12, "MAE": 0.04, "Edge Ratio": 3.0, "Return Std Dev": 0.01}
-        with mock.patch("transactions_store.TransactionsStore", return_value=_Store()):
-            with mock.patch("data.historical_store.HistoricalStore", return_value=_HStore()):
-                with mock.patch("evaluation_engine.EvaluationEngine") as MockEE:
-                    MockEE.return_value.calculate_edge_ratio.return_value = edge_ret
-                    resp = client.get("/calibration/edge-by-strategy")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch("transactions_store.TransactionsStore", return_value=_Store()):
+                with mock.patch("data.historical_store.HistoricalStore", return_value=_HStore()):
+                    with mock.patch("evaluation_engine.EvaluationEngine") as MockEE:
+                        MockEE.return_value.calculate_edge_ratio.return_value = edge_ret
+                        resp = client.get("/calibration/edge-by-strategy")
 
         assert resp.status_code == 200
         rows = resp.json()["rows"]
@@ -4498,8 +4590,11 @@ class TestAgenticStatus:
 
 class TestAgenticDiscoveryRead:
     def test_cold_start_shape(self, tmp_path):
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/agentic/discovery")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/agentic/discovery")
         assert resp.status_code == 200
         body = resp.json()
         for key in ("generated_at", "candidates", "scan_configs", "reason", "writable", "note"):
@@ -4508,11 +4603,14 @@ class TestAgenticDiscoveryRead:
         assert body["reason"] is not None
 
     def test_writable_tracks_the_flag(self, tmp_path):
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
-                on = client.get("/agentic/discovery").json()
-            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", False):
-                off = client.get("/agentic/discovery").json()
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                    on = client.get("/agentic/discovery").json()
+                with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", False):
+                    off = client.get("/agentic/discovery").json()
         assert on["writable"] is True
         assert off["writable"] is False
         assert "AGENTIC_DISCOVERY_ENABLED=false" in off["note"]
@@ -4530,8 +4628,11 @@ class TestAgenticDiscoveryRead:
 
     def test_never_500_on_corrupt_candidates_file(self, tmp_path):
         (tmp_path / "scan_candidates.json").write_text("{ not valid json", encoding="utf-8")
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/agentic/discovery")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/agentic/discovery")
         assert resp.status_code == 200
         assert resp.json()["candidates"] == []
 
@@ -4548,8 +4649,11 @@ class TestAgenticDiscoveryRead:
             ),
             encoding="utf-8",
         )
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            resp = client.get("/agentic/discovery")
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/agentic/discovery")
         assert resp.status_code == 200
         body = resp.json()
         assert body["reason"] is None
@@ -5894,16 +5998,19 @@ class TestHrpCvarOptimize:
             "MSFT": self._synthetic_closes(4, start=300.0),
         }
 
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_a)):
-            resp_a = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={"symbols": ["AAPL", "MSFT"]},
-            )
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_b)):
-            resp_b = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={"symbols": ["AAPL", "MSFT"]},
-            )
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_a)):
+                resp_a = client.post(
+                    "/pilots/portfolio/optimize/hrp-cvar",
+                    json={"symbols": ["AAPL", "MSFT"]},
+                )
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_b)):
+                resp_b = client.post(
+                    "/pilots/portfolio/optimize/hrp-cvar",
+                    json={"symbols": ["AAPL", "MSFT"]},
+                )
 
         assert resp_a.status_code == 200
         assert resp_b.status_code == 200
@@ -5919,11 +6026,14 @@ class TestHrpCvarOptimize:
 
     def test_insufficient_history_returns_honest_422(self):
         store = self._Store({"AAPL": [], "MSFT": self._synthetic_closes(5, start=300.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={"symbols": ["AAPL", "MSFT"]},
-            )
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+                resp = client.post(
+                    "/pilots/portfolio/optimize/hrp-cvar",
+                    json={"symbols": ["AAPL", "MSFT"]},
+                )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history"
         assert "AAPL" in resp.json()["detail"]["symbols_missing"]
@@ -5933,11 +6043,14 @@ class TestHrpCvarOptimize:
             "AAPL": self._synthetic_closes(6, n=10, start=150.0),
             "MSFT": self._synthetic_closes(7, n=10, start=300.0),
         })
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={"symbols": ["AAPL", "MSFT"]},
-            )
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+                resp = client.post(
+                    "/pilots/portfolio/optimize/hrp-cvar",
+                    json={"symbols": ["AAPL", "MSFT"]},
+                )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history"
 
@@ -6126,8 +6239,11 @@ def _synthetic_closes_walk(seed, n=400, start=100.0):
 class TestTransformerForecast:
     def test_calls_get_bars_with_symbol_and_returns_trained_forecast(self):
         store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
-            resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
+                resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
@@ -6143,10 +6259,13 @@ class TestTransformerForecast:
         store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
         store_b = _OhlcvStore({"AAPL": _synthetic_closes_walk(22, n=400, start=150.0)})
 
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
-            resp_a = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
-            resp_b = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
+                resp_a = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
+                resp_b = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
 
         assert resp_a.status_code == 200 and resp_b.status_code == 200
         forecast_a = resp_a.json()["forecast"]
@@ -6155,15 +6274,21 @@ class TestTransformerForecast:
 
     def test_insufficient_history_returns_honest_422(self):
         store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=50, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+                resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
     def test_unknown_symbol_returns_honest_422(self):
         store = _OhlcvStore({})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "ZZZZ"})
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+                resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "ZZZZ"})
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
@@ -6191,8 +6316,11 @@ class TestDiffusionStressTest:
 
     def test_calls_get_bars_with_symbol_and_returns_real_data_driven_result(self):
         store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
-            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
+                resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
@@ -6205,25 +6333,34 @@ class TestDiffusionStressTest:
         store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
         store_b = _OhlcvStore({"AAPL": _synthetic_closes_walk(22, n=400, start=150.0)})
 
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
-            resp_a = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
-            resp_b = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
+                resp_a = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
+                resp_b = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
 
         assert resp_a.status_code == 200 and resp_b.status_code == 200
         assert resp_a.json()["VaR_95"] != resp_b.json()["VaR_95"]
 
     def test_insufficient_history_returns_honest_422(self):
         store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=5, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+                resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
     def test_unknown_symbol_returns_honest_422(self):
         store = _OhlcvStore({})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
+        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+                resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
