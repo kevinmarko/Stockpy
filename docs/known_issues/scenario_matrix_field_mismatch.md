@@ -1,7 +1,7 @@
 # Known issue (2026-08-19): Paper Broker screen crashed on live backend — `ScenarioHeatmap` and `pilots/scenario_matrix.py` disagreed on almost every field name
 
-**Status: fixed, confined to this branch. Fixed on branch
-`claude/error-investigation-6b723d`; PR number to be filled in once opened.**
+**Status: fixed.** [PR #808](https://github.com/kevinmarko/Stockpy/pull/808)
+(branch `claude/error-investigation-6b723d`).
 
 ## What happened
 
