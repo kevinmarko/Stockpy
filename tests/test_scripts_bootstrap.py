@@ -28,6 +28,7 @@ TestBootstrapModuleItself       — scripts/_bootstrap.py is stdlib-only at
 from __future__ import annotations
 
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -40,9 +41,50 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 # entry point) and _bootstrap.py itself (the module being called, which
 # obviously does not call itself).
 _EXCLUDED = {"__init__.py", "_bootstrap.py"}
-_SCRIPT_FILES = sorted(
-    p for p in SCRIPTS_DIR.glob("*.py") if p.name not in _EXCLUDED
-)
+
+
+def _tracked_script_files() -> list[Path]:
+    """Return every git-tracked scripts/*.py file (excluding _EXCLUDED).
+
+    Deliberately scoped via `git ls-files` (tracked/staged files only, NOT
+    `--others`) rather than a raw `SCRIPTS_DIR.glob("*.py")` directory
+    listing. A raw glob also parametrizes over any untracked file an
+    operator happens to have sitting in their own scripts/ working tree --
+    e.g. a scratch or in-progress script of their own that was never part
+    of the change under test and has no relation to this repo's committed
+    bootstrap convention. That makes local runs of this test fail based on
+    whatever else happens to be on the machine's filesystem, not on the
+    actual state of the codebase -- the same class of machine-state
+    dependent flakiness already fixed elsewhere by scoping filesystem walks
+    to git's own view of the tree (see tests/test_env_loading.py's
+    `_tracked_python_files`). Restricting to tracked/staged (not `--others`)
+    is intentional here, unlike that sibling fix: this guard's failure mode
+    is specifically an operator's unstaged, unrelated WIP file, and a script
+    only needs to satisfy this convention once it's actually part of the
+    tree (staged or committed), not while it's still being drafted.
+    Falls back to a plain glob if `git` is unavailable (e.g. no repository),
+    so this test still has meaningful coverage outside a git checkout.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--", "scripts/*.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return sorted(p for p in SCRIPTS_DIR.glob("*.py") if p.name not in _EXCLUDED)
+
+    # Unlike a shell glob, git's pathspec `scripts/*.py` also matches nested
+    # paths (e.g. scripts/auditor/foo.py) -- filter to direct children of
+    # scripts/ only, preserving this test's original non-recursive scope
+    # (SCRIPTS_DIR.glob("*.py") never descended into subdirectories either).
+    files = [REPO_ROOT / rel for rel in result.stdout.split("\0") if rel]
+    return sorted(p for p in files if p.parent == SCRIPTS_DIR and p.name not in _EXCLUDED)
+
+
+_SCRIPT_FILES = _tracked_script_files()
 
 
 def _source_imports_bootstrap_name(tree: ast.Module) -> bool:
