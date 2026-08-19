@@ -105,9 +105,14 @@ def _finite(v) -> bool:
 class TestDefaultOffContract:
     def test_skill_weighting_disabled_by_default(self):
         """Opt-in gate: FORECAST_SKILL_WEIGHTING_ENABLED must default to False so
-        a fresh clone / CI reproduces today's exact static-blend behavior."""
+        a fresh clone / CI reproduces today's exact static-blend behavior.
+
+        Checked against the field's own coded default, not a freshly
+        constructed ``Settings()`` -- the latter still reads a real,
+        operator-populated ``.env``, so it is not a reliable stand-in for
+        "the project default" on a machine with its own ``.env``."""
         from settings import Settings
-        assert Settings().FORECAST_SKILL_WEIGHTING_ENABLED is False
+        assert Settings.model_fields["FORECAST_SKILL_WEIGHTING_ENABLED"].default is False
 
     def test_settings_singleton_default_off(self):
         from settings import settings

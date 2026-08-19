@@ -191,8 +191,15 @@ def test_create_readonly_db_engine_uri_contains_mode_ro(tmp_path):
     assert kwargs.get("uri") is True
 
 
-def test_create_readonly_db_engine_postgres_sets_readonly_option():
-    """Construct-only (never connects): the engine carries postgresql_readonly."""
+def test_create_readonly_db_engine_postgres_sets_readonly_option(monkeypatch):
+    """Construct-only (never connects): the engine carries postgresql_readonly.
+
+    MCP_DATABASE_URL_RO pinned unset (matching the sibling
+    ...postgres_unset_ro_dsn_uses_primary_url test below) so this doesn't
+    depend on the machine's real .env leaving it unset -- when set, the
+    real DSN wins over the ``db_url`` argument passed here and this test's
+    plain placeholder URL is never actually used to construct the engine."""
+    monkeypatch.setattr(settings, "MCP_DATABASE_URL_RO", None)
     engine = create_readonly_db_engine("postgresql://user:pass@localhost/testdb")
     assert engine.dialect.name == "postgresql"
     assert engine.get_execution_options() == {"postgresql_readonly": True}
@@ -259,7 +266,10 @@ def test_create_readonly_db_engine_rejects_unknown_backend():
         create_readonly_db_engine("mysql://user:pass@localhost/testdb")
 
 
-def test_create_readonly_db_engine_never_logs_raw_url(caplog):
+def test_create_readonly_db_engine_never_logs_raw_url(monkeypatch, caplog):
+    # MCP_DATABASE_URL_RO pinned unset -- see the sibling
+    # ...sets_readonly_option test above for why.
+    monkeypatch.setattr(settings, "MCP_DATABASE_URL_RO", None)
     caplog.set_level("INFO")
     create_readonly_db_engine("postgresql://user:supersecretpw@localhost/testdb")
     assert "supersecretpw" not in caplog.text

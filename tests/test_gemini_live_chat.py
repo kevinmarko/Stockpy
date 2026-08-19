@@ -95,6 +95,12 @@ class TestAuthAndGating:
 
     def test_notifies_and_closes_when_gemini_key_missing(self, monkeypatch):
         monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+        # This client sends no Authorization header, relying on
+        # _check_ws_token's fail-open-on-loopback path (matching
+        # TestLoopbackOnlyFailOpen's equivalent tests below) -- pinned
+        # explicitly so it doesn't depend on the machine's real .env
+        # leaving STATE_API_TOKEN unset.
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
 
         with client.websocket_connect("/ws/chat/live") as ws:
             msg = ws.receive_json()
@@ -148,6 +154,10 @@ class TestLiveChatSession:
         monkeypatch.setattr(settings, "GEMINI_API_KEY", "real-key-mocked")
         monkeypatch.setattr(settings, "GEMINI_LIVE_CHAT_MODEL", "gemini-3.1-flash-live-preview")
         monkeypatch.setattr(settings, "GEMINI_LIVE_VOICE_NAME", "Aoede")
+        # No Authorization header is sent below; relies on the
+        # fail-open-on-loopback path -- pinned explicitly (see
+        # test_notifies_and_closes_when_gemini_key_missing above).
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
 
         class _FakePart:
             def __init__(self, data=None, text=None):
@@ -275,6 +285,10 @@ class TestLiveChatSession:
 
     def test_live_tool_call_execution(self, monkeypatch):
         monkeypatch.setattr(settings, "GEMINI_API_KEY", "real-key-mocked")
+        # No Authorization header is sent below; relies on the
+        # fail-open-on-loopback path -- pinned explicitly (see
+        # test_notifies_and_closes_when_gemini_key_missing above).
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
 
         class _FakeFunctionCall:
             def __init__(self, name, call_id, args):

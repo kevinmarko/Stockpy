@@ -1191,14 +1191,20 @@ class TestMacroHistory:
         assert len(t10y) == 50
 
     def test_settings_fundamentals_refresh_days(self):
-        """settings.FUNDAMENTALS_REFRESH_DAYS == 1."""
-        from settings import settings as _s
-        assert _s.FUNDAMENTALS_REFRESH_DAYS == 1
+        """FUNDAMENTALS_REFRESH_DAYS's coded default == 1.
+
+        Checked against the field's own coded default, not the live
+        singleton -- an operator may legitimately have a different
+        FUNDAMENTALS_REFRESH_DAYS in their own real .env, which is a valid
+        deployment choice, not a violation of the class default this test
+        is pinning down."""
+        from settings import Settings
+        assert Settings.model_fields["FUNDAMENTALS_REFRESH_DAYS"].default == 1
 
     def test_settings_macro_refresh_hours(self):
-        """settings.MACRO_REFRESH_HOURS == 12."""
-        from settings import settings as _s
-        assert _s.MACRO_REFRESH_HOURS == 12
+        """MACRO_REFRESH_HOURS's coded default == 12 (see docstring above)."""
+        from settings import Settings
+        assert Settings.model_fields["MACRO_REFRESH_HOURS"].default == 12
 
 
 class TestNewsSentimentHistory:
