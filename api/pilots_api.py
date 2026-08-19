@@ -5613,7 +5613,12 @@ class ScenarioMatrixRequest(BaseModel):
     spot_shifts: Optional[List[float]] = Field(default=None, max_length=50)
     iv_shifts: Optional[List[float]] = Field(default=None, max_length=50)
     time_shifts: Optional[List[int]] = Field(default=None, max_length=50)
-    time_days_forward: Optional[int] = Field(default=0, ge=0, le=365)
+    # default=None (not 0) is load-bearing: it's what lets the route below
+    # distinguish "caller didn't ask for a time dimension at all" (falls
+    # through to the full default 4-slice grid) from "caller explicitly
+    # wants only day 0" (0, collapses to a single T+0 slice) -- see
+    # docs/known_issues/scenario_matrix_field_mismatch.md.
+    time_days_forward: Optional[int] = Field(default=None, ge=0, le=365)
 
 class EarningsCrushExecuteRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=10)
@@ -5884,7 +5889,7 @@ def post_paper_broker_scenario_matrix(body: Optional[ScenarioMatrixRequest] = No
         spot_shifts=body.spot_shifts if body else None,
         iv_shifts=body.iv_shifts if body else None,
         time_shifts=body.time_shifts if body else None,
-        time_days_forward=body.time_days_forward if body and body.time_days_forward is not None else 0,
+        time_days_forward=body.time_days_forward if body else None,
     )
 
 

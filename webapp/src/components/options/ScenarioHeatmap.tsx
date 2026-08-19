@@ -337,8 +337,9 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
             <span style={{ color: theme.textSecondary }}>Scenario: </span>
             <strong>
               Spot {hoveredCell.spot_shift_pct >= 0 ? "+" : ""}
-              {(hoveredCell.spot_shift_pct * 100).toFixed(0)}% ($
-              {hoveredCell.spot_price.toFixed(2)}), IV {hoveredCell.iv_shift_pct >= 0 ? "+" : ""}
+              {(hoveredCell.spot_shift_pct * 100).toFixed(0)}%
+              {hoveredCell.spot_price != null ? ` ($${hoveredCell.spot_price.toFixed(2)})` : ""}, IV{" "}
+              {hoveredCell.iv_shift_pct >= 0 ? "+" : ""}
               {(hoveredCell.iv_shift_pct * 100).toFixed(0)}%, +{hoveredCell.days_forward}d
             </strong>
           </div>

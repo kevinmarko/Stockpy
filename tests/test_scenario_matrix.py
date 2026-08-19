@@ -26,10 +26,12 @@ from pilots.scenario_matrix import (
     DEFAULT_TIME_SHIFTS_DAYS,
     HISTORICAL_PRESETS,
     evaluate_historical_presets,
+    evaluate_portfolio_scenario_matrix,
     evaluate_scenario_matrix,
     evaluate_single_scenario,
     get_2d_scenario_slice,
     get_historical_presets,
+    to_scenario_matrix_response,
 )
 
 
@@ -285,6 +287,122 @@ def test_get_2d_scenario_slice():
     assert len(slice_t0["matrix_pnl"]) == 3  # 3 iv rows
     assert len(slice_t0["matrix_pnl"][0]) == 3  # 3 spot cols
     assert slice_t0["matrix_pnl"][1][1] == 0.0  # center cell (0 spot, 0 iv) = 0 PnL shift
+
+
+def test_evaluate_portfolio_scenario_matrix_default_call_uses_full_default_grid():
+    """
+    Regression test for the time_days_forward=0-default bug: calling the API-facing
+    wrapper with NO args at all (mirroring exactly how the real frontend calls the
+    endpoint) must use the full default time-shift grid, not collapse to T+0 only.
+    """
+    res = evaluate_portfolio_scenario_matrix(positions=[])
+    days_forward_values = sorted(set(c["days_forward"] for c in res["matrix"]))
+    assert days_forward_values == sorted(DEFAULT_TIME_SHIFTS_DAYS)
+    assert days_forward_values != [0]
+
+
+def test_evaluate_portfolio_scenario_matrix_explicit_single_day_still_works():
+    """An explicit time_days_forward=0 request (caller genuinely wants only T+0)
+    still collapses to a single slice -- distinct from the "not specified at all" case."""
+    res = evaluate_portfolio_scenario_matrix(positions=[], time_days_forward=0)
+    days_forward_values = sorted(set(c["days_forward"] for c in res["matrix"]))
+    assert days_forward_values == [0]
+
+
+def test_evaluate_portfolio_scenario_matrix_frontend_shape():
+    """
+    Exercises the real reshape end to end for a simple single-ticker stock position,
+    confirming the ScenarioMatrixResponse contract webapp/src/api/types.ts and
+    webapp/src/api/mock.ts already agree on.
+    """
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    positions = [{"symbol": "AAPL", "qty": 100, "avg_entry_price": 150.0}]
+    result = evaluate_scenario_matrix(
+        positions=positions,
+        spot_map={"AAPL": 150.0},
+        now=now,
+    )
+    res = to_scenario_matrix_response(result)
+
+    # Top-level keys present, and the raw internal shape is NOT leaked through.
+    for key in (
+        "spot_shifts",
+        "iv_shifts",
+        "time_slices",
+        "matrix",
+        "historical_scenarios",
+        "current_portfolio_value",
+    ):
+        assert key in res
+    assert "grid" not in res
+    assert "time_shifts_days" not in res
+    assert "baseline" not in res
+
+    expected_cell_keys = {
+        "spot_shift_pct",
+        "iv_shift_pct",
+        "days_forward",
+        "portfolio_value",
+        "pnl_dollar",
+        "pnl_pct",
+        "net_delta",
+        "net_gamma",
+        "net_theta",
+        "net_vega",
+        "spot_price",
+    }
+    for cell in res["matrix"]:
+        assert set(cell.keys()) == expected_cell_keys
+
+    up_t0_cell = next(
+        c for c in res["matrix"] if c["spot_shift_pct"] == 0.10 and c["days_forward"] == 0
+    )
+    assert up_t0_cell["spot_price"] == round(150.0 * 1.10, 2)
+
+    assert isinstance(res["historical_scenarios"], list)
+    assert len(res["historical_scenarios"]) == 4
+    expected_preset_keys = {
+        "id",
+        "name",
+        "description",
+        "spot_shift_pct",
+        "iv_shift_pct",
+        "projected_pnl_dollar",
+        "projected_pnl_pct",
+    }
+    for preset in res["historical_scenarios"]:
+        assert set(preset.keys()) == expected_preset_keys
+
+    assert res["current_portfolio_value"] == result["baseline"]["portfolio_market_value"]
+
+
+def test_to_scenario_matrix_response_omits_spot_price_for_multi_ticker_book():
+    """A book spanning multiple distinct underlyings has no single honest reference
+    spot price -- spot_price must be omitted rather than fabricating a blended number."""
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    positions = [
+        {"symbol": "AAPL", "qty": 100, "avg_entry_price": 150.0},
+        {"symbol": "MSFT", "qty": 50, "avg_entry_price": 300.0},
+    ]
+    spot_map = {"AAPL": 150.0, "MSFT": 300.0}
+
+    result = evaluate_scenario_matrix(positions=positions, spot_map=spot_map, now=now)
+    res = to_scenario_matrix_response(result)
+
+    assert len(res["matrix"]) > 0
+    for cell in res["matrix"]:
+        assert "spot_price" not in cell
+
+
+def test_to_scenario_matrix_response_omits_spot_price_for_empty_book():
+    """An empty book has an empty spot_map -- _resolve_reference_spot returns None
+    and no cell should carry a fabricated spot_price."""
+    result = evaluate_scenario_matrix(positions=[], spot_map={})
+    res = to_scenario_matrix_response(result)
+
+    assert len(res["matrix"]) > 0
+    for cell in res["matrix"]:
+        assert "spot_price" not in cell
 
 
 def test_scenario_matrix_ast_import_safety():

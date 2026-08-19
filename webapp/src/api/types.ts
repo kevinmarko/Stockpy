@@ -4123,7 +4123,7 @@ export interface ScenarioMatrixCell {
   spot_shift_pct: number;
   iv_shift_pct: number;
   days_forward: number;
-  spot_price: number;
+  spot_price?: number;
   portfolio_value: number;
   pnl_dollar: number;
   pnl_pct: number;
