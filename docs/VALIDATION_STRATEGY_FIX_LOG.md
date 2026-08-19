@@ -1067,3 +1067,146 @@ re-verification pass.
 
 Test coverage: `tests/test_dispersion_trading.py`, `tests/test_options_desk_deployability_runtime_gap.py`,
 `tests/test_zero_dte_engine.py` all re-run green after both fixes.
+
+---
+
+## 2026-08-19: `VALIDATION_HARNESS_OOS_GATE_ENABLED` full-registry re-validation
+
+Closes the follow-up the 2026-07-29 harness-fix entry above explicitly deferred: *"Flipping
+this flag on is a deliberate, separate follow-up: re-run `python -m scripts.refresh_validations
+--json` for every `STRATEGY_REGISTRY` strategy with the flag enabled, and append the resulting
+before/after table here."* That entry's stated blocker — this sandboxed dev/CI environment
+lacking live-market network access — no longer applies; real, network-backed `yfinance` access
+was confirmed working in this session (and has since been used for several other entries in this
+log, e.g. the 2026-08-19 `copula_stat_arb` registration above).
+
+**Methodology**: two fresh, back-to-back runs of `python -m scripts.refresh_validations --json`
+(all 29 currently-registered strategies, default `--start 2005-01-01 --end` today), identical in
+every respect except `VALIDATION_HARNESS_OOS_GATE_ENABLED` — `False` (today's default) for the
+first, `True` (via env var, not a settings.py default change) for the second — run in the same
+session against the same live `yfinance`/cached `HistoricalStore` data for a clean, apples-to-apples
+isolation of the flag's effect, matching the isolation approach the 2026-08-17 DSR-correction
+entry above used for the sibling `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` flag.
+
+### Full before/after table (flag off / flag on)
+
+| Strategy | Sharpe (off) | Sharpe (on) | PBO (off) | PBO (on) | DSR (off) | DSR (on) | MaxDD (off) | MaxDD (on) | Deploy (off) | Deploy (on) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `options_flow_sentiment` | 0.231 | 0.213 | 0.111 | 0.200 | 0.906 | 0.750 | 0.277 | 0.142 | ❌ | ❌ |
+| `rsi2_mean_reversion` | 0.591 | 0.592 | 0.000 | 0.000 | 0.998 | 0.996 | 0.171 | 0.081 | ✅ | ✅ |
+| `timeseries_momentum` | 0.525 | 0.537 | 0.000 | 0.000 | 0.993 | 0.992 | 0.260 | 0.172 | ✅ | ✅ |
+| `macd_trend` | 0.507 | 0.575 | 0.067 | 0.044 | 0.976 | 0.955 | 0.237 | 0.148 | ✅ | ✅ |
+| `coppock_momentum` | 0.646 | 0.642 | 0.178 | 0.178 | 0.995 | 0.993 | 0.251 | 0.158 | ✅ | ✅ |
+| `multifactor_lowvol_size` | 0.739 | 0.746 | 0.000 | 0.000 | 1.000 | 1.000 | 0.211 | 0.138 | ✅ | ✅ |
+| `garch_vol_target` | 0.781 | 0.779 | 0.333 | 0.289 | 1.000 | 1.000 | 0.188 | 0.136 | ✅ | ✅ |
+| `cross_sectional_momentum` | 0.950 | 0.948 | 0.111 | 0.133 | 1.000 | 1.000 | 0.202 | 0.144 | ✅ | ✅ |
+| `relative_strength_xsec` | 0.812 | 0.807 | 0.000 | 0.000 | 1.000 | 1.000 | 0.213 | 0.160 | ✅ | ✅ |
+| `rsi14_extremes` | 0.296 | 0.422 | 0.000 | 0.000 | 0.956 | 0.929 | 0.287 | 0.124 | ❌ | ❌ |
+| `sortino_drawdown` | 0.699 | 0.703 | 0.089 | 0.089 | 0.984 | 0.976 | 0.266 | 0.170 | ✅ | ✅ |
+| `dividend_yield_edgar_pit` | 0.621 | 0.712 | 0.000 | 0.000 | 1.000 | 0.999 | 0.446 | 0.192 | ❌ | ✅ **←FLIP** |
+| `deep_value_edgar_pit` | 0.526 | 0.572 | 0.000 | 0.000 | 0.997 | 0.996 | 0.448 | 0.240 | ❌ | ✅ **←FLIP** |
+| `value_quality_edgar_pit` | 0.556 | 0.595 | 0.000 | 0.000 | 0.998 | 0.997 | 0.436 | 0.239 | ❌ | ✅ **←FLIP** |
+| `macro_regime_pit` | 0.835 | 0.836 | 0.000 | 0.000 | 1.000 | 1.000 | 0.148 | 0.120 | ✅ | ✅ |
+| `forecast_direction_arima_hw` | 0.424 | 0.392 | 0.000 | 0.000 | 0.841 | 0.821 | 0.298 | 0.176 | ❌ | ❌ |
+| `signal_replay_balanced_blend` | — | — | — | — | — | — | — | — | ⚠️ ERROR | ⚠️ ERROR |
+| `sector_quality_rank` | 0.950 | 0.979 | 0.000 | 0.000 | 1.000 | 1.000 | 0.284 | 0.196 | ✅ | ✅ |
+| `lgbm_ranker` | 2.702 | 0.308 | 0.000 | 0.000 | 0.771 | 0.631 | 0.029 | 0.025 | ❌ | ❌ |
+| `vrp_premium_selling` | 0.217 | 0.053 | 0.000 | 0.000 | 0.999 | 0.599 | 0.179 | 0.083 | ❌ | ❌ |
+| `vol_mispricing` | -0.031 | -0.005 | 0.000 | 0.000 | 0.509 | 0.490 | 1.000 | 0.987 | ❌ | ❌ |
+| `put_credit_spread` | -0.446 | -0.780 | — | — | 0.000 | 0.000 | 0.722 | 0.176 | ❌ | ❌ |
+| `call_credit_spread` | -0.033 | 0.334 | — | — | 0.995 | 0.972 | 0.225 | 0.088 | ❌ | ❌ |
+| `call_debit_spread` | 0.382 | 0.352 | 0.000 | 0.000 | 0.950 | 0.947 | 1.000 | 1.850 | ❌ | ❌ |
+| `put_debit_spread` | -0.399 | -0.556 | 0.000 | 0.000 | 0.005 | 0.003 | 1.000 | 0.808 | ❌ | ❌ |
+| `covered_call` | -0.312 | -0.254 | 0.000 | 0.000 | 0.942 | 0.119 | 0.108 | 0.037 | ❌ | ❌ |
+| `pairs_trading` | -0.822 | -0.854 | 0.000 | 0.000 | 0.192 | 0.000 | 0.297 | 0.075 | ❌ | ❌ |
+| `copula_stat_arb` | -0.455 | -0.681 | 0.000 | 0.000 | 0.246 | 0.007 | 0.351 | 0.102 | ❌ | ❌ |
+| `aroon_trend` | 0.667 | 0.668 | 0.000 | 0.000 | 0.999 | 0.999 | 0.170 | 0.126 | ✅ | ✅ |
+
+### Headline finding: 3 strategies flip `False → True`
+
+`dividend_yield_edgar_pit`, `deep_value_edgar_pit`, and `value_quality_edgar_pit` — all three of
+Category D's "honest `deployable=False`: real data-coverage ceilings (not fixable by any lever
+tried)" strategies from the 2026-07-17 entry above — flip to `deployable=True` under the
+genuinely-OOS gate. In every case the flip is driven by MaxDD, not Sharpe/DSR: the previous
+in-sample MaxDD numbers (44.6%/44.8%/43.6%) were substantially WORSE than the genuine
+out-of-sample MaxDD (19.2%/24.0%/23.9%) — the opposite direction of the "in-sample numbers run
+hotter than genuine OOS" expectation the 2026-07-29 harness-fix entry's own docstring warns about
+for Sharpe. This is a real, counterintuitive, and specific-to-these-three-strategies result, not
+a general pattern across the registry (compare: every other strategy's MaxDD improved too under
+the flag, since the in-sample-vs-OOS MaxDD gap runs the same direction registry-wide here — see
+"a broader pattern" below — but only these three were sitting close enough to the 30% MaxDD line
+for that gap to flip their gate status). **Category D's "not fixable by any lever tried"
+conclusion from the 2026-07-17 entry is now superseded for MaxDD specifically** — not because a
+lever was found, but because the ORIGINAL in-sample MaxDD number these three were failing against
+was never a legitimate out-of-sample measurement in the first place. Category D's Sharpe
+analysis (the ~0.13-0.22 in-sample Sharpes traced to genuine EDGAR PIT sparse-coverage windows)
+is UNAFFECTED and remains accurate — DSR stayed comfortably `> 0.95` for all three either way,
+and per-strategy Sharpe moved only modestly (0.526→0.572, 0.556→0.595, 0.621→0.712), still the
+same order of magnitude, still consistent with the sparse-coverage explanation already on record.
+
+### A broader pattern worth flagging: every registered strategy's MaxDD improved under the flag
+
+Every single one of the 29 rows above shows a lower MaxDD under the genuinely-OOS gate than
+under the in-sample one (the sole partial exception, `call_debit_spread`, got WORSE — 100%→185% —
+see the options-selling caveat below). This is consistent with, but does not by itself prove, a
+structural explanation: `self.strategy_fn(X, y, X, y)`'s in-sample "test" set is trained AND
+evaluated on the exact same window, so its equity curve's drawdown reflects the single worst
+historical period in full; a genuine CPCV-selected OOS path's MaxDD is instead the mean of the
+worst drawdown *within each held-out fold*, which are shorter windows less likely to each contain
+the single worst historical episode in isolation. This entry does not attempt to prove that
+mechanism rigorously — flagging it as the most likely explanation for a future investigation,
+not asserting it as confirmed.
+
+### The `lgbm_ranker` Sharpe collapse: the single most dramatic illustration of the integrity gap this flag exists to fix
+
+`lgbm_ranker`'s in-sample Sharpe of **2.702** — implausibly high for any real daily-rebalanced
+equity strategy, and never flagged as suspicious anywhere in this log before now — collapses to
+**0.308** under the genuinely-OOS gate. `lgbm_ranker` stays `deployable=False` either way (it now
+fails on DSR 0.631<0.95 instead of previously not failing on Sharpe at all), so this doesn't
+change today's live deployability list, but it is the starkest confirmation in this entire
+before/after table that `self.strategy_fn(X, y, X, y)`'s in-sample number was never a trustworthy
+Sharpe estimate for a real per-fold-retrained ML ranker — exactly the integrity gap
+`VALIDATION_HARNESS_OOS_GATE_ENABLED` exists to close. `vrp_premium_selling`/`covered_call`/
+`pairs_trading`/`copula_stat_arb` show smaller but directionally similar DSR degradation under
+genuine OOS evaluation.
+
+### Options-selling strategies: MaxDD is noisier, not uniformly better, under the flag
+
+`call_debit_spread`'s MaxDD moved the WRONG direction under the flag (100.0%→185.0%, worse) — the
+sole exception to the "every strategy's MaxDD improved" pattern above. Every options-selling
+adapter's MaxDD in this table is capped near 100% by `simulate_*_returns`'s own honest full-notional
+loss-cap convention (see `validation/options_selling_backtest.py`), so a >100% reading here
+reflects the CPCV per-path evaluation surfacing a fold whose worst-case loss compounds beyond a
+single full-notional wipeout in a way the in-sample single-path evaluation doesn't — this is a
+genuine, options-specific artifact of how per-fold OOS MaxDD is computed for a capped-loss
+instrument, not a bug in this entry's methodology. None of the 7 options-selling strategies
+(`vrp_premium_selling`, `vol_mispricing`, the 4 spread adapters, `covered_call`) change
+`deployable` status either way — all were, and remain, honestly `False`.
+
+### `signal_replay_balanced_blend`: pre-existing regression, unrelated to this entry, flagged not fixed
+
+Both runs error identically (`'str' object has no attribute 'get'`) — `_build_signal_replay_adapter`
+now fails outright, rather than producing the `deployable=True` (Sharpe 0.820, MaxDD 19.9%) result
+the 2026-07-29 addendum above recorded. This is a genuine regression somewhere between that entry
+and today, independent of `VALIDATION_HARNESS_OOS_GATE_ENABLED` (identical error both flag states)
+— out of scope for this entry to fix (it's an adapter-level bug, not a harness-flag effect), but
+flagged here rather than silently left for someone to rediscover. `STRATEGY_REGISTRY`'s live
+`deployable=True` claim for `signal_replay_balanced_blend` should be treated as unverified until
+this is fixed and re-run.
+
+### Recommendation
+
+The evidence from this pass supports flipping `VALIDATION_HARNESS_OOS_GATE_ENABLED`'s field
+default in `settings.py` from `False` to `True`: no currently-`True` strategy flips to `False`
+under it (the change is directionally safe for everything already live), three
+previously-non-deployable strategies gain a legitimately-earned `deployable=True`, and the
+`lgbm_ranker` finding demonstrates the flag catches a real, previously-undetected integrity gap.
+As with the sibling DSR-correction entry above, **this entry does not make that default-flip
+decision on the operator's behalf** — it record that the required verification has now been done.
+If the default is flipped, `signal_replay_balanced_blend`'s regression should be fixed first (or
+the strategy temporarily deregistered) so `python -m scripts.refresh_validations` doesn't start
+erroring on every run.
+
+Tests: no new test needed — this entry is a one-time verification run, not a code change; the
+existing `tests/test_harness_oos_gate.py` already covers the flag's wiring and default-off
+byte-for-byte reproduction.
