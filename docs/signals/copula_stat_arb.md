@@ -54,7 +54,7 @@ $$h(u \mid v) = \frac{\partial C(u, v)}{\partial v} = P(U \le u \mid V = v)$$
   - `DSR > 0.95`
   - `Sharpe > 0.50`
   - `MaxDD < 30%`
-- **Current Status**: Evaluated through pairs trading proxy (`pairs_trading` in `STRATEGY_REGISTRY`) with `PBO = 0.000`, `DSR = 1.000`, `deployable = True`.
+- **Current Status (corrected 2026-08-19)**: **Not independently validated.** This section previously cited `PBO = 0.000`, `DSR = 1.000`, `deployable = True` from the `pairs_trading` entry in `STRATEGY_REGISTRY` — but `pairs_trading`'s adapter (`scripts/refresh_validations.py::_build_pairs_trading_adapter`) calls `signals.pairs_trading.generate_pairs_signals`, a separate, simpler z-score module that never touches this file's Clayton/Gumbel/Frank/Gaussian copula fitting or Kalman dynamic hedge ratio. Those numbers validated a different strategy, not this one. `pilots/copula_stat_arb.py` has no `STRATEGY_REGISTRY` entry of its own today. `generate_copula_stat_arb_signals` is a real, causal candidate for one (already covered by a genuine lookahead-perturbation test — `tests/test_copula_stat_arb.py::test_copula_stat_arb_zero_lookahead_bias`) but registering it and running the harness needs live market data access this sandbox doesn't have. See `CLAUDE.md`'s "Options desk Tier A/B/C/D build-out" bullet for the current tracking status.
 - **Known Failure Modes**:
   1. Structural break in cointegration due to M&A, regulatory shock, or corporate bankruptcy.
   2. Sustained divergence exceeding margin tolerance when volatility regimes transition from calm to credit crisis.
