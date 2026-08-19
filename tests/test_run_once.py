@@ -103,8 +103,13 @@ def _make_recommendation(symbol: str, action: str = "HOLD") -> Recommendation:
 class TestLoadWatchlist:
     """Tests for _load_watchlist()."""
 
-    def test_from_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_from_env_var(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         monkeypatch.setenv("WATCHLIST", "AAPL, MSFT, GOOG")
+        # Isolate from a real repo-root watchlist.txt (_load_watchlist() reads
+        # a bare relative "watchlist.txt" from the CWD) -- without this, an
+        # operator checkout with a populated watchlist.txt leaks its real
+        # tickers into this env-var-only assertion.
+        monkeypatch.chdir(tmp_path)
         result = _load_watchlist()
         assert result == ["AAPL", "MSFT", "GOOG"]
 
@@ -171,8 +176,10 @@ class TestBuildUniverse:
         assert set(result) == {"AAPL", "TSLA"}
         assert result == sorted(result)  # must be sorted
 
-    def test_union_with_watchlist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_union_with_watchlist(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
         result = _build_universe(snap)
         assert set(result) == {"AAPL", "NVDA", "MSFT"}
@@ -207,10 +214,12 @@ class TestBuildUniverse:
         assert result == sorted(result)
 
     def test_sheet2_not_called_when_watchlist_present(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         """Sheet2 must NOT be consulted when the watchlist already has tickers."""
         monkeypatch.setenv("WATCHLIST", "AAPL")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
         with patch("main._load_tickers_from_sheet2") as mock_sheet2:
             result = _build_universe(snap)
@@ -323,8 +332,11 @@ class TestRunOnce:
         _bars: MagicMock,
         _ctx: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
     ) -> None:
         monkeypatch.setenv("WATCHLIST", "AAPL,MSFT")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         snap = _make_snapshot()
         mock_snap.return_value = snap
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
@@ -351,6 +363,7 @@ class TestRunOnce:
         mock_macro: MagicMock,
         _bars: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
     ) -> None:
         """Task A6: _build_context_extras() must be computed exactly ONCE per
         run_once() call (not per symbol), and the SAME object must be passed
@@ -358,6 +371,8 @@ class TestRunOnce:
         cross-sectional momentum / multifactor signals see universe-relative
         data identical to what the orchestrator path already provides."""
         monkeypatch.setenv("WATCHLIST", "AAPL,MSFT,GOOG")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         snap = _make_snapshot()
         mock_snap.return_value = snap
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
@@ -398,9 +413,12 @@ class TestRunOnce:
         _bars: MagicMock,
         _ctx: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
     ) -> None:
         """One symbol raising should not abort the run; error goes to RunResult.errors."""
         monkeypatch.setenv("WATCHLIST", "AAPL,FAIL_SYM")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         snap = _make_snapshot()
         mock_snap.return_value = snap
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
@@ -439,8 +457,11 @@ class TestRunOnce:
         _bars: MagicMock,
         _ctx: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
     ) -> None:
         monkeypatch.setenv("WATCHLIST", "BAD1,BAD2")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         mock_snap.return_value = _make_snapshot()
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
         mock_eval.side_effect = Exception("always fails")
@@ -466,9 +487,12 @@ class TestRunOnce:
         _bars: MagicMock,
         _ctx: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
     ) -> None:
         """When Robinhood is unreachable, the run proceeds on empty account + watchlist."""
         monkeypatch.setenv("WATCHLIST", "SPY")
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        monkeypatch.chdir(tmp_path)
         mock_snap.side_effect = RuntimeError("Robinhood login failed")
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
         mock_eval.return_value = _make_recommendation("SPY", "HOLD")
@@ -597,9 +621,18 @@ class TestAdvisoryConcurrency:
     _UNIVERSE = "AAPL,MSFT,GOOG,NVDA,TSLA,JNJ,AGNC,SPY"
 
     def _run_with_workers(
-        self, workers: int, monkeypatch: pytest.MonkeyPatch, fail_symbol: str | None = None
+        self,
+        workers: int,
+        monkeypatch: pytest.MonkeyPatch,
+        fail_symbol: str | None = None,
+        tmp_path: Any = None,
     ) -> RunResult:
         monkeypatch.setenv("WATCHLIST", self._UNIVERSE)
+        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
+        # tmp_path is optional (defaulting None) so any caller that forgets to
+        # pass it fails loudly via chdir(None) rather than silently reading
+        # the real filesystem.
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(m.settings, "ADVISORY_MAX_CONCURRENCY", workers, raising=False)
 
         def _eval_side(symbol: str, **kw: Any) -> Recommendation:
@@ -619,9 +652,11 @@ class TestAdvisoryConcurrency:
             mock_eval.side_effect = _eval_side
             return run_once()
 
-    def test_parallel_matches_sequential_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        seq = self._run_with_workers(1, monkeypatch)
-        par = self._run_with_workers(8, monkeypatch)
+    def test_parallel_matches_sequential_order(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        seq = self._run_with_workers(1, monkeypatch, tmp_path=tmp_path)
+        par = self._run_with_workers(8, monkeypatch, tmp_path=tmp_path)
         # Same recommendations, same ORDER (universe order, deduped+sorted by
         # _build_universe), regardless of worker completion order.
         assert [r.symbol for r in seq.recommendations] == [r.symbol for r in par.recommendations]
@@ -629,9 +664,11 @@ class TestAdvisoryConcurrency:
         assert len(par.recommendations) == 8
         assert par.errors == []
 
-    def test_parallel_dead_letter_matches_sequential(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        seq = self._run_with_workers(1, monkeypatch, fail_symbol="NVDA")
-        par = self._run_with_workers(8, monkeypatch, fail_symbol="NVDA")
+    def test_parallel_dead_letter_matches_sequential(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        seq = self._run_with_workers(1, monkeypatch, fail_symbol="NVDA", tmp_path=tmp_path)
+        par = self._run_with_workers(8, monkeypatch, fail_symbol="NVDA", tmp_path=tmp_path)
         # The failing symbol is dead-lettered identically in both paths.
         assert [r.symbol for r in seq.recommendations] == [r.symbol for r in par.recommendations]
         assert "NVDA" not in {r.symbol for r in par.recommendations}
@@ -641,10 +678,10 @@ class TestAdvisoryConcurrency:
         assert par.errors[0]["error_type"] == "RuntimeError"
 
     def test_zero_or_negative_workers_falls_back_to_sequential(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         # max(1, ...) guard means 0 / negative never crashes the pool.
-        res = self._run_with_workers(0, monkeypatch)
+        res = self._run_with_workers(0, monkeypatch, tmp_path=tmp_path)
         assert len(res.recommendations) == 8
         assert res.errors == []
 
