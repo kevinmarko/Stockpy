@@ -3,6 +3,17 @@
 **Status: fixed.** [PR #808](https://github.com/kevinmarko/Stockpy/pull/808)
 (branch `claude/error-investigation-6b723d`).
 
+**Follow-up (2026-08-19):** the "What is still open" section below turned out to
+undercount the problem — a systematic sweep (branch
+`claude/paper-broker-screens-errors-3650c6`) found this exact bug class in 13
+backend modules, not just the ones named below. See
+[`options_desk_mock_live_parity_sweep_2026_08_19.md`](options_desk_mock_live_parity_sweep_2026_08_19.md)
+for the full list and fixes; that write-up also corrects CLAUDE.md's "Options desk
+mock/live API parity — fixed (PR #766)" bullet, whose "re-verified fresh
+2026-08-19" claim was disproven for 4 of the 8 screens it named (`GexProfileView`,
+`MarketMakerAgentView`, `MultiBrokerGatewayView`, `ResearchCopilotView` all had
+real, reproducible bugs on live data at the time that claim was written).
+
 ## What happened
 
 `ScenarioHeatmap.tsx` renders unconditionally on the Pilots PWA's Paper
@@ -135,12 +146,22 @@ an empty book).
 
 ## What is still open
 
-The sibling components CLAUDE.md's "Options desk mock/live API parity"
-bullet already named — `GexProfileView.tsx`, `LobDepthView.tsx`,
-`CopulaSpreadView.tsx`, `MarketMakerAgentView.tsx`,
-`TransformerVolForecastView.tsx`, `GenerativeDiffusionStressView.tsx`,
-`MultiBrokerGatewayView.tsx`, `ResearchCopilotView.tsx` — are unaffected by
-this fix and remain broken against a live backend.
+~~The sibling components CLAUDE.md's "Options desk mock/live API parity" bullet
+already named — `GexProfileView.tsx`, `LobDepthView.tsx`, `CopulaSpreadView.tsx`,
+`MarketMakerAgentView.tsx`, `TransformerVolForecastView.tsx`,
+`GenerativeDiffusionStressView.tsx`, `MultiBrokerGatewayView.tsx`,
+`ResearchCopilotView.tsx` — are unaffected by this fix and remain broken against a
+live backend.~~ **Superseded by the 2026-08-19 follow-up above.** Of these 8,
+`GexProfileView.tsx`, `LobDepthView.tsx`, `MarketMakerAgentView.tsx`,
+`MultiBrokerGatewayView.tsx`, and `ResearchCopilotView.tsx` had real, confirmed
+bugs and are now fixed (see the follow-up doc); `CopulaSpreadView.tsx` was
+re-audited and found genuinely bug-free (every backend field it reads is
+non-nullable by construction). `TransformerVolForecastView.tsx` and
+`GenerativeDiffusionStressView.tsx` were **not** in scope for the 2026-08-19 sweep
+(it covered the Paper Broker screen's dependency tree; those two are not mounted
+there) — their status is whatever CLAUDE.md's PR #766 bullet claims, which the
+2026-08-19 follow-up found to be unreliable for 4 of its other 6 claims, so treat
+that claim for these two specifically as unverified rather than confirmed.
 
 Separately: the **request**-side param naming is also inconsistent between
 frontend and backend. The frontend's `api.getScenarioMatrix(params?: {...,

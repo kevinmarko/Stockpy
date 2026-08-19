@@ -5876,10 +5876,14 @@ def post_paper_broker_delta_hedge_execute(body: Optional[DeltaHedgeExecuteReques
     return execute_delta_hedge(dry_run=dry_run, shares_override=shares)
 
 @app.get("/pilots/options/vol-surface", dependencies=[Depends(require_read_token)])
-def get_options_vol_surface(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+def get_options_vol_surface(
+    symbol: str = Query(..., min_length=1),
+    expiration: Optional[str] = Query(None),
+) -> Dict[str, Any]:
     """Returns volatility surface, IV smile curve, term structure, 25-delta skew, and VRP volatility cone."""
-    from pilots.volatility_surface import get_volatility_surface_data
-    return get_volatility_surface_data(symbol=symbol)
+    from pilots.volatility_surface import get_volatility_surface_data, to_vol_surface_response
+    raw = get_volatility_surface_data(symbol=symbol)
+    return to_vol_surface_response(raw, selected_expiration=expiration)
 
 @app.post("/pilots/paper-broker/scenario-matrix", dependencies=[Depends(require_read_token)])
 def post_paper_broker_scenario_matrix(body: Optional[ScenarioMatrixRequest] = None) -> Dict[str, Any]:
@@ -6078,9 +6082,10 @@ def get_options_earnings_crush_candidates(
     min_edge: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Returns upcoming earnings crush candidates with expected vs realized moves and edge ratios."""
-    from pilots.earnings_crush import get_earnings_crush_candidates
+    from pilots.earnings_crush import get_earnings_crush_candidates, to_earnings_crush_candidate_response
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
-    candidates = get_earnings_crush_candidates(symbols=sym_list, min_edge=min_edge)
+    raw_candidates = get_earnings_crush_candidates(symbols=sym_list, min_edge=min_edge)
+    candidates = [to_earnings_crush_candidate_response(c) for c in raw_candidates]
     return {"count": len(candidates), "candidates": candidates}
 
 
@@ -6150,6 +6155,7 @@ def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Di
 
 @app.get("/pilots/options/flow/unusual", dependencies=[Depends(require_read_token)])
 def get_options_flow_unusual(
+    symbol: Optional[str] = None,
     symbols: Optional[str] = None,
     min_vol_oi: Optional[float] = None,
     min_notional: Optional[float] = None,
@@ -6157,7 +6163,11 @@ def get_options_flow_unusual(
 ) -> Dict[str, Any]:
     """Returns live unusual options activity records with V/OI ratios, notional sizing, and sweep tags."""
     from pilots.unusual_options_flow import get_unusual_options_activity
-    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
+    # webapp/src/api/client.ts::getUnusualOptionsFlow sends a singular `symbol` query
+    # param; accept both so a live single-ticker filter actually filters instead of
+    # silently no-op'ing (FastAPI ignores query params with no matching handler arg).
+    combined = ",".join(v for v in (symbols, symbol) if v)
+    sym_list = [s.strip().upper() for s in combined.split(",") if s.strip()] if combined else None
     records = get_unusual_options_activity(
         symbols=sym_list,
         min_vol_oi=min_vol_oi,
@@ -6170,22 +6180,22 @@ def get_options_flow_unusual(
 @app.get("/pilots/options/flow/sentiment", dependencies=[Depends(require_read_token)])
 def get_options_flow_sentiment(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
     """Returns net institutional options flow sentiment score, call/put ratio, and active strikes for a symbol."""
-    from pilots.unusual_options_flow import get_flow_sentiment
-    return get_flow_sentiment(symbol=symbol)
+    from pilots.unusual_options_flow import get_flow_sentiment, to_flow_sentiment_response
+    return to_flow_sentiment_response(get_flow_sentiment(symbol=symbol))
 
 
 @app.get("/pilots/options/forecast/har-rv", dependencies=[Depends(require_read_token)])
 def get_options_forecast_har_rv(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
     """Returns Corsi (2009) HAR-RV model fit, components (RV_d, RV_w, RV_m), and forward volatility forecast."""
-    from pilots.har_volatility import get_har_volatility_forecast
-    return get_har_volatility_forecast(symbol=symbol)
+    from pilots.har_volatility import get_har_volatility_forecast, to_har_rv_forecast_response
+    return to_har_rv_forecast_response(get_har_volatility_forecast(symbol=symbol))
 
 
 @app.get("/pilots/options/forecast/mispricing", dependencies=[Depends(require_read_token)])
 def get_options_forecast_mispricing(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
     """Returns strike-by-strike market IV vs fair IV spread and Rich/Cheap candidate recommendations."""
-    from pilots.vol_mispricing import get_volatility_mispricing_data
-    return get_volatility_mispricing_data(symbol=symbol)
+    from pilots.vol_mispricing import get_volatility_mispricing_data, to_vol_mispricing_response
+    return to_vol_mispricing_response(get_volatility_mispricing_data(symbol=symbol))
 
 
 @app.post(
@@ -6234,29 +6244,58 @@ def post_options_mispricing_execute(body: VolMispricingExecuteRequest) -> Dict[s
 
 
 class GammaScalpSimulateRequest(BaseModel):
+    # Raw/advanced shape (existing tests/test_pilots_paper_broker.py coverage; also usable
+    # directly by non-webapp callers).
     position: Optional[Dict[str, Any]] = None
     price_path: Optional[List[float]] = None
     delta_threshold: float = 0.15
     dt_days: Optional[float] = 0.1
     transaction_cost_per_share: Optional[float] = 0.005
+    # webapp/src/api/types.ts's GammaScalpRequest shape --
+    # webapp/src/api/client.ts::simulateGammaScalping posts this flat request verbatim.
+    # Pydantic silently drops unrecognized fields by default, so without these the live
+    # endpoint always simulated a hardcoded default single-leg position on a freshly
+    # regenerated 50-step synthetic path -- every operator-configured symbol/strike/IV/
+    # option type/contracts/price-path selection was a complete no-op.
+    symbol: Optional[str] = None
+    spot_price: Optional[float] = None
+    option_type: Optional[str] = None
+    strike: Optional[float] = None
+    expiration: Optional[str] = None
+    dte: Optional[float] = None
+    iv: Optional[float] = None
+    contracts: Optional[float] = None
+    underlying_price_path: Optional[List[float]] = None
 
 
 @app.post("/pilots/options/gamma-scalp/simulate", dependencies=[Depends(require_read_token)])
 def post_options_gamma_scalp_simulate(body: Optional[GammaScalpSimulateRequest] = None) -> Dict[str, Any]:
     """Simulates intraday dynamic delta hedging and returns gamma rent vs theta decay breakdown."""
-    from pilots.gamma_scalper import simulate_gamma_scalping
+    from pilots.gamma_scalper import simulate_gamma_scalping, to_gamma_scalp_response
+
     pos = body.position if body else None
-    path = body.price_path if body else None
+    if pos is None and body and (body.symbol or body.strike or body.spot_price):
+        pos = {
+            "symbol": body.symbol or "",
+            "qty": body.contracts,
+            "strike": body.strike if body.strike is not None else body.spot_price,
+            "option_type": body.option_type or "CALL",
+            "sigma": body.iv,
+            "dte": body.dte,
+        }
+
+    path = (body.price_path or body.underlying_price_path) if body else None
     thresh = body.delta_threshold if body else 0.15
     dt = body.dt_days if body and body.dt_days is not None else 0.1
     cost = body.transaction_cost_per_share if body and body.transaction_cost_per_share is not None else 0.005
-    return simulate_gamma_scalping(
+    raw = simulate_gamma_scalping(
         position=pos,
         price_path=path,
         delta_threshold=thresh,
         dt_days=dt,
         transaction_cost_per_share=cost,
     )
+    return to_gamma_scalp_response(raw)
 
 
 class OptionsAlertTestRequest(BaseModel):
@@ -6391,8 +6430,8 @@ def get_options_zero_dte_signals(
     range_minutes: Optional[int] = 15,
 ) -> Dict[str, Any]:
     """Returns 0DTE opening range breakout status, squeeze state, and candidate contract."""
-    from pilots.zero_dte_engine import get_0dte_signals
-    return get_0dte_signals(symbol=symbol, range_minutes=range_minutes or 15)
+    from pilots.zero_dte_engine import get_0dte_signals_for_frontend
+    return get_0dte_signals_for_frontend(symbol=symbol, range_minutes=range_minutes or 15)
 
 
 @app.post(
@@ -6473,8 +6512,8 @@ def get_options_vpin_metrics_endpoint(
     bucket_size: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Returns volume-synchronized probability of toxicity (VPIN), regime, and bucket history."""
-    from pilots.options_vpin import get_options_vpin_metrics
-    return get_options_vpin_metrics(
+    from pilots.options_vpin import get_options_vpin_metrics_for_frontend
+    return get_options_vpin_metrics_for_frontend(
         symbol=symbol,
         num_buckets=num_buckets or 50,
         bucket_size=bucket_size,
@@ -6488,18 +6527,20 @@ class OptionsSorAnalyzeRequest(BaseModel):
     quotes_map: Optional[Dict[str, Any]] = None
     vpin: Optional[float] = None
     urgency: Optional[str] = "NORMAL"
+    latency_ms: Optional[float] = None
 
 
 @app.post("/pilots/options/sor/analyze", dependencies=[Depends(require_read_token)])
 def post_options_sor_analyze(body: OptionsSorAnalyzeRequest) -> Dict[str, Any]:
     """Analyzes Complex Order Book (COB) net package routing vs Synthetic Legging execution."""
-    from pilots.options_sor import analyze_routing_options
-    res = analyze_routing_options(
+    from pilots.options_sor import analyze_routing_options_for_frontend
+    return analyze_routing_options_for_frontend(
         legs=body.legs,
         spot_price=float(body.spot_price or 0.0),
         quotes_map=body.quotes_map,
+        latency_ms=body.latency_ms,
+        symbol=body.symbol,
     )
-    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 
 class OptionsSorSimulateLeggingRequest(BaseModel):
@@ -6514,15 +6555,15 @@ class OptionsSorSimulateLeggingRequest(BaseModel):
 @app.post("/pilots/options/sor/simulate-legging", dependencies=[Depends(require_read_token)])
 def post_options_sor_simulate_legging(body: OptionsSorSimulateLeggingRequest) -> Dict[str, Any]:
     """Runs Monte Carlo simulation of inter-leg execution latency and adverse selection hazard."""
-    from pilots.options_sor import simulate_legging_execution
-    res = simulate_legging_execution(
+    from pilots.options_sor import simulate_legging_execution_for_frontend
+    return simulate_legging_execution_for_frontend(
         legs=body.legs,
         spot_price=float(body.spot_price or 0.0),
         volatility=body.volatility if body.volatility is not None else 0.20,
         latency_seconds=body.latency_seconds if body.latency_seconds is not None else 2.0,
         num_simulations=body.num_simulations if body.num_simulations is not None else 1000,
+        drift=body.drift if body.drift is not None else 0.0,
     )
-    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 
 @app.get("/pilots/options/gex/profile", dependencies=[Depends(require_read_token)])

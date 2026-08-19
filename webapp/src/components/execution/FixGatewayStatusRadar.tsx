@@ -1080,8 +1080,8 @@ export const FixGatewayStatusRadar: React.FC<FixGatewayStatusRadarProps> = ({
                     }}
                   >
                     <span style={{ color: theme.textMuted }}>Fill Rate</span>
-                    <span style={{ fontWeight: 700, color: theme.growth }}>
-                      {v.fill_rate_pct}%
+                    <span style={{ fontWeight: 700, color: v.fill_rate_pct != null ? theme.growth : theme.textMuted }}>
+                      {v.fill_rate_pct != null ? `${v.fill_rate_pct}%` : "—"}
                     </span>
                   </div>
                   <div
@@ -1094,7 +1094,7 @@ export const FixGatewayStatusRadar: React.FC<FixGatewayStatusRadarProps> = ({
                   >
                     <div
                       style={{
-                        width: `${Math.min(100, Math.max(0, v.fill_rate_pct))}%`,
+                        width: v.fill_rate_pct != null ? `${Math.min(100, Math.max(0, v.fill_rate_pct))}%` : "0%",
                         height: "100%",
                         background: theme.growth,
                         borderRadius: 3,
@@ -1139,7 +1139,7 @@ export const FixGatewayStatusRadar: React.FC<FixGatewayStatusRadarProps> = ({
                         fontFamily: "var(--font-mono, monospace)",
                       }}
                     >
-                      {v.share_of_flow_pct ? `${v.share_of_flow_pct}%` : "20%"}
+                      {v.share_of_flow_pct != null ? `${v.share_of_flow_pct}%` : "—"}
                     </div>
                   </div>
                   <div>

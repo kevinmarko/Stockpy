@@ -21,6 +21,16 @@ export interface SecRule606ReportViewProps {
   className?: string;
 }
 
+/** SecRule606VenueRow after client-side normalization -- order_count,
+ * executed_shares, and pct_of_total_shares are always real numbers here,
+ * regardless of which raw backend shape (venues_overall vs. by_category)
+ * the row originated from. */
+type DisplayVenueRow = SecRule606VenueRow & {
+  order_count: number;
+  executed_shares: number;
+  pct_of_total_shares: number;
+};
+
 export const SecRule606ReportView: React.FC<SecRule606ReportViewProps> = ({
   initialYear = 2026,
   initialQuarter = 1,
@@ -76,14 +86,32 @@ export const SecRule606ReportView: React.FC<SecRule606ReportViewProps> = ({
 
   const summary = report?.summary;
   const categories = report?.order_category_breakdown ? Object.values(report.order_category_breakdown) : [];
-  
-  let venueRows: SecRule606VenueRow[] = [];
+
+  // The backend's "venues_overall" rows use total_orders/total_shares while
+  // its "by_category" rows use order_count/executed_shares and omit
+  // pct_of_total_shares entirely -- see the SecRule606VenueRow comment in
+  // api/types.ts. Normalize both shapes into one fully-populated row here
+  // so every render below sees a real number, not a name it doesn't have.
+  const normalizeVenueRow = (v: SecRule606VenueRow, totalSharesPeriod: number): DisplayVenueRow => {
+    const executedShares = v.executed_shares ?? v.total_shares ?? 0;
+    return {
+      ...v,
+      order_count: v.order_count ?? v.total_orders ?? 0,
+      executed_shares: executedShares,
+      pct_of_total_shares:
+        v.pct_of_total_shares ??
+        (totalSharesPeriod > 0 ? (executedShares / totalSharesPeriod) * 100 : 0),
+    };
+  };
+
+  let venueRows: DisplayVenueRow[] = [];
   if (report?.venue_breakdown) {
-    if (activeCategoryTab === "all") {
-      venueRows = report.venue_breakdown.venues_overall || [];
-    } else {
-      venueRows = report.venue_breakdown.by_category?.[activeCategoryTab] || [];
-    }
+    const totalSharesPeriod = summary?.total_shares || 0;
+    const rawRows =
+      activeCategoryTab === "all"
+        ? report.venue_breakdown.venues_overall || []
+        : report.venue_breakdown.by_category?.[activeCategoryTab] || [];
+    venueRows = rawRows.map((v) => normalizeVenueRow(v, totalSharesPeriod));
   }
 
   return (

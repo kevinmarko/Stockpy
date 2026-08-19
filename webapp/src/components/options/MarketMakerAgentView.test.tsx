@@ -20,7 +20,7 @@ const mockMmResponse: MarketMakerSimResponse = {
   sharpe_ratio: 2.84,
   max_drawdown: 12.4,
   total_trades: 28,
-  fill_rate: 14.0,
+  fill_rate: 0.14,
   final_inventory: 2,
   avg_spread: 0.045,
   steps: [

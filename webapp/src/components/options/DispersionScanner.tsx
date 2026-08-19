@@ -545,7 +545,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                 </thead>
                 <tbody>
                   {activeOpp.constituents.map((c) => {
-                    const spread = (c.atm_iv - c.realized_vol_30d) * 100;
+                    const spread = c.realized_vol_30d != null ? (c.atm_iv - c.realized_vol_30d) * 100 : null;
                     return (
                       <tr
                         key={c.symbol}
@@ -568,10 +568,10 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                           {(c.atm_iv * 100).toFixed(1)}%
                         </td>
                         <td style={{ padding: "10px 12px", color: theme.textSecondary }}>
-                          {(c.realized_vol_30d * 100).toFixed(1)}%
+                          {c.realized_vol_30d != null ? `${(c.realized_vol_30d * 100).toFixed(1)}%` : "—"}
                         </td>
-                        <td style={{ padding: "10px 12px", color: spread >= 5 ? theme.growth : theme.textPrimary, fontWeight: 600 }}>
-                          +{spread.toFixed(1)}%
+                        <td style={{ padding: "10px 12px", color: spread != null && spread >= 5 ? theme.growth : theme.textPrimary, fontWeight: 600 }}>
+                          {spread != null ? `+${spread.toFixed(1)}%` : "—"}
                         </td>
                         <td style={{ padding: "10px 12px" }}>
                           ${c.straddle_strike.toFixed(1)}

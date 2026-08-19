@@ -42,6 +42,7 @@ __all__ = [
     "compute_25delta_skew",
     "compute_vrp_cone",
     "implied_volatility_black_scholes",
+    "to_vol_surface_response",
     "get_volatility_surface_data",
     "STANDARD_TERM_HORIZONS",
     "STANDARD_VRP_WINDOWS",
@@ -1216,12 +1217,113 @@ def _generate_parametric_surface(
     }
 
 
+def to_vol_surface_response(
+    raw: Dict[str, Any],
+    selected_expiration: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Reshapes calculate_volatility_surface()'s internal result (smiles/term_structure/
+    skew_summary/vrp_cone -- the shape every existing test in tests/test_volatility_surface.py
+    asserts on) into the VolSurfaceResponse contract webapp/src/api/types.ts,
+    webapp/src/api/mock.ts, and webapp/src/components/options/VolSurfaceView.tsx
+    already agree on (smile_points / term_structure-as-array / skew / selected_expiration).
+
+    Kept as a separate step from calculate_volatility_surface() itself so every existing
+    caller/test of the pure math function is unaffected -- only get_volatility_surface_data()
+    (the function GET /pilots/options/vol-surface actually calls) applies this reshape.
+
+    Every frontend-required field is populated defensively: a None/missing upstream value is
+    OMITTED (never fabricated as 0 -- CONSTRAINT #4) so the frontend's own null-guards render
+    an honest "--" instead of a fabricated number.
+    """
+    smiles: Dict[str, Any] = raw.get("smiles") or {}
+    expirations: List[str] = list(raw.get("expirations") or smiles.keys())
+
+    exp_key: Optional[str] = selected_expiration if selected_expiration in smiles else None
+    if exp_key is None and expirations:
+        exp_key = expirations[0]
+
+    smile_entry: Optional[Dict[str, Any]] = smiles.get(exp_key) if exp_key else None
+
+    smile_points: List[Dict[str, Any]] = []
+    if smile_entry:
+        for pt in smile_entry.get("curve") or []:
+            if pt.get("strike") is None or pt.get("iv") is None:
+                continue
+            smile_points.append({
+                "strike": pt["strike"],
+                "iv": pt["iv"],
+                "moneyness": pt.get("moneyness"),
+            })
+
+    vrp_cone: Dict[str, Any] = raw.get("vrp_cone") or {}
+    rv_30d = (vrp_cone.get("30d") or {}).get("realized_vol")
+
+    term_structure: List[Dict[str, Any]] = []
+    for exp in expirations:
+        entry = smiles.get(exp)
+        if not entry or entry.get("atm_iv") is None:
+            continue
+        row: Dict[str, Any] = {
+            "expiration": entry.get("expiration", exp),
+            "dte": entry.get("dte"),
+            "atm_iv": entry["atm_iv"],
+        }
+        if rv_30d is not None:
+            row["historical_realized_vol_30d"] = rv_30d
+        term_structure.append(row)
+
+    skew: Dict[str, Any] = {}
+    if smile_entry:
+        if smile_entry.get("skew_25d") is not None:
+            skew["skew_25delta"] = smile_entry["skew_25d"]
+        if smile_entry.get("put_25d_iv") is not None:
+            skew["put_25delta_iv"] = smile_entry["put_25d_iv"]
+        if smile_entry.get("call_25d_iv") is not None:
+            skew["call_25delta_iv"] = smile_entry["call_25d_iv"]
+        if smile_entry.get("atm_iv") is not None:
+            skew["atm_iv"] = smile_entry["atm_iv"]
+
+    for window, field in (
+        ("10d", "realized_vol_10d"),
+        ("20d", "realized_vol_20d"),
+        ("30d", "realized_vol_30d"),
+        ("60d", "realized_vol_60d"),
+    ):
+        rv = (vrp_cone.get(window) or {}).get("realized_vol")
+        if rv is not None:
+            skew[field] = rv
+
+    vrp_30d = (vrp_cone.get("30d") or {}).get("vrp")
+    if vrp_30d is not None:
+        skew["vrp_spread"] = vrp_30d
+
+    return {
+        "symbol": raw.get("symbol") or raw.get("ticker") or "",
+        "spot_price": raw.get("spot_price"),
+        "as_of": raw.get("as_of"),
+        "expirations": expirations,
+        "selected_expiration": exp_key,
+        "smile_points": smile_points,
+        "term_structure": term_structure,
+        "skew": skew,
+    }
+
+
 def get_volatility_surface_data(
     symbol: str,
     market_provider: Optional[Any] = None,
     options_provider: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Resolves market quotes and option chains to compute live/parametric volatility surface for symbol."""
+    """Resolves market quotes and option chains to compute live/parametric volatility surface for symbol.
+
+    Returns calculate_volatility_surface()'s raw internal shape (smiles/term_structure/
+    skew_summary/vrp_cone/surface_grid) UNCHANGED -- this is also consumed directly by
+    GET /pilots/options/vol-surface/3d-mesh (api/pilots_api.py), which reads
+    `surface_grid`. GET /pilots/options/vol-surface (the OTHER caller) applies
+    to_vol_surface_response() itself rather than this function doing it, so both callers
+    keep working off the one shape.
+    """
     sym = symbol.upper().strip()
     spot_price = None
 

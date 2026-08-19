@@ -430,7 +430,7 @@ export const MarketMakerAgentView: React.FC<MarketMakerAgentViewProps> = ({
               Poisson Fill Rate
             </div>
             <div style={{ fontSize: "1.45rem", fontWeight: 700, color: theme.textPrimary }}>
-              {simResult.fill_rate.toFixed(1)}%
+              {(simResult.fill_rate * 100).toFixed(1)}%
             </div>
             <div style={{ fontSize: "0.75rem", color: theme.textMuted }}>
               Total Executions: {simResult.total_trades} orders

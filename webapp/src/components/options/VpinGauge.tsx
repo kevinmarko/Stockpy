@@ -436,7 +436,7 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
                   Toxicity %ile
                 </div>
                 <div style={{ fontSize: "0.95rem", fontWeight: 700 }}>
-                  {data.toxicity_percentile ?? 50}th
+                  {data.toxicity_percentile != null ? `${data.toxicity_percentile}th` : "—"}
                 </div>
               </div>
               <div

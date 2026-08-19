@@ -3931,6 +3931,14 @@ export interface StrategyOptionsExecutionResult {
   }>;
 }
 
+// `pilots/options_risk.py::calculate_position_greeks` returns every field
+// below as `None` (not merely omitted) whenever a live spot quote for the
+// position's underlying couldn't be resolved (`missing_data: true`) -- the
+// position is still included in `PortfolioGreeks.positions` in that case
+// (see `calculate_portfolio_greeks`'s `else` branch), so every numeric field
+// here MUST tolerate `null` on live data. `positions_with_missing_data` on
+// the parent `PortfolioGreeks` already names these symbols for the banner;
+// `missing_data` lets a consumer of a single row detect it directly too.
 export interface PositionGreekBreakdown {
   symbol: string;
   asset_type: "stock" | "option";
@@ -3940,17 +3948,18 @@ export interface PositionGreekBreakdown {
   option_type?: "call" | "put";
   dte?: number;
   qty: number;
-  spot_price: number;
-  delta_per_unit: number;
-  gamma_per_unit: number;
-  theta_daily_per_unit: number;
-  vega_1pct_per_unit: number;
-  position_delta: number;
-  position_dollar_delta: number;
-  position_gamma: number;
-  position_theta_daily: number;
-  position_vega_1pct: number;
-  market_value: number;
+  spot_price: number | null;
+  delta_per_unit: number | null;
+  gamma_per_unit: number | null;
+  theta_daily_per_unit: number | null;
+  vega_1pct_per_unit: number | null;
+  position_delta: number | null;
+  position_dollar_delta: number | null;
+  position_gamma: number | null;
+  position_theta_daily: number | null;
+  position_vega_1pct: number | null;
+  market_value: number | null;
+  missing_data?: boolean;
 }
 
 export interface PortfolioGreeks {
@@ -4004,7 +4013,11 @@ export interface OptionContract {
   // would be indistinguishable from a verified-zero reading.
   volume: number | null;
   openInterest: number | null;
-  impliedVolatility: number;
+  // `null` when the provider couldn't compute IV for this contract (common
+  // for illiquid/wide-spread strikes) -- `api/data_api.py`'s `_clean_nan`
+  // nulls any NaN float in the response, and yfinance's own IV solver
+  // routinely fails to converge on thin contracts. Never fabricated to `0`.
+  impliedVolatility: number | null;
   inTheMoney: boolean;
   greeks: {
     delta: number;
@@ -4019,7 +4032,11 @@ export interface OptionContract {
 export interface OptionChainResponse {
   symbol: string;
   expiration?: string;
-  spot_price: number;
+  // Omitted entirely (not merely `null`) on the "list expirations" shape of
+  // `GET /data/options/chain/{symbol}` (no `expiration` query param) -- that
+  // response is just `{symbol, expirations}`. Only present once a specific
+  // expiration has been requested and the backend resolved a live spot quote.
+  spot_price?: number;
   expirations?: string[];
   calls?: OptionContract[];
   puts?: OptionContract[];
@@ -4170,10 +4187,13 @@ export interface VolTermStructurePoint {
 }
 
 export interface SkewData {
-  skew_25delta: number;
-  put_25delta_iv: number;
-  call_25delta_iv: number;
-  atm_iv: number;
+  // Backend (pilots/volatility_surface.py::to_vol_surface_response) omits any of these
+  // that its degenerate-input guards (compute_25delta_skew) or a missing smile fit
+  // produced as None -- never fabricated. Treat every field here as possibly absent.
+  skew_25delta?: number;
+  put_25delta_iv?: number;
+  call_25delta_iv?: number;
+  atm_iv?: number;
   vrp_spread?: number;
   realized_vol_10d?: number;
   realized_vol_20d?: number;
@@ -4192,27 +4212,44 @@ export interface VolSurfaceResponse {
   skew: SkewData;
 }
 
+// Matches `pilots/options_hedging.py::get_delta_hedge_preview`'s real return
+// shape exactly -- the previous version of this interface (net_delta_shares,
+// spy_spot_price, required_hedge_shares, hedge_symbol, estimated_cost,
+// is_within_tolerance, action including "NONE") named fields the backend
+// never returns at all, which produced a live `undefined.toFixed()` crash
+// on this screen. `shares`/`target_hedge_shares` are always non-negative
+// resp. signed real numbers (never missing) -- `calculate_delta_hedge_order`
+// always resolves them from computed portfolio Greeks, no live-quote gap.
 export interface DeltaHedgePreview {
-  net_delta_shares: number;
+  symbol: string;
   net_dollar_delta: number;
   beta_weighted_delta_spy: number;
-  spy_spot_price: number;
-  required_hedge_shares: number;
-  action: "BUY" | "SELL" | "NONE";
-  hedge_symbol: string;
-  estimated_cost: number;
+  /** Signed shares needed to zero out beta-weighted SPY delta (not an order size -- use `shares` for that). */
+  target_hedge_shares: number;
   tolerance_band_shares: number;
-  is_within_tolerance: boolean;
+  /** "HOLD" means no rebalance is needed (deadband not exceeded) -- there is no "NONE" value. */
+  action: "HOLD" | "BUY" | "SELL";
+  /** Non-negative order size to execute; 0 when action is "HOLD". */
+  shares: number;
+  required_action: boolean;
+  reason: string;
+  spy_spot: number;
 }
 
+// Matches `pilots/options_hedging.py::execute_delta_hedge`'s real return
+// shape -- there is no top-level `price`/`side` field (only `action`, and a
+// fill price nested under `fill.fill_price`); most fields are absent on the
+// rare "PaperAccountStore unavailable" failure path, so `message` is the
+// only field this screen may treat as always-present.
 export interface DeltaHedgeResult {
   ok: boolean;
-  order_id?: string;
-  shares: number;
-  symbol: string;
-  side: "BUY" | "SELL";
-  price: number;
-  message: string;
+  hedged?: boolean;
+  action?: "HOLD" | "BUY" | "SELL";
+  shares?: number;
+  symbol?: string;
+  order_id?: string | null;
+  reason?: string;
+  message?: string;
 }
 
 /** One leg of a roll's close/open list -- mirrors api/pilots_api.py's
@@ -4349,7 +4386,10 @@ export interface FlowSentimentResponse {
 
 export interface HarRvForecastResponse {
   symbol: string;
-  spot_price: number;
+  // pilots/har_volatility.py::to_har_rv_forecast_response only sets this when a real
+  // trailing close price was resolved (never a fabricated quote -- CONSTRAINT #4);
+  // absent on the parametric-fallback (offline/thin-history) path.
+  spot_price?: number;
   as_of: string;
   rv_daily: number;
   rv_weekly: number;
@@ -4378,8 +4418,12 @@ export interface VolMispricingStrike {
   market_iv: number;
   fair_iv: number;
   iv_spread: number;
-  spread_zscore: number;
-  classification: "RICH" | "CHEAP" | "FAIR";
+  // pilots/vol_mispricing.py's StrikeMispricingRecord has no z-score field -- never
+  // fabricated (CONSTRAINT #4), so this is always absent from the live response.
+  spread_zscore?: number;
+  // Real values: "RICH" | "CHEAP" | "NEUTRAL", plus "UNKNOWN" when the spread itself
+  // was uncomputable (see classify_strike_mispricing()) -- NOT "FAIR".
+  classification: "RICH" | "CHEAP" | "NEUTRAL" | "UNKNOWN";
   suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL";
   bid?: number;
   ask?: number;
@@ -4397,8 +4441,11 @@ export interface VolMispricingResponse {
   expiration: string;
   expirations: string[];
   dte: number;
-  fair_iv_baseline: number;
-  market_atm_iv: number;
+  // pilots/vol_mispricing.py's baseline_fair_iv/market_atm_iv are genuinely
+  // Optional[float] -- uncomputable on a degenerate/empty chain (CONSTRAINT #4: never
+  // fabricated as 0).
+  fair_iv_baseline?: number;
+  market_atm_iv?: number;
   rich_strikes_count: number;
   cheap_strikes_count: number;
   strikes: VolMispricingStrike[];
@@ -4491,24 +4538,27 @@ export interface DispersionConstituent {
   weight: number;
   spot_price: number;
   atm_iv: number;
-  realized_vol_30d: number;
+  // Not computed by the backend (only the cross-sectional `realized_correlation` is) --
+  // always null on a real response. See pilots/dispersion_trading.py::_opportunity_to_frontend_card.
+  realized_vol_30d: number | null;
   straddle_strike: number;
-  straddle_bid: number;
-  straddle_ask: number;
+  straddle_bid: number | null;
+  straddle_ask: number | null;
   straddle_mid: number;
   vega_per_straddle: number;
   contracts_allocated: number;
   leg_action: "BUY" | "SELL";
-  implied_rv_spread?: number;
+  implied_rv_spread?: number | null;
 }
 
 export interface DispersionOpportunity {
   id: string;
   index_symbol: string;
-  index_name?: string;
+  index_name?: string | null;
   index_spot: number;
   index_iv: number;
-  index_rv_30d: number;
+  // Not computed by the backend -- always null on a real response.
+  index_rv_30d: number | null;
   index_straddle_strike: number;
   index_straddle_price: number;
   index_straddle_contracts: number;
@@ -4526,7 +4576,7 @@ export interface DispersionOpportunity {
   expiration: string;
   dte: number;
   constituents: DispersionConstituent[];
-  as_of?: string;
+  as_of?: string | null;
 }
 
 export interface DispersionBasketResponse {
@@ -4563,13 +4613,14 @@ export interface ZeroDteContract {
   expiration: string;
   dte: number;
   delta: number;
-  gamma?: number;
-  theta?: number;
-  vega?: number;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
   bid: number;
   ask: number;
   mid: number;
-  implied_vol: number;
+  // Not computed by the backend on a candidate 0DTE contract -- always null on a real response.
+  implied_vol: number | null;
   target_price: number;
   stop_loss_price: number;
   hard_exit_time: string;
@@ -4579,16 +4630,21 @@ export interface ZeroDteSignal {
   symbol: string;
   spot_price: number;
   timestamp: string;
-  opening_range_high: number;
-  opening_range_low: number;
-  opening_range_width_pct: number;
+  // Only populated when a real 15-minute opening range was computed; this repo has no
+  // intraday/1-minute bar source today, so these are null on every real response
+  // (see pilots/zero_dte_engine.py::get_0dte_signals's own docstring).
+  opening_range_high: number | null;
+  opening_range_low: number | null;
+  opening_range_width_pct: number | null;
   ttm_squeeze_active: boolean;
-  ttm_squeeze_bars: number;
+  // Not computed by the backend -- always null on a real response.
+  ttm_squeeze_bars: number | null;
   momentum_direction: "BULLISH_BREAKOUT" | "BEARISH_BREAKDOWN" | "IN_RANGE";
-  momentum_score: number;
-  relative_volume_15m: number;
+  momentum_score: number | null;
+  // Not computed by the backend -- always null on a real response.
+  relative_volume_15m: number | null;
   suggested_action: "BUY_CALL" | "BUY_PUT" | "WAIT";
-  recommended_contract?: ZeroDteContract;
+  recommended_contract?: ZeroDteContract | null;
   trigger_reason?: string;
 }
 
@@ -4642,7 +4698,9 @@ export interface VpinMetricsResponse {
   symbol: string;
   vpin: number;
   regime: "LOW" | "MODERATE" | "HIGH_TOXICITY";
-  toxicity_percentile?: number;
+  // Not computed by the backend (no historical VPIN distribution to rank against) -- always
+  // null/omitted on a real response.
+  toxicity_percentile?: number | null;
   bucket_size: number;
   num_buckets: number;
   buckets: VpinBucket[];
@@ -4755,9 +4813,11 @@ export interface GexProfileResponse {
   net_gex: number;
   total_call_gex?: number;
   total_put_gex?: number;
-  zero_gamma_flip: number;
-  call_wall_strike: number;
-  put_wall_strike: number;
+  // null when the backend could not resolve a real spot price/options chain for the symbol
+  // (calculate_gex_profile's degenerate-spot-price path) -- never fabricated.
+  zero_gamma_flip: number | null;
+  call_wall_strike: number | null;
+  put_wall_strike: number | null;
   gamma_regime: "POSITIVE_GAMMA" | "NEGATIVE_GAMMA" | "PIN_RISK_HIGH";
   regime_description: string;
   dealer_hedging_flow: number;
@@ -4800,7 +4860,10 @@ export interface LobQueueSimulationResponse {
   num_simulations: number;
   fill_probability: number;
   expected_fill_time_sec: number | null;
-  expected_wait_time_sec: number;
+  // Same underlying value as `expected_fill_time_sec` (an alias the backend also echoes under
+  // this key) -- null whenever no simulated path filled within the time horizon (e.g. a large
+  // queue relative to time_horizon_sec/theta_market), never fabricated.
+  expected_wait_time_sec: number | null;
   unconditional_fill_time_sec: number;
   median_fill_time_sec: number | null;
   prob_adverse_move_before_fill: number;
@@ -4891,6 +4954,7 @@ export interface MarketMakerSimResponse {
   sharpe_ratio: number;
   max_drawdown: number;
   total_trades: number;
+  /** 0-1 fraction (matches ml/drl_market_maker.py's `total_trades / max(1, 2 * n_steps)`), NOT a 0-100 percentage. Multiply by 100 at render time. */
   fill_rate: number;
   final_inventory: number;
   avg_spread: number;
@@ -5055,7 +5119,12 @@ export interface FixVenueRoutingStat {
   status: 'ACTIVE' | 'DEGRADED' | 'HALTED';
   base_latency_ms: number;
   current_latency_ms?: number;
-  fill_rate_pct: number;
+  // api/pilots_api.py's GET /pilots/execution/fix/session/status builds this
+  // from MultiVenueAggregator.get_venues_info(), which has no per-venue
+  // execution history in this stateless aggregator -- fill_rate_pct is
+  // always sent as `null`, exactly like current_latency_ms/share_of_flow_pct
+  // below (CONSTRAINT #4: honestly unknown, never fabricated).
+  fill_rate_pct?: number;
   maker_fee: number;
   taker_fee: number;
   maker_rebate?: number;
@@ -5139,17 +5208,25 @@ export interface AutonomousBacktestRequest {
 export interface AutonomousBacktestResponse {
   strategy_id: string;
   is_deployable: boolean;
-  sharpe_ratio: number;
-  sortino_ratio: number;
-  max_drawdown: number;
-  pbo: number;
-  dsr: number;
-  turnover: number;
-  annualized_return: number;
-  cumulative_return: number;
-  win_rate: number;
-  calmar_ratio: number;
-  volatility: number;
+  // The backend (validation/autonomous_backtest_runner.py's to_dict()) emits
+  // `null` for every one of these whenever the underlying float is NaN --
+  // both on the AST-compile-failure path (sharpe_ratio/sortino_ratio/
+  // max_drawdown/annualized_return/cumulative_return/calmar_ratio/volatility
+  // are all explicitly float('nan') there) and on genuinely reachable
+  // degenerate-math paths in the success path (e.g. sortino_ratio/
+  // calmar_ratio go NaN on zero downside-deviation / zero max drawdown).
+  // Never assume these are populated -- CONSTRAINT #4.
+  sharpe_ratio: number | null;
+  sortino_ratio: number | null;
+  max_drawdown: number | null;
+  pbo: number | null;
+  dsr: number | null;
+  turnover: number | null;
+  annualized_return: number | null;
+  cumulative_return: number | null;
+  win_rate: number | null;
+  calmar_ratio: number | null;
+  volatility: number | null;
   gate_evaluations: Record<string, boolean>;
   failure_reasons: string[];
   n_paths: number;
@@ -5240,7 +5317,13 @@ export interface RoutingAuditDto {
 }
 
 export interface MultiBrokerStatusResponse {
-  active_broker_id: string;
+  // execution/multi_broker_gateway.py's GatewayStatusSnapshot.active_broker_id
+  // is Optional[str] -- it is genuinely None whenever resolve_active_broker()
+  // raises NoHealthyBrokerError (no manual override, no candidate in the
+  // priority hierarchy, and no fallback connected broker). That is exactly
+  // the worst-case state this screen exists to surface, so it must never be
+  // papered over with a fabricated default broker id (CONSTRAINT #4).
+  active_broker_id: string | null;
   manual_override_broker_id?: string | null;
   priority_hierarchy: string[];
   brokers: Record<string, BrokerHealthStatusDto>;
@@ -5270,12 +5353,27 @@ export interface BrokerFailoverResponse {
 
 export interface SecRule606VenueRow {
   venue: string;
-  order_count: number;
+  // execution/sec_rule_606_reporter.py's SecRule606Reporter._compute_report()
+  // builds TWO differently-shaped venue-row dicts for what the frontend
+  // treats as one type: the by-category rows (venue_breakdown.by_category)
+  // use order_count/executed_shares and omit pct_of_total_shares entirely,
+  // while the venues_overall rows use total_orders/total_shares instead
+  // (that naming is also depended on by generate_markdown_summary/CSV
+  // export, so it isn't a simple backend rename). order_count/
+  // executed_shares/pct_of_total_shares are optional here because a raw
+  // row may carry them under the alternate name (or, for pct_of_total_shares,
+  // not at all) -- SecRule606ReportView.tsx normalizes every row into a
+  // fully-populated shape before rendering, computing pct_of_total_shares
+  // from the period total when the backend omitted it, rather than
+  // null-guarding into a permanent "--" for live data.
+  order_count?: number;
+  total_orders?: number;
   pct_of_category_orders?: number;
   pct_of_total_orders: number;
-  executed_shares: number;
+  executed_shares?: number;
+  total_shares?: number;
   pct_of_category_shares?: number;
-  pct_of_total_shares: number;
+  pct_of_total_shares?: number;
   net_fee_rebate_dollars: number;
   rebate_per_hundred_shares_dollars: number;
   rebate_per_hundred_shares_cents: number;

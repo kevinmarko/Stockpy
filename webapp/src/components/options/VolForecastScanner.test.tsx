@@ -65,7 +65,7 @@ const mockMispricing: VolMispricingResponse = {
       fair_iv: 0.212,
       iv_spread: 0.003,
       spread_zscore: 0.12,
-      classification: "FAIR",
+      classification: "NEUTRAL",
       suggested_action: "HOLD",
       bid: 8.10,
       ask: 8.40,

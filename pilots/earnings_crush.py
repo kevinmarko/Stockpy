@@ -49,6 +49,7 @@ __all__ = [
     "get_historical_earnings_moves",
     "evaluate_earnings_crush_candidates",
     "get_earnings_crush_candidates",
+    "to_earnings_crush_candidate_response",
     "execute_earnings_crush_trade",
     "snap_strike_to_grid_or_chain",
     "FALLBACK_MEDIAN_MOVE_PCT",
@@ -917,6 +918,60 @@ def get_earnings_crush_candidates(
         min_edge=min_edge,
         store=store,
     )
+
+
+def to_earnings_crush_candidate_response(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshapes one evaluate_earnings_crush_candidates()/get_earnings_crush_candidates()
+    raw candidate dict (symbol/spot/earnings_date/expected_move_usd/realized_move_pct/
+    strategy/strikes/net_credit/... -- the shape every existing test in
+    tests/test_earnings_crush.py asserts on) into the EarningsCrushCandidate contract
+    webapp/src/api/types.ts, webapp/src/api/mock.ts, and
+    webapp/src/components/options/EarningsCrushScanner.tsx already agree on
+    (spot_price/report_date/expected_move_dollar/median_realized_move_pct/
+    suggested_strategy/*_wing_strike/*_strike/estimated_credit).
+
+    Kept as a separate step from get_earnings_crush_candidates() itself so every existing
+    caller/test of the pure evaluation function is unaffected -- only the API handler for
+    GET /pilots/options/earnings-crush/candidates applies this reshape.
+
+    Any upstream field that is None/missing is OMITTED rather than fabricated (CONSTRAINT #4)
+    so the frontend's own null-guards render an honest "--" instead of a synthetic number.
+    """
+    strikes: Dict[str, Any] = candidate.get("strikes") or {}
+
+    response: Dict[str, Any] = {
+        "symbol": candidate.get("symbol", ""),
+        "report_date": candidate.get("earnings_date", ""),
+        "atm_iv": candidate.get("atm_iv"),
+        "dte": candidate.get("dte"),
+        "expected_move_pct": candidate.get("expected_move_pct"),
+        "crush_edge_ratio": candidate.get("crush_edge_ratio"),
+        "suggested_strategy": candidate.get("strategy", "Iron Condor"),
+    }
+
+    if candidate.get("spot") is not None:
+        response["spot_price"] = candidate["spot"]
+    if candidate.get("expected_move_usd") is not None:
+        response["expected_move_dollar"] = candidate["expected_move_usd"]
+    if candidate.get("realized_move_pct") is not None:
+        response["median_realized_move_pct"] = candidate["realized_move_pct"]
+    if candidate.get("expiration") is not None:
+        response["expiration"] = candidate["expiration"]
+    if candidate.get("net_credit") is not None:
+        response["estimated_credit"] = candidate["net_credit"]
+    if candidate.get("is_recommended") is not None:
+        response["edge_passed"] = candidate["is_recommended"]
+    if strikes.get("long_put") is not None:
+        response["put_wing_strike"] = strikes["long_put"]
+    if strikes.get("short_put") is not None:
+        response["short_put_strike"] = strikes["short_put"]
+    if strikes.get("short_call") is not None:
+        response["short_call_strike"] = strikes["short_call"]
+    if strikes.get("long_call") is not None:
+        response["call_wing_strike"] = strikes["long_call"]
+
+    return response
 
 
 def execute_earnings_crush_trade(

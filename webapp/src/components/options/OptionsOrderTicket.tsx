@@ -17,7 +17,11 @@ interface Props {
   expiration?: string;
   legs?: SelectedLeg[];
   assetType?: 'option' | 'stock';
-  spotPrice?: number;
+  // `null`/`undefined` while the caller's own spot-price fetch hasn't
+  // resolved yet (e.g. the Options screen's expirations-only chain response
+  // never carries `spot_price` at all) -- must never be silently treated as
+  // a verified $0.00 quote.
+  spotPrice?: number | null;
   initialAction?: 'Buy' | 'Sell';
   onClear: () => void;
 }
@@ -27,7 +31,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
   expiration = '',
   legs = [],
   assetType = 'option',
-  spotPrice = 0,
+  spotPrice = null,
   initialAction = 'Buy',
   onClear,
 }) => {
@@ -241,7 +245,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
         <div>
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>{title}</h2>
           <span style={{ fontSize: 12, color: theme.textSecondary }}>
-            {isStock ? `Spot Price: ${fmtUsd(spotPrice)}` : `Expiration: ${expiration || 'N/A'}`}
+            {isStock ? `Spot Price: ${spotPrice != null ? fmtUsd(spotPrice) : '—'}` : `Expiration: ${expiration || 'N/A'}`}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -594,7 +598,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            <DataRow label="IV" value={isMultiLeg ? "N/A" : `${fmtNum((primaryLeg.contract.impliedVolatility || 0) * 100, 2)}%`} />
+            <DataRow label="IV" value={isMultiLeg ? "N/A" : (primaryLeg.contract.impliedVolatility != null ? `${fmtNum(primaryLeg.contract.impliedVolatility * 100, 2)}%` : "—")} />
             <DataRow label="Chance of profit" value={isMultiLeg ? "N/A" : `${fmtNum((primaryLeg.contract.greeks?.chanceOfProfit || 0) * 100, 2)}%`} />
             <DataRow label="Open Interest" value={isMultiLeg ? "N/A" : fmtNum(primaryLeg.contract.openInterest)} />
           </div>

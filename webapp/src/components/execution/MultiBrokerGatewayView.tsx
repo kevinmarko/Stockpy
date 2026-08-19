@@ -127,7 +127,7 @@ export const MultiBrokerGatewayView: React.FC<MultiBrokerGatewayViewProps> = ({
     );
   }
 
-  const activeBrokerId = status?.active_broker_id || "alpaca";
+  const activeBrokerId = status?.active_broker_id ?? null;
   const brokerList = status?.brokers ? Object.values(status.brokers) : [];
   const audits = status?.recent_routing_audits || [];
 
@@ -221,9 +221,9 @@ export const MultiBrokerGatewayView: React.FC<MultiBrokerGatewayViewProps> = ({
       >
         <div>
           <div style={{ fontSize: "0.72rem", color: theme.textSecondary }}>Active Primary Gateway</div>
-          <div style={{ fontSize: "1.15rem", fontWeight: 800, color: theme.growth, display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+          <div style={{ fontSize: "1.15rem", fontWeight: 800, color: activeBrokerId ? theme.growth : theme.decline, display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
             <Radio size={16} className="animate-pulse" />
-            {activeBrokerId.toUpperCase()}
+            {activeBrokerId ? activeBrokerId.toUpperCase() : "NONE ACTIVE"}
           </div>
           <div style={{ fontSize: "0.68rem", color: theme.textSecondary, marginTop: 2 }}>
             Failover Mode: {status?.manual_override_broker_id ? "MANUAL OVERRIDE ACTIVE" : "AUTO"}

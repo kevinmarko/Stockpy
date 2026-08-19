@@ -75,6 +75,7 @@ __all__ = [
     "get_unusual_options_activity",
     "calculate_net_flow_sentiment",
     "get_flow_sentiment",
+    "to_flow_sentiment_response",
     "calculate_historical_volatility",
     "categorize_trade_aggressiveness",
     "calculate_iv_burst_score",
@@ -866,6 +867,9 @@ def calculate_net_flow_sentiment(
     call_volume = 0
     put_volume = 0
     strikes_volume: Dict[float, int] = {}
+    strikes_notional: Dict[float, float] = {}
+    strikes_call_volume: Dict[float, int] = {}
+    strikes_put_volume: Dict[float, int] = {}
 
     for r in filtered:
         notional = float(r.notional if isinstance(r, UOARecord) else (r.get("notional") or 0.0))
@@ -876,6 +880,11 @@ def calculate_net_flow_sentiment(
 
         if strike > 0:
             strikes_volume[strike] = strikes_volume.get(strike, 0) + vol
+            strikes_notional[strike] = strikes_notional.get(strike, 0.0) + notional
+            if opt_type == "call":
+                strikes_call_volume[strike] = strikes_call_volume.get(strike, 0) + vol
+            elif opt_type == "put":
+                strikes_put_volume[strike] = strikes_put_volume.get(strike, 0) + vol
 
         if opt_type == "call":
             call_volume += vol
@@ -917,9 +926,19 @@ def calculate_net_flow_sentiment(
     else:
         call_put_ratio = 1.0
 
-    # Top active strikes
+    # Top active strikes. `option_type` is the side with more volume at that strike
+    # (a real, computed majority classification -- never fabricated); `notional` is
+    # the real combined call+put notional traded at that strike.
     sorted_strikes = sorted(strikes_volume.items(), key=lambda x: x[1], reverse=True)[:5]
-    top_strikes = [{"strike": k, "volume": v} for k, v in sorted_strikes]
+    top_strikes = [
+        {
+            "strike": k,
+            "volume": v,
+            "option_type": "CALL" if strikes_call_volume.get(k, 0) >= strikes_put_volume.get(k, 0) else "PUT",
+            "notional": round(strikes_notional.get(k, 0.0), 2),
+        }
+        for k, v in sorted_strikes
+    ]
 
     return {
         "symbol": clean_sym,
@@ -1128,4 +1147,46 @@ def get_unusual_options_activity(
 def get_flow_sentiment(symbol: str) -> Dict[str, Any]:
     """Public accessor for options flow sentiment for symbol."""
     return get_symbol_flow_sentiment(symbol)
+
+
+def to_flow_sentiment_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshapes calculate_net_flow_sentiment()/get_flow_sentiment()'s internal result
+    (call_put_ratio -- the shape every existing test in tests/test_unusual_options_flow.py
+    asserts on) into the FlowSentimentData contract webapp/src/api/types.ts,
+    webapp/src/api/mock.ts, and webapp/src/components/options/UnusualFlowFeed.tsx
+    already agree on (put_call_ratio -- the RECIPROCAL of call_put_ratio, not a mere
+    rename: webapp/src/components/options/UnusualFlowFeed.tsx reads
+    sentiment.put_call_ratio.toFixed(2) unconditionally, so the live endpoint was handing
+    the frontend `undefined` -- the exact "Cannot read properties of undefined (reading
+    'toFixed')" bug class this fix addresses -- every time this panel opened.
+
+    `put_call_ratio: number` is non-optional in the frontend contract, so this is derived
+    directly from call_volume/put_volume (always present, real integers -- never a
+    fabricated 0) using the same "no puts/calls at all" clamp-to-999.99 and "both zero"
+    convention calculate_net_flow_sentiment() already applies to its own call_put_ratio,
+    rather than inverting that field's own lossy sentinel.
+
+    Kept as a separate step from get_flow_sentiment() itself (applied at the API handler
+    for GET /pilots/options/flow/sentiment instead) so every existing caller/test of the
+    pure computation is unaffected, and so a test that mocks get_flow_sentiment() directly
+    still exercises the real reshape the live endpoint applies.
+    """
+    response = dict(raw)
+    response.pop("call_put_ratio", None)
+
+    try:
+        call_volume = float(raw.get("call_volume") or 0.0)
+        put_volume = float(raw.get("put_volume") or 0.0)
+    except (TypeError, ValueError):
+        call_volume = put_volume = 0.0
+
+    if call_volume > 0:
+        response["put_call_ratio"] = round(put_volume / call_volume, 4)
+    elif put_volume > 0:
+        response["put_call_ratio"] = 999.99
+    else:
+        response["put_call_ratio"] = 1.0
+
+    return response
 

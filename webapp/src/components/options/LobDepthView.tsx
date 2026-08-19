@@ -353,7 +353,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
                 Expected Wait Time
               </span>
               <div style={{ fontSize: "1.6rem", fontWeight: 800, color: theme.growth }}>
-                ~{simResult.expected_wait_time_sec.toFixed(1)}s
+                {simResult.expected_wait_time_sec != null ? `~${simResult.expected_wait_time_sec.toFixed(1)}s` : "—"}
               </div>
               <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
                 Median: {simResult.median_fill_time_sec != null ? `${simResult.median_fill_time_sec.toFixed(1)}s` : "—"}

@@ -151,11 +151,11 @@ export const VolSurfaceView: React.FC<VolSurfaceViewProps> = ({ initialSymbol = 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
               <div style={{ fontSize: 11, color: theme.textSecondary }}>25-Delta Put-Call Skew (IV₂₅ₚ - IV₂₅꜀)</div>
-              <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4, color: volData.skew.skew_25delta >= 0 ? theme.caution : theme.growth }}>
-                {volData.skew.skew_25delta > 0 ? "+" : ""}{(volData.skew.skew_25delta * 100).toFixed(2)}%
+              <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4, color: (volData.skew.skew_25delta ?? 0) >= 0 ? theme.caution : theme.growth }}>
+                {volData.skew.skew_25delta != null ? `${volData.skew.skew_25delta > 0 ? "+" : ""}${(volData.skew.skew_25delta * 100).toFixed(2)}%` : "—"}
               </div>
               <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
-                Put 25Δ: {(volData.skew.put_25delta_iv * 100).toFixed(1)}% | Call 25Δ: {(volData.skew.call_25delta_iv * 100).toFixed(1)}%
+                Put 25Δ: {volData.skew.put_25delta_iv != null ? `${(volData.skew.put_25delta_iv * 100).toFixed(1)}%` : "—"} | Call 25Δ: {volData.skew.call_25delta_iv != null ? `${(volData.skew.call_25delta_iv * 100).toFixed(1)}%` : "—"}
               </div>
             </div>
 
@@ -174,7 +174,7 @@ export const VolSurfaceView: React.FC<VolSurfaceViewProps> = ({ initialSymbol = 
             <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
               <div style={{ fontSize: 11, color: theme.textSecondary }}>ATM Implied Volatility</div>
               <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4, color: theme.accent }}>
-                {(volData.skew.atm_iv * 100).toFixed(2)}%
+                {volData.skew.atm_iv != null ? `${(volData.skew.atm_iv * 100).toFixed(2)}%` : "—"}
               </div>
               <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
                 Realized Vol (30d): {volData.skew.realized_vol_30d ? `${(volData.skew.realized_vol_30d * 100).toFixed(1)}%` : "—"}
@@ -321,7 +321,7 @@ export const VolSurfaceView: React.FC<VolSurfaceViewProps> = ({ initialSymbol = 
                     <span style={{ color: theme.textSecondary }}>{item.label}</span>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontWeight: 600 }}>{item.val ? `${(item.val * 100).toFixed(1)}%` : "—"}</span>
-                      {item.val && (
+                      {item.val != null && volData.skew.atm_iv != null && (
                         <span
                           style={{
                             fontSize: 10,

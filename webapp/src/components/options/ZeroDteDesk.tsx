@@ -28,8 +28,8 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
   const query = useApi<ZeroDteSignalResponse>(
-    () => api.getZeroDteSignals(),
-    []
+    () => api.getZeroDteSignals(selectedSymbol),
+    [selectedSymbol]
   );
 
   const executeMutation = useMutation((signal: ZeroDteSignal) => {
@@ -302,7 +302,7 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                   <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>(Breakout Trigger)</span>
                 </div>
                 <span style={{ fontSize: "1.1rem", fontWeight: 700, color: theme.growth }}>
-                  ${activeSignal.opening_range_high.toFixed(2)}
+                  {activeSignal.opening_range_high != null ? `$${activeSignal.opening_range_high.toFixed(2)}` : "—"}
                 </span>
               </div>
 
@@ -311,7 +311,13 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                 <div>
                   <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>Range Width: </span>
                   <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>
-                    ${(activeSignal.opening_range_high - activeSignal.opening_range_low).toFixed(2)} ({(activeSignal.opening_range_width_pct * 100).toFixed(2)}%)
+                    {activeSignal.opening_range_high != null && activeSignal.opening_range_low != null
+                      ? `$${(activeSignal.opening_range_high - activeSignal.opening_range_low).toFixed(2)} (${
+                          activeSignal.opening_range_width_pct != null
+                            ? (activeSignal.opening_range_width_pct * 100).toFixed(2)
+                            : "—"
+                        }%)`
+                      : "—"}
                   </span>
                 </div>
                 <div>
@@ -320,14 +326,18 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                       fontSize: "0.8rem",
                       fontWeight: 700,
                       color:
-                        activeSignal.spot_price >= activeSignal.opening_range_high
+                        activeSignal.opening_range_high == null || activeSignal.opening_range_low == null
+                          ? theme.textSecondary
+                          : activeSignal.spot_price >= activeSignal.opening_range_high
                           ? theme.growth
                           : activeSignal.spot_price <= activeSignal.opening_range_low
                           ? theme.decline
                           : theme.textSecondary,
                     }}
                   >
-                    {activeSignal.spot_price >= activeSignal.opening_range_high
+                    {activeSignal.opening_range_high == null || activeSignal.opening_range_low == null
+                      ? "No 15m opening-range data available"
+                      : activeSignal.spot_price >= activeSignal.opening_range_high
                       ? "▲ ABOVE RANGE (Bullish Thrust)"
                       : activeSignal.spot_price <= activeSignal.opening_range_low
                       ? "▼ BELOW RANGE (Bearish Thrust)"
@@ -351,7 +361,7 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                   <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>(Breakdown Trigger)</span>
                 </div>
                 <span style={{ fontSize: "1.1rem", fontWeight: 700, color: theme.decline }}>
-                  ${activeSignal.opening_range_low.toFixed(2)}
+                  {activeSignal.opening_range_low != null ? `$${activeSignal.opening_range_low.toFixed(2)}` : "—"}
                 </span>
               </div>
             </div>
@@ -418,7 +428,9 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                 </span>
                 <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
                   {activeSignal.ttm_squeeze_active
-                    ? `Bollinger Bands inside Keltner Channel for ${activeSignal.ttm_squeeze_bars} bars. Energy building.`
+                    ? `Bollinger Bands inside Keltner Channel${
+                        activeSignal.ttm_squeeze_bars != null ? ` for ${activeSignal.ttm_squeeze_bars} bars` : ""
+                      }. Energy building.`
                     : `Bollinger Bands expanding outside Keltner Channel. Momentum release in progress.`}
                 </span>
               </div>
@@ -445,8 +457,17 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
               </div>
               <div style={{ background: theme.surface2, padding: 10, borderRadius: 6 }}>
                 <div style={{ fontSize: "0.7rem", color: theme.textSecondary }}>15M Relative Volume</div>
-                <div style={{ fontSize: "0.95rem", fontWeight: 700, color: activeSignal.relative_volume_15m >= 1.5 ? theme.growth : theme.textPrimary }}>
-                  {activeSignal.relative_volume_15m.toFixed(2)}x Vol Thrust
+                <div
+                  style={{
+                    fontSize: "0.95rem",
+                    fontWeight: 700,
+                    color:
+                      activeSignal.relative_volume_15m != null && activeSignal.relative_volume_15m >= 1.5
+                        ? theme.growth
+                        : theme.textPrimary,
+                  }}
+                >
+                  {activeSignal.relative_volume_15m != null ? `${activeSignal.relative_volume_15m.toFixed(2)}x Vol Thrust` : "—"}
                 </div>
               </div>
             </div>
@@ -530,7 +551,7 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                 <div style={{ background: theme.surface2, padding: 10, borderRadius: 6 }}>
                   <div style={{ fontSize: "0.7rem", color: theme.textSecondary }}>Delta (Δ) / Gamma (Γ)</div>
                   <div style={{ fontSize: "1rem", fontWeight: 600 }}>
-                    {activeSignal.recommended_contract.delta.toFixed(2)} Δ / {activeSignal.recommended_contract.gamma?.toFixed(3) || "0.080"} Γ
+                    {activeSignal.recommended_contract.delta.toFixed(2)} Δ / {activeSignal.recommended_contract.gamma != null ? `${activeSignal.recommended_contract.gamma.toFixed(3)} Γ` : "— Γ"}
                   </div>
                 </div>
                 <div style={{ background: theme.surface2, padding: 10, borderRadius: 6 }}>

@@ -813,20 +813,122 @@ def _source_real_dispersion_inputs(
     return spot_map, iv_map, realized_corr
 
 
+_REGIME_TO_FRONTEND = {
+    "Long Dispersion": "LONG_DISPERSION",
+    "Short Dispersion": "SHORT_DISPERSION",
+    "Neutral": "NEUTRAL",
+}
+
+
+def _opportunity_to_frontend_card(
+    opp: Dict[str, Any],
+    idx_spot: Optional[float],
+    idx_iv: Optional[float],
+) -> Optional[Dict[str, Any]]:
+    """
+    Adapts one `evaluate_dispersion_opportunity()` result (with `opp["basket"]` populated by
+    `build_dispersion_basket().to_dict()`) into the flat card shape
+    `webapp/src/api/types.ts::DispersionOpportunity` declares.
+
+    `evaluate_dispersion_opportunity`'s own return shape (nested `basket`, snake_case regime
+    string, no index spot/IV/straddle pricing at the top level) was never wire-compatible with
+    what the Pilots PWA's DispersionScanner screen reads -- this adapter is the single place that
+    reshapes it, mirroring the `to_scenario_matrix_response()` fix for the same bug class
+    (`docs/known_issues/scenario_matrix_field_mismatch.md`). `evaluate_dispersion_opportunity`/
+    `build_dispersion_basket`'s own return shapes are untouched by this function.
+
+    Returns `None` (never a partially-fabricated card -- CONSTRAINT #4) when the opportunity has
+    no priced basket -- there is no honest way to fill the strike/price/vega fields the frontend
+    needs without one. A per-constituent 30-day realized-vol series is never computed by this
+    module (only the cross-sectional `realized_correlation` is); that field is honestly `None`
+    on every constituent rather than a fabricated number.
+    """
+    basket = opp.get("basket")
+    if not basket or idx_spot is None or idx_iv is None:
+        return None
+
+    idx_sym = opp["index_symbol"]
+    index_legs = basket.get("index_leg_requests") or []
+    idx_strike = index_legs[0].get("strike") if index_legs else None
+    idx_call_price = next((leg.get("fill_price") for leg in index_legs if leg.get("type") == "call"), None)
+    idx_put_price = next((leg.get("fill_price") for leg in index_legs if leg.get("type") == "put"), None)
+    idx_straddle_price = (
+        (idx_call_price + idx_put_price)
+        if idx_call_price is not None and idx_put_price is not None
+        else None
+    )
+
+    is_long = bool(basket.get("is_long_dispersion", True))
+    index_vega_total = basket.get("index_vega")
+    constituents_vega_total = basket.get("basket_vega")
+    net_vega = (
+        (constituents_vega_total - index_vega_total)
+        if index_vega_total is not None and constituents_vega_total is not None
+        else None
+    )
+
+    constituents_out: List[Dict[str, Any]] = []
+    for sym, alloc in (basket.get("constituent_allocations") or {}).items():
+        constituents_out.append({
+            "symbol": sym,
+            "weight": alloc.get("weight"),
+            "spot_price": alloc.get("spot"),
+            "atm_iv": alloc.get("iv"),
+            "realized_vol_30d": None,
+            "straddle_strike": alloc.get("strike"),
+            "straddle_bid": None,
+            "straddle_ask": None,
+            "straddle_mid": alloc.get("straddle_unit_price"),
+            "vega_per_straddle": alloc.get("contract_vega"),
+            "contracts_allocated": alloc.get("contracts"),
+            "leg_action": "BUY" if is_long else "SELL",
+            "implied_rv_spread": None,
+        })
+
+    return {
+        "id": f"{idx_sym}_{basket.get('expiration') or ''}",
+        "index_symbol": idx_sym,
+        "index_name": None,
+        "index_spot": idx_spot,
+        "index_iv": idx_iv,
+        "index_rv_30d": None,
+        "index_straddle_strike": idx_strike,
+        "index_straddle_price": idx_straddle_price,
+        "index_straddle_contracts": basket.get("index_contracts"),
+        "index_action": "SELL" if is_long else "BUY",
+        "implied_correlation": opp.get("implied_correlation"),
+        "realized_correlation": opp.get("realized_correlation"),
+        "correlation_spread": opp.get("correlation_spread"),
+        "regime": _REGIME_TO_FRONTEND.get(opp.get("regime"), "NEUTRAL"),
+        "trade_recommendation": opp.get("description"),
+        "index_vega_total": index_vega_total,
+        "constituents_vega_total": constituents_vega_total,
+        "net_vega": net_vega,
+        "vega_neutrality_ratio": basket.get("vega_neutrality_ratio"),
+        "net_premium_estimate": basket.get("total_net_cash_impact"),
+        "expiration": basket.get("expiration"),
+        "dte": basket.get("target_dte"),
+        "constituents": constituents_out,
+        "as_of": None,
+    }
+
+
 def get_dispersion_opportunities(
     indices: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Returns dispersion arbitrage analysis and opportunities across index baskets.
+    Returns dispersion arbitrage opportunities across index baskets, shaped for the Pilots PWA's
+    DispersionScanner screen (see `_opportunity_to_frontend_card` above).
 
-    Sources real market data per index via `_source_real_dispersion_inputs`. When it is
-    unavailable for an index, that index's entry honestly reports `is_actionable=False` /
-    `regime="Insufficient Data"` (CONSTRAINT #4) rather than falling back to a fabricated
-    IV/correlation guess.
+    Sources real market data per index via `_source_real_dispersion_inputs`. An index whose
+    opportunity could not be priced off real data (regime="Insufficient Data", or
+    `build_dispersion_basket` itself refused due to incomplete constituent coverage) is honestly
+    omitted from `opportunities` (CONSTRAINT #4) rather than emitted as a partially-fabricated
+    card the frontend has no way to render without inventing numbers.
     """
     idx_list = indices or ["QQQ", "SPY"]
 
-    opportunities = []
+    opportunities: List[Dict[str, Any]] = []
     for idx in idx_list:
         try:
             idx_sym = str(idx).upper().strip()
@@ -845,6 +947,7 @@ def get_dispersion_opportunities(
                 realized_correlation=realized_corr,
             )
 
+            basket_obj = None
             if opp.get("regime") != "Insufficient Data":
                 # build_dispersion_basket is a second, independent honesty gate: it will
                 # itself refuse (return None) if per-symbol spot/IV coverage is incomplete.
@@ -857,23 +960,18 @@ def get_dispersion_opportunities(
                     is_long_dispersion=(opp.get("direction") != "short_dispersion"),
                     realized_correlation=realized_corr,
                 )
-                opp["basket"] = basket_obj.to_dict() if basket_obj is not None else None
-            else:
-                opp["basket"] = None
+            opp["basket"] = basket_obj.to_dict() if basket_obj is not None else None
 
-            opportunities.append(opp)
+            card = _opportunity_to_frontend_card(opp, spot_map.get(idx_sym), iv_map.get(idx_sym))
+            if card is not None:
+                opportunities.append(card)
         except Exception as exc:
             logger.warning("Error evaluating dispersion opportunity for %s: %s", idx, exc)
 
-    first_opp = opportunities[0] if opportunities else {}
     return {
         "count": len(opportunities),
         "opportunities": opportunities,
-        "implied_correlation": first_opp.get("implied_correlation"),
-        "realized_correlation": first_opp.get("realized_correlation"),
-        "correlation_spread": first_opp.get("correlation_spread"),
-        "regime": first_opp.get("regime"),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "as_of": datetime.now(timezone.utc).isoformat(),
     }
 
 
