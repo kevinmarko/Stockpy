@@ -6858,13 +6858,22 @@ def _derive_diffusion_regime_labels(
     the one dated window in this codebase with an unambiguous
     liquidity-squeeze characterization).
 
-    ``stagflation`` (REGIME_MAP class 3) is a KNOWN, DISCLOSED GAP and is
-    NEVER assigned by this function: no inflation series feeds
-    ``_reconstruct_macro_regime_series``'s output anywhere in this codebase
-    today (no real FRED inflation series is wired into that reconstruction),
-    so there is no honest proxy to derive it from. Do not fabricate a
-    heuristic for it here -- see also the caveat added to
-    ``GenerativeDiffusionStressView.tsx``'s stagflation option description.
+    ``stagflation`` (REGIME_MAP class 3) is approximated as elevated
+    market-implied inflation expectations (FRED ``T10YIE``, the 10-Year
+    Breakeven Inflation Rate, above its own trailing rolling threshold --
+    a self-relative comparison, since "normal" breakeven inflation drifts
+    across economic cycles) combined with a rising unemployment trend
+    (``UNRATE`` above its year-ago level), evaluated independently of the
+    ``AUG_2024`` liquidity-squeeze override and applied only when the base
+    bucket from ``_reconstruct_macro_regime_series`` is NOT already
+    ``RECESSION``/``CREDIT EVENT`` (those are more specific, already
+    real-signal-detected regimes -- this override never replaces a more
+    specific correct classification with a less specific one). This is a
+    real, FRED-sourced heuristic built from genuine historical data, NOT a
+    rigorously validated regime detector -- treat it as approximate; see
+    also the caveat in ``GenerativeDiffusionStressView.tsx``'s stagflation
+    option description. Degrades to never applying the override (not to a
+    hard failure of the whole function) if ``T10YIE`` is unavailable.
 
     Degrades to ``None`` (today's exact unconditional-training behavior --
     CONSTRAINT #4/#6) on ANY failure: a missing/stubbed
@@ -6907,10 +6916,54 @@ def _derive_diffusion_regime_labels(
     aug_start = pd.Timestamp(aug_2024.start) if aug_2024 is not None else None
     aug_end = pd.Timestamp(aug_2024.end) if aug_2024 is not None else None
 
+    # ── Stagflation override: elevated market-implied inflation expectations
+    # (T10YIE) + a rising unemployment trend (UNRATE), evaluated independently
+    # of the AUG_2024 check above and applied only where the base bucket isn't
+    # already a more specific RECESSION/CREDIT EVENT signal. This is a real,
+    # FRED-sourced heuristic, not a rigorously validated regime detector --
+    # see the docstring above for the honest caveat. Degrades to an empty set
+    # (override never applied, never raises) if T10YIE is unavailable.
+    stagflation_dates: set = set()
+    try:
+        t10yie = store.get_macro("T10YIE", lookback_days=750)
+        if t10yie is not None and not t10yie.empty and unrate is not None and not unrate.empty:
+            t10yie_sorted = t10yie.sort_index()
+            # Self-relative threshold: "elevated" = above the top quartile of
+            # the series' own trailing ~6-month (126 business day) window --
+            # not a hardcoded absolute level, since "normal" breakeven
+            # inflation drifts across economic cycles.
+            rolling_threshold = t10yie_sorted.rolling(window=126, min_periods=40).quantile(0.75)
+            unrate_sorted = unrate.sort_index()
+
+            for end_date in end_dates:
+                end_ts = pd.Timestamp(end_date)
+                t10yie_now = t10yie_sorted.asof(end_ts)
+                threshold_now = rolling_threshold.asof(end_ts)
+                unrate_now = unrate_sorted.asof(end_ts)
+                unrate_year_ago = unrate_sorted.asof(end_ts - pd.DateOffset(months=12))
+                if (
+                    pd.notna(t10yie_now) and pd.notna(threshold_now)
+                    and pd.notna(unrate_now) and pd.notna(unrate_year_ago)
+                    and t10yie_now > threshold_now
+                    and unrate_now > unrate_year_ago
+                ):
+                    stagflation_dates.add(end_ts)
+    except Exception as exc:  # noqa: BLE001 -- the stagflation override is
+        # best-effort on top of the already-real base regime classification;
+        # any failure here just means the override never fires, never a
+        # crash of the whole label-derivation function.
+        logger.debug(
+            "Diffusion stress test: T10YIE stagflation override skipped (%s).", exc,
+        )
+        stagflation_dates = set()
+
     labels: List[str] = []
     for end_date, bucket in zip(end_dates, regime_df["market_regime"]):
         if aug_start is not None and aug_end is not None and aug_start <= end_date <= aug_end:
             labels.append("liquidity_squeeze")
+            continue
+        if bucket not in ("RECESSION", "CREDIT EVENT") and pd.Timestamp(end_date) in stagflation_dates:
+            labels.append("stagflation")
             continue
         labels.append(bucket_to_class.get(bucket, "unconditional"))
 

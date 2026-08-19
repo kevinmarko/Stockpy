@@ -6526,7 +6526,11 @@ class TestDiffusionRegimeConditioning:
         assert len(distinct) > 1, f"expected multiple distinct regime classes, got {distinct}"
         assert "credit_freeze" in distinct
         assert "unconditional" in distinct
-        # stagflation must NEVER be fabricated -- no real proxy exists.
+        # This store's get_macro() has no "T10YIE" case (falls through to an
+        # empty Series), so the real T10YIE-based stagflation override in
+        # _derive_diffusion_regime_labels never fires here -- see
+        # TestDiffusionStagflationOverride below for the override itself,
+        # exercised against a store that DOES mock T10YIE.
         assert "stagflation" not in distinct
 
     def test_window_end_dates_mirror_build_return_windows_index_math(self):
@@ -6548,6 +6552,132 @@ class TestDiffusionRegimeConditioning:
             # original position in `returns` -- so it's also the position in
             # `dates` whose date must equal end_date.
             assert dates[int(row[-1])] == end_date
+
+
+class _StagflationMacroStore:
+    """``HistoricalStore.get_macro()`` stand-in for testing the T10YIE +
+    UNRATE stagflation override added to ``_derive_diffusion_regime_labels``.
+
+    VIXCLS/T10Y2Y/BAA10Y stay flat/benign for the whole history (never push
+    the base bucket toward RECESSION/CREDIT EVENT on their own). BAMLH0A0HYM2
+    (credit spread) is a low, RISK-ON-territory 2.0 everywhere except one
+    single spiked date (8.0, real CREDIT EVENT territory per
+    dto_models.MacroEconomicDTO._rules_based_regime), used to prove the
+    override never overrides an already-more-specific real signal. T10YIE
+    steps from a flat 2.0 baseline to an elevated 3.5 plateau starting at
+    ``elevated_start_idx`` (well within a 126-business-day rolling window of
+    itself by the time any test date is checked). UNRATE is a long, flat 4.0%
+    monthly series (so the Sahm Rule proxy is safely warmed up and near-zero)
+    that rises gently -- 4.0% -> 4.3% over its final 12 months, well under
+    the Sahm Rule's 0.6pp recession trigger -- so "UNRATE trending up" is
+    real without also flipping the base bucket to RECESSION.
+    """
+
+    def __init__(self, dates, *, elevated_start_idx, credit_event_date):
+        self._dates = dates
+        self._elevated_start_idx = elevated_start_idx
+        self._credit_event_date = credit_event_date
+
+    def get_macro(self, series_id, *, lookback_days=None, data_engine=None):
+        idx = self._dates
+        if series_id == "VIXCLS":
+            return pd.Series(15.0, index=idx, name=series_id)
+        if series_id == "T10Y2Y":
+            return pd.Series(1.0, index=idx, name=series_id)
+        if series_id == "BAA10Y":
+            return pd.Series(2.0, index=idx, name=series_id)
+        if series_id == "BAMLH0A0HYM2":
+            values = pd.Series(2.0, index=idx, name=series_id)
+            values.loc[self._credit_event_date] = 8.0
+            return values
+        if series_id == "T10YIE":
+            values = np.where(np.arange(len(idx)) >= self._elevated_start_idx, 3.5, 2.0)
+            return pd.Series(values, index=idx, name=series_id)
+        if series_id == "UNRATE":
+            monthly_idx = pd.date_range(end=idx[-1], periods=120, freq="MS")
+            values = np.full(len(monthly_idx), 4.0)
+            values[-12:] = np.linspace(4.0, 4.3, 12)
+            return pd.Series(values, index=monthly_idx, name=series_id)
+        return pd.Series(dtype=float, name=series_id)
+
+
+class TestDiffusionStagflationOverride:
+    """The plan's item 1: ``_derive_diffusion_regime_labels`` now assigns a
+    real, FRED-sourced ``stagflation`` label (elevated T10YIE + rising
+    UNRATE) rather than never emitting it. Uses window_len=1 so every date
+    in ``dates`` is its own window's end date (n_available == len(dates),
+    n_windows == len(dates) when max_windows >= len(dates)), letting a single
+    store/call exercise three distinct dates deterministically."""
+
+    N_DAYS = 500
+    ELEVATED_START_IDX = 470  # T10YIE plateau starts here
+    CALM_IDX = 200            # before the T10YIE plateau and the UNRATE rise
+    STAGFLATION_IDX = 490     # inside the plateau; credit spread stays calm
+    CREDIT_EVENT_IDX = 485    # inside the plateau; credit spread is spiked here
+
+    def _dates_and_store(self):
+        dates = pd.bdate_range(end="2026-08-01", periods=self.N_DAYS)
+        store = _StagflationMacroStore(
+            dates,
+            elevated_start_idx=self.ELEVATED_START_IDX,
+            credit_event_date=dates[self.CREDIT_EVENT_IDX],
+        )
+        return dates, store
+
+    def test_assigns_stagflation_to_elevated_inflation_and_rising_unemployment_window(self):
+        dates, store = self._dates_and_store()
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert labels[self.STAGFLATION_IDX] == "stagflation"
+
+    def test_does_not_assign_stagflation_to_a_calm_window(self):
+        dates, store = self._dates_and_store()
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert labels[self.CALM_IDX] != "stagflation"
+
+    def test_does_not_override_an_already_credit_event_window(self):
+        # Elevated T10YIE + rising UNRATE both hold at this date too (it's
+        # inside the same plateau as STAGFLATION_IDX), but the base bucket
+        # is a real, more-specific CREDIT EVENT (credit spread spiked to 8.0
+        # on this exact date) -- the override must never replace a more
+        # specific, already-correct classification with a less specific one.
+        dates, store = self._dates_and_store()
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert labels[self.CREDIT_EVENT_IDX] == "credit_freeze"
+
+    def test_no_t10yie_series_never_applies_override(self):
+        # Same elevated-plateau/rising-UNRATE setup, but get_macro("T10YIE")
+        # degrades to an empty Series (mirrors a real HistoricalStore that
+        # has never cached T10YIE) -- the override must never fire, and the
+        # rest of the label derivation must proceed unaffected (CONSTRAINT #6).
+        dates, store = self._dates_and_store()
+
+        real_get_macro = store.get_macro
+
+        def _get_macro_no_t10yie(series_id, **kwargs):
+            if series_id == "T10YIE":
+                return pd.Series(dtype=float, name=series_id)
+            return real_get_macro(series_id, **kwargs)
+
+        store.get_macro = _get_macro_no_t10yie
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert "stagflation" not in set(labels)
+        assert labels[self.STAGFLATION_IDX] == "unconditional"
 
 
 # ---------------------------------------------------------------------------

@@ -38,11 +38,13 @@ const REGIME_OPTIONS: RegimeOption[] = [
     name: "Stagflation",
     badge: "MACRO STRESS",
     description:
-      "Persistent negative drift + elevated rate vol. Caveat: no real inflation " +
-      "series feeds this platform's regime detection, so unlike the other four " +
-      "regimes this class has no real historical training examples today -- " +
-      "results reflect classifier-free guidance only, not learned stagflation " +
-      "conditioning.",
+      "Persistent negative drift + elevated rate vol. Labeled from real FRED " +
+      "data -- market-implied inflation expectations (10-Year Breakeven, " +
+      "T10YIE) elevated above their own trailing range, combined with a " +
+      "rising unemployment trend -- rather than a single hand-picked dated " +
+      "historical window like Credit Freeze/Liquidity Squeeze below. Caveat: " +
+      "this is a disclosed heuristic, not a rigorously validated regime " +
+      "detector, so treat any training examples it labels as approximate.",
     color: theme.caution,
   },
   {
