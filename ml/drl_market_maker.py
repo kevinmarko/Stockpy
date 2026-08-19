@@ -71,10 +71,11 @@ continuous parameter space of an already-fixed analytical policy; it does not le
 has no value network, no replay buffer, and no policy gradient of any kind.
 
 `MarketMakingEnv` is a real, correctly-implemented Gym-style step/reset environment and would be a valid
-substrate for an actual RL algorithm -- but no such algorithm is implemented here. `train_market_maker_policy`
-is also NOT called by `api/pilots_api.py` or any webapp component as of this writing; the only
-live-reachable path from the Pilots API is `simulate_market_maker_session` (the deterministic
-closed-form AS quoter). Building a real PPO/SAC agent over `MarketMakingEnv` -- a neural policy network,
+substrate for an actual RL algorithm -- but no such algorithm is implemented here. As of PR #788,
+`train_market_maker_policy` IS called by `api/pilots_api.py` (`POST /pilots/options/market-maker/train`),
+but it still has NO webapp caller -- the only UI-reachable path remains `simulate_market_maker_session`
+(the deterministic closed-form AS quoter), reached via `POST /pilots/options/market-maker/simulate`.
+Building a real PPO/SAC agent over `MarketMakingEnv` -- a neural policy network,
 an advantage/value estimator, a proper on-policy or off-policy training loop -- is a separate, substantial
 RL engineering effort, out of scope for this fix; this note exists so nobody mistakes the hill-climb
 optimizer here for that.
