@@ -161,6 +161,29 @@ def _qmark_to_named(sql: str, params: tuple) -> tuple:
     return rewritten, bind_dict
 
 
+def _resolve_sqlite_db_path(db_url: str) -> str:
+    """Resolve a `sqlite:///...` DATABASE_URL down to a bare filesystem path.
+
+    Always parses the actual path out of the resolved URL — for BOTH the
+    default case (DATABASE_URL unset) and an explicit custom override — never
+    substitutes a hardcoded cwd-relative literal for the default case. This is
+    the same fix pattern as `forecasting/forecast_tracker.py`'s PR #720 (see
+    `docs/known_issues/forecast_tracker_local_data_root_split.md` for the full
+    incident writeup): a module that bypasses `db_config.resolve_database_url()`'s
+    resolved path for the default case and substitutes `"quant_platform.db"`
+    instead silently reads/writes a stale cwd-relative file rather than the
+    live `settings.LOCAL_DATA_ROOT`-anchored one whenever the process cwd
+    differs from `LOCAL_DATA_ROOT` — exactly what `_db_query`/`get_database_schema`
+    were doing before this fix. Shared by both so their pre-checks and actual
+    queries always agree on which file they're talking about.
+
+    The `or "quant_platform.db"` fallback only matters for a pathological
+    empty-database-field URL.
+    """
+    from sqlalchemy.engine import make_url
+    return make_url(db_url).database or "quant_platform.db"
+
+
 def _db_query(sql: str, params: tuple = ()):
     """
     Executes a read query against the platform database, transparently
@@ -178,30 +201,19 @@ def _db_query(sql: str, params: tuple = ()):
     wrap this in try/except per the codebase convention).
     """
     try:
-        from db_config import resolve_database_url, DEFAULT_DATABASE_URL
+        from db_config import resolve_database_url
         db_url = resolve_database_url()
-        # Only an EXPLICITLY-configured DATABASE_URL should redirect the
-        # sqlite fast path below to a non-default file — when the operator
-        # hasn't set DATABASE_URL, resolve_database_url() returns this
-        # exact default sentinel and today's cwd-relative behavior (and
-        # every existing chdir-based test) must be preserved unchanged.
-        is_default_sqlite = db_url == DEFAULT_DATABASE_URL
     except Exception:
+        # db_config itself failed to import -- an extremely rare degrade path
+        # with no resolve_database_url() to call, so a hardcoded literal
+        # fallback is fine here (unlike the bug this function used to have in
+        # its DEFAULT case, where db_config imported fine and was simply
+        # overridden).
         db_url = "sqlite:///quant_platform.db"
-        is_default_sqlite = True
 
     if db_url.startswith("sqlite"):
         # Local sqlite fast path - preserve existing raw sqlite3 behavior.
-        if is_default_sqlite:
-            # DATABASE_URL unset -> the RELATIVE literal, cwd-relative (the
-            # test suite's `monkeypatch.chdir(tmp_path)` fixtures depend on this).
-            db_path = "quant_platform.db"
-        else:
-            # An explicit custom sqlite DATABASE_URL was configured — honor
-            # its actual file path instead of silently reading the wrong
-            # (default, cwd-relative) file.
-            from sqlalchemy.engine import make_url
-            db_path = make_url(db_url).database or "quant_platform.db"
+        db_path = _resolve_sqlite_db_path(db_url)
         if not os.path.exists(db_path):
             # Keep this check: `mode=ro` on a missing file raises the less-clear
             # "unable to open database file" and does NOT create it, so this
@@ -209,11 +221,11 @@ def _db_query(sql: str, params: tuple = ()):
             raise FileNotFoundError(f"{db_path} not found.")
         # DB-LEVEL read-only via `?mode=ro` (uri=True). Unlike PRAGMA query_only,
         # this cannot be reverted by any subsequent PRAGMA. Escaping IS required
-        # here: when a custom DATABASE_URL is configured, db_path comes from
-        # make_url().database rather than the hardcoded literal, so it can
-        # contain URI metacharacters (?/#/%) — an unescaped path would silently
-        # DROP ?mode=ro and hand back a READ-WRITE connection (fail-open). Reuse
-        # db_config's own escaping helper rather than duplicating the logic.
+        # here: db_path comes from make_url().database (via
+        # _resolve_sqlite_db_path), so it can contain URI metacharacters
+        # (?/#/%) — an unescaped path would silently DROP ?mode=ro and hand
+        # back a READ-WRITE connection (fail-open). Reuse db_config's own
+        # escaping helper rather than duplicating the logic.
         from db_config import sqlite_readonly_uri
         conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
         try:
@@ -380,9 +392,14 @@ def get_database_schema() -> str:
         db_url = "sqlite:///quant_platform.db"
 
     if db_url.startswith("sqlite"):
-        db_path = "quant_platform.db"
+        # Resolve the same way _db_query() does (via _resolve_sqlite_db_path)
+        # so this function's own existence pre-check and the actual query
+        # _db_query() performs below always agree on which file they're
+        # talking about -- see _resolve_sqlite_db_path's docstring for the
+        # bug this fixes.
+        db_path = _resolve_sqlite_db_path(db_url)
         if not os.path.exists(db_path):
-            return "Error: quant_platform.db not found in the current directory."
+            return f"Error: {db_path} not found."
         try:
             _, rows = _db_query("SELECT sql FROM sqlite_master WHERE type='table';")
             schema_definitions = "\n\n".join([row[0] for row in rows if row[0]])

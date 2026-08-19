@@ -80,7 +80,12 @@ not on ``investyo_mcp_server``'s namespace. File-based tools
 (``update_watch_rules``, ``update_universe_tickers``,
 ``get_universe_status``, ``read_platform_logs``) use
 ``monkeypatch.chdir(tmp_path)`` to isolate from the real repo's
-``.env``/``watch_rules.yaml``/``quant_platform.db``/log files.
+``.env``/``watch_rules.yaml``/log files. Any tool that reaches
+``_db_query``/``get_database_schema`` (the sqlite fast path resolves via
+``db_config.resolve_database_url()``, anchored at ``settings.LOCAL_DATA_ROOT``
+-- NOT the process cwd) additionally needs ``_route_default_db_to_tmp_path``
+(defined below) to isolate it from the real, live platform database; see
+that helper's docstring for why ``chdir`` alone is no longer sufficient.
 
 Coverage
 --------
@@ -216,6 +221,35 @@ def _patch_advisory_inputs(monkeypatch, snapshot=None):
         pass
 
 
+def _route_default_db_to_tmp_path(monkeypatch, tmp_path, filename="quant_platform.db"):
+    """Isolate every tool that ultimately reads through
+    ``investyo_mcp_server._db_query``/``get_database_schema`` from the real,
+    live platform database.
+
+    Before the fix documented in ``investyo_mcp_server._resolve_sqlite_db_path``,
+    the DEFAULT case (``DATABASE_URL`` unset) substituted a hardcoded,
+    cwd-relative ``"quant_platform.db"`` literal instead of the file
+    ``db_config.resolve_database_url()`` actually resolved to, so a plain
+    ``monkeypatch.chdir(tmp_path)`` was sufficient isolation on its own.
+    Post-fix, the default sqlite path is parsed from
+    ``db_config.resolve_database_url()``'s real return value -- and
+    ``db_config.DEFAULT_DB_FILE``/``DEFAULT_DATABASE_URL`` are frozen at
+    ``db_config`` MODULE IMPORT time from ``settings.LOCAL_DATA_ROOT``, so
+    monkeypatching ``settings.LOCAL_DATA_ROOT`` after import would not
+    retroactively change them -- so ``chdir`` alone no longer isolates a
+    test from the real, live ``settings.LOCAL_DATA_ROOT``-anchored database.
+    This monkeypatches ``db_config.resolve_database_url`` itself instead,
+    mirroring ``tests/test_forecast_tracker.py``'s
+    ``TestDefaultDbPathResolvesThroughDbConfig`` pattern for the sibling
+    incident this mirrors (see
+    ``docs/known_issues/forecast_tracker_local_data_root_split.md``).
+    """
+    monkeypatch.setattr(
+        "db_config.resolve_database_url",
+        lambda: f"sqlite:///{tmp_path / filename}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
@@ -231,10 +265,12 @@ class TestGetReadOnlyEntry:
 class TestGetDatabaseSchema:
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         assert "not found" in srv.get_database_schema()
 
     def test_real_schema_returned(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE Foo (id INTEGER PRIMARY KEY, name TEXT)")
         conn.commit()
@@ -246,12 +282,14 @@ class TestGetDatabaseSchema:
 
     def test_empty_db_returns_placeholder(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         sqlite3.connect("quant_platform.db").close()
 
         assert srv.get_database_schema() == "Database is currently empty."
 
     def test_query_exception_degrades_to_error_string(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         sqlite3.connect("quant_platform.db").close()
 
         def _raise(*a, **k):
@@ -500,6 +538,7 @@ class TestQueryInvestyoDb:
 
     def test_accepts_lowercase_and_leading_whitespace_select(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         sqlite3.connect("quant_platform.db").close()
         assert "Only SELECT" not in srv.query_investyo_db("   select 1")
 
@@ -507,6 +546,7 @@ class TestQueryInvestyoDb:
         """Fixed contract: a read-only ``WITH ... SELECT`` CTE is ACCEPTED
         (the guard is no longer a naive ``startswith('SELECT')``)."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE T (symbol TEXT, score REAL)")
         conn.execute("INSERT INTO T VALUES ('AAPL', 1.5)")
@@ -522,6 +562,7 @@ class TestQueryInvestyoDb:
 
     def test_accepts_leading_whitespace_with_cte(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         sqlite3.connect("quant_platform.db").close()
         assert "Only SELECT queries are permitted" not in srv.query_investyo_db(
             "  \n WITH x AS (SELECT 1 AS a) SELECT a FROM x"
@@ -543,10 +584,12 @@ class TestQueryInvestyoDb:
 
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         assert "not found" in srv.query_investyo_db("SELECT 1")
 
     def test_zero_rows_message(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE T (id INTEGER)")
         conn.commit()
@@ -558,6 +601,7 @@ class TestQueryInvestyoDb:
 
     def test_formatted_multi_row_result(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE T (symbol TEXT, score REAL)")
         conn.execute("INSERT INTO T VALUES ('AAPL', 1.5)")
@@ -573,6 +617,7 @@ class TestQueryInvestyoDb:
 
     def test_malformed_sql_degrades_to_error_string(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         sqlite3.connect("quant_platform.db").close()
 
         result = srv.query_investyo_db("SELECT * FROM nonexistent_table")
@@ -587,6 +632,7 @@ class TestQueryInvestyoDb:
         the connection itself. This is the path every other _db_query caller —
         and any future caller — takes."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE T (symbol TEXT, score REAL)")
         conn.commit()
@@ -599,6 +645,7 @@ class TestQueryInvestyoDb:
         """mode=ro is strictly stronger than PRAGMA query_only: even after asking
         to disable query_only, a write still fails (mode=ro is not revertible)."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE T (x INTEGER)")
         conn.commit()
@@ -619,6 +666,7 @@ class TestQueryInvestyoDb:
 
     def test_db_query_does_not_create_missing_db_file(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         with pytest.raises(FileNotFoundError):
             srv._db_query("SELECT 1")
         assert not (tmp_path / "quant_platform.db").exists()
@@ -626,6 +674,7 @@ class TestQueryInvestyoDb:
     def test_db_query_readonly_creates_no_wal_sidecars(self, monkeypatch, tmp_path):
         """A read over a non-WAL db must not leave -wal/-shm sidecars behind."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE T (x INTEGER)")
         conn.execute("INSERT INTO T VALUES (1)")
@@ -639,15 +688,24 @@ class TestQueryInvestyoDb:
 
 
 # ---------------------------------------------------------------------------
-# _db_query internals — two dormant Postgres-branch bugs (fixed):
+# _db_query internals — dormant/fixed bugs:
 #   1. ``sqlalchemy.text(sql)`` doesn't understand SQLite's ``?`` positional
 #      placeholders, and a plain tuple params arg raises ArgumentError under
 #      SQLAlchemy 2.0 — `_qmark_to_named` rewrites `?` -> `:pN` + a bind dict.
 #   2. The sqlite branch silently discarded a caller-configured custom
 #      DATABASE_URL and always read the cwd-relative "quant_platform.db"
-#      literal — fixed to honor an EXPLICIT custom sqlite DATABASE_URL,
-#      while leaving the (unset/default) case, and every existing
-#      chdir-based test above, byte-for-byte unchanged.
+#      literal — fixed to honor an EXPLICIT custom sqlite DATABASE_URL.
+#   3. The DEFAULT case (DATABASE_URL unset) ALSO silently discarded the
+#      resolved db_config.resolve_database_url() path and substituted the
+#      same hardcoded cwd-relative "quant_platform.db" literal instead --
+#      the mirror-image bug to #2, and the one that actually bit in
+#      production (see docs/known_issues/forecast_tracker_local_data_root_split.md
+#      for the sibling incident this matches). Fixed so BOTH the default and
+#      custom cases resolve the sqlite path the same way, via
+#      _resolve_sqlite_db_path (sqlalchemy.engine.make_url(...).database).
+#      Every chdir-based test in this file was updated to also monkeypatch
+#      db_config.resolve_database_url (via _route_default_db_to_tmp_path)
+#      instead of relying on chdir alone for isolation.
 # ---------------------------------------------------------------------------
 
 
@@ -835,19 +893,34 @@ class TestDbQueryPostgresBranch:
 
 
 class TestDbQuerySqliteDatabaseUrlHonored:
-    """Bug 2: DATABASE_URL unset must reproduce today's exact cwd-relative
-    behavior; an EXPLICIT custom sqlite DATABASE_URL must be honored instead
-    of silently reading the wrong file."""
+    """DATABASE_URL unset (the default case) must resolve the sqlite path
+    through db_config.resolve_database_url() the same way an EXPLICIT
+    custom sqlite DATABASE_URL does -- both parsed via
+    _resolve_sqlite_db_path (sqlalchemy.engine.make_url(...).database),
+    never a hardcoded cwd-relative "quant_platform.db" literal for either
+    case. Before this fix, the default case substituted that literal
+    instead of the resolved path -- the bug documented in
+    docs/known_issues/forecast_tracker_local_data_root_split.md's sibling
+    incident, and the two tests below (test_default_case_resolves_via_...
+    and test_default_case_reads_the_resolved_file_not_a_decoy_cwd_file) are
+    the regression coverage that would have caught it."""
 
-    def test_unset_database_url_uses_cwd_relative_default(self, monkeypatch, tmp_path):
-        """Unchanged-behavior pin: identical to how every other test in this
-        file already calls query_investyo_db/read_platform_logs/etc, just
-        exercised directly against `_db_query`."""
+    def test_default_case_resolves_via_resolve_database_url(self, monkeypatch, tmp_path):
+        """The default (DATABASE_URL unset) case reads the file
+        db_config.resolve_database_url() actually resolves to -- proven here
+        by pointing that resolution at an arbitrary tmp_path location (NOT
+        the process cwd, which is left untouched) and confirming the query
+        reads from there."""
         from settings import settings
+        import db_config
 
         monkeypatch.setattr(settings, "DATABASE_URL", None)
-        monkeypatch.chdir(tmp_path)
-        conn = sqlite3.connect("quant_platform.db")
+        resolved_db = tmp_path / "resolved" / "quant_platform.db"
+        resolved_db.parent.mkdir()
+        monkeypatch.setattr(
+            db_config, "resolve_database_url", lambda: f"sqlite:///{resolved_db}"
+        )
+        conn = sqlite3.connect(str(resolved_db))
         conn.execute("CREATE TABLE T (id INTEGER)")
         conn.execute("INSERT INTO T VALUES (7)")
         conn.commit()
@@ -856,6 +929,48 @@ class TestDbQuerySqliteDatabaseUrlHonored:
         columns, rows = srv._db_query("SELECT id FROM T")
 
         assert rows == [(7,)]
+
+    def test_default_case_reads_the_resolved_file_not_a_decoy_cwd_file(self, monkeypatch, tmp_path):
+        """Regression guard for the original bug, reproducing it exactly:
+        with DATABASE_URL unset (the default case), a same-named
+        "quant_platform.db" sitting in the process's CURRENT WORKING
+        DIRECTORY must NOT be the file read -- only the file at
+        db_config.resolve_database_url()'s actual resolved location. Before
+        the fix, the default branch discarded the resolved path and
+        substituted a bare cwd-relative literal, so this exact scenario
+        would have silently served the decoy file's row (-1) instead of the
+        real one (42), with no error at all."""
+        from settings import settings
+        import db_config
+
+        monkeypatch.setattr(settings, "DATABASE_URL", None)
+        monkeypatch.chdir(tmp_path)
+
+        # A decoy "quant_platform.db" sits in the process cwd with a
+        # DIFFERENT row -- if the bug were still present, _db_query would
+        # read THIS file (via the hardcoded literal) instead of the
+        # resolved one below.
+        decoy_conn = sqlite3.connect("quant_platform.db")
+        decoy_conn.execute("CREATE TABLE T (id INTEGER)")
+        decoy_conn.execute("INSERT INTO T VALUES (-1)")
+        decoy_conn.commit()
+        decoy_conn.close()
+
+        # The REAL resolved location -- deliberately NOT the cwd.
+        resolved_db = tmp_path / "elsewhere" / "quant_platform.db"
+        resolved_db.parent.mkdir()
+        monkeypatch.setattr(
+            db_config, "resolve_database_url", lambda: f"sqlite:///{resolved_db}"
+        )
+        conn = sqlite3.connect(str(resolved_db))
+        conn.execute("CREATE TABLE T (id INTEGER)")
+        conn.execute("INSERT INTO T VALUES (42)")
+        conn.commit()
+        conn.close()
+
+        columns, rows = srv._db_query("SELECT id FROM T")
+
+        assert rows == [(42,)]
 
     def test_custom_sqlite_database_url_is_honored(self, monkeypatch, tmp_path):
         """The core regression: a custom DATABASE_URL pointing at a
@@ -1387,11 +1502,13 @@ class TestReadPlatformLogs:
         # present". Same isolation TestReadPlatformLogsFindsLogsSubdirectory
         # already applies below.
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path)
         assert "No execution logs found" in srv.read_platform_logs()
 
     def test_db_rows_rendered(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute(
             "CREATE TABLE ExecutionLogs (id INTEGER PRIMARY KEY, timestamp TEXT, status TEXT, "
@@ -1411,6 +1528,7 @@ class TestReadPlatformLogs:
 
     def test_log_file_contents_included(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         (tmp_path / "app.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
 
         result = srv.read_platform_logs(lines=2)
@@ -1428,6 +1546,7 @@ class TestReadPlatformLogs:
 class TestGetUniverseStatus:
     def test_defaults_when_nothing_present(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         # `settings` is a process-wide singleton constructed once on first
         # import, not re-read per call -- whichever test imports it first
         # locks in whatever DEFAULT_TICKERS its real `.env` had at that
@@ -1448,6 +1567,7 @@ class TestGetUniverseStatus:
 
     def test_reads_env_and_watch_rules_and_db(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         (tmp_path / ".env").write_text('DEFAULT_TICKERS=["NVDA"]\n', encoding="utf-8")
         (tmp_path / "watch_rules.yaml").write_text(
             yaml.safe_dump({"rules": [{"symbol": "NVDA", "alert_on": "conviction_above", "threshold": 0.9}]}),
@@ -1476,6 +1596,7 @@ class TestGetUniverseStatus:
         ExecutionLogs / trades (and NO `Transactions` table) must render the
         metrics without the old ``no such table: Transactions`` error."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE DailySignals (id INTEGER)")
         conn.execute("CREATE TABLE ExecutionLogs (id INTEGER)")
@@ -3047,10 +3168,12 @@ class TestGetSignalBreakdown:
 
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         assert "not found" in srv.get_signal_breakdown("AAPL")
 
     def test_symbol_not_found(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
@@ -3058,6 +3181,7 @@ class TestGetSignalBreakdown:
 
     def test_renders_most_recent_row_excluding_meta_keys(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
@@ -3097,10 +3221,12 @@ class TestGenerateDailySignals:
 
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         assert "not found" in srv.generate_daily_signals()
 
     def test_no_signals_in_db(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
@@ -3108,6 +3234,7 @@ class TestGenerateDailySignals:
 
     def test_top_n_ranked_by_score(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
@@ -4271,6 +4398,7 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
         # (settings.LOCAL_DATA_ROOT, Bucket 3) rather than a CWD-relative
         # "logs" dir, so point LOCAL_DATA_ROOT at tmp_path.
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path)
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
@@ -4286,6 +4414,7 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
         """Backward-compat: a *.log file directly in the cwd (not under
         logs/) is still found -- pins the pre-existing behavior/test."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         # Point LOCAL_DATA_ROOT somewhere with no "logs" subdir so this test
         # only exercises the cwd fallback, not the real operator's local data root.
         monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path / "_unused_local_data_root")
@@ -4297,6 +4426,7 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
 
     def test_finds_both_logs_subdir_and_cwd_files(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path)
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
@@ -4519,12 +4649,14 @@ class TestGetFactorAttributions:
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         from investyo_mcp_server import get_factor_attributions
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         res = get_factor_attributions("AAPL")
         assert "no recent factor score for AAPL" in res or "failed" in res
 
     def test_ticker_not_in_universe(self, monkeypatch, tmp_path):
         from investyo_mcp_server import get_factor_attributions
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
@@ -4535,6 +4667,7 @@ class TestGetFactorAttributions:
         import sqlite3
         from investyo_mcp_server import get_factor_attributions
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
@@ -4736,6 +4869,7 @@ class TestValidateOrderCompliance:
     def test_never_returns_blanket_passed_with_no_data(self, monkeypatch, tmp_path):
         """No DailySignals row at all -- must be UNAVAILABLE, never PASSED."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         from investyo_mcp_server import validate_order_compliance
@@ -4749,6 +4883,7 @@ class TestValidateOrderCompliance:
         from settings import settings
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("GOOD", kelly=0.10, sizing_capped="No",
@@ -4768,6 +4903,7 @@ class TestValidateOrderCompliance:
         from settings import settings
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         # Kelly Target well beyond settings.KELLY_CAP (0.20), and the
@@ -4788,6 +4924,7 @@ class TestValidateOrderCompliance:
 
     def test_sell_side_skips_kelly_cap_check(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("SELLME", kelly=0.35, sizing_capped="Yes",
@@ -4803,6 +4940,7 @@ class TestValidateOrderCompliance:
         """A Kelly-only row (no VRP/True_IVR yet) must degrade that ONE
         check to UNAVAILABLE, never silently pass it."""
         monkeypatch.chdir(tmp_path)
+        _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("PARTIAL", kelly=0.05, sizing_capped="No",
