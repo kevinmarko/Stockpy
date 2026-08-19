@@ -73,6 +73,7 @@ def test_health_open_even_when_tokens_set():
 
 
 def test_pilots_list_shape(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/pilots")
@@ -102,6 +103,7 @@ def test_pilots_list_shape(monkeypatch):
 
 
 def test_pilots_list_headline_null_when_no_backtest(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/pilots")
@@ -115,6 +117,7 @@ def test_pilots_list_headline_null_when_no_backtest(monkeypatch):
 
 
 def test_pilots_list_holdings_count_zero_without_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     # tmp_path has no state_snapshot.json -> list still returns (never 404).
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
@@ -130,6 +133,7 @@ def test_pilots_list_holdings_count_zero_without_snapshot(tmp_path, monkeypatch)
 
 
 def test_pilot_detail_shape(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/pilots/trend-following")
@@ -157,6 +161,7 @@ def test_pilot_detail_shape(monkeypatch):
 def test_pilot_detail_news_coverage_null_for_non_news_pilot(monkeypatch):
     # trend-following carries no `news_catalyst` weight -> news_coverage must
     # be null, never a fabricated/borrowed value (CONSTRAINT #4).
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/pilots/trend-following")
@@ -165,6 +170,7 @@ def test_pilot_detail_news_coverage_null_for_non_news_pilot(monkeypatch):
 
 
 def test_pilot_detail_news_coverage_populated_for_news_catalyst_pilot(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     fake_coverage = {
         "archived_score_count": 412,
@@ -182,6 +188,7 @@ def test_pilot_detail_news_coverage_populated_for_news_catalyst_pilot(monkeypatc
 def test_pilot_detail_news_coverage_degrades_to_none_on_failure(monkeypatch):
     # get_news_catalyst_coverage itself never raises (CONSTRAINT #6) — but the
     # detail endpoint must also survive a None return honestly, not 500.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES), mock.patch(
         "pilots.news_catalyst.get_news_catalyst_coverage", return_value=None
@@ -191,13 +198,15 @@ def test_pilot_detail_news_coverage_degrades_to_none_on_failure(monkeypatch):
     assert resp.json()["news_coverage"] is None
 
 
-def test_pilot_detail_unknown_404():
+def test_pilot_detail_unknown_404(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     resp = client.get("/pilots/does-not-exist")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "No such pilot."
 
 
 def test_pilot_detail_cold_start_empty_but_not_404(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/pilots/trend-following")
@@ -216,7 +225,8 @@ def test_pilot_detail_cold_start_empty_but_not_404(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_symbol_detail_shape_and_values():
+def test_symbol_detail_shape_and_values(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/AAPL")
     assert resp.status_code == 200
@@ -255,22 +265,25 @@ def test_symbol_detail_shape_and_values():
         assert set(p) == {"pilot_id", "name", "weight"}
 
 
-def test_symbol_detail_case_insensitive():
+def test_symbol_detail_case_insensitive(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/aapl")
     assert resp.status_code == 200
     assert resp.json()["symbol"] == "AAPL"
 
 
-def test_symbol_detail_unknown_404():
+def test_symbol_detail_unknown_404(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/ZZZ")
     assert resp.status_code == 404
     assert resp.json()["detail"] == pilots_api._UNKNOWN_SYMBOL_DETAIL
 
 
-def test_symbol_detail_cold_start_404(tmp_path):
+def test_symbol_detail_cold_start_404(tmp_path, monkeypatch):
     # tmp_path has no state_snapshot.json → honest cold-start 404 (distinct detail).
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/symbols/AAPL")
     assert resp.status_code == 404
@@ -282,7 +295,8 @@ def test_symbol_detail_cold_start_404(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_symbols_compare_shape_and_values():
+def test_symbols_compare_shape_and_values(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=AAPL,MSFT")
     assert resp.status_code == 200
@@ -304,12 +318,13 @@ def test_symbols_compare_shape_and_values():
     assert isinstance(body["modules"], list) and body["modules"] == sorted(body["modules"])
 
 
-def test_symbols_compare_not_shadowed_by_ticker_route():
+def test_symbols_compare_not_shadowed_by_ticker_route(monkeypatch):
     # Regression guard for the FastAPI route-ordering trap: /symbols/compare
     # must match its own handler, not get captured as ticker="compare" by the
     # earlier-declared-in-file-order... (it's declared BEFORE /symbols/{ticker}
     # precisely to avoid this). A shadowed route would 404 with
     # _UNKNOWN_SYMBOL_DETAIL instead of returning the comparison shape.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=AAPL,MSFT")
     assert resp.status_code == 200
@@ -317,7 +332,8 @@ def test_symbols_compare_not_shadowed_by_ticker_route():
     assert "identity" not in resp.json()  # would be present if it hit get_symbol_detail
 
 
-def test_symbols_compare_case_insensitive_and_deduped():
+def test_symbols_compare_case_insensitive_and_deduped(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=aapl,AAPL,  Aapl ,msft")
     assert resp.status_code == 200
@@ -328,7 +344,8 @@ def test_symbols_compare_case_insensitive_and_deduped():
     assert body["symbols"][1]["symbol"] == "MSFT"
 
 
-def test_symbols_compare_unknown_symbol_gets_honest_row_not_404():
+def test_symbols_compare_unknown_symbol_gets_honest_row_not_404(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=AAPL,ZZZ")
     assert resp.status_code == 200
@@ -339,7 +356,8 @@ def test_symbols_compare_unknown_symbol_gets_honest_row_not_404():
     assert rows["ZZZ"]["score"] is None
 
 
-def test_symbols_compare_cold_start_never_404s(tmp_path):
+def test_symbols_compare_cold_start_never_404s(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/symbols/compare?symbols=AAPL,MSFT")
     assert resp.status_code == 200
@@ -350,7 +368,8 @@ def test_symbols_compare_cold_start_never_404s(tmp_path):
         assert row["reason"] == pilots_api._MISSING_SNAPSHOT_DETAIL
 
 
-def test_symbols_compare_too_few_symbols_422():
+def test_symbols_compare_too_few_symbols_422(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=AAPL")
     assert resp.status_code == 422
@@ -358,22 +377,25 @@ def test_symbols_compare_too_few_symbols_422():
     assert detail["error"] == "too_few_symbols"
 
 
-def test_symbols_compare_too_few_symbols_after_dedup_422():
+def test_symbols_compare_too_few_symbols_after_dedup_422(monkeypatch):
     # AAPL,aapl de-duplicates to a single symbol -> still below the floor.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=AAPL,aapl")
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "too_few_symbols"
 
 
-def test_symbols_compare_too_many_symbols_422():
+def test_symbols_compare_too_many_symbols_422(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare?symbols=AAPL,MSFT,NVDA,JPM,XOM,JNJ")
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "too_many_symbols"
 
 
-def test_symbols_compare_missing_query_param_422():
+def test_symbols_compare_missing_query_param_422(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/symbols/compare")
     assert resp.status_code == 422
@@ -384,7 +406,8 @@ def test_symbols_compare_missing_query_param_422():
 # ---------------------------------------------------------------------------
 
 
-def test_universe_shape_and_values():
+def test_universe_shape_and_values(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/universe")
     assert resp.status_code == 200
@@ -400,10 +423,11 @@ def test_universe_shape_and_values():
     assert aapl["action"] == "BUY"
 
 
-def test_universe_cold_start_empty_not_404(tmp_path):
+def test_universe_cold_start_empty_not_404(tmp_path, monkeypatch):
     # Unlike /symbols/{ticker}, /universe never 404s — a cold start is an
     # honestly empty suggestion list, not an error (this endpoint only ever
     # backs an autocomplete UI, so "nothing to suggest yet" is a normal state).
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/universe")
     assert resp.status_code == 200
@@ -495,7 +519,8 @@ class TestUniverseReinclude:
 # ---------------------------------------------------------------------------
 
 
-def test_recommendations_shape_and_ranking():
+def test_recommendations_shape_and_ranking(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/recommendations")
     assert resp.status_code == 200
@@ -511,7 +536,8 @@ def test_recommendations_shape_and_ranking():
         assert set(r) == {"symbol", "action", "conviction", "score", "buy_range", "sector", "price"}
 
 
-def test_recommendations_limit_clamped():
+def test_recommendations_limit_clamped(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/recommendations?limit=2")
     assert resp.status_code == 200
@@ -524,7 +550,8 @@ def test_recommendations_limit_clamped():
         assert client.get("/recommendations?limit=999").status_code == 422
 
 
-def test_recommendations_cold_start_empty_with_reason(tmp_path):
+def test_recommendations_cold_start_empty_with_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/recommendations")
     assert resp.status_code == 200
@@ -552,7 +579,8 @@ def test_recommendations_read_token_gates_the_endpoint():
 # ---------------------------------------------------------------------------
 
 
-def test_thresholds_shape_and_live_values():
+def test_thresholds_shape_and_live_values(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     from validation.thresholds import (
         DSR_MIN,
         MAX_DRAWDOWN_MAX,
@@ -584,10 +612,11 @@ def test_thresholds_shape_and_live_values():
     assert body["retrain_window_days"] == float(MODEL_RETRAIN_WINDOW_DAYS)
 
 
-def test_thresholds_never_depends_on_snapshot(tmp_path):
+def test_thresholds_never_depends_on_snapshot(tmp_path, monkeypatch):
     # Config constants, not persisted state — a cold-start OUTPUT_DIR (no
     # state_snapshot.json) must not change anything, unlike /universe or
     # /symbols/{ticker}.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/thresholds")
     assert resp.status_code == 200
@@ -600,6 +629,7 @@ def test_thresholds_never_depends_on_snapshot(tmp_path):
 
 
 def test_performance_good_range(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     resp = client.get("/pilots/trend-following/performance?range=2Y")
     assert resp.status_code == 200
@@ -621,6 +651,7 @@ def test_performance_good_range(monkeypatch):
 
 def test_performance_curve_null_for_pilot_without_backtest(monkeypatch):
     """A Pilot whose validation_strategy_id is None honestly reports curve=null."""
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     _point_reports_at_fixtures(monkeypatch)
     resp = client.get("/pilots/balanced-blend/performance?range=1M")
     assert resp.status_code == 200
@@ -630,13 +661,15 @@ def test_performance_curve_null_for_pilot_without_backtest(monkeypatch):
     assert body["reason"]  # honest explanation present
 
 
-def test_performance_bad_range_422():
+def test_performance_bad_range_422(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     resp = client.get("/pilots/trend-following/performance?range=5Y")
     assert resp.status_code == 422
     assert "Invalid range" in resp.json()["detail"]
 
 
-def test_performance_unknown_pilot_404():
+def test_performance_unknown_pilot_404(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     resp = client.get("/pilots/nope/performance?range=1M")
     assert resp.status_code == 404
 
@@ -647,32 +680,37 @@ def test_performance_unknown_pilot_404():
 
 
 def test_holdings_endpoint(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
         resp = client.get("/pilots/trend-following/holdings")
     assert resp.status_code == 200
     assert len(resp.json()) == 5
 
 
-def test_holdings_unknown_404():
+def test_holdings_unknown_404(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     resp = client.get("/pilots/nope/holdings")
     assert resp.status_code == 404
 
 
-def test_holdings_empty_without_snapshot(tmp_path):
+def test_holdings_empty_without_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/pilots/trend-following/holdings")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_trades_endpoint_empty_without_history(tmp_path):
+def test_trades_endpoint_empty_without_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
         resp = client.get("/pilots/trend-following/trades?limit=5")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_trades_unknown_404():
+def test_trades_unknown_404(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     resp = client.get("/pilots/nope/trades")
     assert resp.status_code == 404
 
@@ -682,7 +720,8 @@ def test_trades_unknown_404():
 # ---------------------------------------------------------------------------
 
 
-def test_portfolio_honest_404_on_empty_db():
+def test_portfolio_honest_404_on_empty_db(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _EmptyStore:
         def latest_account_snapshot(self):
             return None
@@ -693,7 +732,8 @@ def test_portfolio_honest_404_on_empty_db():
     assert resp.json()["detail"] == "No account snapshot yet — run the pipeline first."
 
 
-def test_portfolio_404_on_db_error():
+def test_portfolio_404_on_db_error(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _BoomStore:
         def latest_account_snapshot(self):
             raise RuntimeError("cold db")
@@ -703,7 +743,8 @@ def test_portfolio_404_on_db_error():
     assert resp.status_code == 404
 
 
-def test_portfolio_serializes_snapshot():
+def test_portfolio_serializes_snapshot(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _FakeSnap:
         def to_dict(self):
             return {"positions": {}, "buying_power": 500.0, "total_equity": 1500.0,
@@ -728,12 +769,13 @@ def test_portfolio_serializes_snapshot():
     assert body["age_hours"] == 1.5
 
 
-def test_portfolio_matches_frontend_contract():
+def test_portfolio_matches_frontend_contract(monkeypatch):
     """The /portfolio response must satisfy the webapp Portfolio /
     PortfolioPositionView type (Mismatch 4): positions is a LIST with
     qty/avg_cost field names, plus derived position_count/total_unrealized_pl
     and an honest source tag."""
 
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _FakeSnap:
         def to_dict(self):
             return {
@@ -790,7 +832,8 @@ def test_portfolio_matches_frontend_contract():
     }
 
 
-def test_equity_curve_envelope_empty_when_none():
+def test_equity_curve_envelope_empty_when_none(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _Store:
         def account_snapshot_history(self, since=None):
             return pd.DataFrame()
@@ -803,7 +846,8 @@ def test_equity_curve_envelope_empty_when_none():
     assert resp.json() == {"range": "1Y", "curve": [], "buying_power_curve": []}
 
 
-def test_equity_curve_envelope_rows():
+def test_equity_curve_envelope_rows(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _Store:
         def account_snapshot_history(self, since=None):
             return pd.DataFrame(
@@ -833,9 +877,10 @@ def test_equity_curve_envelope_rows():
     assert bp_curve[1] == {"date": "2026-07-10", "value": 500.0}
 
 
-def test_equity_curve_buying_power_missing_value_drops_only_that_point():
+def test_equity_curve_buying_power_missing_value_drops_only_that_point(monkeypatch):
     """A row with a missing/non-finite buying_power must not truncate the
     equity curve, and vice-versa -- the two series degrade independently."""
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
     class _Store:
         def account_snapshot_history(self, since=None):
             return pd.DataFrame(
