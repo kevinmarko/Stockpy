@@ -7230,6 +7230,25 @@ def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[st
     }
 
 
+def require_fix_gateway_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for the simulated FIX 4.4 gateway's
+    route/session endpoints (``POST /pilots/execution/fix/route`` and the
+    session-management endpoints below it). ``settings.FIX_GATEWAY_ENABLED``
+    is a non-secret, GUI-writable setting -- this is an ADDITIONAL gate layered
+    on top of each endpoint's existing ``require_command_token``/
+    ``require_read_token`` dependency, not a replacement for it. Called
+    explicitly at the top of each gated handler's body (after its own
+    ``Depends(...)`` token check has already run), matching this module's
+    established ``require_*_enabled`` guard pattern used elsewhere in this
+    file (e.g. ``require_brokerage_connect_enabled``,
+    ``require_dead_letter_retry_enabled``)."""
+    if not settings.FIX_GATEWAY_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="FIX gateway is disabled (settings.FIX_GATEWAY_ENABLED=False)",
+        )
+
+
 class FixRouteOrderRequest(BaseModel):
     symbol: str = Field(..., min_length=1)
     side: Literal["BUY", "SELL"]
@@ -7259,6 +7278,7 @@ async def post_pilots_execution_fix_route(req: FixRouteOrderRequest) -> Dict[str
     """Routes an order across multiple option/equity execution venues via the Smart Order Router (SOR).
     Returns multi-venue fill breakdown, fee/rebate schedules, VWAP, execution latency statistics, and FIX audit log.
     """
+    require_fix_gateway_enabled()
     from execution.fix_gateway import MultiVenueAggregator, RoutingPolicy
 
     side_norm = req.side.strip().upper()
@@ -7318,27 +7338,23 @@ class FixResetSeqRequest(BaseModel):
     "/pilots/execution/fix/session/status",
     dependencies=[Depends(require_read_token)],
 )
-def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
-    """Returns real-time status of the institutional FIX 4.4 gateway session."""
+async def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
+    """Returns real-time status of the institutional FIX 4.4 gateway session.
+
+    ``async def`` (dispatched on the main event loop, not FastAPI's threadpool)
+    so this handler can genuinely hold ``session._lock`` -- the SAME
+    ``asyncio.Lock`` ``FixSession.connect()``/``disconnect()`` already acquire
+    while mutating ``state``/``connected_at``/sequence numbers/``message_log`` --
+    for the duration of every read of that mutable session state below. Prior
+    to this fix the handler was a plain ``def`` (FastAPI threadpool-dispatched)
+    reading that same state with zero locking, racing a concurrent
+    ``connect()``/``disconnect()`` on the event loop.
+    """
+    require_fix_gateway_enabled()
     from execution.fix_gateway import get_global_fix_session, FixSessionState, MultiVenueAggregator
 
     session = get_global_fix_session()
     aggregator = MultiVenueAggregator()
-
-    state_map = {
-        FixSessionState.CONNECTED: "ACTIVE",
-        FixSessionState.LOGGING_ON: "CONNECTING",
-        FixSessionState.LOGGING_OFF: "LOGOUT_SENT",
-        FixSessionState.DISCONNECTED: "DISCONNECTED",
-        FixSessionState.RESEND_PROCESSING: "RESEND_REQUESTED",
-    }
-    state_str = state_map.get(session.state, "ACTIVE") if isinstance(session.state, FixSessionState) else str(session.state)
-
-    last_hb_iso = (
-        datetime.fromtimestamp(session._last_received_time, tz=timezone.utc).isoformat()
-        if session._last_received_time
-        else None
-    )
 
     # Real multi-venue routing config from MultiVenueAggregator.get_venues_info() --
     # this module's ACTUAL configured venues (CBOE, MIAX, BOX, PHLX, ARCA, EDGX), not
@@ -7349,6 +7365,8 @@ def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
     # (no execution history is tracked across requests), so they are honestly None
     # rather than fabricated (CONSTRAINT #4) -- market_center is likewise just the
     # real venue code, since VenueConfig carries no separate long-form display name.
+    # Pure/local computation -- touches nothing on `session`, so it's fine to run
+    # outside the lock below.
     venues_info = aggregator.get_venues_info()
     venue_stats = []
     for v in venues_info.get("venues", []):
@@ -7367,32 +7385,54 @@ def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
         })
     venues_active = [v.get("venue") for v in venues_info.get("venues", [])]
 
-    # Recent FIX 4.4 audit log entries -- real messages only, no fabricated fallback.
-    audit_log = []
-    if session.message_log:
-        for m in session.message_log[-20:]:
-            raw_parts = [f"{k}={v}" for k, v in m.items()]
-            audit_log.append("|".join(raw_parts) + "|")
+    async with session._lock:
+        state_map = {
+            FixSessionState.CONNECTED: "ACTIVE",
+            FixSessionState.LOGGING_ON: "CONNECTING",
+            FixSessionState.LOGGING_OFF: "LOGOUT_SENT",
+            FixSessionState.DISCONNECTED: "DISCONNECTED",
+            FixSessionState.RESEND_PROCESSING: "RESEND_REQUESTED",
+        }
+        state_str = (
+            state_map.get(session.state, "ACTIVE")
+            if isinstance(session.state, FixSessionState)
+            else str(session.state)
+        )
 
-    session_uptime_sec = (
-        int(time.time() - session.connected_at) if session.connected_at else None
-    )
+        last_hb_iso = (
+            datetime.fromtimestamp(session._last_received_time, tz=timezone.utc).isoformat()
+            if session._last_received_time
+            else None
+        )
 
-    return {
-        "session_id": f"FIX.4.4:{session.sender_comp_id}->{session.target_comp_id}",
-        "state": state_str,
-        "in_seq_num": session.inbound_seq_num,
-        "out_seq_num": session.outbound_seq_num,
-        "sender_comp_id": session.sender_comp_id,
-        "target_comp_id": session.target_comp_id,
-        "gap_queue_depth": len(session._incoming_buffer),
-        "last_heartbeat_at": last_hb_iso,
-        "venues_active": venues_active,
-        "heartbeat_int": session.heartbeat_int,
-        "session_uptime_sec": session_uptime_sec,
-        "venue_stats": venue_stats,
-        "audit_log": audit_log,
-    }
+        # Recent FIX 4.4 audit log entries -- real messages only, no fabricated fallback.
+        audit_log = []
+        if session.message_log:
+            for m in session.message_log[-20:]:
+                raw_parts = [f"{k}={v}" for k, v in m.items()]
+                audit_log.append("|".join(raw_parts) + "|")
+
+        session_uptime_sec = (
+            int(time.time() - session.connected_at) if session.connected_at else None
+        )
+
+        result = {
+            "session_id": f"FIX.4.4:{session.sender_comp_id}->{session.target_comp_id}",
+            "state": state_str,
+            "in_seq_num": session.inbound_seq_num,
+            "out_seq_num": session.outbound_seq_num,
+            "sender_comp_id": session.sender_comp_id,
+            "target_comp_id": session.target_comp_id,
+            "gap_queue_depth": len(session._incoming_buffer),
+            "last_heartbeat_at": last_hb_iso,
+            "venues_active": venues_active,
+            "heartbeat_int": session.heartbeat_int,
+            "session_uptime_sec": session_uptime_sec,
+            "venue_stats": venue_stats,
+            "audit_log": audit_log,
+        }
+
+    return result
 
 
 @app.post(
@@ -7403,6 +7443,7 @@ async def post_pilots_execution_fix_session_test_request(
     payload: Optional[FixTestRequestPayload] = None,
 ) -> Dict[str, Any]:
     """Emits FIX Test Request (35=1) and verifies heartbeat response."""
+    require_fix_gateway_enabled()
     from execution.fix_gateway import get_global_fix_session, FixSessionState, Heartbeat
 
     session = get_global_fix_session()
@@ -7440,6 +7481,7 @@ async def post_pilots_execution_fix_session_reset_seq(
     req: FixResetSeqRequest,
 ) -> Dict[str, Any]:
     """Allows operator sequence reset (35=4) with new_seq_num."""
+    require_fix_gateway_enabled()
     from execution.fix_gateway import get_global_fix_session, FixSessionState
 
     session = get_global_fix_session()
@@ -7474,6 +7516,7 @@ async def post_pilots_execution_fix_session_reset_seq(
 )
 async def post_pilots_execution_fix_session_reconnect() -> Dict[str, Any]:
     """Re-establishes FIX 4.4 institutional session."""
+    require_fix_gateway_enabled()
     from execution.fix_gateway import get_global_fix_session, FixSessionState
 
     session = get_global_fix_session()

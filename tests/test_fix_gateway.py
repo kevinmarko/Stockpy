@@ -5,6 +5,10 @@ order cancel/replace lifecycles, session state transitions, and multi-venue rout
 """
 import pytest
 import asyncio
+import logging
+from unittest import mock
+
+from settings import settings
 from execution.fix_gateway import (
     FixMessage,
     FixMsgType,
@@ -1032,5 +1036,89 @@ async def test_double_connect_no_orphaned_heartbeat_task():
 
     await session.disconnect()
     assert session._heartbeat_task is None
+
+
+# --- PR #792 deep-dive audit follow-up (Cluster A): items 5, 6, 7 ---
+
+
+def test_from_fix_str_malformed_tag_34_raises_fix_parse_error():
+    """Item 6: a non-integer Tag 34 (MsgSeqNum) previously leaked a bare
+    ValueError from int(tag_dict.get("34", "0")) instead of the module's own
+    FixParseError -- callers catching FixError/FixParseError (the documented
+    exception hierarchy for malformed FIX input) would not have caught it."""
+    raw = "8=FIX.4.4\x019=40\x0135=0\x0149=CLIENT\x0156=EXCHANGE\x0134=NOTANUMBER\x0152=20260815-12:00:00.000\x0110=000\x01"
+    with pytest.raises(FixParseError) as exc_info:
+        FixMessage.from_fix_str(raw, validate_checksum=False)
+    assert "34" in str(exc_info.value)
+    # Must NOT be a bare ValueError escaping instead.
+    assert not isinstance(exc_info.value, ValueError) or isinstance(exc_info.value, FixParseError)
+
+
+def test_from_fix_str_valid_tag_34_still_parses():
+    """Sanity companion: a well-formed Tag 34 is unaffected by the try/except."""
+    msg = FixMessage(FixMsgType.HEARTBEAT, "CLIENT", "EXCHANGE", 7)
+    raw = msg.to_fix_str()
+    parsed = FixMessage.from_fix_str(raw)
+    assert parsed.seq_num == 7
+
+
+def test_fix_session_manager_restore_all_logs_warning_on_corrupt_file(tmp_path, caplog):
+    """Item 7: FixSessionManager.restore_all()'s per-file loop previously
+    swallowed any failure (open()/json.load()/get_or_create_session()) with a
+    bare `except Exception: pass`. A corrupt state file must now produce a
+    logged WARNING (module logger), not silence."""
+    state_dir = tmp_path
+    corrupt_file = state_dir / "fix_session_CLIENT_EXCHANGE.json"
+    corrupt_file.write_text("{not valid json!!", encoding="utf-8")
+
+    mgr = FixSessionManager(state_dir=str(state_dir))
+    with caplog.at_level(logging.WARNING, logger="execution.fix_gateway"):
+        restored = mgr.restore_all()
+
+    assert restored == 0
+    assert any(
+        "restore_all" in rec.message and "fix_session_CLIENT_EXCHANGE.json" in rec.message
+        for rec in caplog.records
+    ), f"Expected a WARNING naming the corrupt file; got: {[r.message for r in caplog.records]}"
+
+
+def test_fix_session_manager_restore_all_still_restores_valid_siblings(tmp_path):
+    """A corrupt file must not abort restoration of OTHER, valid state files
+    in the same directory -- the per-file try/except must keep skip-and-continue
+    semantics, only gaining logging."""
+    state_dir = tmp_path
+
+    good_session = FixSession("DESK_GOOD", "VENUE_GOOD")
+    good_session.in_seq_num = 9
+    good_session.out_seq_num = 10
+    good_session.persist_state(str(state_dir / "fix_session_DESK_GOOD_VENUE_GOOD.json"))
+
+    (state_dir / "fix_session_BROKEN_VENUE.json").write_text("{{{not json", encoding="utf-8")
+
+    mgr = FixSessionManager(state_dir=str(state_dir))
+    restored = mgr.restore_all()
+
+    assert restored == 1
+    assert mgr.get_session("DESK_GOOD->VENUE_GOOD") is not None
+    assert mgr.get_session("DESK_GOOD->VENUE_GOOD").in_seq_num == 9
+
+
+def test_get_global_fix_session_honors_fix_heartbeat_interval_setting():
+    """Item 5 (execution/fix_gateway.py half): get_global_fix_session() must
+    construct the singleton with settings.FIX_HEARTBEAT_INTERVAL_SECONDS
+    rather than a hardcoded 30."""
+    import execution.fix_gateway as fix_gateway_module
+
+    with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+        with mock.patch.object(settings, "FIX_HEARTBEAT_INTERVAL_SECONDS", 77):
+            session = fix_gateway_module.get_global_fix_session()
+            assert session.heartbeat_int == 77
+
+    # Restore singleton to a clean, default-heartbeat state for any sibling
+    # test module relying on the process-wide global (matches this test
+    # file's existing convention of patching `_global_fix_session` to None
+    # rather than leaving a mutated singleton behind).
+    with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+        fix_gateway_module.get_global_fix_session()
 
 

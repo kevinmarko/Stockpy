@@ -15,6 +15,8 @@ from enum import Enum
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable, Awaitable, Set
 import numpy as np
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # --- FIX Constants & Delimiters ---
@@ -331,7 +333,12 @@ class FixMessage:
 
         sender = tag_dict.get("49", "")
         target = tag_dict.get("56", "")
-        seq_num = int(tag_dict.get("34", "0"))
+        try:
+            seq_num = int(tag_dict.get("34", "0"))
+        except ValueError:
+            raise FixParseError(
+                f"Malformed sequence number in tag 34: {tag_dict.get('34')!r}"
+            )
         sending_time = tag_dict.get("52", "")
 
         subclass_map = {
@@ -2007,8 +2014,11 @@ class FixSessionManager:
                             session = self.get_or_create_session(sender, target, auto_restore=False)
                             if session.restore_state(fpath):
                                 restored += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "FixSessionManager.restore_all: failed to restore session from %s: %s",
+                            fname, exc,
+                        )
         return restored
 
     async def close_all(self) -> None:
@@ -2381,7 +2391,7 @@ def get_global_fix_session() -> FixSession:
         _global_fix_session = FixSession(
             sender_comp_id="INVESTYO_PWA",
             target_comp_id="FIX_GATEWAY",
-            heartbeat_int=30,
+            heartbeat_int=settings.FIX_HEARTBEAT_INTERVAL_SECONDS,
         )
         state_dir = "output"
         session_file = os.path.join(state_dir, "fix_session_INVESTYO_PWA_FIX_GATEWAY.json")

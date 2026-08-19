@@ -16,6 +16,7 @@ performance loader at ``tests/fixtures`` by monkeypatching
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import pathlib
@@ -6823,6 +6824,161 @@ class TestFixGatewaySessionEndpoints:
                 headers={"Authorization": "Bearer WRONG_TOKEN"},
             )
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# PR #792 deep-dive audit follow-up (Cluster A): items 4 and 5
+# ---------------------------------------------------------------------------
+
+
+class TestFixGatewayEnabledFlag:
+    """Item 5: settings.FIX_GATEWAY_ENABLED is an ADDITIONAL gate on top of
+    each endpoint's existing require_command_token/require_read_token check
+    -- when False, every route/session-management endpoint must refuse with
+    403 rather than proceeding, even with a valid command/read token."""
+
+    def test_route_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={"symbol": "AAPL", "side": "BUY", "quantity": 10, "limit_price": 100.0},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+        assert "FIX_GATEWAY_ENABLED" in resp.json()["detail"]
+
+    def test_session_status_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get(
+                "/pilots/execution/fix/session/status",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+        assert "FIX_GATEWAY_ENABLED" in resp.json()["detail"]
+
+    def test_test_request_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_reset_seq_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/reset-seq",
+                json={"new_seq_num": 5},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_reconnect_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/reconnect",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_venues_endpoint_not_gated_by_flag(self):
+        """GET /pilots/execution/fix/venues is explicitly out of scope for
+        this gate per the approved plan -- confirm it is unaffected."""
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get(
+                "/pilots/execution/fix/venues",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+
+    def test_route_allowed_when_enabled(self):
+        """Sanity companion: the default (True) must not block anything --
+        no regression versus pre-existing behavior."""
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", True), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={"symbol": "MSFT", "side": "BUY", "quantity": 5, "limit_price": 50.0},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+
+
+class TestFixSessionStatusConcurrency:
+    """Item 4: GET /pilots/execution/fix/session/status previously read
+    FixSession's mutable state (message_log, _incoming_buffer, state,
+    sequence numbers, ...) from FastAPI's threadpool with zero locking while
+    connect()/disconnect() mutate the same singleton on the main event loop
+    under session._lock. The handler is now `async def` and must genuinely
+    acquire that same lock for the duration of its reads."""
+
+    @pytest.mark.anyio
+    async def test_status_handler_blocks_while_lock_held_externally(self):
+        import execution.fix_gateway as fix_gateway_module
+
+        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+            session = fix_gateway_module.get_global_fix_session()
+            await session._lock.acquire()
+            try:
+                task = asyncio.ensure_future(
+                    pilots_api.get_pilots_execution_fix_session_status()
+                )
+                # Give the handler every chance to run past its lock acquire
+                # if it were (incorrectly) not honoring the lock at all.
+                await asyncio.sleep(0.05)
+                assert not task.done(), (
+                    "status handler completed while session._lock was held "
+                    "externally -- it is not genuinely acquiring the lock"
+                )
+            finally:
+                session._lock.release()
+
+            result = await asyncio.wait_for(task, timeout=2.0)
+            assert result["sender_comp_id"] == "INVESTYO_PWA"
+            assert result["target_comp_id"] == "FIX_GATEWAY"
+
+    @pytest.mark.anyio
+    async def test_status_handler_concurrent_with_connect_disconnect_no_corruption(self):
+        """A real concurrent connect()/disconnect() racing the status read
+        must never surface a torn/inconsistent snapshot (e.g. a KeyError, a
+        half-updated sequence number, or an exception) -- with the lock in
+        place, each of the concurrent operations sees a consistent, fully
+        applied state."""
+        import execution.fix_gateway as fix_gateway_module
+
+        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+            session = fix_gateway_module.get_global_fix_session()
+
+            results = await asyncio.gather(
+                pilots_api.get_pilots_execution_fix_session_status(),
+                session.connect(),
+                pilots_api.get_pilots_execution_fix_session_status(),
+                return_exceptions=True,
+            )
+
+            for r in results:
+                assert not isinstance(r, Exception), f"concurrent call raised: {r!r}"
+
+            status_results = [r for r in results if isinstance(r, dict)]
+            assert len(status_results) == 2
+            for status in status_results:
+                assert status["session_id"] == "FIX.4.4:INVESTYO_PWA->FIX_GATEWAY"
+                assert isinstance(status["in_seq_num"], int)
+                assert isinstance(status["out_seq_num"], int)
+                assert status["state"] in {
+                    "ACTIVE", "CONNECTING", "LOGON_SENT", "LOGON_RECEIVED",
+                    "RESEND_REQUESTED", "GAP_FILL_PROCESSING", "LOGOUT_SENT",
+                    "DISCONNECTED", "SUSPENDED",
+                }
+
+            await session.disconnect()
 
 
 class TestFixRouteOrderSymbolValidation:
