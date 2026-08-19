@@ -190,6 +190,19 @@ class TestPitRowToFundamentalsDto:
         # NOT True (which a fabricated 0.0 payout_ratio would incorrectly produce).
         assert dto.is_dividend_sustainable is False
 
+    def test_non_dict_raw_degrades_honestly_instead_of_crashing(self) -> None:
+        """A malformed raw_json row (e.g. a stored row whose payload wasn't
+        actually a dict -- confirmed to happen in production from a
+        badly-isolated test writing a non-dict `raw` straight through
+        json.dumps(..., default=str) into the shared LOCAL_DATA_ROOT DB)
+        must degrade to the same honest "no data" defaults as an empty dict,
+        never raise AttributeError from calling .get() on a string/list."""
+        for bad_raw in ("<MagicMock name='mock.get_fundamentals()' id='1'>", ["not", "a", "dict"], 42, None):
+            dto = _pit_row_to_fundamentals_dto("JNJ", "Healthcare", bad_raw)
+            assert dto.pe_ratio is None
+            assert np.isnan(dto.graham_number)
+            assert dto.is_dividend_sustainable is False
+
 
 # ---------------------------------------------------------------------------
 # TestBuildSignalReplayAdapter
@@ -261,6 +274,48 @@ class TestBuildSignalReplayAdapter:
         closes = _synthetic_closes(["SPY", "AAPL", "JNJ"], n_days=600)
         X, y, pre = _run_adapter(closes)  # default mock store has empty PIT history
         assert not X.empty  # must not have raised or returned empty due to a crash
+
+    def test_malformed_raw_json_row_does_not_crash_the_adapter(self) -> None:
+        """Regression test: a real production incident (2026-08-19) had a
+        fundamentals_history row whose raw_json column held a JSON-encoded
+        STRING (a MagicMock repr, from a badly-isolated test that wrote a
+        non-dict `raw` argument straight through
+        HistoricalStore.upsert_fundamentals_pit's json.dumps(..., default=str)
+        into the shared LOCAL_DATA_ROOT DB every worktree/session on this
+        machine reads) instead of a JSON object. json.loads succeeded (it's
+        valid JSON) but decoded to a str, not a dict -- and
+        `raw.get("pe_ratio")` on that str raised AttributeError, crashing
+        `python -m scripts.refresh_validations` outright for this strategy.
+        One malformed row must degrade that ticker/date's fundamentals to
+        empty, not take down the whole adapter."""
+        closes = _synthetic_closes(["SPY", "AAPL", "JNJ"], n_days=600)
+        idx = closes.index
+
+        store = _mock_store(idx)
+        bad_hist = pd.DataFrame({
+            "as_of": [idx[0].strftime("%Y-%m-%d")],
+            "pe_ratio": [None],
+            "pb_ratio": [None],
+            "roe": [None],
+            "dividend_yield": [None],
+            "market_cap": [None],
+            "eps": [None],
+            "operating_margin": [None],
+            "debt_to_equity": [None],
+            "report_date": [idx[0].strftime("%Y-%m-%d")],
+            # A JSON-encoded STRING, not object -- json.loads decodes this to
+            # a Python str, exactly the malformed-row shape found in
+            # production.
+            "raw_json": ["\"<MagicMock name='mock.get_fundamentals()' id='1'>\""],
+        })
+
+        def _get_hist(ticker):
+            return bad_hist if ticker == "JNJ" else pd.DataFrame()
+
+        store.get_fundamentals_history.side_effect = _get_hist
+
+        X, y, pre = _run_adapter(closes, store=store)
+        assert not X.empty  # must not have raised
 
 
 # ---------------------------------------------------------------------------
