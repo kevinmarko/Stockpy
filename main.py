@@ -1422,7 +1422,23 @@ def main() -> None:
                         _exit_res.get("failed_count", 0),
                     )
 
+                # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
+                if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+                    try:
+                        from pilots.zero_dte_engine import manage_0dte_exits
+                        _0dte_res = manage_0dte_exits(store=_executor.store)
+                        if _0dte_res.get("executed_count", 0) > 0:
+                            logger.info(
+                                "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
+                                _0dte_res.get("evaluated_count", 0),
+                                _0dte_res.get("executed_count", 0),
+                                _0dte_res.get("failed_count", 0),
+                            )
+                    except Exception as _0dte_exc:
+                        logger.debug("0DTE exit lifecycle evaluation: %s", _0dte_exc)
+
                 # 2. Open New Strategy Option Positions
+
                 if getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False):
                     # Pass the cycle's real macro_dto (threaded through
                     # RunResult by run_once()) so the VIX/CREDIT-EVENT

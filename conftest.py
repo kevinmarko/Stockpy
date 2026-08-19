@@ -8,6 +8,7 @@ manually.
 """
 import sys
 import os
+from typing import Optional
 
 import pytest
 
@@ -16,14 +17,135 @@ import pytest
 # resolve correctly regardless of where pytest is invoked from.
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Reset settings singleton to clean defaults on test session initialization
+def _field_default(model_cls, name):
+    """The TRUE coded default for a Settings field, independent of .env, real
+    shell env, and output/runtime_flags.json.
+
+    Deliberately NOT ``Settings(_env_file=None)``: that constructor argument
+    only skips parsing the ``.env`` FILE -- pydantic-settings still reads
+    ``os.environ`` as an independent, lower-precedence-than-nothing source.
+    ~14 call sites in this codebase (main.py, main_orchestrator.py, every
+    standalone ``api/*.py`` FastAPI service -- see settings.py's ENV_PATH
+    comment) call python-dotenv's ``load_dotenv()``, which DOES mutate real
+    ``os.environ`` the first time one of those modules is imported. Proven
+    empirically: importing ``api.metrics_api`` alone injects
+    ``os.environ["VALIDATION_HARNESS_OOS_GATE_ENABLED"] = "true"`` for the
+    rest of the process. In a single pytest invocation covering multiple test
+    files, THAT import can happen during collection of one file and silently
+    poison ``Settings(_env_file=None)``'s reading of ``os.environ`` for every
+    other file's tests in the same run -- which is exactly why an earlier
+    version of this fix (reconstructing via ``Settings(_env_file=None)``)
+    passed every affected test file in isolation but still failed when run
+    together with ``tests/test_metrics_api.py`` in the same process.
+    Reading the field's own declared default (``Field(default=...)`` /
+    ``default_factory=``) directly off the model class is immune to all of
+    that -- it never touches the environment at all.
+    """
+    finfo = model_cls.model_fields[name]
+    if finfo.default_factory is not None:
+        return finfo.default_factory()
+    return finfo.default
+
+
+# Reset settings singleton to clean defaults on test session initialization.
+#
+# Every boolean settings field is additionally forced to its CODED default
+# (ignoring .env / real shell env / output/runtime_flags.json), computed once
+# here and reused by `_clean_settings_between_tests` below for the per-test
+# reset.
+#
+# Why this exists: `.env` and the runtime-flags store are both legitimate,
+# real configuration layers for a live operator run (see settings.py's own
+# ENV_PATH/runtime_flags.py docstrings) -- but every one of this codebase's
+# "opt-in, defaults preserve exact current behavior" feature flags (dozens of
+# them, per CLAUDE.md's own convention) is boolean, and a test asserting
+# "default (unset) behavior" is asserting the CODED default, not whatever an
+# operator happened to flip on for their own live checkout. A prior version
+# of this reset used a hand-maintained 7-key tuple; it missed
+# VALIDATION_HARNESS_OOS_GATE_ENABLED, which this operator's real .env sets
+# to True, silently breaking every test asserting that flag's documented
+# default-off behavior (tests/test_harness_oos_gate.py::TestFlagDefaultOff,
+# tests/test_harness_calmar_degenerate_guard.py) -- an allowlist that only
+# grows by discovering the next broken test is the wrong shape for this.
+# Booleans only (not the full field set): non-bool fields (paths, numeric
+# thresholds, credentials) are far more likely to be something a specific
+# test legitimately relies on from a real .env (e.g. a network-marked test
+# needing a real API key), and every "TestFlagEnabled"-style test in this
+# suite already explicitly `monkeypatch.setattr`s the ONE flag it needs on,
+# rather than relying on ambient state -- so resetting every boolean to its
+# coded default cannot break a test that follows this codebase's own
+# established convention.
+_BOOL_FIELD_NAMES: tuple[str, ...] = ()
+# Every `gui.env_io.SECRET_KEYS` entry that is also a real `Settings` field --
+# the STRING-typed sibling of `_BOOL_FIELD_NAMES` above, computed once here and
+# reused by `_clean_settings_between_tests` below for the per-test reset.
+#
+# Why this exists: `_BOOL_FIELD_NAMES` closed the boolean half of "this
+# operator's real .env pollutes test isolation" -- but that .env also sets
+# real command tokens / API keys / paths (FMP_API_KEY, ORCHESTRATOR_DAEMON_
+# TOKEN, DATABASE_URL, ...) that plenty of tests assume are unset (empty
+# string, matching the coded default) so they can assert "no credential
+# configured" behavior, or so a test-local monkeypatched value isn't shadowed
+# by a real one already sitting on the singleton before the test even sets
+# it up. `gui.env_io.SECRET_KEYS` is this codebase's own canonical list of
+# which `Settings` fields are secrets (CONSTRAINT #3) -- reusing it here
+# instead of hand-picking fields avoids yet another hand-maintained allowlist
+# that only grows by discovering the next broken test (see
+# `_clean_settings_between_tests`'s docstring for that exact history with
+# booleans).
+#
+# `gui.env_io` is imported LAZILY here (not at conftest.py module top) even
+# though, as of this writing, it only imports `ENV_PATH` from `settings` (not
+# the `settings` singleton itself) and so has no live circular-import hazard
+# today -- keeping the import inside this try block, after `settings`/
+# `runtime_flags` have already fully imported, means a future change to
+# gui/env_io.py's own imports (e.g. importing the `settings` singleton
+# directly) can never turn into an import-order failure for every single test
+# file via conftest.py, only a caught-and-ignored no-op here.
+#
+# Two things this set deliberately is NOT allowed to include:
+#   1. A `SECRET_KEYS` entry that isn't a real `Settings.model_fields` name
+#      (e.g. a legacy/removed key like `NTFY_TOPIC`/`PROMPT_REGISTRY_
+#      CREDENTIALS`, which are secrets in spirit but never became actual
+#      pydantic fields) -- skipped via `hasattr`/membership check, never a
+#      crash, matching this fixture's dead-letter-per-key convention.
+#   2. A non-string-typed field -- as of this writing every real
+#      `SECRET_KEYS` field is `str`/`Optional[str]`, but the filter is kept
+#      explicit rather than assumed, since a future secret field added as
+#      some other type (e.g. a parsed dict) is exactly the kind of value a
+#      test might legitimately construct from a real `.env` fixture and this
+#      reset has no business overwriting sight-unseen.
+_SECRET_STR_FIELD_NAMES: tuple[str, ...] = ()
 try:
     from settings import Settings, settings
     import runtime_flags
-    # Reset singleton to clean defaults
+    # Reset singleton to clean defaults (still .env-sourced, matching prior
+    # behavior for non-bool fields).
     _defaults = Settings()
     for field_name in type(_defaults).model_fields:
         setattr(settings, field_name, getattr(_defaults, field_name))
+    # Then force every boolean to its true coded default, bypassing .env AND
+    # real os.environ (see _field_default's docstring for why the latter
+    # matters).
+    _BOOL_FIELD_NAMES = tuple(
+        name
+        for name, finfo in type(settings).model_fields.items()
+        if finfo.annotation is bool
+    )
+    for field_name in _BOOL_FIELD_NAMES:
+        setattr(settings, field_name, _field_default(type(settings), field_name))
+    # Now the secret-string half: gui.env_io.SECRET_KEYS intersected with real
+    # Settings fields, filtered to string-typed ones (see the block comment
+    # above for why both filters are needed).
+    import gui.env_io as _env_io
+    _model_fields = type(settings).model_fields
+    _SECRET_STR_FIELD_NAMES = tuple(
+        name
+        for name in dict.fromkeys(_env_io.SECRET_KEYS)  # de-dupe, preserve order
+        if name in _model_fields and _model_fields[name].annotation in (str, Optional[str])
+    )
+    for field_name in _SECRET_STR_FIELD_NAMES:
+        setattr(settings, field_name, _field_default(type(settings), field_name))
 except Exception:
     pass
 
@@ -122,24 +244,49 @@ def _clean_settings_between_tests(monkeypatch):
     VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED, META_LABELING_ENABLED,
     or META_LABEL_MIN_CONFIDENCE for the entire session. Dropped the bogus
     key rather than trying to resolve it to a real field, since no such
-    field exists."""
+    field exists.
+
+    An even later version hand-maintained a 7-key tuple of settings deemed
+    worth resetting; it missed VALIDATION_HARNESS_OOS_GATE_ENABLED, which a
+    real operator .env on the machine this was found on sets to True,
+    silently breaking every test asserting that flag's documented
+    default-off behavior. Every boolean field is now reset unconditionally
+    (via the module-level `_BOOL_FIELD_NAMES`, computed once) rather than
+    hand-picking which ones matter -- this closes the whole bug class
+    instead of the one instance that happened to get caught. The three
+    dict/list-typed fields below are not boolean and stay explicit; so does
+    META_LABEL_MIN_CONFIDENCE (float).
+
+    Sourced via ``_field_default`` (the raw pydantic field default), NOT
+    ``Settings(_env_file=None)`` -- the latter still reads real ``os.environ``,
+    which collecting certain OTHER test files (anything importing
+    main.py/main_orchestrator.py/a standalone ``api/*.py`` service) mutates
+    via their own ``load_dotenv()`` call, silently reintroducing the exact
+    pollution this fixture exists to strip. See ``_field_default``'s
+    docstring above for the empirical proof.
+
+    ``_SECRET_STR_FIELD_NAMES`` (module-level, computed once alongside
+    ``_BOOL_FIELD_NAMES`` above) extends this same per-test reset to every
+    string-typed ``gui.env_io.SECRET_KEYS`` field that is a real ``Settings``
+    field -- this operator's real ``.env`` sets real command tokens / API
+    keys / paths that a test may assume are unset (the coded default, empty
+    string) just as reliably as it sets stray booleans on. See that
+    module-level block's own comment for the full reasoning and the two
+    deliberate exclusions (legacy/removed ``SECRET_KEYS`` entries with no
+    matching field; non-string-typed fields)."""
     try:
         import copy
         from settings import Settings, settings
-        _clean = Settings(_env_file=None)
     except Exception:
         return
-    for k in (
+    for k in _BOOL_FIELD_NAMES + _SECRET_STR_FIELD_NAMES + (
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
         "REGIME_SIGNAL_WEIGHTS",
-        "HISTORICAL_STORE_ENABLED",
-        "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
-        "META_LABELING_ENABLED",
         "META_LABEL_MIN_CONFIDENCE",
     ):
         try:
-            val = getattr(_clean, k)
+            val = _field_default(Settings, k)
             if isinstance(val, (dict, list, set)):
                 val = copy.deepcopy(val)
             monkeypatch.setattr(settings, k, val, raising=False)

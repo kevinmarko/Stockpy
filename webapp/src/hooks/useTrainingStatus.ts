@@ -11,7 +11,8 @@ export interface TrainingJobStatus {
 // in minutes, so there's no need for useLiveTick's fuller exponential-backoff
 // convention. A fixed delay keeps this hook much simpler, per the "Retrain
 // Now" feature's own scope.
-const RECONNECT_DELAY_MS = 5000;
+const INITIAL_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 30000;
 
 /**
  * useTrainingStatus — subscribes to the Control API's `/ws/training/status`
@@ -22,15 +23,13 @@ const RECONNECT_DELAY_MS = 5000;
  * One shared WebSocket connection for every in-flight job (not one per
  * job/symbol like useLiveTick) -- messages are `{job_id, status, ...}`
  * frames that merge into a `job_id`-keyed map rather than replacing a
- * single value. No REST-polling fallback: if the socket never connects (or
- * the server never sends a "finished" frame for a given job), the caller is
- * expected to apply its own client-side timeout rather than this hook
- * inventing one.
+ * single value.
  */
 export function useTrainingStatus(): Record<string, TrainingJobStatus> {
   const [statuses, setStatuses] = useState<Record<string, TrainingJobStatus>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryDelayRef = useRef(INITIAL_RETRY_DELAY_MS);
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -39,8 +38,21 @@ export function useTrainingStatus(): Record<string, TrainingJobStatus> {
     const connect = () => {
       if (!aliveRef.current) return;
 
+      if (wsRef.current) {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
       const ws = new WebSocket(trainingStatusWsUrl());
       wsRef.current = ws;
+
+      ws.onopen = () => {
+        retryDelayRef.current = INITIAL_RETRY_DELAY_MS;
+      };
 
       ws.onmessage = (event) => {
         try {
@@ -59,11 +71,12 @@ export function useTrainingStatus(): Record<string, TrainingJobStatus> {
         wsRef.current = null;
         if (!aliveRef.current) return;
         if (retryRef.current) clearTimeout(retryRef.current);
-        retryRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
+        const delay = retryDelayRef.current;
+        retryDelayRef.current = Math.min(delay * 2, MAX_RETRY_DELAY_MS);
+        retryRef.current = setTimeout(connect, delay);
       };
 
-      // onerror is always immediately followed by onclose in every browser
-      // implementation -- reconnect is handled there, this is a no-op.
+      // onerror is always immediately followed by onclose in browser WebSocket implementations
       ws.onerror = () => {};
     };
 
@@ -73,8 +86,12 @@ export function useTrainingStatus(): Record<string, TrainingJobStatus> {
       aliveRef.current = false;
       if (retryRef.current) clearTimeout(retryRef.current);
       if (wsRef.current) {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
         wsRef.current.onclose = null; // prevent reconnect on intentional unmount
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, []);

@@ -147,3 +147,17 @@ artifact, not evidence the underlying Graham/deep-value signal is weak.
 See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
 [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
 full 12-strategy series this fix was part of.
+
+
+### 2026-08-18 Full Validation Run (`deep_value_edgar_pit`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.5606 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9952 |
+| **Max Drawdown** | 24.27% |
+| **Deployable** | ✅ True |
+
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

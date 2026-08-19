@@ -186,3 +186,98 @@ def test_options_risk_ast_import_safety():
             if node.module:
                 assert "processing_engine" not in node.module
 
+
+def test_calculate_black_scholes_exact_analytical_references():
+    """Verifies Black-Scholes Greeks against exact closed-form analytical references."""
+    spot = 100.0
+    strike = 100.0
+    t_years = 1.0
+    sigma = 0.20
+    r = 0.05
+
+    g_call = calculate_black_scholes_greeks(spot, strike, t_years, sigma, r=r, option_type="call")
+    # Exact d1 = (ln(1) + (0.05 + 0.02)*1) / 0.2 = 0.35
+    # N(0.35) = 0.63683
+    assert pytest.approx(g_call["delta"], abs=1e-3) == 0.6368
+    # Exact Gamma = N'(0.35) / (100 * 0.2 * 1) = 0.37524 / 20 = 0.01876
+    assert pytest.approx(g_call["gamma"], abs=1e-4) == 0.0188
+    # Exact Vega (1% IV change) = 100 * 1 * 0.37524 * 0.01 = 0.3752
+    assert pytest.approx(g_call["vega_1pct"], abs=1e-3) == 0.3752
+    # Put Delta = N(d1) - 1 = -0.3632
+    g_put = calculate_black_scholes_greeks(spot, strike, t_years, sigma, r=r, option_type="put")
+    assert pytest.approx(g_put["delta"], abs=1e-3) == -0.3632
+    # Put Gamma matches Call Gamma exactly
+    assert pytest.approx(g_put["gamma"], abs=1e-4) == g_call["gamma"]
+    # Put Vega matches Call Vega exactly
+    assert pytest.approx(g_put["vega_1pct"], abs=1e-3) == g_call["vega_1pct"]
+
+
+def test_calculate_portfolio_greeks_per_symbol_beta():
+    """Verifies that beta-weighted SPY delta applies per-symbol regression beta."""
+    # Long 100 shares of NVDA (beta = 1.8), spot = $100 -> dollar delta = $10,000, beta dollar delta = $18,000
+    pos_nvda = PaperPosition(symbol="NVDA", qty=100.0, avg_entry_price=100.0)
+    mock_provider = MagicMock()
+    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=100.0) if sym == "NVDA" else (MagicMock(price=500.0) if sym == "SPY" else None)
+
+    from unittest.mock import patch
+    with patch("pilots.options_risk._resolve_symbol_beta", side_effect=lambda sym: 1.8 if sym == "NVDA" else 1.0):
+        g = calculate_portfolio_greeks(positions=[pos_nvda], market_provider=mock_provider, spy_spot=500.0)
+        assert g["net_dollar_delta"] == 10000.0
+        # Beta-weighted delta SPY shares = 18000 / 500 = 36.0 shares
+        assert pytest.approx(g["beta_weighted_delta_spy"], abs=0.1) == 36.0
+
+
+def test_beta_weighted_delta_spy_calculation(monkeypatch):
+    """Verifies that beta-weighted SPY delta scales by each symbol's true regression beta."""
+    from pilots.options_risk import _resolve_symbol_beta
+
+    # Mock beta lookup
+    betas = {"AAPL": 1.20, "TSLA": 2.00, "SPY": 1.00}
+    monkeypatch.setattr("pilots.options_risk._resolve_symbol_beta", lambda sym: betas.get(sym, 1.0))
+
+    pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)  # Dollar Delta = 15,000 * 1.2 = 18,000
+    pos_tsla = PaperPosition(symbol="TSLA", qty=50.0, avg_entry_price=200.0)   # Dollar Delta = 10,000 * 2.0 = 20,000
+
+    mock_provider = MagicMock()
+    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=150.0 if sym == "AAPL" else 200.0)
+
+    # SPY Spot = 500.0
+    # Expected Beta Dollar Delta = 18,000 + 20,000 = 38,000
+    # Expected SPY Delta Shares = 38,000 / 500 = 76.0
+    greeks = calculate_portfolio_greeks(positions=[pos_aapl, pos_tsla], market_provider=mock_provider, spy_spot=500.0)
+
+    assert greeks["net_dollar_delta"] == 25000.0
+    assert greeks["beta_weighted_delta_spy"] == 76.0
+    assert greeks["positions"][0]["symbol_beta"] == 1.20
+    assert greeks["positions"][0]["beta_dollar_delta"] == 18000.0
+    assert greeks["positions"][1]["symbol_beta"] == 2.00
+    assert greeks["positions"][1]["beta_dollar_delta"] == 20000.0
+
+
+
+def test_black_scholes_greeks_exact_analytical_reference():
+    """Validates calculate_black_scholes_greeks against exact hand-computed closed-form reference values.
+
+    Parameters: S=100.0, K=100.0, T=1.0 yr, sigma=0.20, r=0.05
+    d1 = (0 + 0.05 + 0.02) / 0.20 = 0.35
+    d2 = 0.35 - 0.20 = 0.15
+    N(d1) = 0.63683065, N(d2) = 0.55961769, N'(d1) = 0.375240
+    """
+    g_call = calculate_black_scholes_greeks(spot=100.0, strike=100.0, t_years=1.0, sigma=0.20, r=0.05, option_type="call")
+    assert pytest.approx(g_call["price"], abs=0.02) == 10.45
+    assert pytest.approx(g_call["delta"], abs=0.005) == 0.637
+    assert pytest.approx(g_call["gamma"], abs=0.001) == 0.0188
+    assert pytest.approx(g_call["vega_1pct"], abs=0.01) == 0.38
+    assert pytest.approx(g_call["theta_daily"], abs=0.005) == -0.0255
+    assert pytest.approx(g_call["rho_1pct"], abs=0.01) == 0.53
+
+
+    g_put = calculate_black_scholes_greeks(spot=100.0, strike=100.0, t_years=1.0, sigma=0.20, r=0.05, option_type="put")
+    assert pytest.approx(g_put["price"], abs=0.02) == 5.57
+    assert pytest.approx(g_put["delta"], abs=0.005) == -0.363
+    assert pytest.approx(g_put["gamma"], abs=0.001) == 0.0188
+    assert pytest.approx(g_put["vega_1pct"], abs=0.01) == 0.38
+    assert pytest.approx(g_put["rho_1pct"], abs=0.01) == -0.42
+
+
+

@@ -71,10 +71,11 @@ continuous parameter space of an already-fixed analytical policy; it does not le
 has no value network, no replay buffer, and no policy gradient of any kind.
 
 `MarketMakingEnv` is a real, correctly-implemented Gym-style step/reset environment and would be a valid
-substrate for an actual RL algorithm -- but no such algorithm is implemented here. `train_market_maker_policy`
-is also NOT called by `api/pilots_api.py` or any webapp component as of this writing; the only
-live-reachable path from the Pilots API is `simulate_market_maker_session` (the deterministic
-closed-form AS quoter). Building a real PPO/SAC agent over `MarketMakingEnv` -- a neural policy network,
+substrate for an actual RL algorithm -- but no such algorithm is implemented here. As of PR #788,
+`train_market_maker_policy` IS called by `api/pilots_api.py` (`POST /pilots/options/market-maker/train`),
+but it still has NO webapp caller -- the only UI-reachable path remains `simulate_market_maker_session`
+(the deterministic closed-form AS quoter), reached via `POST /pilots/options/market-maker/simulate`.
+Building a real PPO/SAC agent over `MarketMakingEnv` -- a neural policy network,
 an advantage/value estimator, a proper on-policy or off-policy training loop -- is a separate, substantial
 RL engineering effort, out of scope for this fix; this note exists so nobody mistakes the hill-climb
 optimizer here for that.
@@ -1277,6 +1278,7 @@ def train_market_maker_policy(
     best_pnl = -float("inf")
 
     training_history: List[Dict[str, Any]] = []
+    last_improved_episode = 0
 
     for ep in range(max(1, int(episodes))):
         if ep == 0:
@@ -1324,6 +1326,7 @@ def train_market_maker_policy(
             best_pnl = final_pnl
             curr_gamma = cand_gamma
             curr_kappa = cand_kappa
+            last_improved_episode = ep
         else:
             delta = score - best_score
             accept_prob = math.exp(max(-10.0, delta / max(0.01, temperature)))
@@ -1342,6 +1345,19 @@ def train_market_maker_policy(
             "best_score": float(best_score),
         })
 
+    # Honest plateau-based convergence signal: the search has "converged" only
+    # if the best score has not improved for the trailing 20% of episodes (min
+    # 10) AND at least that many episodes actually ran. Previously this field
+    # was hardcoded True unconditionally -- indistinguishable from a real
+    # convergence check to any caller, and now that train_market_maker_policy
+    # is wired live via POST /pilots/options/market-maker/train (see
+    # docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08 High-Frequency Market
+    # Maker entry), that fabricated-looking value is visible to a real caller.
+    n_episodes = max(1, int(episodes))
+    convergence_window = max(10, int(0.2 * n_episodes))
+    episodes_since_improvement = (n_episodes - 1) - last_improved_episode
+    converged = n_episodes >= convergence_window and episodes_since_improvement >= convergence_window
+
     return PolicyOptimizationResult(
         best_gamma=float(best_gamma),
         best_kappa=float(best_kappa),
@@ -1351,7 +1367,7 @@ def train_market_maker_policy(
         best_max_inventory=int(mm_env.config.max_inventory),
         episodes_trained=int(episodes),
         training_history=training_history,
-        converged=True,
+        converged=bool(converged),
     )
 
 

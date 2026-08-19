@@ -4,7 +4,6 @@ Provides FastMCP tools for proposing, reviewing, and executing live equity order
 under risk gates and kill-switch constraints.
 """
 
-import os
 import json
 import uuid
 import time
@@ -42,6 +41,22 @@ class RateLimiter:
 _rate_limiter = RateLimiter(capacity=5, fill_rate=1.0/12.0)
 
 def _get_broker():
+    # If multi-broker failover engine is enabled, route through MultiBrokerGateway
+    # to inherit latency tracking and automated circuit-breaker failover.
+    # Read via settings.X (never os.environ directly) -- pydantic-settings'
+    # .env loading does not populate the real process os.environ, so a
+    # .env-only value here would silently never take effect (the same bug
+    # class documented in CLAUDE.md for Finnhub/EDGAR/Reddit/robinhood_portfolio).
+    if getattr(settings, "MULTI_BROKER_GATEWAY_ENABLED", False):
+        try:
+            from execution.multi_broker_gateway import MultiBrokerGateway
+            gw = MultiBrokerGateway.get_default_gateway()
+            active_adapter = gw.get_active_adapter()
+            if active_adapter is not None:
+                return active_adapter
+        except Exception:
+            pass
+
     # resolve_broker_backend() is the single source of truth for "which
     # broker should actually be used" -- shared with
     # main_orchestrator.py::_execute_broker_orders so the two call sites

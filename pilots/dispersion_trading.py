@@ -78,6 +78,44 @@ DEFAULT_WEIGHTS = {
     "TSLA": 0.09,
     "AVGO": 0.08,
 }
+
+# Distinct index constituent baskets per index (QQQ vs SPY). Both indices' TOP holdings
+# genuinely overlap heavily in real life (the same mega-cap tech names dominate both) --
+# that overlap is a real market fact, not a bug, and both baskets keep it. What's
+# structurally different between the two indices is SECTOR breadth: SPY (S&P 500) carries
+# real non-tech sector weight (financials, healthcare) that QQQ (Nasdaq-100, which
+# structurally excludes financials by index rule) does not. JPM (financials) and UNH
+# (healthcare) replace SPY's two smallest legacy slots to reflect that; QQQ keeps AVGO/TSLA
+# (its real growth/semiconductor tilt) in their place. These are static, reasoned
+# approximations of real index composition (order-of-magnitude weights, not a live-fetched
+# snapshot) -- see this module's own docstring for why no live constituent-weight source
+# exists in this repo; they will drift from the real, current index weights over time.
+INDEX_CONSTITUENTS_MAP = {
+    "SPY": ["AAPL", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "JPM", "UNH"],
+    "QQQ": ["AAPL", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "AVGO", "TSLA"],
+}
+INDEX_WEIGHTS_MAP = {
+    "SPY": {
+        "AAPL": 0.18,
+        "NVDA": 0.16,
+        "MSFT": 0.17,
+        "AMZN": 0.10,
+        "GOOGL": 0.09,
+        "META": 0.08,
+        "JPM": 0.12,
+        "UNH": 0.10,
+    },
+    "QQQ": {
+        "AAPL": 0.20,
+        "NVDA": 0.18,
+        "MSFT": 0.19,
+        "AMZN": 0.12,
+        "GOOGL": 0.10,
+        "META": 0.09,
+        "AVGO": 0.07,
+        "TSLA": 0.05,
+    },
+}
 OPTION_FEE_PER_CONTRACT_LEG = 0.65  # $0.65 per contract leg
 
 
@@ -792,8 +830,8 @@ def get_dispersion_opportunities(
     for idx in idx_list:
         try:
             idx_sym = str(idx).upper().strip()
-            constituents = list(DEFAULT_DISPERSION_CONSTITUENTS)
-            weights = dict(DEFAULT_WEIGHTS)
+            constituents = INDEX_CONSTITUENTS_MAP.get(idx_sym, list(DEFAULT_DISPERSION_CONSTITUENTS))
+            weights = INDEX_WEIGHTS_MAP.get(idx_sym, dict(DEFAULT_WEIGHTS))
 
             spot_map, iv_map, realized_corr = _source_real_dispersion_inputs(idx_sym, constituents, weights)
             const_ivs = {s: iv_map[s] for s in constituents if s in iv_map}
@@ -863,15 +901,29 @@ def execute_dispersion_trade(
         # No basket supplied -- source real market data (same path get_dispersion_opportunities
         # uses) rather than calling build_dispersion_basket with empty spot/iv maps, which would
         # always refuse (CONSTRAINT #4: no fabricated fallback spot/IV exists to fall through to).
-        constituents = list(DEFAULT_DISPERSION_CONSTITUENTS)
-        weights = dict(DEFAULT_WEIGHTS)
+        constituents = INDEX_CONSTITUENTS_MAP.get(idx_sym, list(DEFAULT_DISPERSION_CONSTITUENTS))
+        weights = INDEX_WEIGHTS_MAP.get(idx_sym, dict(DEFAULT_WEIGHTS))
         spot_map, iv_map, realized_corr = _source_real_dispersion_inputs(idx_sym, constituents, weights)
+        const_ivs = {s: iv_map[s] for s in constituents if s in iv_map}
+
+        # Evaluate opportunity first to derive the actual spread sign dynamically
+        opp = evaluate_dispersion_opportunity(
+            index_symbol=idx_sym,
+            constituent_symbols=constituents,
+            index_iv=iv_map.get(idx_sym),
+            constituent_ivs=const_ivs or None,
+            weights=weights,
+            realized_correlation=realized_corr,
+        )
+        is_long = opp.get("direction") != "short_dispersion"
+
         basket = build_dispersion_basket(
             index_symbol=idx_sym,
             constituent_symbols=constituents,
             spot_map=spot_map,
             iv_map=iv_map,
             weights=weights,
+            is_long_dispersion=is_long,
             realized_correlation=realized_corr,
         )
     elif isinstance(basket, dict):
@@ -915,11 +967,16 @@ def execute_dispersion_trade(
     try:
         paper_store = store or PaperAccountStore()
     except Exception as exc:
+        # Full exception + traceback goes to the server log only (never echoed back to the
+        # caller) -- CodeQL py/stack-trace-exposure flagged this dict flowing straight through
+        # api/pilots_api.py's post_options_dispersion_execute `return res`, matching the same
+        # generic-message-to-client / detail-to-log-only convention execute_vol_mispricing_trade
+        # already follows for its own store-failure path.
         logger.exception("Failed to initialize PaperAccountStore for dispersion trade: %s", exc)
         return {
             "ok": False,
             "basket_id": basket_id,
-            "message": f"Paper account storage unavailable: {exc}",
+            "message": "Paper account storage unavailable; see server logs for detail.",
         }
 
     strategy_name = "Dispersion Arbitrage"

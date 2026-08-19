@@ -124,3 +124,30 @@ losses during market downturns, improving net Sharpe from −0.128 to 0.562 and 
 achieving full deployability without modifying the underlying forecasting math or violating point-in-time constraints.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
+
+
+### 2026-08-18 Full Validation Run (`forecast_direction_arima_hw`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.4524 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.8560 |
+| **Max Drawdown** | 17.44% |
+| **Deployable** | ❌ False |
+
+
+**Regression from the `deployable=True` result above — a real, identified cause, not noise.**
+The 2026-08-14 `True` measurement above was recorded in commit `182fe8dc`. Only 29 minutes later,
+commit `588b324b` ("fix: address code-review findings on options gate fabrication + forecast-direction
+long-only bug") changed `_build_forecast_direction_adapter`'s allocation gate from
+`if is_market_uptrend and expected_gain_pct >= 1.5:` to
+`if is_market_uptrend and abs(expected_gain_pct) >= 1.5:`. The commit message states the bug
+plainly: the one-sided check "zeroed every bearish forecast regardless of magnitude, silently
+converting the documented long/short score-weighted book into a long-only book." **The `True`
+measurement above was therefore taken on an accidentally long-only version of this strategy; every
+run since (including this one) correctly measures the intended long/short book**, which is a
+materially different — and more honest — strategy, not a data artifact or harness regression. This
+doc's "Backtest Validation" numbers above predate the fix and should not be read as the strategy's
+current behavior; they are retained here as history per this file's existing convention, not
+because they still describe what `forecast_direction_arima_hw` does today.

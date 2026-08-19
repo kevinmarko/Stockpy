@@ -98,6 +98,8 @@ separately rather than mixed into it:
 | [`etf_transmission.md`](etf_transmission.md) | ETF volatility-transmission — diagnostic columns (`ETF_Ownership_Pct`, `ETF_Comovement_R2`) plus an opt-in sizing derate and portfolio-covariance adjustment | Diagnostic/sizing-only; consumed by `sizing/position_sizer.py`, not `SignalAggregator` |
 | [`sector_heat_factor.md`](sector_heat_factor.md) | GDELT-based per-sector article-volume/attention proxy | Dashboard feature column only, populated by `pipeline/production_steps.py` |
 | [`sector_selection.md`](sector_selection.md) | Semantic related-sector-selection engine (`sector_selection_engine.py`) — a daily ranking pass powering the webapp's Sector Selection screen | A standalone orchestration engine with its own master switch (`settings.SECTOR_SELECTION_ENABLED`), not a per-ticker scoring contributor |
+| [`google_trends_asvi.md`](google_trends_asvi.md) | Google Trends Overlapping Window Stitcher & ASVI Attention Engine (`data/trends_stitcher.py`) | Attention data ingestion, SVI scaling factor reconstruction, and sequence tensor preparation |
+
 
 ## Adding a New Signal Module
 

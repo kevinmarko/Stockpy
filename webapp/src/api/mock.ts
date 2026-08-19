@@ -10897,7 +10897,6 @@ export const mockApi = {
     });
 
     const divRatio = Number((1.2 + Math.min(0.6, req.symbols.length * 0.08)).toFixed(2));
-
     return delay<HrpCvarOptimizeResponse>({
       allocations,
       dendrogram: {
@@ -10936,13 +10935,19 @@ export const mockApi = {
       });
     }
 
+    const tempImpact = req.liquidity ? 1 / Math.max(1, req.liquidity) : 0.001;
+    const totalImpact = Math.max(0.01, (req.quantity * tempImpact + (req.risk_aversion || 1e-6) * (req.volatility || 0.20) * 100));
+    const expectedShortfall = Number((totalImpact * (1 + Math.random() * 0.1)).toFixed(2));
+    const variance = Number((Math.pow((req.volatility || 0.20), 2) * (req.horizon_steps || 10) * 0.5).toFixed(2));
+    const halfLife = Number((Math.log(2) / Math.max(1e-4, Math.sqrt((req.risk_aversion || 1e-6) / tempImpact))).toFixed(2));
+
     return delay<AlmgrenChrissOptimizeResponse>({
       symbol: req.symbol,
       trajectory: t,
       expected_trajectory: t,
-      expected_shortfall: 15.42,
-      variance: 2.15,
-      half_life: 3.4,
+      expected_shortfall: expectedShortfall,
+      variance: variance,
+      half_life: halfLife,
       as_of: new Date().toISOString(),
     }, 400);
   },

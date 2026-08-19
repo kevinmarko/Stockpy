@@ -97,10 +97,9 @@ def glu_forward(X: np.ndarray, W: np.ndarray, b: np.ndarray) -> np.ndarray:
     sigmoid_b = 1 / (1 + np.exp(-np.clip(b_gate, -20, 20)))
     return a * sigmoid_b
 
-
-def attention_forward(X: np.ndarray, weights: Dict[str, np.ndarray], num_heads: int) -> Tuple[np.ndarray, np.ndarray]:
+def attention_forward(X: np.ndarray, weights: Dict[str, np.ndarray], num_heads: int, causal: bool = True) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Multi-head attention forward pass.
+    Multi-head attention forward pass with causal lower-triangular masking.
     """
     batch_size, seq_len, d_model = X.shape
     d_head = d_model // num_heads
@@ -115,7 +114,12 @@ def attention_forward(X: np.ndarray, weights: Dict[str, np.ndarray], num_heads: 
     
     scores = np.matmul(Q, K.transpose(0, 1, 3, 2)) / np.sqrt(d_head)
     
-    # Softmax along the last axis
+    if causal and seq_len > 1:
+        # Lower-triangular causal mask: mask upper triangle (j > i) with -1e9
+        mask = np.triu(np.ones((seq_len, seq_len), dtype=bool), k=1)
+        scores = np.where(mask[None, None, :, :], -1e9, scores)
+
+    # We can use scipy.special.softmax along the last axis
     attn_weights = softmax(scores, axis=-1)
     
     context = np.matmul(attn_weights, V)

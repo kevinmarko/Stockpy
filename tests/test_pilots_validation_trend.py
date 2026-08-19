@@ -269,7 +269,17 @@ class TestValidationTrendSnapshotComposite:
             Path(FIXTURES_DIR, "timeseries_momentum_validation_summary.json").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-        result = validation_trend_snapshot(reports_dir=str(tmp_path), output_dir=tmp_path)
+        # history_dir must be pointed at an empty/nonexistent directory --
+        # `validation_trend_snapshot`'s default ("reports/history", relative
+        # to CWD) resolves to this repo's own real, populated
+        # reports/history/timeseries_momentum_validation_history.jsonl when
+        # pytest is invoked from the repo root, which would make the "no
+        # history seeded" assertions below false for the wrong reason.
+        result = validation_trend_snapshot(
+            reports_dir=str(tmp_path),
+            history_dir=str(tmp_path / "no_history_here"),
+            output_dir=tmp_path,
+        )
         assert result["strategies"] and result["strategies_reason"] is None
         # No history/regime data seeded -> both other sections degrade honestly
         # without affecting the strategies section (CONSTRAINT #6).

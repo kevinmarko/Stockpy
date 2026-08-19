@@ -47,15 +47,24 @@ def test_settings_load_from_environment(monkeypatch, tmp_path):
 # 2. DEFAULTS — unset fields fall back to documented defaults
 # =============================================================================
 def test_settings_defaults(monkeypatch, tmp_path):
-    # Ensure nothing leaks in from the host environment.
+    # Ensure nothing leaks in from the host environment. ALPACA_API_KEY is
+    # required here (not merely nice-to-have): on a machine with a real,
+    # populated .env, another test module's own load_dotenv(ENV_PATH,
+    # override=False) call earlier in this same pytest session copies it
+    # (and only it, of the fields this test asserts on) into real
+    # os.environ -- Settings(_env_file=None) skips the .env FILE but still
+    # reads os.environ, so without this delenv the assertion below observes
+    # the operator's real key instead of the documented None default.
     for key in (
         "FRED_API_KEY",
+        "ALPACA_API_KEY",
         "RISK_FREE_RATE",
         "ALPACA_PAPER",
         "DEFAULT_TICKERS",
         "STATE_API_TOKEN",
         "CORS_ALLOWED_ORIGINS",
         "DRY_RUN",
+        "MAX_PORTFOLIO_HEAT",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))

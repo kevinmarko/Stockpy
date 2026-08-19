@@ -520,6 +520,13 @@ class TestWatchlistFilesFromEnv:
 class TestDiscoverUniverse:
     def test_unions_holdings_watchlists_and_files(self, monkeypatch, tmp_path):
         client = _make_client(monkeypatch)
+        # Isolate from a real operator .env's SYNC_WATCHLIST_FILES (e.g.
+        # "watchlist.txt") -- discover_universe() unions in every file that
+        # setting names via _watchlist_files_from_env(), and this test only
+        # wants extra_files=[f] to matter. See
+        # test_env_var_files_are_included_alongside_extra_files_argument for
+        # the sibling test that exercises SYNC_WATCHLIST_FILES on purpose.
+        monkeypatch.setattr(robinhood_client.settings, "SYNC_WATCHLIST_FILES", None)
         monkeypatch.setattr(
             robinhood_client.r,
             "build_holdings",
@@ -543,6 +550,9 @@ class TestDiscoverUniverse:
 
     def test_unauthenticated_client_still_uses_file_sources(self, monkeypatch, tmp_path):
         client = _make_client(monkeypatch, authenticated=False)
+        # Isolate from a real operator .env's SYNC_WATCHLIST_FILES -- see
+        # test_unions_holdings_watchlists_and_files.
+        monkeypatch.setattr(robinhood_client.settings, "SYNC_WATCHLIST_FILES", None)
         f = tmp_path / "extra.txt"
         f.write_text("pg\n", encoding="utf-8")
 
@@ -552,6 +562,9 @@ class TestDiscoverUniverse:
 
     def test_holdings_fetch_exception_does_not_abort_other_sources(self, monkeypatch, tmp_path):
         client = _make_client(monkeypatch)
+        # Isolate from a real operator .env's SYNC_WATCHLIST_FILES -- see
+        # test_unions_holdings_watchlists_and_files.
+        monkeypatch.setattr(robinhood_client.settings, "SYNC_WATCHLIST_FILES", None)
 
         def _raise():
             raise RuntimeError("holdings API down")

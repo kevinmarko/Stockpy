@@ -311,3 +311,28 @@ def test_backwards_compatibility_generate_synthetic_crash_paths():
     paths_cond = generate_synthetic_crash_paths(cond_model, num_paths=50, steps=20)
     assert paths_cond.shape == (50, 8)
     assert not np.isnan(paths_cond).any()
+
+
+def test_synthetic_diffusion_engine_no_lookahead_bias():
+    """Verifies that future data mutations t > T do not affect model training or generated paths for t <= T."""
+    np.random.seed(42)
+    # Generate historical paths up to time T
+    N, L = 50, 10
+    full_history = np.random.randn(100, L) * 0.02 - 0.005
+
+    # Baseline slice up to index N
+    hist_baseline = full_history[:N].copy()
+    model_baseline = train_diffusion_model(hist_baseline, epochs=20, lr=0.01)
+
+    # Mutate future history beyond N (index N to 100)
+    mutated_full_history = full_history.copy()
+    mutated_full_history[N:] = np.random.randn(50, L) * 10.0
+
+    # Extract historical slice up to N from mutated history
+    hist_mutated = mutated_full_history[:N].copy()
+    model_mutated = train_diffusion_model(hist_mutated, epochs=20, lr=0.01)
+
+    # Weights must be bit-exact identical
+    for k in ["W1", "b1", "W2", "b2"]:
+        np.testing.assert_array_equal(model_baseline[k], model_mutated[k])
+

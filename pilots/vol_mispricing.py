@@ -38,6 +38,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import logging
 import math
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -66,6 +67,7 @@ __all__ = [
     "build_candidate_strategy_trades",
     "evaluate_strike_mispricing",
     "get_volatility_mispricing_data",
+    "execute_vol_mispricing_trade",
 ]
 
 # Standard volatility spread thresholds (in vol decimal units)
@@ -1411,3 +1413,126 @@ def get_volatility_mispricing_data(
     result["as_of"] = datetime.now(timezone.utc).isoformat()
     result["har_forecast_summary"] = har_forecast
     return result
+
+
+# ---------------------------------------------------------------------------
+# Paper-Broker Execution
+# ---------------------------------------------------------------------------
+
+
+def execute_vol_mispricing_trade(
+    symbol: str,
+    *,
+    candidate: Optional[Dict[str, Any]] = None,
+    contracts: int = 1,
+    dry_run: bool = False,
+    is_live: bool = False,
+) -> Dict[str, Any]:
+    """
+    Executes a single already-built candidate multi-leg volatility-mispricing trade
+    (one element of `build_candidate_strategy_trades()`'s output) in the paper broker.
+
+    Unlike `execute_earnings_crush_trade`, this function does NOT derive candidates or
+    strikes itself -- deriving candidates is `build_candidate_strategy_trades()`'s job.
+    The caller (typically the API layer, passing through a request body built from a
+    prior `GET /pilots/options/forecast/mispricing` call) must explicitly select which
+    candidate trade to execute; this mirrors `execute_dispersion_trade`'s `basket`
+    parameter more than `execute_earnings_crush_trade`'s optional-legs-with-strike-
+    fallback pattern, since a vol_mispricing candidate's legs are always already
+    populated by `_create_strategy_leg`.
+
+    `vol_mispricing` is a MEASURED deployability failure (Sharpe -0.499, DSR 0.027,
+    fails the Oct-2008 stress window -- see docs/signals/vol_mispricing.md's Backtest
+    Validation section) -- the caller (`POST /pilots/options/mispricing/execute` in
+    api/pilots_api.py) is responsible for gating this function behind
+    OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] and an explicit per-request
+    `override_deployability_gate` flag. This function itself performs no deployability
+    check -- it is a pure execution primitive, same division of responsibility as
+    `execute_earnings_crush_trade`/`execute_dispersion_trade`.
+    """
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"ok": False, "message": "Symbol is required."}
+
+    if is_live:
+        return {
+            "ok": False,
+            "message": "Advisory-Only Mode: Live options order execution is disabled. Please use paper mode.",
+        }
+
+    if not candidate or not candidate.get("legs"):
+        return {
+            "ok": False,
+            "message": "A candidate strategy trade (with legs) is required to execute a vol_mispricing trade.",
+        }
+
+    strategy_type = candidate.get("strategy_type") or candidate.get("name") or "Vol Mispricing"
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "symbol": sym,
+            "strategy": strategy_type,
+            "contracts": contracts,
+            "message": f"Dry run: {strategy_type} vol mispricing order validated for {sym}.",
+        }
+
+    # Translate _create_strategy_leg's {"action", "unit_price" ($/share)} leg shape into
+    # execute_earnings_crush_trade's generic-executor {"side", "fill_price" ($/contract)}
+    # shape. Options premia are quoted per-share; one contract == 100 shares, so
+    # fill_price = unit_price * 100.0. A leg with no resolvable unit_price is left
+    # unpriced (fill_price omitted) rather than fabricated -- the shared executor's own
+    # CONSTRAINT #4 guard refuses the whole trade if any leg ends up unpriced.
+    translated_legs: List[Dict[str, Any]] = []
+    expiration: Optional[str] = None
+    for leg in candidate.get("legs") or []:
+        unit_price = leg.get("unit_price")
+        leg_out: Dict[str, Any] = {
+            "symbol": leg.get("symbol"),
+            "side": str(leg.get("action") or "buy").lower(),
+            "strike": leg.get("strike"),
+            "type": leg.get("type"),
+        }
+        if unit_price is not None:
+            leg_out["fill_price"] = float(unit_price) * 100.0
+        translated_legs.append(leg_out)
+        if expiration is None and leg.get("expiration"):
+            expiration = leg.get("expiration")
+
+    executor_candidate = {
+        "symbol": sym,
+        "strategy": strategy_type,
+        "expiration": expiration,
+        "legs": translated_legs,
+    }
+
+    try:
+        from execution.options_paper_executor import OptionsPaperExecutor
+        executor = OptionsPaperExecutor()
+        res = executor.execute_earnings_crush_trade(
+            executor_candidate,
+            contracts=contracts,
+            strategy_name="Vol Mispricing",
+        )
+        if res.get("success"):
+            return {
+                "ok": True,
+                "order_id": res.get("order_id") or f"vm_{uuid.uuid4().hex[:8]}",
+                "symbol": sym,
+                "strategy": strategy_type,
+                "contracts": contracts,
+                "message": f"Successfully executed {strategy_type} vol mispricing trade for {sym}.",
+                "details": res,
+            }
+        return {
+            "ok": False,
+            "message": res.get("reason", "Failed to execute vol mispricing trade"),
+            "details": res,
+        }
+    except Exception as exc:  # noqa: BLE001 -- never raises (CONSTRAINT #6)
+        logger.warning("execute_vol_mispricing_trade failed for %s: %s", sym, exc)
+        return {
+            "ok": False,
+            "message": f"Internal error executing vol mispricing trade for {sym}.",
+        }

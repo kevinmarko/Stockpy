@@ -9,16 +9,25 @@ Key Capabilities:
     Computes opening range boundaries [Low_15, High_15] from 9:30 to 9:45 AM ET.
     Detects directional thrust above High_15 (Bullish Breakout) or below Low_15 (Bearish Breakdown).
 
-2. TTM Volatility Squeeze Gate:
+2. TTM Volatility Squeeze Confidence Signal:
     Bollinger Bands (20-period, 2.0 std) contracting within Keltner Channels (20-period, 1.5 ATR).
-    Identifies pre-breakout volatility compression and fires upon expansion/momentum release.
+    Identifies pre-breakout volatility compression and detects expansion/momentum release
+    (detect_volatility_squeeze/SqueezeResult -- real code, not a stub). Corrected 2026-08-19:
+    this was previously called a "Gate," implying it filters/blocks entries -- it does not.
+    generate_0dte_signals only uses squeeze_fired to modestly boost the reported confidence
+    score (+0.10) on an already-triggered ORB breakout; it never blocks or requires a squeeze
+    to enter a trade.
 
 3. High-Gamma Convexity Contract Selection:
     Selects optimal ATM/1-OTM 0DTE strike (Delta ~ 0.40 - 0.55) expiring the current trading session.
 
 4. Fast 0DTE Risk Lifecycle & Pin Protection:
     - Fast Profit Target (+75% gain in premium) -> PROFIT_TARGET_75 (EXIT_PROFIT_TARGET)
-    - Fast Stop Loss (-30% loss or opening range reversal) -> STOP_LOSS_30 (EXIT_STOP_LOSS)
+    - Fast Stop Loss (-30% loss in premium) -> STOP_LOSS_30 (EXIT_STOP_LOSS). Corrected
+      2026-08-19: this was previously documented as also triggering on "opening range
+      reversal," but manage_0dte_exits' actual stop-loss condition (pnl_pct <= -stop_loss_pct)
+      is a pure premium-percentage stop -- there is no opening-range-reversal-based exit
+      trigger anywhere in this module's exit-lifecycle code.
     - Mandatory 15:45 ET Hard Time Stop to eliminate closing assignment/pin risk -> HARD_TIME_STOP_1545 (EXIT_HARD_TIME_STOP).
 
 5. Single-Leg 0DTE Paper Broker Execution:
@@ -797,17 +806,19 @@ def get_0dte_signals(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    bars = None
-    try:
-        from data.historical_store import HistoricalStore
-        store = HistoricalStore()
-        bars = store.get_intraday_bars(sym) if hasattr(store, "get_intraday_bars") else None
-    except Exception as exc:
-        logger.debug("0DTE Historical store bars lookup error: %s", exc)
-
+    # No intraday/1-minute bar source exists anywhere in this repo -- `HistoricalStore`
+    # (data/historical_store.py) is daily-OHLCV-only (`get_bars`/`get_bars_bulk`); it exposes
+    # no per-minute intraday accessor at all. This is a structural data-availability gap, not
+    # a fixable lookup bug -- see docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-17 entry, which
+    # also notes the 4 mandatory 0DTE stress windows fall outside yfinance's ~30-day 1-minute
+    # retention. `scan_0dte_breakouts` already degrades honestly when `intraday_bars=None`
+    # (opening_range marked invalid, signal_type="NO_SIGNAL", an explanatory `reason`) rather
+    # than fabricating a synthetic range from daily bars -- so pass `None` explicitly instead
+    # of pretending to look one up. (Regression-guarded by
+    # tests/test_zero_dte_engine.py::test_get_0dte_signals_source_has_no_dead_historical_store_lookup.)
     res = scan_0dte_breakouts(
         symbol=sym,
-        intraday_bars=bars,
+        intraday_bars=None,
         range_minutes=range_minutes,
     )
     return {
@@ -1096,7 +1107,37 @@ def execute_0dte_trade(
     elif limit_price is not None and limit_price > 0:
         unit_price = float(limit_price)
     else:
-        unit_price = 1.50
+        # Attempt to compute real theoretical option price from latest spot price
+        spot = None
+        try:
+            from pilots.price_provider import get_latest_price
+            spot = get_latest_price(ticker)
+        except Exception:
+            pass
+
+        if spot is not None and spot > 0:
+            from pilots.options_risk import calculate_black_scholes_greeks
+            greeks = calculate_black_scholes_greeks(
+                spot=spot,
+                strike=strike,
+                t_years=0.5 / 365.0,
+                sigma=0.20,
+                option_type=resolved_opt_type,
+            )
+            unit_price = max(0.05, round(float(greeks.get("price", 1.0)), 2))
+        else:
+            logger.error(
+                "0DTE execution rejected for %s: No quote_price or limit_price provided. "
+                "Refusing to fabricate fallback fill price (CONSTRAINT #4).",
+                option_symbol,
+            )
+            return {
+                "ok": False,
+                "error": "No quote_price or limit_price provided. Real price source required to execute 0DTE trade.",
+                "symbol": ticker,
+                "contract_symbol": option_symbol,
+                "dry_run": dry_run,
+            }
 
     fill_price_contract = unit_price * _DEFAULT_MULTIPLIER
     commission = 0.65 * contracts

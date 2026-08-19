@@ -351,6 +351,11 @@ class OrchestratorDaemon:
             )
             state = RunState.SUCCEEDED
             error = None
+            # Note: 0DTE exit-lifecycle management (manage_0dte_exits) is NOT
+            # re-run here. _timer_loop already calls it on every interval wake
+            # (more frequently than once per full pipeline cycle, and without
+            # waiting on cycle success) -- see _timer_loop below. A second call
+            # here would just double-fire it once per completed cycle.
         except main_orchestrator.PipelineFatalError as exc:
             state = RunState.FAILED
             error = str(exc)
@@ -882,6 +887,14 @@ class OrchestratorDaemon:
             ):
                 logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
                 continue
+            # Periodically evaluate and manage 0DTE exits (F5) during market hours
+            if getattr(settings, "OPTIONS_0DTE_ENABLED", False):
+                try:
+                    from pilots.zero_dte_engine import manage_0dte_exits
+                    manage_0dte_exits()
+                except Exception as exc:  # noqa: BLE001 - defensive only (CONSTRAINT #6)
+                    logger.debug("0DTE daemon periodic exit evaluation skipped: %s", exc)
+
             self.trigger_run(reason="interval")
 
     # ------------------------------------------------------------------

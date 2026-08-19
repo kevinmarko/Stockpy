@@ -98,6 +98,12 @@ import pytest
 import transactions_store
 from tests._db_isolation import make_memory_db_init
 
+# Keep every test in this file on a single xdist worker so the module-scoped
+# orchestrator_run fixture (a full real pipeline run) builds once, not once
+# per worker that happens to get a split share of the file's 5 classes --
+# measured in CI as a genuine ~53s x2 duplication before this marker existed.
+pytestmark = pytest.mark.xdist_group("orchestrator_e2e")
+
 
 # ============================================================================
 # Shared fixture: run _main_body() exactly once, all assertions read from its

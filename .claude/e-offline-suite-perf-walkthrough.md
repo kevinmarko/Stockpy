@@ -84,3 +84,120 @@ as a fourth member of the group.
 | Drop `--cov-report=term-missing` | 5–15 s (300+ file table) |
 | `--durations=50` → `--durations=10` | ~1 s (minor) |
 | `xdist_group` on `test_settings_keysets.py` | Prevents duplicate class-fixture setup across workers |
+
+## Follow-on: cache the installed dependencies (2026-08-18, same day)
+
+After the above merged (PR #796), real timing data from two live CI runs
+showed the **`Install dependencies` step now dominates the `test` job's
+wall-clock time** — consistently ~70–80s in every job that installs the
+full `requirements.txt` (`test`, `test-slow`, `security`), even though
+`actions/setup-python`'s `cache: pip` was already warm. That cache layer
+only speeds up *downloading* wheels; it does nothing for the cost of
+unpacking/linking ~500+ MB of compiled packages (lightgbm, scipy,
+statsmodels, scikit-learn, prophet's bundled cmdstan, pyarrow, ...) into
+site-packages on every run.
+
+### First attempt (reverted): explicit `.venv`, cached separately
+
+The first version of this fix had each of the three heavy-install jobs
+create its Python environment as an explicit `.venv` inside the checkout
+and cache that directory via `actions/cache@v4`, keyed on
+`hashFiles('requirements.txt')`, with the venv's `bin/` prepended to
+`$GITHUB_PATH` so later steps resolved into it unchanged.
+
+**This measured worse, not better, in PR #797's own CI run.** Comparing the
+actual `pytest` execution step (not the install step) across three runs, all
+with an identical 11375-passed/25-skipped result:
+
+| Run | site-packages location | pytest wall-clock |
+|---|---|---|
+| Pre-caching baseline (×2) | `/opt/hostedtoolcache/...` | 705.10s (11:45) |
+| `.venv`-based caching | `$GITHUB_WORKSPACE/.venv/...` | 841.60s (14:01) |
+
+A ~19% slowdown in the test run itself — on the very run meant to prove the
+change out — more than erasing the ~75s meant to be saved on install. The
+`slowest 10 durations` list was the same shape in both runs (same tests
+topping it: `test_orchestrator_e2e` setup, `test_backtest_sector_configs_cli`,
+etc.), just uniformly worse — pointing at a systemic cause, not one flaky
+test. Working theory: `/opt/hostedtoolcache` is GitHub's pre-provisioned,
+pre-warmed tool-cache volume; `$GITHUB_WORKSPACE/.venv` sits on the checkout
+workspace disk instead, and every xdist worker's imports paid that I/O
+difference across the whole suite.
+
+### Actual fix: cache the interpreter's own site-packages directly
+
+Instead of relocating installs into a new `.venv`, the cache now targets
+`${{ env.pythonLocation }}/lib/python3.12/site-packages` — the exact
+directory `pip install -r requirements.txt` already writes into on the
+setup-python-provisioned interpreter, on the same fast disk the pre-caching
+baseline always used. No `.venv`, no `$GITHUB_PATH` manipulation — `python`/
+`pip`/`ruff`/`pytest` calls in every later step are completely unchanged.
+
+The cache key includes the exact resolved Python patch version
+(`steps.setup-python.outputs.python-version`, e.g. `3.12.13`), not just
+`3.12` — so a future GitHub-side interpreter bump can never restore compiled
+extensions built against a different patch release; it just misses cleanly
+and falls through to a normal fresh install.
+
+- **Cache hit** (requirements.txt unchanged since last run): most of
+  site-packages is already in place; `pip install -r requirements.txt`
+  becomes a fast up-to-date check instead of a full install.
+- **Partial hit** (requirements.txt changed, restore-keys fallback): most
+  packages already present; pip only installs what actually changed.
+- **Cold cache** (first run, patch-version bump, or cache eviction): behaves
+  exactly like the pre-caching baseline — full fresh install, no regression.
+
+This was NOT applied to the `webapp` job (npm install is already ~7s with
+a warm `cache: npm`) or `bandit` (installs only the `bandit` package
+itself, ~2–3s) — neither has meaningful room left to cut.
+
+### Real bug found on the first genuine warm-cache run: `bin/` was missing
+
+The site-packages-only cache above got its first real warm-cache exercise
+via a manual re-run of the same commit (the cache had just been populated
+by another job in the prior run). It broke two jobs outright:
+
+```
+ruff._find_ruff.RuffNotFound: Could not find the ruff binary in any of
+the following locations:
+ - /opt/hostedtoolcache/Python/3.12.13/x64/bin
+ ...
+```
+```
+/home/runner/.../86c5e9a5....sh: line 12: pip-audit: command not found
+##[error]Process completed with exit code 127.
+```
+
+Root cause: `ruff`'s `__main__.py` calls `find_ruff_bin()`, which needs the
+actual Rust binary from `bin/ruff` — `python -m ruff` still depends on a
+binary outside site-packages, contrary to the earlier assumption that
+module-invoked tools never need `bin/`. `pip-audit`'s own console-script
+entry point lives in `bin/` too. Neither was ever part of the cached path.
+On the cache-populating run, `pip install pip-audit` had already put
+pip-audit's package files in the (then being-saved) site-packages tree; on
+the warm-cache run, `pip install pip-audit` saw the dist-info already
+present and reported "already satisfied" — skipping the step that would
+normally regenerate the missing `bin/pip-audit` wrapper script. `ruff`
+never gets *reinstalled* to fail this way (it's not invoked in a step that
+reinstalls it), but the same absent-`bin/` gap applies to it directly:
+`bin/ruff` simply was never restored from cache to begin with.
+
+**Fix:** cache `${{ env.pythonLocation }}/bin` alongside site-packages, as
+two paths in the same cache step (not the whole `$pythonLocation` directory,
+which would also duplicate the base interpreter/stdlib setup-python's own
+tool-cache already manages — `bin/` itself is small, wrapper scripts and
+symlinks, not multi-hundred-MB packages, so this doesn't meaningfully grow
+the cache).
+
+**This also likely explains the earlier "~19% slower pytest" and "worse
+than the `.venv` attempt" measurements** — those were real numbers, but the
+disk-location causal story built on them (from n=1-per-variant samples) was
+never verified against a genuine warm-cache run before being written down.
+The one comparison that would have actually distinguished "disk location"
+from "cache correctness bug" from "plain runner noise" — a real warm-cache
+hit — didn't happen until this bug surfaced it.
+
+**Lesson:** a passing CI status is not the same as a performance win, and
+a plausible-sounding causal story fit to n=1 samples is not confirmation —
+verify the actual timing data AND get a genuine cache hit (not just a
+cache miss with different code paths) before trusting either.

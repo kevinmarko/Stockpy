@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 315,
+    "live_safe": 316,
     "no_op": 3,
     "restart_required": 104,
-    "total": 422
+    "total": 423
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 418,
+  "files_scanned": 420,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -324,6 +324,7 @@
     "MCP_OAUTH_MULTI_USER_ENABLED",
     "META_LABELING_ENABLED",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
+    "MULTI_BROKER_GATEWAY_ENABLED",
     "NEWS_EARNINGS_DAMPEN_DAYS",
     "NEWS_EARNINGS_SUPPRESS_HOURS",
     "NEWS_HISTORY_CAPTURE_ENABLED",
@@ -466,13 +467,13 @@
   "read_forms": {
     "attr": 832,
     "factory_param": 4,
-    "getattr_const": 355,
+    "getattr_const": 360,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 247,
     "factory_param": 4,
-    "getattr_const": 203,
+    "getattr_const": 204,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -2451,7 +2452,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "ml/drl_market_maker.py:108",
+        "site": "ml/drl_market_maker.py:109",
         "via": []
       }
     ],
