@@ -1,4 +1,14 @@
 import asyncio
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from scripts._bootstrap import bootstrap
+bootstrap()
+
 from google.antigravity import Agent, LocalAgentConfig, types
 
 async def launch_builder_agent(name, directory, prompt):
