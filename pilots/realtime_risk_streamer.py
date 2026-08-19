@@ -257,7 +257,13 @@ def compute_position_risk_greeks(
         exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         dte = max(0.0, (exp_dt - now).total_seconds() / 86400.0)
     except Exception:
-        dte = 30.0
+        # Unparseable expiration date: never fabricate a plausible-but-wrong
+        # DTE (this file's own Constraint #4 docstring). Return None so the
+        # caller's existing missing_positions path (compute_portfolio_risk_
+        # stream's `if pos_greeks is None: missing_positions.append(sym)`)
+        # honestly excludes this position instead of reporting a fabricated
+        # 30-day Greek.
+        return None
 
     t_years = max(0.0, dte / 365.0)
     iv = float(position.get("iv") or 0.25)

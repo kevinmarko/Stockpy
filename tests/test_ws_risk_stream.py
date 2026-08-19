@@ -202,3 +202,122 @@ def test_ws_portfolio_risk_quote_fetch_is_batched_not_per_symbol(monkeypatch):
     assert call_count == 1
     assert set(received_symbols) == {"AAPL", "MSFT", "GOOGL", "TSLA", "SPY"}
     assert payload["total_positions_count"] == 4
+
+
+def test_check_ws_token_uses_hmac_compare_digest(monkeypatch):
+    """Regression test for the timing-safe-comparison fix: _check_ws_token
+    must genuinely call hmac.compare_digest rather than a plain `==`. Spies
+    on the real hmac.compare_digest (imported into api.ws_api's module
+    namespace) and confirms it is actually invoked for both the query-param
+    and Authorization-header paths -- a regression back to plain `==` would
+    make this assertion fail even though behavior for a correct/incorrect
+    token would look unchanged otherwise."""
+    import hmac as hmac_module
+    import api.ws_api as ws_api_module
+
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "super-secret-token")
+
+    calls = []
+    real_compare_digest = hmac_module.compare_digest
+
+    def spy_compare_digest(a, b):
+        calls.append((a, b))
+        return real_compare_digest(a, b)
+
+    monkeypatch.setattr(ws_api_module.hmac, "compare_digest", spy_compare_digest)
+
+    # Query-param path
+    assert ws_api_module._check_ws_token("super-secret-token", None, "1.2.3.4") is True
+    assert ws_api_module._check_ws_token("wrong-token", None, "1.2.3.4") is False
+
+    # Authorization-header path
+    assert ws_api_module._check_ws_token(None, "Bearer super-secret-token", "1.2.3.4") is True
+    assert ws_api_module._check_ws_token(None, "Bearer wrong-token", "1.2.3.4") is False
+
+    # hmac.compare_digest was genuinely exercised on both paths.
+    assert len(calls) == 4
+
+
+def test_check_ws_token_rejects_near_miss_token(monkeypatch):
+    """A token differing from the real one only in its last character must
+    still be rejected -- exercises the timing-safe comparison path end to
+    end rather than just confirming the mock was called."""
+    import api.ws_api as ws_api_module
+
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "super-secret-token")
+    assert ws_api_module._check_ws_token("super-secret-tokeN", None, "1.2.3.4") is False
+    assert ws_api_module._check_ws_token("super-secret-token", None, "1.2.3.4") is True
+
+
+def test_ws_portfolio_risk_uses_readonly_paper_account_store(monkeypatch):
+    """Regression test: the /ws/risk/portfolio handler must construct
+    PaperAccountStore with readonly=True (this handler only ever reads via
+    get_open_positions()), matching every other read-only call site in the
+    codebase."""
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "")
+    monkeypatch.setattr(
+        "data.paper_account_store.PaperAccountStore.get_open_positions",
+        lambda self: [],
+    )
+
+    captured_kwargs = {}
+    from data.paper_account_store import PaperAccountStore as RealPaperAccountStore
+
+    original_init = RealPaperAccountStore.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(RealPaperAccountStore, "__init__", spy_init)
+
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    with client.websocket_connect("/ws/risk/portfolio") as ws:
+        ws.receive_text()
+
+    assert captured_kwargs.get("readonly") is True
+
+
+def test_ws_portfolio_risk_sleep_interval_reads_from_settings(monkeypatch):
+    """Regression test: the handler's per-tick sleep must genuinely read
+    settings.WS_RISK_STREAM_INTERVAL_SECONDS, not a hardcoded 1.0. Spies on
+    api.ws_api.asyncio.sleep (mirroring the existing
+    tests/test_main_orchestrator.py::monkeypatch.setattr(mo.asyncio, "sleep",
+    ...) convention in this codebase) and confirms it is invoked with the
+    configured value.
+
+    The spy raises a plain RuntimeError (not asyncio.CancelledError) so
+    execution lands in the endpoint's own `except Exception as exc:` branch,
+    which explicitly calls `websocket.close(code=1011)` -- the CancelledError
+    branch just `pass`es with no explicit close, which left the test client's
+    second receive_text() blocked waiting on a close frame that was never
+    sent (confirmed by direct reproduction: a 30s hang), so RuntimeError is
+    the reliable choice here for actually observing the loop exit.
+    """
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "")
+    monkeypatch.setattr(settings, "WS_RISK_STREAM_INTERVAL_SECONDS", 4.25)
+    monkeypatch.setattr(
+        "data.paper_account_store.PaperAccountStore.get_open_positions",
+        lambda self: [],
+    )
+
+    import api.ws_api as ws_api_module
+
+    sleep_calls = []
+
+    async def spy_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise RuntimeError("stop the loop after capturing the sleep() call")
+
+    monkeypatch.setattr(ws_api_module.asyncio, "sleep", spy_sleep)
+
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    with client.websocket_connect("/ws/risk/portfolio") as ws:
+        ws.receive_text()
+        # The handler's `except Exception as exc:` branch closes the socket
+        # (code=1011) after the spy's RuntimeError propagates out of
+        # asyncio.sleep(); the client observes that as a disconnect.
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
+
+    assert sleep_calls == [4.25]

@@ -156,6 +156,27 @@ class TestPositionRiskGreeks:
         assert res.theta_daily < 0.0
         assert res.vega_1pct > 0.0
 
+    def test_malformed_expiration_returns_none_not_fabricated_dte(self):
+        """Regression test: an option symbol whose expiration date fails to
+        parse must NOT fabricate a plausible-but-wrong dte=30.0 and continue
+        computing Greeks against it. It must return None (matching the
+        empty-symbol / near-zero-qty / non-positive-spot degenerate cases
+        this same function already handles this way), so the caller's
+        missing_positions path is the one that reports it -- see
+        test_malformed_expiration_lands_in_missing_positions below."""
+        pos = {
+            "symbol": "AAPL 2026-13-45 $180.00 CALL",  # invalid month/day
+            "qty": 1,
+            "iv": 0.25,
+        }
+        res = compute_position_risk_greeks(
+            position=pos,
+            spot_price=180.0,
+            spy_price=500.0,
+            beta=1.0,
+        )
+        assert res is None
+
 
 class TestPortfolioRiskStreamAggregation:
     def test_portfolio_aggregation_multi_asset(self):
@@ -202,3 +223,29 @@ class TestPortfolioRiskStreamAggregation:
         assert "UNKNOWN_TICKER" in port_risk.missing_positions
         # Aggregate delta is strictly based on the resolved position (100 shares of AAPL)
         assert port_risk.net_delta == 100.0
+
+    def test_malformed_expiration_lands_in_missing_positions(self):
+        """A position with an unparseable option expiration date must land
+        in missing_positions -- not in resolved_positions with a fabricated
+        30-day Greek -- when run through the full portfolio aggregation
+        entry point. Zero new branching logic was needed in the caller for
+        this: the existing `if pos_greeks is None: missing_positions.append`
+        path (exercised above for missing quotes) already handles it."""
+        positions = [
+            {"symbol": "AAPL", "qty": 100},
+            {"symbol": "AAPL 2026-13-45 $180.00 CALL", "qty": 1, "iv": 0.25},
+        ]
+        quotes = {"AAPL": 180.0, "SPY": 500.0}
+
+        port_risk = compute_portfolio_risk_stream(
+            positions=positions,
+            quotes=quotes,
+            spy_price=500.0,
+        )
+
+        assert port_risk.total_positions_count == 2
+        assert port_risk.resolved_positions_count == 1
+        assert port_risk.missing_data_count == 1
+        assert "AAPL 2026-13-45 $180.00 CALL" in port_risk.missing_positions
+        resolved_symbols = {p.symbol for p in port_risk.positions}
+        assert "AAPL 2026-13-45 $180.00 CALL" not in resolved_symbols

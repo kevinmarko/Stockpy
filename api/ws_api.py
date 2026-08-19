@@ -42,6 +42,7 @@ once an endpoint is reachable from outside this machine (e.g. via the
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -78,10 +79,10 @@ def _check_ws_token(
     server_token = getattr(settings, "STATE_API_TOKEN", None)
     if not server_token:
         return is_loopback_host(client_host)
-    if token and token == server_token:
+    if token and hmac.compare_digest(token, server_token):
         return True
     if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[len("Bearer "):] == server_token
+        return hmac.compare_digest(auth_header[len("Bearer "):], server_token)
     return False
 
 
@@ -646,9 +647,10 @@ async def ws_portfolio_risk_endpoint(
     Pushes JSON payload computed by pilots.realtime_risk_streamer. The
     connection is closed with 4003 if the auth token is invalid.
 
-    Cadence, plainly stated: this loop polls once per second
-    (``asyncio.sleep(1.0)`` below) and pushes one JSON payload per iteration.
-    There is no sub-second/500ms tick here (that cadence belongs to the
+    Cadence, plainly stated: this loop polls every
+    ``settings.WS_RISK_STREAM_INTERVAL_SECONDS`` (default 1.0s, i.e. once per
+    second) and pushes one JSON payload per iteration. There is no
+    sub-second/500ms tick here (that cadence belongs to the
     separate ``/ws/ticks/{symbol}`` endpoint above) and no heartbeat/idle
     watchdog on this connection -- a client that stops reading will simply
     have its socket buffer back up until the underlying TCP/ASGI layer
@@ -668,7 +670,7 @@ async def ws_portfolio_risk_endpoint(
         from data.paper_account_store import PaperAccountStore
         from pilots.realtime_risk_streamer import compute_portfolio_risk_stream, parse_option_symbol
         from pilots.price_provider import get_latest_prices
-        store = PaperAccountStore()
+        store = PaperAccountStore(readonly=True)
 
         while True:
             loop = asyncio.get_running_loop()
@@ -727,7 +729,7 @@ async def ws_portfolio_risk_endpoint(
             )
 
             await websocket.send_text(json.dumps(risk_summary.to_dict()))
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(settings.WS_RISK_STREAM_INTERVAL_SECONDS)
 
     except WebSocketDisconnect:
         logger.info("ws_portfolio_risk_endpoint: client disconnected")
