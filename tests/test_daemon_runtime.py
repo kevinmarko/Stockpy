@@ -30,6 +30,29 @@ from desktop.run_history_store import RunHistoryStore
 from tests._db_isolation import redirect_class_to_memory_db
 
 
+def _make_fake_paper_account_store(equities):
+    """Build a fake ``data.paper_account_store.PaperAccountStore`` class
+    whose ``get_account().equity`` yields successive values from
+    ``equities`` (one per construction+call), for
+    ``maybe_update_circuit_breaker``'s loss-velocity sub-step. Keeps these
+    tests fully offline -- never touches the real, git-committed
+    ``quant_platform.db`` or issues a real quote-API call."""
+    it = iter(equities)
+
+    class _FakeAccountSnapshot:
+        def __init__(self, equity: float) -> None:
+            self.equity = equity
+
+    class _FakePaperAccountStore:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_account(self) -> "_FakeAccountSnapshot":
+            return _FakeAccountSnapshot(next(it))
+
+    return _FakePaperAccountStore
+
+
 def _poll_until(predicate, *, timeout: float = 3.0, interval: float = 0.02) -> bool:
     """Poll ``predicate`` until it returns truthy or ``timeout`` elapses.
 
@@ -1258,3 +1281,365 @@ class TestMaybeRefreshSettingsNeverRaises:
                 assert d.maybe_refresh_settings(path=store) is None
         finally:
             d.shutdown(timeout=2.0)
+
+
+class TestMaybeUpdateCircuitBreaker:
+    """desktop/daemon_runtime.py::OrchestratorDaemon.maybe_update_circuit_breaker
+    -- the live volatility-jump circuit-breaker updater (Phase 32, item 8).
+    Called directly (no d.start()/d.shutdown() needed -- this method has no
+    dependency on the daemon's run-lifecycle state)."""
+
+    def test_noop_when_disabled(self, monkeypatch):
+        """settings.CIRCUIT_BREAKER_ENABLED defaults False -- the method
+        must return immediately without even importing the data provider."""
+        from settings import settings
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
+
+        def _fail_if_called():
+            raise AssertionError("get_provider() must not be called when disabled")
+
+        monkeypatch.setattr("data.market_data.get_provider", _fail_if_called)
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise / must not call get_provider
+
+    def test_never_raises_when_provider_fails(self, monkeypatch):
+        """CONSTRAINT #6: a data-fetch failure must degrade to a logged
+        WARNING, never propagate into the timer loop."""
+        from settings import settings
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+
+        class _ExplodingProvider:
+            def get_intraday_bars(self, *a, **k):
+                raise RuntimeError("simulated network failure")
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _ExplodingProvider())
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise
+
+    def test_never_raises_when_bars_are_empty(self, monkeypatch):
+        """Degenerate-but-non-exceptional provider response (empty frame)
+        must also degrade cleanly rather than raising downstream (e.g. on
+        .rolling()/.std() over too little data)."""
+        import pandas as pd
+        from settings import settings
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+
+        class _EmptyProvider:
+            def get_intraday_bars(self, *a, **k):
+                return pd.DataFrame()
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _EmptyProvider())
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise
+
+    def test_happy_path_computes_and_persists_volatility_zscore(self, monkeypatch):
+        """When enabled with a well-formed provider, the daily-bar baseline
+        and hourly-bar reactive window are both fetched and handed to
+        check_volatility_jump()/update_metrics(persist=True)."""
+        import numpy as np
+        import pandas as pd
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+
+        rng = np.random.default_rng(42)
+        daily_prices = 400.0 + np.cumsum(rng.normal(0, 1, 90))
+        daily_df = pd.DataFrame(
+            {"Close": daily_prices},
+            index=pd.date_range("2026-01-01", periods=90, freq="D"),
+        )
+        hourly_prices = daily_prices[-1] + np.cumsum(rng.normal(0, 0.5, 40))
+        hourly_df = pd.DataFrame(
+            {"Close": hourly_prices},
+            index=pd.date_range("2026-04-01", periods=40, freq="h"),
+        )
+
+        calls: list[tuple] = []
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                calls.append((symbol, lookback_days, interval))
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+
+        update_calls: list[tuple] = []
+
+        class _FakeState:
+            value = "NORMAL"
+
+        class _FakeCB:
+            def __init__(self, *a, **k):
+                pass
+
+            def check_volatility_jump(self, **kwargs):
+                assert "intraday_returns_or_prices" in kwargs
+                assert kwargs["is_prices"] is True
+                return (False, 1.23, None)
+
+            def update_metrics(
+                self, *, volatility_zscore=None, vpin=None,
+                loss_velocity_per_min=None, account_equity=None, persist=True,
+            ):
+                update_calls.append(
+                    (volatility_zscore, vpin, loss_velocity_per_min, account_equity, persist)
+                )
+
+            @property
+            def current_state(self):
+                return _FakeState()
+
+        monkeypatch.setattr(
+            "execution.dynamic_circuit_breaker.DynamicCircuitBreaker", _FakeCB
+        )
+        # This fixture's hourly_df carries only "Close" (no "Volume"), so the
+        # VPIN sub-step degrades to None on its own -- consistent with the
+        # partial-failure-isolation contract exercised more directly below.
+        # PaperAccountStore is faked so this test never touches the real,
+        # git-committed quant_platform.db or makes a real quote-API call.
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore",
+            _make_fake_paper_account_store([100_000.0]),
+        )
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()
+
+        assert ("SPY", 90, "1d") in calls
+        assert ("SPY", 2, "1h") in calls
+        # Single sample -> loss_velocity_per_min/account_equity stay None
+        # (needs >= 2 samples spanning >= 60s); vpin is None (no Volume col).
+        assert update_calls == [(1.23, None, None, None, True)]
+
+    @staticmethod
+    def _install_fake_cb(monkeypatch, update_calls: list[dict]):
+        """Shared _FakeCB installer for the tests below -- records every
+        update_metrics() call as a kwargs dict (rather than a positional
+        tuple) so assertions can check individual keys without depending on
+        argument order."""
+
+        class _FakeState:
+            value = "NORMAL"
+
+        class _FakeCB:
+            def __init__(self, *a, **k):
+                pass
+
+            def check_volatility_jump(self, **kwargs):
+                return (False, 1.23, None)
+
+            def update_metrics(self, **kwargs):
+                update_calls.append(kwargs)
+
+            @property
+            def current_state(self):
+                return _FakeState()
+
+        monkeypatch.setattr(
+            "execution.dynamic_circuit_breaker.DynamicCircuitBreaker", _FakeCB
+        )
+
+    @staticmethod
+    def _make_daily_and_hourly_bars(*, with_volume: bool, n_hourly: int = 14):
+        """Well-formed daily (90d) + hourly (n_hourly-row) bar fixtures,
+        mirroring test_happy_path_computes_and_persists_volatility_zscore's
+        shape. ``with_volume=True`` adds a real "Volume" column to the
+        hourly frame so VPIN's bar-level BVC computation has something to
+        chew on."""
+        import numpy as np
+        import pandas as pd
+
+        rng = np.random.default_rng(7)
+        daily_prices = 400.0 + np.cumsum(rng.normal(0, 1, 90))
+        daily_df = pd.DataFrame(
+            {"Close": daily_prices},
+            index=pd.date_range("2026-01-01", periods=90, freq="D"),
+        )
+        hourly_prices = daily_prices[-1] + np.cumsum(rng.normal(0, 0.5, n_hourly))
+        hourly_data = {"Close": hourly_prices}
+        if with_volume:
+            hourly_data["Volume"] = rng.integers(1_000, 50_000, n_hourly).astype(float)
+        hourly_df = pd.DataFrame(
+            hourly_data,
+            index=pd.date_range("2026-04-01", periods=n_hourly, freq="h"),
+        )
+        return daily_df, hourly_df
+
+    def test_vpin_genuinely_passed_when_hourly_bars_have_volume(self, monkeypatch):
+        """(a) With real Close+Volume hourly bars, maybe_update_circuit_breaker
+        must pass a real float (not None) as vpin= into update_metrics()."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+
+        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=True)
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore",
+            _make_fake_paper_account_store([100_000.0]),
+        )
+
+        update_calls: list[dict] = []
+        self._install_fake_cb(monkeypatch, update_calls)
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()
+
+        assert len(update_calls) == 1
+        vpin_value = update_calls[0]["vpin"]
+        assert vpin_value is not None
+        assert isinstance(vpin_value, float)
+        assert 0.0 <= vpin_value <= 1.0
+
+    def test_ofi_is_never_passed(self, monkeypatch):
+        """(b) OFI is deliberately unwired: the update_metrics() call must
+        never carry a real (non-None) ofi= value -- either the kwarg is
+        absent entirely, or it is explicitly None."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+
+        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=True)
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore",
+            _make_fake_paper_account_store([100_000.0]),
+        )
+
+        update_calls: list[dict] = []
+        self._install_fake_cb(monkeypatch, update_calls)
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()
+
+        assert len(update_calls) == 1
+        assert update_calls[0].get("ofi") is None
+
+    def test_loss_velocity_computed_from_two_samples(self, monkeypatch):
+        """(c) With >= 2 buffered equity samples spanning a known elapsed
+        time, loss_velocity_per_min/account_equity must reflect the EXACT
+        rate computed against the OLDEST buffered sample."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+
+        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=False)
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore",
+            _make_fake_paper_account_store([94_000.0]),
+        )
+
+        update_calls: list[dict] = []
+        self._install_fake_cb(monkeypatch, update_calls)
+
+        d = OrchestratorDaemon()
+        # Seed the buffer directly with a fabricated "earliest" sample from
+        # ~300s ago rather than monkeypatching the global stdlib `time`
+        # module -- `time.time` is shared process-wide, and the logging
+        # module's own LogRecord construction (triggered by this method's
+        # own logger.warning/debug calls) also calls time.time() internally,
+        # so patching it globally silently perturbs unrelated call counts.
+        # A tiny amount of real wall-clock jitter (milliseconds) between the
+        # seed below and the method's own time.time() call is negligible
+        # against a 300s window, hence the tolerance on the rate assertion.
+        seeded_ts = time.time() - 300.0  # 5 minutes ago
+        d._circuit_breaker_equity_history.append((seeded_ts, 100_000.0))
+
+        d.maybe_update_circuit_breaker()  # 2nd sample: equity=94_000.0, now
+
+        assert len(update_calls) == 1
+        assert len(d._circuit_breaker_equity_history) == 2
+        # (94_000 - 100_000) / (300s / 60) = -6_000 / 5 = -1_200/min
+        assert update_calls[0]["loss_velocity_per_min"] == pytest.approx(-1_200.0, rel=0.02)
+        assert update_calls[0]["account_equity"] == pytest.approx(94_000.0)
+
+    def test_noop_when_disabled_computes_nothing(self, monkeypatch):
+        """(d) CIRCUIT_BREAKER_ENABLED=False must still be a true no-op for
+        the new VPIN/loss-velocity sub-steps too -- no exception, and
+        neither PaperAccountStore nor the VPIN module should even be
+        imported/touched."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
+
+        def _fail_if_called(*a, **k):
+            raise AssertionError("must not be constructed when disabled")
+
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore", _fail_if_called
+        )
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise, must not touch either sub-step
+        assert len(d._circuit_breaker_equity_history) == 0
+
+    def test_vpin_failure_does_not_prevent_vol_jump_or_loss_velocity(self, monkeypatch):
+        """(e) Partial-failure isolation: a VPIN computation failure must not
+        prevent the vol-jump z-score or loss-velocity from still being
+        computed and passed into update_metrics() in the SAME call."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+
+        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=True)
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore",
+            _make_fake_paper_account_store([99_500.0]),
+        )
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated VPIN failure")
+
+        monkeypatch.setattr("pilots.options_vpin.calculate_vpin", _boom)
+
+        update_calls: list[dict] = []
+        self._install_fake_cb(monkeypatch, update_calls)
+
+        d = OrchestratorDaemon()
+        # See test_loss_velocity_computed_from_two_samples above for why this
+        # seeds the buffer directly rather than monkeypatching time.time().
+        seeded_ts = time.time() - 90.0  # 90s ago
+        d._circuit_breaker_equity_history.append((seeded_ts, 100_000.0))
+
+        d.maybe_update_circuit_breaker()
+
+        assert len(update_calls) == 1
+        # vpin is None (computation always fails)...
+        assert update_calls[0]["vpin"] is None
+        # ...but the vol-jump z-score (from the FakeCB's fixed 1.23) and the
+        # loss-velocity computation are both still present in the SAME call.
+        assert update_calls[0]["volatility_zscore"] == 1.23
+        assert update_calls[0]["loss_velocity_per_min"] == pytest.approx(
+            (99_500.0 - 100_000.0) / (90.0 / 60.0), rel=0.02
+        )
+        assert update_calls[0]["account_equity"] == pytest.approx(99_500.0)

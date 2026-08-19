@@ -139,6 +139,20 @@ class TestGlobalKillSwitch:
         tmp_ks.deactivate()  # called when not active — should not crash
         assert not tmp_ks.is_active()
 
+    def test_soft_halt_lifecycle(self, tmp_ks: GlobalKillSwitch):
+        assert not tmp_ks.is_soft_halt_active()
+        assert tmp_ks.soft_halt_reason() == ""
+
+        tmp_ks.activate_soft_halt(reason="volatility burst")
+        assert tmp_ks.is_soft_halt_active()
+        assert not tmp_ks.is_active()  # hard kill switch remains inactive
+        assert "volatility burst" in tmp_ks.soft_halt_reason()
+
+        tmp_ks.deactivate_soft_halt()
+        assert not tmp_ks.is_soft_halt_active()
+        assert tmp_ks.soft_halt_reason() == ""
+
+
 
 # ---------------------------------------------------------------------------
 # OrderManager + KillSwitch integration

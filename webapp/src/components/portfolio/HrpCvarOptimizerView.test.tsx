@@ -31,6 +31,10 @@ describe("HrpCvarOptimizerView", () => {
       expected_return: 0.15,
       cvar_95: 0.08,
       sharpe_ratio: 1.5,
+      turnover: 0.05,
+      portfolio_beta: 1.0,
+      sector_exposures: { Tech: 1.0 },
+      diversification_ratio: 1.25,
     });
 
     render(<HrpCvarOptimizerView symbols={["AAPL", "MSFT"]} />);
@@ -77,6 +81,10 @@ describe("HrpCvarOptimizerView", () => {
       expected_return: 0,
       cvar_95: 0,
       sharpe_ratio: 0,
+      turnover: 0,
+      portfolio_beta: 1.0,
+      sector_exposures: {},
+      diversification_ratio: 1.0,
     });
     render(<HrpCvarOptimizerView symbols={["AAPL", "MSFT"]} />);
     

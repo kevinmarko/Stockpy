@@ -16,6 +16,7 @@ performance loader at ``tests/fixtures`` by monkeypatching
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import pathlib
@@ -6193,6 +6194,83 @@ class TestHrpCvarOptimize:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history"
 
+    def test_turnover_regularization_and_telemetry_fields(self):
+        series = {
+            "AAPL": self._synthetic_closes(10, start=150.0),
+            "MSFT": self._synthetic_closes(11, start=300.0),
+        }
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
+            resp = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={
+                    "symbols": ["AAPL", "MSFT"],
+                    "current_weights": {"AAPL": 0.8, "MSFT": 0.2},
+                    "lambda_turnover": 0.1,
+                    "sector_map": {"AAPL": "Tech", "MSFT": "Tech"},
+                    "sector_caps": {"Tech": 1.0},
+                    "asset_betas": {"AAPL": 1.2, "MSFT": 0.9},
+                    "target_beta_range": [0.8, 1.3],
+                },
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "turnover" in data
+        assert "portfolio_beta" in data
+        assert "sector_exposures" in data
+        assert "diversification_ratio" in data
+        assert "allocations" in data
+        assert "expected_return" in data
+        assert "cvar_95" in data
+        assert "sharpe_ratio" in data
+        assert "as_of" in data
+        assert data["turnover"] >= 0.0
+        assert data["portfolio_beta"] >= 0.0
+        assert "Tech" in data["sector_exposures"]
+        assert data["diversification_ratio"] >= 1.0
+
+    def test_max_asset_weight_constrains_endpoint_output(self):
+        # Phase 35 remediation item 13: max_asset_weight was previously a UI-only
+        # slider whose value was never sent to the backend, and the backend's own
+        # request model had no such field at all. Construct return series with a
+        # heavy vol skew so an unconstrained HRP-CVaR optimum concentrates weight
+        # in the calmest asset well above 40%, then confirm max_asset_weight=0.4
+        # genuinely caps every allocation end-to-end through the real endpoint.
+        rng_a = np.random.default_rng(100)
+        calm = list(150.0 * np.cumprod(1 + rng_a.normal(0.0005, 0.001, size=150)))
+        rng_b = np.random.default_rng(200)
+        volatile_b = list(150.0 * np.cumprod(1 + rng_b.normal(0.0, 0.05, size=150)))
+        rng_c = np.random.default_rng(300)
+        volatile_c = list(150.0 * np.cumprod(1 + rng_c.normal(0.0, 0.05, size=150)))
+        series = {"CALM": calm, "VOLB": volatile_b, "VOLC": volatile_c}
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
+            resp_unconstrained = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["CALM", "VOLB", "VOLC"], "lambda_turnover": 0.0},
+            )
+            resp_constrained = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={
+                    "symbols": ["CALM", "VOLB", "VOLC"],
+                    "lambda_turnover": 0.0,
+                    "max_asset_weight": 0.4,
+                },
+            )
+        assert resp_unconstrained.status_code == 200
+        assert resp_constrained.status_code == 200
+        unconstrained_weights = {
+            a["symbol"]: a["weight"] for a in resp_unconstrained.json()["allocations"]
+        }
+        constrained_weights = {
+            a["symbol"]: a["weight"] for a in resp_constrained.json()["allocations"]
+        }
+        # Sanity: the unconstrained optimum genuinely concentrates weight above the
+        # cap in the calm asset -- otherwise this test wouldn't exercise the cap.
+        assert unconstrained_weights["CALM"] > 0.4
+        # The cap is genuinely enforced end-to-end through the real endpoint.
+        for w in constrained_weights.values():
+            assert w <= 0.4 + 1e-6
+
 
 # ---------------------------------------------------------------------------
 # POST /pilots/options/meta-model/retrain -- previously fed the ML
@@ -6390,6 +6468,13 @@ class TestTransformerForecast:
             assert h in body["forecast"]
             assert isinstance(body["forecast"][h], float)
         assert body["trained_samples"] >= 30
+        assert "quantile_forecast" in body
+        for h in ["1d", "5d", "21d", "60d"]:
+            assert h in body["quantile_forecast"]
+            q_h = body["quantile_forecast"][h]
+            assert "q10" in q_h and "q50" in q_h and "q90" in q_h
+            assert q_h["q10"] <= q_h["q50"] <= q_h["q90"]
+        assert "macro_conditioned" in body
         # get_bars was actually called -- the real-data path is exercised,
         # not bypassed.
         mock_hs.assert_called()
@@ -6443,7 +6528,7 @@ class TestTransformerForecast:
 
 
 class TestDiffusionStressTest:
-    def _base_request(self, symbol="AAPL"):
+    def _base_request(self, symbol="AAPL", regime="vol_shock", guidance_scale=2.0):
         return {
             "symbol": symbol,
             "spot_price": 150.0,
@@ -6451,6 +6536,8 @@ class TestDiffusionStressTest:
             "num_paths": 50,
             "horizon": 30,
             "drift": 0.0,
+            "regime": regime,
+            "guidance_scale": guidance_scale,
         }
 
     def test_calls_get_bars_with_symbol_and_returns_real_data_driven_result(self):
@@ -6463,10 +6550,31 @@ class TestDiffusionStressTest:
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
+        assert body["regime"] == "vol_shock"
+        assert body["guidance_scale"] == 2.0
         assert len(body["paths"]) == 50
         assert body["VaR_95"] >= 0.0
         assert body["CVaR_95"] >= body["VaR_95"]
+        assert body["VaR_99"] >= 0.0
+        assert body["CVaR_99"] >= body["VaR_99"]
+        assert body["trained_windows"] > 0
         mock_hs.assert_called()
+
+    def test_custom_regime_and_guidance_scale(self):
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(5, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json=self._base_request(regime="stagflation", guidance_scale=3.5),
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert body["regime"] == "stagflation"
+        assert body["guidance_scale"] == 3.5
+        assert len(body["paths"]) == 50
+        assert "VaR_99" in body
+        assert "CVaR_99" in body
 
     def test_two_different_series_produce_different_var(self):
         store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
@@ -6503,6 +6611,687 @@ class TestDiffusionStressTest:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
+    def test_var_cvar_never_reach_or_exceed_spot_price_end_to_end(self):
+        # Phase 34 remediation item 10 (audit Critical #5) regression guard,
+        # exercised through the REAL endpoint (not just the pure helper):
+        # a dollar VaR/CVaR loss can never imply a negative post-loss price,
+        # and every generated price path stays strictly positive, regardless
+        # of how extreme the (undertrained, few-epoch) diffusion model's raw
+        # output happens to be on this draw.
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(3, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 200
+        body = resp.json()
+        spot = 150.0
+        for key in ("VaR_95", "CVaR_95", "VaR_99", "CVaR_99"):
+            assert 0.0 <= body[key] < spot, f"{key}={body[key]} is not in [0, spot={spot})"
+        for path in body["paths"]:
+            assert all(p > 0 for p in path), "a generated price path went <= 0"
+
+    def test_regime_labels_none_when_macro_unavailable_degrades_gracefully(self):
+        # _OhlcvStore has no get_macro() -- confirms _derive_diffusion_regime_labels
+        # degrades to None (today's exact unconditional-training behavior)
+        # rather than crashing the whole endpoint when macro data is
+        # unavailable (CONSTRAINT #6).
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 200
+        assert resp.json()["regime_conditioned"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 34 remediation item 10 (audit Critical #5) -- unit tests for the
+# extracted pure helpers directly, independent of the diffusion model's own
+# (possibly extreme, undertrained-at-15-epochs) output.
+# ---------------------------------------------------------------------------
+
+
+class TestDiffusionPriceBoundAndVarUnitFix:
+    def test_clip_and_compound_never_goes_negative_on_adversarial_returns(self):
+        # Mirrors the original audit's repro: an adversarial/extreme
+        # synthetic return path (as an undertrained diffusion model's
+        # reverse SDE could emit -- generate_guided_crisis_paths clips the
+        # latent state to +/-50) that would explode/flip negative under the
+        # OLD unclipped `price_path[-1] * (1.0 + r)` compounding.
+        extreme_returns = [5.0, -3.0, 10.0, -1.5, 2.0, -8.0, 6.0]
+        path = pilots_api._clip_and_compound_diffusion_path(extreme_returns, spot_price=150.0)
+        assert path[0] == 150.0
+        assert all(p > 0 for p in path), "a clipped path went <= 0"
+        assert min(path) >= 0.01
+        # Every step is bounded to a -50%/+200% move, so the path can never
+        # exceed spot * 3^len(extreme_returns).
+        assert path[-1] <= 150.0 * (3.0 ** len(extreme_returns))
+
+    def test_clip_and_compound_matches_naive_compounding_for_normal_returns(self):
+        # A realistic, small-magnitude return path (well inside the clip
+        # bounds) must compound identically to the naive formula -- the fix
+        # must not distort ordinary, non-adversarial paths.
+        normal_returns = [0.01, -0.02, 0.015, -0.01, 0.02]
+        path = pilots_api._clip_and_compound_diffusion_path(normal_returns, spot_price=150.0)
+        expected = [150.0]
+        for r in normal_returns:
+            expected.append(expected[-1] * (1.0 + r))
+        assert path == pytest.approx(expected, rel=1e-9)
+
+    def test_logret_loss_to_dollars_well_under_spot_for_realistic_var(self):
+        # A realistic horizon log-return VaR (a handful of percent to ~25%)
+        # should convert to a dollar loss well under 100% of spot -- not the
+        # near-100%-saturated artifact the old linear formula could produce.
+        spot = 150.0
+        for var_logret in (0.05, 0.10, 0.15, 0.25):
+            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+            assert 0.0 <= dollars < spot
+            assert dollars < spot * 0.30, f"VaR ${dollars:.2f} not well under spot ${spot}"
+
+    def test_logret_loss_to_dollars_never_exceeds_spot_for_extreme_var(self):
+        # The exponential form is bounded ABOVE by spot_price (never
+        # exceeds it, unlike the old linear multiply). For a genuinely
+        # extreme var_logret (e.g. 50.0) exp(-var_logret) underflows to a
+        # value indistinguishable from 0.0 in float64, so the loss can
+        # legitimately round to exactly spot_price -- the invariant that
+        # matters is "never exceeds", not "always strictly less than".
+        spot = 150.0
+        for var_logret in (0.9, 1.5, 5.0, 50.0):
+            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+            assert 0.0 <= dollars <= spot
+        # At a realistic-to-moderately-stressed magnitude, strictly below spot.
+        for var_logret in (0.9, 1.5, 5.0):
+            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+            assert dollars < spot
+
+    def test_old_linear_conversion_would_have_implied_negative_price_regression_guard(self):
+        # Documents the exact bug being fixed: the OLD linear formula
+        # (var_logret * spot_price) implies a negative post-loss price for
+        # any var_logret > 1.0 -- nonsensical for a VaR/CVaR loss on a long
+        # spot position. The new exponential transform never does.
+        spot = 150.0
+        var_logret = 1.5
+        old_linear_loss = var_logret * spot
+        assert old_linear_loss > spot  # the bug: implies price < 0
+        new_loss = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+        assert new_loss < spot  # fixed: implied price always > 0
+
+
+class _OhlcvAndMacroStore(_OhlcvStore):
+    """Extends _OhlcvStore with a real get_macro() stub for Phase 34
+    remediation item 11 tests. UNRATE is a long, flat monthly history (never
+    triggers RECESSION via the internally-derived Sahm proxy once past
+    rolling-window warmup); T10Y2Y and VIX stay constant/benign; the
+    high-yield credit spread (BAMLH0A0HYM2) steps from a calm 2.0% to a
+    stressed 8.0% at a known cutover business-day index, so a real,
+    non-degenerate CREDIT EVENT regime is reconstructable across the trading
+    history."""
+
+    def __init__(self, series_by_symbol, *, n_days, credit_spread_cutover_idx):
+        super().__init__(series_by_symbol)
+        self._idx = pd.bdate_range(end="2026-08-01", periods=n_days)
+        self._cutover_date = self._idx[credit_spread_cutover_idx]
+
+    def get_macro(self, series_id, *, lookback_days=None, data_engine=None):
+        if series_id == "VIXCLS":
+            return pd.Series(15.0, index=self._idx, name=series_id)
+        if series_id == "T10Y2Y":
+            return pd.Series(1.0, index=self._idx, name=series_id)
+        if series_id == "BAMLH0A0HYM2":
+            values = np.where(self._idx < self._cutover_date, 2.0, 8.0)
+            return pd.Series(values, index=self._idx, name=series_id)
+        if series_id == "UNRATE":
+            # 8 years of flat monthly unemployment so the internally-derived
+            # Sahm proxy is well past its rolling-window warmup (needs ~15
+            # months) and stays 0.0 (never >= 0.6 -- never RECESSION) at
+            # every date this test's window-end dates could touch.
+            monthly_idx = pd.date_range(end="2026-08-01", periods=96, freq="MS")
+            return pd.Series(4.0, index=monthly_idx, name=series_id)
+        if series_id == "BAA10Y":
+            return pd.Series(2.0, index=self._idx, name=series_id)
+        return pd.Series(dtype=float, name=series_id)
+
+
+class TestDiffusionRegimeConditioning:
+    """Phase 34 remediation item 11 (audit Critical #6): the live endpoint
+    never passed regime_labels into train_conditional_diffusion_model, so
+    classifier-free guidance was training against an entirely unconditional
+    dataset regardless of the caller's requested regime."""
+
+    def test_regime_labels_passed_with_multiple_distinct_classes(self):
+        n = 750
+        closes = _synthetic_closes_walk(9, n=n, start=150.0)
+        store = _OhlcvAndMacroStore({"AAPL": closes}, n_days=n, credit_spread_cutover_idx=600)
+
+        # Capture the REAL function BEFORE patching -- re-importing it from
+        # inside the spy while the patch is active would just return the
+        # mock again (infinite recursion), since mock.patch replaces the
+        # module attribute for the duration of the context manager.
+        from validation.synthetic_diffusion_engine import (
+            train_conditional_diffusion_model as _real_train,
+        )
+
+        captured: dict = {}
+
+        def _spy_train(historical_data, regime_labels=None, **kwargs):
+            captured["regime_labels"] = regime_labels
+            captured["n_rows"] = len(historical_data)
+            return _real_train(historical_data, regime_labels=regime_labels, epochs=1, lr=0.01)
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store), mock.patch(
+            "validation.synthetic_diffusion_engine.train_conditional_diffusion_model",
+            side_effect=_spy_train,
+        ):
+            resp = client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json={
+                    "symbol": "AAPL",
+                    "spot_price": 150.0,
+                    "volatility": 0.25,
+                    "num_paths": 10,
+                    "horizon": 30,
+                    "drift": 0.0,
+                    "regime": "vol_shock",
+                    "guidance_scale": 2.0,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["regime_conditioned"] is True
+
+        regime_labels = captured.get("regime_labels")
+        assert regime_labels is not None
+        assert len(regime_labels) == captured["n_rows"]
+        distinct = set(regime_labels)
+        assert len(distinct) > 1, f"expected multiple distinct regime classes, got {distinct}"
+        assert "credit_freeze" in distinct
+        assert "unconditional" in distinct
+        # This store's get_macro() has no "T10YIE" case (falls through to an
+        # empty Series), so the real T10YIE-based stagflation override in
+        # _derive_diffusion_regime_labels never fires here -- see
+        # TestDiffusionStagflationOverride below for the override itself,
+        # exercised against a store that DOES mock T10YIE.
+        assert "stagflation" not in distinct
+
+    def test_window_end_dates_mirror_build_return_windows_index_math(self):
+        from validation.synthetic_diffusion_engine import build_return_windows
+
+        dates = pd.bdate_range(end="2026-08-01", periods=400)
+        returns = np.arange(400, dtype=float)  # value == position, for an easy check
+        window_len = 29
+        max_windows = 200
+
+        windows = build_return_windows(returns, window_len=window_len, max_windows=max_windows)
+        end_dates = pilots_api._diffusion_window_end_dates(
+            dates, window_len=window_len, max_windows=max_windows,
+        )
+
+        assert len(end_dates) == len(windows)
+        for row, end_date in zip(windows, end_dates):
+            # row[-1] is the raw return value, which we set equal to its
+            # original position in `returns` -- so it's also the position in
+            # `dates` whose date must equal end_date.
+            assert dates[int(row[-1])] == end_date
+
+
+class _StagflationMacroStore:
+    """``HistoricalStore.get_macro()`` stand-in for testing the T10YIE +
+    UNRATE stagflation override added to ``_derive_diffusion_regime_labels``.
+
+    VIXCLS/T10Y2Y/BAA10Y stay flat/benign for the whole history (never push
+    the base bucket toward RECESSION/CREDIT EVENT on their own). BAMLH0A0HYM2
+    (credit spread) is a low, RISK-ON-territory 2.0 everywhere except one
+    single spiked date (8.0, real CREDIT EVENT territory per
+    dto_models.MacroEconomicDTO._rules_based_regime), used to prove the
+    override never overrides an already-more-specific real signal. T10YIE
+    steps from a flat 2.0 baseline to an elevated 3.5 plateau starting at
+    ``elevated_start_idx`` (well within a 126-business-day rolling window of
+    itself by the time any test date is checked). UNRATE is a long, flat 4.0%
+    monthly series (so the Sahm Rule proxy is safely warmed up and near-zero)
+    that rises gently -- 4.0% -> 4.3% over its final 12 months, well under
+    the Sahm Rule's 0.6pp recession trigger -- so "UNRATE trending up" is
+    real without also flipping the base bucket to RECESSION.
+    """
+
+    def __init__(self, dates, *, elevated_start_idx, credit_event_date):
+        self._dates = dates
+        self._elevated_start_idx = elevated_start_idx
+        self._credit_event_date = credit_event_date
+
+    def get_macro(self, series_id, *, lookback_days=None, data_engine=None):
+        idx = self._dates
+        if series_id == "VIXCLS":
+            return pd.Series(15.0, index=idx, name=series_id)
+        if series_id == "T10Y2Y":
+            return pd.Series(1.0, index=idx, name=series_id)
+        if series_id == "BAA10Y":
+            return pd.Series(2.0, index=idx, name=series_id)
+        if series_id == "BAMLH0A0HYM2":
+            values = pd.Series(2.0, index=idx, name=series_id)
+            values.loc[self._credit_event_date] = 8.0
+            return values
+        if series_id == "T10YIE":
+            values = np.where(np.arange(len(idx)) >= self._elevated_start_idx, 3.5, 2.0)
+            return pd.Series(values, index=idx, name=series_id)
+        if series_id == "UNRATE":
+            monthly_idx = pd.date_range(end=idx[-1], periods=120, freq="MS")
+            values = np.full(len(monthly_idx), 4.0)
+            values[-12:] = np.linspace(4.0, 4.3, 12)
+            return pd.Series(values, index=monthly_idx, name=series_id)
+        return pd.Series(dtype=float, name=series_id)
+
+
+class TestDiffusionStagflationOverride:
+    """The plan's item 1: ``_derive_diffusion_regime_labels`` now assigns a
+    real, FRED-sourced ``stagflation`` label (elevated T10YIE + rising
+    UNRATE) rather than never emitting it. Uses window_len=1 so every date
+    in ``dates`` is its own window's end date (n_available == len(dates),
+    n_windows == len(dates) when max_windows >= len(dates)), letting a single
+    store/call exercise three distinct dates deterministically."""
+
+    N_DAYS = 500
+    ELEVATED_START_IDX = 470  # T10YIE plateau starts here
+    CALM_IDX = 200            # before the T10YIE plateau and the UNRATE rise
+    STAGFLATION_IDX = 490     # inside the plateau; credit spread stays calm
+    CREDIT_EVENT_IDX = 485    # inside the plateau; credit spread is spiked here
+
+    def _dates_and_store(self):
+        dates = pd.bdate_range(end="2026-08-01", periods=self.N_DAYS)
+        store = _StagflationMacroStore(
+            dates,
+            elevated_start_idx=self.ELEVATED_START_IDX,
+            credit_event_date=dates[self.CREDIT_EVENT_IDX],
+        )
+        return dates, store
+
+    def test_assigns_stagflation_to_elevated_inflation_and_rising_unemployment_window(self):
+        dates, store = self._dates_and_store()
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert labels[self.STAGFLATION_IDX] == "stagflation"
+
+    def test_does_not_assign_stagflation_to_a_calm_window(self):
+        dates, store = self._dates_and_store()
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert labels[self.CALM_IDX] != "stagflation"
+
+    def test_does_not_override_an_already_credit_event_window(self):
+        # Elevated T10YIE + rising UNRATE both hold at this date too (it's
+        # inside the same plateau as STAGFLATION_IDX), but the base bucket
+        # is a real, more-specific CREDIT EVENT (credit spread spiked to 8.0
+        # on this exact date) -- the override must never replace a more
+        # specific, already-correct classification with a less specific one.
+        dates, store = self._dates_and_store()
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert labels[self.CREDIT_EVENT_IDX] == "credit_freeze"
+
+    def test_no_t10yie_series_never_applies_override(self):
+        # Same elevated-plateau/rising-UNRATE setup, but get_macro("T10YIE")
+        # degrades to an empty Series (mirrors a real HistoricalStore that
+        # has never cached T10YIE) -- the override must never fire, and the
+        # rest of the label derivation must proceed unaffected (CONSTRAINT #6).
+        dates, store = self._dates_and_store()
+
+        real_get_macro = store.get_macro
+
+        def _get_macro_no_t10yie(series_id, **kwargs):
+            if series_id == "T10YIE":
+                return pd.Series(dtype=float, name=series_id)
+            return real_get_macro(series_id, **kwargs)
+
+        store.get_macro = _get_macro_no_t10yie
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            labels = pilots_api._derive_diffusion_regime_labels(
+                dates, window_len=1, max_windows=self.N_DAYS,
+            )
+        assert labels is not None
+        assert "stagflation" not in set(labels)
+        assert labels[self.STAGFLATION_IDX] == "unconditional"
+
+
+# ---------------------------------------------------------------------------
+# FIX 4.4 Protocol Gateway Session Management Endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestFixGatewaySessionEndpoints:
+    def test_get_fix_session_status_success(self):
+        # Phase 36 remediation item 15: the status endpoint no longer fabricates a
+        # NYSE/NASDAQ/BATS/IEX/ARCA equity venue list or a synthetic 3-message audit
+        # log fallback -- it reports the module's REAL configured venues (CBOE, MIAX,
+        # BOX, PHLX, ARCA, EDGX from MultiVenueAggregator) and only ever real
+        # session.message_log entries. Send a real Test Request first so message_log
+        # is deterministically non-empty regardless of what order tests run in
+        # (the global FixSession singleton is process-wide and this test module is
+        # not guaranteed to run before/after its siblings under pytest-randomly).
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={"test_req_id": "TEST-STATUS-SEED"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get(
+                "/pilots/execution/fix/session/status",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "session_id" in body
+        assert body["sender_comp_id"] == "INVESTYO_PWA"
+        assert body["target_comp_id"] == "FIX_GATEWAY"
+        assert body["state"] in {
+            "ACTIVE", "CONNECTING", "LOGON_SENT", "LOGON_RECEIVED",
+            "RESEND_REQUESTED", "GAP_FILL_PROCESSING", "LOGOUT_SENT", "DISCONNECTED", "SUSPENDED"
+        }
+        assert isinstance(body["in_seq_num"], int)
+        assert isinstance(body["out_seq_num"], int)
+        assert isinstance(body["gap_queue_depth"], int)
+        assert isinstance(body["venues_active"], list)
+        # Real MultiVenueAggregator venues, not the old fabricated equity list.
+        assert set(body["venues_active"]) == {"CBOE", "MIAX", "BOX", "PHLX", "ARCA", "EDGX"}
+        assert "NYSE" not in body["venues_active"]
+        assert "NASDAQ" not in body["venues_active"]
+        assert "venue_stats" in body
+        assert len(body["venue_stats"]) == 6
+        for v in body["venue_stats"]:
+            # Real VenueConfig-backed fields are always populated numerically.
+            assert isinstance(v["base_latency_ms"], (int, float))
+            assert isinstance(v["maker_fee"], (int, float))
+            assert isinstance(v["taker_fee"], (int, float))
+            assert isinstance(v["liquidity_depth"], (int, float))
+            # Fields with no real source in this stateless aggregator are honestly
+            # None rather than a fabricated plausible-looking number.
+            assert v["fill_rate_pct"] is None
+            assert v["share_of_flow_pct"] is None
+        assert "audit_log" in body
+        assert len(body["audit_log"]) > 0
+        # No fabricated ORD-99124/CL-3019 fake fill in the log.
+        assert not any("ORD-99124" in line for line in body["audit_log"])
+        assert "session_uptime_sec" in body
+        assert body["session_uptime_sec"] is None or body["session_uptime_sec"] >= 0
+
+    def test_get_fix_session_status_no_fabricated_audit_log_when_empty(self):
+        # A brand-new session with zero real messages returns an honest empty
+        # audit_log rather than a synthetic fallback (audit finding Critical #9).
+        import execution.fix_gateway as fix_gateway_module
+
+        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+            with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+                resp = client.get(
+                    "/pilots/execution/fix/session/status",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json()["audit_log"] == []
+
+    def test_get_fix_session_status_fail_open_without_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/pilots/execution/fix/session/status")
+        assert resp.status_code == 200
+        assert resp.json()["session_id"].startswith("FIX.4.4:")
+
+    def test_post_fix_session_test_request_success(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={"test_req_id": "TEST-UNIT-01"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["test_req_id"] == "TEST-UNIT-01"
+        assert "Heartbeat" in body["message"]
+        assert body["session_state"] == "ACTIVE"
+        assert "round_trip_ms" in body
+
+    def test_post_fix_session_reset_seq_hard_and_gap_fill(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            # Hard reset
+            resp1 = client.post(
+                "/pilots/execution/fix/session/reset-seq",
+                json={"new_seq_num": 500, "gap_fill": False},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+            assert resp1.status_code == 200
+            body1 = resp1.json()
+            assert body1["status"] == "ok"
+            assert body1["new_seq_num"] == 500
+            assert body1["out_seq_num"] == 500
+
+            # Gap fill
+            resp2 = client.post(
+                "/pilots/execution/fix/session/reset-seq",
+                json={"new_seq_num": 600, "gap_fill": True},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+            assert resp2.status_code == 200
+            body2 = resp2.json()
+            assert body2["status"] == "ok"
+            assert body2["new_seq_num"] == 600
+            assert body2["out_seq_num"] == 600
+
+    def test_post_fix_session_reconnect_success(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/reconnect",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["session_state"] == "ACTIVE"
+
+    def test_post_fix_session_command_auth_required(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={},
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# PR #792 deep-dive audit follow-up (Cluster A): items 4 and 5
+# ---------------------------------------------------------------------------
+
+
+class TestFixGatewayEnabledFlag:
+    """Item 5: settings.FIX_GATEWAY_ENABLED is an ADDITIONAL gate on top of
+    each endpoint's existing require_command_token/require_read_token check
+    -- when False, every route/session-management endpoint must refuse with
+    403 rather than proceeding, even with a valid command/read token."""
+
+    def test_route_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={"symbol": "AAPL", "side": "BUY", "quantity": 10, "limit_price": 100.0},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+        assert "FIX_GATEWAY_ENABLED" in resp.json()["detail"]
+
+    def test_session_status_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get(
+                "/pilots/execution/fix/session/status",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+        assert "FIX_GATEWAY_ENABLED" in resp.json()["detail"]
+
+    def test_test_request_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_reset_seq_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/reset-seq",
+                json={"new_seq_num": 5},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_reconnect_blocked_when_disabled(self):
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/session/reconnect",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_venues_endpoint_not_gated_by_flag(self):
+        """GET /pilots/execution/fix/venues is explicitly out of scope for
+        this gate per the approved plan -- confirm it is unaffected."""
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
+                mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get(
+                "/pilots/execution/fix/venues",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+
+    def test_route_allowed_when_enabled(self):
+        """Sanity companion: the default (True) must not block anything --
+        no regression versus pre-existing behavior."""
+        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", True), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={"symbol": "MSFT", "side": "BUY", "quantity": 5, "limit_price": 50.0},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+
+
+class TestFixSessionStatusConcurrency:
+    """Item 4: GET /pilots/execution/fix/session/status previously read
+    FixSession's mutable state (message_log, _incoming_buffer, state,
+    sequence numbers, ...) from FastAPI's threadpool with zero locking while
+    connect()/disconnect() mutate the same singleton on the main event loop
+    under session._lock. The handler is now `async def` and must genuinely
+    acquire that same lock for the duration of its reads."""
+
+    @pytest.mark.anyio
+    async def test_status_handler_blocks_while_lock_held_externally(self):
+        import execution.fix_gateway as fix_gateway_module
+
+        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+            session = fix_gateway_module.get_global_fix_session()
+            await session._lock.acquire()
+            try:
+                task = asyncio.ensure_future(
+                    pilots_api.get_pilots_execution_fix_session_status()
+                )
+                # Give the handler every chance to run past its lock acquire
+                # if it were (incorrectly) not honoring the lock at all.
+                await asyncio.sleep(0.05)
+                assert not task.done(), (
+                    "status handler completed while session._lock was held "
+                    "externally -- it is not genuinely acquiring the lock"
+                )
+            finally:
+                session._lock.release()
+
+            result = await asyncio.wait_for(task, timeout=2.0)
+            assert result["sender_comp_id"] == "INVESTYO_PWA"
+            assert result["target_comp_id"] == "FIX_GATEWAY"
+
+    @pytest.mark.anyio
+    async def test_status_handler_concurrent_with_connect_disconnect_no_corruption(self):
+        """A real concurrent connect()/disconnect() racing the status read
+        must never surface a torn/inconsistent snapshot (e.g. a KeyError, a
+        half-updated sequence number, or an exception) -- with the lock in
+        place, each of the concurrent operations sees a consistent, fully
+        applied state."""
+        import execution.fix_gateway as fix_gateway_module
+
+        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+            session = fix_gateway_module.get_global_fix_session()
+
+            results = await asyncio.gather(
+                pilots_api.get_pilots_execution_fix_session_status(),
+                session.connect(),
+                pilots_api.get_pilots_execution_fix_session_status(),
+                return_exceptions=True,
+            )
+
+            for r in results:
+                assert not isinstance(r, Exception), f"concurrent call raised: {r!r}"
+
+            status_results = [r for r in results if isinstance(r, dict)]
+            assert len(status_results) == 2
+            for status in status_results:
+                assert status["session_id"] == "FIX.4.4:INVESTYO_PWA->FIX_GATEWAY"
+                assert isinstance(status["in_seq_num"], int)
+                assert isinstance(status["out_seq_num"], int)
+                assert status["state"] in {
+                    "ACTIVE", "CONNECTING", "LOGON_SENT", "LOGON_RECEIVED",
+                    "RESEND_REQUESTED", "GAP_FILL_PROCESSING", "LOGOUT_SENT",
+                    "DISCONNECTED", "SUSPENDED",
+                }
+
+            await session.disconnect()
+
+
+class TestFixRouteOrderSymbolValidation:
+    """Phase 36 remediation item 19 (audit High): FixRouteOrderRequest.symbol must
+    reject FIX tag-injection characters (SOH, '=', '|') rather than silently
+    accepting them, since they could inject spurious tag-value pairs into a
+    downstream raw FIX message via the Symbol tag (55).
+    """
+
+    @pytest.mark.parametrize("bad_symbol", ["AAPL\x0135=D", "AAPL=INJECT", "AAPL|55=XYZ"])
+    def test_soh_and_delimiter_symbols_rejected_with_422(self, bad_symbol):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={
+                    "symbol": bad_symbol,
+                    "side": "BUY",
+                    "quantity": 10,
+                    "limit_price": 100.0,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_clean_symbol_accepted(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={
+                    "symbol": "AAPL",
+                    "side": "BUY",
+                    "quantity": 10,
+                    "limit_price": 100.0,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
 
 # ---------------------------------------------------------------------------
 # vol_mispricing HAS a live paper-execute path as of 2026-08-18 (`POST

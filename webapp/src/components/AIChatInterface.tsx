@@ -75,6 +75,19 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
   const [showCustomInput, setShowCustomInput] = useState<boolean>(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      abortControllerRef.current?.abort();
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -277,6 +290,10 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
       return;
     }
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsLoading(true);
 
     const currentMessages = [...messages, { role: 'user' as const, content: textToSend.trim() }];
@@ -295,6 +312,7 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        signal: controller.signal,
         body: JSON.stringify({
           message: textToSend.trim(),
           history: currentMessages.slice(0, -1),
@@ -355,6 +373,9 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
         }
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
       console.error(error);
       setMessages([...currentMessages, { role: 'model', content: `⚠️ Error connecting to server.` }]);
     } finally {

@@ -1368,6 +1368,10 @@ class Settings(BaseSettings):
         description="Webhook URL for CRITICAL drift alerts (Slack/Discord incoming webhook).",
     )
 
+    # --- FIX 4.4 Gateway (execution/fix_gateway.py) ---
+    FIX_GATEWAY_ENABLED: bool = Field(default=True, description="Master switch for the simulated FIX 4.4 gateway's route/session endpoints (POST /pilots/execution/fix/route and session management). Defaults True since this module is fully simulated -- it never touches real capital or a real venue connection -- following this repo's 2026-08-03 convention that new admin/execution capabilities default ON unless they change live trading behavior.")
+    FIX_HEARTBEAT_INTERVAL_SECONDS: int = Field(default=30, description="Heartbeat interval (seconds) for FixSession -- was previously hardcoded as the class constructor default; now operator-configurable.")
+
     # --- Pre-trade risk gate (execution/risk_gate.py) ---
     MAX_CORRELATION: float = Field(
         default=0.85,
@@ -1411,6 +1415,32 @@ class Settings(BaseSettings):
     RISK_GATE_ENFORCE_MARKET_HOURS: bool = Field(
         default=True,
         description="Block orders outside NYSE RTH (09:30–16:00 ET).",
+    )
+
+    # --- Dynamic Circuit Breaker & Flash Guard (execution/dynamic_circuit_breaker.py) ---
+    CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD: float = Field(
+        default=3.5,
+        description="Volatility jump Z-score threshold to trigger SOFT_HALT (VOLATILITY_BURST_HALT).",
+    )
+    CIRCUIT_BREAKER_VPIN_THRESHOLD: float = Field(
+        default=0.40,
+        description="Volume-Synchronized Probability of Toxicity threshold to trigger FLASH_CRASH_SHIELD.",
+    )
+    CIRCUIT_BREAKER_OFI_THRESHOLD: float = Field(
+        default=1000.0,
+        description="Order Flow Imbalance threshold (selling pressure) to trigger FLASH_CRASH_SHIELD.",
+    )
+    CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS: float = Field(
+        default=30.0,
+        description="Loss velocity rolling time window in minutes relative to daily loss limit.",
+    )
+    CIRCUIT_BREAKER_ENABLED: bool = Field(
+        default=False,
+        description="Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
+    )
+    CIRCUIT_BREAKER_REFERENCE_SYMBOL: str = Field(
+        default="SPY",
+        description="Reference symbol used for the live volatility-jump circuit-breaker updater's baseline/reactive vol computation.",
     )
 
     # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---
@@ -1565,6 +1595,7 @@ class Settings(BaseSettings):
     PROGRESS_POLL_SECONDS: int = Field(
         default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
     )
+    WS_RISK_STREAM_INTERVAL_SECONDS: float = Field(default=1.0, description="Poll interval (seconds) for the /ws/risk/portfolio WebSocket stream -- was previously a hardcoded asyncio.sleep(1.0).")
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
     PAPER_TRADING_START_DATE: Optional[str] = Field(
@@ -1764,6 +1795,14 @@ class Settings(BaseSettings):
     OUTPUT_DIR: Optional[Path] = Field(
         default=None,
         description="Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset.",
+    )
+    NO_VENV_REEXEC: bool = Field(
+        default=False,
+        description=(
+            "Opt-out flag for scripts/_bootstrap.py: when True, suppresses "
+            "automatic re-execution under .venv's interpreter when invoked under "
+            "an external Python environment."
+        ),
     )
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     SYNC_WATCHLIST_FILES: Optional[str] = Field(

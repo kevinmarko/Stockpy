@@ -4901,7 +4901,10 @@ export interface MarketMakerSimResponse {
 export interface TransformerForecastResponse {
   symbol: string;
   forecast: Record<string, number>;
+  quantile_forecast?: Record<string, { q10: number; q50: number; q90: number }>;
   attention_heatmap: number[][];
+  trained_samples?: number;
+  macro_conditioned?: boolean;
 }
 
 export interface DiffusionStressRequest {
@@ -4911,19 +4914,38 @@ export interface DiffusionStressRequest {
   drift?: number;
   num_paths?: number;
   horizon?: number;
+  regime?: "unconditional" | "vol_shock" | "credit_freeze" | "stagflation" | "liquidity_squeeze";
+  guidance_scale?: number;
 }
 
 export interface DiffusionStressResponse {
   symbol: string;
+  regime?: string;
+  guidance_scale?: number;
   paths: number[][];
   VaR_95: number;
   CVaR_95: number;
+  VaR_99?: number;
+  CVaR_99?: number;
+  trained_windows?: number;
+  /** True when real per-window macro-regime labels were derived and passed
+   * into training (Phase 34 remediation item 11); false/absent means the
+   * model trained unconditionally (e.g. macro-regime derivation failed or
+   * degraded -- see api/pilots_api.py's _derive_diffusion_regime_labels). */
+  regime_conditioned?: boolean;
 }
 
 export interface HrpCvarOptimizeRequest {
   symbols: string[];
   target_return?: number;
   risk_aversion?: number;
+  current_weights?: Record<string, number>;
+  lambda_turnover?: number;
+  sector_caps?: Record<string, number>;
+  target_beta_range?: [number, number] | number[];
+  sector_map?: Record<string, string>;
+  asset_betas?: Record<string, number>;
+  max_asset_weight?: number;
 }
 
 export interface HrpCvarClusterNode {
@@ -4943,6 +4965,10 @@ export interface HrpCvarOptimizeResponse {
   expected_return: number;
   cvar_95: number;
   sharpe_ratio: number;
+  turnover: number;
+  portfolio_beta: number;
+  sector_exposures: Record<string, number>;
+  diversification_ratio: number;
   as_of?: string;
 }
 
@@ -5010,6 +5036,67 @@ export interface FixRouteOrderResponse {
   fills: FixRouteFill[];
   nbbo: any;
   fix_audit_log: string[];
+}
+
+export type FixSessionState =
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'LOGON_SENT'
+  | 'LOGON_RECEIVED'
+  | 'ACTIVE'
+  | 'RESEND_REQUESTED'
+  | 'GAP_FILL_PROCESSING'
+  | 'LOGOUT_SENT'
+  | 'SUSPENDED';
+
+export interface FixVenueRoutingStat {
+  venue: string;
+  market_center?: string;
+  status: 'ACTIVE' | 'DEGRADED' | 'HALTED';
+  base_latency_ms: number;
+  current_latency_ms?: number;
+  fill_rate_pct: number;
+  maker_fee: number;
+  taker_fee: number;
+  maker_rebate?: number;
+  liquidity_depth: number;
+  share_of_flow_pct?: number;
+}
+
+export interface FixSessionStatusResponse {
+  session_id: string;
+  state: FixSessionState;
+  in_seq_num: number;
+  out_seq_num: number;
+  sender_comp_id: string;
+  target_comp_id: string;
+  gap_queue_depth: number;
+  last_heartbeat_at: string | null;
+  venues_active: string[];
+  heartbeat_int?: number;
+  session_uptime_sec?: number;
+  venue_stats?: FixVenueRoutingStat[];
+  audit_log?: string[];
+}
+
+export interface FixSessionControlResponse {
+  status: 'ok' | 'error' | string;
+  message: string;
+  session_state: FixSessionState;
+  in_seq_num?: number;
+  out_seq_num?: number;
+  test_req_id?: string;
+  round_trip_ms?: number;
+  new_seq_num?: number;
+}
+
+export interface FixTestRequestPayload {
+  test_req_id?: string;
+}
+
+export interface FixResetSeqRequest {
+  new_seq_num: number;
+  gap_fill?: boolean;
 }
 
 // ============================================================================
@@ -5251,4 +5338,67 @@ export interface SecRule606ReportResponse {
     venues_overall: SecRule606VenueRow[];
   };
 }
+
+/**
+ * Real-time Greek and risk telemetry for a single equity or option leg.
+ */
+export interface PositionRiskGreeks {
+  symbol: string;
+  underlying: string;
+  position_type: 'equity' | 'option';
+  qty: number;
+  spot_price: number;
+  strike?: number | null;
+  dte?: number | null;
+  option_type?: 'call' | 'put' | null;
+  iv?: number | null;
+  delta: number;
+  dollar_delta: number;
+  gamma: number;
+  dollar_gamma_1pct: number;
+  theta_daily: number;
+  vega_1pct: number;
+  beta_spy: number;
+  beta_weighted_delta_spy: number;
+}
+
+/**
+ * Sub-second portfolio risk and aggregate Greeks event pushed via WebSocket (/ws/risk/portfolio).
+ */
+export interface PortfolioRiskStreamEvent {
+  timestamp: string;
+  spy_price: number;
+  net_delta: number;
+  net_dollar_delta: number;
+  net_gamma: number;
+  net_dollar_gamma_1pct: number;
+  net_theta: number;
+  net_vega: number;
+  beta_weighted_delta_spy: number;
+  total_positions_count: number;
+  resolved_positions_count: number;
+  missing_data_count: number;
+  positions: PositionRiskGreeks[];
+  missing_positions: string[];
+}
+
+/**
+ * Dynamic circuit breaker operational state.
+ */
+export type CircuitBreakerState = "NORMAL" | "CAUTION" | "SOFT_HALT" | "HARD_HALT";
+
+/**
+ * GET /risk/circuit-breaker/status response shape.
+ */
+export interface CircuitBreakerStatusResponse {
+  state: CircuitBreakerState;
+  volatility_zscore: number;
+  vpin: number;
+  ofi: number;
+  loss_velocity_per_min: number;
+  reason: string | null;
+  updated_at: string;
+}
+
+
 

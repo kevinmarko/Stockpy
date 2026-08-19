@@ -138,9 +138,10 @@ install_redacting_exception_handler(app)
 # stream_job_logs call sites, so a /ws/training/status route mounted here
 # could never broadcast anything; see api/ws_api.py's module docstring.
 try:
-    from api.ws_api import tick_router, live_chat_router
+    from api.ws_api import tick_router, live_chat_router, risk_router
     app.include_router(tick_router)
     app.include_router(live_chat_router)
+    app.include_router(risk_router)
 except Exception as _ws_e:
     logger.warning("ws routers mount skipped: %s", _ws_e)
 
@@ -2033,3 +2034,67 @@ async def chat_endpoint(req: ChatMessageRequest):
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
+
+@app.get(
+    "/risk/circuit-breaker/status",
+    dependencies=[Depends(require_token)],
+)
+async def get_circuit_breaker_status():
+    """Get the active dynamic circuit breaker status.
+
+    Reads ``output/circuit_breaker_state.json`` or queries DynamicCircuitBreaker.
+    Degrades gracefully to NORMAL state if uninitialized or file is missing.
+    Never fabricates or raises (CONSTRAINT #4 / #6).
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    # 1. Try reading persisted output/circuit_breaker_state.json
+    try:
+        output_dir = getattr(settings, "OUTPUT_DIR", None) or Path("output")
+        cb_path = Path(output_dir) / "circuit_breaker_state.json"
+        if cb_path.exists():
+            with open(cb_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    "state": data.get("state", "NORMAL"),
+                    "volatility_zscore": float(data.get("volatility_zscore", 0.0) or 0.0),
+                    "vpin": float(data.get("vpin", 0.0) or 0.0),
+                    "ofi": float(data.get("ofi", 0.0) or 0.0),
+                    "loss_velocity_per_min": float(data.get("loss_velocity_per_min", 0.0) or 0.0),
+                    "reason": data.get("reason"),
+                    "updated_at": data.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+                }
+    except Exception as exc:
+        logger.warning("data_api: Failed to read circuit breaker state file: %s", exc)
+
+    # 2. Try querying DynamicCircuitBreaker if available in memory
+    try:
+        from execution.dynamic_circuit_breaker import DynamicCircuitBreaker  # type: ignore
+        cb = DynamicCircuitBreaker()
+        status = cb.load_metrics()
+        if status is not None:
+            s_dict = status.to_dict() if hasattr(status, "to_dict") else status
+            return {
+                "state": s_dict.get("state", "NORMAL"),
+                "volatility_zscore": float(s_dict.get("volatility_zscore", 0.0) or 0.0),
+                "vpin": float(s_dict.get("vpin", 0.0) or 0.0),
+                "ofi": float(s_dict.get("ofi", 0.0) or 0.0),
+                "loss_velocity_per_min": float(s_dict.get("loss_velocity_per_min", 0.0) or 0.0),
+                "reason": s_dict.get("reason"),
+                "updated_at": s_dict.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+            }
+    except (ImportError, AttributeError, Exception) as exc:
+        logger.debug("data_api: DynamicCircuitBreaker in-memory status not available: %s", exc)
+
+    # 3. Fallback to NORMAL
+    return {
+        "state": "NORMAL",
+        "volatility_zscore": 0.0,
+        "vpin": 0.0,
+        "ofi": 0.0,
+        "loss_velocity_per_min": 0.0,
+        "reason": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }

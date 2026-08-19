@@ -39,6 +39,7 @@ import os
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -163,6 +164,19 @@ class OrchestratorDaemon:
         # never has to special-case "no prior check happened yet" against
         # "the file wasn't there last time either" (see that method).
         self._last_seen_store_stat: Any = _STORE_UNCHECKED
+
+        # Bounded in-process (timestamp, equity) sample buffer for
+        # maybe_update_circuit_breaker()'s loss-velocity brake. Sized for a
+        # ~60-minute rolling window assuming a ~60s daemon tick cadence (the
+        # smallest practically-useful ORCHESTRATOR_INTERVAL_SECONDS an
+        # operator would run this feature at) -- comfortably covers
+        # settings.CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS's default 30m
+        # even with some margin. A slower configured cadence just means the
+        # buffer's oldest sample spans MORE than 60 minutes, which only
+        # makes the computed rate a smoother, longer-horizon average -- never
+        # a correctness problem. Never persisted; intentionally lost on
+        # restart (an intraday-only metric with no cross-restart meaning).
+        self._circuit_breaker_equity_history: "deque[tuple[float, float]]" = deque(maxlen=60)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -596,6 +610,236 @@ class OrchestratorDaemon:
             )
             return None
 
+    # ------------------------------------------------------------------
+    # Live circuit-breaker updater (volatility-jump + VPIN + loss-velocity;
+    # OFI deliberately unwired -- see maybe_update_circuit_breaker's own
+    # docstring for the full, honest scope)
+    # ------------------------------------------------------------------
+
+    def maybe_update_circuit_breaker(self) -> None:
+        """Live circuit-breaker updater: volatility-jump + VPIN + loss-velocity.
+
+        HONEST SCOPE — read this before assuming full automatic coverage:
+        this wires THREE of the Dynamic Circuit Breaker's four sub-checks
+        (``execution.dynamic_circuit_breaker.DynamicCircuitBreaker``) into a
+        periodic live data feed:
+
+        1. **Volatility jump** (``check_volatility_jump`` / the
+           ``volatility_zscore`` input) — daily-bar baseline vs. a reactive
+           hourly window, as before.
+        2. **VPIN** (Volume-Synchronized Probability of Toxicity, the
+           ``vpin`` input) — a coarse, BAR-LEVEL Bulk Volume Classification
+           approximation (``pilots.options_vpin.calculate_vpin``) computed
+           against the SAME reactive hourly-bar window fetched for #1 (no
+           second network fetch). This is intentionally NOT tick-resolution
+           toxicity — with only ~a few dozen hourly bars available, the
+           number of volume buckets is sized down from the module's 50-bucket
+           tick-stream default to fit the actual row count. It is a genuine,
+           non-fabricated signal, just a coarser one than the literature's
+           tick-level formulation.
+        3. **Loss velocity** (``check_loss_velocity_brake`` / the
+           ``loss_velocity_per_min``/``account_equity`` inputs) — sampled
+           from ``data.paper_account_store.PaperAccountStore(readonly=True)
+           .get_account().equity`` into a small in-process rolling buffer
+           (``self._circuit_breaker_equity_history``) on this instance; the
+           rate is computed against the OLDEST buffered sample once at least
+           two samples span >= 60 seconds. Each sample is a REAL read (not a
+           cached/stale value) that resolves live prices for every open
+           paper position, so this ties a real external quote-API cost to
+           whatever daemon tick cadence is configured — worth knowing before
+           turning ``CIRCUIT_BREAKER_ENABLED`` on with a tight interval.
+
+        **OFI (Order Flow Imbalance) is deliberately NOT wired and stays
+        MANUAL-ONLY.** No configured market-data provider (Alpaca/FMP/
+        yfinance) populates bid/ask SIZE anywhere in this codebase's
+        ``Quote`` type — there is no real order-flow-imbalance signal to
+        compute from here, full stop; this is a genuine data-availability
+        gap, not an oversight. Because ``check_flash_crash_shield`` requires
+        BOTH ``ofi`` and ``vpin`` to be non-``None`` before it evaluates
+        anything, the compound flash-crash shield still can never trigger
+        automatically even though VPIN itself is now real and persisted —
+        VPIN's persisted value retains standalone diagnostic/observability
+        worth on its own. An operator (or an external watchdog) can still
+        trip either the flash-crash shield or any other state directly via
+        ``python -m execution.kill_switch --activate-soft-halt`` /
+        ``--activate``.
+
+        Gated on ``settings.CIRCUIT_BREAKER_ENABLED`` (default ``False`` —
+        today's exact, inert, behavior; a no-op when disabled). When
+        enabled: fetches recent daily bars for
+        ``settings.CIRCUIT_BREAKER_REFERENCE_SYMBOL`` to build a rolling
+        20-trading-day annualized realized-vol baseline (plus that series'
+        own std), fetches a short recent hourly window as the reactive
+        "current" input (reused for VPIN, see #2 above), computes the
+        5m-EWMA-style volatility Z-score via ``check_volatility_jump``, and
+        persists the combined result via ``update_metrics(volatility_zscore=
+        ..., vpin=..., loss_velocity_per_min=..., account_equity=...,
+        persist=True)`` — the same persistence path
+        ``dynamic_circuit_breaker_check``'s file-sentinel fallback
+        (``execution/risk_gate.py``) reads via ``load_metrics()``.
+
+        Never raises (CONSTRAINT #6): any data-fetch or computation failure
+        in the volatility-jump path degrades this whole tick to a logged
+        WARNING (skipped, previous state untouched). The VPIN and
+        loss-velocity sub-steps are each wrapped in their OWN try/except so
+        a failure in either (e.g. VPIN's bar-level BVC computation, or a
+        paper-account-store read) degrades that one input to ``None``
+        without preventing the other two inputs (including the
+        already-working volatility Z-score) from still being computed and
+        persisted this tick. Called from ``_timer_loop`` on every wake,
+        mirroring ``maybe_refresh_settings``'s own defensive pattern.
+        """
+        if not settings.CIRCUIT_BREAKER_ENABLED:
+            return
+        try:
+            from data.market_data import get_provider
+            from execution.dynamic_circuit_breaker import DynamicCircuitBreaker
+
+            symbol = settings.CIRCUIT_BREAKER_REFERENCE_SYMBOL
+            provider = get_provider()
+
+            daily_bars = provider.get_intraday_bars(symbol, lookback_days=90, interval="1d")
+            if daily_bars is None or daily_bars.empty or "Close" not in daily_bars.columns:
+                logger.warning(
+                    "maybe_update_circuit_breaker: no usable daily bars for %s; skipping tick.",
+                    symbol,
+                )
+                return
+
+            daily_returns = daily_bars["Close"].pct_change().dropna()
+            if len(daily_returns) < 21:
+                logger.warning(
+                    "maybe_update_circuit_breaker: insufficient daily-return history for "
+                    "%s (%d rows, need >= 21 for a 20d rolling-vol baseline); skipping tick.",
+                    symbol, len(daily_returns),
+                )
+                return
+
+            rolling_vol = daily_returns.rolling(window=20).std().dropna() * (252.0 ** 0.5)
+            if rolling_vol.empty:
+                logger.warning(
+                    "maybe_update_circuit_breaker: rolling 20d vol series empty for %s; "
+                    "skipping tick.",
+                    symbol,
+                )
+                return
+            baseline_20d_vol = float(rolling_vol.iloc[-1])
+            baseline_vol_std = float(rolling_vol.std()) if len(rolling_vol) > 1 else None
+
+            reactive_bars = provider.get_intraday_bars(symbol, lookback_days=2, interval="1h")
+            if reactive_bars is None or reactive_bars.empty or "Close" not in reactive_bars.columns:
+                logger.warning(
+                    "maybe_update_circuit_breaker: no usable hourly bars for %s; skipping tick.",
+                    symbol,
+                )
+                return
+
+            cb = DynamicCircuitBreaker()
+            _triggered, z_score, _reason = cb.check_volatility_jump(
+                intraday_returns_or_prices=reactive_bars["Close"],
+                baseline_20d_vol=baseline_20d_vol,
+                baseline_vol_std=baseline_vol_std,
+                is_prices=True,
+            )
+
+            # --- VPIN: coarse bar-level BVC approximation ------------------
+            # Reuses the SAME reactive_bars hourly window fetched above for
+            # the vol-jump detector -- no second network fetch. Isolated in
+            # its own try/except (CONSTRAINT #6): a VPIN failure must never
+            # prevent the already-computed volatility Z-score (or the
+            # loss-velocity sub-step below) from still being persisted.
+            vpin_value: Optional[float] = None
+            try:
+                import pandas as pd
+
+                from pilots.options_vpin import calculate_vpin
+
+                # DEFAULT_NUM_BUCKETS (50) assumes a real tick/trade stream;
+                # a ~2-day hourly window is only ~13-14 rows, so bucket count
+                # is sized down to the actual row count instead (floored at
+                # 2 so the rolling-VPIN window is never degenerate).
+                vpin_num_buckets = max(2, min(10, len(reactive_bars) // 2))
+                # _normalize_trades_df matches an EXACT lowercase column set
+                # ("price"/"volume"/"time" among its aliases) -- the raw
+                # OHLCV bars use capitalized "Close"/"Volume" and a
+                # DatetimeIndex, neither of which match those aliases
+                # as-is, so an explicit rename (not a bare pass-through) is
+                # required here.
+                vpin_trades_df = pd.DataFrame(
+                    {
+                        "price": reactive_bars["Close"].to_numpy(dtype=float),
+                        "volume": reactive_bars["Volume"].to_numpy(dtype=float),
+                        "time": reactive_bars.index.astype(str),
+                    }
+                )
+                vpin_result = calculate_vpin(
+                    vpin_trades_df, num_buckets=vpin_num_buckets, symbol=symbol
+                )
+                vpin_value = float(vpin_result.vpin)
+            except Exception as vpin_exc:  # noqa: BLE001 - CONSTRAINT #6, isolate from vol-jump
+                logger.warning(
+                    "maybe_update_circuit_breaker: VPIN computation failed (%s); "
+                    "leaving vpin=None this tick.", type(vpin_exc).__name__, exc_info=True,
+                )
+
+            # --- Loss velocity: live PaperAccountStore equity sampling -----
+            # Isolated in its own try/except (CONSTRAINT #6) for the same
+            # reason as VPIN above -- a paper-account-store read failure
+            # must not take down the vol-jump/VPIN inputs already computed.
+            loss_velocity_per_min: Optional[float] = None
+            account_equity_for_update: Optional[float] = None
+            try:
+                from data.paper_account_store import PaperAccountStore
+
+                equity_now = float(PaperAccountStore(readonly=True).get_account().equity)
+                now_ts = time.time()
+                self._circuit_breaker_equity_history.append((now_ts, equity_now))
+
+                if len(self._circuit_breaker_equity_history) >= 2:
+                    earliest_ts, earliest_equity = self._circuit_breaker_equity_history[0]
+                    elapsed_seconds = now_ts - earliest_ts
+                    # Require >= 60s of real elapsed time so the rate isn't
+                    # dominated by noise from two near-simultaneous samples.
+                    if elapsed_seconds >= 60.0:
+                        loss_velocity_per_min = (
+                            (equity_now - earliest_equity) / (elapsed_seconds / 60.0)
+                        )
+                        account_equity_for_update = equity_now
+            except Exception as lv_exc:  # noqa: BLE001 - CONSTRAINT #6, isolate from vol-jump/VPIN
+                logger.warning(
+                    "maybe_update_circuit_breaker: loss-velocity sampling failed (%s); "
+                    "leaving loss_velocity_per_min=None this tick.",
+                    type(lv_exc).__name__, exc_info=True,
+                )
+
+            # --- OFI: deliberately NOT computed -----------------------------
+            # No configured market-data provider (Alpaca/FMP/yfinance)
+            # populates bid/ask SIZE anywhere in this codebase's Quote type,
+            # so there is no real order-flow-imbalance signal available to
+            # compute here -- this is a genuine data-availability gap, not
+            # an oversight. check_flash_crash_shield requires BOTH ofi and
+            # vpin to be non-None before it evaluates anything, so the
+            # compound flash-crash shield still cannot trigger automatically
+            # even with vpin now real and persisted below; VPIN's persisted
+            # value retains standalone diagnostic worth on its own.
+            cb.update_metrics(
+                volatility_zscore=z_score,
+                vpin=vpin_value,
+                loss_velocity_per_min=loss_velocity_per_min,
+                account_equity=account_equity_for_update,
+                persist=True,
+            )
+            logger.debug(
+                "maybe_update_circuit_breaker: %s volatility Z-score=%.2f vpin=%s "
+                "loss_velocity_per_min=%s -> state=%s",
+                symbol, z_score, vpin_value, loss_velocity_per_min, cb.current_state.value,
+            )
+        except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, never break the timer loop
+            logger.warning(
+                "maybe_update_circuit_breaker: unexpected failure (%s); will retry "
+                "next tick.", type(exc).__name__, exc_info=True,
+            )
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -616,6 +860,12 @@ class OrchestratorDaemon:
             # operator has explicitly set the flag to False to opt out.
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
+            # maybe_update_circuit_breaker() gates on
+            # settings.CIRCUIT_BREAKER_ENABLED internally (unlike
+            # maybe_refresh_settings, which relies on its callers to gate) --
+            # see its own docstring. Called unconditionally here so it is a
+            # true no-op, not merely "never invoked," when the flag is off.
+            self.maybe_update_circuit_breaker()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -629,6 +879,7 @@ class OrchestratorDaemon:
                 break
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
+            self.maybe_update_circuit_breaker()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(

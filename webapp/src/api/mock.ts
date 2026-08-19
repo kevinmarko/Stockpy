@@ -41,6 +41,8 @@ import type {
   CalibrationSummary,
   CircuitBreakerSummary,
   CircuitBreakerTrip,
+  CircuitBreakerState,
+  CircuitBreakerStatusResponse,
   ControlStatus,
   CronStatus,
   CorrelationCluster,
@@ -178,6 +180,7 @@ import type {
   DeadLetterQueueEntry,
   DeadLetterQueue,
   DeadLetterRetryResult,
+  PortfolioRiskStreamEvent,
   PromptListResponse,
   PromptEntry,
   PromptBody,
@@ -260,6 +263,10 @@ import type {
   AlmgrenChrissOptimizeResponse,
   FixRouteOrderRequest,
   FixRouteOrderResponse,
+  FixSessionStatusResponse,
+  FixSessionControlResponse,
+  FixTestRequestPayload,
+  FixResetSeqRequest,
   ResearchSynthesizeRequest,
   ResearchSynthesizeResponse,
   AutonomousBacktestRequest,
@@ -10637,8 +10644,16 @@ export const mockApi = {
     const horizons = ["1d", "5d", "21d", "60d"];
     const horizonDays: Record<string, number> = { "1d": 1, "5d": 5, "21d": 21, "60d": 60 };
     const forecast: Record<string, number> = {};
+    const quantile_forecast: Record<string, { q10: number; q50: number; q90: number }> = {};
+
     for (const h of horizons) {
-      forecast[h] = baseVol * (1 + 0.05 * Math.sin(horizonDays[h] / 10));
+      const med = Number((baseVol * (1 + 0.05 * Math.sin(horizonDays[h] / 10))).toFixed(4));
+      const spread = Number((0.03 + 0.015 * Math.sqrt(horizonDays[h] / 20)).toFixed(4));
+      const q10 = Number(Math.max(0.01, med - spread).toFixed(4));
+      const q50 = med;
+      const q90 = Number((med + spread * 1.25).toFixed(4));
+      forecast[h] = q50;
+      quantile_forecast[h] = { q10, q50, q90 };
     }
     const attention_heatmap = Array.from({ length: 8 }, () =>
       Array.from({ length: 8 }, () => Math.random())
@@ -10647,71 +10662,260 @@ export const mockApi = {
     return delay<TransformerForecastResponse>({
       symbol: sym,
       forecast,
+      quantile_forecast,
       attention_heatmap,
+      trained_samples: 120,
+      macro_conditioned: true,
     });
   },
 
   async runDiffusionStressTest(req: DiffusionStressRequest): Promise<DiffusionStressResponse> {
     const sym = req.symbol.toUpperCase();
     const spot = req.spot_price;
-    const drift = req.drift ?? 0.0;
+    const regime = req.regime ?? "vol_shock";
+    const guidance = req.guidance_scale ?? 2.0;
+    const baseDrift = req.drift ?? 0.0;
     const horizon = req.horizon ?? 30;
-    const numPaths = Math.min(req.num_paths ?? 1000, 20); // small sample for the mock UI
+    const numPaths = Math.min(req.num_paths ?? 1000, 30); // sample paths for chart rendering
+
+    // Regime-specific dynamics adjusted by guidance scale
+    let volMultiplier = 1.0;
+    let regimeDrift = baseDrift;
+    let jumpProb = 0.0;
+    let jumpSize = 0.0;
+
+    switch (regime) {
+      case "vol_shock":
+        volMultiplier = 1.0 + 1.2 * (guidance / 2.0);
+        regimeDrift = baseDrift - 0.15 * guidance;
+        break;
+      case "credit_freeze":
+        volMultiplier = 1.0 + 0.8 * (guidance / 2.0);
+        regimeDrift = baseDrift - 0.28 * guidance;
+        break;
+      case "stagflation":
+        volMultiplier = 1.0 + 0.6 * (guidance / 2.0);
+        regimeDrift = baseDrift - 0.20 * guidance;
+        break;
+      case "liquidity_squeeze":
+        volMultiplier = 1.0 + 1.0 * (guidance / 2.0);
+        regimeDrift = baseDrift - 0.10 * guidance;
+        jumpProb = 0.08 * (guidance / 2.0);
+        jumpSize = -0.04 * guidance;
+        break;
+      case "unconditional":
+      default:
+        volMultiplier = 1.0;
+        regimeDrift = baseDrift;
+        break;
+    }
+
+    const effVol = req.volatility * volMultiplier;
     const paths: number[][] = [];
     const terminalReturns: number[] = [];
+
     for (let p = 0; p < numPaths; p++) {
       const path = [spot];
       for (let i = 0; i < horizon; i++) {
-        const shock = (Math.random() - 0.5) * 2 * req.volatility * Math.sqrt(1 / 252);
-        const next = path[path.length - 1] * (1 + drift / 252 + shock);
+        const shock = (Math.random() - 0.5) * 2 * effVol * Math.sqrt(1 / 252);
+        const hasJump = Math.random() < jumpProb;
+        const jump = hasJump ? jumpSize : 0;
+        const ret = regimeDrift / 252 + shock + jump;
+        const next = Math.max(0.01, path[path.length - 1] * (1 + ret));
         path.push(next);
       }
       paths.push(path);
       terminalReturns.push((path[path.length - 1] - spot) / spot);
     }
+
     terminalReturns.sort((a, b) => a - b);
-    const idx95 = Math.max(0, Math.floor(terminalReturns.length * 0.05) - 1);
+    const n = terminalReturns.length;
+
+    const idx95 = Math.max(0, Math.floor(n * 0.05) - 1);
     const var95Fraction = Math.abs(Math.min(0, terminalReturns[idx95] ?? terminalReturns[0]));
-    const tailLosses = terminalReturns.slice(0, idx95 + 1).filter((r) => r < 0).map((r) => -r);
+    const tailLosses95 = terminalReturns.slice(0, idx95 + 1).filter((r) => r < 0).map((r) => -r);
     const cvar95Fraction =
-      tailLosses.length > 0
-        ? tailLosses.reduce((a, b) => a + b, 0) / tailLosses.length
+      tailLosses95.length > 0
+        ? tailLosses95.reduce((a, b) => a + b, 0) / tailLosses95.length
         : var95Fraction;
+
+    const idx99 = Math.max(0, Math.floor(n * 0.01) - 1);
+    const var99Fraction = Math.abs(Math.min(0, terminalReturns[idx99] ?? terminalReturns[0]));
+    const tailLosses99 = terminalReturns.slice(0, idx99 + 1).filter((r) => r < 0).map((r) => -r);
+    const cvar99Fraction =
+      tailLosses99.length > 0
+        ? tailLosses99.reduce((a, b) => a + b, 0) / tailLosses99.length
+        : Math.max(var99Fraction, cvar95Fraction * 1.2);
 
     return delay<DiffusionStressResponse>(
       {
         symbol: sym,
+        regime,
+        guidance_scale: guidance,
         paths,
         VaR_95: var95Fraction * spot,
-        CVaR_95: cvar95Fraction * spot,
+        CVaR_95: Math.max(var95Fraction * spot, cvar95Fraction * spot),
+        VaR_99: Math.max(var95Fraction * spot, var99Fraction * spot),
+        CVaR_99: Math.max(var99Fraction * spot, cvar99Fraction * spot),
+        trained_windows: 145,
+        regime_conditioned: true,
       },
-      500
+      400
     );
   },
 
   async optimizeHrpCvar(req: HrpCvarOptimizeRequest): Promise<HrpCvarOptimizeResponse> {
-    const rawWeights = req.symbols.map(() => Math.max(0.01, 1 / req.symbols.length + (Math.random() - 0.5) * 0.1));
-    const totalWeight = rawWeights.reduce((a, b) => a + b, 0);
+    const n = Math.max(1, req.symbols.length);
+    const defaultSectorMap: Record<string, string> = {
+      AAPL: "Tech",
+      MSFT: "Tech",
+      NVDA: "Tech",
+      JPM: "Financials",
+      V: "Financials",
+      UNH: "Healthcare",
+      JNJ: "Healthcare",
+      AMZN: "Consumer",
+      PG: "Consumer",
+      XOM: "Energy",
+      CVX: "Energy",
+    };
+    const defaultBetas: Record<string, number> = {
+      AAPL: 1.15,
+      MSFT: 1.05,
+      NVDA: 1.65,
+      JPM: 0.95,
+      V: 0.85,
+      UNH: 0.70,
+      JNJ: 0.60,
+      AMZN: 1.25,
+      PG: 0.55,
+      XOM: 0.80,
+      CVX: 0.75,
+    };
+
+    const sectorMap = req.sector_map || defaultSectorMap;
+    const assetBetas = req.asset_betas || defaultBetas;
+    const lambda = req.lambda_turnover ?? 0.05;
+
+    // Generate baseline HRP weights
+    const rawWeights = req.symbols.map((sym, idx) => {
+      const b = assetBetas[sym] || 1.0;
+      return 1.0 / (0.5 + b * 0.5) + (idx % 2 === 0 ? 0.05 : -0.05);
+    });
+    const sumRaw = rawWeights.reduce((a, b) => a + b, 0);
+    const hrpWeights = rawWeights.map((w) => w / sumRaw);
+
+    // Incumbent weights w0
+    const w0: number[] = req.symbols.map((sym) => {
+      if (req.current_weights && sym in req.current_weights) {
+        return req.current_weights[sym];
+      }
+      return 1 / n;
+    });
+
+    // Turnover regularization: blend between HRP and w0
+    const blendFactor = Math.min(0.9, lambda * 2.0); // higher lambda -> closer to incumbent
+    let proposedWeights = hrpWeights.map((hw, i) => (1 - blendFactor) * hw + blendFactor * w0[i]);
+
+    // Apply sector caps if provided
+    if (req.sector_caps) {
+      const sectorTotals: Record<string, number> = {};
+      req.symbols.forEach((sym, i) => {
+        const sec = sectorMap[sym] || "General";
+        sectorTotals[sec] = (sectorTotals[sec] || 0) + proposedWeights[i];
+      });
+
+      for (const [sec, cap] of Object.entries(req.sector_caps)) {
+        if (sectorTotals[sec] && sectorTotals[sec] > cap) {
+          const factor = cap / sectorTotals[sec];
+          req.symbols.forEach((sym, i) => {
+            if ((sectorMap[sym] || "General") === sec) {
+              proposedWeights[i] *= factor;
+            }
+          });
+        }
+      }
+    }
+
+    // Apply max_asset_weight cap if provided -- mirrors the live endpoint's
+    // sizing/hrp_cvar_optimizer.py max_weight bound (Phase 35 remediation item 13)
+    // so the mock doesn't silently ignore a request field the real backend honors.
+    // A naive cap-then-renormalize can push a capped weight back ABOVE the cap
+    // once the leftover mass is redistributed (e.g. cap=0.4 on [0.6,0.25,0.15]
+    // renormalizes to [0.5, 0.3125, 0.1875] -- still over cap), so this is a
+    // small iterative water-filling loop that genuinely converges under the cap.
+    if (req.max_asset_weight !== undefined && req.max_asset_weight !== null) {
+      const cap = req.max_asset_weight;
+      for (let iter = 0; iter < 20; iter++) {
+        const sum = proposedWeights.reduce((a, b) => a + b, 0);
+        if (sum <= 0) break;
+        proposedWeights = proposedWeights.map((w) => w / sum);
+        let excess = 0;
+        const freeIdx: number[] = [];
+        proposedWeights = proposedWeights.map((w, i) => {
+          if (w > cap + 1e-9) {
+            excess += w - cap;
+            return cap;
+          }
+          freeIdx.push(i);
+          return w;
+        });
+        if (excess <= 1e-9 || freeIdx.length === 0) break;
+        const freeSum = freeIdx.reduce((a, i) => a + proposedWeights[i], 0);
+        freeIdx.forEach((i) => {
+          proposedWeights[i] += excess * (freeSum > 0 ? proposedWeights[i] / freeSum : 1 / freeIdx.length);
+        });
+      }
+    }
+
+    // Re-normalize weights to 1.0
+    const sumProp = proposedWeights.reduce((a, b) => a + b, 0);
+    const finalWeights = proposedWeights.map((w) => (sumProp > 0 ? w / sumProp : 1 / n));
+
     const allocations = req.symbols.map((sym, i) => ({
       symbol: sym,
-      weight: Number((rawWeights[i] / totalWeight).toFixed(4)),
+      weight: Number(finalWeights[i].toFixed(4)),
     }));
-    const expectedReturn = Number((req.target_return ?? (0.08 + allocations.reduce((acc, a) => acc + a.weight * 0.05, 0))).toFixed(4));
-    const cvar95 = Number(Math.max(0.02, (req.risk_aversion ? req.risk_aversion * 0.1 : 0.065) + (Math.random() * 0.02)).toFixed(4));
-    const sharpeRatio = Number((expectedReturn / (cvar95 * 1.2)).toFixed(2));
 
+    // Calculate turnover: 0.5 * sum |w_i - w0_i|
+    const turnover = Number(
+      (0.5 * finalWeights.reduce((acc, w, i) => acc + Math.abs(w - w0[i]), 0)).toFixed(4)
+    );
+
+    // Calculate portfolio beta
+    const portBeta = Number(
+      finalWeights
+        .reduce((acc, w, i) => acc + w * (assetBetas[req.symbols[i]] || 1.0), 0)
+        .toFixed(3)
+    );
+
+    // Calculate sector exposures
+    const sectorExposures: Record<string, number> = {};
+    req.symbols.forEach((sym, i) => {
+      const sec = sectorMap[sym] || "Other";
+      sectorExposures[sec] = Number(((sectorExposures[sec] || 0) + finalWeights[i]).toFixed(4));
+    });
+
+    const divRatio = Number((1.2 + Math.min(0.6, req.symbols.length * 0.08)).toFixed(2));
     return delay<HrpCvarOptimizeResponse>({
       allocations,
       dendrogram: {
-        name: "root",
-        distance: 1.0,
-        children: req.symbols.map(sym => ({ name: sym, distance: 0 }))
+        name: "Root Cluster",
+        distance: 0.85,
+        children: req.symbols.map((sym, i) => ({
+          name: sym,
+          distance: Number((0.15 + (i % 3) * 0.1).toFixed(2)),
+        })),
       },
-      expected_return: expectedReturn,
-      cvar_95: cvar95,
-      sharpe_ratio: sharpeRatio,
-      as_of: new Date().toISOString()
-    }, 500);
+      expected_return: 0.145,
+      cvar_95: 0.042,
+      sharpe_ratio: 1.68,
+      turnover,
+      portfolio_beta: portBeta,
+      sector_exposures: sectorExposures,
+      diversification_ratio: divRatio,
+      as_of: new Date().toISOString(),
+    }, 400);
   },
 
   async optimizeAlmgrenChriss(req: AlmgrenChrissOptimizeRequest): Promise<AlmgrenChrissOptimizeResponse> {
@@ -10794,6 +10998,130 @@ export const mockApi = {
         "8=FIX.4.4|9=124|35=8|49=NSDQ|..."
       ],
     }, 500);
+  },
+
+  async getFixSessionStatus(): Promise<FixSessionStatusResponse> {
+    return delay<FixSessionStatusResponse>({
+      session_id: "FIX.4.4:INVESTYO_PWA->FIX_GATEWAY",
+      state: "ACTIVE",
+      in_seq_num: 1048,
+      out_seq_num: 1049,
+      sender_comp_id: "INVESTYO_PWA",
+      target_comp_id: "FIX_GATEWAY",
+      gap_queue_depth: 0,
+      last_heartbeat_at: new Date().toISOString(),
+      venues_active: ["NYSE", "NASDAQ", "BATS", "IEX", "ARCA"],
+      heartbeat_int: 30,
+      session_uptime_sec: 14820,
+      venue_stats: [
+        {
+          venue: "NYSE",
+          market_center: "New York Stock Exchange",
+          status: "ACTIVE",
+          base_latency_ms: 1.1,
+          current_latency_ms: 1.14,
+          fill_rate_pct: 99.4,
+          maker_fee: 0.0012,
+          taker_fee: 0.0030,
+          maker_rebate: 0.0020,
+          liquidity_depth: 125000,
+          share_of_flow_pct: 34.2,
+        },
+        {
+          venue: "NASDAQ",
+          market_center: "Nasdaq Stock Market",
+          status: "ACTIVE",
+          base_latency_ms: 0.9,
+          current_latency_ms: 0.95,
+          fill_rate_pct: 99.8,
+          maker_fee: 0.0015,
+          taker_fee: 0.0030,
+          maker_rebate: 0.0025,
+          liquidity_depth: 140000,
+          share_of_flow_pct: 38.5,
+        },
+        {
+          venue: "BATS",
+          market_center: "Cboe BZX Exchange",
+          status: "ACTIVE",
+          base_latency_ms: 0.7,
+          current_latency_ms: 0.72,
+          fill_rate_pct: 98.9,
+          maker_fee: -0.0020,
+          taker_fee: 0.0025,
+          maker_rebate: 0.0020,
+          liquidity_depth: 65000,
+          share_of_flow_pct: 12.1,
+        },
+        {
+          venue: "IEX",
+          market_center: "Investors Exchange (D-Limit)",
+          status: "ACTIVE",
+          base_latency_ms: 1.8,
+          current_latency_ms: 1.85,
+          fill_rate_pct: 97.5,
+          maker_fee: 0.0000,
+          taker_fee: 0.0009,
+          maker_rebate: 0.0000,
+          liquidity_depth: 45000,
+          share_of_flow_pct: 6.8,
+        },
+        {
+          venue: "ARCA",
+          market_center: "NYSE Arca Equities",
+          status: "ACTIVE",
+          base_latency_ms: 1.2,
+          current_latency_ms: 1.23,
+          fill_rate_pct: 99.1,
+          maker_fee: -0.0022,
+          taker_fee: 0.0028,
+          maker_rebate: 0.0022,
+          liquidity_depth: 85000,
+          share_of_flow_pct: 8.4,
+        },
+      ],
+      audit_log: [
+        "8=FIX.4.4|9=112|35=0|49=FIX_GATEWAY|56=INVESTYO_PWA|34=1048|52=20260817-21:45:00.120|10=092|",
+        "8=FIX.4.4|9=128|35=8|49=FIX_GATEWAY|56=INVESTYO_PWA|34=1047|52=20260817-21:44:58.330|37=ORD-99124|11=CL-3019|39=2|150=2|55=SPY|54=1|38=100|44=512.50|32=100|31=512.48|14=100|6=512.48|10=184|",
+        "8=FIX.4.4|9=108|35=1|49=INVESTYO_PWA|56=FIX_GATEWAY|34=1048|52=20260817-21:44:30.010|112=TEST-9921|10=210|",
+        "8=FIX.4.4|9=115|35=0|49=FIX_GATEWAY|56=INVESTYO_PWA|34=1046|52=20260817-21:44:30.012|112=TEST-9921|10=044|",
+        "8=FIX.4.4|9=140|35=D|49=INVESTYO_PWA|56=FIX_GATEWAY|34=1047|52=20260817-21:44:00.000|11=CL-3019|55=SPY|54=1|38=100|40=2|44=512.50|59=0|10=156|",
+      ],
+    }, 200);
+  },
+
+  async sendFixTestRequest(req?: FixTestRequestPayload): Promise<FixSessionControlResponse> {
+    const tid = req?.test_req_id || "TEST-" + Math.random().toString(36).substring(2, 8).toUpperCase();
+    return delay<FixSessionControlResponse>({
+      status: "ok",
+      message: `FIX Test Request (35=1, TestReqID=${tid}) verified. Heartbeat response received.`,
+      session_state: "ACTIVE",
+      test_req_id: tid,
+      in_seq_num: 1049,
+      out_seq_num: 1050,
+      round_trip_ms: 1.24,
+    }, 200);
+  },
+
+  async resetFixSequence(req: FixResetSeqRequest): Promise<FixSessionControlResponse> {
+    return delay<FixSessionControlResponse>({
+      status: "ok",
+      message: `Sequence reset (35=4) to seq #${req.new_seq_num} successful.`,
+      session_state: "ACTIVE",
+      new_seq_num: req.new_seq_num,
+      in_seq_num: req.new_seq_num,
+      out_seq_num: req.new_seq_num,
+    }, 200);
+  },
+
+  async reconnectFixSession(): Promise<FixSessionControlResponse> {
+    return delay<FixSessionControlResponse>({
+      status: "ok",
+      message: "FIX 4.4 Session re-established successfully.",
+      session_state: "ACTIVE",
+      in_seq_num: 1,
+      out_seq_num: 1,
+    }, 200);
   },
 
   // ---- Agentic Trading tab ----
@@ -14396,6 +14724,11 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
     proposal.approved_by = "operator";
     return delay({ ...proposal });
   },
+
+  // ---- Dynamic Circuit Breaker ----
+  async getCircuitBreakerStatus(): Promise<CircuitBreakerStatusResponse> {
+    return delay(getMockCircuitBreakerStatus());
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -14923,3 +15256,111 @@ let mockLiveTradeProposals: LiveTradeProposal[] = [
 export function __setMockLiveTradeProposals(proposals: LiveTradeProposal[]) {
   mockLiveTradeProposals = proposals;
 }
+
+/**
+ * Returns a realistic sub-second portfolio risk and Greek streaming event for mock mode.
+ */
+export function getMockPortfolioRiskStreamEvent(): PortfolioRiskStreamEvent {
+  return {
+    timestamp: new Date().toISOString(),
+    spy_price: 502.45,
+    net_delta: 142.5,
+    net_dollar_delta: 25650.0,
+    net_gamma: 12.45,
+    net_dollar_gamma_1pct: 128.3,
+    net_theta: -45.2,
+    net_vega: 84.1,
+    beta_weighted_delta_spy: 51.05,
+    total_positions_count: 2,
+    resolved_positions_count: 2,
+    missing_data_count: 0,
+    positions: [
+      {
+        symbol: "AAPL",
+        underlying: "AAPL",
+        position_type: "equity",
+        qty: 100,
+        spot_price: 182.5,
+        delta: 100,
+        dollar_delta: 18250,
+        gamma: 0,
+        dollar_gamma_1pct: 0,
+        theta_daily: 0,
+        vega_1pct: 0,
+        beta_spy: 1.2,
+        beta_weighted_delta_spy: 43.58,
+      },
+      {
+        symbol: "AAPL 2026-09-18 $185.00 CALL",
+        underlying: "AAPL",
+        position_type: "option",
+        qty: 1,
+        spot_price: 182.5,
+        strike: 185.0,
+        dte: 32,
+        option_type: "call",
+        iv: 0.24,
+        delta: 42.5,
+        dollar_delta: 7400,
+        gamma: 12.45,
+        dollar_gamma_1pct: 128.3,
+        theta_daily: -45.2,
+        vega_1pct: 84.1,
+        beta_spy: 1.2,
+        beta_weighted_delta_spy: 7.47,
+      },
+    ],
+    missing_positions: [],
+  };
+}
+
+/**
+ * Realistic mock dynamic circuit breaker status fixture.
+ */
+export function getMockCircuitBreakerStatus(stateOverride?: CircuitBreakerState): CircuitBreakerStatusResponse {
+  const state = stateOverride ?? "NORMAL";
+  if (state === "CAUTION") {
+    return {
+      state: "CAUTION",
+      volatility_zscore: 2.35,
+      vpin: 0.32,
+      ofi: -450.2,
+      loss_velocity_per_min: -85.5,
+      reason: "Elevated market volatility detected across monitored universe",
+      updated_at: new Date().toISOString(),
+    };
+  }
+  if (state === "SOFT_HALT") {
+    return {
+      state: "SOFT_HALT",
+      volatility_zscore: 3.82,
+      vpin: 0.46,
+      ofi: -1250.0,
+      loss_velocity_per_min: -210.0,
+      reason: "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > threshold 3.50",
+      updated_at: new Date().toISOString(),
+    };
+  }
+  if (state === "HARD_HALT") {
+    return {
+      state: "HARD_HALT",
+      volatility_zscore: 4.15,
+      vpin: 0.58,
+      ofi: -2400.0,
+      loss_velocity_per_min: -750.0,
+      reason: "LOSS_VELOCITY_BREACH: Intraday loss rate $750.00/min exceeds allowable rate $666.67/min",
+      updated_at: new Date().toISOString(),
+    };
+  }
+  return {
+    state: "NORMAL",
+    volatility_zscore: 0.85,
+    vpin: 0.18,
+    ofi: 120.5,
+    loss_velocity_per_min: -15.4,
+    reason: null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+

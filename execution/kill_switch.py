@@ -39,8 +39,9 @@ from settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Canonical sentinel-file location. Tests may override via GlobalKillSwitch(sentinel_file=…).
+# Canonical sentinel-file locations. Tests may override via GlobalKillSwitch(sentinel_file=…, soft_halt_file=…).
 KILL_SWITCH_FILE: Path = settings.OUTPUT_DIR / "KILL_SWITCH"
+SOFT_HALT_FILE: Path = settings.OUTPUT_DIR / "SOFT_HALT"
 
 
 class KillSwitchActiveError(RuntimeError):
@@ -52,7 +53,7 @@ class KillSwitchActiveError(RuntimeError):
 
 class GlobalKillSwitch:
     """
-    Stateless file-based kill switch.
+    Stateless file-based kill switch and soft-halt guard.
 
     Every public method is idempotent.  The file system is the single source of
     truth so multiple processes (orchestrator + watchdog) share a consistent view
@@ -63,14 +64,28 @@ class GlobalKillSwitch:
     sentinel_file : Path | None
         Override the default KILL_SWITCH_FILE (useful for unit tests that
         operate in a temporary directory).
+    soft_halt_file : Path | None
+        Override the default SOFT_HALT_FILE. If omitted but sentinel_file is given,
+        defaults to sentinel_file.parent / "SOFT_HALT".
     """
 
-    def __init__(self, sentinel_file: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        sentinel_file: Optional[Path] = None,
+        soft_halt_file: Optional[Path] = None,
+    ) -> None:
         self._path = sentinel_file or KILL_SWITCH_FILE
+        self._soft_halt_path = soft_halt_file or (
+            self._path.parent / "SOFT_HALT" if sentinel_file else SOFT_HALT_FILE
+        )
 
     def is_active(self) -> bool:
         """Return True if the sentinel file exists."""
         return self._path.exists()
+
+    def is_soft_halt_active(self) -> bool:
+        """Return True if the soft-halt sentinel file exists."""
+        return self._soft_halt_path.exists()
 
     def activate(self, reason: str = "") -> None:
         """Create the sentinel file, halting all future order submissions.
@@ -156,6 +171,57 @@ class GlobalKillSwitch:
         except OSError:
             return ""
 
+    def activate_soft_halt(self, reason: str = "") -> None:
+        """Create the soft-halt sentinel file, halting new BUY / risk-increasing orders.
+
+        Uses atomic write-then-rename. Risk-reducing SELL orders remain permitted.
+        """
+        self._soft_halt_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).isoformat()
+        content = f"Soft halt activated at {ts}\n{reason}".strip()
+        tmp = self._soft_halt_path.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.rename(self._soft_halt_path)
+        logger.warning(
+            "SOFT HALT ACTIVATED — new BUY order submissions BLOCKED (SELLs permitted). "
+            "Reason: %s. File: %s",
+            reason or "(no reason given)",
+            self._soft_halt_path,
+        )
+
+        try:
+            from observability.alerts import send_alert
+            send_alert(
+                "WARNING",
+                f"Soft halt ACTIVATED — new BUY orders BLOCKED (SELLs permitted). "
+                f"Reason: {reason or '(no reason given)'}",
+                extra={"reason": reason, "sentinel_file": str(self._soft_halt_path)},
+                dedup_key="soft_halt_activate",
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("kill_switch: send_alert on soft halt activation failed (%s)", exc)
+
+    def deactivate_soft_halt(self) -> None:
+        """Remove the soft-halt sentinel file, re-enabling BUY order submission."""
+        if self._soft_halt_path.exists():
+            self._soft_halt_path.unlink()
+            logger.info(
+                "SOFT HALT DEACTIVATED — BUY order submission re-enabled. "
+                "File removed: %s",
+                self._soft_halt_path,
+            )
+        else:
+            logger.debug("deactivate_soft_halt() called but soft halt was not active.")
+
+    def soft_halt_reason(self) -> str:
+        """Return the reason text stored in the soft-halt sentinel, or '' if inactive."""
+        if not self._soft_halt_path.exists():
+            return ""
+        try:
+            return self._soft_halt_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point  (python -m execution.kill_switch)
@@ -169,10 +235,12 @@ def _main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--activate", action="store_true", help="Activate the kill switch.")
-    group.add_argument("--deactivate", action="store_true", help="Deactivate the kill switch.")
+    group.add_argument("--activate", action="store_true", help="Activate the global kill switch.")
+    group.add_argument("--deactivate", action="store_true", help="Deactivate the global kill switch.")
+    group.add_argument("--activate-soft-halt", action="store_true", help="Activate soft halt (block BUYs).")
+    group.add_argument("--deactivate-soft-halt", action="store_true", help="Deactivate soft halt.")
     group.add_argument("--status", action="store_true", help="Print current status.")
-    parser.add_argument("--reason", default="", help="Reason text (--activate only).")
+    parser.add_argument("--reason", default="", help="Reason text (--activate / --activate-soft-halt).")
     args = parser.parse_args()
 
     ks = GlobalKillSwitch()
@@ -182,12 +250,23 @@ def _main() -> None:
     elif args.deactivate:
         ks.deactivate()
         print(f"Kill switch DEACTIVATED. File removed: {ks._path}")
+    elif args.activate_soft_halt:
+        ks.activate_soft_halt(reason=args.reason)
+        print(f"Soft halt ACTIVATED. File: {ks._soft_halt_path}")
+    elif args.deactivate_soft_halt:
+        ks.deactivate_soft_halt()
+        print(f"Soft halt DEACTIVATED. File removed: {ks._soft_halt_path}")
     elif args.status:
         active = ks.is_active()
-        print(f"Kill switch: {'ACTIVE' if active else 'INACTIVE'}")
+        soft_active = ks.is_soft_halt_active()
+        print(f"Kill switch (HARD): {'ACTIVE' if active else 'INACTIVE'}")
         if active:
             print(f"Reason: {ks.reason() or '(none stored)'}")
             print(f"File: {ks._path}")
+        print(f"Soft halt:          {'ACTIVE' if soft_active else 'INACTIVE'}")
+        if soft_active:
+            print(f"Reason: {ks.soft_halt_reason() or '(none stored)'}")
+            print(f"File: {ks._soft_halt_path}")
 
 
 if __name__ == "__main__":

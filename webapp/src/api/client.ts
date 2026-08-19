@@ -195,6 +195,10 @@ import type {
   AlmgrenChrissOptimizeResponse,
   FixRouteOrderRequest,
   FixRouteOrderResponse,
+  FixSessionStatusResponse,
+  FixSessionControlResponse,
+  FixTestRequestPayload,
+  FixResetSeqRequest,
   ResearchSynthesizeRequest,
   ResearchSynthesizeResponse,
   AutonomousBacktestRequest,
@@ -204,6 +208,7 @@ import type {
   BrokerFailoverRequest,
   BrokerFailoverResponse,
   SecRule606ReportResponse,
+  CircuitBreakerStatusResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -258,10 +263,29 @@ function baseFor(path: string): string {
   // Data API (:8603) alongside the other "/data/*" Phase-6 endpoints, but
   // keep their own top-level paths ("/api/chat", "/ws/ticks/*", "/ws/chat/*")
   // rather than a "/data/" prefix, so they need an explicit match here.
-  if (path === "/api/chat" || path.startsWith("/ws/ticks/") || path.startsWith("/ws/chat/")) {
+  if (
+    path === "/api/chat" ||
+    path.startsWith("/ws/ticks/") ||
+    path.startsWith("/ws/chat/") ||
+    path.startsWith("/ws/risk/") ||
+    path.startsWith("/risk/")
+  ) {
     return DATA_BASE_URL;
   }
   return BASE_URL;
+}
+
+/**
+ * Full ws:// (or wss:// on an https origin) URL for the real-time portfolio risk & Greek endpoint.
+ */
+export function portfolioRiskWsUrl(tokenOverride?: string): string {
+  const httpBase = baseFor("/ws/risk/portfolio");
+  const wsBase = httpBase.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const params = new URLSearchParams();
+  const token = tokenOverride || TOKEN;
+  if (token) params.set("token", token);
+  const qs = params.toString();
+  return `${wsBase}/ws/risk/portfolio${qs ? `?${qs}` : ""}`;
 }
 
 /**
@@ -651,6 +675,23 @@ const liveApi = {
     http<FixRouteOrderResponse>("/pilots/execution/fix/route", {
       method: "POST",
       body: JSON.stringify(req),
+    }),
+  getFixSessionStatus: () =>
+    http<FixSessionStatusResponse>("/pilots/execution/fix/session/status"),
+  sendFixTestRequest: (req?: FixTestRequestPayload) =>
+    http<FixSessionControlResponse>("/pilots/execution/fix/session/test-request", {
+      method: "POST",
+      body: JSON.stringify(req || {}),
+    }),
+  resetFixSequence: (req: FixResetSeqRequest) =>
+    http<FixSessionControlResponse>("/pilots/execution/fix/session/reset-seq", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  reconnectFixSession: () =>
+    http<FixSessionControlResponse>("/pilots/execution/fix/session/reconnect", {
+      method: "POST",
+      body: JSON.stringify({}),
     }),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
@@ -1229,6 +1270,9 @@ const liveApi = {
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectLiveTrade: (token: string) =>
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/reject`, { method: "POST" }),
+
+  // ---- Dynamic Circuit Breaker ----
+  getCircuitBreakerStatus: () => http<CircuitBreakerStatusResponse>("/risk/circuit-breaker/status"),
 };
 
 /**

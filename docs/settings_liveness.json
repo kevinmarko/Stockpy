@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 311,
+    "live_safe": 316,
     "no_op": 3,
-    "restart_required": 99,
-    "total": 413
+    "restart_required": 104,
+    "total": 423
   },
   "dynamic_sites": [
     {
@@ -42,28 +42,28 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 176,
+      "line": 177,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3165,
+      "line": 3167,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4271,
+      "line": 4273,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4376,
+      "line": 4378,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 418,
+  "files_scanned": 420,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -175,6 +175,8 @@
     "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
     "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
     "CACHE_LONG_SHORT_WRITES_ENABLED",
+    "CIRCUIT_BREAKER_ENABLED",
+    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
     "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
@@ -216,6 +218,8 @@
     "FINBERT_ENABLED",
     "FINBERT_SCORE_CACHE_ENABLED",
     "FINNHUB_API_KEY",
+    "FIX_GATEWAY_ENABLED",
+    "FIX_HEARTBEAT_INTERVAL_SECONDS",
     "FLATTEN_ON_KILL",
     "FMP_ANALYST_ENABLED",
     "FMP_ANALYST_REFRESH_HOURS",
@@ -451,7 +455,8 @@
     "VOL_TARGET",
     "WATCH_RULES_FILE",
     "WIKIPEDIA_ATTENTION_ENABLED",
-    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
+    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
+    "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
   "no_op": [
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
@@ -460,16 +465,16 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 825,
+    "attr": 832,
     "factory_param": 4,
-    "getattr_const": 353,
-    "os_environ": 24
+    "getattr_const": 360,
+    "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 242,
+    "attr": 247,
     "factory_param": 4,
-    "getattr_const": 199,
-    "os_environ": 17
+    "getattr_const": 204,
+    "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -638,6 +643,50 @@
         "via": []
       }
     ],
+    "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "execution/dynamic_circuit_breaker.py:307",
+        "via": []
+      }
+    ],
+    "CIRCUIT_BREAKER_OFI_THRESHOLD": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "execution/dynamic_circuit_breaker.py:302",
+        "via": []
+      }
+    ],
+    "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "execution/dynamic_circuit_breaker.py:292",
+        "via": []
+      }
+    ],
+    "CIRCUIT_BREAKER_VPIN_THRESHOLD": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "execution/dynamic_circuit_breaker.py:297",
+        "via": []
+      }
+    ],
     "CORS_ALLOWED_ORIGINS": [
       {
         "discarded": false,
@@ -672,7 +721,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:322",
+        "site": "api/pilots_api.py:324",
         "via": []
       },
       {
@@ -688,11 +737,20 @@
     "DAILY_LOSS_LIMIT_PCT": [
       {
         "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "execution/dynamic_circuit_breaker.py:312",
+        "via": []
+      },
+      {
+        "discarded": false,
         "form": "attr",
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:144",
+        "site": "execution/risk_gate.py:164",
         "via": []
       }
     ],
@@ -1450,7 +1508,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4753",
+        "site": "api/pilots_api.py:4755",
         "via": []
       }
     ],
@@ -1461,7 +1519,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4752",
+        "site": "api/pilots_api.py:4754",
         "via": []
       }
     ],
@@ -1472,7 +1530,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4922",
+        "site": "api/pilots_api.py:4924",
         "via": []
       },
       {
@@ -1547,7 +1605,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4894",
+        "site": "api/pilots_api.py:4896",
         "via": []
       },
       {
@@ -1591,7 +1649,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:632",
+        "site": "api/pilots_api.py:634",
         "via": []
       }
     ],
@@ -1918,7 +1976,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:154",
+        "site": "execution/risk_gate.py:174",
         "via": []
       }
     ],
@@ -2134,7 +2192,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:139",
+        "site": "execution/risk_gate.py:159",
         "via": []
       }
     ],
@@ -2145,7 +2203,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:149",
+        "site": "execution/risk_gate.py:169",
         "via": []
       }
     ],
@@ -2156,7 +2214,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:136",
+        "site": "execution/risk_gate.py:156",
         "via": []
       }
     ],
@@ -2167,7 +2225,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:133",
+        "site": "execution/risk_gate.py:153",
         "via": []
       }
     ],
@@ -2354,6 +2412,17 @@
         "via": []
       }
     ],
+    "NO_VENV_REEXEC": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "scripts/_bootstrap.py:110",
+        "via": []
+      }
+    ],
     "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD": [
       {
         "discarded": false,
@@ -2485,9 +2554,27 @@
         "discarded": false,
         "form": "attr",
         "rules": [
+          "init_self_assign"
+        ],
+        "site": "execution/dynamic_circuit_breaker.py:314",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
           "module_level"
         ],
         "site": "execution/kill_switch.py:43",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "execution/kill_switch.py:44",
         "via": []
       },
       {
@@ -2766,7 +2853,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:159",
+        "site": "execution/risk_gate.py:179",
         "via": []
       }
     ],
@@ -2880,7 +2967,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:627",
+        "site": "api/pilots_api.py:629",
         "via": []
       },
       {
@@ -2968,10 +3055,10 @@
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
     "init_body": 6,
-    "init_self_assign": 45,
+    "init_self_assign": 51,
     "method_self_assign": 4,
-    "module_level": 77,
-    "os_environ": 24
+    "module_level": 78,
+    "os_environ": 25
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",

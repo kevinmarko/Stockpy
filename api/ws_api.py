@@ -42,9 +42,11 @@ once an endpoint is reachable from outside this machine (e.g. via the
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
+import time
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -58,6 +60,7 @@ logger = logging.getLogger(__name__)
 tick_router = APIRouter()
 training_router = APIRouter()
 live_chat_router = APIRouter()
+risk_router = APIRouter()
 
 def _check_ws_token(
     token: Optional[str], auth_header: Optional[str], client_host: Optional[str]
@@ -76,10 +79,10 @@ def _check_ws_token(
     server_token = getattr(settings, "STATE_API_TOKEN", None)
     if not server_token:
         return is_loopback_host(client_host)
-    if token and token == server_token:
+    if token and hmac.compare_digest(token, server_token):
         return True
     if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[len("Bearer "):] == server_token
+        return hmac.compare_digest(auth_header[len("Bearer "):], server_token)
     return False
 
 
@@ -541,4 +544,202 @@ async def ws_live_chat_endpoint(
             await websocket.close(code=1011)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# /ws/risk/portfolio helpers
+# ---------------------------------------------------------------------------
+
+# symbol -> (beta, computed_at_epoch_seconds). Module-level so it survives
+# across ticks of the same process (there is only ever one long-lived
+# ws_portfolio_risk_endpoint loop per connection, and betas are a slow-moving
+# statistic -- recomputing a rolling Cov/Var over ~1yr of daily bars on every
+# 1 Hz tick would be needless DB + pandas load for a number that barely
+# changes minute to minute). See _compute_betas_sync's docstring.
+_BETA_CACHE: dict[str, tuple[float, float]] = {}
+_BETA_CACHE_TTL_SECONDS = 300.0  # 5 minutes
+
+
+def _compute_betas_sync(symbols: set[str]) -> dict[str, float]:
+    """Blocking: return {symbol: beta_vs_spy}, computed once per tick for the
+    DISTINCT underlyings actually held (never per-position), reused across
+    every position sharing that underlying via the returned dict.
+
+    Real beta via ``data.historical_store.HistoricalStore`` daily bars +
+    ``data.fmp_fundamentals.compute_beta`` (Cov/Var over the inner-joined
+    daily-return overlap, the same formula ``pilots/rolling_beta.py`` and
+    ``data/yahoo_fundamentals.py`` use) -- not the hardcoded beta=1.0
+    fallback ``pilots.realtime_risk_streamer.compute_portfolio_risk_stream``
+    silently used before this call site ever threaded a real ``betas`` dict
+    through.
+
+    Cached per-symbol for ``_BETA_CACHE_TTL_SECONDS`` so a symbol already
+    held (the common case tick-over-tick) is served from cache rather than
+    re-fetching bars + re-running the rolling covariance every second --
+    this is what actually keeps the per-tick cost bounded, since this
+    function itself does blocking DB reads (SQLite) and pandas math and
+    must be run via ``loop.run_in_executor`` by its caller, exactly like the
+    ``/ws/ticks/{symbol}`` REST-fallback quote fetch above.
+
+    Never raises: any symbol that fails to resolve (missing bars, <60
+    overlapping days, DB error) degrades to beta=1.0 -- the same neutral
+    fallback ``compute_portfolio_risk_stream``'s ``betas_map.get(underlying,
+    1.0)`` already used unconditionally before this fix, so a resolution
+    failure for one symbol is never worse than today's prior behavior for
+    every symbol.
+    """
+    now = time.time()
+    result: dict[str, float] = {}
+    to_fetch: list[str] = []
+    for sym in symbols:
+        cached = _BETA_CACHE.get(sym)
+        if cached is not None and (now - cached[1]) < _BETA_CACHE_TTL_SECONDS:
+            result[sym] = cached[0]
+        else:
+            to_fetch.append(sym)
+
+    if not to_fetch:
+        return result
+
+    try:
+        from data.historical_store import HistoricalStore
+        from data.fmp_fundamentals import compute_beta
+
+        store = HistoricalStore(readonly=True)
+        spy_df = store.get_bars("SPY", lookback_days=400)
+        spy_returns = (
+            spy_df["Close"].pct_change()
+            if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns
+            else None
+        )
+
+        for sym in to_fetch:
+            beta = 1.0
+            if sym == "SPY":
+                beta = 1.0
+            elif spy_returns is not None:
+                try:
+                    price_df = store.get_bars(sym, lookback_days=400)
+                    if price_df is not None and not price_df.empty and "Close" in price_df.columns:
+                        stock_returns = price_df["Close"].pct_change()
+                        b = compute_beta(stock_returns, spy_returns)
+                        if b == b and b not in (float("inf"), float("-inf")):  # finite, no math/np import needed
+                            beta = float(b)
+                except Exception as exc:  # noqa: BLE001 - one bad symbol must not blank the whole batch
+                    logger.debug("ws_portfolio_risk beta compute failed for %s: %s", sym, exc)
+            _BETA_CACHE[sym] = (beta, now)
+            result[sym] = beta
+    except Exception as exc:  # noqa: BLE001 - HistoricalStore/import failure: degrade every symbol to 1.0
+        logger.warning("ws_portfolio_risk beta batch compute failed (falling back to beta=1.0): %s", exc)
+        for sym in to_fetch:
+            result.setdefault(sym, 1.0)
+
+    return result
+
+
+@risk_router.websocket("/ws/risk/portfolio")
+async def ws_portfolio_risk_endpoint(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+):
+    """Stream aggregate and position-level portfolio Greeks in real-time (1 Hz).
+
+    Pushes JSON payload computed by pilots.realtime_risk_streamer. The
+    connection is closed with 4003 if the auth token is invalid.
+
+    Cadence, plainly stated: this loop polls every
+    ``settings.WS_RISK_STREAM_INTERVAL_SECONDS`` (default 1.0s, i.e. once per
+    second) and pushes one JSON payload per iteration. There is no
+    sub-second/500ms tick here (that cadence belongs to the
+    separate ``/ws/ticks/{symbol}`` endpoint above) and no heartbeat/idle
+    watchdog on this connection -- a client that stops reading will simply
+    have its socket buffer back up until the underlying TCP/ASGI layer
+    errors out, not be proactively disconnected.
+    """
+    auth_header = websocket.headers.get("authorization")
+    client_host = websocket.client.host if websocket.client else None
+    if not _check_ws_token(token, auth_header, client_host):
+        await websocket.close(code=4003)
+        logger.warning("ws_portfolio_risk_endpoint: rejected unauthenticated connection")
+        return
+
+    await websocket.accept()
+    logger.info("ws_portfolio_risk_endpoint: client connected")
+
+    try:
+        from data.paper_account_store import PaperAccountStore
+        from pilots.realtime_risk_streamer import compute_portfolio_risk_stream, parse_option_symbol
+        from pilots.price_provider import get_latest_prices
+        store = PaperAccountStore(readonly=True)
+
+        while True:
+            loop = asyncio.get_running_loop()
+            # store.get_open_positions() -> PaperAccountStore._resolve_position_prices()
+            # -> fmp_client.batch_quote() makes a synchronous `requests.get` with
+            # retry/backoff sleeps; offload it exactly like the REST-fallback
+            # quote fetch in _build_tick_payload above does, so one slow HTTP
+            # call can't block every other connected client's event loop.
+            open_positions = await loop.run_in_executor(None, store.get_open_positions)
+            positions = [
+                {
+                    "symbol": p.symbol,
+                    "qty": p.qty,
+                    "spot_price": (p.market_value / p.qty) if p.qty != 0 else p.avg_entry_price,
+                    "avg_cost": p.avg_entry_price,
+                }
+                for p in open_positions
+            ]
+
+            quotes: dict[str, float] = {}
+            betas: dict[str, float] = {}
+            if positions:
+                underlyings = {"SPY"}
+                for p in positions:
+                    parsed = parse_option_symbol(p["symbol"])
+                    underlyings.add(parsed["ticker"] if parsed else p["symbol"].upper())
+
+                # Single batched, executor-offloaded quote fetch instead of one
+                # get_latest_price(sym) call per underlying: get_latest_prices
+                # -> data.fmp_client.batch_quote makes ONE synchronous
+                # `requests.get` for every distinct underlying this tick needs,
+                # so this offloads exactly one blocking call regardless of
+                # portfolio size, mirroring the run_in_executor pattern used
+                # for store.get_open_positions above and _compute_betas_sync
+                # below. get_latest_prices degrades per-symbol internally
+                # (missing/malformed/non-positive entries are simply absent
+                # from the returned dict, never raised) so this outer
+                # try/except should now rarely fire -- it stays as defensive
+                # logging for the batch call failing entirely (network down,
+                # malformed top-level response, etc.).
+                try:
+                    quotes = await loop.run_in_executor(None, get_latest_prices, list(underlyings))
+                except Exception as prov_exc:  # noqa: BLE001 - one bad tick's quotes must not kill the stream
+                    logger.warning("ws_portfolio_risk_endpoint: batch quote fetch failed: %s", prov_exc)
+
+                try:
+                    betas = await loop.run_in_executor(None, _compute_betas_sync, underlyings)
+                except Exception as beta_exc:  # noqa: BLE001 - degrade to the module's own beta=1.0 default
+                    logger.warning("ws_portfolio_risk_endpoint: beta fetch failed: %s", beta_exc)
+
+            risk_summary = compute_portfolio_risk_stream(
+                positions=positions,
+                quotes=quotes,
+                betas=betas,
+                spy_price=quotes.get("SPY", 500.0),
+            )
+
+            await websocket.send_text(json.dumps(risk_summary.to_dict()))
+            await asyncio.sleep(settings.WS_RISK_STREAM_INTERVAL_SECONDS)
+
+    except WebSocketDisconnect:
+        logger.info("ws_portfolio_risk_endpoint: client disconnected")
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.error("ws_portfolio_risk_endpoint error: %s", exc)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
 

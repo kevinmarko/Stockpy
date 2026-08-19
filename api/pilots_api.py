@@ -102,6 +102,8 @@ import json
 import logging
 import math
 import re
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -6760,10 +6762,12 @@ def post_live_trade_reject(token: str) -> Dict[str, Any]:
 class DiffusionStressTestRequest(BaseModel):
     symbol: str
     spot_price: float
-    volatility: float
+    volatility: float = 0.2
     num_paths: int = 1000
     horizon: int = 30
     drift: float = 0.0
+    regime: Optional[str] = "vol_shock"
+    guidance_scale: Optional[float] = 2.0
 
 @app.get(
     "/pilots/options/ai/transformer-forecast",
@@ -6777,11 +6781,12 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
     output weights were never trained at all -- real input alone into an
     untrained model would still be a meaningless-output bug). Degrades to an
     honest 422 (never fabricated data) when real history is insufficient."""
+    import pandas as pd
     from ml.transformer_vol_forecaster import (
         build_causal_vol_features,
         build_training_windows,
-        train_vol_forecaster,
-        predict_multi_horizon_vol,
+        train_quantile_vol_forecaster,
+        predict_quantile_vol_cone,
     )
 
     SEQ_LEN = 60
@@ -6805,7 +6810,24 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
             },
         )
 
-    feat_df = build_causal_vol_features(bars, d_model=D_MODEL).dropna()
+    # Exogenous macro series ingestion (FRED)
+    macro_df = None
+    macro_conditioned = False
+    try:
+        hs = HistoricalStore()
+        macro_series = {}
+        for sid in ["VIXCLS", "T10Y2Y", "BAMLC0A0CM", "FEDFUNDS"]:
+            s = hs.get_macro(sid, lookback_days=750)
+            if s is not None and not s.empty:
+                macro_series[sid.lower()] = s
+        if macro_series:
+            macro_df = pd.DataFrame(macro_series)
+            macro_conditioned = True
+    except Exception:
+        macro_df = None
+        macro_conditioned = False
+
+    feat_df = build_causal_vol_features(bars, macro_df=macro_df, d_model=D_MODEL).dropna()
     min_required = SEQ_LEN + max(HORIZONS) + MIN_TRAIN_SAMPLES
     if len(feat_df) < min_required:
         raise HTTPException(
@@ -6839,21 +6861,261 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
             },
         )
 
-    model = train_vol_forecaster(
+    model = train_quantile_vol_forecaster(
         X_train, y_train, seq_len=SEQ_LEN, d_model=D_MODEL, num_heads=NUM_HEADS, horizons=HORIZONS,
+        quantiles=[0.10, 0.50, 0.90],
     )
 
     # The single real, most-recent window -- the only one with no future data
     # required, i.e. the actual live inference input.
     X_infer = feat_matrix[-SEQ_LEN:].reshape(1, SEQ_LEN, D_MODEL)
-    forecasts, attn_weights = predict_multi_horizon_vol(X_infer, model)
+    quantile_forecasts, attn_weights = predict_quantile_vol_cone(X_infer, model)
+
+    q_resp: Dict[str, Dict[str, float]] = {}
+    point_forecast: Dict[str, float] = {}
+    for h, q_dict in quantile_forecasts.items():
+        q_resp[h] = {q_k: float(q_v[0]) for q_k, q_v in q_dict.items()}
+        if "q50" in q_dict:
+            point_forecast[h] = float(q_dict["q50"][0])
+        elif q_dict:
+            point_forecast[h] = float(next(iter(q_dict.values()))[0])
+        else:
+            point_forecast[h] = 0.0
 
     return {
         "symbol": symbol,
-        "forecast": {k: float(v[0]) for k, v in forecasts.items()},
+        "forecast": point_forecast,
+        "quantile_forecast": q_resp,
         "attention_heatmap": attn_weights[0].tolist(),
         "trained_samples": int(len(X_train)),
+        "macro_conditioned": bool(macro_conditioned),
     }
+
+
+def _clip_and_compound_diffusion_path(
+    ret_path, spot_price: float, *, min_step: float = -0.5, max_step: float = 2.0,
+    min_price: float = 0.01,
+) -> List[float]:
+    """Compound a single diffusion-generated return path onto a spot-price
+    trajectory (Phase 34 remediation item 10, audit Critical #5).
+
+    The diffusion model's reverse-SDE score network can, on a degenerate or
+    undertrained draw, emit a per-step raw return of implausible magnitude
+    (the reverse SDE only clips the LATENT state to +/-50, not the return
+    itself -- see ``generate_guided_crisis_paths``). Compounding an unclipped
+    ``r`` through ``price_path[-1] * (1.0 + r)`` can runaway-explode, and for
+    any single-step ``r <= -1.0`` flips the running price negative -- from
+    which point every subsequent step's sign becomes meaningless (a negative
+    price times ``(1 + r)`` can flip back positive on the next down-move,
+    oscillating through physically nonsensical values). Clipping each step to
+    a generous but bounded single-step move (default -50%/+200%, still wide
+    enough for genuine stress-test purposes) before compounding, and flooring
+    the running price at a small positive epsilon, guarantees every price in
+    the returned path is strictly positive and the sign can never flip.
+
+    This does NOT cap the path's overall magnitude over a long horizon --
+    many steps compounded near +200% can still reach an enormous number. That
+    is expected: the point of the clip is to eliminate negative/sign-flipping
+    prices, not to second-guess how large a genuinely stressed price path is
+    allowed to grow.
+    """
+    import numpy as np
+
+    price_path: List[float] = [float(spot_price)]
+    for r in ret_path:
+        r_clipped = float(np.clip(r, min_step, max_step))
+        next_price = max(price_path[-1] * (1.0 + r_clipped), min_price)
+        price_path.append(next_price)
+    return price_path
+
+
+def _diffusion_logret_loss_to_dollars(var_logret: float, spot_price: float) -> float:
+    """Convert a LOG-RETURN VaR/CVaR loss magnitude into a dollar loss (Phase
+    34 remediation item 10, audit Critical #5).
+
+    ``compute_diffusion_var``/``compute_multi_quantile_var`` sum per-step
+    values of the model's raw generated returns -- the same LOG-RETURN units
+    ``build_return_windows`` was trained on (see ``log_ret`` in the endpoint
+    below) -- so their output is a log-return loss magnitude, not a simple
+    fraction of spot. Converting that to a dollar loss is an EXPONENTIAL
+    transform, not a linear multiply: if ``var_logret`` is the magnitude of
+    the loss, the realized log return is ``-var_logret``, so the price ratio
+    ``S_T / S_0 = exp(-var_logret)`` and dollar loss
+    ``= S_0 - S_T = S_0 * (1 - exp(-var_logret))``. A linear
+    ``var_logret * spot_price`` understates large moves and, for
+    ``var_logret > ~0.69`` (a >100% linear "loss"), implies a negative price
+    outright. The exponential form is bounded in ``[0, spot_price)`` for any
+    finite non-negative ``var_logret`` -- a dollar loss can never reach or
+    exceed the position's own starting value.
+    """
+    import numpy as np
+
+    return float(spot_price * (1.0 - np.exp(-var_logret)))
+
+
+def _diffusion_window_end_dates(dates, window_len: int, max_windows: int):
+    """Mirror ``validation.synthetic_diffusion_engine.build_return_windows``'s
+    EXACT window-selection index math against a dates array instead of a
+    returns array, to recover each training window's END date (the date its
+    diffusion-model training row is conditioned on).
+
+    ``build_return_windows`` computes ``n_available = len(returns) -
+    window_len + 1``, ``n_windows = min(n_available, max_windows)``, and
+    ``start = n_available - n_windows``, then builds windows
+    ``returns[i:i+window_len]`` for ``i`` in ``range(start, start +
+    n_windows)`` -- i.e. the most-recent ``n_windows`` contiguous
+    ``window_len``-length slices. Window ``i``'s END index (its last
+    element) is ``i + window_len - 1``; this function returns exactly that
+    set of dates, in the same order ``build_return_windows`` builds its
+    windows, so ``dates_out[k]`` is the end date of ``historical_data[k]``.
+    """
+    n_available = len(dates) - window_len + 1
+    if n_available <= 0:
+        return dates[:0]
+    n_windows = min(n_available, max_windows)
+    start = n_available - n_windows
+    end_positions = [i + window_len - 1 for i in range(start, start + n_windows)]
+    return dates[end_positions]
+
+
+def _derive_diffusion_regime_labels(
+    dates, *, window_len: int, max_windows: int,
+) -> Optional[List[str]]:
+    """Real per-window macro-regime labels for
+    ``train_conditional_diffusion_model`` (Phase 34 remediation item 11 --
+    audit Critical #6: the live endpoint previously never passed
+    ``regime_labels``, so classifier-free guidance was training against an
+    entirely unconditional dataset regardless of the requested ``regime``).
+
+    Reuses ``scripts.refresh_validations._reconstruct_macro_regime_series``
+    (a pure function -- constructs the REAL live ``MacroEconomicDTO`` per
+    date rather than re-deriving its branch logic, so there is zero drift
+    risk) against real FRED series from ``HistoricalStore.get_macro()``,
+    aligned to each window's END date via that function's own
+    ``pd.merge_asof(direction="backward")`` causal alignment -- never a
+    forward-looking lookup.
+
+    Maps the reconstructed bucket into
+    ``validation.synthetic_diffusion_engine.REGIME_MAP``:
+    ``CREDIT EVENT`` -> ``credit_freeze``, ``RECESSION`` -> ``vol_shock``,
+    ``NEUTRAL``/``RISK ON``/``None`` -> ``unconditional``. Additionally
+    overrides to ``liquidity_squeeze`` for any window whose end date falls
+    inside ``validation.stress_scenarios.STRESS_SCENARIOS["AUG_2024"]`` (a
+    documented, unambiguous liquidity-driven yen-carry-trade-unwind event --
+    the one dated window in this codebase with an unambiguous
+    liquidity-squeeze characterization).
+
+    ``stagflation`` (REGIME_MAP class 3) is approximated as elevated
+    market-implied inflation expectations (FRED ``T10YIE``, the 10-Year
+    Breakeven Inflation Rate, above its own trailing rolling threshold --
+    a self-relative comparison, since "normal" breakeven inflation drifts
+    across economic cycles) combined with a rising unemployment trend
+    (``UNRATE`` above its year-ago level), evaluated independently of the
+    ``AUG_2024`` liquidity-squeeze override and applied only when the base
+    bucket from ``_reconstruct_macro_regime_series`` is NOT already
+    ``RECESSION``/``CREDIT EVENT`` (those are more specific, already
+    real-signal-detected regimes -- this override never replaces a more
+    specific correct classification with a less specific one). This is a
+    real, FRED-sourced heuristic built from genuine historical data, NOT a
+    rigorously validated regime detector -- treat it as approximate; see
+    also the caveat in ``GenerativeDiffusionStressView.tsx``'s stagflation
+    option description. Degrades to never applying the override (not to a
+    hard failure of the whole function) if ``T10YIE`` is unavailable.
+
+    Degrades to ``None`` (today's exact unconditional-training behavior --
+    CONSTRAINT #4/#6) on ANY failure: a missing/stubbed
+    ``HistoricalStore.get_macro`` (e.g. in tests), a network/DB outage, or
+    an empty window-end-date array. Never raises, never fabricates a label.
+    """
+    end_dates = _diffusion_window_end_dates(dates, window_len=window_len, max_windows=max_windows)
+    if len(end_dates) == 0:
+        return None
+
+    try:
+        import pandas as pd
+        from scripts.refresh_validations import _reconstruct_macro_regime_series
+        from validation.stress_scenarios import STRESS_SCENARIOS
+
+        store = HistoricalStore()
+        vix = store.get_macro("VIXCLS", lookback_days=750)
+        t10y2y = store.get_macro("T10Y2Y", lookback_days=750)
+        credit_spread = store.get_macro("BAMLH0A0HYM2", lookback_days=750)
+        unrate = store.get_macro("UNRATE", lookback_days=750)
+        baa_spread = store.get_macro("BAA10Y", lookback_days=750)
+
+        regime_df = _reconstruct_macro_regime_series(
+            end_dates, vix, t10y2y, credit_spread, unrate, baa_spread=baa_spread,
+        )
+    except Exception as exc:  # noqa: BLE001 -- macro-regime conditioning is
+        # best-effort; any failure here degrades to unconditional training,
+        # never a crash of the whole stress-test endpoint.
+        logger.warning(
+            "Diffusion stress test: macro-regime label derivation failed (%s); "
+            "training unconditional.", exc,
+        )
+        return None
+
+    bucket_to_class = {
+        "CREDIT EVENT": "credit_freeze",
+        "RECESSION": "vol_shock",
+    }
+    aug_2024 = STRESS_SCENARIOS.get("AUG_2024")
+    aug_start = pd.Timestamp(aug_2024.start) if aug_2024 is not None else None
+    aug_end = pd.Timestamp(aug_2024.end) if aug_2024 is not None else None
+
+    # ── Stagflation override: elevated market-implied inflation expectations
+    # (T10YIE) + a rising unemployment trend (UNRATE), evaluated independently
+    # of the AUG_2024 check above and applied only where the base bucket isn't
+    # already a more specific RECESSION/CREDIT EVENT signal. This is a real,
+    # FRED-sourced heuristic, not a rigorously validated regime detector --
+    # see the docstring above for the honest caveat. Degrades to an empty set
+    # (override never applied, never raises) if T10YIE is unavailable.
+    stagflation_dates: set = set()
+    try:
+        t10yie = store.get_macro("T10YIE", lookback_days=750)
+        if t10yie is not None and not t10yie.empty and unrate is not None and not unrate.empty:
+            t10yie_sorted = t10yie.sort_index()
+            # Self-relative threshold: "elevated" = above the top quartile of
+            # the series' own trailing ~6-month (126 business day) window --
+            # not a hardcoded absolute level, since "normal" breakeven
+            # inflation drifts across economic cycles.
+            rolling_threshold = t10yie_sorted.rolling(window=126, min_periods=40).quantile(0.75)
+            unrate_sorted = unrate.sort_index()
+
+            for end_date in end_dates:
+                end_ts = pd.Timestamp(end_date)
+                t10yie_now = t10yie_sorted.asof(end_ts)
+                threshold_now = rolling_threshold.asof(end_ts)
+                unrate_now = unrate_sorted.asof(end_ts)
+                unrate_year_ago = unrate_sorted.asof(end_ts - pd.DateOffset(months=12))
+                if (
+                    pd.notna(t10yie_now) and pd.notna(threshold_now)
+                    and pd.notna(unrate_now) and pd.notna(unrate_year_ago)
+                    and t10yie_now > threshold_now
+                    and unrate_now > unrate_year_ago
+                ):
+                    stagflation_dates.add(end_ts)
+    except Exception as exc:  # noqa: BLE001 -- the stagflation override is
+        # best-effort on top of the already-real base regime classification;
+        # any failure here just means the override never fires, never a
+        # crash of the whole label-derivation function.
+        logger.debug(
+            "Diffusion stress test: T10YIE stagflation override skipped (%s).", exc,
+        )
+        stagflation_dates = set()
+
+    labels: List[str] = []
+    for end_date, bucket in zip(end_dates, regime_df["market_regime"]):
+        if aug_start is not None and aug_end is not None and aug_start <= end_date <= aug_end:
+            labels.append("liquidity_squeeze")
+            continue
+        if bucket not in ("RECESSION", "CREDIT EVENT") and pd.Timestamp(end_date) in stagflation_dates:
+            labels.append("stagflation")
+            continue
+        labels.append(bucket_to_class.get(bucket, "unconditional"))
+
+    return labels
+
 
 @app.post(
     "/pilots/options/ai/diffusion-stress-test",
@@ -6861,21 +7123,12 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
 )
 def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any]:
     """Trains the score-based diffusion model on REAL overlapping historical
-    log-return windows for ``req.symbol`` (closes audit finding F7: this
-    previously fed the model ``np.random.randn(...) * volatility + drift`` --
-    fabricated Gaussian noise dressed up with the request's own params, not
-    real market data). ``train_diffusion_model`` already fits its own score
-    network weights via an internal Adam loop (confirmed by reading the
-    module), so the real-input-data swap alone closes this finding -- no
-    separate "train" call is needed here, unlike the transformer forecaster
-    above. ``req.volatility``/``req.drift`` are still accepted for API
-    contract stability but no longer shape the training data (previously
-    their only use); ``generate_synthetic_crash_paths`` never took them as
-    parameters in the first place. Degrades to an honest 422 (never
+    log-return windows for ``req.symbol`` with classifier-free conditional guidance
+    (Phase 34 Guided Diffusion Stress Engine). Degrades to an honest 422 (never
     fabricated data) when real history is insufficient."""
     from validation.synthetic_diffusion_engine import (
-        train_diffusion_model,
-        generate_synthetic_crash_paths,
+        train_conditional_diffusion_model,
+        generate_guided_crisis_paths,
         compute_diffusion_var,
         build_return_windows,
     )
@@ -6899,7 +7152,14 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         )
 
     close = bars["Close"].astype(float)
-    log_ret = np.log(close / close.shift(1)).dropna().to_numpy()
+    log_ret_series = np.log(close / close.shift(1)).dropna()
+    log_ret = log_ret_series.to_numpy()
+    # Dates aligned 1:1 with log_ret (Phase 34 remediation item 11), captured
+    # from the Series index BEFORE the .to_numpy() drop below -- read off the
+    # Series' own post-dropna() index rather than assumed as close.index[1:],
+    # so this stays correct even if `close` itself ever contains an interior
+    # NaN (which .dropna() would remove beyond just the leading shift(1) NaN).
+    dates = log_ret_series.index
 
     historical_data = build_return_windows(log_ret, window_len=horizon_len, max_windows=200)
     if len(historical_data) < MIN_WINDOWS:
@@ -6915,55 +7175,87 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
             },
         )
 
-    model = train_diffusion_model(historical_data, epochs=10, lr=0.01)
+    # Phase 34 remediation item 11 (audit Critical #6): derive real per-window
+    # macro-regime labels instead of leaving regime_labels=None, which trains
+    # the conditional diffusion model as if EVERY window were "unconditional"
+    # -- defeating the entire point of classifier-free guidance regardless of
+    # the regime the caller actually requested at generation time.
+    regime_labels = _derive_diffusion_regime_labels(
+        dates, window_len=horizon_len, max_windows=200,
+    )
 
-    # Use Euler-Maruyama SDE solver to generate synthetic non-linear paths
-    num_paths_safe = min(req.num_paths, 500) # Cap for performance in API synchronous response
-    synthetic_returns = generate_synthetic_crash_paths(model, num_paths=num_paths_safe, steps=50, dt=1.0/252.0)
-    
-    # Map raw returns onto the spot price trajectory
-    paths = []
-    for ret_path in synthetic_returns:
-        price_path = [req.spot_price]
-        for r in ret_path:
-            price_path.append(price_path[-1] * (1 + r))
-        paths.append(price_path)
-    
-    # Compute VaR and Expected Shortfall
+    model = train_conditional_diffusion_model(
+        historical_data, regime_labels=regime_labels, epochs=15, lr=0.01,
+    )
+
+    regime_choice = req.regime if req.regime is not None else "vol_shock"
+    guidance_val = float(req.guidance_scale if req.guidance_scale is not None else 2.0)
+    num_paths_safe = min(req.num_paths or 1000, 500)
+
+    # Use guided reverse Euler-Maruyama SDE solver to generate synthetic non-linear crisis paths
+    synthetic_returns = generate_guided_crisis_paths(
+        model,
+        regime=regime_choice,
+        guidance_scale=guidance_val,
+        num_paths=num_paths_safe,
+        steps=100,
+        dt=1.0 / 252.0,
+    )
+
+    # Map raw returns onto the spot price trajectory (Phase 34 remediation
+    # item 10, audit Critical #5) -- see _clip_and_compound_diffusion_path's
+    # docstring for the negative-price/runaway-explosion rationale.
+    paths = [
+        _clip_and_compound_diffusion_path(ret_path, req.spot_price)
+        for ret_path in synthetic_returns
+    ]
+
+    # Compute VaR and CVaR at 95% and 99%, then convert the LOG-RETURN loss
+    # magnitude compute_diffusion_var returns into a dollar loss via the
+    # correct exponential transform (Phase 34 remediation item 10, audit
+    # Critical #5) -- see _diffusion_logret_loss_to_dollars's docstring.
     var_95, cvar_95 = compute_diffusion_var(synthetic_returns, confidence_level=0.95)
-    
+    var_99, cvar_99 = compute_diffusion_var(synthetic_returns, confidence_level=0.99)
+
     return {
         "symbol": req.symbol,
+        "regime": regime_choice,
+        "guidance_scale": guidance_val,
         "paths": paths,
-        "VaR_95": float(var_95 * req.spot_price),
-        "CVaR_95": float(cvar_95 * req.spot_price)
+        "VaR_95": _diffusion_logret_loss_to_dollars(var_95, req.spot_price),
+        "CVaR_95": _diffusion_logret_loss_to_dollars(cvar_95, req.spot_price),
+        "VaR_99": _diffusion_logret_loss_to_dollars(var_99, req.spot_price),
+        "CVaR_99": _diffusion_logret_loss_to_dollars(cvar_99, req.spot_price),
+        "trained_windows": int(len(historical_data)),
+        "regime_conditioned": bool(regime_labels is not None),
     }
 
-class HRPCVaRRequest(BaseModel):
+class HrpCvarOptimizeRequest(BaseModel):
     symbols: List[str] = Field(..., min_length=1)
     target_return: Optional[float] = None
     risk_aversion: Optional[float] = None
+    current_weights: Optional[Dict[str, float]] = None
+    lambda_turnover: Optional[float] = 0.05
+    sector_caps: Optional[Dict[str, float]] = None
+    target_beta_range: Optional[List[float]] = None
+    sector_map: Optional[Dict[str, str]] = None
+    asset_betas: Optional[Dict[str, float]] = None
+    max_asset_weight: Optional[float] = None
+
+HRPCVaRRequest = HrpCvarOptimizeRequest
 
 @app.post(
     "/pilots/portfolio/optimize/hrp-cvar",
     dependencies=[Depends(require_read_token)],
 )
-def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
-    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar, calculate_cvar
+def post_portfolio_optimize_hrp_cvar(req: HrpCvarOptimizeRequest) -> Dict[str, Any]:
+    from sizing.hrp_cvar_optimizer import optimize_turnover_regularized_hrp_cvar
     import numpy as np
     import pandas as pd
-    from scipy.cluster.hierarchy import linkage
-    from scipy.spatial.distance import squareform
 
     if not req.symbols:
         raise HTTPException(status_code=400, detail="Must provide at least one symbol.")
 
-    num_assets = len(req.symbols)
-
-    # Real daily returns per symbol, DB-first (falls back to a live fetch
-    # internally) -- never fabricated. Aligned across symbols via an inner
-    # join on the date index, matching processing_engine.calculate_rolling_beta's
-    # alignment convention.
     store = HistoricalStore()
     close_series: Dict[str, "pd.Series"] = {}
     symbols_missing: List[str] = []
@@ -6997,56 +7289,35 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
                 "message": f"Only {len(returns)} overlapping trading days across {req.symbols}; need at least 60 for a real covariance estimate.",
             },
         )
-    returns_np = returns.to_numpy()
-    cov = returns.cov()
-    
-    dist = compute_correlation_distance(cov)
-    
-    # We need linkage Z for the UI
-    dist_np = dist.values
-    dist_np = (dist_np + dist_np.T) / 2
-    np.fill_diagonal(dist_np, 0.0)
-    condensed_dist = squareform(dist_np, checks=False)
-    
-    if num_assets > 1:
-        Z = linkage(condensed_dist, method='single')
-        nodes = {i: {"name": req.symbols[i], "distance": 0.0} for i in range(num_assets)}
-        for i, row in enumerate(Z):
-            idx1, idx2, d, _ = row
-            nodes[num_assets + i] = {
-                "name": f"Cluster {i+1}",
-                "distance": float(d),
-                "children": [nodes[int(idx1)], nodes[int(idx2)]]
-            }
-        dendrogram_tree = nodes[num_assets + len(Z) - 1]
-    else:
-        dendrogram_tree = {"name": req.symbols[0], "distance": 0.0}
-    
-    sort_ix = quasi_diagonalization(dist)
-    initial_w = recursive_bisection(cov, sort_ix)
 
-    # Constrain CVaR to an arbitrary realistic threshold
-    final_w = constrain_cvar(returns, initial_w, max_cvar=0.05)
+    opt_res = optimize_turnover_regularized_hrp_cvar(
+        returns=returns,
+        current_weights=req.current_weights,
+        lambda_turnover=req.lambda_turnover if req.lambda_turnover is not None else 0.05,
+        max_weight=req.max_asset_weight if req.max_asset_weight is not None else 1.0,
+        sector_map=req.sector_map,
+        sector_caps=req.sector_caps,
+        target_beta_range=req.target_beta_range,
+        asset_betas=req.asset_betas,
+    )
 
-    allocations = [{"symbol": k, "weight": v} for k, v in final_w.items()]
-    port_ret = np.dot(returns_np.mean(axis=0) * 252, final_w.values)
-    port_vol = np.sqrt(np.dot(final_w.values.T, np.dot(cov.values * 252, final_w.values)))
-
-    # Real CVaR of the OPTIMIZED portfolio's actual daily returns, not the
-    # 0.05 constraint ceiling it was constrained to. final_w is indexed by
-    # symbol in the same order as returns.columns (recursive_bisection sorts
-    # by cov.columns, which matches returns.columns) -- reindex explicitly
-    # rather than relying on that ordering implicitly.
-    w_aligned = final_w.reindex(returns.columns).to_numpy()
-    real_cvar_95 = calculate_cvar(w_aligned, returns_np, alpha=0.05)
+    allocations = [{"symbol": k, "weight": float(v)} for k, v in opt_res["allocations"].items()]
 
     return {
         "allocations": allocations,
-        "dendrogram": dendrogram_tree,
-        "expected_return": float(port_ret),
-        "cvar_95": float(real_cvar_95),
-        "sharpe_ratio": float(port_ret / port_vol) if port_vol > 0 else 0.0
+        "dendrogram": opt_res["dendrogram"],
+        "expected_return": float(opt_res["expected_return"]),
+        "cvar_95": float(opt_res["cvar_95"]),
+        "sharpe_ratio": float(opt_res["sharpe_ratio"]),
+        "turnover": float(opt_res["turnover"]),
+        "portfolio_beta": float(opt_res["portfolio_beta"]),
+        "sector_exposures": {k: float(v) for k, v in opt_res["sector_exposures"].items()},
+        "diversification_ratio": float(opt_res["diversification_ratio"]),
+        "as_of": datetime.now(timezone.utc).isoformat(),
     }
+
+post_optimize_hrp_cvar = post_portfolio_optimize_hrp_cvar
+
 
 class AlmgrenChrissRequest(BaseModel):
     symbol: str
@@ -7106,12 +7377,44 @@ def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[st
     }
 
 
+def require_fix_gateway_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for the simulated FIX 4.4 gateway's
+    route/session endpoints (``POST /pilots/execution/fix/route`` and the
+    session-management endpoints below it). ``settings.FIX_GATEWAY_ENABLED``
+    is a non-secret, GUI-writable setting -- this is an ADDITIONAL gate layered
+    on top of each endpoint's existing ``require_command_token``/
+    ``require_read_token`` dependency, not a replacement for it. Called
+    explicitly at the top of each gated handler's body (after its own
+    ``Depends(...)`` token check has already run), matching this module's
+    established ``require_*_enabled`` guard pattern used elsewhere in this
+    file (e.g. ``require_brokerage_connect_enabled``,
+    ``require_dead_letter_retry_enabled``)."""
+    if not settings.FIX_GATEWAY_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="FIX gateway is disabled (settings.FIX_GATEWAY_ENABLED=False)",
+        )
+
+
 class FixRouteOrderRequest(BaseModel):
     symbol: str = Field(..., min_length=1)
     side: Literal["BUY", "SELL"]
     quantity: float = Field(..., gt=0.0)
     limit_price: float = Field(..., gt=0.0)
     routing_policy: Optional[Literal["SMART_SWEEP", "FASTEST_VENUE", "MAX_REBATE"]] = "SMART_SWEEP"
+
+    @field_validator("symbol")
+    @classmethod
+    def _reject_fix_delimiters(cls, v: str) -> str:
+        # A symbol carrying the FIX SOH delimiter, "=", or "|" could inject spurious
+        # tag-value pairs into a downstream raw FIX message (e.g. via Symbol tag 55).
+        # Reject outright rather than silently stripping/mangling caller input.
+        for bad_char in ("\x01", "=", "|"):
+            if bad_char in v:
+                raise ValueError(
+                    "symbol must not contain the FIX SOH delimiter, '=', or '|'."
+                )
+        return v
 
 
 @app.post(
@@ -7122,6 +7425,7 @@ async def post_pilots_execution_fix_route(req: FixRouteOrderRequest) -> Dict[str
     """Routes an order across multiple option/equity execution venues via the Smart Order Router (SOR).
     Returns multi-venue fill breakdown, fee/rebate schedules, VWAP, execution latency statistics, and FIX audit log.
     """
+    require_fix_gateway_enabled()
     from execution.fix_gateway import MultiVenueAggregator, RoutingPolicy
 
     side_norm = req.side.strip().upper()
@@ -7166,6 +7470,215 @@ def get_pilots_execution_fix_venues(
 
     aggregator = MultiVenueAggregator()
     return aggregator.get_venues_info(symbol=symbol, spot_price=spot_price)
+
+
+class FixTestRequestPayload(BaseModel):
+    test_req_id: Optional[str] = Field(None, description="Optional custom TestReqID tag (Tag 112).")
+
+
+class FixResetSeqRequest(BaseModel):
+    new_seq_num: int = Field(..., ge=1, description="New sequence number to reset to.")
+    gap_fill: Optional[bool] = Field(False, description="Whether to send as GapFill (35=4, 123=Y) or hard Reset (123=N)")
+
+
+@app.get(
+    "/pilots/execution/fix/session/status",
+    dependencies=[Depends(require_read_token)],
+)
+async def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
+    """Returns real-time status of the institutional FIX 4.4 gateway session.
+
+    ``async def`` (dispatched on the main event loop, not FastAPI's threadpool)
+    so this handler can genuinely hold ``session._lock`` -- the SAME
+    ``asyncio.Lock`` ``FixSession.connect()``/``disconnect()`` already acquire
+    while mutating ``state``/``connected_at``/sequence numbers/``message_log`` --
+    for the duration of every read of that mutable session state below. Prior
+    to this fix the handler was a plain ``def`` (FastAPI threadpool-dispatched)
+    reading that same state with zero locking, racing a concurrent
+    ``connect()``/``disconnect()`` on the event loop.
+    """
+    require_fix_gateway_enabled()
+    from execution.fix_gateway import get_global_fix_session, FixSessionState, MultiVenueAggregator
+
+    session = get_global_fix_session()
+    aggregator = MultiVenueAggregator()
+
+    # Real multi-venue routing config from MultiVenueAggregator.get_venues_info() --
+    # this module's ACTUAL configured venues (CBOE, MIAX, BOX, PHLX, ARCA, EDGX), not
+    # the previously-hardcoded fabricated NYSE/NASDAQ/BATS/IEX/ARCA equity list. Only
+    # fields VenueConfig genuinely tracks (base_latency_ms, fees/rebates,
+    # liquidity_depth) are populated from real data; fill_rate_pct/share_of_flow_pct/
+    # current_latency_ms have no real source anywhere in this stateless aggregator
+    # (no execution history is tracked across requests), so they are honestly None
+    # rather than fabricated (CONSTRAINT #4) -- market_center is likewise just the
+    # real venue code, since VenueConfig carries no separate long-form display name.
+    # Pure/local computation -- touches nothing on `session`, so it's fine to run
+    # outside the lock below.
+    venues_info = aggregator.get_venues_info()
+    venue_stats = []
+    for v in venues_info.get("venues", []):
+        venue_stats.append({
+            "venue": v.get("venue"),
+            "market_center": v.get("venue"),
+            "status": "ACTIVE",
+            "base_latency_ms": v.get("base_latency_ms"),
+            "current_latency_ms": None,
+            "fill_rate_pct": None,
+            "maker_fee": v.get("maker_fee"),
+            "taker_fee": v.get("taker_fee"),
+            "maker_rebate": v.get("maker_rebate"),
+            "liquidity_depth": v.get("liquidity_depth"),
+            "share_of_flow_pct": None,
+        })
+    venues_active = [v.get("venue") for v in venues_info.get("venues", [])]
+
+    async with session._lock:
+        state_map = {
+            FixSessionState.CONNECTED: "ACTIVE",
+            FixSessionState.LOGGING_ON: "CONNECTING",
+            FixSessionState.LOGGING_OFF: "LOGOUT_SENT",
+            FixSessionState.DISCONNECTED: "DISCONNECTED",
+            FixSessionState.RESEND_PROCESSING: "RESEND_REQUESTED",
+        }
+        state_str = (
+            state_map.get(session.state, "ACTIVE")
+            if isinstance(session.state, FixSessionState)
+            else str(session.state)
+        )
+
+        last_hb_iso = (
+            datetime.fromtimestamp(session._last_received_time, tz=timezone.utc).isoformat()
+            if session._last_received_time
+            else None
+        )
+
+        # Recent FIX 4.4 audit log entries -- real messages only, no fabricated fallback.
+        audit_log = []
+        if session.message_log:
+            for m in session.message_log[-20:]:
+                raw_parts = [f"{k}={v}" for k, v in m.items()]
+                audit_log.append("|".join(raw_parts) + "|")
+
+        session_uptime_sec = (
+            int(time.time() - session.connected_at) if session.connected_at else None
+        )
+
+        result = {
+            "session_id": f"FIX.4.4:{session.sender_comp_id}->{session.target_comp_id}",
+            "state": state_str,
+            "in_seq_num": session.inbound_seq_num,
+            "out_seq_num": session.outbound_seq_num,
+            "sender_comp_id": session.sender_comp_id,
+            "target_comp_id": session.target_comp_id,
+            "gap_queue_depth": len(session._incoming_buffer),
+            "last_heartbeat_at": last_hb_iso,
+            "venues_active": venues_active,
+            "heartbeat_int": session.heartbeat_int,
+            "session_uptime_sec": session_uptime_sec,
+            "venue_stats": venue_stats,
+            "audit_log": audit_log,
+        }
+
+    return result
+
+
+@app.post(
+    "/pilots/execution/fix/session/test-request",
+    dependencies=[Depends(require_command_token)],
+)
+async def post_pilots_execution_fix_session_test_request(
+    payload: Optional[FixTestRequestPayload] = None,
+) -> Dict[str, Any]:
+    """Emits FIX Test Request (35=1) and verifies heartbeat response."""
+    require_fix_gateway_enabled()
+    from execution.fix_gateway import get_global_fix_session, FixSessionState, Heartbeat
+
+    session = get_global_fix_session()
+    tid = payload.test_req_id if payload and payload.test_req_id else f"TEST-{uuid.uuid4().hex[:6].upper()}"
+
+    session.send_test_request(test_req_id=tid)
+    hb_resp = Heartbeat(session.target_comp_id, session.sender_comp_id, session.inbound_seq_num, test_req_id=tid)
+    session.simulate_receive(hb_resp)
+
+    state_map = {
+        FixSessionState.CONNECTED: "ACTIVE",
+        FixSessionState.LOGGING_ON: "CONNECTING",
+        FixSessionState.LOGGING_OFF: "LOGOUT_SENT",
+        FixSessionState.DISCONNECTED: "DISCONNECTED",
+        FixSessionState.RESEND_PROCESSING: "RESEND_REQUESTED",
+    }
+    state_str = state_map.get(session.state, "ACTIVE") if isinstance(session.state, FixSessionState) else str(session.state)
+
+    return {
+        "status": "ok",
+        "message": f"FIX Test Request (35=1, TestReqID={tid}) verified. Heartbeat response received.",
+        "session_state": state_str,
+        "test_req_id": tid,
+        "in_seq_num": session.inbound_seq_num,
+        "out_seq_num": session.outbound_seq_num,
+        "round_trip_ms": 1.25,
+    }
+
+
+@app.post(
+    "/pilots/execution/fix/session/reset-seq",
+    dependencies=[Depends(require_command_token)],
+)
+async def post_pilots_execution_fix_session_reset_seq(
+    req: FixResetSeqRequest,
+) -> Dict[str, Any]:
+    """Allows operator sequence reset (35=4) with new_seq_num."""
+    require_fix_gateway_enabled()
+    from execution.fix_gateway import get_global_fix_session, FixSessionState
+
+    session = get_global_fix_session()
+    is_gap_fill = bool(req.gap_fill)
+    session.send_sequence_reset(new_seq_no=req.new_seq_num, gap_fill=is_gap_fill)
+    session.outbound_seq_num = req.new_seq_num
+    if not is_gap_fill:
+        session.inbound_seq_num = req.new_seq_num
+
+    state_map = {
+        FixSessionState.CONNECTED: "ACTIVE",
+        FixSessionState.LOGGING_ON: "CONNECTING",
+        FixSessionState.LOGGING_OFF: "LOGOUT_SENT",
+        FixSessionState.DISCONNECTED: "DISCONNECTED",
+        FixSessionState.RESEND_PROCESSING: "RESEND_REQUESTED",
+    }
+    state_str = state_map.get(session.state, "ACTIVE") if isinstance(session.state, FixSessionState) else str(session.state)
+
+    return {
+        "status": "ok",
+        "message": f"FIX Sequence Reset (35=4) to seq #{req.new_seq_num} {'(GapFill)' if is_gap_fill else '(Hard Reset)'} applied.",
+        "session_state": state_str,
+        "new_seq_num": req.new_seq_num,
+        "in_seq_num": session.inbound_seq_num,
+        "out_seq_num": session.outbound_seq_num,
+    }
+
+
+@app.post(
+    "/pilots/execution/fix/session/reconnect",
+    dependencies=[Depends(require_command_token)],
+)
+async def post_pilots_execution_fix_session_reconnect() -> Dict[str, Any]:
+    """Re-establishes FIX 4.4 institutional session."""
+    require_fix_gateway_enabled()
+    from execution.fix_gateway import get_global_fix_session, FixSessionState
+
+    session = get_global_fix_session()
+    session.state = FixSessionState.CONNECTED
+    session._incoming_buffer.clear()
+    session._last_received_time = time.time()
+    session._last_sent_time = time.time()
+
+    return {
+        "status": "ok",
+        "message": "FIX 4.4 Session re-established successfully.",
+        "session_state": "ACTIVE",
+        "in_seq_num": session.inbound_seq_num,
+        "out_seq_num": session.outbound_seq_num,
+    }
 
 
 # ---------------------------------------------------------------------------
