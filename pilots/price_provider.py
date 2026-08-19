@@ -20,7 +20,7 @@ Quote structure returned by `get_stock_quote`:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,60 @@ def get_latest_price(symbol: str) -> float:
     quote = get_stock_quote(symbol)
     return float(quote.get("price") or 0.0)
 
+
+def get_latest_prices(symbols: List[str]) -> Dict[str, float]:
+    """Fetch latest spot prices for MANY symbols in a single request.
+
+    Calls ``data.fmp_client.batch_quote`` directly (the same real
+    ``/batch-quote`` endpoint ``PaperAccountStore._resolve_position_prices``
+    already uses -- the established "fetch many quotes in one request"
+    pattern in this codebase) rather than looping ``get_stock_quote``/
+    ``get_latest_price`` once per symbol, which is what this function exists
+    to replace at call sites that need more than one symbol's price per tick.
+
+    Never raises -- mirrors ``get_latest_price``'s degrade philosophy of
+    "0.0 / absent rather than blow up the caller", just applied per-entry
+    instead of per-call: any symbol whose batch response entry is missing,
+    malformed (not a dict, no parseable ``price``), zero, or negative is
+    SKIPPED from the returned dict rather than included as a fabricated
+    0.0 -- a caller can distinguish "no price available" (key absent) from
+    "price is genuinely zero" (impossible for a real equity quote, so this
+    never happens for real symbols). A failure of the batch call itself
+    (network error, malformed top-level response) degrades to an empty
+    dict, with a WARNING logged, exactly like ``get_stock_quote``'s network
+    failure path.
+    """
+    from data.fmp_client import batch_quote
+
+    clean_symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
+    if not clean_symbols:
+        return {}
+
+    prices: Dict[str, float] = {}
+    try:
+        quotes_resp = batch_quote(clean_symbols)
+    except Exception as e:
+        logger.warning(f"Failed to fetch batch quotes for {clean_symbols}: {e}")
+        return {}
+
+    if not isinstance(quotes_resp, list):
+        logger.warning(f"Unexpected batch quote response shape for {clean_symbols}: {type(quotes_resp)!r}")
+        return {}
+
+    for entry in quotes_resp:
+        if not isinstance(entry, dict):
+            continue
+        sym = str(entry.get("symbol", "")).strip().upper()
+        if not sym:
+            continue
+        try:
+            price = float(entry.get("price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if price > 0.0:
+            prices[sym] = price
+
+    return prices
 
 
 def get_current_price(symbol: str, fallback_price: Optional[float] = None) -> float:

@@ -667,7 +667,7 @@ async def ws_portfolio_risk_endpoint(
     try:
         from data.paper_account_store import PaperAccountStore
         from pilots.realtime_risk_streamer import compute_portfolio_risk_stream, parse_option_symbol
-        from pilots.price_provider import get_latest_price
+        from pilots.price_provider import get_latest_prices
         store = PaperAccountStore()
 
         while True:
@@ -696,18 +696,23 @@ async def ws_portfolio_risk_endpoint(
                     parsed = parse_option_symbol(p["symbol"])
                     underlyings.add(parsed["ticker"] if parsed else p["symbol"].upper())
 
+                # Single batched, executor-offloaded quote fetch instead of one
+                # get_latest_price(sym) call per underlying: get_latest_prices
+                # -> data.fmp_client.batch_quote makes ONE synchronous
+                # `requests.get` for every distinct underlying this tick needs,
+                # so this offloads exactly one blocking call regardless of
+                # portfolio size, mirroring the run_in_executor pattern used
+                # for store.get_open_positions above and _compute_betas_sync
+                # below. get_latest_prices degrades per-symbol internally
+                # (missing/malformed/non-positive entries are simply absent
+                # from the returned dict, never raised) so this outer
+                # try/except should now rarely fire -- it stays as defensive
+                # logging for the batch call failing entirely (network down,
+                # malformed top-level response, etc.).
                 try:
-                    for sym in underlyings:
-                        try:
-                            price = get_latest_price(sym)
-                            if price is not None and price > 0:
-                                quotes[sym] = float(price)
-                        except Exception as quote_exc:  # noqa: BLE001 - one bad symbol must not blank the batch
-                            logger.warning(
-                                "ws_portfolio_risk_endpoint: quote fetch failed for %s: %s", sym, quote_exc
-                            )
-                except Exception as prov_exc:
-                    logger.warning("ws_portfolio_risk_endpoint: quote fetch error: %s", prov_exc)
+                    quotes = await loop.run_in_executor(None, get_latest_prices, list(underlyings))
+                except Exception as prov_exc:  # noqa: BLE001 - one bad tick's quotes must not kill the stream
+                    logger.warning("ws_portfolio_risk_endpoint: batch quote fetch failed: %s", prov_exc)
 
                 try:
                     betas = await loop.run_in_executor(None, _compute_betas_sync, underlyings)
