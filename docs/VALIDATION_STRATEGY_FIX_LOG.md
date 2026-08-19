@@ -969,3 +969,68 @@ documented instructions). `tests/test_vol_mispricing.py` gained direct coverage 
 `execute_vol_mispricing_trade` (symbol validation, `is_live` refusal, dry-run preview,
 missing/empty-candidate refusal, the leg-translation worked example, and the no-fabrication
 refusal path).
+
+---
+
+## 2026-08-19: `copula_stat_arb` — new `STRATEGY_REGISTRY` entry, replacing a borrowed-number documentation error
+
+**Before**: `docs/signals/copula_stat_arb.md`'s "Current Status" cited `PBO = 0.000`, `DSR = 1.000`,
+`deployable = True` as if `pilots/copula_stat_arb.py`'s Clayton/Gumbel/Frank/Gaussian copula
+fitting + Kalman dynamic hedge ratio had been validated. It hadn't — those numbers came from
+`STRATEGY_REGISTRY["pairs_trading"]`, whose adapter (`_build_pairs_trading_adapter`) calls
+`signals.pairs_trading.generate_pairs_signals`, an entirely separate, simpler Engle-Granger +
+static z-score module on a different pair (XOM/CVX) that never touches the copula module's
+actual logic. `pilots/copula_stat_arb.py` had no `STRATEGY_REGISTRY` entry of its own.
+
+**Fix**: added `_build_copula_stat_arb_adapter` (`scripts/refresh_validations.py`), calling
+`pilots.copula_stat_arb.generate_copula_stat_arb_signals` directly — the same production entry
+point the Pilots PWA's copula screen calls — on a KO/PEP pair (deliberately distinct from
+`pairs_trading`'s XOM/CVX, so this entry validates copula-specific behavior rather than
+duplicating the linear pair). Registered as `STRATEGY_REGISTRY["copula_stat_arb"]` with
+`turnover=0.04` (reasoned from the entry/exit/stop z-score gate's implied round-trip cadence,
+matching `pairs_trading`'s own turnover order of magnitude for the same gate shape and asset
+class — not an independently re-measured value for this specific pair).
+
+**After (measured, real yfinance data, 2005-02-15 → 2026-08-18)**:
+
+| Metric | Value | Gate | Pass? |
+|---|---|---|---|
+| Sharpe | -0.455 | > 0.50 | ❌ |
+| PBO | 0.000 | < 0.50 | ✅ (single trial — see note below) |
+| DSR | 0.246 | > 0.95 | ❌ |
+| MaxDD | 35.1% | < 30% | ❌ |
+| **Deployable** | **False** | | |
+
+**Honest FAIL, not a fixed strategy.** This is the documented, evidence-backed reason the gate
+stays closed, per this file's own convention: the worst single-day drawdown (-21.4%) lands on
+2008-10-13, during the global financial crisis — matching `docs/signals/copula_stat_arb.md`'s
+own already-documented "sustained divergence ... when volatility regimes transition from calm to
+credit crisis" failure mode, now with a measured instance rather than only a theoretical one.
+Annual `strategy_returns` sums are net negative across more years (2006, 2008-2010, 2017-2018,
+2024-2025) than positive across the full 21-year window, driving the negative full-sample Sharpe
+— not a single crisis event alone. `PBO = 0.000` reflects `n_trials = 1` (this run tested exactly
+one configuration, not a shopped set of variants) — it certifies "not overfit to a search," not
+"a good strategy"; DSR and Sharpe are the metrics actually failing here.
+
+**What was deliberately NOT done**: re-running against multiple candidate pairs or parameter
+variants until one happened to pass. That would itself risk exactly the kind of
+data-snooping/overfitting-across-attempts PBO is designed to catch, and this file's own
+convention (see the 2026-07 `signal_replay_balanced_blend` entry) is that an honest FAIL,
+recorded with its measured cause, is a legitimate outcome — not every candidate strategy needs
+to end up deployable. A follow-up pass, if attempted, has three documented candidate levers
+(not yet tried): (1) a market-trend de-risking gate analogous to `pairs_trading`'s Faber
+SMA-200 filter on SPY, which measurably fixed several other strategies in this log's earlier
+2026-08-14 entry; (2) a different, potentially better-cointegrated pair; (3) a shorter,
+more recent evaluation window that excludes the 2008 GFC tail event, evaluated honestly on
+its own reduced-sample-size caveats rather than picked because it merely looks better.
+
+**Documentation**: `docs/signals/copula_stat_arb.md`'s "Backtest Validation & Deployability
+Status" section corrected with the real numbers and this honest-FAIL reasoning, superseding the
+borrowed-number claim.
+
+**Test coverage**: no new test needed for the adapter itself — `_build_copula_stat_arb_adapter`
+is a thin wrapper around the already-tested `generate_copula_stat_arb_signals`
+(`tests/test_copula_stat_arb.py::test_copula_stat_arb_zero_lookahead_bias` already covers the
+underlying no-lookahead guarantee this adapter inherits). Verified manually end-to-end: real
+`yfinance` KO/PEP download → adapter → `python -m scripts.refresh_validations --strategies
+copula_stat_arb --json` produced the table above.
