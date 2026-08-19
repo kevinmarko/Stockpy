@@ -6781,6 +6781,7 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
     output weights were never trained at all -- real input alone into an
     untrained model would still be a meaningless-output bug). Degrades to an
     honest 422 (never fabricated data) when real history is insufficient."""
+    import pandas as pd
     from ml.transformer_vol_forecaster import (
         build_causal_vol_features,
         build_training_windows,
