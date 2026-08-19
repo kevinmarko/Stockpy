@@ -1210,3 +1210,57 @@ erroring on every run.
 Tests: no new test needed — this entry is a one-time verification run, not a code change; the
 existing `tests/test_harness_oos_gate.py` already covers the flag's wiring and default-off
 byte-for-byte reproduction.
+
+---
+
+## 2026-08-19 (cont.): `signal_replay_balanced_blend` regression — root cause, data cleanup, and a hardening fix
+
+Closes the regression flagged (not fixed) in the OOS re-validation entry above: both runs there
+errored identically on `signal_replay_balanced_blend` with `AttributeError: 'str' object has no
+attribute 'get'`.
+
+**Root cause, confirmed by direct inspection of the shared local DB**
+(`~/.stockpy_local/quant_platform.db` — every worktree/session on this machine reads/writes the
+same physical file per `settings.LOCAL_DATA_ROOT`'s design): one row in `fundamentals_history`
+had `symbol=JNJ`, `source=magicmock`, `as_of=2026-08-14`, and `raw_json` literally
+`"<MagicMock name='mock.get_fundamentals()' id='...'>"` — the string representation of an
+un-configured `unittest.mock.MagicMock`, JSON-encoded as a string (valid JSON, but a `str`
+payload, not the `dict` every real fundamentals row's `raw_json` is supposed to decode to).
+This is consistent with `HistoricalStore.upsert_fundamentals_pit`'s `source` fallback
+(`data/historical_store.py::_source_name`, `type(provider).__name__.lower()` when no
+`provider.source_name`/embedded `"_source"` key exists — `type(MagicMock()).__name__.lower()`
+is exactly `"magicmock"`) and `raw_json_str = json.dumps(raw, default=str)` (a non-dict `raw`
+argument gets `str()`-ed by `default=str` and the resulting STRING gets JSON-encoded, producing
+exactly this shape). **Some test elsewhere on this machine constructed a `HistoricalStore()`
+against the real, non-isolated DB and called a fundamentals-write path with a `MagicMock` in
+place of a real provider/response** — this repo's every other `HistoricalStore` test properly
+isolates via `db_path=str(tmp_path / "...")` (verified: `tests/test_pit_fundamentals.py`,
+`tests/test_backfill_edgar_fundamentals.py`); this entry did not track down which specific test,
+on which worktree, wrote the offending row — that is a test-isolation gap in its own right,
+likely the same class of issue another concurrent session on this machine was independently
+addressing (`fix-test-isolation-runtime-flags-pollution`, a differently-scoped .env/runtime-flags
+leak, same root cause: `LOCAL_DATA_ROOT` is machine-global, so an unisolated test on any
+worktree can pollute state every other worktree reads).
+
+**Immediate remediation**: deleted the single corrupted row (`DELETE FROM fundamentals_history
+WHERE source = 'magicmock'`) — unambiguously safe, since no legitimate fundamentals data has
+that source label.
+
+**Durable fix** (`scripts/refresh_validations.py`): `_build_signal_replay_adapter`'s raw_json
+parse now checks `isinstance(parsed, dict)` after `json.loads` succeeds — a valid-JSON-but-wrong-shape
+payload (str/list/number) now degrades that one ticker/date to no raw fundamentals data
+(CONSTRAINT #4/#6), matching the SAME guard `HistoricalStore.get_fundamentals()` already applies
+at its own cache-read site (`"raw_json did not decode to a dict; falling through to live
+fetch"`) — this file's equivalent read path just didn't have it. `_pit_row_to_fundamentals_dto`
+also gained a belt-and-suspenders `raw = raw if isinstance(raw, dict) else {}` guard at its own
+entry point, so a future caller passing a malformed `raw` directly (not via the raw_json parse
+path) is equally safe.
+
+**Verified**: `python -m scripts.refresh_validations --strategies signal_replay_balanced_blend
+--json` now succeeds — `Sharpe=0.832, PBO=0.000, DSR=1.000, MaxDD=19.9%, deployable=True`,
+consistent with (small live-data drift from) the 2026-07-29 addendum's original recorded result
+(Sharpe 0.820, MaxDD 19.9%). Two new regression tests in `tests/test_validation_signal_replay.py`
+(`TestPitRowToFundamentalsDto::test_non_dict_raw_degrades_honestly_instead_of_crashing`,
+`TestBuildSignalReplayAdapter::test_malformed_raw_json_row_does_not_crash_the_adapter`) — both
+confirmed to reproduce the exact original `AttributeError` when run against the pre-fix code,
+and pass after it.

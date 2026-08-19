@@ -1869,7 +1869,10 @@ def _pit_row_to_fundamentals_dto(ticker: str, sector: str, raw: Dict[str, Any]):
     """
     from dto_models import FundamentalDataDTO
 
-    raw = raw or {}
+    # Belt-and-suspenders (the real guard lives at the raw_json parse call
+    # site in _build_signal_replay_adapter): never trust a caller-supplied
+    # `raw` to actually be a dict just because the type hint says so.
+    raw = raw if isinstance(raw, dict) else {}
     return FundamentalDataDTO(
         ticker=ticker,
         pe_ratio=raw.get("pe_ratio"),
@@ -2169,7 +2172,22 @@ def _build_signal_replay_adapter(
             raw_dict = {}
             if isinstance(raw_json, str):
                 try:
-                    raw_dict = json.loads(raw_json)
+                    parsed = json.loads(raw_json)
+                    # A well-formed row's raw_json always decodes to a dict --
+                    # matching HistoricalStore.get_fundamentals()'s own
+                    # "raw_json did not decode to a dict" guard (that method's
+                    # docstring/log message at data/historical_store.py). A
+                    # non-dict decode (str/list/number) means the stored row
+                    # itself is malformed -- e.g. a test that wrote a non-dict
+                    # "raw" payload straight through json.dumps(..., default=str)
+                    # (this repo's LOCAL_DATA_ROOT DB is shared machine-wide
+                    # across worktrees/sessions, so one badly-isolated test
+                    # elsewhere can leave a row like this behind). Degrade this
+                    # one ticker/date to no raw fundamentals data (CONSTRAINT
+                    # #4/#6) rather than letting one malformed row crash the
+                    # entire registry validation run.
+                    if isinstance(parsed, dict):
+                        raw_dict = parsed
                 except (ValueError, TypeError):
                     raw_dict = {}
             fundamentals = _pit_row_to_fundamentals_dto(ticker, f.at[dt, "sector"], raw_dict)
