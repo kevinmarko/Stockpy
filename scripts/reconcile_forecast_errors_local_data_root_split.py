@@ -273,12 +273,17 @@ def connect_writable(
 
 
 def get_table_stats(conn: sqlite3.Connection, table: str = TABLE) -> TableStats:
+    # {table}/{dedup_cols_sql} interpolate only the fixed TABLE/DEDUP_COLUMNS
+    # module constants (or a caller-passed table name that is likewise always
+    # a literal, never runtime user input) -- never a bound VALUE, which is
+    # always passed via the parameterized `?` placeholder. Same
+    # reviewed-and-marked pattern as data/historical_store.py.
     count, min_ts, max_ts = conn.execute(
-        f"SELECT COUNT(*), MIN(recorded_at), MAX(recorded_at) FROM {table}"
+        f"SELECT COUNT(*), MIN(recorded_at), MAX(recorded_at) FROM {table}"  # nosec B608
     ).fetchone()
     dedup_cols_sql = ", ".join(DEDUP_COLUMNS)
     (distinct_count,) = conn.execute(
-        f"SELECT COUNT(*) FROM (SELECT DISTINCT {dedup_cols_sql} FROM {table})"
+        f"SELECT COUNT(*) FROM (SELECT DISTINCT {dedup_cols_sql} FROM {table})"  # nosec B608
     ).fetchone()
     return TableStats(
         count=count or 0,
@@ -301,15 +306,17 @@ def verify_zero_overlap(
     old_rows_at_or_after_new_min = 0
     new_rows_at_or_before_old_max = 0
 
+    # {TABLE} is the fixed module constant; the actual value is always bound
+    # via the parameterized `?` placeholder below, never interpolated.
     if old_stats.count and new_stats.count and new_stats.min_recorded_at is not None:
         (old_rows_at_or_after_new_min,) = old_conn.execute(
-            f"SELECT COUNT(*) FROM {TABLE} WHERE recorded_at >= ?",
+            f"SELECT COUNT(*) FROM {TABLE} WHERE recorded_at >= ?",  # nosec B608
             (new_stats.min_recorded_at,),
         ).fetchone()
 
     if old_stats.count and new_stats.count and old_stats.max_recorded_at is not None:
         (new_rows_at_or_before_old_max,) = new_conn.execute(
-            f"SELECT COUNT(*) FROM {TABLE} WHERE recorded_at <= ?",
+            f"SELECT COUNT(*) FROM {TABLE} WHERE recorded_at <= ?",  # nosec B608
             (old_stats.max_recorded_at,),
         ).fetchone()
 
@@ -464,8 +471,9 @@ def run_batched_merge(
     # The OLD db has no live writer (that bug is fixed), so this count is
     # stable for the duration of this run and safe to use for progress
     # logging (an estimate of batch count, not a correctness input).
+    # {TABLE} is the fixed module constant; the value is bound via `?`.
     (remaining_total,) = old_conn.execute(
-        f"SELECT COUNT(*) FROM {TABLE} WHERE id > ?", (last_id,)
+        f"SELECT COUNT(*) FROM {TABLE} WHERE id > ?", (last_id,)  # nosec B608
     ).fetchone()
     total_batches_estimate = (
         (remaining_total + batch_size - 1) // batch_size if remaining_total else 0
