@@ -25,7 +25,7 @@ All six roadmap phases have been designed, implemented, mathematically verified,
     $$\Delta_{\text{net}} = \sum_i \Delta_i \cdot \text{Multiplier}_i \cdot Q_i, \quad \Delta_{\text{SPY}} = \sum_i \beta_i \cdot \Delta_{\$, i} / S_{\text{SPY}}$$
   - Strictly adheres to **Constraint #4 (Data Honesty)**: skips unresolvable or missing quotes from sum calculations and reports count in `missing_positions`.
 - **WebSocket Streaming Hub ([`api/ws_api.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/resolve_memory_leak_root/api/ws_api.py))**:
-  - Endpoint `GET /ws/risk` mounted on port 8603, streaming real-time JSON packets every 500ms with heartbeat watchdogs and token authentication.
+  - Endpoint `GET /ws/risk/portfolio` (`risk_router`, mounted by `api/data_api.py`), streaming real-time JSON packets at a **1 Hz poll** (`asyncio.sleep(1.0)` per iteration) with token authentication. Corrected 2026-08-19: the endpoint does **not** stream at 500ms and has **no** heartbeat/idle watchdog — a client that stops reading simply backs up until the underlying TCP/ASGI layer errors out, not a proactive disconnect.
 - **Frontend Visualization ([`RealTimeRiskRadar.tsx`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/resolve_memory_leak_root/webapp/src/components/options/RealTimeRiskRadar.tsx))**:
   - Live pulse indicators, Greek dials, and safe unmount cleanup (`isMounted` guards).
 
