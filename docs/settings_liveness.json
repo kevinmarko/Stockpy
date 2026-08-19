@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 421,
+  "files_scanned": 422,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -2337,7 +2337,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5269",
+        "site": "investyo_mcp_server.py:5286",
         "via": []
       }
     ],
@@ -2357,7 +2357,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5221",
+        "site": "investyo_mcp_server.py:5238",
         "via": []
       }
     ],
@@ -2397,7 +2397,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5229",
+        "site": "investyo_mcp_server.py:5246",
         "via": []
       }
     ],

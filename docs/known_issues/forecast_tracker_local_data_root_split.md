@@ -1,7 +1,8 @@
 # Known issue (2026-08-13): `ForecastTracker` kept writing to the old repo-relative DB after the `LOCAL_DATA_ROOT` migration, splitting `forecast_errors` across two live databases
 
-**Status: code fixed (PR #720); data reconciliation between the old and new
-database still pending — not yet done.**
+**Status: fully resolved (2026-08-19).** Code fixed in PR #720; the split data
+was reconciled on 2026-08-19 — see "Reconciliation (2026-08-19)" below for the
+full before/after numbers and verification.
 
 ## What happened
 
@@ -91,28 +92,87 @@ pinning: the default resolves via `db_config.resolve_database_url()`, an
 explicit override still wins, and a non-sqlite `DATABASE_URL` falls back to
 the historical literal instead of raising.
 
-## What is still open
+## Reconciliation (2026-08-19)
 
-**The already-diverged data has not been reconciled.** The 1,974,166 rows in
-the old `forecast_errors` table and the (now-growing) rows in the new one
-remain two separate sets on disk. This is deliberately deferred, not
-resolved:
+The operator gave explicit sign-off on approach (pause the live daemon,
+merge, restart) six days after this doc was written, once the daemon had
+been running continuously long enough that a live audit could re-confirm
+the split was still exactly as described here. Live state at the time of
+reconciliation:
 
-- It's a data-merge operation on a live trading platform's database, not a
-  code change, and it needs the operator's explicit sign-off on approach
-  before anything touches it.
-- A naive overwrite or move is not safe either direction: overwriting the
-  new DB with the old one would destroy whatever the new DB has genuinely
-  accumulated in *other* tables since the restart; moving/merging only
-  `forecast_errors` forward risks leaving primary-key or timestamp
-  collisions unhandled.
-- Until reconciled, `FORECAST_SKILL_WEIGHTING_ENABLED`'s inverse-RMSE
-  blending is starting its skill history over from the new database — the
-  1,974,166 historical rows are sitting unused at the old path, not
-  contributing to current skill weights.
+- OLD (stale, repo-relative) DB: **1,974,166 rows**, `recorded_at` spanning
+  `2026-07-10T16:04:24Z` → `2026-08-12T23:43:57Z`.
+- NEW (`LOCAL_DATA_ROOT`-anchored, live) DB: **261,522 rows** (grown from the
+  1,974,166/0 split originally observed, since the daemon kept running for
+  six more days), `recorded_at` spanning `2026-08-13T00:14:14Z` → present.
+- **Zero temporal overlap** between the two, re-verified live immediately
+  before the merge (not assumed from this doc's earlier numbers): no OLD row
+  has `recorded_at >=` the NEW DB's earliest timestamp, and no NEW row has
+  `recorded_at <=` the OLD DB's latest timestamp. This is a clean temporal
+  cutover, not an interleaved split, which is what made a straightforward
+  append-merge safe (no per-row dedup logic was needed).
+- Nothing else in the codebase treats `forecast_errors.id` as a foreign key
+  (confirmed by a dedicated repo-wide search before merging), so merged rows
+  were safely given fresh autoincrement ids in the NEW db rather than
+  preserving the OLD ids.
 
-This is a real open item on this platform, stated plainly: **code fixed,
-data not reconciled.**
+**Mechanics:** `scripts/reconcile_forecast_errors_local_data_root_split.py`
+(new, one-time script, kept in the repo as part of this incident's record —
+see its own docstring for the full safety design: online WAL-safe backup
+before any write, batched/resumable inserts with a generous `busy_timeout`,
+and a post-merge verification pass). The live `com.investyo.stack` launchd
+service was unloaded (stopping the daemon + APIs cleanly) before the merge
+and reloaded immediately after, per the operator's chosen approach — the
+script itself is also safe to run against a live daemon (WAL-safe backup +
+busy_timeout), but pausing it first was the lower-risk choice for a
+~2-million-row one-time merge.
+
+**Result:** all 1,974,166 OLD rows copied into the NEW db in 99 batches
+(20,000 rows/batch) in under 25 seconds. Post-merge verification: NEW db's
+final `forecast_errors` count is 2,235,688 (261,522 + 1,974,166, plus zero
+extra rows from the daemon since it was paused for the merge), OLD db count
+unchanged (1,974,166 — it was opened strictly read-only throughout, verified
+at the SQLite driver level via a `mode=ro` URI), and **zero new duplicate
+`(symbol, model_name, horizon_days, forecast_ts)` tuples** were introduced.
+An online backup of the NEW db was taken immediately before the merge
+(`quant_platform.db.pre_reconcile_backup.20260819T191658Z`, alongside the
+live db) and retained. The daemon was confirmed back up, holding both API
+ports and the database, within ~35 seconds of being paused.
+
+The OLD database file was renamed (not deleted) to
+`quant_platform.db.pre-migration-2026-08-13.archived` at its original
+location, per the operator's explicit choice, so it's unambiguously marked
+historical rather than sitting there looking like it might still be live.
+
+`FORECAST_SKILL_WEIGHTING_ENABLED`'s inverse-RMSE blending now has
+continuous history back to 2026-07-10 to draw on, rather than starting over
+from the 2026-08-13 cutover point.
+
+## Related bug found during reconciliation (fixed separately)
+
+While auditing for other instances of this same bug class before trusting
+the merge, a **second, previously-undocumented instance** was found in
+`investyo_mcp_server.py` (`_db_query()` and `get_database_schema()`): both
+functions called `db_config.resolve_database_url()` but then discarded the
+result and substituted a hardcoded cwd-relative `"quant_platform.db"`
+literal specifically in the *default* (no custom `DATABASE_URL`) case —
+backwards from every other correctly-fixed module. This meant every MCP
+tool that reads through `_db_query` (`query_investyo_db`,
+`read_platform_logs`, `get_universe_status`, `get_signal_breakdown`,
+`generate_daily_signals`, `get_factor_attributions`,
+`get_order_execution_history`, and the `get_database_schema` resource) was
+silently serving a stale, days-old snapshot instead of the live database —
+worse than a loud failure, since the stale file existed and returned
+plausible-looking wrong answers with no error. Fixed on this same branch;
+see the commit fixing `investyo_mcp_server.py` for detail. Also found: an
+orphaned worktree at a since-abandoned parent-repo path still holds its own
+479,029-row pre-migration slice of `forecast_errors` (harmless — not
+receiving any writes, just disk debris) and a separate local checkout at
+`/Users/kevinlee/Anti/Stockpy-main` is on a snapshot that predates PR #718
+entirely, so every one of its SQLite-backed stores (not only
+`forecast_tracker.py`) would reproduce this same cwd-relative bug class if
+that checkout starts running real pipeline cycles — flagged for the
+operator, not fixed here (out of scope for this repo/branch).
 
 ## Related
 
