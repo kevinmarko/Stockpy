@@ -947,3 +947,90 @@ async def test_smart_order_router_fix_execution_reports():
     assert parsed_report.side == Side.BUY
 
 
+# --- Phase 36 remediation (audit Critical #11): unbounded buffer caps ---
+
+def test_message_log_and_sent_messages_capped_under_burst():
+    """
+    message_log/sent_messages previously grew without bound across a long-lived
+    session's lifetime (the global singleton in particular). Mirrors the original
+    audit's 20,000-message burst repro; both lists must stay capped.
+    """
+    from execution.fix_gateway import _MAX_MESSAGE_LOG_SIZE
+
+    session = FixSession("CLIENT1", "EXCHANGE")
+    for _ in range(20000):
+        session._send(Heartbeat(session.sender_comp_id, session.target_comp_id, session.out_seq_num))
+
+    assert len(session.message_log) == _MAX_MESSAGE_LOG_SIZE
+    assert len(session.sent_messages) == _MAX_MESSAGE_LOG_SIZE
+    # The most recently sent message is retained, not dropped from the tail.
+    assert session.sent_messages[-1].seq_num == session.out_seq_num - 1
+
+
+def test_received_messages_capped_under_burst():
+    """received_messages is appended to on every simulate_receive() call and must
+    also stay bounded under a sustained burst of in-order inbound messages."""
+    from execution.fix_gateway import _MAX_MESSAGE_LOG_SIZE
+
+    session = FixSession("CLIENT1", "EXCHANGE")
+    for seq in range(1, 1500):
+        session.simulate_receive({"34": seq, "35": "0"})
+
+    assert len(session.received_messages) == _MAX_MESSAGE_LOG_SIZE
+
+
+def test_gap_queue_capped_and_drops_oldest_under_burst():
+    """
+    A sustained burst of out-of-order inbound messages (never sending the
+    expected seq 1, so nothing ever drains) must not grow gap_queue forever --
+    once at capacity, the OLDEST buffered entry is dropped (with a WARNING) to
+    make room for the newest.
+    """
+    from execution.fix_gateway import _MAX_GAP_QUEUE_SIZE
+
+    session = FixSession("CLIENT1", "EXCHANGE")
+    assert session.inbound_seq_num == 1
+
+    total_gap_messages = _MAX_GAP_QUEUE_SIZE + 500
+    for seq in range(2, 2 + total_gap_messages):
+        session.simulate_receive({"34": seq, "35": "0"})
+
+    assert len(session.gap_queue) == _MAX_GAP_QUEUE_SIZE
+    # The oldest (lowest-seq) entries were evicted -- only the most recent
+    # window of buffered sequence numbers remains.
+    assert min(session.gap_queue.keys()) == 2 + total_gap_messages - _MAX_GAP_QUEUE_SIZE
+    assert max(session.gap_queue.keys()) == 2 + total_gap_messages - 1
+
+
+# --- Phase 36 remediation (audit Critical #11): orphaned heartbeat task ---
+
+@pytest.mark.anyio
+async def test_double_connect_no_orphaned_heartbeat_task():
+    """
+    connect() previously created a new heartbeat task unconditionally on every
+    call, orphaning the previous task's asyncio.Task if connect() was called
+    again without an intervening disconnect() -- each orphan keeps its
+    heartbeat loop running forever, a real task/memory leak for a long-lived
+    session (e.g. a Reconnect action hitting an already-ACTIVE session).
+    """
+    session = FixSession("CLIENT1", "EXCHANGE", heartbeat_int=30)
+
+    await session.connect()
+    first_task = session._heartbeat_task
+    assert first_task is not None
+    assert not first_task.done()
+
+    await session.connect()
+    second_task = session._heartbeat_task
+    assert second_task is not None
+    assert second_task is not first_task
+    assert not second_task.done()
+
+    # The first task must have been cancelled (and its cancellation awaited)
+    # by the second connect() call, not left running orphaned.
+    assert first_task.done()
+
+    await session.disconnect()
+    assert session._heartbeat_task is None
+
+

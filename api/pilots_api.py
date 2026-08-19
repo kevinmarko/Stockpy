@@ -6744,6 +6744,179 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
         "macro_conditioned": bool(macro_conditioned),
     }
 
+
+def _clip_and_compound_diffusion_path(
+    ret_path, spot_price: float, *, min_step: float = -0.5, max_step: float = 2.0,
+    min_price: float = 0.01,
+) -> List[float]:
+    """Compound a single diffusion-generated return path onto a spot-price
+    trajectory (Phase 34 remediation item 10, audit Critical #5).
+
+    The diffusion model's reverse-SDE score network can, on a degenerate or
+    undertrained draw, emit a per-step raw return of implausible magnitude
+    (the reverse SDE only clips the LATENT state to +/-50, not the return
+    itself -- see ``generate_guided_crisis_paths``). Compounding an unclipped
+    ``r`` through ``price_path[-1] * (1.0 + r)`` can runaway-explode, and for
+    any single-step ``r <= -1.0`` flips the running price negative -- from
+    which point every subsequent step's sign becomes meaningless (a negative
+    price times ``(1 + r)`` can flip back positive on the next down-move,
+    oscillating through physically nonsensical values). Clipping each step to
+    a generous but bounded single-step move (default -50%/+200%, still wide
+    enough for genuine stress-test purposes) before compounding, and flooring
+    the running price at a small positive epsilon, guarantees every price in
+    the returned path is strictly positive and the sign can never flip.
+
+    This does NOT cap the path's overall magnitude over a long horizon --
+    many steps compounded near +200% can still reach an enormous number. That
+    is expected: the point of the clip is to eliminate negative/sign-flipping
+    prices, not to second-guess how large a genuinely stressed price path is
+    allowed to grow.
+    """
+    import numpy as np
+
+    price_path: List[float] = [float(spot_price)]
+    for r in ret_path:
+        r_clipped = float(np.clip(r, min_step, max_step))
+        next_price = max(price_path[-1] * (1.0 + r_clipped), min_price)
+        price_path.append(next_price)
+    return price_path
+
+
+def _diffusion_logret_loss_to_dollars(var_logret: float, spot_price: float) -> float:
+    """Convert a LOG-RETURN VaR/CVaR loss magnitude into a dollar loss (Phase
+    34 remediation item 10, audit Critical #5).
+
+    ``compute_diffusion_var``/``compute_multi_quantile_var`` sum per-step
+    values of the model's raw generated returns -- the same LOG-RETURN units
+    ``build_return_windows`` was trained on (see ``log_ret`` in the endpoint
+    below) -- so their output is a log-return loss magnitude, not a simple
+    fraction of spot. Converting that to a dollar loss is an EXPONENTIAL
+    transform, not a linear multiply: if ``var_logret`` is the magnitude of
+    the loss, the realized log return is ``-var_logret``, so the price ratio
+    ``S_T / S_0 = exp(-var_logret)`` and dollar loss
+    ``= S_0 - S_T = S_0 * (1 - exp(-var_logret))``. A linear
+    ``var_logret * spot_price`` understates large moves and, for
+    ``var_logret > ~0.69`` (a >100% linear "loss"), implies a negative price
+    outright. The exponential form is bounded in ``[0, spot_price)`` for any
+    finite non-negative ``var_logret`` -- a dollar loss can never reach or
+    exceed the position's own starting value.
+    """
+    import numpy as np
+
+    return float(spot_price * (1.0 - np.exp(-var_logret)))
+
+
+def _diffusion_window_end_dates(dates, window_len: int, max_windows: int):
+    """Mirror ``validation.synthetic_diffusion_engine.build_return_windows``'s
+    EXACT window-selection index math against a dates array instead of a
+    returns array, to recover each training window's END date (the date its
+    diffusion-model training row is conditioned on).
+
+    ``build_return_windows`` computes ``n_available = len(returns) -
+    window_len + 1``, ``n_windows = min(n_available, max_windows)``, and
+    ``start = n_available - n_windows``, then builds windows
+    ``returns[i:i+window_len]`` for ``i`` in ``range(start, start +
+    n_windows)`` -- i.e. the most-recent ``n_windows`` contiguous
+    ``window_len``-length slices. Window ``i``'s END index (its last
+    element) is ``i + window_len - 1``; this function returns exactly that
+    set of dates, in the same order ``build_return_windows`` builds its
+    windows, so ``dates_out[k]`` is the end date of ``historical_data[k]``.
+    """
+    n_available = len(dates) - window_len + 1
+    if n_available <= 0:
+        return dates[:0]
+    n_windows = min(n_available, max_windows)
+    start = n_available - n_windows
+    end_positions = [i + window_len - 1 for i in range(start, start + n_windows)]
+    return dates[end_positions]
+
+
+def _derive_diffusion_regime_labels(
+    dates, *, window_len: int, max_windows: int,
+) -> Optional[List[str]]:
+    """Real per-window macro-regime labels for
+    ``train_conditional_diffusion_model`` (Phase 34 remediation item 11 --
+    audit Critical #6: the live endpoint previously never passed
+    ``regime_labels``, so classifier-free guidance was training against an
+    entirely unconditional dataset regardless of the requested ``regime``).
+
+    Reuses ``scripts.refresh_validations._reconstruct_macro_regime_series``
+    (a pure function -- constructs the REAL live ``MacroEconomicDTO`` per
+    date rather than re-deriving its branch logic, so there is zero drift
+    risk) against real FRED series from ``HistoricalStore.get_macro()``,
+    aligned to each window's END date via that function's own
+    ``pd.merge_asof(direction="backward")`` causal alignment -- never a
+    forward-looking lookup.
+
+    Maps the reconstructed bucket into
+    ``validation.synthetic_diffusion_engine.REGIME_MAP``:
+    ``CREDIT EVENT`` -> ``credit_freeze``, ``RECESSION`` -> ``vol_shock``,
+    ``NEUTRAL``/``RISK ON``/``None`` -> ``unconditional``. Additionally
+    overrides to ``liquidity_squeeze`` for any window whose end date falls
+    inside ``validation.stress_scenarios.STRESS_SCENARIOS["AUG_2024"]`` (a
+    documented, unambiguous liquidity-driven yen-carry-trade-unwind event --
+    the one dated window in this codebase with an unambiguous
+    liquidity-squeeze characterization).
+
+    ``stagflation`` (REGIME_MAP class 3) is a KNOWN, DISCLOSED GAP and is
+    NEVER assigned by this function: no inflation series feeds
+    ``_reconstruct_macro_regime_series``'s output anywhere in this codebase
+    today (no real FRED inflation series is wired into that reconstruction),
+    so there is no honest proxy to derive it from. Do not fabricate a
+    heuristic for it here -- see also the caveat added to
+    ``GenerativeDiffusionStressView.tsx``'s stagflation option description.
+
+    Degrades to ``None`` (today's exact unconditional-training behavior --
+    CONSTRAINT #4/#6) on ANY failure: a missing/stubbed
+    ``HistoricalStore.get_macro`` (e.g. in tests), a network/DB outage, or
+    an empty window-end-date array. Never raises, never fabricates a label.
+    """
+    end_dates = _diffusion_window_end_dates(dates, window_len=window_len, max_windows=max_windows)
+    if len(end_dates) == 0:
+        return None
+
+    try:
+        import pandas as pd
+        from scripts.refresh_validations import _reconstruct_macro_regime_series
+        from validation.stress_scenarios import STRESS_SCENARIOS
+
+        store = HistoricalStore()
+        vix = store.get_macro("VIXCLS", lookback_days=750)
+        t10y2y = store.get_macro("T10Y2Y", lookback_days=750)
+        credit_spread = store.get_macro("BAMLH0A0HYM2", lookback_days=750)
+        unrate = store.get_macro("UNRATE", lookback_days=750)
+        baa_spread = store.get_macro("BAA10Y", lookback_days=750)
+
+        regime_df = _reconstruct_macro_regime_series(
+            end_dates, vix, t10y2y, credit_spread, unrate, baa_spread=baa_spread,
+        )
+    except Exception as exc:  # noqa: BLE001 -- macro-regime conditioning is
+        # best-effort; any failure here degrades to unconditional training,
+        # never a crash of the whole stress-test endpoint.
+        logger.warning(
+            "Diffusion stress test: macro-regime label derivation failed (%s); "
+            "training unconditional.", exc,
+        )
+        return None
+
+    bucket_to_class = {
+        "CREDIT EVENT": "credit_freeze",
+        "RECESSION": "vol_shock",
+    }
+    aug_2024 = STRESS_SCENARIOS.get("AUG_2024")
+    aug_start = pd.Timestamp(aug_2024.start) if aug_2024 is not None else None
+    aug_end = pd.Timestamp(aug_2024.end) if aug_2024 is not None else None
+
+    labels: List[str] = []
+    for end_date, bucket in zip(end_dates, regime_df["market_regime"]):
+        if aug_start is not None and aug_end is not None and aug_start <= end_date <= aug_end:
+            labels.append("liquidity_squeeze")
+            continue
+        labels.append(bucket_to_class.get(bucket, "unconditional"))
+
+    return labels
+
+
 @app.post(
     "/pilots/options/ai/diffusion-stress-test",
     dependencies=[Depends(require_read_token)],
@@ -6779,7 +6952,14 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         )
 
     close = bars["Close"].astype(float)
-    log_ret = np.log(close / close.shift(1)).dropna().to_numpy()
+    log_ret_series = np.log(close / close.shift(1)).dropna()
+    log_ret = log_ret_series.to_numpy()
+    # Dates aligned 1:1 with log_ret (Phase 34 remediation item 11), captured
+    # from the Series index BEFORE the .to_numpy() drop below -- read off the
+    # Series' own post-dropna() index rather than assumed as close.index[1:],
+    # so this stays correct even if `close` itself ever contains an interior
+    # NaN (which .dropna() would remove beyond just the leading shift(1) NaN).
+    dates = log_ret_series.index
 
     historical_data = build_return_windows(log_ret, window_len=horizon_len, max_windows=200)
     if len(historical_data) < MIN_WINDOWS:
@@ -6795,7 +6975,18 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
             },
         )
 
-    model = train_conditional_diffusion_model(historical_data, epochs=15, lr=0.01)
+    # Phase 34 remediation item 11 (audit Critical #6): derive real per-window
+    # macro-regime labels instead of leaving regime_labels=None, which trains
+    # the conditional diffusion model as if EVERY window were "unconditional"
+    # -- defeating the entire point of classifier-free guidance regardless of
+    # the regime the caller actually requested at generation time.
+    regime_labels = _derive_diffusion_regime_labels(
+        dates, window_len=horizon_len, max_windows=200,
+    )
+
+    model = train_conditional_diffusion_model(
+        historical_data, regime_labels=regime_labels, epochs=15, lr=0.01,
+    )
 
     regime_choice = req.regime if req.regime is not None else "vol_shock"
     guidance_val = float(req.guidance_scale if req.guidance_scale is not None else 2.0)
@@ -6811,15 +7002,18 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         dt=1.0 / 252.0,
     )
 
-    # Map raw returns onto the spot price trajectory
-    paths = []
-    for ret_path in synthetic_returns:
-        price_path = [req.spot_price]
-        for r in ret_path:
-            price_path.append(price_path[-1] * (1.0 + r))
-        paths.append(price_path)
+    # Map raw returns onto the spot price trajectory (Phase 34 remediation
+    # item 10, audit Critical #5) -- see _clip_and_compound_diffusion_path's
+    # docstring for the negative-price/runaway-explosion rationale.
+    paths = [
+        _clip_and_compound_diffusion_path(ret_path, req.spot_price)
+        for ret_path in synthetic_returns
+    ]
 
-    # Compute VaR and CVaR at 95% and 99%
+    # Compute VaR and CVaR at 95% and 99%, then convert the LOG-RETURN loss
+    # magnitude compute_diffusion_var returns into a dollar loss via the
+    # correct exponential transform (Phase 34 remediation item 10, audit
+    # Critical #5) -- see _diffusion_logret_loss_to_dollars's docstring.
     var_95, cvar_95 = compute_diffusion_var(synthetic_returns, confidence_level=0.95)
     var_99, cvar_99 = compute_diffusion_var(synthetic_returns, confidence_level=0.99)
 
@@ -6828,11 +7022,12 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         "regime": regime_choice,
         "guidance_scale": guidance_val,
         "paths": paths,
-        "VaR_95": float(var_95 * req.spot_price),
-        "CVaR_95": float(cvar_95 * req.spot_price),
-        "VaR_99": float(var_99 * req.spot_price),
-        "CVaR_99": float(cvar_99 * req.spot_price),
+        "VaR_95": _diffusion_logret_loss_to_dollars(var_95, req.spot_price),
+        "CVaR_95": _diffusion_logret_loss_to_dollars(cvar_95, req.spot_price),
+        "VaR_99": _diffusion_logret_loss_to_dollars(var_99, req.spot_price),
+        "CVaR_99": _diffusion_logret_loss_to_dollars(cvar_99, req.spot_price),
         "trained_windows": int(len(historical_data)),
+        "regime_conditioned": bool(regime_labels is not None),
     }
 
 class HrpCvarOptimizeRequest(BaseModel):
@@ -6845,6 +7040,7 @@ class HrpCvarOptimizeRequest(BaseModel):
     target_beta_range: Optional[List[float]] = None
     sector_map: Optional[Dict[str, str]] = None
     asset_betas: Optional[Dict[str, float]] = None
+    max_asset_weight: Optional[float] = None
 
 HRPCVaRRequest = HrpCvarOptimizeRequest
 
@@ -6898,6 +7094,7 @@ def post_portfolio_optimize_hrp_cvar(req: HrpCvarOptimizeRequest) -> Dict[str, A
         returns=returns,
         current_weights=req.current_weights,
         lambda_turnover=req.lambda_turnover if req.lambda_turnover is not None else 0.05,
+        max_weight=req.max_asset_weight if req.max_asset_weight is not None else 1.0,
         sector_map=req.sector_map,
         sector_caps=req.sector_caps,
         target_beta_range=req.target_beta_range,
@@ -6986,6 +7183,19 @@ class FixRouteOrderRequest(BaseModel):
     quantity: float = Field(..., gt=0.0)
     limit_price: float = Field(..., gt=0.0)
     routing_policy: Optional[Literal["SMART_SWEEP", "FASTEST_VENUE", "MAX_REBATE"]] = "SMART_SWEEP"
+
+    @field_validator("symbol")
+    @classmethod
+    def _reject_fix_delimiters(cls, v: str) -> str:
+        # A symbol carrying the FIX SOH delimiter, "=", or "|" could inject spurious
+        # tag-value pairs into a downstream raw FIX message (e.g. via Symbol tag 55).
+        # Reject outright rather than silently stripping/mangling caller input.
+        for bad_char in ("\x01", "=", "|"):
+            if bad_char in v:
+                raise ValueError(
+                    "symbol must not contain the FIX SOH delimiter, '=', or '|'."
+                )
+        return v
 
 
 @app.post(
@@ -7077,43 +7287,43 @@ def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
         else None
     )
 
-    # Multi-venue execution statistics (NYSE, NASDAQ, BATS, IEX, ARCA)
-    market_centers = {
-        "NYSE": {"name": "New York Stock Exchange", "base_lat": 1.1, "maker": 0.0012, "taker": 0.0030, "rebate": 0.0020, "fill_rate": 99.4, "depth": 125000, "share": 34.2},
-        "NASDAQ": {"name": "Nasdaq Stock Market", "base_lat": 0.9, "maker": 0.0015, "taker": 0.0030, "rebate": 0.0025, "fill_rate": 99.8, "depth": 140000, "share": 38.5},
-        "BATS": {"name": "Cboe BZX Exchange", "base_lat": 0.7, "maker": -0.0020, "taker": 0.0025, "rebate": 0.0020, "fill_rate": 98.9, "depth": 65000, "share": 12.1},
-        "IEX": {"name": "Investors Exchange (D-Limit)", "base_lat": 1.8, "maker": 0.0000, "taker": 0.0009, "rebate": 0.0000, "fill_rate": 97.5, "depth": 45000, "share": 6.8},
-        "ARCA": {"name": "NYSE Arca Equities", "base_lat": 1.2, "maker": -0.0022, "taker": 0.0028, "rebate": 0.0022, "fill_rate": 99.1, "depth": 85000, "share": 8.4},
-    }
+    # Real multi-venue routing config from MultiVenueAggregator.get_venues_info() --
+    # this module's ACTUAL configured venues (CBOE, MIAX, BOX, PHLX, ARCA, EDGX), not
+    # the previously-hardcoded fabricated NYSE/NASDAQ/BATS/IEX/ARCA equity list. Only
+    # fields VenueConfig genuinely tracks (base_latency_ms, fees/rebates,
+    # liquidity_depth) are populated from real data; fill_rate_pct/share_of_flow_pct/
+    # current_latency_ms have no real source anywhere in this stateless aggregator
+    # (no execution history is tracked across requests), so they are honestly None
+    # rather than fabricated (CONSTRAINT #4) -- market_center is likewise just the
+    # real venue code, since VenueConfig carries no separate long-form display name.
+    venues_info = aggregator.get_venues_info()
     venue_stats = []
-    for v_code, v_info in market_centers.items():
+    for v in venues_info.get("venues", []):
         venue_stats.append({
-            "venue": v_code,
-            "market_center": v_info["name"],
+            "venue": v.get("venue"),
+            "market_center": v.get("venue"),
             "status": "ACTIVE",
-            "base_latency_ms": v_info["base_lat"],
-            "current_latency_ms": round(v_info["base_lat"] + 0.04, 2),
-            "fill_rate_pct": v_info["fill_rate"],
-            "maker_fee": v_info["maker"],
-            "taker_fee": v_info["taker"],
-            "maker_rebate": v_info["rebate"],
-            "liquidity_depth": v_info["depth"],
-            "share_of_flow_pct": v_info["share"],
+            "base_latency_ms": v.get("base_latency_ms"),
+            "current_latency_ms": None,
+            "fill_rate_pct": None,
+            "maker_fee": v.get("maker_fee"),
+            "taker_fee": v.get("taker_fee"),
+            "maker_rebate": v.get("maker_rebate"),
+            "liquidity_depth": v.get("liquidity_depth"),
+            "share_of_flow_pct": None,
         })
+    venues_active = [v.get("venue") for v in venues_info.get("venues", [])]
 
-    # Recent FIX 4.4 audit log entries
+    # Recent FIX 4.4 audit log entries -- real messages only, no fabricated fallback.
     audit_log = []
     if session.message_log:
         for m in session.message_log[-20:]:
             raw_parts = [f"{k}={v}" for k, v in m.items()]
             audit_log.append("|".join(raw_parts) + "|")
-    else:
-        now_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H:%M:%S.000")
-        audit_log = [
-            f"8=FIX.4.4|9=112|35=0|49={session.target_comp_id}|56={session.sender_comp_id}|34={session.inbound_seq_num}|52={now_str}|10=092|",
-            f"8=FIX.4.4|9=128|35=8|49={session.target_comp_id}|56={session.sender_comp_id}|34={session.inbound_seq_num - 1}|52={now_str}|37=ORD-99124|11=CL-3019|39=2|150=2|55=SPY|54=1|38=100|44=512.50|32=100|31=512.48|14=100|6=512.48|10=184|",
-            f"8=FIX.4.4|9=108|35=1|49={session.sender_comp_id}|56={session.target_comp_id}|34={session.outbound_seq_num}|52={now_str}|112=TEST-SYNC|10=210|",
-        ]
+
+    session_uptime_sec = (
+        int(time.time() - session.connected_at) if session.connected_at else None
+    )
 
     return {
         "session_id": f"FIX.4.4:{session.sender_comp_id}->{session.target_comp_id}",
@@ -7124,9 +7334,9 @@ def get_pilots_execution_fix_session_status() -> Dict[str, Any]:
         "target_comp_id": session.target_comp_id,
         "gap_queue_depth": len(session._incoming_buffer),
         "last_heartbeat_at": last_hb_iso,
-        "venues_active": list(market_centers.keys()),
+        "venues_active": venues_active,
         "heartbeat_int": session.heartbeat_int,
-        "session_uptime_sec": 14820,
+        "session_uptime_sec": session_uptime_sec,
         "venue_stats": venue_stats,
         "audit_log": audit_log,
     }

@@ -5975,6 +5975,49 @@ class TestHrpCvarOptimize:
         assert "Tech" in data["sector_exposures"]
         assert data["diversification_ratio"] >= 1.0
 
+    def test_max_asset_weight_constrains_endpoint_output(self):
+        # Phase 35 remediation item 13: max_asset_weight was previously a UI-only
+        # slider whose value was never sent to the backend, and the backend's own
+        # request model had no such field at all. Construct return series with a
+        # heavy vol skew so an unconstrained HRP-CVaR optimum concentrates weight
+        # in the calmest asset well above 40%, then confirm max_asset_weight=0.4
+        # genuinely caps every allocation end-to-end through the real endpoint.
+        rng_a = np.random.default_rng(100)
+        calm = list(150.0 * np.cumprod(1 + rng_a.normal(0.0005, 0.001, size=150)))
+        rng_b = np.random.default_rng(200)
+        volatile_b = list(150.0 * np.cumprod(1 + rng_b.normal(0.0, 0.05, size=150)))
+        rng_c = np.random.default_rng(300)
+        volatile_c = list(150.0 * np.cumprod(1 + rng_c.normal(0.0, 0.05, size=150)))
+        series = {"CALM": calm, "VOLB": volatile_b, "VOLC": volatile_c}
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
+            resp_unconstrained = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={"symbols": ["CALM", "VOLB", "VOLC"], "lambda_turnover": 0.0},
+            )
+            resp_constrained = client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json={
+                    "symbols": ["CALM", "VOLB", "VOLC"],
+                    "lambda_turnover": 0.0,
+                    "max_asset_weight": 0.4,
+                },
+            )
+        assert resp_unconstrained.status_code == 200
+        assert resp_constrained.status_code == 200
+        unconstrained_weights = {
+            a["symbol"]: a["weight"] for a in resp_unconstrained.json()["allocations"]
+        }
+        constrained_weights = {
+            a["symbol"]: a["weight"] for a in resp_constrained.json()["allocations"]
+        }
+        # Sanity: the unconstrained optimum genuinely concentrates weight above the
+        # cap in the calm asset -- otherwise this test wouldn't exercise the cap.
+        assert unconstrained_weights["CALM"] > 0.4
+        # The cap is genuinely enforced end-to-end through the real endpoint.
+        for w in constrained_weights.values():
+            assert w <= 0.4 + 1e-6
+
 
 # ---------------------------------------------------------------------------
 # POST /pilots/options/meta-model/retrain -- previously fed the ML
@@ -6291,6 +6334,221 @@ class TestDiffusionStressTest:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
+    def test_var_cvar_never_reach_or_exceed_spot_price_end_to_end(self):
+        # Phase 34 remediation item 10 (audit Critical #5) regression guard,
+        # exercised through the REAL endpoint (not just the pure helper):
+        # a dollar VaR/CVaR loss can never imply a negative post-loss price,
+        # and every generated price path stays strictly positive, regardless
+        # of how extreme the (undertrained, few-epoch) diffusion model's raw
+        # output happens to be on this draw.
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(3, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 200
+        body = resp.json()
+        spot = 150.0
+        for key in ("VaR_95", "CVaR_95", "VaR_99", "CVaR_99"):
+            assert 0.0 <= body[key] < spot, f"{key}={body[key]} is not in [0, spot={spot})"
+        for path in body["paths"]:
+            assert all(p > 0 for p in path), "a generated price path went <= 0"
+
+    def test_regime_labels_none_when_macro_unavailable_degrades_gracefully(self):
+        # _OhlcvStore has no get_macro() -- confirms _derive_diffusion_regime_labels
+        # degrades to None (today's exact unconditional-training behavior)
+        # rather than crashing the whole endpoint when macro data is
+        # unavailable (CONSTRAINT #6).
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 200
+        assert resp.json()["regime_conditioned"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 34 remediation item 10 (audit Critical #5) -- unit tests for the
+# extracted pure helpers directly, independent of the diffusion model's own
+# (possibly extreme, undertrained-at-15-epochs) output.
+# ---------------------------------------------------------------------------
+
+
+class TestDiffusionPriceBoundAndVarUnitFix:
+    def test_clip_and_compound_never_goes_negative_on_adversarial_returns(self):
+        # Mirrors the original audit's repro: an adversarial/extreme
+        # synthetic return path (as an undertrained diffusion model's
+        # reverse SDE could emit -- generate_guided_crisis_paths clips the
+        # latent state to +/-50) that would explode/flip negative under the
+        # OLD unclipped `price_path[-1] * (1.0 + r)` compounding.
+        extreme_returns = [5.0, -3.0, 10.0, -1.5, 2.0, -8.0, 6.0]
+        path = pilots_api._clip_and_compound_diffusion_path(extreme_returns, spot_price=150.0)
+        assert path[0] == 150.0
+        assert all(p > 0 for p in path), "a clipped path went <= 0"
+        assert min(path) >= 0.01
+        # Every step is bounded to a -50%/+200% move, so the path can never
+        # exceed spot * 3^len(extreme_returns).
+        assert path[-1] <= 150.0 * (3.0 ** len(extreme_returns))
+
+    def test_clip_and_compound_matches_naive_compounding_for_normal_returns(self):
+        # A realistic, small-magnitude return path (well inside the clip
+        # bounds) must compound identically to the naive formula -- the fix
+        # must not distort ordinary, non-adversarial paths.
+        normal_returns = [0.01, -0.02, 0.015, -0.01, 0.02]
+        path = pilots_api._clip_and_compound_diffusion_path(normal_returns, spot_price=150.0)
+        expected = [150.0]
+        for r in normal_returns:
+            expected.append(expected[-1] * (1.0 + r))
+        assert path == pytest.approx(expected, rel=1e-9)
+
+    def test_logret_loss_to_dollars_well_under_spot_for_realistic_var(self):
+        # A realistic horizon log-return VaR (a handful of percent to ~25%)
+        # should convert to a dollar loss well under 100% of spot -- not the
+        # near-100%-saturated artifact the old linear formula could produce.
+        spot = 150.0
+        for var_logret in (0.05, 0.10, 0.15, 0.25):
+            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+            assert 0.0 <= dollars < spot
+            assert dollars < spot * 0.30, f"VaR ${dollars:.2f} not well under spot ${spot}"
+
+    def test_logret_loss_to_dollars_never_exceeds_spot_for_extreme_var(self):
+        # The exponential form is bounded ABOVE by spot_price (never
+        # exceeds it, unlike the old linear multiply). For a genuinely
+        # extreme var_logret (e.g. 50.0) exp(-var_logret) underflows to a
+        # value indistinguishable from 0.0 in float64, so the loss can
+        # legitimately round to exactly spot_price -- the invariant that
+        # matters is "never exceeds", not "always strictly less than".
+        spot = 150.0
+        for var_logret in (0.9, 1.5, 5.0, 50.0):
+            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+            assert 0.0 <= dollars <= spot
+        # At a realistic-to-moderately-stressed magnitude, strictly below spot.
+        for var_logret in (0.9, 1.5, 5.0):
+            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+            assert dollars < spot
+
+    def test_old_linear_conversion_would_have_implied_negative_price_regression_guard(self):
+        # Documents the exact bug being fixed: the OLD linear formula
+        # (var_logret * spot_price) implies a negative post-loss price for
+        # any var_logret > 1.0 -- nonsensical for a VaR/CVaR loss on a long
+        # spot position. The new exponential transform never does.
+        spot = 150.0
+        var_logret = 1.5
+        old_linear_loss = var_logret * spot
+        assert old_linear_loss > spot  # the bug: implies price < 0
+        new_loss = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
+        assert new_loss < spot  # fixed: implied price always > 0
+
+
+class _OhlcvAndMacroStore(_OhlcvStore):
+    """Extends _OhlcvStore with a real get_macro() stub for Phase 34
+    remediation item 11 tests. UNRATE is a long, flat monthly history (never
+    triggers RECESSION via the internally-derived Sahm proxy once past
+    rolling-window warmup); T10Y2Y and VIX stay constant/benign; the
+    high-yield credit spread (BAMLH0A0HYM2) steps from a calm 2.0% to a
+    stressed 8.0% at a known cutover business-day index, so a real,
+    non-degenerate CREDIT EVENT regime is reconstructable across the trading
+    history."""
+
+    def __init__(self, series_by_symbol, *, n_days, credit_spread_cutover_idx):
+        super().__init__(series_by_symbol)
+        self._idx = pd.bdate_range(end="2026-08-01", periods=n_days)
+        self._cutover_date = self._idx[credit_spread_cutover_idx]
+
+    def get_macro(self, series_id, *, lookback_days=None, data_engine=None):
+        if series_id == "VIXCLS":
+            return pd.Series(15.0, index=self._idx, name=series_id)
+        if series_id == "T10Y2Y":
+            return pd.Series(1.0, index=self._idx, name=series_id)
+        if series_id == "BAMLH0A0HYM2":
+            values = np.where(self._idx < self._cutover_date, 2.0, 8.0)
+            return pd.Series(values, index=self._idx, name=series_id)
+        if series_id == "UNRATE":
+            # 8 years of flat monthly unemployment so the internally-derived
+            # Sahm proxy is well past its rolling-window warmup (needs ~15
+            # months) and stays 0.0 (never >= 0.6 -- never RECESSION) at
+            # every date this test's window-end dates could touch.
+            monthly_idx = pd.date_range(end="2026-08-01", periods=96, freq="MS")
+            return pd.Series(4.0, index=monthly_idx, name=series_id)
+        if series_id == "BAA10Y":
+            return pd.Series(2.0, index=self._idx, name=series_id)
+        return pd.Series(dtype=float, name=series_id)
+
+
+class TestDiffusionRegimeConditioning:
+    """Phase 34 remediation item 11 (audit Critical #6): the live endpoint
+    never passed regime_labels into train_conditional_diffusion_model, so
+    classifier-free guidance was training against an entirely unconditional
+    dataset regardless of the caller's requested regime."""
+
+    def test_regime_labels_passed_with_multiple_distinct_classes(self):
+        n = 750
+        closes = _synthetic_closes_walk(9, n=n, start=150.0)
+        store = _OhlcvAndMacroStore({"AAPL": closes}, n_days=n, credit_spread_cutover_idx=600)
+
+        # Capture the REAL function BEFORE patching -- re-importing it from
+        # inside the spy while the patch is active would just return the
+        # mock again (infinite recursion), since mock.patch replaces the
+        # module attribute for the duration of the context manager.
+        from validation.synthetic_diffusion_engine import (
+            train_conditional_diffusion_model as _real_train,
+        )
+
+        captured: dict = {}
+
+        def _spy_train(historical_data, regime_labels=None, **kwargs):
+            captured["regime_labels"] = regime_labels
+            captured["n_rows"] = len(historical_data)
+            return _real_train(historical_data, regime_labels=regime_labels, epochs=1, lr=0.01)
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store), mock.patch(
+            "validation.synthetic_diffusion_engine.train_conditional_diffusion_model",
+            side_effect=_spy_train,
+        ):
+            resp = client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json={
+                    "symbol": "AAPL",
+                    "spot_price": 150.0,
+                    "volatility": 0.25,
+                    "num_paths": 10,
+                    "horizon": 30,
+                    "drift": 0.0,
+                    "regime": "vol_shock",
+                    "guidance_scale": 2.0,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["regime_conditioned"] is True
+
+        regime_labels = captured.get("regime_labels")
+        assert regime_labels is not None
+        assert len(regime_labels) == captured["n_rows"]
+        distinct = set(regime_labels)
+        assert len(distinct) > 1, f"expected multiple distinct regime classes, got {distinct}"
+        assert "credit_freeze" in distinct
+        assert "unconditional" in distinct
+        # stagflation must NEVER be fabricated -- no real proxy exists.
+        assert "stagflation" not in distinct
+
+    def test_window_end_dates_mirror_build_return_windows_index_math(self):
+        from validation.synthetic_diffusion_engine import build_return_windows
+
+        dates = pd.bdate_range(end="2026-08-01", periods=400)
+        returns = np.arange(400, dtype=float)  # value == position, for an easy check
+        window_len = 29
+        max_windows = 200
+
+        windows = build_return_windows(returns, window_len=window_len, max_windows=max_windows)
+        end_dates = pilots_api._diffusion_window_end_dates(
+            dates, window_len=window_len, max_windows=max_windows,
+        )
+
+        assert len(end_dates) == len(windows)
+        for row, end_date in zip(windows, end_dates):
+            # row[-1] is the raw return value, which we set equal to its
+            # original position in `returns` -- so it's also the position in
+            # `dates` whose date must equal end_date.
+            assert dates[int(row[-1])] == end_date
+
 
 # ---------------------------------------------------------------------------
 # FIX 4.4 Protocol Gateway Session Management Endpoints
@@ -6299,6 +6557,21 @@ class TestDiffusionStressTest:
 
 class TestFixGatewaySessionEndpoints:
     def test_get_fix_session_status_success(self):
+        # Phase 36 remediation item 15: the status endpoint no longer fabricates a
+        # NYSE/NASDAQ/BATS/IEX/ARCA equity venue list or a synthetic 3-message audit
+        # log fallback -- it reports the module's REAL configured venues (CBOE, MIAX,
+        # BOX, PHLX, ARCA, EDGX from MultiVenueAggregator) and only ever real
+        # session.message_log entries. Send a real Test Request first so message_log
+        # is deterministically non-empty regardless of what order tests run in
+        # (the global FixSession singleton is process-wide and this test module is
+        # not guaranteed to run before/after its siblings under pytest-randomly).
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={"test_req_id": "TEST-STATUS-SEED"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+
         with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
             resp = client.get(
                 "/pilots/execution/fix/session/status",
@@ -6317,12 +6590,42 @@ class TestFixGatewaySessionEndpoints:
         assert isinstance(body["out_seq_num"], int)
         assert isinstance(body["gap_queue_depth"], int)
         assert isinstance(body["venues_active"], list)
-        assert "NYSE" in body["venues_active"]
-        assert "NASDAQ" in body["venues_active"]
+        # Real MultiVenueAggregator venues, not the old fabricated equity list.
+        assert set(body["venues_active"]) == {"CBOE", "MIAX", "BOX", "PHLX", "ARCA", "EDGX"}
+        assert "NYSE" not in body["venues_active"]
+        assert "NASDAQ" not in body["venues_active"]
         assert "venue_stats" in body
-        assert len(body["venue_stats"]) >= 5
+        assert len(body["venue_stats"]) == 6
+        for v in body["venue_stats"]:
+            # Real VenueConfig-backed fields are always populated numerically.
+            assert isinstance(v["base_latency_ms"], (int, float))
+            assert isinstance(v["maker_fee"], (int, float))
+            assert isinstance(v["taker_fee"], (int, float))
+            assert isinstance(v["liquidity_depth"], (int, float))
+            # Fields with no real source in this stateless aggregator are honestly
+            # None rather than a fabricated plausible-looking number.
+            assert v["fill_rate_pct"] is None
+            assert v["share_of_flow_pct"] is None
         assert "audit_log" in body
         assert len(body["audit_log"]) > 0
+        # No fabricated ORD-99124/CL-3019 fake fill in the log.
+        assert not any("ORD-99124" in line for line in body["audit_log"])
+        assert "session_uptime_sec" in body
+        assert body["session_uptime_sec"] is None or body["session_uptime_sec"] >= 0
+
+    def test_get_fix_session_status_no_fabricated_audit_log_when_empty(self):
+        # A brand-new session with zero real messages returns an honest empty
+        # audit_log rather than a synthetic fallback (audit finding Critical #9).
+        import execution.fix_gateway as fix_gateway_module
+
+        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
+            with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+                resp = client.get(
+                    "/pilots/execution/fix/session/status",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json()["audit_log"] == []
 
     def test_get_fix_session_status_fail_open_without_token(self):
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -6390,3 +6693,40 @@ class TestFixGatewaySessionEndpoints:
                 headers={"Authorization": "Bearer WRONG_TOKEN"},
             )
         assert resp.status_code == 401
+
+
+class TestFixRouteOrderSymbolValidation:
+    """Phase 36 remediation item 19 (audit High): FixRouteOrderRequest.symbol must
+    reject FIX tag-injection characters (SOH, '=', '|') rather than silently
+    accepting them, since they could inject spurious tag-value pairs into a
+    downstream raw FIX message via the Symbol tag (55).
+    """
+
+    @pytest.mark.parametrize("bad_symbol", ["AAPL\x0135=D", "AAPL=INJECT", "AAPL|55=XYZ"])
+    def test_soh_and_delimiter_symbols_rejected_with_422(self, bad_symbol):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={
+                    "symbol": bad_symbol,
+                    "side": "BUY",
+                    "quantity": 10,
+                    "limit_price": 100.0,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_clean_symbol_accepted(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/pilots/execution/fix/route",
+                json={
+                    "symbol": "AAPL",
+                    "side": "BUY",
+                    "quantity": 10,
+                    "limit_price": 100.0,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200

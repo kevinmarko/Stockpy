@@ -4,12 +4,16 @@ Implements Lopez de Prado's Hierarchical Risk Parity portfolio allocation combin
 with Conditional Value at Risk (CVaR / Expected Shortfall) optimization.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
 from scipy.optimize import minimize
 from typing import List, Dict, Optional, Tuple, Any, Union
+
+logger = logging.getLogger(__name__)
 
 def compute_correlation_distance(cov: pd.DataFrame) -> pd.DataFrame:
     """
@@ -269,6 +273,7 @@ def optimize_turnover_regularized_hrp_cvar(
     # Compute baseline HRP weights as starting point
     cov = returns.cov()
     dendrogram_tree: Dict[str, Any] = {}
+    hrp_fallback = False
     try:
         dist = compute_correlation_distance(cov)
         dist_np = dist.values
@@ -288,8 +293,10 @@ def optimize_turnover_regularized_hrp_cvar(
         sort_ix = quasi_diagonalization(dist)
         hrp_series = recursive_bisection(cov, sort_ix)
         w_hrp = hrp_series.reindex(assets).fillna(1.0 / N).values
-    except Exception:
+    except Exception as exc:
+        logger.warning("HRP quasi-diagonalization failed, falling back to equal-weight: %s", exc)
         w_hrp = np.ones(N) / N
+        hrp_fallback = True
 
     # Initial guess: clipped and normalized HRP weights within bounds
     w_init = np.clip(w_hrp, min_weight, max_weight)
@@ -443,6 +450,7 @@ def optimize_turnover_regularized_hrp_cvar(
         "diversification_ratio": diversification_ratio,
         "dendrogram": dendrogram_tree,
         "status": status,
+        "hrp_fallback": hrp_fallback,
     }
 
 

@@ -37,7 +37,12 @@ const REGIME_OPTIONS: RegimeOption[] = [
     id: "stagflation",
     name: "Stagflation",
     badge: "MACRO STRESS",
-    description: "Persistent negative drift + elevated rate vol",
+    description:
+      "Persistent negative drift + elevated rate vol. Caveat: no real inflation " +
+      "series feeds this platform's regime detection, so unlike the other four " +
+      "regimes this class has no real historical training examples today -- " +
+      "results reflect classifier-free guidance only, not learned stagflation " +
+      "conditioning.",
     color: theme.caution,
   },
   {

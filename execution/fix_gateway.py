@@ -12,13 +12,22 @@ import random
 import uuid
 import logging
 from enum import Enum
-from typing import Dict, List, Optional, Any, Tuple, Union, Callable, Awaitable
+from typing import Dict, List, Optional, Any, Tuple, Union, Callable, Awaitable, Set
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # --- FIX Constants & Delimiters ---
 
 SOH = "\x01"
 SOH_BYTES = b"\x01"
+
+# --- Session buffer bounds (memory-leak guard) ---
+# Long-lived FixSession instances (the global singleton in particular) previously
+# grew message_log/sent_messages/received_messages/gap_queue without bound across
+# the process lifetime. Trim-on-append to the most recent N entries.
+_MAX_MESSAGE_LOG_SIZE = 1000
+_MAX_GAP_QUEUE_SIZE = 500
 
 # --- FIX Data Types & Enums ---
 
@@ -1080,6 +1089,55 @@ class ExecutionReport(FixMessage):
 
 # --- FIX Session State Machine & Recovery ---
 
+# Known-legitimate state transitions, enumerated from every `self.state = X`
+# assignment this module's own code actually performs (connect/disconnect/
+# simulate_receive/_process_message_payload/_drain_gap_queue/restore_state).
+# Consulted by FixSession._set_state() to WARN (never block) on a transition this
+# table doesn't recognize -- a visibility fix, not an enforcement fix, since this
+# pass didn't attempt to fully re-derive every edge case the current code handles.
+_VALID_TRANSITIONS: Dict["FixSessionState", Set["FixSessionState"]] = {
+    FixSessionState.DISCONNECTED: {
+        FixSessionState.LOGON_SENT, FixSessionState.ACTIVE, FixSessionState.DISCONNECTED,
+        # disconnect() unconditionally sets LOGOUT_SENT regardless of current state
+        # (e.g. calling it on an already-disconnected/never-connected session), and
+        # simulate_receive()'s gap detection can fire before any connect() ever
+        # happened (e.g. a raw inbound message hitting a fresh session in tests).
+        FixSessionState.LOGOUT_SENT, FixSessionState.RESEND_REQUESTED,
+    },
+    FixSessionState.CONNECTING: {
+        FixSessionState.ACTIVE, FixSessionState.LOGON_SENT,
+    },
+    FixSessionState.LOGON_SENT: {
+        FixSessionState.ACTIVE, FixSessionState.LOGON_SENT,
+        FixSessionState.DISCONNECTED, FixSessionState.LOGOUT_SENT,
+    },
+    FixSessionState.LOGON_RECEIVED: {
+        FixSessionState.ACTIVE,
+    },
+    FixSessionState.ACTIVE: {
+        FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING,
+        FixSessionState.LOGOUT_SENT, FixSessionState.DISCONNECTED,
+        FixSessionState.LOGON_SENT, FixSessionState.ACTIVE,
+    },
+    FixSessionState.RESEND_REQUESTED: {
+        FixSessionState.GAP_FILL_PROCESSING, FixSessionState.ACTIVE,
+        FixSessionState.RESEND_REQUESTED, FixSessionState.DISCONNECTED,
+        FixSessionState.LOGOUT_SENT, FixSessionState.LOGON_SENT,
+    },
+    FixSessionState.GAP_FILL_PROCESSING: {
+        FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED,
+        FixSessionState.DISCONNECTED, FixSessionState.LOGOUT_SENT,
+        FixSessionState.LOGON_SENT,
+    },
+    FixSessionState.LOGOUT_SENT: {
+        FixSessionState.DISCONNECTED,
+    },
+    FixSessionState.SUSPENDED: {
+        FixSessionState.LOGON_SENT, FixSessionState.ACTIVE, FixSessionState.DISCONNECTED,
+    },
+}
+
+
 class FixSession:
     """
     FIX 4.4 Institutional Session State Machine with Resilient Recovery.
@@ -1100,14 +1158,15 @@ class FixSession:
         self.target_comp_id = target_comp_id
         self.heartbeat_int = int(heartbeat_int)
         self.session_id = f"{sender_comp_id}->{target_comp_id}"
-        self.state = FixSessionState.DISCONNECTED
-        
+        self._set_state(FixSessionState.DISCONNECTED)
+        self.connected_at: Optional[float] = None
+
         self._in_seq_num = 1
         self._out_seq_num = 1
         self._last_received_time: float = time.time()
         self._last_sent_time: float = time.time()
         self.pending_resend_range: Optional[Tuple[int, int]] = None
-        
+
         self.message_log: List[Dict[str, Any]] = []
         self.sent_messages: List[FixMessage] = []
         self.received_messages: List[FixMessage] = []
@@ -1216,10 +1275,27 @@ class FixSession:
         except Exception:
             pass
 
+    def _set_state(self, new_state: "FixSessionState") -> None:
+        """Set self.state, logging a WARNING (never raising or blocking) when the
+        transition from the current state isn't one this module's own code is known
+        to perform (see _VALID_TRANSITIONS above). This is a visibility fix, not an
+        enforcement fix -- an unrecognized transition is still applied as requested.
+        """
+        old_state = getattr(self, "state", None)
+        if old_state is not None and old_state != new_state:
+            allowed = _VALID_TRANSITIONS.get(old_state, set())
+            if new_state not in allowed:
+                logger.warning(
+                    "FixSession %s: unexpected state transition %s -> %s",
+                    getattr(self, "session_id", "?"), old_state, new_state,
+                )
+        self.state = new_state
+
     async def connect(self, reset_seq: bool = False):
         """Initiate logon sequence and activate heartbeat loop."""
         async with self._lock:
-            self.state = FixSessionState.LOGON_SENT
+            self._set_state(FixSessionState.LOGON_SENT)
+            self.connected_at = time.time()
             await asyncio.sleep(0.01)
             logon_msg = Logon(
                 self.sender_comp_id,
@@ -1229,13 +1305,19 @@ class FixSession:
                 reset_seq_num=reset_seq,
             )
             self._send(logon_msg)
-            self.state = FixSessionState.ACTIVE
+            self._set_state(FixSessionState.ACTIVE)
+            if self._heartbeat_task is not None and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+                try:
+                    await self._heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def disconnect(self, text: Optional[str] = None):
         """Initiate logout sequence and cancel heartbeat task."""
         async with self._lock:
-            self.state = FixSessionState.LOGOUT_SENT
+            self._set_state(FixSessionState.LOGOUT_SENT)
             logout_msg = Logout(self.sender_comp_id, self.target_comp_id, self.out_seq_num, text=text)
             self._send(logout_msg)
             if self._heartbeat_task:
@@ -1245,7 +1327,7 @@ class FixSession:
                 except asyncio.CancelledError:
                     pass
                 self._heartbeat_task = None
-            self.state = FixSessionState.DISCONNECTED
+            self._set_state(FixSessionState.DISCONNECTED)
 
     async def _heartbeat_loop(self):
         """Background heartbeat and inactivity watchdog generator loop."""
@@ -1290,7 +1372,11 @@ class FixSession:
         """Send message, updating outbound sequence number and message log."""
         msg.seq_num = self.out_seq_num
         self.message_log.append(msg.to_dict())
+        if len(self.message_log) > _MAX_MESSAGE_LOG_SIZE:
+            del self.message_log[: len(self.message_log) - _MAX_MESSAGE_LOG_SIZE]
         self.sent_messages.append(msg)
+        if len(self.sent_messages) > _MAX_MESSAGE_LOG_SIZE:
+            del self.sent_messages[: len(self.sent_messages) - _MAX_MESSAGE_LOG_SIZE]
         self.out_seq_num += 1
         self.last_sent_at = time.time()
         return msg
@@ -1506,6 +1592,8 @@ class FixSession:
 
         self.last_heard_at = time.time()
         self.received_messages.append(msg)
+        if len(self.received_messages) > _MAX_MESSAGE_LOG_SIZE:
+            del self.received_messages[: len(self.received_messages) - _MAX_MESSAGE_LOG_SIZE]
         seq = msg.seq_num
 
         # Sequence number handling & gap detection
@@ -1522,8 +1610,15 @@ class FixSession:
 
         # Sequence Gap Detected! (Incoming MsgSeqNum > expected in_seq_num)
         if seq > self.in_seq_num:
+            if seq not in self.gap_queue and len(self.gap_queue) >= _MAX_GAP_QUEUE_SIZE:
+                oldest_seq = min(self.gap_queue.keys())
+                del self.gap_queue[oldest_seq]
+                logger.warning(
+                    "FixSession %s: gap_queue exceeded max size %d, dropping oldest buffered seq %d",
+                    self.session_id, _MAX_GAP_QUEUE_SIZE, oldest_seq,
+                )
             self.gap_queue[seq] = msg
-            self.state = FixSessionState.RESEND_REQUESTED
+            self._set_state(FixSessionState.RESEND_REQUESTED)
             self.pending_resend_range = (self.in_seq_num, seq - 1)
             # Send ResendRequest for the missing gap [in_seq_num, 0]
             self.send_resend_request(begin_seq_no=self.in_seq_num, end_seq_no=0)
@@ -1541,7 +1636,7 @@ class FixSession:
 
         # Expected sequence number (seq == self.in_seq_num)
         if msg.msg_type_val == FixMsgType.SEQUENCE_RESET.value and msg.tags.get("123") == "Y":
-            self.state = FixSessionState.GAP_FILL_PROCESSING
+            self._set_state(FixSessionState.GAP_FILL_PROCESSING)
             self._process_message_payload(msg)
         else:
             self._process_message_payload(msg)
@@ -1560,7 +1655,7 @@ class FixSession:
                 self.in_seq_num += 1
 
         if not self.gap_queue and self.state in {FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
-            self.state = FixSessionState.ACTIVE
+            self._set_state(FixSessionState.ACTIVE)
             self.pending_resend_range = None
 
     def _process_message_payload(self, msg: FixMessage) -> None:
@@ -1572,11 +1667,11 @@ class FixSession:
                 self.in_seq_num = 1
                 self.out_seq_num = 1
             if self.state in {FixSessionState.DISCONNECTED, FixSessionState.LOGON_SENT, FixSessionState.CONNECTING}:
-                self.state = FixSessionState.ACTIVE
+                self._set_state(FixSessionState.ACTIVE)
             self._invoke_callback(self.on_logon, msg)
 
         elif msg_type == FixMsgType.LOGOUT.value:
-            self.state = FixSessionState.DISCONNECTED
+            self._set_state(FixSessionState.DISCONNECTED)
             if self._heartbeat_task:
                 self._heartbeat_task.cancel()
                 self._heartbeat_task = None
@@ -1783,9 +1878,9 @@ class FixSession:
             
             st_val = state_dict.get("state", FixSessionState.DISCONNECTED.value)
             try:
-                self.state = FixSessionState(st_val)
+                self._set_state(FixSessionState(st_val))
             except ValueError:
-                self.state = FixSessionState.DISCONNECTED
+                self._set_state(FixSessionState.DISCONNECTED)
 
             self.in_seq_num = int(state_dict.get("in_seq_num", 1))
             self.out_seq_num = int(state_dict.get("out_seq_num", 1))
@@ -2267,19 +2362,42 @@ _global_fix_session: Optional[FixSession] = None
 
 
 def get_global_fix_session() -> FixSession:
-    """Returns or creates the shared institutional FIX 4.4 session singleton."""
+    """Returns or creates the shared institutional FIX 4.4 session singleton.
+
+    On first construction, attempts to restore persisted sequence numbers, session
+    state, and order book from disk -- mirroring FixSessionManager.get_or_create_session's
+    own restore order: a session-specific state file first
+    (output/fix_session_INVESTYO_PWA_FIX_GATEWAY.json), falling back to the shared
+    default file (output/fix_session_state.json) -- so a process restart doesn't
+    silently reset sequence numbers to a hardcoded starting point out from under a
+    real venue counterparty. restore_state() never raises (it logs and returns False
+    on a missing/corrupt file), so this falls back to the prior hardcoded-fresh-session
+    behavior whenever no valid state file exists.
+    """
     global _global_fix_session
     if _global_fix_session is None:
+        import os
+
         _global_fix_session = FixSession(
             sender_comp_id="INVESTYO_PWA",
             target_comp_id="FIX_GATEWAY",
             heartbeat_int=30,
         )
-        _global_fix_session.state = FixSessionState.CONNECTED
-        _global_fix_session.out_seq_num = 142
-        _global_fix_session.in_seq_num = 142
-        _global_fix_session.last_heard_at = time.time()
-        _global_fix_session.last_sent_at = time.time()
+        state_dir = "output"
+        session_file = os.path.join(state_dir, "fix_session_INVESTYO_PWA_FIX_GATEWAY.json")
+        global_file = os.path.join(state_dir, "fix_session_state.json")
+        restored = False
+        if os.path.exists(session_file):
+            restored = _global_fix_session.restore_state(session_file)
+        if not restored and os.path.exists(global_file):
+            restored = _global_fix_session.restore_state(global_file)
+
+        if not restored:
+            _global_fix_session._set_state(FixSessionState.CONNECTED)
+            _global_fix_session.out_seq_num = 142
+            _global_fix_session.in_seq_num = 142
+            _global_fix_session.last_heard_at = time.time()
+            _global_fix_session.last_sent_at = time.time()
     return _global_fix_session
 
 

@@ -19,7 +19,7 @@ import { GexProfileView } from "../components/options/GexProfileView";
 import { LobDepthView } from "../components/options/LobDepthView";
 import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
 import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
-import { HrpCvarOptimizerView } from "../components/portfolio/HrpCvarOptimizerView";
+import { HrpCvarOptimizerView } from "../components/portfolio/HrpPortfolioOptimizerView";
 import { AlmgrenChrissRouterView } from "../components/execution/AlmgrenChrissRouterView";
 import { ResearchCopilotView } from "../components/ai/ResearchCopilotView";
 import { MultiBrokerGatewayView } from "../components/execution/MultiBrokerGatewayView";

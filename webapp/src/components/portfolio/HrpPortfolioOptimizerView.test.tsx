@@ -118,6 +118,9 @@ describe("HrpPortfolioOptimizerView", () => {
       expect(api.optimizeHrpCvar).toHaveBeenLastCalledWith(
         expect.objectContaining({
           lambda_turnover: 0.25,
+          // Phase 35 remediation item 13: max_asset_weight was previously a
+          // UI-only slider whose value never reached the backend call.
+          max_asset_weight: 0.45,
           sector_caps: expect.objectContaining({ Tech: 0.4 }),
         })
       );

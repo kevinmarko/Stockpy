@@ -106,6 +106,7 @@ export function HrpPortfolioOptimizerView({
         symbols: activeSymbols,
         current_weights: currentWeights,
         lambda_turnover: lambdaTurnover,
+        max_asset_weight: maxAssetWeight,
         sector_caps: sectorCaps,
         target_beta_range: [betaMin, betaMax],
         sector_map: DEFAULT_SECTOR_MAP,

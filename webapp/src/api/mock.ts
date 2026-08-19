@@ -10758,6 +10758,7 @@ export const mockApi = {
         VaR_99: Math.max(var95Fraction * spot, var99Fraction * spot),
         CVaR_99: Math.max(var99Fraction * spot, cvar99Fraction * spot),
         trained_windows: 145,
+        regime_conditioned: true,
       },
       400
     );
@@ -10833,6 +10834,37 @@ export const mockApi = {
             }
           });
         }
+      }
+    }
+
+    // Apply max_asset_weight cap if provided -- mirrors the live endpoint's
+    // sizing/hrp_cvar_optimizer.py max_weight bound (Phase 35 remediation item 13)
+    // so the mock doesn't silently ignore a request field the real backend honors.
+    // A naive cap-then-renormalize can push a capped weight back ABOVE the cap
+    // once the leftover mass is redistributed (e.g. cap=0.4 on [0.6,0.25,0.15]
+    // renormalizes to [0.5, 0.3125, 0.1875] -- still over cap), so this is a
+    // small iterative water-filling loop that genuinely converges under the cap.
+    if (req.max_asset_weight !== undefined && req.max_asset_weight !== null) {
+      const cap = req.max_asset_weight;
+      for (let iter = 0; iter < 20; iter++) {
+        const sum = proposedWeights.reduce((a, b) => a + b, 0);
+        if (sum <= 0) break;
+        proposedWeights = proposedWeights.map((w) => w / sum);
+        let excess = 0;
+        const freeIdx: number[] = [];
+        proposedWeights = proposedWeights.map((w, i) => {
+          if (w > cap + 1e-9) {
+            excess += w - cap;
+            return cap;
+          }
+          freeIdx.push(i);
+          return w;
+        });
+        if (excess <= 1e-9 || freeIdx.length === 0) break;
+        const freeSum = freeIdx.reduce((a, i) => a + proposedWeights[i], 0);
+        freeIdx.forEach((i) => {
+          proposedWeights[i] += excess * (freeSum > 0 ? proposedWeights[i] / freeSum : 1 / freeIdx.length);
+        });
       }
     }
 

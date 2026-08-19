@@ -4928,6 +4928,11 @@ export interface DiffusionStressResponse {
   VaR_99?: number;
   CVaR_99?: number;
   trained_windows?: number;
+  /** True when real per-window macro-regime labels were derived and passed
+   * into training (Phase 34 remediation item 11); false/absent means the
+   * model trained unconditionally (e.g. macro-regime derivation failed or
+   * degraded -- see api/pilots_api.py's _derive_diffusion_regime_labels). */
+  regime_conditioned?: boolean;
 }
 
 export interface HrpCvarOptimizeRequest {
@@ -4940,6 +4945,7 @@ export interface HrpCvarOptimizeRequest {
   target_beta_range?: [number, number] | number[];
   sector_map?: Record<string, string>;
   asset_betas?: Record<string, number>;
+  max_asset_weight?: number;
 }
 
 export interface HrpCvarClusterNode {

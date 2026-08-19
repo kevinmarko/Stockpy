@@ -330,3 +330,46 @@ def test_edge_cases_single_and_empty():
     assert res_single["diversification_ratio"] == 1.0
 
 
+def test_hrp_fallback_flag_and_warning_on_clustering_failure(monkeypatch, caplog):
+    """
+    Phase 35 remediation item 14 (audit Critical #8): when quasi-diagonalization/
+    recursive-bisection fails, the function used to silently degrade to
+    equal-weight with zero logging and no way for a caller to distinguish it from
+    a genuinely-computed HRP baseline. Force the failure and confirm both a WARNING
+    is logged and the new `hrp_fallback` flag is honestly True.
+    """
+    import sizing.hrp_cvar_optimizer as hrp_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced quasi-diagonalization failure")
+
+    monkeypatch.setattr(hrp_mod, "quasi_diagonalization", _boom)
+
+    np.random.seed(7)
+    returns = pd.DataFrame(
+        np.random.normal(0.001, 0.02, size=(300, 3)),
+        columns=['A', 'B', 'C'],
+    )
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="sizing.hrp_cvar_optimizer"):
+        res = optimize_turnover_regularized_hrp_cvar(returns, target_beta_range=None)
+
+    assert res["hrp_fallback"] is True
+    assert np.isclose(sum(res["weights"].values()), 1.0)
+    assert any(
+        "quasi-diagonalization failed" in record.message for record in caplog.records
+    )
+
+
+def test_hrp_fallback_flag_false_on_success():
+    """The happy path leaves hrp_fallback honestly False -- no degradation occurred."""
+    np.random.seed(7)
+    returns = pd.DataFrame(
+        np.random.normal(0.001, 0.02, size=(300, 3)),
+        columns=['A', 'B', 'C'],
+    )
+    res = optimize_turnover_regularized_hrp_cvar(returns, target_beta_range=None)
+    assert res["hrp_fallback"] is False
+
+
