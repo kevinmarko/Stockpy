@@ -87,6 +87,15 @@ WRITE_GATE_REASONS: dict[str, str] = {
         "settings_keysets.DANGEROUS_KEYS) which decides whether an order is "
         "real."
     ),
+    "FIX_GATEWAY_ENABLED": (
+        "Gates POST /pilots/execution/fix/route and the FIX session-"
+        "management endpoints (test-request, reset-seq, reconnect, "
+        "session/status) on the Pilots API "
+        "(api/pilots_api.py::require_fix_gateway_enabled), on top of their "
+        "existing command/read-token checks. Defaults True: the FIX 4.4 "
+        "gateway (execution/fix_gateway.py) is fully simulated -- it never "
+        "opens a real venue connection or touches real capital."
+    ),
 }
 
 # -- Read-only diagnostic/data features (2026-08-07, opt-in by operator -----

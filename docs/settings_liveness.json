@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 312,
+    "live_safe": 315,
     "no_op": 3,
     "restart_required": 104,
-    "total": 419
+    "total": 422
   },
   "dynamic_sites": [
     {
@@ -218,6 +218,8 @@
     "FINBERT_ENABLED",
     "FINBERT_SCORE_CACHE_ENABLED",
     "FINNHUB_API_KEY",
+    "FIX_GATEWAY_ENABLED",
+    "FIX_HEARTBEAT_INTERVAL_SECONDS",
     "FLATTEN_ON_KILL",
     "FMP_ANALYST_ENABLED",
     "FMP_ANALYST_REFRESH_HOURS",
@@ -452,7 +454,8 @@
     "VOL_TARGET",
     "WATCH_RULES_FILE",
     "WIKIPEDIA_ATTENTION_ENABLED",
-    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
+    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
+    "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
   "no_op": [
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
@@ -461,13 +464,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 829,
+    "attr": 832,
     "factory_param": 4,
     "getattr_const": 355,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 244,
+    "attr": 247,
     "factory_param": 4,
     "getattr_const": 203,
     "os_environ": 18

@@ -1355,6 +1355,10 @@ class Settings(BaseSettings):
         description="Webhook URL for CRITICAL drift alerts (Slack/Discord incoming webhook).",
     )
 
+    # --- FIX 4.4 Gateway (execution/fix_gateway.py) ---
+    FIX_GATEWAY_ENABLED: bool = Field(default=True, description="Master switch for the simulated FIX 4.4 gateway's route/session endpoints (POST /pilots/execution/fix/route and session management). Defaults True since this module is fully simulated -- it never touches real capital or a real venue connection -- following this repo's 2026-08-03 convention that new admin/execution capabilities default ON unless they change live trading behavior.")
+    FIX_HEARTBEAT_INTERVAL_SECONDS: int = Field(default=30, description="Heartbeat interval (seconds) for FixSession -- was previously hardcoded as the class constructor default; now operator-configurable.")
+
     # --- Pre-trade risk gate (execution/risk_gate.py) ---
     MAX_CORRELATION: float = Field(
         default=0.85,
@@ -1578,6 +1582,7 @@ class Settings(BaseSettings):
     PROGRESS_POLL_SECONDS: int = Field(
         default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
     )
+    WS_RISK_STREAM_INTERVAL_SECONDS: float = Field(default=1.0, description="Poll interval (seconds) for the /ws/risk/portfolio WebSocket stream -- was previously a hardcoded asyncio.sleep(1.0).")
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
     PAPER_TRADING_START_DATE: Optional[str] = Field(

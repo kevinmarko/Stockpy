@@ -244,6 +244,21 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ADVISORY_ONLY",              # bool — execution quarantine
     # Universe / signals (JSON-encoded)
     "DEFAULT_TICKERS",
+    # NOTE: NO_VENV_REEXEC does not belong in this "JSON-encoded" comment group
+    # (it's a plain scalar, not JSON) -- left here rather than reshuffled since
+    # moving it risks a merge collision with concurrent edits to this list.
+    # More importantly: a GUI/.env write to this key is structurally INERT for
+    # its actual purpose. scripts/_bootstrap.py reads NO_VENV_REEXEC via a real
+    # shell-exported environment variable BEFORE .env is ever parsed --
+    # categorically, on every invocation -- so only an actually-exported shell
+    # variable (e.g. `NO_VENV_REEXEC=1 python3 scripts/...`) has any effect;
+    # writing it through gui/env_io.py only ever updates .env, which is read
+    # too late to matter. It correctly stays in ALLOWED_KEYS rather than
+    # EXCLUDED_FROM_GUI (that set is reserved for filesystem-path fields per
+    # its own header comment, and NO_VENV_REEXEC is not a secret either, so
+    # per this file's 2026-08-08 "GUI-writability is gated on secrecy alone"
+    # policy it is correctly classified here) -- this comment documents the
+    # limitation honestly rather than silently leaving a no-op GUI control.
     "NO_VENV_REEXEC",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
@@ -645,6 +660,15 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "OPTIONS_GEX_SEARCH_RANGE_PCT",
     "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
     "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
+    # FIX 4.4 Gateway (execution/fix_gateway.py) + WS risk stream (api/ws_api.py).
+    # All three are non-secret tunables — no credential material. The FIX
+    # gateway is fully simulated (never touches real capital or a real venue
+    # connection), so a GUI bug here can only make the simulated route/session
+    # endpoints reachable/unreachable or change a heartbeat cadence, not enable
+    # anything dangerous.
+    "FIX_GATEWAY_ENABLED",
+    "FIX_HEARTBEAT_INTERVAL_SECONDS",
+    "WS_RISK_STREAM_INTERVAL_SECONDS",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
