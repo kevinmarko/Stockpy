@@ -77,7 +77,11 @@ def test_reader_wrong_shape_degrades(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 def test_commands_endpoint_shape_from_committed_manifest():
     # Reads the real committed cli_introspect/command_manifest.json.
-    resp = client.get("/commands")
+    # Fail-open GET, no Authorization header sent -- pinned STATE_API_TOKEN
+    # unset (matching test_commands_endpoint_fail_open_no_token below) so
+    # this doesn't depend on the machine's real .env leaving it unset.
+    with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+        resp = client.get("/commands")
     assert resp.status_code == 200
     body = resp.json()
     assert body["reason"] is None
@@ -102,6 +106,7 @@ def test_commands_endpoint_cold_start_reason(monkeypatch, tmp_path: Path):
     # No manifest present → honest empty shape with a reason, still 200 (matches
     # /options and /pairs cold-start behavior; never a fabricated command list).
     monkeypatch.setattr(commands_reader, "_DEFAULT_MANIFEST", tmp_path / "absent.json")
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "")
     resp = client.get("/commands")
     assert resp.status_code == 200
     body = resp.json()

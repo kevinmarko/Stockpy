@@ -472,8 +472,17 @@ class TestGrounding:
         import llm.research as research_mod
 
         monkeypatch.setattr(_settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
-        # No FINNHUB_API_KEY configured by default in test env — build_finnhub_client
-        # degrades to None, so the packet should be the empty shape.
+        # No news provider configured -- must be enforced explicitly, not
+        # merely assumed absent: a machine with a real, populated .env has
+        # both FINNHUB_API_KEY and FMP_API_KEY set for live use, and
+        # fetch_company_headlines (the FMP-first/Finnhub-fallback
+        # dispatcher _gather_grounding calls) would otherwise make a REAL
+        # network call and return real headlines during this offline test.
+        monkeypatch.setattr(_settings, "FINNHUB_API_KEY", None, raising=False)
+        monkeypatch.setattr(_settings, "FMP_API_KEY", None, raising=False)
+        monkeypatch.setattr(_settings, "FMP_NEWS_ENABLED", False, raising=False)
+        # With both providers unavailable, build_finnhub_client/the FMP path
+        # degrade to None, so the packet should be the empty shape.
         packet = research_mod._gather_grounding("AAPL", context=None)
         assert packet["headlines"] == []
         assert packet["next_earnings"] is None

@@ -81,8 +81,22 @@ def no_dotenv(monkeypatch: pytest.MonkeyPatch):
     Same fixture as ``tests/test_runtime_flags.py``: without it, whether a field
     counts as env-pinned depends on the developer's real ``.env``, which differs
     between the operator's checkout (populated) and CI (absent).
+
+    Patching ``_dotenv_entries`` alone is not sufficient on a machine with a
+    real, populated ``.env``: another test module's own import-time
+    ``load_dotenv(ENV_PATH, override=False)`` call (~14 call sites across this
+    codebase) copies ``.env`` into real ``os.environ`` earlier in this same
+    pytest session, and that mutation persists independent of this fixture.
+    With ``_dotenv_entries`` patched to ``{}``, any such name already present
+    in ``os.environ`` then looks like a genuine shell export to
+    ``real_environment_keys()`` and gets pinned. The ``live`` fixture already
+    clears the FIELD/OTHER_FIELD/CONCURRENT_FIELDS probes it uses;
+    ``ROBINHOOD_EXECUTION_MODE`` is the one additional probe field used
+    directly by this file's ``TestInvalidValue`` tests, cleared here too so
+    they are deterministic regardless of this machine's real .env.
     """
     monkeypatch.setattr(runtime_flags, "_dotenv_entries", lambda: {})
+    monkeypatch.delenv("ROBINHOOD_EXECUTION_MODE", raising=False)
 
 
 @pytest.fixture

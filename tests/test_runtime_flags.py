@@ -94,8 +94,29 @@ def no_dotenv(monkeypatch: pytest.MonkeyPatch):
     Without this, whether a field is considered env-pinned depends on the
     developer's real ``.env`` — which differs between the operator's checkout
     (populated) and CI/a fresh worktree (absent).
+
+    Patching ``_dotenv_entries`` alone is not sufficient on a machine with a
+    real, populated ``.env``: this module's own docstring notes ~14 call
+    sites in this codebase run ``load_dotenv(ENV_PATH, override=False)`` at
+    import time, which COPIES ``.env`` into real ``os.environ`` the first
+    time one of those modules (e.g. ``api.pilots_api``, imported by other
+    test files in this same pytest session) is imported — and that
+    os.environ mutation persists for the rest of the process, independent of
+    this fixture. With ``_dotenv_entries`` patched to ``{}``, every name
+    already present in ``os.environ`` (including one put there by that
+    earlier import, not by a real shell export) then looks like a genuine
+    shell export to ``real_environment_keys()`` and gets pinned, which is
+    exactly backwards for a test asserting "the override applies". The two
+    probe fields this file's ``no_dotenv``-consuming tests use --
+    ``BETA_LOOKBACK_DAYS`` and ``ROBINHOOD_EXECUTION_MODE`` -- are cleared
+    explicitly so those tests are deterministic regardless of this
+    machine's real .env or another test file's import-time
+    ``load_dotenv()``.
     """
     monkeypatch.setattr(runtime_flags, "_dotenv_entries", lambda: {})
+    monkeypatch.delenv("BETA_LOOKBACK_DAYS", raising=False)
+    monkeypatch.delenv("ROBINHOOD_EXECUTION_MODE", raising=False)
+    monkeypatch.delenv("FORECAST_PROPHET_WEIGHT", raising=False)
 
 
 # ===========================================================================

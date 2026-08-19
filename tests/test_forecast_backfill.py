@@ -730,6 +730,12 @@ def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):
 
     summary_file.write_text(json.dumps(mock_payload))
     monkeypatch.setattr("settings.settings.OUTPUT_DIR", tmp_path)
+    # GET /pilots/forecast_backfill is gated by require_read_token
+    # (STATE_API_TOKEN). This client sends no Authorization header at all,
+    # relying on the fail-open-on-loopback path -- pinned explicitly so it
+    # doesn't depend on the machine's real .env leaving STATE_API_TOKEN
+    # unset.
+    monkeypatch.setattr("settings.settings.STATE_API_TOKEN", None)
 
     res = client.get("/pilots/forecast_backfill")
     assert res.status_code == 200
@@ -879,12 +885,19 @@ class TestForecastBackfillRunEndpointHappyPath:
 
 
 class TestForecastBackfillStatusEndpoint:
+    """Every GET here is gated by require_read_token (STATE_API_TOKEN) and
+    sends no Authorization header at all, relying on the fail-open-on-loopback
+    path -- STATE_API_TOKEN is pinned unset in each test so this doesn't
+    depend on the machine's real .env leaving it unset."""
+
     def test_status_unknown_job_returns_404(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
         monkeypatch.setattr(pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: None)
         resp = _client.get("/pilots/forecast_backfill/status/nope")
         assert resp.status_code == 404
 
     def test_status_known_job_returns_serialized_shape(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
         monkeypatch.setattr(
             pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: "job-obj"
         )
@@ -915,6 +928,7 @@ class TestForecastBackfillStatusEndpoint:
         """GET status is read-only -- require_read_token alone, matching
         every other GET in this file. Must succeed even with the master
         write flag off."""
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
         monkeypatch.setattr(
             pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: "job-obj"
         )
