@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 302,
+    "live_safe": 312,
     "no_op": 3,
-    "restart_required": 100,
-    "total": 405
+    "restart_required": 104,
+    "total": 419
   },
   "dynamic_sites": [
     {
@@ -42,28 +42,28 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 176,
+      "line": 177,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3165,
+      "line": 3167,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4271,
+      "line": 4273,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4376,
+      "line": 4378,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 416,
+  "files_scanned": 418,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -175,6 +175,8 @@
     "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
     "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
     "CACHE_LONG_SHORT_WRITES_ENABLED",
+    "CIRCUIT_BREAKER_ENABLED",
+    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
     "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
@@ -277,12 +279,20 @@
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "GRAVITY_REQUIRE_NATIVE",
     "HISTORICAL_STORE_ENABLED",
+    "HMM_CREDIT_SPREAD_FEATURE_ENABLED",
+    "HMM_INFLATION_FEATURE_ENABLED",
+    "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
+    "HMM_RISK_ON_DOWNGRADE_THRESHOLD",
+    "HMM_STANDARDIZE_FEATURES_ENABLED",
+    "HMM_VOL_TERM_SPREAD_FEATURE_ENABLED",
     "JOBS_API_ENABLED",
     "JULES_API_KEY",
     "JULES_ENABLED",
     "JULES_REQUEST_TIMEOUT_SECONDS",
     "KELLY_CAP",
     "KELLY_FRACTION",
+    "KILLSWITCH_SAHM_THRESHOLD_AGREED",
+    "KILLSWITCH_VIX_THRESHOLD_AGREED",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
     "LIVE_TRADE_APPROVAL_ENABLED",
     "LIVE_TRADE_EXECUTION_ENABLED",
@@ -451,15 +461,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 806,
+    "attr": 829,
     "factory_param": 4,
-    "getattr_const": 349,
+    "getattr_const": 355,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 235,
+    "attr": 244,
     "factory_param": 4,
-    "getattr_const": 198,
+    "getattr_const": 203,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -707,7 +717,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:322",
+        "site": "api/pilots_api.py:324",
         "via": []
       },
       {
@@ -1494,7 +1504,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4753",
+        "site": "api/pilots_api.py:4755",
         "via": []
       }
     ],
@@ -1505,7 +1515,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4752",
+        "site": "api/pilots_api.py:4754",
         "via": []
       }
     ],
@@ -1516,7 +1526,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4922",
+        "site": "api/pilots_api.py:4924",
         "via": []
       },
       {
@@ -1591,7 +1601,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4894",
+        "site": "api/pilots_api.py:4896",
         "via": []
       },
       {
@@ -1635,7 +1645,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:632",
+        "site": "api/pilots_api.py:634",
         "via": []
       }
     ],
@@ -1900,6 +1910,39 @@
         "via": []
       }
     ],
+    "HMM_COVARIANCE_TYPE": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:87",
+        "via": []
+      }
+    ],
+    "HMM_N_INITS": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:90",
+        "via": []
+      }
+    ],
+    "HMM_N_ITER": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:88",
+        "via": []
+      }
+    ],
     "HMM_N_STATES": [
       {
         "discarded": false,
@@ -1930,6 +1973,17 @@
           "init_self_assign"
         ],
         "site": "execution/risk_gate.py:174",
+        "via": []
+      }
+    ],
+    "HMM_TOL": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "macro_engine.py:89",
         "via": []
       }
     ],
@@ -2909,7 +2963,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:627",
+        "site": "api/pilots_api.py:629",
         "via": []
       },
       {
@@ -2929,7 +2983,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:560",
+        "site": "pipeline/production_steps.py:564",
         "via": []
       }
     ],
@@ -2997,7 +3051,7 @@
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
     "init_body": 6,
-    "init_self_assign": 47,
+    "init_self_assign": 51,
     "method_self_assign": 4,
     "module_level": 78,
     "os_environ": 25
