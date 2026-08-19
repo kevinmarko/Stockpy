@@ -282,6 +282,14 @@ def test_normal_command_succeeds_and_builds_expected_argv(monkeypatch):
 def test_command_job_response_echoes_command_name_and_created_at(monkeypatch):
     created: list = []
     monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen(created))
+    # GET /jobs/{id} is gated by require_read_token (STATE_API_TOKEN), a
+    # DIFFERENT token than the ORCHESTRATOR_DAEMON_TOKEN _enabled() patches
+    # for the command-token-gated POST above -- _HEADERS's "Bearer
+    # test-token" only satisfies the GET on a machine where STATE_API_TOKEN
+    # is unset (the fail-open-on-loopback path this TestClient's loopback
+    # host relies on). Pinned explicitly so this doesn't depend on the
+    # machine's real .env leaving STATE_API_TOKEN unset.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
     with _manifest_patch(), _enabled():
         resp = client.post(
             "/jobs",

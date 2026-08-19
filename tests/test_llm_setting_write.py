@@ -219,7 +219,12 @@ class TestLlmSettingWriteLivePatch:
         # __exit__ regardless of any mutation during the block, so checking
         # settings.LLM_COMMENTARY_ENABLED after exiting would just observe
         # the teardown, not the endpoint's live setattr.
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+        # GET /llm/status below sends no Authorization header at all, relying
+        # on require_read_token's fail-open-on-loopback path -- STATE_API_TOKEN
+        # pinned unset (matching TestLlmStatusWritableFlag's convention) so
+        # this doesn't depend on the machine's real .env leaving it unset.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
                 with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
                     with mock.patch.object(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "none"):
@@ -246,7 +251,10 @@ class TestLlmSettingWriteLivePatch:
                             assert claude_after["enabled"] is False
 
     def test_provider_selector_write_is_visible_immediately(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+        # GET /llm/status below sends no Authorization header at all --
+        # STATE_API_TOKEN pinned unset for the same reason as the test above.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
                 with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", True):
                     with mock.patch.object(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "claude"):
@@ -346,7 +354,8 @@ class TestLlmStatusWritableFlag:
     interval.writable and GET /strategy/matrix's writable)."""
 
     def test_writable_tracks_the_flag(self, tmp_path):
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+                mock.patch.object(settings, "STATE_API_TOKEN", None):
             with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
                 on = client.get("/llm/status").json()
             with mock.patch.object(settings, "LLM_WRITES_ENABLED", False):

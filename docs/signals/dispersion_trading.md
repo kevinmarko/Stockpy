@@ -32,22 +32,20 @@ substitution's own systematic bias.
 
 Recorded so they are not lost; `pilots/*.py` is out of this task's ownership.
 
-1. **HALF FIXED (2026-08-18) — the identical-8-stock-basket defect.** `get_dispersion_opportunities`
-   no longer reads a single shared basket constant for every index — `pilots/dispersion_trading.py`
-   now has a per-index `INDEX_CONSTITUENTS_MAP`/`INDEX_WEIGHTS_MAP`. But verified directly against
-   the current source: `INDEX_CONSTITUENTS_MAP["SPY"]` is
-   `["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO"]` and
-   `INDEX_CONSTITUENTS_MAP["QQQ"]` is `["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO", "TSLA"]`
-   — the same 8 tickers as a set, only `TSLA`/`AVGO`'s list position swapped. Only
-   `INDEX_WEIGHTS_MAP`'s per-symbol weight allocations genuinely differ between the two indices
-   (e.g. `AAPL` is 0.18 under `SPY` vs 0.20 under `QQQ`). So the SPY dispersion reading is still
-   computed against a basket that is set-identical to QQQ's — a real S&P 500 dispersion trade and
-   a real Nasdaq-100 dispersion trade would draw on different, only partially overlapping,
-   mega-cap constituent sets, not the same 8 names reordered. Covered (as a "distinct, not
-   copy-pasted" check on the *weights*, not the constituent sets) by
-   `tests/test_options_desk_deployability_runtime_gap.py::test_dispersion_trading_baskets_distinct_for_spy_and_qqq`
-   — that test passes today and is correct on what it checks, but does not by itself establish
-   that the constituent baskets themselves differ.
+1. **FIXED (2026-08-19) — the identical-8-stock-basket defect.** `INDEX_CONSTITUENTS_MAP["SPY"]`
+   and `INDEX_CONSTITUENTS_MAP["QQQ"]` are no longer set-identical. Both baskets keep the real
+   mega-cap tech overlap that genuinely exists between the two indices in real life (AAPL, NVDA,
+   MSFT, AMZN, GOOGL, META are legitimately top holdings of both) — that overlap is a market
+   fact, not a bug. What now genuinely differs reflects a real structural distinction between the
+   indices: SPY (S&P 500) carries real non-tech sector weight (JPM financials, UNH healthcare)
+   that QQQ (Nasdaq-100, which structurally excludes financials by index rule) does not; QQQ
+   keeps its real growth/semiconductor tilt (AVGO, TSLA) in their place. These are static,
+   reasoned approximations of real index composition, not a live-fetched snapshot, and will drift
+   from the real, current index weights over time — see `pilots/dispersion_trading.py`'s own
+   comment above the two maps. Covered by
+   `tests/test_options_desk_deployability_runtime_gap.py::test_dispersion_trading_baskets_distinct_for_spy_and_qqq`,
+   strengthened to assert on the constituent SETS differing (not just weights on an identical
+   set), and by `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-19 entry.
 2. **FIXED (2026-08-18) — the hardcoded-Long defect.** `execute_dispersion_trade(basket=None)`
    no longer always constructs a Long Dispersion basket. Verified directly against the current
    source: the `basket is None` branch now calls `evaluate_dispersion_opportunity(...)` first and

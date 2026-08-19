@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -173,9 +174,43 @@ def _find_bare_load_dotenv_calls(path: Path) -> list[int]:
 _SCAN_EXCLUDED_DIR_PARTS = {".venv", "node_modules", "tests", "webapp", ".git"}
 
 
+def _tracked_python_files(repo_root: Path) -> list[Path]:
+    """Return every *.py file under repo_root that git considers part of
+    this checkout's own source tree — committed/tracked ("cached") plus new,
+    not-yet-`git add`ed files, as long as they aren't gitignored ("others
+    --exclude-standard").
+
+    Deliberately scoped via `git ls-files` rather than a raw
+    `Path.rglob("*.py")` filesystem walk.  A raw walk also descends into
+    gitignored directories such as `.claude/worktrees/` — the harness's own
+    per-session scratch worktrees for OTHER, possibly mid-edit, concurrent
+    agent sessions running on this same machine.  Those worktrees can
+    legitimately contain syntax-broken WIP files (e.g. an unterminated
+    string mid-edit) that were never meant to be treated as this repo's own
+    source, and ast.parse()-ing one crashes this scan with an unrelated
+    SyntaxError instead of a clean pass/fail on real code.  `--cached
+    --others --exclude-standard` is immune to this by construction:
+    anything matched by .gitignore (which already lists
+    `.claude/worktrees/`) is invisible to it — the same intent as
+    `_SCAN_EXCLUDED_DIR_PARTS` keeping out `.venv`/`node_modules`/`.git`,
+    generalized to "not part of this checkout's source" rather than an
+    ever-growing hardcoded list — while a brand-new production file a
+    developer just created (and hasn't staged yet) is still covered, unlike
+    a `--cached`-only scan.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.py"],
+        cwd=repo_root,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return [repo_root / rel for rel in result.stdout.split("\0") if rel]
+
+
 def test_no_bare_load_dotenv_calls_in_production_code() -> None:
     offenders: list[str] = []
-    for path in REPO_ROOT.rglob("*.py"):
+    for path in _tracked_python_files(REPO_ROOT):
         if any(part in _SCAN_EXCLUDED_DIR_PARTS for part in path.relative_to(REPO_ROOT).parts):
             continue
         for lineno in _find_bare_load_dotenv_calls(path):

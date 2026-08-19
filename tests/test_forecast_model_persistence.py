@@ -446,9 +446,13 @@ class TestGenerateForecastTickerThreading:
 
 class TestSettingsDefaults:
     def test_persistence_disabled_by_default(self):
+        """Checked against the field's own coded default, not a freshly
+        constructed ``Settings()`` -- the latter still reads a real,
+        operator-populated ``.env``, so it is not a reliable stand-in for
+        "the project default" on a machine with its own ``.env``."""
         from settings import Settings
-        assert Settings().FORECAST_MODEL_PERSISTENCE_ENABLED is False
+        assert Settings.model_fields["FORECAST_MODEL_PERSISTENCE_ENABLED"].default is False
 
     def test_retrain_days_default_is_seven(self):
         from settings import Settings
-        assert Settings().FORECAST_MODEL_RETRAIN_DAYS == 7
+        assert Settings.model_fields["FORECAST_MODEL_RETRAIN_DAYS"].default == 7

@@ -285,8 +285,13 @@ class TestSettings:
         assert 0.0 < settings.CORRELATION_CLUSTER_THRESHOLD <= 2.0
 
     def test_lookback_default_is_60(self):
-        from settings import settings
-        assert settings.CORRELATION_CLUSTER_LOOKBACK_DAYS == 60
+        """Checked against the field's own coded default, not the live
+        singleton -- an operator may legitimately have a different
+        CORRELATION_CLUSTER_LOOKBACK_DAYS in their own real .env, which is a
+        valid deployment choice, not a violation of the class default this
+        test is pinning down."""
+        from settings import Settings
+        assert Settings.model_fields["CORRELATION_CLUSTER_LOOKBACK_DAYS"].default == 60
 
     def test_threshold_default_is_0_4(self):
         from settings import settings

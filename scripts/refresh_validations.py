@@ -1869,9 +1869,15 @@ def _pit_row_to_fundamentals_dto(ticker: str, sector: str, raw: Dict[str, Any]):
     """
     from dto_models import FundamentalDataDTO
 
-    if not isinstance(raw, dict):
-        raw = {}
-    sector_str = str(sector) if sector is not None and not (isinstance(sector, float) and np.isnan(sector)) else "N/A"
+    # Belt-and-suspenders (the real guard lives at the raw_json parse call
+    # site in _build_signal_replay_adapter): never trust a caller-supplied
+    # `raw` to actually be a dict just because the type hint says so.
+    raw = raw if isinstance(raw, dict) else {}
+    sector_str = (
+        str(sector)
+        if sector is not None and not (isinstance(sector, float) and np.isnan(sector))
+        else "N/A"
+    )
     return FundamentalDataDTO(
         ticker=ticker,
         pe_ratio=raw.get("pe_ratio"),
@@ -2174,6 +2180,19 @@ def _build_signal_replay_adapter(
             elif isinstance(raw_json, str):
                 try:
                     parsed = json.loads(raw_json)
+                    # A well-formed row's raw_json always decodes to a dict --
+                    # matching HistoricalStore.get_fundamentals()'s own
+                    # "raw_json did not decode to a dict" guard (that method's
+                    # docstring/log message at data/historical_store.py). A
+                    # non-dict decode (str/list/number) means the stored row
+                    # itself is malformed -- e.g. a test that wrote a non-dict
+                    # "raw" payload straight through json.dumps(..., default=str)
+                    # (this repo's LOCAL_DATA_ROOT DB is shared machine-wide
+                    # across worktrees/sessions, so one badly-isolated test
+                    # elsewhere can leave a row like this behind). Degrade this
+                    # one ticker/date to no raw fundamentals data (CONSTRAINT
+                    # #4/#6) rather than letting one malformed row crash the
+                    # entire registry validation run.
                     if isinstance(parsed, dict):
                         raw_dict = parsed
                 except (ValueError, TypeError):
@@ -2960,6 +2979,91 @@ def _build_pairs_trading_adapter(
     return X, y, precomputed
 
 
+def _build_copula_stat_arb_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Non-linear copula statistical arbitrage on a cointegrated pair (default: KO/PEP),
+    validated via ``pilots/copula_stat_arb.py``'s real Clayton/Gumbel/Frank/Gaussian
+    MLE copula fitting + Kalman-filter dynamic hedge ratio -- NOT the linear
+    Engle-Granger + static-band z-score logic ``_build_pairs_trading_adapter`` above
+    validates (a different, unrelated ``signals/pairs_trading.py`` module). Added
+    2026-08 to correct a prior documentation error in ``docs/signals/copula_stat_arb.md``
+    that cited ``pairs_trading``'s STRATEGY_REGISTRY numbers as if they validated this
+    module's actual copula/Kalman logic -- see that file's "Current Status" note and
+    ``docs/VALIDATION_STRATEGY_FIX_LOG.md``'s corresponding entry.
+
+    Academic basis & methodology:
+      * Empirical-rank pseudo-observations + best-fit bivariate Archimedean copula
+        (Clayton/Gumbel/Frank) or Gaussian, refit on a strictly trailing window every
+        ``copula_cache_interval`` bars for lookahead-free per-bar tail-risk gating
+        (``pilots/copula_stat_arb.py::generate_copula_stat_arb_signals``).
+      * Dynamic 2-state Kalman filter (alpha intercept, beta slope) for the hedge
+        ratio, recursive and therefore causal by construction.
+      * Rolling spread z-score entry/exit/stop (``settings.OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD``
+        default entry, 0-cross exit, |Z| >= 4.0 stop), gated additionally on OU
+        half-life bounds (5-60 days) and lower-tail copula dependence
+        (``lambda_L <= 0.85``) -- a position is only taken when BOTH the mean-reversion
+        speed and the crash-co-movement risk are within acceptable bounds at that bar.
+
+    Universe:
+      Requires a cointegrated pair (default: ["KO", "PEP"] -- a distinct pair from
+      ``_build_pairs_trading_adapter``'s XOM/CVX, deliberately chosen so this
+      adapter validates copula-specific behavior rather than duplicating the
+      linear pairs-trading pair).
+    """
+    from pilots.copula_stat_arb import generate_copula_stat_arb_signals
+
+    if isinstance(closes, pd.Series):
+        raise ValueError("copula_stat_arb adapter requires a multi-column DataFrame with at least two asset prices.")
+
+    if "KO" in closes.columns and "PEP" in closes.columns:
+        y_col, x_col = "KO", "PEP"
+    else:
+        tradeable = list(closes.columns)
+        if len(tradeable) < 2:
+            raise RuntimeError("copula_stat_arb requires at least two assets to form a pair.")
+        y_col, x_col = tradeable[0], tradeable[1]
+
+    y_prices = closes[y_col].dropna()
+    x_prices = closes[x_col].dropna()
+    common_idx = y_prices.index.intersection(x_prices.index)
+    if len(common_idx) < 60:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y_prices = y_prices.loc[common_idx]
+    x_prices = x_prices.loc[common_idx]
+
+    # Generate signals via the production pilots.copula_stat_arb module -- the
+    # SAME entry point the Pilots PWA's copula screen calls, not a re-implementation.
+    result = generate_copula_stat_arb_signals(y_col, x_col, y_prices, x_prices)
+    signals_df = result.signals_df
+    if signals_df.empty or "strategy_returns" not in signals_df.columns:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = signals_df["strategy_returns"].fillna(0.0)
+    valid_idx = signals_df.dropna(subset=["spread"]).index
+    if len(valid_idx) > 30:
+        valid_idx = valid_idx[30:]  # drop the copula/OU warmup window (see module docstring)
+    if len(valid_idx) < 30:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    X = pd.DataFrame(index=valid_idx)
+    X["Z_Score"] = signals_df["z_score"].loc[valid_idx].fillna(0.0)
+    X["Spread"] = signals_df["spread"].loc[valid_idx].fillna(0.0)
+    X["Beta"] = signals_df["beta"].loc[valid_idx].fillna(1.0)
+    X["Position"] = signals_df["position"].loc[valid_idx].fillna(0.0)
+
+    # Benchmark return: equal-weighted pair buy-and-hold, matching
+    # _build_pairs_trading_adapter's convention above.
+    y = ((y_prices.pct_change() + x_prices.pct_change()) / 2.0).loc[valid_idx].fillna(0.0)
+
+    precomputed = {
+        "Copula_StatArb_DynamicHedge": strategy_returns.loc[valid_idx],
+    }
+    return X, y, precomputed
+
+
 def _aroon(series: pd.Series, window: int = 25) -> Tuple[pd.Series, pd.Series, pd.Series]:
     """Calculates Aroon Up, Aroon Down, and Aroon Oscillator over a rolling window.
 
@@ -3506,6 +3610,13 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "put_debit_spread": (_build_put_debit_spread_adapter, 0.05, ["SPY"]),
     "covered_call": (_build_covered_call_adapter, 0.03, ["SPY"]),
     "pairs_trading": (_build_pairs_trading_adapter, 0.04, ["SPY", "XOM", "CVX"]),
+    # turnover=0.04: the entry/exit/stop z-score gate (entry |Z|>=~2.0, exit at
+    # 0-cross, stop at |Z|>=4.0) produces roughly one full round-trip every
+    # ~25 trading days on a KO/PEP-scale mean-reversion cycle -- 1/25 ~= 0.04,
+    # matching pairs_trading's own turnover order of magnitude above (same
+    # entry/exit/stop shape, same asset-class liquidity), not an independently
+    # re-measured value for this specific pair.
+    "copula_stat_arb": (_build_copula_stat_arb_adapter, 0.04, ["KO", "PEP"]),
     "aroon_trend": (_build_aroon_trend_adapter, 0.02, ["SPY"]),
 }
 

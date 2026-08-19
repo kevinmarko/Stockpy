@@ -79,31 +79,41 @@ DEFAULT_WEIGHTS = {
     "AVGO": 0.08,
 }
 
-# Distinct index constituent weight allocations per index (QQQ vs SPY)
+# Distinct index constituent baskets per index (QQQ vs SPY). Both indices' TOP holdings
+# genuinely overlap heavily in real life (the same mega-cap tech names dominate both) --
+# that overlap is a real market fact, not a bug, and both baskets keep it. What's
+# structurally different between the two indices is SECTOR breadth: SPY (S&P 500) carries
+# real non-tech sector weight (financials, healthcare) that QQQ (Nasdaq-100, which
+# structurally excludes financials by index rule) does not. JPM (financials) and UNH
+# (healthcare) replace SPY's two smallest legacy slots to reflect that; QQQ keeps AVGO/TSLA
+# (its real growth/semiconductor tilt) in their place. These are static, reasoned
+# approximations of real index composition (order-of-magnitude weights, not a live-fetched
+# snapshot) -- see this module's own docstring for why no live constituent-weight source
+# exists in this repo; they will drift from the real, current index weights over time.
 INDEX_CONSTITUENTS_MAP = {
-    "SPY": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO"],
-    "QQQ": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO", "TSLA"],
+    "SPY": ["AAPL", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "JPM", "UNH"],
+    "QQQ": ["AAPL", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "AVGO", "TSLA"],
 }
 INDEX_WEIGHTS_MAP = {
     "SPY": {
         "AAPL": 0.18,
-        "MSFT": 0.17,
         "NVDA": 0.16,
-        "AMZN": 0.12,
-        "GOOGL": 0.11,
-        "META": 0.09,
-        "TSLA": 0.09,
-        "AVGO": 0.08,
+        "MSFT": 0.17,
+        "AMZN": 0.10,
+        "GOOGL": 0.09,
+        "META": 0.08,
+        "JPM": 0.12,
+        "UNH": 0.10,
     },
     "QQQ": {
         "AAPL": 0.20,
-        "MSFT": 0.19,
         "NVDA": 0.18,
-        "AMZN": 0.14,
-        "GOOGL": 0.12,
+        "MSFT": 0.19,
+        "AMZN": 0.12,
+        "GOOGL": 0.10,
         "META": 0.09,
-        "AVGO": 0.05,
-        "TSLA": 0.03,
+        "AVGO": 0.07,
+        "TSLA": 0.05,
     },
 }
 OPTION_FEE_PER_CONTRACT_LEG = 0.65  # $0.65 per contract leg
