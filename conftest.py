@@ -8,6 +8,7 @@ manually.
 """
 import sys
 import os
+from typing import Optional
 
 import pytest
 
@@ -75,6 +76,46 @@ def _field_default(model_cls, name):
 # coded default cannot break a test that follows this codebase's own
 # established convention.
 _BOOL_FIELD_NAMES: tuple[str, ...] = ()
+# Every `gui.env_io.SECRET_KEYS` entry that is also a real `Settings` field --
+# the STRING-typed sibling of `_BOOL_FIELD_NAMES` above, computed once here and
+# reused by `_clean_settings_between_tests` below for the per-test reset.
+#
+# Why this exists: `_BOOL_FIELD_NAMES` closed the boolean half of "this
+# operator's real .env pollutes test isolation" -- but that .env also sets
+# real command tokens / API keys / paths (FMP_API_KEY, ORCHESTRATOR_DAEMON_
+# TOKEN, DATABASE_URL, ...) that plenty of tests assume are unset (empty
+# string, matching the coded default) so they can assert "no credential
+# configured" behavior, or so a test-local monkeypatched value isn't shadowed
+# by a real one already sitting on the singleton before the test even sets
+# it up. `gui.env_io.SECRET_KEYS` is this codebase's own canonical list of
+# which `Settings` fields are secrets (CONSTRAINT #3) -- reusing it here
+# instead of hand-picking fields avoids yet another hand-maintained allowlist
+# that only grows by discovering the next broken test (see
+# `_clean_settings_between_tests`'s docstring for that exact history with
+# booleans).
+#
+# `gui.env_io` is imported LAZILY here (not at conftest.py module top) even
+# though, as of this writing, it only imports `ENV_PATH` from `settings` (not
+# the `settings` singleton itself) and so has no live circular-import hazard
+# today -- keeping the import inside this try block, after `settings`/
+# `runtime_flags` have already fully imported, means a future change to
+# gui/env_io.py's own imports (e.g. importing the `settings` singleton
+# directly) can never turn into an import-order failure for every single test
+# file via conftest.py, only a caught-and-ignored no-op here.
+#
+# Two things this set deliberately is NOT allowed to include:
+#   1. A `SECRET_KEYS` entry that isn't a real `Settings.model_fields` name
+#      (e.g. a legacy/removed key like `NTFY_TOPIC`/`PROMPT_REGISTRY_
+#      CREDENTIALS`, which are secrets in spirit but never became actual
+#      pydantic fields) -- skipped via `hasattr`/membership check, never a
+#      crash, matching this fixture's dead-letter-per-key convention.
+#   2. A non-string-typed field -- as of this writing every real
+#      `SECRET_KEYS` field is `str`/`Optional[str]`, but the filter is kept
+#      explicit rather than assumed, since a future secret field added as
+#      some other type (e.g. a parsed dict) is exactly the kind of value a
+#      test might legitimately construct from a real `.env` fixture and this
+#      reset has no business overwriting sight-unseen.
+_SECRET_STR_FIELD_NAMES: tuple[str, ...] = ()
 try:
     from settings import Settings, settings
     import runtime_flags
@@ -92,6 +133,18 @@ try:
         if finfo.annotation is bool
     )
     for field_name in _BOOL_FIELD_NAMES:
+        setattr(settings, field_name, _field_default(type(settings), field_name))
+    # Now the secret-string half: gui.env_io.SECRET_KEYS intersected with real
+    # Settings fields, filtered to string-typed ones (see the block comment
+    # above for why both filters are needed).
+    import gui.env_io as _env_io
+    _model_fields = type(settings).model_fields
+    _SECRET_STR_FIELD_NAMES = tuple(
+        name
+        for name in dict.fromkeys(_env_io.SECRET_KEYS)  # de-dupe, preserve order
+        if name in _model_fields and _model_fields[name].annotation in (str, Optional[str])
+    )
+    for field_name in _SECRET_STR_FIELD_NAMES:
         setattr(settings, field_name, _field_default(type(settings), field_name))
 except Exception:
     pass
@@ -210,13 +263,23 @@ def _clean_settings_between_tests(monkeypatch):
     main.py/main_orchestrator.py/a standalone ``api/*.py`` service) mutates
     via their own ``load_dotenv()`` call, silently reintroducing the exact
     pollution this fixture exists to strip. See ``_field_default``'s
-    docstring above for the empirical proof."""
+    docstring above for the empirical proof.
+
+    ``_SECRET_STR_FIELD_NAMES`` (module-level, computed once alongside
+    ``_BOOL_FIELD_NAMES`` above) extends this same per-test reset to every
+    string-typed ``gui.env_io.SECRET_KEYS`` field that is a real ``Settings``
+    field -- this operator's real ``.env`` sets real command tokens / API
+    keys / paths that a test may assume are unset (the coded default, empty
+    string) just as reliably as it sets stray booleans on. See that
+    module-level block's own comment for the full reasoning and the two
+    deliberate exclusions (legacy/removed ``SECRET_KEYS`` entries with no
+    matching field; non-string-typed fields)."""
     try:
         import copy
         from settings import Settings, settings
     except Exception:
         return
-    for k in _BOOL_FIELD_NAMES + (
+    for k in _BOOL_FIELD_NAMES + _SECRET_STR_FIELD_NAMES + (
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
         "REGIME_SIGNAL_WEIGHTS",
