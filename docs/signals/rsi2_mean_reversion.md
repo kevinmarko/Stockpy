@@ -145,3 +145,15 @@ empirically-measured turnover correction (0.02 → 0.01) achieves a robust, net-
 minimal drawdown (7.5%), fully clearing all four validation gates without parameter cherry-picking or lookahead.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
+
+
+### 2026-08-18 Full Validation Run (`rsi2_mean_reversion`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.5925 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9957 |
+| **Max Drawdown** | 8.13% |
+| **Deployable** | ✅ True |
+

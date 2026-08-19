@@ -76,3 +76,15 @@ deep current drawdown tells you about present capital damage.
 - This module's 10.0 weight makes it a tiebreaker / risk-quality overlay rather than a
   primary driver. In a balanced signal environment (all modules near zero), a high Sortino
   and low drawdown can tilt the final score from HOLD to BUY.
+
+
+### 2026-08-18 Full Validation Run (`sortino_drawdown`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.7061 |
+| **PBO** | 0.0889 |
+| **DSR** | 0.9766 |
+| **Max Drawdown** | 17.03% |
+| **Deployable** | ✅ True |
+

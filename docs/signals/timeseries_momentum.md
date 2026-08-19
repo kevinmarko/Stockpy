@@ -168,3 +168,15 @@ Increase to 20–25 if the portfolio's primary universe is large-cap equities wi
 least 2 years of history (where TSMOM is most reliable). Decrease to 5–10 for micro-cap
 or recently-IPO'd stocks where 12-month return windows are truncated and survivorship
 bias may distort the signal.
+
+
+### 2026-08-18 Full Validation Run (`timeseries_momentum`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.5394 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9921 |
+| **Max Drawdown** | 17.15% |
+| **Deployable** | ✅ True |
+

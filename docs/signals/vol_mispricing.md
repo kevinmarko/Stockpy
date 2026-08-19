@@ -118,3 +118,25 @@ section previously left open between "document only" and "build with an enforced
   Crush"` in every call regardless of caller — now controllable via the new `strategy_name=`
   parameter (default `None` preserves the exact historical `"Earnings Crush"` behavior for every
   pre-existing caller).
+
+### 2026-08-18 Full Validation Run (`vol_mispricing`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | -0.0098 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.4818 |
+| **Max Drawdown** | 98.71% |
+| **Deployable** | ❌ False |
+
+*Reconciliation note: this run's Sharpe/DSR differ from both the "Backtest Validation" section's
+2015-2026 walk-forward numbers above (Sharpe -0.499, DSR 0.027) and an earlier, since-superseded
+2026-08-17 pre-rebase run (Sharpe -0.0369, DSR 0.4966) for this same strategy. The qualitative
+verdict is stable across all three runs — `deployable=False`, MaxDD in the ~99-101% range,
+consistent with the RICH-branch iron-condor blow-up in the OCT_2008 stress window documented
+above — but the point estimates for Sharpe/DSR are not stable run-to-run. This is consistent with
+`vol_mispricing` being a low-trade-count strategy whose walk-forward window right edge moves with
+"today's date," so a handful of trades entering/leaving the sample between runs can swing DSR
+meaningfully; it has not been separately investigated further here. The `MEASURED_FAIL` gate
+status and the enforced-override design in "Live Paper-Execution Status" below do not depend on
+the exact point estimate and are unaffected by this variance.

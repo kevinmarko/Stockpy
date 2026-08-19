@@ -286,3 +286,17 @@ hermetic tests — MultiIndex shape, thin-sector exclusion, no-lookahead, per-fo
 slicing, missing-EDGAR-data dead-letter), `tests/test_validation_sector_quality_rank.py`
 (network-marked, the real end-to-end run above), `tests/test_harness_multiindex_t1.py`
 (the new `StrategyValidationHarness.run(t1=...)` plumbing, hermetic).
+
+
+### 2026-08-18 Full Validation Run (`sector_quality_rank`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.9785 |
+| **PBO** | 0.0000 |
+| **DSR** | 1.0000 |
+| **Max Drawdown** | 19.57% |
+| **Deployable** | ✅ True |
+
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

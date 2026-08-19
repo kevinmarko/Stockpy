@@ -18,6 +18,7 @@ TestMainCLI             — argument parsing; all-pass exit-0, any-fail exit-1
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -1003,6 +1004,246 @@ class TestBuildSectorQualityRankAdapter:
         assert not ibm_sector.empty
         assert ibm_sector.isna().all()
 
+
+# ---------------------------------------------------------------------------
+# TestPitRowToFundamentalsDto -- regression coverage for the 2026-08 crash
+# fix: EDGAR PIT's ``raw_json`` occasionally stores a double-encoded or
+# plain-garbage JSON string (or NaN sector), which the pre-fix
+# ``_pit_row_to_fundamentals_dto`` crashed on with ``AttributeError: 'str'
+# object has no attribute 'get'`` (non-dict raw) / ``AttributeError: 'float'
+# object has no attribute 'strip'`` (NaN sector) instead of degrading
+# honestly (CONSTRAINT #4/#6). Reproduced against the real pre-fix source
+# (temporarily reverting the guard) while writing these tests to confirm
+# they actually fail on the old code, not just pass on the new one.
+# ---------------------------------------------------------------------------
+
+class TestPitRowToFundamentalsDto:
+    def test_double_encoded_json_string_raw_degrades_without_raising(self) -> None:
+        """A double-encoded raw_json (decodes ONCE to a plain string, not a
+        dict -- e.g. json.loads(json.dumps(json.dumps({...}))) is what one
+        extra layer of encoding produces) must never crash -- it degrades to
+        the same honest all-NaN/None fallback as a totally empty dict."""
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        double_encoded = json.dumps(json.dumps({"pe_ratio": 12.0, "pb_ratio": 3.0}))
+        # Mirrors exactly what the OLD (pre-fix) inline raw_json parser in
+        # _build_signal_replay_adapter would hand to this function after one
+        # json.loads() pass: a plain string, not a dict.
+        raw_after_one_decode = json.loads(double_encoded)
+        assert isinstance(raw_after_one_decode, str)
+
+        dto = _pit_row_to_fundamentals_dto("TEST", "Technology", raw_after_one_decode)
+
+        assert dto.ticker == "TEST"
+        assert dto.pe_ratio is None
+        assert dto.pb_ratio is None
+        assert np.isnan(dto.dividend_yield)
+        assert np.isnan(dto.book_value)
+        assert np.isnan(dto.eps_trailing)
+        assert np.isnan(dto.payout_ratio)
+        assert np.isnan(dto.market_cap)
+        assert dto.sector == "Technology"
+
+    def test_plain_garbage_string_raw_degrades_without_raising(self) -> None:
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto("TEST", "Technology", "not json at all {{{")
+
+        assert dto.pe_ratio is None
+        assert dto.pb_ratio is None
+        assert np.isnan(dto.market_cap)
+
+    def test_list_raw_degrades_without_raising(self) -> None:
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto("TEST", "Technology", ["not", "a", "dict"])
+
+        assert dto.pe_ratio is None
+        assert dto.pb_ratio is None
+        assert np.isnan(dto.market_cap)
+
+    def test_nan_float_raw_degrades_without_raising(self) -> None:
+        """A NaN float (e.g. a pandas-read cell with no PIT row at all) is
+        also not a dict and must degrade the same way."""
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto("TEST", "Technology", float("nan"))
+
+        assert dto.pe_ratio is None
+        assert dto.pb_ratio is None
+        assert np.isnan(dto.market_cap)
+
+    def test_valid_dict_raw_still_populates_real_fields(self) -> None:
+        """Sanity check that the isinstance guard doesn't also blank out a
+        genuinely well-formed dict -- only non-dict input degrades."""
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto(
+            "TEST", "Technology",
+            {"pe_ratio": 15.0, "pb_ratio": 2.5, "market_cap": 1_000_000.0},
+        )
+
+        assert dto.pe_ratio == pytest.approx(15.0)
+        assert dto.pb_ratio == pytest.approx(2.5)
+        assert dto.market_cap == pytest.approx(1_000_000.0)
+
+    def test_nan_sector_degrades_to_na_without_raising(self) -> None:
+        """A NaN-float sector (FundamentalDataDTO.__init__'s own
+        ``sector.strip()`` would previously crash on it) must degrade to the
+        literal string "N/A", never raise."""
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto("TEST", float("nan"), {})
+
+        assert dto.sector == "N/A"
+
+    def test_none_sector_degrades_to_na(self) -> None:
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto("TEST", None, {})
+
+        assert dto.sector == "N/A"
+
+    def test_real_string_sector_is_preserved(self) -> None:
+        from scripts.refresh_validations import _pit_row_to_fundamentals_dto
+
+        dto = _pit_row_to_fundamentals_dto("TEST", "Energy", {})
+
+        assert dto.sector == "Energy"
+
+
+# ---------------------------------------------------------------------------
+# TestBuildSignalReplayAdapterRawJsonHandling -- regression coverage for the
+# same 2026-08 fix, exercised through the REAL inline raw_json->raw_dict
+# branch inside _build_signal_replay_adapter (isinstance(raw_json, dict) /
+# isinstance(raw_json, str)+json.loads+isinstance(parsed, dict) / silent
+# fall-through to {} for everything else -- see the module source directly
+# above _pit_row_to_fundamentals_dto's call site). The full adapter is
+# invoked (not too heavy: HistoricalStore/_download_ohlcv/_pit_asof_frame
+# are all monkeypatched, so this is a fast, fully offline, single-ticker
+# run) rather than hand-duplicating the parsing logic, so this actually
+# proves the real merged code degrades rather than a re-implementation of
+# it. A spy wraps the real _pit_row_to_fundamentals_dto so the exact
+# raw_dict computed by the inline branch for each scenario can be asserted
+# directly, not just "did it crash".
+# ---------------------------------------------------------------------------
+
+class TestBuildSignalReplayAdapterRawJsonHandling:
+    def _run_adapter_with_raw_json_scenarios(self, scenarios: List[Any]):
+        """Runs the real _build_signal_replay_adapter over a single non-SPY
+        ticker whose PIT ``raw_json`` cell cycles through ``scenarios`` (one
+        per warm date), with every other dependency (HistoricalStore,
+        OHLCV download, PIT store lookup, sector map) monkeypatched to a
+        deterministic offline stand-in. Returns the list of (ticker, sector,
+        raw) tuples _pit_row_to_fundamentals_dto was actually called with
+        for the "TEST" ticker, in date order.
+        """
+        import scripts.refresh_validations as rv
+
+        n = 504 + len(scenarios)
+        closes = _synthetic_closes(["SPY", "TEST"], n=n)
+        # _synthetic_closes seeds every ticker off the same RNG state, but
+        # column order/name is all this test needs -- SPY just needs to be
+        # present as the benchmark column.
+        common_index = closes.dropna(how="all").index
+        warm_len = len(common_index) - 504
+        assert warm_len == len(scenarios)
+
+        pit_df = pd.DataFrame(index=common_index)
+        for col in (
+            "pb_ratio", "pe_ratio", "roe", "operating_margin",
+            "market_cap", "dividend_yield", "eps",
+        ):
+            pit_df[col] = np.nan
+        pit_df["sector"] = "Technology"
+        pit_df["raw_json"] = [None] * (len(common_index) - warm_len) + list(scenarios)
+
+        def _fake_pit_asof_frame(store, tickers, idx):
+            return {"TEST": pit_df.reindex(idx)}
+
+        real_fn = rv._pit_row_to_fundamentals_dto
+        calls: List[tuple] = []
+
+        def _spy_fn(ticker, sector, raw):
+            calls.append((ticker, sector, raw))
+            return real_fn(ticker, sector, raw)
+
+        with patch.object(rv, "_download_ohlcv", return_value={}), \
+             patch.object(rv, "_pit_asof_frame", side_effect=_fake_pit_asof_frame), \
+             patch.object(rv, "_load_ticker_sectors", return_value={"TEST": "Technology"}), \
+             patch.object(rv, "_pit_row_to_fundamentals_dto", side_effect=_spy_fn), \
+             patch("data.historical_store.HistoricalStore") as MockStore:
+            MockStore.return_value.get_macro.return_value = pd.Series(dtype=float)
+            X, y, pre = rv._build_signal_replay_adapter(closes)
+
+        assert not X.empty and not y.empty
+        assert "SignalReplay_TopHalf" in pre
+        return [c for c in calls if c[0] == "TEST"]
+
+    def test_double_encoded_json_string_degrades_to_empty_dict(self) -> None:
+        double_encoded = json.dumps(json.dumps({"pe_ratio": 12.0}))
+        test_calls = self._run_adapter_with_raw_json_scenarios([double_encoded])
+
+        assert len(test_calls) == 1
+        _, _, raw = test_calls[0]
+        assert raw == {}
+
+    def test_plain_garbage_string_degrades_to_empty_dict(self) -> None:
+        test_calls = self._run_adapter_with_raw_json_scenarios(["not json at all {{{"])
+
+        assert len(test_calls) == 1
+        _, _, raw = test_calls[0]
+        assert raw == {}
+
+    def test_non_dict_non_str_types_degrade_to_empty_dict(self) -> None:
+        """int, list, and None all fall through the isinstance(dict)/
+        isinstance(str) branches untouched -- must land on the {} default,
+        never raise."""
+        scenarios = [12345, ["not", "a", "dict"], None]
+        test_calls = self._run_adapter_with_raw_json_scenarios(scenarios)
+
+        assert len(test_calls) == len(scenarios)
+        for _, _, raw in test_calls:
+            assert raw == {}
+
+    def test_genuine_dict_raw_json_is_used_directly_not_dropped(self) -> None:
+        """A raw_json cell that is ALREADY a dict (not a JSON string) must be
+        passed straight through -- this is the isinstance(raw_json, dict)
+        branch the pre-fix code lacked entirely (it only ever checked
+        isinstance(raw_json, str), silently discarding a real dict)."""
+        real_dict = {"pe_ratio": 9.5, "market_cap": 42.0}
+        test_calls = self._run_adapter_with_raw_json_scenarios([real_dict])
+
+        assert len(test_calls) == 1
+        _, _, raw = test_calls[0]
+        assert raw == real_dict
+
+    def test_mixed_scenario_sequence_never_raises(self) -> None:
+        """End-to-end regression guard: a realistic mixed sequence (already
+        a dict, double-encoded string, garbage string, int, list, None)
+        across consecutive dates must run to completion without raising --
+        this is the exact failure mode the 2026-08 fix closed."""
+        scenarios: List[Any] = [
+            {"pe_ratio": 10.0, "market_cap": 5000.0},
+            json.dumps(json.dumps({"pe_ratio": 12.0})),
+            "not json at all {{{",
+            12345,
+            ["x"],
+            None,
+        ]
+        test_calls = self._run_adapter_with_raw_json_scenarios(scenarios)
+
+        assert len(test_calls) == len(scenarios)
+        expected = [
+            scenarios[0],  # already a dict -> used directly
+            {},             # double-encoded -> decodes to a str, not a dict -> {}
+            {},             # garbage string -> json.loads fails -> {}
+            {},             # int -> neither dict nor str -> {}
+            {},             # list -> neither dict nor str -> {}
+            {},             # None -> neither dict nor str -> {}
+        ]
+        for (_, _, raw), exp in zip(test_calls, expected):
+            assert raw == exp
 
 
 class TestBuildOptionsStrategiesAdapters:

@@ -118,3 +118,15 @@ recommended without also re-validating the strategy harness (`python -m validati
 5. **Single Robust Variant (Category B lever)**: Emitting a single robust variant (`MacroRegime_TrendGated`) eliminates multi-trial selection noise, establishing PBO=0.000 and DSR=1.000 across the full CPCV split distribution.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for full cross-strategy validation history.
+
+
+### 2026-08-18 Full Validation Run (`macro_regime_pit`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.8339 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9999 |
+| **Max Drawdown** | 11.89% |
+| **Deployable** | ✅ True |
+

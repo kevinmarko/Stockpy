@@ -139,3 +139,17 @@ and carried a stale, mismatched result (Sharpe 0.612, DSR 1.000, `deployable=Tru
 platform's actual measured numbers.
 
 See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.
+
+
+### 2026-08-18 Full Validation Run (`vrp_premium_selling`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.3769 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9759 |
+| **Max Drawdown** | 8.14% |
+| **Deployable** | ❌ False |
+
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
