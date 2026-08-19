@@ -42,6 +42,8 @@ __all__ = [
     "evaluate_historical_presets",
     "get_historical_presets",
     "get_2d_scenario_slice",
+    "evaluate_portfolio_scenario_matrix",
+    "to_scenario_matrix_response",
 ]
 
 # Standard default shift grids
@@ -462,6 +464,11 @@ def evaluate_scenario_matrix(
         "grid": grid,
         "historical_presets": historical_presets,
         "missing_data_symbols": sorted(list(all_missing_symbols)),
+        # Ticker -> resolved spot price used for this evaluation. Additive-only field
+        # (existing callers/tests that only look at the keys above are unaffected) --
+        # consumed by to_scenario_matrix_response() below to derive an honest
+        # per-cell reference spot_price without re-resolving quotes a second time.
+        "spot_map": dict(spot_map),
     }
 
 
@@ -507,20 +514,118 @@ def get_2d_scenario_slice(
     }
 
 
+def _resolve_reference_spot(spot_map: Dict[str, float]) -> Optional[float]:
+    """
+    Resolves a single honest reference spot price for the per-cell spot_price
+    field the frontend contract expects.
+
+    A scenario matrix can span multiple underlying tickers (equity + several
+    option legs on different names) with no single "the portfolio's spot
+    price" -- rather than fabricate a blended/average number that corresponds
+    to no real instrument, this only resolves a reference spot when the book
+    has exactly one distinct underlying ticker with a known live quote.
+    Otherwise returns None and the frontend cell simply omits spot_price.
+    """
+    if len(spot_map) != 1:
+        return None
+    (only_spot,) = spot_map.values()
+    return only_spot if only_spot and only_spot > 0 else None
+
+
+def _cell_to_frontend_shape(cell: Dict[str, Any], reference_spot: Optional[float]) -> Dict[str, Any]:
+    """Renames one evaluate_scenario_matrix() grid cell into the ScenarioMatrixCell
+    shape webapp/src/api/types.ts and webapp/src/api/mock.ts already agree on."""
+    frontend_cell: Dict[str, Any] = {
+        "spot_shift_pct": cell["spot_shift"],
+        "iv_shift_pct": cell["iv_shift"],
+        "days_forward": cell["time_shift_days"],
+        "portfolio_value": cell["portfolio_market_value"],
+        "pnl_dollar": cell["pnl_shift"],
+        "pnl_pct": cell["pnl_pct"],
+        "net_delta": cell["net_delta"],
+        "net_gamma": cell["net_gamma"],
+        "net_theta": cell["net_theta_daily"],
+        "net_vega": cell["net_vega_1pct"],
+    }
+    if reference_spot is not None:
+        frontend_cell["spot_price"] = round(reference_spot * (1.0 + cell["spot_shift"]), 2)
+    return frontend_cell
+
+
+def _preset_to_frontend_shape(preset: Dict[str, Any]) -> Dict[str, Any]:
+    """Renames one evaluate_historical_presets() entry into HistoricalScenarioPreset."""
+    return {
+        "id": preset["id"],
+        "name": preset["name"],
+        "description": preset["description"],
+        "spot_shift_pct": preset["spot_shift"],
+        "iv_shift_pct": preset["iv_shift"],
+        "projected_pnl_dollar": preset["pnl_shift"],
+        "projected_pnl_pct": preset["pnl_pct"],
+    }
+
+
+def to_scenario_matrix_response(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshapes evaluate_scenario_matrix()'s internal result (grid/time_shifts_days/
+    historical_presets/baseline -- the shape every existing test in
+    tests/test_scenario_matrix.py asserts on) into the ScenarioMatrixResponse
+    contract webapp/src/api/types.ts, webapp/src/api/mock.ts, and
+    webapp/src/components/options/ScenarioHeatmap.tsx already agree on
+    (matrix/time_slices/historical_scenarios/current_portfolio_value).
+
+    Kept as a separate step from evaluate_scenario_matrix() itself so every
+    existing caller/test of the pure math function is unaffected -- only
+    evaluate_portfolio_scenario_matrix() (the function POST /pilots/paper-broker/
+    scenario-matrix actually calls) applies this reshape.
+    """
+    spot_map = result.get("spot_map", {})
+    reference_spot = _resolve_reference_spot(spot_map)
+
+    return {
+        "spot_shifts": result["spot_shifts"],
+        "iv_shifts": result["iv_shifts"],
+        "time_slices": result["time_shifts_days"],
+        "matrix": [_cell_to_frontend_shape(c, reference_spot) for c in result["grid"]],
+        "historical_scenarios": [
+            _preset_to_frontend_shape(preset) for preset in result["historical_presets"].values()
+        ],
+        "current_portfolio_value": result["baseline"]["portfolio_market_value"],
+    }
+
+
 def evaluate_portfolio_scenario_matrix(
     spot_shifts: Optional[List[float]] = None,
     iv_shifts: Optional[List[float]] = None,
     time_shifts: Optional[List[int]] = None,
-    time_days_forward: int = 0,
+    time_days_forward: Optional[int] = None,
     store: Optional[Any] = None,
     positions: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
-    """Helper wrapper for evaluating portfolio scenario matrix."""
-    return evaluate_scenario_matrix(
+    """
+    API-facing wrapper for POST /pilots/paper-broker/scenario-matrix.
+
+    Unlike evaluate_scenario_matrix() (the pure math function every test in
+    tests/test_scenario_matrix.py exercises directly), this returns the
+    ScenarioMatrixResponse shape the webapp actually consumes -- see
+    to_scenario_matrix_response() and docs/known_issues/scenario_matrix_field_mismatch.md.
+    """
+    if time_shifts is not None:
+        resolved_time_shifts = time_shifts
+    elif time_days_forward is not None:
+        # An explicit single-day request (e.g. a future caller wanting just T+0).
+        resolved_time_shifts = [time_days_forward]
+    else:
+        # No time dimension specified at all -- use the full default grid
+        # (DEFAULT_TIME_SHIFTS_DAYS) rather than silently collapsing to one slice.
+        resolved_time_shifts = None
+
+    result = evaluate_scenario_matrix(
         positions=positions,
         spot_shifts=spot_shifts,
         iv_shifts=iv_shifts,
-        time_shifts_days=time_shifts if time_shifts is not None else [time_days_forward],
+        time_shifts_days=resolved_time_shifts,
         store=store,
     )
+    return to_scenario_matrix_response(result)
 

@@ -111,6 +111,25 @@ describe("ScenarioHeatmap", () => {
     expect(screen.getByText(/Impact: -3.50% Equity Shock/i)).toBeInTheDocument();
   });
 
+  it("omits the spot price parenthetical in the hover strip when spot_price is absent (multi-ticker book)", () => {
+    const mockScenarioDataNoSpotPrice: ScenarioMatrixResponse = {
+      ...mockScenarioData,
+      matrix: mockScenarioData.matrix.map(({ spot_price, ...rest }) => rest),
+    };
+
+    render(<ScenarioHeatmap initialData={mockScenarioDataNoSpotPrice} />);
+
+    // The base cell (spot_shift=0, iv_shift=0) renders "+$0" for the default P&L ($) metric.
+    const baseCell = screen.getByText("+$0");
+    fireEvent.mouseEnter(baseCell);
+
+    const scenarioStrong = screen.getByText("Scenario:").closest("div");
+    expect(scenarioStrong).not.toBeNull();
+    expect(scenarioStrong?.textContent).not.toContain("$undefined");
+    expect(scenarioStrong?.textContent).not.toContain("$NaN");
+    expect(scenarioStrong?.textContent).toContain("Spot +0%");
+  });
+
   it("triggers refresh callback", async () => {
     const handleRefresh = vi.fn();
     render(<ScenarioHeatmap initialData={mockScenarioData} onRefresh={handleRefresh} />);
