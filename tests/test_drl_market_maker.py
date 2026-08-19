@@ -378,7 +378,12 @@ def test_train_market_maker_policy_execution():
     assert 0.5 <= opt_result.best_kappa <= 3.0
     assert opt_result.episodes_trained == 10
     assert len(opt_result.training_history) == 10
-    assert opt_result.converged is True
+    # `converged` is a real plateau signal (best score hasn't improved for the
+    # trailing 20% of episodes), not a hardcoded constant -- with only 10
+    # episodes it is not guaranteed to be True, so only its type is asserted
+    # here. See test_train_market_maker_policy_convergence_signal below for
+    # coverage of the actual plateau logic.
+    assert isinstance(opt_result.converged, bool)
 
     # Dict access
     assert opt_result["best_gamma"] == opt_result.best_gamma
@@ -388,6 +393,37 @@ def test_train_market_maker_policy_execution():
     res_dict = opt_result.to_dict()
     assert "best_gamma" in res_dict
     assert json.dumps(res_dict) is not None
+
+
+def test_train_market_maker_policy_convergence_signal():
+    """`converged` is a real plateau check, not the previous hardcoded True.
+
+    A long run with a tight parameter range and low learning rate should
+    plateau well before the end and report converged=True; a run truncated to
+    fewer episodes than the plateau window can require has not had a chance
+    to demonstrate a plateau and must report converged=False.
+    """
+    path = generate_gbm_price_path(s0=100.0, steps=60, seed=7)
+
+    long_result = train_market_maker_policy(
+        env=[path],
+        episodes=50,
+        learning_rate=0.05,
+        gamma_bounds=(0.05, 0.10),
+        kappa_bounds=(1.0, 1.2),
+        seed=7,
+    )
+    assert long_result.converged is True
+
+    short_result = train_market_maker_policy(
+        env=[path],
+        episodes=5,
+        learning_rate=0.05,
+        gamma_bounds=(0.05, 0.10),
+        kappa_bounds=(1.0, 1.2),
+        seed=7,
+    )
+    assert short_result.converged is False
 
 
 # ===========================================================================

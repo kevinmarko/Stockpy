@@ -5605,39 +5605,39 @@ class RollOrderRequest(BaseModel):
 
 class DeltaHedgeExecuteRequest(BaseModel):
     dry_run: bool = False
-    shares: Optional[float] = None
+    shares: Optional[float] = Field(default=None, ge=-100000.0, le=100000.0)
 
 class ScenarioMatrixRequest(BaseModel):
-    spot_shifts: Optional[List[float]] = None
-    iv_shifts: Optional[List[float]] = None
-    time_shifts: Optional[List[int]] = None
-    time_days_forward: Optional[int] = 0
+    spot_shifts: Optional[List[float]] = Field(default=None, max_length=50)
+    iv_shifts: Optional[List[float]] = Field(default=None, max_length=50)
+    time_shifts: Optional[List[int]] = Field(default=None, max_length=50)
+    time_days_forward: Optional[int] = Field(default=0, ge=0, le=365)
 
 class EarningsCrushExecuteRequest(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, max_length=10)
     strategy: Optional[str] = "Iron Condor"
     expiration: Optional[str] = None
-    contracts: Optional[int] = 1
+    contracts: Optional[int] = Field(default=1, ge=1, le=1000)
     legs: Optional[List[Dict[str, Any]]] = None
-    limit_price: Optional[float] = None
+    limit_price: Optional[float] = Field(default=None, gt=0.0)
     dry_run: bool = False
     is_live: bool = False
 
 class DispersionExecuteRequest(BaseModel):
-    index_symbol: str = "QQQ"
+    index_symbol: str = Field(default="QQQ", min_length=1, max_length=10)
     basket: Optional[Dict[str, Any]] = None
     dry_run: bool = False
     is_live: bool = False
 
 class ZeroDteExecuteRequest(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, max_length=10)
     option_type: Optional[str] = "CALL"
-    strike: float
+    strike: float = Field(..., gt=0.0)
     expiration: Optional[str] = None
-    contracts: Optional[int] = 1
-    limit_price: Optional[float] = None
-    stop_loss_pct: Optional[float] = 0.30
-    profit_target_pct: Optional[float] = 0.75
+    contracts: Optional[int] = Field(default=1, ge=1, le=1000)
+    limit_price: Optional[float] = Field(default=None, gt=0.0)
+    stop_loss_pct: Optional[float] = Field(default=0.30, ge=0.01, le=1.0)
+    profit_target_pct: Optional[float] = Field(default=0.75, ge=0.01, le=5.0)
     dry_run: bool = False
     is_live: bool = False
 
@@ -6669,9 +6669,42 @@ def post_market_maker_simulate(body: MarketMakerSimulateRequest) -> Dict[str, An
     return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 
+class MarketMakerTrainRequest(BaseModel):
+    episodes: Optional[int] = Field(50, gt=0, le=1000)
+    learning_rate: Optional[float] = Field(0.05, gt=0.0)
+    gamma_min: Optional[float] = Field(0.01, gt=0.0)
+    gamma_max: Optional[float] = Field(1.0, gt=0.0)
+    kappa_min: Optional[float] = Field(0.5, gt=0.0)
+    kappa_max: Optional[float] = Field(5.0, gt=0.0)
+    seed: Optional[int] = 42
+
+
+@app.post("/pilots/options/market-maker/train", dependencies=[Depends(require_read_token)])
+def post_market_maker_train(body: MarketMakerTrainRequest) -> Dict[str, Any]:
+    """Trains Avellaneda-Stoikov quoting policy parameters (gamma, kappa) via policy optimization."""
+    from ml.drl_market_maker import train_market_maker_policy
+    res = train_market_maker_policy(
+        episodes=body.episodes or 50,
+        learning_rate=body.learning_rate or 0.05,
+        gamma_bounds=(body.gamma_min or 0.01, body.gamma_max or 1.0),
+        kappa_bounds=(body.kappa_min or 0.5, body.kappa_max or 5.0),
+        seed=body.seed or 42,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else {
+        "best_gamma": float(res.best_gamma),
+        "best_kappa": float(res.best_kappa),
+        "best_reward": float(res.best_reward),
+        "best_sharpe": float(res.best_sharpe),
+        "best_pnl": float(res.best_pnl),
+        "best_max_inventory": int(res.best_max_inventory),
+        "episodes_trained": int(res.episodes_trained),
+        "training_history": res.training_history,
+        "converged": bool(res.converged),
+    }
 
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
+
 def get_live_trade_pending() -> Dict[str, Any]:
     from pilots.live_trade_proposals import get_pending_proposals
     return {"proposals": get_pending_proposals()}
@@ -7141,9 +7174,9 @@ def get_pilots_execution_fix_venues(
 
 
 class ResearchSynthesizeRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, description="Quantitative hypothesis, academic abstract, or math formula.")
-    strategy_type: Optional[str] = Field(None, description="Optional strategy type/mode e.g. momentum, mean_reversion, hypothesis.")
-    target_asset_class: Optional[str] = Field(None, description="Optional target asset class e.g. equities, options, crypto.")
+    prompt: str = Field(..., min_length=1, max_length=4000, description="Quantitative hypothesis, academic abstract, or math formula.")
+    strategy_type: Optional[str] = Field(None, max_length=50, description="Optional strategy type/mode e.g. momentum, mean_reversion, hypothesis.")
+    target_asset_class: Optional[str] = Field(None, max_length=50, description="Optional target asset class e.g. equities, options, crypto.")
 
 
 @app.post(
@@ -7180,15 +7213,15 @@ def post_pilots_ai_research_synthesize(req: ResearchSynthesizeRequest) -> Dict[s
 
 
 class ResearchBacktestRequest(BaseModel):
-    code: Optional[str] = Field(None, description="AST-safe SignalModule or strategy Python code.")
-    strategy_code: Optional[str] = Field(None, description="Alias for code.")
-    symbol: Optional[str] = Field("SPY", description="Ticker symbol to validate against.")
-    strategy_id: Optional[str] = Field(None, description="Strategy identifier.")
+    code: Optional[str] = Field(None, max_length=100000, description="AST-safe SignalModule or strategy Python code.")
+    strategy_code: Optional[str] = Field(None, max_length=100000, description="Alias for code.")
+    symbol: Optional[str] = Field("SPY", max_length=20, description="Ticker symbol to validate against.")
+    strategy_id: Optional[str] = Field(None, max_length=100, description="Strategy identifier.")
     symbols: Optional[List[str]] = Field(None, description="List of symbols.")
-    start_date: Optional[str] = Field(None, description="Start date YYYY-MM-DD.")
-    end_date: Optional[str] = Field(None, description="End date YYYY-MM-DD.")
-    cost_bps: Optional[float] = Field(5.0, ge=0.0, description="Transaction cost in basis points per turnover.")
-    transaction_cost_bps: Optional[float] = Field(None, ge=0.0, description="Alias for cost_bps.")
+    start_date: Optional[str] = Field(None, max_length=20, description="Start date YYYY-MM-DD.")
+    end_date: Optional[str] = Field(None, max_length=20, description="End date YYYY-MM-DD.")
+    cost_bps: Optional[float] = Field(5.0, ge=0.0, le=500.0, description="Transaction cost in basis points per turnover.")
+    transaction_cost_bps: Optional[float] = Field(None, ge=0.0, le=500.0, description="Alias for cost_bps.")
     apply_trend_gate: Optional[bool] = Field(False, description="Apply Faber SMA-200 trend gating.")
 
 

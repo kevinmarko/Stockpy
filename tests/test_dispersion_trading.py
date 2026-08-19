@@ -111,6 +111,22 @@ def test_compute_implied_correlation():
     assert compute_implied_correlation(index_iv=0.20, constituent_ivs={}, weights=weights) is None
 
 
+def test_driessen_maenhout_vilkov_implied_correlation_exact_multi_asset():
+    """Validates Driessen-Maenhout-Vilkov (2009) implied correlation on an asymmetric 3-asset basket.
+
+    w = [0.5, 0.3, 0.2], sigma = [0.30, 0.25, 0.20]
+    Target rho_imp = 0.50 -> sigma_index = sqrt(0.049975) ≈ 0.223550889
+    """
+    weights = {"A": 0.5, "B": 0.3, "C": 0.2}
+    const_ivs = {"A": 0.30, "B": 0.25, "C": 0.20}
+    index_iv = np.sqrt(0.049975)
+
+    rho = compute_implied_correlation(index_iv=index_iv, constituent_ivs=const_ivs, weights=weights)
+    assert rho is not None
+    assert pytest.approx(rho, abs=1e-5) == 0.50
+
+
+
 def test_compute_realized_correlation_matrix():
     np.random.seed(42)
     dates = pd.date_range("2026-01-01", periods=100)

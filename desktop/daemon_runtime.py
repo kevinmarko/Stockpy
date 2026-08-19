@@ -337,6 +337,11 @@ class OrchestratorDaemon:
             )
             state = RunState.SUCCEEDED
             error = None
+            # Note: 0DTE exit-lifecycle management (manage_0dte_exits) is NOT
+            # re-run here. _timer_loop already calls it on every interval wake
+            # (more frequently than once per full pipeline cycle, and without
+            # waiting on cycle success) -- see _timer_loop below. A second call
+            # here would just double-fire it once per completed cycle.
         except main_orchestrator.PipelineFatalError as exc:
             state = RunState.FAILED
             error = str(exc)

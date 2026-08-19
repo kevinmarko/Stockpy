@@ -888,7 +888,6 @@ allocations genuinely differ between the two indices (verified by reading both d
 The sibling hardcoded-Long defect (item 5 above) is fully fixed and is not part of this remaining
 gap.
 
-
 ---
 
 ## 2026-08-18 (cont.): vol_mispricing Live Paper-Execution Endpoint — Enforced Override Gate
@@ -967,6 +966,27 @@ documented instructions). `tests/test_vol_mispricing.py` gained direct coverage 
 `execute_vol_mispricing_trade` (symbol validation, `is_live` refusal, dry-run preview,
 missing/empty-candidate refusal, the leg-translation worked example, and the no-fabrication
 refusal path).
+
+---
+
+## 2026-08: High-Frequency Market Maker (Avellaneda-Stoikov) Validation Exemption & Evaluation Framework
+
+**Module**: `ml/drl_market_maker.py` (`MarketMakingEnv`, `simulate_market_maker_session`, `train_market_maker_policy`)
+
+**Architectural Role**: Institutional high-frequency quoting and inventory risk mitigation engine based on Avellaneda & Stoikov (2008) and Guéant, Lehalle & Fernandez-Tapia (2012).
+
+### Evaluation Framework & Validation Exemption
+Unlike directional trend or long/short cross-sectional strategies evaluated via daily-return CPCV (Sharpe $\ge 0.50$, PBO $< 0.50$, DSR $\ge 0.95$, MaxDD $\le 30\%$), High-Frequency Market Making operates on sub-second order book arrival intensities with non-directional inventory mean-reversion objectives.
+
+1. **Custom Quantitative Metrics**:
+   - **Spread Capture ($)**: $\sum_{\text{fills}} |P_{\text{fill}} - S_t| > 0$
+   - **Inventory Holding Variance**: $\text{Var}(q_t) \to 0$ (penalized via $\frac{1}{2} \gamma \sigma^2 q_t^2$)
+   - **Adverse Selection Loss ($)**: $\sum \mathbb{I}(q_{t+1} \Delta S_{t+1} < 0) |q_{t+1} \Delta S_{t+1}|$
+   - **Terminal Inventory**: $q_T \approx 0$
+2. **Policy Optimization Method**:
+   - Closed-form reservation price $R(s, q, t) = s - q \gamma \sigma^2 (T - t)$ paired with stochastic parameter tuning over $(\gamma, \kappa) \in [0.01, 1.0] \times [0.5, 5.0]$ (the actual default `gamma_bounds`/`kappa_bounds` in `train_market_maker_policy`) via `train_market_maker_policy`.
+   - Exemption from standard daily-bar `STRATEGY_REGISTRY` backtesting is formally documented and covered by dedicated microstructure simulation tests (`tests/test_drl_market_maker.py`).
+   - **Why PBO/DSR specifically don't apply**: PBO (Probability of Backtest Overfitting) measures overfitting risk across a *selection process over many candidate daily-return strategies* -- the CPCV combinatorial-path framework this repo's harness implements. `train_market_maker_policy` is not that: it is a 2-parameter $(\gamma, \kappa)$ stochastic hill-climb over one fixed, closed-form analytical policy (Avellaneda-Stoikov), evaluated on sub-second simulated order-book fills, not a strategy-selection process producing a daily-return series a CPCV path split could even be constructed over. This is a structural mismatch between what PBO measures and what this module does, not a claim that the module is somehow immune to overfitting -- the custom metrics above (spread capture, inventory variance, adverse selection, terminal inventory) are this module's actual overfitting/robustness check, evaluated across the `MarketMakingEnv` simulation tests instead.
 
 ---
 
