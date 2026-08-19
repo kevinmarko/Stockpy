@@ -1034,3 +1034,36 @@ is a thin wrapper around the already-tested `generate_copula_stat_arb_signals`
 underlying no-lookahead guarantee this adapter inherits). Verified manually end-to-end: real
 `yfinance` KO/PEP download → adapter → `python -m scripts.refresh_validations --strategies
 copula_stat_arb --json` produced the table above.
+
+---
+
+## 2026-08-19 (cont.): dispersion_trading basket fix + zero_dte_engine docstring corrections
+
+Closes the remaining half of the 2026-08-18 entry's item that was explicitly left open
+("only half fixed") plus two related docstring-accuracy defects surfaced during the same
+re-verification pass.
+
+1. **`dispersion_trading`'s identical-8-stock-basket defect, now fully fixed.**
+   `INDEX_CONSTITUENTS_MAP["SPY"]` and `["QQQ"]` were set-identical (same 8 tickers, only
+   `TSLA`/`AVGO`'s list position swapped). Fixed: both baskets keep the real mega-cap tech
+   overlap that genuinely exists between the two indices (AAPL/NVDA/MSFT/AMZN/GOOGL/META are
+   legitimately top holdings of both — a market fact, not the bug), but SPY now also carries
+   JPM (financials) and UNH (healthcare) — real non-tech sector exposure that QQQ's Nasdaq-100
+   index rules structurally exclude — replacing its two smallest legacy slots; QQQ keeps AVGO/TSLA
+   (its real growth/semiconductor tilt) in their place. `tests/test_options_desk_deployability_runtime_gap.py::test_dispersion_trading_baskets_distinct_for_spy_and_qqq`
+   strengthened to assert on the constituent SETS differing, not just weights on an identical set
+   (the prior assertion, `spy_weights["TSLA"] != qqq_weights["TSLA"]`, is no longer even
+   well-formed now that TSLA isn't in SPY's basket at all).
+2. **`zero_dte_engine.py`'s docstring corrected on two points**, both confirmed by reading the
+   actual exit/entry code rather than re-asserting the docstring's own claim: (a) the stop-loss
+   was documented as triggering on "-30% loss **or opening range reversal**" — `manage_0dte_exits`'s
+   actual condition is `pnl_pct <= -stop_loss_pct` only; there is no opening-range-reversal exit
+   trigger anywhere in the module. (b) the TTM squeeze detector was documented as a "Gate" —
+   `generate_0dte_signals` only uses `squeeze_fired` to add +0.10 to the reported confidence score
+   on an already-triggered ORB breakout; it never blocks or requires a squeeze to enter. Both
+   corrected to describe what the code actually does. `detect_volatility_squeeze` itself is real,
+   substantive code (Bollinger-inside-Keltner compression detection) — only the "Gate" framing was
+   wrong, not the underlying computation.
+
+Test coverage: `tests/test_dispersion_trading.py`, `tests/test_options_desk_deployability_runtime_gap.py`,
+`tests/test_zero_dte_engine.py` all re-run green after both fixes.
