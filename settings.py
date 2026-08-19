@@ -1419,7 +1419,7 @@ class Settings(BaseSettings):
     )
     CIRCUIT_BREAKER_ENABLED: bool = Field(
         default=False,
-        description="Master switch for automatic live circuit-breaker updates (volatility-jump detector only — see docstring on the daemon updater for scope). Defaults False to preserve today's exact (inert) behavior.",
+        description="Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
     )
     CIRCUIT_BREAKER_REFERENCE_SYMBOL: str = Field(
         default="SPY",

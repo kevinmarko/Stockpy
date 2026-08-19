@@ -316,10 +316,13 @@ export const DynamicCircuitBreakerBadge: React.FC<DynamicCircuitBreakerBadgeProp
         )}
       </div>
 
-      {/* Scope note: only the volatility-jump detector is wired to a live,
-          automatic updater today. OFI/VPIN and loss-velocity stay
-          manual-only -- no live equity order-flow or intraday PnL
-          time-series data source exists to feed them automatically. */}
+      {/* Scope note: volatility-jump, VPIN, and loss-velocity are all wired
+          to a live, automatic updater when CIRCUIT_BREAKER_ENABLED is on.
+          OFI specifically (and therefore the compound OFI+VPIN flash-crash
+          shield, which needs both) stays manual-only -- no configured
+          market-data provider populates bid/ask size anywhere in this
+          codebase, so there is no real order-flow-imbalance signal to
+          compute automatically. */}
       <div
         data-testid="circuit-breaker-scope-note"
         style={{
@@ -328,10 +331,12 @@ export const DynamicCircuitBreakerBadge: React.FC<DynamicCircuitBreakerBadgeProp
           lineHeight: 1.4,
         }}
       >
-        Automatic halting covers volatility jumps only (live when the operator
-        enables CIRCUIT_BREAKER_ENABLED). The OFI/VPIN flash-crash shield and
-        loss-velocity brake below are manual-only — reachable via the kill-switch
-        CLI, not triggered automatically.
+        Automatic updates cover volatility jumps, VPIN (bar-level toxicity),
+        and the loss-velocity brake (live when the operator enables
+        CIRCUIT_BREAKER_ENABLED). OFI stays manual-only — no configured data
+        provider supplies real bid/ask size — so the compound OFI+VPIN
+        flash-crash shield below cannot trigger automatically either;
+        reachable via the kill-switch CLI instead.
       </div>
 
       {/* Metrics Row */}
