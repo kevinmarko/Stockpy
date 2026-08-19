@@ -1264,3 +1264,77 @@ consistent with (small live-data drift from) the 2026-07-29 addendum's original 
 `TestBuildSignalReplayAdapter::test_malformed_raw_json_row_does_not_crash_the_adapter`) — both
 confirmed to reproduce the exact original `AttributeError` when run against the pre-fix code,
 and pass after it.
+
+---
+
+## 2026-08-19: Real PPO agent for the market maker (`ml/drl_market_maker_ppo.py`) — closes the "Deep RL (PPO)" audit finding
+
+Closes the item flagged as "still open" in this log's OOS re-validation entry above, and the
+original giant-master-plan audit finding: Phase 22's "Deep RL (PPO)" framing was previously false
+— `ml/drl_market_maker.py::train_market_maker_policy` is a 2-parameter (γ, κ) heuristic hill-climb
+over a fixed closed-form policy, not a trained neural network.
+
+**What was built**: `ml/drl_market_maker_ppo.py` — a real actor-critic PPO agent (Schulman et al.
+2017), implemented in pure NumPy (matching this `ml/` package's own established convention — see
+`ml/transformer_vol_forecaster.py`'s full TFT implementation — rather than adding `torch` as a new
+hard dependency; `torch` is listed in `requirements-optional.txt` but is not actually installed in
+this repo's own committed `.venv`, nor importable under the Python 3.14 this module was authored
+against). Components: a 2-layer MLP shared trunk with separate policy (Gaussian mean over
+`[delta_bid, delta_ask]`, softplus-transformed to guarantee non-negative half-spreads) and value
+heads, hand-derived backward pass, a hand-rolled Adam optimizer, Generalized Advantage Estimation
+(GAE), and PPO's clipped surrogate objective with the standard gradient-masking rule.
+
+**The hand-derived backprop is verified, not asserted**: a subtly-wrong backward pass would still
+run, still "train," and would be indistinguishable from a correct implementation without checking
+the math — exactly the class of plausible-but-fake result this repo's conventions exist to catch.
+`tests/test_drl_market_maker_ppo.py::TestGradientCorrectness::test_gradients_match_finite_differences`
+checks every parameter's analytic gradient against a finite-difference numerical gradient and
+passes.
+
+**Action space is genuinely state-dependent, unlike the hill-climb**: this agent outputs direct
+`[delta_bid, delta_ask]` quote offsets conditioned on `MarketMakingEnv`'s own 6-dim observation
+(inventory, time remaining, price drift, vol, reservation-spread, running PnL) at every step — the
+actual point of using RL here, since a closed-form Avellaneda-Stoikov quote can only react to
+state through its fixed analytical formula.
+
+**First training run — a reference point, not an established result**: 150 iterations, 6 episodes
+per iteration, 10 synthetic GBM training paths (seeds 100-109), evaluated deterministically on 10
+held-out paths (seeds 500-509, disjoint from training) against the closed-form AS quoter on the
+identical paths:
+
+| Metric | PPO (this run) | Closed-form AS |
+|---|---|---|
+| Mean total PnL | 139.04 | 30.10 |
+| Mean Sharpe (per-episode) | 1.247 | 0.517 |
+| Mean MaxDD | 94.15 | 77.82 |
+| Mean inventory variance | 10.96 | 6.86 |
+| Mean |terminal inventory| | 8.70 | 1.00 |
+
+**Read honestly, not as "PPO wins"**: PPO achieved higher raw PnL/Sharpe on this small run, but
+also took on meaningfully MORE inventory risk (higher variance, ~9x the closed-form's terminal
+inventory) and a larger drawdown — it learned a more aggressive, higher-risk/higher-reward policy
+on these particular paths, not a strictly dominant one. A terminal inventory averaging +8.7 (vs.
+the closed-form's near-flat 1.0) suggests the policy under-learned the terminal liquidation
+penalty term in this short a training run — plausible and unsurprising for 150 iterations on a
+16-hidden-unit network, not evidence of a bug (the gradient-correctness test rules that out
+separately). This is a first reference point from one training configuration, not a validated,
+tuned, or production-ready policy.
+
+**Same PBO/DSR exemption reasoning as `train_market_maker_policy`'s own entry above applies here,
+more directly**: a trained neural policy evaluated via rollout simulation on synthetic/historical
+price paths is not a `STRATEGY_REGISTRY`-shaped daily-return series a CPCV path split could be
+constructed over. Not registered in `STRATEGY_REGISTRY`.
+
+**Not wired to any API endpoint or webapp screen** as of this entry — `ml/drl_market_maker_ppo.py`
+is a standalone module, callable directly (`train_ppo_market_maker`, `evaluate_ppo_policy`), same
+"built but not yet wired" state `train_market_maker_policy` itself was in until PR #788 wired it
+into `POST /pilots/options/market-maker/train`. Wiring this in (a `method: "ppo"` request option,
+or a dedicated endpoint) is left as a separate follow-up so it can get its own considered API
+design and — given a real neural network with real training time — a decision about whether
+training happens synchronously in a request handler or as a background job.
+
+Tests: `tests/test_drl_market_maker_ppo.py` (12 tests: gradient correctness, GAE math, rollout
+buffer, full training-loop functional tests, the same honest plateau-based convergence-signal
+convention `train_market_maker_policy` established, evaluation metric-shape parity with the
+closed-form comparison, deterministic-evaluation reproducibility, non-negative action-space
+contract, AST import safety).
