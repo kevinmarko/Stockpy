@@ -591,6 +591,108 @@ class OrchestratorDaemon:
             )
             return None
 
+    # ------------------------------------------------------------------
+    # Live circuit-breaker updater (volatility-jump detector only)
+    # ------------------------------------------------------------------
+
+    def maybe_update_circuit_breaker(self) -> None:
+        """Live volatility-jump circuit-breaker updater.
+
+        HONEST SCOPE — read this before assuming full automatic coverage:
+        this wires ONLY the Dynamic Circuit Breaker's volatility-jump
+        detector (``execution.dynamic_circuit_breaker.DynamicCircuitBreaker
+        .check_volatility_jump`` / ``update_metrics``) into a periodic live
+        data feed. The OFI/VPIN flash-crash shield and the intraday
+        loss-velocity brake remain MANUAL-ONLY — no live equity order-flow
+        (bid/ask quote-level deltas or buy/sell volume buckets) or intraday
+        PnL time-series data source exists anywhere in this codebase to feed
+        them automatically. An operator (or an external watchdog) can still
+        trip either of those directly via
+        ``python -m execution.kill_switch --activate-soft-halt`` /
+        ``--activate``.
+
+        Gated on ``settings.CIRCUIT_BREAKER_ENABLED`` (default ``False`` —
+        today's exact, inert, behavior; a no-op when disabled). When
+        enabled: fetches recent daily bars for
+        ``settings.CIRCUIT_BREAKER_REFERENCE_SYMBOL`` to build a rolling
+        20-trading-day annualized realized-vol baseline (plus that series'
+        own std), fetches a short recent hourly window as the reactive
+        "current" input, computes the 5m-EWMA-style volatility Z-score via
+        ``check_volatility_jump``, and persists the result via
+        ``update_metrics(volatility_zscore=..., persist=True)`` — the same
+        persistence path ``dynamic_circuit_breaker_check``'s file-sentinel
+        fallback (``execution/risk_gate.py``) reads via ``load_metrics()``.
+
+        Never raises (CONSTRAINT #6): any data-fetch or computation failure
+        degrades to a logged WARNING and this tick is simply skipped — the
+        previously-persisted circuit breaker state (if any) is left
+        untouched rather than being overwritten with a stale/fabricated
+        value. Called from ``_timer_loop`` on every wake, mirroring
+        ``maybe_refresh_settings``'s own defensive pattern.
+        """
+        if not settings.CIRCUIT_BREAKER_ENABLED:
+            return
+        try:
+            from data.market_data import get_provider
+            from execution.dynamic_circuit_breaker import DynamicCircuitBreaker
+
+            symbol = settings.CIRCUIT_BREAKER_REFERENCE_SYMBOL
+            provider = get_provider()
+
+            daily_bars = provider.get_intraday_bars(symbol, lookback_days=90, interval="1d")
+            if daily_bars is None or daily_bars.empty or "Close" not in daily_bars.columns:
+                logger.warning(
+                    "maybe_update_circuit_breaker: no usable daily bars for %s; skipping tick.",
+                    symbol,
+                )
+                return
+
+            daily_returns = daily_bars["Close"].pct_change().dropna()
+            if len(daily_returns) < 21:
+                logger.warning(
+                    "maybe_update_circuit_breaker: insufficient daily-return history for "
+                    "%s (%d rows, need >= 21 for a 20d rolling-vol baseline); skipping tick.",
+                    symbol, len(daily_returns),
+                )
+                return
+
+            rolling_vol = daily_returns.rolling(window=20).std().dropna() * (252.0 ** 0.5)
+            if rolling_vol.empty:
+                logger.warning(
+                    "maybe_update_circuit_breaker: rolling 20d vol series empty for %s; "
+                    "skipping tick.",
+                    symbol,
+                )
+                return
+            baseline_20d_vol = float(rolling_vol.iloc[-1])
+            baseline_vol_std = float(rolling_vol.std()) if len(rolling_vol) > 1 else None
+
+            reactive_bars = provider.get_intraday_bars(symbol, lookback_days=2, interval="1h")
+            if reactive_bars is None or reactive_bars.empty or "Close" not in reactive_bars.columns:
+                logger.warning(
+                    "maybe_update_circuit_breaker: no usable hourly bars for %s; skipping tick.",
+                    symbol,
+                )
+                return
+
+            cb = DynamicCircuitBreaker()
+            _triggered, z_score, _reason = cb.check_volatility_jump(
+                intraday_returns_or_prices=reactive_bars["Close"],
+                baseline_20d_vol=baseline_20d_vol,
+                baseline_vol_std=baseline_vol_std,
+                is_prices=True,
+            )
+            cb.update_metrics(volatility_zscore=z_score, persist=True)
+            logger.debug(
+                "maybe_update_circuit_breaker: %s volatility Z-score=%.2f -> state=%s",
+                symbol, z_score, cb.current_state.value,
+            )
+        except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, never break the timer loop
+            logger.warning(
+                "maybe_update_circuit_breaker: unexpected failure (%s); will retry "
+                "next tick.", type(exc).__name__, exc_info=True,
+            )
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -611,6 +713,12 @@ class OrchestratorDaemon:
             # operator has explicitly set the flag to False to opt out.
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
+            # maybe_update_circuit_breaker() gates on
+            # settings.CIRCUIT_BREAKER_ENABLED internally (unlike
+            # maybe_refresh_settings, which relies on its callers to gate) --
+            # see its own docstring. Called unconditionally here so it is a
+            # true no-op, not merely "never invoked," when the flag is off.
+            self.maybe_update_circuit_breaker()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -624,6 +732,7 @@ class OrchestratorDaemon:
                 break
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
+            self.maybe_update_circuit_breaker()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(

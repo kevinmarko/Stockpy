@@ -316,6 +316,24 @@ export const DynamicCircuitBreakerBadge: React.FC<DynamicCircuitBreakerBadgeProp
         )}
       </div>
 
+      {/* Scope note: only the volatility-jump detector is wired to a live,
+          automatic updater today. OFI/VPIN and loss-velocity stay
+          manual-only -- no live equity order-flow or intraday PnL
+          time-series data source exists to feed them automatically. */}
+      <div
+        data-testid="circuit-breaker-scope-note"
+        style={{
+          fontSize: "0.7rem",
+          color: theme.textMuted,
+          lineHeight: 1.4,
+        }}
+      >
+        Automatic halting covers volatility jumps only (live when the operator
+        enables CIRCUIT_BREAKER_ENABLED). The OFI/VPIN flash-crash shield and
+        loss-velocity brake below are manual-only — reachable via the kill-switch
+        CLI, not triggered automatically.
+      </div>
+
       {/* Metrics Row */}
       <div
         data-testid="circuit-breaker-metrics-grid"

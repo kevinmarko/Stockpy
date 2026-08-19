@@ -1417,6 +1417,14 @@ class Settings(BaseSettings):
         default=30.0,
         description="Loss velocity rolling time window in minutes relative to daily loss limit.",
     )
+    CIRCUIT_BREAKER_ENABLED: bool = Field(
+        default=False,
+        description="Master switch for automatic live circuit-breaker updates (volatility-jump detector only — see docstring on the daemon updater for scope). Defaults False to preserve today's exact (inert) behavior.",
+    )
+    CIRCUIT_BREAKER_REFERENCE_SYMBOL: str = Field(
+        default="SPY",
+        description="Reference symbol used for the live volatility-jump circuit-breaker updater's baseline/reactive vol computation.",
+    )
 
     # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---
     HMM_N_STATES: int = Field(

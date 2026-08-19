@@ -1258,3 +1258,120 @@ class TestMaybeRefreshSettingsNeverRaises:
                 assert d.maybe_refresh_settings(path=store) is None
         finally:
             d.shutdown(timeout=2.0)
+
+
+class TestMaybeUpdateCircuitBreaker:
+    """desktop/daemon_runtime.py::OrchestratorDaemon.maybe_update_circuit_breaker
+    -- the live volatility-jump circuit-breaker updater (Phase 32, item 8).
+    Called directly (no d.start()/d.shutdown() needed -- this method has no
+    dependency on the daemon's run-lifecycle state)."""
+
+    def test_noop_when_disabled(self, monkeypatch):
+        """settings.CIRCUIT_BREAKER_ENABLED defaults False -- the method
+        must return immediately without even importing the data provider."""
+        from settings import settings
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
+
+        def _fail_if_called():
+            raise AssertionError("get_provider() must not be called when disabled")
+
+        monkeypatch.setattr("data.market_data.get_provider", _fail_if_called)
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise / must not call get_provider
+
+    def test_never_raises_when_provider_fails(self, monkeypatch):
+        """CONSTRAINT #6: a data-fetch failure must degrade to a logged
+        WARNING, never propagate into the timer loop."""
+        from settings import settings
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+
+        class _ExplodingProvider:
+            def get_intraday_bars(self, *a, **k):
+                raise RuntimeError("simulated network failure")
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _ExplodingProvider())
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise
+
+    def test_never_raises_when_bars_are_empty(self, monkeypatch):
+        """Degenerate-but-non-exceptional provider response (empty frame)
+        must also degrade cleanly rather than raising downstream (e.g. on
+        .rolling()/.std() over too little data)."""
+        import pandas as pd
+        from settings import settings
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+
+        class _EmptyProvider:
+            def get_intraday_bars(self, *a, **k):
+                return pd.DataFrame()
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _EmptyProvider())
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()  # must not raise
+
+    def test_happy_path_computes_and_persists_volatility_zscore(self, monkeypatch):
+        """When enabled with a well-formed provider, the daily-bar baseline
+        and hourly-bar reactive window are both fetched and handed to
+        check_volatility_jump()/update_metrics(persist=True)."""
+        import numpy as np
+        import pandas as pd
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+
+        rng = np.random.default_rng(42)
+        daily_prices = 400.0 + np.cumsum(rng.normal(0, 1, 90))
+        daily_df = pd.DataFrame(
+            {"Close": daily_prices},
+            index=pd.date_range("2026-01-01", periods=90, freq="D"),
+        )
+        hourly_prices = daily_prices[-1] + np.cumsum(rng.normal(0, 0.5, 40))
+        hourly_df = pd.DataFrame(
+            {"Close": hourly_prices},
+            index=pd.date_range("2026-04-01", periods=40, freq="h"),
+        )
+
+        calls: list[tuple] = []
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                calls.append((symbol, lookback_days, interval))
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+
+        update_calls: list[tuple] = []
+
+        class _FakeState:
+            value = "NORMAL"
+
+        class _FakeCB:
+            def __init__(self, *a, **k):
+                pass
+
+            def check_volatility_jump(self, **kwargs):
+                assert "intraday_returns_or_prices" in kwargs
+                assert kwargs["is_prices"] is True
+                return (False, 1.23, None)
+
+            def update_metrics(self, *, volatility_zscore=None, persist=True):
+                update_calls.append((volatility_zscore, persist))
+
+            @property
+            def current_state(self):
+                return _FakeState()
+
+        monkeypatch.setattr(
+            "execution.dynamic_circuit_breaker.DynamicCircuitBreaker", _FakeCB
+        )
+
+        d = OrchestratorDaemon()
+        d.maybe_update_circuit_breaker()
+
+        assert ("SPY", 90, "1d") in calls
+        assert ("SPY", 2, "1h") in calls
+        assert update_calls == [(1.23, True)]

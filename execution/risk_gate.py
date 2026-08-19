@@ -230,14 +230,53 @@ class PreTradeRiskGate:
             reason = cb.current_metrics.reason or ""
 
         else:
-            # File-based sentinel fallback
+            # File-based sentinel fallback — no DynamicCircuitBreaker instance
+            # was injected via context/self.circuit_breaker, so evaluate
+            # against (a) the GlobalKillSwitch sentinel files (both HARD and
+            # SOFT halt — a prior version of this branch only ever checked
+            # soft-halt) and (b) whatever a live updater (or a previous
+            # process) persisted to output/circuit_breaker_state.json via
+            # DynamicCircuitBreaker.load_metrics(). The two signals are
+            # independent (either can be set without the other), so take the
+            # MORE SEVERE of the two rather than letting one silently shadow
+            # the other. Any failure while evaluating this fallback must
+            # fail SAFE — set SOFT_HALT with a clear reason — never silently
+            # fall through as if everything were NORMAL.
             try:
                 ks = GlobalKillSwitch()
-                if ks.is_soft_halt_active():
-                    state = CircuitBreakerState.SOFT_HALT
-                    reason = ks.soft_halt_reason()
-            except Exception:
-                pass
+                fallback_state: Optional[CircuitBreakerState] = None
+                fallback_reason = ""
+
+                if ks.is_active():
+                    fallback_state = CircuitBreakerState.HARD_HALT
+                    fallback_reason = ks.reason()
+                elif ks.is_soft_halt_active():
+                    fallback_state = CircuitBreakerState.SOFT_HALT
+                    fallback_reason = ks.soft_halt_reason()
+
+                persisted = DynamicCircuitBreaker().load_metrics()
+                if persisted is not None:
+                    severity = {
+                        CircuitBreakerState.SOFT_HALT: 1,
+                        CircuitBreakerState.HARD_HALT: 2,
+                    }
+                    current_severity = severity.get(fallback_state, 0)
+                    persisted_severity = severity.get(persisted.state, 0)
+                    if persisted_severity > current_severity:
+                        fallback_state = persisted.state
+                        fallback_reason = persisted.reason or ""
+
+                state = fallback_state
+                reason = fallback_reason
+            except Exception as exc:
+                logger.error(
+                    "risk_gate: dynamic_circuit_breaker_check file-sentinel fallback "
+                    "evaluation failed (%s) — failing SAFE to SOFT_HALT rather than "
+                    "silently passing the order through.",
+                    exc, exc_info=True,
+                )
+                state = CircuitBreakerState.SOFT_HALT
+                reason = f"circuit breaker fallback evaluation failed: {exc}"
 
         if state == CircuitBreakerState.HARD_HALT:
             msg = f"HARD_HALT active: {reason or 'Dynamic circuit breaker tripped'} — all order submissions blocked"
