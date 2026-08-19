@@ -4,11 +4,15 @@ Implements a Temporal Fusion Transformer (TFT) architecture in pure NumPy/SciPy
 for multi-horizon point volatility prediction.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 from scipy.special import softmax
 from scipy.optimize import minimize
 from typing import Dict, List, Optional, Tuple, Any, Union
+
+logger = logging.getLogger(__name__)
 
 
 def pinball_loss(
@@ -231,7 +235,13 @@ def fit_quantile_output_weights(
                     theta_opt = res.x
                 else:
                     theta_opt = theta_0
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "fit_quantile_output_weights: L-BFGS-B optimization failed for quantile "
+                    "alpha=%s, falling back to Ridge seed: %s",
+                    alpha,
+                    exc,
+                )
                 theta_opt = theta_0
                 
             W_alpha[:, j] = theta_opt[:-1]
@@ -456,10 +466,7 @@ def _align_macro_causal(bars_index: pd.Index, macro_df: pd.DataFrame) -> pd.Data
             m_df[date_col] = pd.to_datetime(m_df[date_col])
             m_df = m_df.set_index(date_col)
         else:
-            try:
-                m_df.index = pd.to_datetime(m_df.index)
-            except Exception:
-                pass
+            m_df.index = pd.to_datetime(m_df.index)
 
     bars_dt = pd.to_datetime(bars_index)
     macro_dt = pd.to_datetime(m_df.index)

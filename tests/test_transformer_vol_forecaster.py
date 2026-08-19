@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,6 +14,7 @@ from ml.transformer_vol_forecaster import (
     forward_pass,
     build_causal_vol_features,
     build_training_windows,
+    _align_macro_causal,
 )
 
 
@@ -118,6 +121,46 @@ def test_fit_quantile_output_weights():
     b_90 = weights_dict[0.90][1]
     assert (b_10 <= b_50 + 0.05).all()
     assert (b_50 <= b_90 + 0.05).all()
+
+
+def test_fit_quantile_output_weights_logs_warning_on_optimizer_failure(monkeypatch, caplog):
+    """
+    Cluster C item 12: `fit_quantile_output_weights`'s L-BFGS-B `except Exception`
+    block previously degraded to the Ridge seed with zero logging. Force
+    scipy.optimize.minimize to raise and confirm a WARNING is logged (naming the
+    failing quantile alpha) while theta_opt still correctly falls back to theta_0
+    (i.e. output weights match a direct Ridge-only fit, behavior unchanged).
+    """
+    import ml.transformer_vol_forecaster as tvf_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced L-BFGS-B failure")
+
+    monkeypatch.setattr(tvf_mod, "minimize", _boom)
+
+    np.random.seed(42)
+    N, d_model = 100, 16
+    H = np.random.randn(N, d_model)
+    y = 0.20 + H[:, :2] @ np.array([0.03, -0.02])[:, None] + np.random.normal(0, 0.04, size=(N, 4))
+    y = np.maximum(y, 0.05)
+
+    with caplog.at_level(logging.WARNING, logger="ml.transformer_vol_forecaster"):
+        weights_dict = fit_quantile_output_weights(H, y, quantiles=[0.10])
+
+    assert any(
+        "L-BFGS-B optimization failed" in record.message and "alpha=0.1" in record.message
+        for record in caplog.records
+    )
+
+    # theta_opt fell back to theta_0 == the Ridge seed + residual-quantile intercept shift,
+    # so the returned weight matrix equals the Ridge coefficients exactly.
+    lambda_reg = 1e-3
+    H_bias = np.hstack([H, np.ones((N, 1))])
+    I_bias = np.eye(d_model + 1)
+    I_bias[-1, -1] = 0.0
+    w_ridge_all = np.linalg.solve(H_bias.T @ H_bias + lambda_reg * I_bias, H_bias.T @ y)
+    W_q, b_q = weights_dict[0.10]
+    np.testing.assert_allclose(W_q, w_ridge_all[:-1, :], rtol=1e-8)
 
 
 def test_train_and_predict_quantile_vol_cone():
@@ -275,6 +318,37 @@ def test_causal_macro_perturbation_no_lookahead():
     )
     # Sanity: perturbation actually changed future features
     assert not feats_orig.iloc[cutoff + 1:].equals(feats_pert.iloc[cutoff + 1:])
+
+
+def test_align_macro_causal_well_formed_index_unaffected_by_dead_code_removal():
+    """
+    Cluster C item 12: `_align_macro_causal`'s `try: m_df.index = pd.to_datetime(...)
+    except Exception: pass` block was removed as dead/misleading code (an identical,
+    unprotected `pd.to_datetime(m_df.index)` call a few lines later would raise the
+    same exception anyway). This is a pure no-op removal for well-formed input --
+    confirm alignment still behaves identically: a non-DatetimeIndex macro frame
+    with no recognizable date column still gets converted and causally forward-filled
+    onto bars_index with zero lookahead.
+    """
+    bars = _synthetic_ohlcv(n_days=40, seed=9)
+    # Macro frame indexed by plain date strings (not a DatetimeIndex, no "Date"-like column)
+    macro_df = pd.DataFrame(
+        {"vix": np.linspace(15.0, 25.0, 40)},
+        index=[d.strftime("%Y-%m-%d") for d in bars.index],
+    )
+
+    aligned = _align_macro_causal(bars.index, macro_df)
+
+    assert list(aligned.index) == list(bars.index)
+    assert aligned["vix"].notna().all()
+    # Causal: value at each date must equal the (forward-filled) macro observation
+    # as-of that same date, never a later one.
+    expected = macro_df.copy()
+    expected.index = pd.to_datetime(expected.index)
+    expected = expected.sort_index()
+    for i, dt in enumerate(pd.to_datetime(bars.index)):
+        as_of = expected[expected.index <= dt]["vix"].iloc[-1]
+        assert aligned["vix"].iloc[i] == pytest.approx(as_of)
 
 
 def test_causal_end_to_end_prediction_perturbation():

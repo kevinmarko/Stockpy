@@ -373,3 +373,35 @@ def test_hrp_fallback_flag_false_on_success():
     assert res["hrp_fallback"] is False
 
 
+def test_slsqp_fallback_logs_warning(monkeypatch, caplog):
+    """
+    Cluster C item 13: the SLSQP-level fallback (`except Exception: w_opt = w_init;
+    status = "fallback"`) previously had zero server-log visibility, distinct from
+    the already-fixed quasi-diagonalization fallback above. Force the SLSQP
+    `minimize` call itself to raise and confirm a WARNING is logged while
+    `status == "fallback"` is still honestly returned (behavior unchanged).
+    """
+    import logging
+    import sizing.hrp_cvar_optimizer as hrp_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced SLSQP failure")
+
+    monkeypatch.setattr(hrp_mod, "minimize", _boom)
+
+    np.random.seed(11)
+    returns = pd.DataFrame(
+        np.random.normal(0.001, 0.02, size=(300, 3)),
+        columns=['A', 'B', 'C'],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="sizing.hrp_cvar_optimizer"):
+        res = optimize_turnover_regularized_hrp_cvar(returns, target_beta_range=None)
+
+    assert res["status"] == "fallback"
+    assert np.isclose(sum(res["weights"].values()), 1.0)
+    assert any(
+        "SLSQP optimization failed" in record.message for record in caplog.records
+    )
+
+

@@ -384,7 +384,8 @@ def optimize_turnover_regularized_hrp_cvar(
         else:
             w_opt = w_init
             status = "fallback"
-    except Exception:
+    except Exception as exc:
+        logger.warning("SLSQP optimization failed, falling back to initial weights: %s", exc)
         w_opt = w_init
         status = "fallback"
 
