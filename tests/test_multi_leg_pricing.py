@@ -212,9 +212,16 @@ def test_price_bull_call_spread_net_debit():
 # 4. FastAPI Endpoint Integration Tests
 # ===========================================================================
 
-def test_api_multi_leg_pricing_endpoint():
+def test_api_multi_leg_pricing_endpoint(monkeypatch):
     """Tests POST /pilots/options/multi-leg/price."""
     from api.pilots_api import app
+    from settings import settings
+
+    # This endpoint is gated by require_read_token (STATE_API_TOKEN). No
+    # Authorization header is sent below, relying on the
+    # fail-open-on-loopback path -- pinned explicitly so it doesn't depend
+    # on the machine's real .env leaving STATE_API_TOKEN unset.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
 
     client = TestClient(app, client=("127.0.0.1", 54123))
     payload = {
@@ -240,9 +247,14 @@ def test_api_multi_leg_pricing_endpoint():
     assert len(data["payoff_curve"]) > 0
 
 
-def test_api_multi_leg_validation_endpoint():
+def test_api_multi_leg_validation_endpoint(monkeypatch):
     """Tests POST /pilots/options/multi-leg/validate."""
     from api.pilots_api import app
+    from settings import settings
+
+    # Gated by require_read_token (STATE_API_TOKEN); see the pricing
+    # endpoint test above for why this is pinned explicitly.
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
 
     client = TestClient(app, client=("127.0.0.1", 54123))
     # Valid vertical spread

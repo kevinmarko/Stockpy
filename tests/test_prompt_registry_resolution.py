@@ -680,7 +680,7 @@ class TestSingleton:
         assert reg._pins.get("gravity.system") == "1.2.3"
         reset_registry()
 
-    def test_dot_env_only_config_enables_registry(self):
+    def test_dot_env_only_config_enables_registry(self, monkeypatch):
         """Regression test for the os.environ-vs-settings bug (CLAUDE.md's
         2026-07 Finnhub/news_catalyst precedent).
 
@@ -693,6 +693,15 @@ class TestSingleton:
         `.env`-only configuration was silently ignored and this would have
         produced a baseline-only (disabled) registry with no error.
         """
+        # The invariant this test relies on to actually detect that
+        # regression (rather than false-positive passing because real
+        # os.environ happens to ALSO carry a truthy value) is enforced here
+        # with delenv rather than merely asserted -- on a machine with a
+        # real, populated .env, another test module's own
+        # load_dotenv(ENV_PATH, override=False) call earlier in this same
+        # pytest session copies PROMPT_REGISTRY_ENABLED (and its .env value)
+        # into real os.environ, which a bare assertion cannot see past.
+        monkeypatch.delenv("PROMPT_REGISTRY_ENABLED", raising=False)
         assert "PROMPT_REGISTRY_ENABLED" not in os.environ, (
             "test setup invariant: real os.environ must NOT carry this key, "
             "so the only way the registry can see it enabled is via settings"
