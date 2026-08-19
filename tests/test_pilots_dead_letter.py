@@ -104,7 +104,10 @@ def test_dead_letter_endpoint_shape(tmp_path: Path):
         json.dumps({"run_id": "r1", "generated_at": "2026-07-30T00:00:00+00:00", "entries": []}),
         encoding="utf-8",
     )
-    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+    # Fail-open GET, no Authorization header sent -- STATE_API_TOKEN pinned
+    # unset (matching test_dead_letter_endpoint_fail_open_no_token below) so
+    # this doesn't depend on the machine's real .env leaving it unset.
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/dead-letter")
     assert resp.status_code == 200
     body = resp.json()
@@ -113,14 +116,14 @@ def test_dead_letter_endpoint_shape(tmp_path: Path):
 
 
 def test_dead_letter_endpoint_reflects_retry_enabled_flag(tmp_path: Path):
-    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), mock.patch.object(settings, "STATE_API_TOKEN", None):
         with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", False):
             resp = client.get("/dead-letter")
     assert resp.json()["retry_enabled"] is False
 
 
 def test_dead_letter_endpoint_cold_start_is_honest_not_500(tmp_path: Path):
-    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/dead-letter")
     assert resp.status_code == 200
     body = resp.json()

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from settings import settings
 from api.pilots_api import app, OPTIONS_DESK_DEPLOYABILITY_GATES
 from pilots.zero_dte_engine import execute_0dte_trade
-from pilots.dispersion_trading import INDEX_WEIGHTS_MAP
+from pilots.dispersion_trading import INDEX_CONSTITUENTS_MAP, INDEX_WEIGHTS_MAP
 
 
 @pytest.fixture
@@ -83,12 +83,26 @@ def test_execute_0dte_trade_refuses_when_price_missing_and_never_fabricates_1_50
 
 
 def test_dispersion_trading_baskets_distinct_for_spy_and_qqq():
-    """SPY and QQQ dispersion weight maps must not be identical -- each index carries its
-    own constituent weight allocation, not a shared/copy-pasted default."""
+    """SPY and QQQ dispersion baskets must not be identical -- each index carries its own
+    constituent set and weight allocation, not a shared/copy-pasted default. As of the
+    2026-08-19 fix (docs/VALIDATION_STRATEGY_FIX_LOG.md), the two baskets differ in
+    CONSTITUENT SET, not just reordering/reweighting the same 8 tickers: SPY includes real
+    non-tech sector exposure (JPM financials, UNH healthcare) that QQQ's Nasdaq-100 index
+    rules structurally exclude, while QQQ keeps its real growth/semiconductor tilt
+    (AVGO, TSLA) in their place."""
+    spy_constituents = set(INDEX_CONSTITUENTS_MAP["SPY"])
+    qqq_constituents = set(INDEX_CONSTITUENTS_MAP["QQQ"])
+    assert spy_constituents != qqq_constituents, "SPY/QQQ must not share an identical constituent set"
+    assert "JPM" in spy_constituents and "JPM" not in qqq_constituents
+    assert "UNH" in spy_constituents and "UNH" not in qqq_constituents
+    assert "TSLA" in qqq_constituents and "TSLA" not in spy_constituents
+    assert "AVGO" in qqq_constituents and "AVGO" not in spy_constituents
+
     spy_weights = INDEX_WEIGHTS_MAP["SPY"]
     qqq_weights = INDEX_WEIGHTS_MAP["QQQ"]
     assert spy_weights != qqq_weights
-    assert spy_weights["TSLA"] != qqq_weights["TSLA"]
+    # A ticker present in both baskets must also carry a genuinely different weight.
+    assert spy_weights["AAPL"] != qqq_weights["AAPL"]
 
 
 def test_zero_dte_execute_surfaces_gate_status(client, monkeypatch):

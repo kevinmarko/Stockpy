@@ -139,5 +139,11 @@ class TestEvaluateRejectsNonPositivePrecomputedValues:
 
 class TestSettingsDefault:
     def test_advisory_reuse_pipeline_compute_defaults_false(self):
+        """Checked against the field's own coded default, not a freshly
+        constructed ``Settings()`` -- the latter still reads a real,
+        operator-populated ``.env`` (and any real os.environ this process's
+        import chain may have picked up via another module's
+        ``load_dotenv()``), so it is not a reliable stand-in for "the
+        project default" on a machine with its own ``.env``."""
         from settings import Settings
-        assert Settings().ADVISORY_REUSE_PIPELINE_COMPUTE is False
+        assert Settings.model_fields["ADVISORY_REUSE_PIPELINE_COMPUTE"].default is False

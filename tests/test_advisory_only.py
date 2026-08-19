@@ -175,15 +175,20 @@ def test_settings_default_advisory_only_is_true():
     """The project default MUST be ADVISORY_ONLY=True so a fresh clone does
     not accidentally route orders to the broker.
 
-    Checked against a freshly-constructed, .env-isolated Settings instance
-    (not the live `settings` singleton) since an operator may have
-    legitimately set ADVISORY_ONLY=false in their own .env to intentionally
-    re-enable broker execution -- that is a valid deployment state, not a
-    violation of the class default this test is pinning down.
+    Checked against the field's own coded default rather than a
+    freshly-constructed ``Settings(_env_file=None)`` instance: an operator
+    may have legitimately set ADVISORY_ONLY=false in their own .env to
+    intentionally re-enable broker execution (a valid deployment state, not
+    a violation of the class default this test is pinning down) -- and
+    ``_env_file=None`` only skips the .env FILE, it still reads real
+    ``os.environ``, which another test module's own ``load_dotenv()`` call
+    earlier in this same pytest session can have already populated from
+    that same .env (see settings.py's ENV_PATH docstring / conftest.py's
+    ``_field_default`` docstring for the empirical proof of this exact
+    failure mode).
     """
     from settings import Settings
 
-    isolated = Settings(_env_file=None)
-    assert isolated.ADVISORY_ONLY is True, (
+    assert Settings.model_fields["ADVISORY_ONLY"].default is True, (
         "settings.ADVISORY_ONLY default must be True (Tier 5.1)"
     )
