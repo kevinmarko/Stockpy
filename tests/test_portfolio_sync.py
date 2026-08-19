@@ -153,6 +153,17 @@ def test_build_sync_report_happy_path(monkeypatch):
     """Held + watchlist + file inputs produce one deduped, classified report."""
     from data import portfolio_sync as ps
     from data import robinhood_client as rc
+    from settings import settings
+
+    # This test's expected universe is a closed, hand-enumerated set (holdings
+    # + the one fake RH watchlist below) -- it must NOT also pick up whatever
+    # real file(s) an operator's own .env happens to point SYNC_WATCHLIST_FILES
+    # at (e.g. a real, populated `watchlist.txt` sitting at the repo root when
+    # pytest is invoked from there). Neither a bool nor a `gui.env_io.
+    # SECRET_KEYS` member, so conftest.py's blanket per-test reset does not
+    # cover it -- pin it explicitly, matching this file's other
+    # SYNC_WATCHLIST_FILES-aware tests below.
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
 
     held = {
         "AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0),
@@ -312,6 +323,12 @@ def test_universe_dedup_and_sort(monkeypatch):
     from data import portfolio_sync as ps
     from data import robinhood_client as rc
     import data.market_data as md
+    from settings import settings
+
+    # See test_build_sync_report_happy_path's identical comment above --
+    # a real operator .env's SYNC_WATCHLIST_FILES must not leak extra
+    # tickers into this test's hand-enumerated expected universe.
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
 
     held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
     snap = _FakeSnapshot(positions=held)
@@ -348,6 +365,12 @@ def test_async_sync_now_dry_run_skips_env_write(monkeypatch, tmp_path):
     from data import portfolio_sync as ps
     import data.market_data as md
     from gui import env_io
+    from settings import settings
+
+    # See test_build_sync_report_happy_path's comment above -- pin so a real
+    # operator .env's SYNC_WATCHLIST_FILES can't inflate n_total past the
+    # single held AAPL position this test expects.
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
 
     snap = _FakeSnapshot(positions={
         "AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0),
@@ -383,6 +406,10 @@ def test_async_sync_now_persist_swallows_env_io_failure(monkeypatch, tmp_path):
     from data import portfolio_sync as ps
     import data.market_data as md
     from gui import env_io
+    from settings import settings
+
+    # See test_build_sync_report_happy_path's comment above.
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
 
     snap = _FakeSnapshot(positions={
         "AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0),
@@ -453,6 +480,12 @@ def test_discover_universe_dedupes_across_sources(monkeypatch, tmp_path):
 def test_unauthenticated_client_returns_empty(monkeypatch):
     """Discovery against a non-authenticated client returns empty containers."""
     from data import robinhood_client as rc
+
+    # See test_build_sync_report_happy_path (tests/test_portfolio_sync.py)'s
+    # comment for the full rationale -- an unauthenticated client must
+    # discover a genuinely empty universe, not whatever real file an
+    # operator's own .env happens to point SYNC_WATCHLIST_FILES at.
+    monkeypatch.setattr(rc.settings, "SYNC_WATCHLIST_FILES", None)
 
     client = rc.RobinhoodClient()
     client.is_authenticated = False

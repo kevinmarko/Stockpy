@@ -3708,8 +3708,18 @@ class TestStrategyHealth:
         overridden for the duration of those `with` blocks -- harmless."""
         monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
 
-    def test_shape_and_all_gates_pass_for_fixture_backed_pilot(self, monkeypatch):
+    def test_shape_and_all_gates_pass_for_fixture_backed_pilot(self, monkeypatch, tmp_path):
         _point_reports_at_fixtures(monkeypatch)
+        # `_validation_history_dir()` defaults to the real, CWD-relative
+        # "reports/history" -- an operator checkout that has actually run
+        # the validation pipeline has a real
+        # reports/history/timeseries_momentum_validation_history.jsonl on
+        # disk there, which would make this test's "no reports/history
+        # fixture wired -> honest empty trend" assertion below false for the
+        # wrong reason. Point it at an empty tmp dir instead, matching
+        # test_trend_populated_from_history_fixture_oldest_first's identical
+        # pattern below.
+        monkeypatch.setattr(pilots_api, "_validation_history_dir", lambda: str(tmp_path / "no_history_here"))
         resp = client.get("/strategy/health")
         assert resp.status_code == 200
         body = resp.json()
