@@ -138,3 +138,15 @@ A forward check through 2026-08-01 (~19 months more live data) gives DSR=0.99985
 the same conclusion. See
 [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s
 2026-08-17 entry for the full 5-strategy re-validation and methodology.
+
+
+### 2026-08-18 Full Validation Run (`garch_vol_target`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.7821 |
+| **PBO** | 0.2889 |
+| **DSR** | 0.9997 |
+| **Max Drawdown** | 13.64% |
+| **Deployable** | ✅ True |
+

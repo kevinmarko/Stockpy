@@ -162,3 +162,17 @@ fabricated; a future re-run with multiple hyperparameter candidates, the full un
 and/or real point-in-time fundamentals could plausibly move this result but was not performed
 here — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08 entry for the full writeup and
 `tests/test_validation_lgbm_ranker_registry.py` for the adapter's own regression coverage.
+
+
+### 2026-08-18 Full Validation Run (`lgbm_ranker`, rebased onto `main`)
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 1.5141 |
+| **PBO** | 0.0000 |
+| **DSR** | 0.9506 |
+| **Max Drawdown** | 2.33% |
+| **Deployable** | ✅ True |
+
+
+*Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
