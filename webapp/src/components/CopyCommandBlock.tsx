@@ -38,8 +38,16 @@ export function CopyCommandBlock({
 
   const copy = () => {
     if (disabled || !command) return;
-    void navigator.clipboard?.writeText(command);
-    setCopied(true);
+    navigator.clipboard?.writeText(command).then(
+      () => setCopied(true),
+      () => {
+        // Clipboard writes can be rejected (permission denied, an
+        // insecure/sandboxed context, etc.) -- don't claim "Copied" when
+        // it didn't happen, and don't leave an unhandled promise
+        // rejection in the console.
+        setCopied(false);
+      }
+    );
   };
 
   return (

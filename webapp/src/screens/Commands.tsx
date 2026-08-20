@@ -304,8 +304,13 @@ function CommandLauncher({
                 <Button
                   variant="neutral"
                   onClick={() => {
-                    navigator.clipboard.writeText(c.invocation);
-                    setCopiedName(c.name);
+                    // Don't claim "copied" when the write was actually
+                    // rejected (permission denied, insecure context, etc.)
+                    // -- mirrors CopyCommandBlock's own honesty fix.
+                    navigator.clipboard?.writeText(c.invocation).then(
+                      () => setCopiedName(c.name),
+                      () => setCopiedName(null)
+                    );
                   }}
                   aria-label={`Copy ${c.name}`}
                   data-testid={`command-card-copy-${c.name}`}

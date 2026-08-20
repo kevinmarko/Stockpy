@@ -529,7 +529,23 @@ describe("Commands screen — Run button", () => {
     fireEvent.click(copyButton);
 
     expect(writeText).toHaveBeenCalledWith("python3 main.py");
-    expect(copyButton).toHaveTextContent("✅");
+    await waitFor(() => expect(copyButton).toHaveTextContent("✅"));
+  });
+
+  it("a rejected clipboard write does NOT flip the grid card's copy button to the checkmark", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("Write permission denied"));
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    renderCommands();
+    await screen.findByText("main.py");
+
+    const copyButton = await screen.findByRole("button", { name: "Copy main.py" });
+    fireEvent.click(copyButton);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    // Give the rejected promise's .then() handler a tick to run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(copyButton).toHaveTextContent("📋");
   });
 
   it("a rejected createJob renders an inline error message, toasts a failure, and does not crash", async () => {
