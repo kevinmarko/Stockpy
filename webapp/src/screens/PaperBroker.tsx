@@ -27,6 +27,25 @@ import { SecRule606ReportView } from "../components/execution/SecRule606ReportVi
 import { FixGatewayStatusRadar } from "../components/execution/FixGatewayStatusRadar";
 import type { RollOrderRequest } from "../api/types";
 
+// Loading/error placeholder for the screen's core (always-on) data sections --
+// mirrors the visual pattern already used by the toggleable options-desk
+// panels (e.g. ScenarioHeatmap's own loading/error early-returns).
+function CoreSectionLoading({ label }: { label: string }) {
+  return (
+    <div style={{ padding: 24, textAlign: "center", color: theme.textSecondary, background: theme.surface, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+      {label}
+    </div>
+  );
+}
+
+function CoreSectionError({ label, error }: { label: string; error: string }) {
+  return (
+    <div style={{ padding: 24, textAlign: "center", color: theme.decline, background: theme.surface, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+      {label}: {error}
+    </div>
+  );
+}
+
 export function PaperBroker() {
   const account = useApi(() => api.getPaperBrokerAccount());
   const positions = useApi(() => api.getPaperBrokerPositions());
@@ -765,6 +784,12 @@ export function PaperBroker() {
           <UnusualFlowFeed onClose={() => setShowUnusualFlow(false)} />
         )}
         
+        {account.loading && !account.data && (
+          <CoreSectionLoading label="Loading account summary..." />
+        )}
+        {account.error && !account.data && (
+          <CoreSectionError label="Failed to load account summary" error={account.error} />
+        )}
         {account.data && (
           <div style={{ display: "flex", gap: 16 }}>
             <div style={{ flex: 1, padding: 16, background: theme.surface, borderRadius: 8, border: `1px solid ${theme.border}` }}>
@@ -783,6 +808,12 @@ export function PaperBroker() {
         )}
 
         {/* Portfolio Greeks Risk Exposure Row */}
+        {greeks.loading && !greeks.data && (
+          <CoreSectionLoading label="Loading portfolio risk & Greeks..." />
+        )}
+        {greeks.error && !greeks.data && (
+          <CoreSectionError label="Failed to load portfolio risk & Greeks" error={greeks.error} />
+        )}
         {greeks.data && (
           <div>
             <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: theme.textPrimary }}>
@@ -853,6 +884,12 @@ export function PaperBroker() {
             )}
 
             {/* Dynamic Delta Hedge Risk Neutralization Card */}
+            {deltaHedge.loading && !deltaHedge.data && (
+              <CoreSectionLoading label="Loading delta hedge preview..." />
+            )}
+            {deltaHedge.error && !deltaHedge.data && (
+              <CoreSectionError label="Failed to load delta hedge preview" error={deltaHedge.error} />
+            )}
             {deltaHedge.data && !deltaHedge.data.available && (
               <div
                 style={{
@@ -1020,54 +1057,62 @@ export function PaperBroker() {
             </div>
           )}
 
-          {candidates.data?.candidates && candidates.data.candidates.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Symbol</th>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Strategy</th>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Action</th>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600, textAlign: "right" }}>Net Premium</th>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600, textAlign: "right" }}>IVR</th>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Trend Bias</th>
-                    <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Target DTE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {candidates.data.candidates.map((c, idx) => (
-                    <tr key={idx} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                      <td style={{ padding: "8px 12px", fontWeight: 600 }}>{c.symbol}</td>
-                      <td style={{ padding: "8px 12px" }}>{c.strategy}</td>
-                      <td style={{ padding: "8px 12px" }}>
-                        <span style={{
-                          padding: "2px 6px",
-                          borderRadius: 4,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          background: c.action.toLowerCase() === "open" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-                          color: c.action.toLowerCase() === "open" ? theme.growth : theme.decline
-                        }}>
-                          {c.action.toUpperCase()}
-                        </span>
-                      </td>
-                      <td style={{ padding: "8px 12px", textAlign: "right" }}>
-                        {c.net_premium != null ? `$${c.net_premium.toFixed(2)}` : "—"}
-                      </td>
-                      <td style={{ padding: "8px 12px", textAlign: "right" }}>
-                        {c.ivr != null ? `${c.ivr.toFixed(1)}%` : "—"}
-                      </td>
-                      <td style={{ padding: "8px 12px" }}>{c.trend_bias}</td>
-                      <td style={{ padding: "8px 12px" }}>{c.target_dte}d</td>
+          {candidates.loading && !candidates.data && (
+            <CoreSectionLoading label="Loading strategy options candidates..." />
+          )}
+          {candidates.error && !candidates.data && (
+            <CoreSectionError label="Failed to load strategy options candidates" error={candidates.error} />
+          )}
+          {candidates.data && (
+            candidates.data.candidates && candidates.data.candidates.length > 0 ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Symbol</th>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Strategy</th>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Action</th>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600, textAlign: "right" }}>Net Premium</th>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600, textAlign: "right" }}>IVR</th>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Trend Bias</th>
+                      <th style={{ padding: "8px 12px", color: theme.textSecondary, fontWeight: 600 }}>Target DTE</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div style={{ color: theme.textSecondary, fontSize: 13, fontStyle: "italic" }}>
-              No strategy options directives currently meet VRP / regime gates.
-            </div>
+                  </thead>
+                  <tbody>
+                    {candidates.data.candidates.map((c, idx) => (
+                      <tr key={idx} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                        <td style={{ padding: "8px 12px", fontWeight: 600 }}>{c.symbol}</td>
+                        <td style={{ padding: "8px 12px" }}>{c.strategy}</td>
+                        <td style={{ padding: "8px 12px" }}>
+                          <span style={{
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            background: c.action.toLowerCase() === "open" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                            color: c.action.toLowerCase() === "open" ? theme.growth : theme.decline
+                          }}>
+                            {c.action.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                          {c.net_premium != null ? `$${c.net_premium.toFixed(2)}` : "—"}
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                          {c.ivr != null ? `${c.ivr.toFixed(1)}%` : "—"}
+                        </td>
+                        <td style={{ padding: "8px 12px" }}>{c.trend_bias}</td>
+                        <td style={{ padding: "8px 12px" }}>{c.target_dte}d</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ color: theme.textSecondary, fontSize: 13, fontStyle: "italic" }}>
+                No strategy options directives currently meet VRP / regime gates.
+              </div>
+            )
           )}
         </div>
 
@@ -1091,6 +1136,16 @@ export function PaperBroker() {
                 </tr>
               </thead>
               <tbody>
+                {positions.loading && !positions.data && (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading positions...</td>
+                  </tr>
+                )}
+                {positions.error && !positions.data && (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load positions: {positions.error}</td>
+                  </tr>
+                )}
                 {positions.data?.length === 0 && (
                   <tr>
                     <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No open positions</td>
@@ -1206,6 +1261,16 @@ export function PaperBroker() {
                 </tr>
               </thead>
               <tbody>
+                {orders.loading && !orders.data && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading orders...</td>
+                  </tr>
+                )}
+                {orders.error && !orders.data && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load orders: {orders.error}</td>
+                  </tr>
+                )}
                 {orders.data?.length === 0 && (
                   <tr>
                     <td colSpan={7} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No recent orders</td>
@@ -1256,32 +1321,40 @@ export function PaperBroker() {
             </button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
-            <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
-              <div style={{ fontSize: 12, color: theme.textSecondary }}>Training Samples</div>
-              <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
-                {metaStatus.data?.n_samples.toLocaleString() ?? "—"}
+          {metaStatus.loading && !metaStatus.data && (
+            <CoreSectionLoading label="Loading Stage 4 ML meta-model status..." />
+          )}
+          {metaStatus.error && !metaStatus.data && (
+            <CoreSectionError label="Failed to load Stage 4 ML meta-model status" error={metaStatus.error} />
+          )}
+          {!(metaStatus.loading && !metaStatus.data) && !(metaStatus.error && !metaStatus.data) && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+              <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>Training Samples</div>
+                <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
+                  {metaStatus.data?.n_samples.toLocaleString() ?? "—"}
+                </div>
+              </div>
+              <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>Model Accuracy</div>
+                <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4, color: theme.growth }}>
+                  {metaStatus.data?.train_accuracy != null ? `${metaStatus.data.train_accuracy}%` : "—"}
+                </div>
+              </div>
+              <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>ROC-AUC Score</div>
+                <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
+                  {metaStatus.data?.train_roc_auc != null ? metaStatus.data.train_roc_auc.toFixed(3) : "—"}
+                </div>
+              </div>
+              <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>Last Retrained</div>
+                <div style={{ fontSize: 13, fontWeight: 500, marginTop: 6, color: theme.textSecondary }}>
+                  {metaStatus.data?.trained_at ? new Date(metaStatus.data.trained_at).toLocaleDateString() : "Active"}
+                </div>
               </div>
             </div>
-            <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
-              <div style={{ fontSize: 12, color: theme.textSecondary }}>Model Accuracy</div>
-              <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4, color: theme.growth }}>
-                {metaStatus.data?.train_accuracy != null ? `${metaStatus.data.train_accuracy}%` : "—"}
-              </div>
-            </div>
-            <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
-              <div style={{ fontSize: 12, color: theme.textSecondary }}>ROC-AUC Score</div>
-              <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
-                {metaStatus.data?.train_roc_auc != null ? metaStatus.data.train_roc_auc.toFixed(3) : "—"}
-              </div>
-            </div>
-            <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
-              <div style={{ fontSize: 12, color: theme.textSecondary }}>Last Retrained</div>
-              <div style={{ fontSize: 13, fontWeight: 500, marginTop: 6, color: theme.textSecondary }}>
-                {metaStatus.data?.trained_at ? new Date(metaStatus.data.trained_at).toLocaleDateString() : "Active"}
-              </div>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Interactive Options Strategy Backtesting Harness */}
