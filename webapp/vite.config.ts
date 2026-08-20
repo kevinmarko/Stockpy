@@ -25,6 +25,17 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff2}"],
         navigateFallback: "index.html",
+        // Workbox's own default (2 MiB) started rejecting the build outright
+        // once the main index-*.js chunk crossed it (2,090 kB on main ->
+        // 2,110 kB after the Symbol Screener screen landed, PR #826) --
+        // vite-plugin-pwa treats exceeding the limit as a hard build error,
+        // not a warning, so this isn't cosmetic. Raised with real headroom
+        // (not just past today's size) since this is a growing single-page
+        // app and the next screen added would trip the same wall again at
+        // the old default. Actual code-splitting (dynamic import() per
+        // route) is the real long-term fix for the underlying bundle-size
+        // growth -- this raises the ceiling, it doesn't lower the bundle.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
         name: "Stockpy Pilots",
