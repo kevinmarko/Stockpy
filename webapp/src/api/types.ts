@@ -4218,10 +4218,20 @@ export interface VolSurfaceResponse {
 // is_within_tolerance, action including "NONE") named fields the backend
 // never returns at all, which produced a live `undefined.toFixed()` crash
 // on this screen. `shares`/`target_hedge_shares` are always non-negative
-// resp. signed real numbers (never missing) -- `calculate_delta_hedge_order`
-// always resolves them from computed portfolio Greeks, no live-quote gap.
-export interface DeltaHedgePreview {
+// resp. signed real numbers (never missing) when `available` is true --
+// `calculate_delta_hedge_order` always resolves them from computed
+// portfolio Greeks, no live-quote gap in that case.
+//
+// `available: false` is the honest-refusal state (CONSTRAINT #4): the
+// backend could not resolve a live SPY quote and refuses to fabricate one
+// (it no longer falls back to a hardcoded 500.0) -- every Greek/hedge field
+// that would otherwise be derived from that price is `null` rather than a
+// fake number. Modeled as a discriminated union on `available` so a caller
+// that checks it first gets real TS narrowing instead of needing `!`
+// assertions everywhere.
+export interface DeltaHedgePreviewAvailable {
   symbol: string;
+  available: true;
   net_dollar_delta: number;
   beta_weighted_delta_spy: number;
   /** Signed shares needed to zero out beta-weighted SPY delta (not an order size -- use `shares` for that). */
@@ -4235,6 +4245,22 @@ export interface DeltaHedgePreview {
   reason: string;
   spy_spot: number;
 }
+
+export interface DeltaHedgePreviewUnavailable {
+  symbol: string;
+  available: false;
+  net_dollar_delta: null;
+  beta_weighted_delta_spy: null;
+  target_hedge_shares: null;
+  tolerance_band_shares: number;
+  action: "HOLD";
+  shares: 0;
+  required_action: false;
+  reason: string;
+  spy_spot: null;
+}
+
+export type DeltaHedgePreview = DeltaHedgePreviewAvailable | DeltaHedgePreviewUnavailable;
 
 // Matches `pilots/options_hedging.py::execute_delta_hedge`'s real return
 // shape -- there is no top-level `price`/`side` field (only `action`, and a

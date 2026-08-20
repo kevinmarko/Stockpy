@@ -21,7 +21,7 @@
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2731,
+      "line": 2733,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -2790,7 +2790,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:180",
+        "site": "pilots/scan_config_store.py:191",
         "via": []
       },
       {
@@ -2810,7 +2810,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11068",
+        "site": "Gravity AI Review Suite.py:11070",
         "via": []
       }
     ],

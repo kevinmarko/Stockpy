@@ -122,6 +122,12 @@ class ModuleInfo:
     classes: int = 0
     documented_classes: int = 0
     parse_error: Optional[str] = None
+    # The parsed AST from the single ``parse()`` pass, cached so later checks
+    # (e.g. ``check_error_handling``) never need to re-read + re-``ast.parse``
+    # the same file a second time. Excluded from repr/eq — it's a cache, not
+    # a fact about the module, and AST nodes don't define meaningful equality
+    # anyway. ``None`` when the module failed to parse (``parse_error`` set).
+    tree: Optional[ast.AST] = field(default=None, repr=False, compare=False)
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +291,7 @@ class StockpyAuditor:
                 self._scan_source_only(info, source)
                 continue
 
+            info.tree = tree
             info.has_module_docstring = ast.get_docstring(tree) is not None
             self._walk_ast(info, tree)
             self._collect_top_level_imports(info, tree.body)
@@ -679,12 +686,25 @@ class StockpyAuditor:
         for info in self.modules.values():
             if info.parse_error or info.rel in SELF_FILES:
                 continue
-            try:
-                tree = ast.parse(info.path.read_text(encoding="utf-8", errors="replace"))
-            except SyntaxError:
+            tree = info.tree
+            if tree is None:
+                # Should not happen (parse_error already filtered above), but
+                # degrade gracefully rather than crash a LOW-severity check.
                 continue
-            guarded = self._guarded_call_nodes(tree)
+            # Single pass over the tree instead of two: ``ast.walk`` is
+            # breadth-first, so every ``ast.Try`` node is always yielded
+            # strictly before its own descendants. That means a Call node's
+            # enclosing Try (if any) is guaranteed to have already been seen
+            # — and its guarded body already marked — by the time we reach
+            # that Call in this same walk, so guarded-status and Call-node
+            # detection can share one traversal instead of two full ones.
+            guarded: Set[int] = set()
             for node in ast.walk(tree):
+                if isinstance(node, ast.Try):
+                    for stmt in node.body:
+                        for child in ast.walk(stmt):
+                            guarded.add(id(child))
+                    continue
                 if not isinstance(node, ast.Call):
                     continue
                 sig = self._io_call_signature(node.func)
@@ -734,18 +754,6 @@ class StockpyAuditor:
             parts.append(cur.id)
             return ".".join(reversed(parts))
         return None
-
-    @staticmethod
-    def _guarded_call_nodes(tree: ast.AST) -> Set[int]:
-        """Return ids of every AST node lexically inside some ``try`` *body* (the
-        except/else/finally clauses are not the guarded region)."""
-        guarded: Set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Try):
-                for stmt in node.body:
-                    for child in ast.walk(stmt):
-                        guarded.add(id(child))
-        return guarded
 
     # -- code quality -----------------------------------------------------
 
