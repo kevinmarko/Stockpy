@@ -7839,7 +7839,13 @@ def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, 
 def get_pilots_options_vol_surface_3d_mesh(
     symbol: Optional[str] = Query("SPY", min_length=1),
 ) -> Dict[str, Any]:
-    """Returns 3D coordinate grid of strike, DTE, and IV points for Three.js rendering."""
+    """Returns 3D coordinate grid of strike, DTE, and IV points for Three.js rendering.
+
+    Currently unused by the webapp: api.getVolSurface3DMesh (client.ts) has no
+    caller in webapp/src/screens or webapp/src/components yet -- this route
+    and its client method are fully wired and available for a future UI
+    wire-up, not dead from disuse.
+    """
     sym = (symbol or "SPY").strip().upper()
     if not sym:
         raise HTTPException(status_code=400, detail="Symbol cannot be empty.")

@@ -671,6 +671,9 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(req),
     }),
+  // Currently unused: no screen/component calls this yet -- fully wired
+  // (types, client, mock fixture) but available for a future UI wire-up,
+  // not dead from disuse.
   routeFixOrder: (req: FixRouteOrderRequest) =>
     http<FixRouteOrderResponse>("/pilots/execution/fix/route", {
       method: "POST",
@@ -1242,6 +1245,9 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
+  // Currently unused: no screen/component calls this yet -- fully wired
+  // (types, client, mock fixture, and a real api/pilots_api.py route) but
+  // available for a future UI wire-up, not dead from disuse.
   getVolSurface3DMesh: (symbol?: string) => {
     const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
     return http<VolSurface3DMeshResponse>(`/pilots/options/vol-surface/3d-mesh${q}`);
