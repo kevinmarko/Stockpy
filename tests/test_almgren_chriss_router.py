@@ -253,3 +253,93 @@ def test_risk_aversion_kappa_front_loading():
     # And leave less remaining inventory at mid-point
     assert res_high['trajectory'][25] < res_low['trajectory'][25]
 
+
+# ---------------------------------------------------------------------------
+# POST /pilots/execution/optimize/almgren-chriss -- `expected_price` must be
+# computed off a real current spot price for the requested symbol, not the
+# hardcoded `100.0` base the endpoint used to fall back to unconditionally
+# (CONSTRAINT #4). The price lookup lives in `api/pilots_api.py` (the
+# endpoint layer, via `pilots.price_provider.get_latest_price`), so these
+# tests exercise it through the real FastAPI app.
+# ---------------------------------------------------------------------------
+
+from unittest import mock
+
+from fastapi.testclient import TestClient
+
+import api.pilots_api as pilots_api
+
+_ac_client = TestClient(pilots_api.app, client=("127.0.0.1", 54127))
+
+
+def test_almgren_chriss_endpoint_uses_real_spot_price_as_impact_base():
+    """`expected_price` for every trajectory point must be derived from the
+    REAL spot price returned by `pilots.price_provider.get_latest_price`,
+    not the old hardcoded `100.0` base."""
+    with mock.patch("pilots.price_provider.get_latest_price", return_value=250.0):
+        resp = _ac_client.post(
+            "/pilots/execution/optimize/almgren-chriss",
+            json={"symbol": "AAPL", "quantity": 1000.0, "horizon_steps": 5},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["spot_price"] == 250.0
+    assert body["spot_price_reason"] is None
+    assert len(body["trajectory"]) == 5
+    for pt in body["trajectory"]:
+        assert pt["expected_price"] is not None
+        # Impact-adjusted price must be anchored near the real 250.0 spot
+        # price, not the old fabricated 100.0 base.
+        assert 240.0 <= pt["expected_price"] <= 250.0
+
+
+def test_almgren_chriss_endpoint_different_spot_price_changes_expected_price():
+    """A different real spot price must produce a materially different
+    `expected_price` -- proving the base price is genuinely read per-request
+    rather than a disguised constant."""
+    with mock.patch("pilots.price_provider.get_latest_price", return_value=50.0):
+        resp_low = _ac_client.post(
+            "/pilots/execution/optimize/almgren-chriss",
+            json={"symbol": "LOWPRICE", "quantity": 1000.0, "horizon_steps": 5},
+        )
+    with mock.patch("pilots.price_provider.get_latest_price", return_value=500.0):
+        resp_high = _ac_client.post(
+            "/pilots/execution/optimize/almgren-chriss",
+            json={"symbol": "HIGHPRICE", "quantity": 1000.0, "horizon_steps": 5},
+        )
+
+    assert resp_low.status_code == 200 and resp_high.status_code == 200
+    price_low = resp_low.json()["trajectory"][0]["expected_price"]
+    price_high = resp_high.json()["trajectory"][0]["expected_price"]
+    assert price_low != price_high
+    assert price_high > price_low + 100.0
+
+
+def test_almgren_chriss_endpoint_degrades_honestly_when_no_live_quote():
+    """CONSTRAINT #4: when no live quote is available for the symbol
+    (`get_latest_price` returns 0.0, its documented "unavailable" sentinel),
+    the endpoint must NEVER fall back to a fabricated base price -- every
+    trajectory point's `expected_price` must be null, and the response must
+    carry an honest `spot_price_reason` explaining why."""
+    with mock.patch("pilots.price_provider.get_latest_price", return_value=0.0):
+        resp = _ac_client.post(
+            "/pilots/execution/optimize/almgren-chriss",
+            json={"symbol": "NOPRICE", "quantity": 1000.0, "horizon_steps": 5},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["spot_price"] is None
+    assert body["spot_price_reason"] is not None
+    assert "NOPRICE" in body["spot_price_reason"]
+    assert len(body["trajectory"]) == 5
+    for pt in body["trajectory"]:
+        assert pt["expected_price"] is None
+    # The rest of the response (real math, not price-dependent) must still
+    # be computed and returned -- degrading the price alone, not the whole
+    # endpoint.
+    assert body["expected_shortfall"] is not None
+    assert body["variance"] is not None
+    assert body["half_life"] is not None
+

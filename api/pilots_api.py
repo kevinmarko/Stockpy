@@ -7381,12 +7381,13 @@ class AlmgrenChrissRequest(BaseModel):
 )
 def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[str, Any]:
     from execution.almgren_chriss_router import compute_trading_trajectory
+    from pilots.price_provider import get_latest_price
     import numpy as np
-    
+
     steps = req.horizon_steps if req.horizon_steps is not None else 10
     vol = req.volatility if req.volatility is not None else 0.02
     risk = req.risk_aversion if req.risk_aversion is not None else 0.5
-    
+
     res = compute_trading_trajectory(
         total_shares=req.quantity,
         total_time=1.0,
@@ -7396,30 +7397,50 @@ def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[st
         perm_impact=0.01,
         risk_aversion=risk
     )
-    
+
     trajectory = []
     traj_arr = res["trajectory"]
     trade_arr = res["trade_list"]
-    
+
     # Calculate half-life of trading
     kappa = np.sqrt(risk * (vol ** 2) / 0.1) if risk > 0 else 0
     half_life = np.log(2) / kappa if kappa > 0 else 0.0
-    
+
+    # Real current spot price for the requested symbol, via the same
+    # `pilots.price_provider.get_latest_price` -> `data.market_data.CompositeProvider`
+    # path the real-time risk streamer uses (see CLAUDE.md's market-data-layer
+    # convention). `get_latest_price` returns 0.0 when no live quote is
+    # available -- never fabricate a base price in that case (CONSTRAINT #4);
+    # instead every trajectory point's `expected_price` degrades to `None`
+    # and the response carries an honest `spot_price_reason`.
+    spot_price = get_latest_price(req.symbol)
+    spot_price_available = spot_price > 0.0
+
     for i in range(len(trade_arr)):
+        expected_price = (
+            spot_price - (0.01 * (req.quantity - traj_arr[i + 1]))
+            if spot_price_available
+            else None
+        )
         trajectory.append({
             "step": i + 1,
             "shares_remaining": traj_arr[i + 1],
             "trade_size": trade_arr[i],
-            "expected_price": 100.0 - (0.01 * (req.quantity - traj_arr[i + 1])) # Dummy impact price
+            "expected_price": expected_price,
         })
-        
+
     return {
         "symbol": req.symbol,
         "trajectory": trajectory,
         "expected_trajectory": trajectory,
         "expected_shortfall": res["expected_shortfall"],
         "variance": res["variance"],
-        "half_life": float(half_life)
+        "half_life": float(half_life),
+        "spot_price": spot_price if spot_price_available else None,
+        "spot_price_reason": (
+            None if spot_price_available
+            else f"No live quote available for {req.symbol}; expected_price omitted."
+        ),
     }
 
 
@@ -7642,9 +7663,19 @@ async def post_pilots_execution_fix_session_test_request(
     session = get_global_fix_session()
     tid = payload.test_req_id if payload and payload.test_req_id else f"TEST-{uuid.uuid4().hex[:6].upper()}"
 
+    # Real elapsed wall-clock time of the TestRequest -> Heartbeat round trip,
+    # not a fabricated constant (CONSTRAINT #4). `time.perf_counter()` is a
+    # monotonic clock, immune to system-clock adjustments mid-request, and is
+    # this codebase's convention for measuring elapsed durations (see e.g.
+    # `data/market_data.py`'s quote-latency tracking). Both the send and the
+    # simulated receive are synchronous in-process calls, so the measured
+    # value is genuinely tiny for this simulated gateway -- that's an honest
+    # reflection of "no real network hop occurred," not a bug.
+    t_start = time.perf_counter()
     session.send_test_request(test_req_id=tid)
     hb_resp = Heartbeat(session.target_comp_id, session.sender_comp_id, session.inbound_seq_num, test_req_id=tid)
     session.simulate_receive(hb_resp)
+    round_trip_ms = (time.perf_counter() - t_start) * 1000.0
 
     state_map = {
         FixSessionState.CONNECTED: "ACTIVE",
@@ -7662,7 +7693,7 @@ async def post_pilots_execution_fix_session_test_request(
         "test_req_id": tid,
         "in_seq_num": session.inbound_seq_num,
         "out_seq_num": session.outbound_seq_num,
-        "round_trip_ms": 1.25,
+        "round_trip_ms": round_trip_ms,
     }
 
 

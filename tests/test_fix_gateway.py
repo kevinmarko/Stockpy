@@ -1122,3 +1122,131 @@ def test_get_global_fix_session_honors_fix_heartbeat_interval_setting():
         fix_gateway_module.get_global_fix_session()
 
 
+# ---------------------------------------------------------------------------
+# POST /pilots/execution/fix/session/test-request -- round_trip_ms must be a
+# real measurement of the TestRequest -> Heartbeat round trip, not the
+# hardcoded `1.25` constant the endpoint used to return unconditionally
+# (CONSTRAINT #4). The measurement itself lives in `api/pilots_api.py`
+# (the endpoint layer), so these tests exercise it through the real FastAPI
+# app rather than `execution.fix_gateway` in isolation.
+# ---------------------------------------------------------------------------
+
+
+def test_fix_session_test_request_round_trip_ms_is_measured_not_hardcoded():
+    """Injecting a real, measurable delay between the TestRequest send and
+    the simulated Heartbeat receive must show up in `round_trip_ms` --
+    proving it's computed from genuine elapsed wall-clock time, not the old
+    hardcoded `1.25` constant. This deliberately does NOT try to fully
+    control `time.perf_counter()` globally (ASGI/Starlette internals make
+    their own untracked calls to it during a request, which would exhaust
+    or corrupt a naive controlled-value queue) -- injecting a real
+    `time.sleep()` into the session's own `simulate_receive` call is this
+    repo's established pattern for timing-sensitive tests (see
+    `tests/test_market_data.py`'s `time.sleep`-based latency tests)."""
+    import time as time_module
+    from fastapi.testclient import TestClient
+    from settings import settings as _settings
+    import api.pilots_api as pilots_api
+    from execution.fix_gateway import get_global_fix_session
+
+    client = TestClient(pilots_api.app, client=("127.0.0.1", 54124))
+    cmd_token = "fix-rt-test-tok"
+
+    session = get_global_fix_session()
+    real_simulate_receive = session.simulate_receive
+    injected_delay_s = 0.05
+
+    def _slow_simulate_receive(*args, **kwargs):
+        time_module.sleep(injected_delay_s)
+        return real_simulate_receive(*args, **kwargs)
+
+    with mock.patch.object(_settings, "FOLLOW_API_TOKEN", cmd_token), \
+            mock.patch.object(session, "simulate_receive", side_effect=_slow_simulate_receive):
+        resp = client.post(
+            "/pilots/execution/fix/session/test-request",
+            json={"test_req_id": "TEST-FIXGW-RT-01"},
+            headers={"Authorization": f"Bearer {cmd_token}"},
+        )
+
+    assert resp.status_code == 200
+    round_trip_ms = resp.json()["round_trip_ms"]
+    # Must reflect (at least most of) the injected 50ms delay -- a hardcoded
+    # 1.25 could never do this regardless of how slow simulate_receive is.
+    assert round_trip_ms >= injected_delay_s * 1000 * 0.8
+    assert round_trip_ms != 1.25
+
+
+def test_fix_session_test_request_round_trip_ms_varies_with_injected_delay():
+    """A longer injected delay must produce a LARGER `round_trip_ms` --
+    proving the value tracks real elapsed time rather than being a constant
+    in disguise."""
+    import time as time_module
+    from fastapi.testclient import TestClient
+    from settings import settings as _settings
+    import api.pilots_api as pilots_api
+    from execution.fix_gateway import get_global_fix_session
+
+    client = TestClient(pilots_api.app, client=("127.0.0.1", 54125))
+    cmd_token = "fix-rt-test-tok-2"
+
+    session = get_global_fix_session()
+    real_simulate_receive = session.simulate_receive
+
+    def _make_slow_simulate_receive(delay_s):
+        def _fn(*args, **kwargs):
+            time_module.sleep(delay_s)
+            return real_simulate_receive(*args, **kwargs)
+        return _fn
+
+    with mock.patch.object(_settings, "FOLLOW_API_TOKEN", cmd_token), \
+            mock.patch.object(session, "simulate_receive", side_effect=_make_slow_simulate_receive(0.01)):
+        resp_a = client.post(
+            "/pilots/execution/fix/session/test-request",
+            json={"test_req_id": "TEST-FIXGW-RT-A"},
+            headers={"Authorization": f"Bearer {cmd_token}"},
+        )
+
+    with mock.patch.object(_settings, "FOLLOW_API_TOKEN", cmd_token), \
+            mock.patch.object(session, "simulate_receive", side_effect=_make_slow_simulate_receive(0.08)):
+        resp_b = client.post(
+            "/pilots/execution/fix/session/test-request",
+            json={"test_req_id": "TEST-FIXGW-RT-B"},
+            headers={"Authorization": f"Bearer {cmd_token}"},
+        )
+
+    assert resp_a.status_code == 200 and resp_b.status_code == 200
+    rt_a = resp_a.json()["round_trip_ms"]
+    rt_b = resp_b.json()["round_trip_ms"]
+    assert rt_b > rt_a
+    assert rt_a != 1.25 and rt_b != 1.25
+
+
+def test_fix_session_test_request_round_trip_ms_reflects_real_unmocked_timing():
+    """Without mocking the clock, `round_trip_ms` must be a small, real,
+    non-negative float -- proving the value comes from an actual
+    `time.perf_counter()` measurement around the real send/receive calls,
+    not a residual hardcoded literal."""
+    from fastapi.testclient import TestClient
+    from settings import settings as _settings
+    import api.pilots_api as pilots_api
+
+    client = TestClient(pilots_api.app, client=("127.0.0.1", 54126))
+    cmd_token = "fix-rt-test-tok-3"
+
+    with mock.patch.object(_settings, "FOLLOW_API_TOKEN", cmd_token):
+        resp = client.post(
+            "/pilots/execution/fix/session/test-request",
+            json={"test_req_id": "TEST-FIXGW-RT-REAL"},
+            headers={"Authorization": f"Bearer {cmd_token}"},
+        )
+
+    assert resp.status_code == 200
+    round_trip_ms = resp.json()["round_trip_ms"]
+    assert isinstance(round_trip_ms, (int, float))
+    assert round_trip_ms >= 0.0
+    # A synchronous in-process simulated round trip should be well under a
+    # second; a generous bound that would only fail if the field somehow
+    # stopped being a real sub-millisecond-scale duration measurement.
+    assert round_trip_ms < 1000.0
+
+
