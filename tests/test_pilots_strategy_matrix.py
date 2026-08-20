@@ -486,8 +486,16 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # are argparse/json/logging/dataclasses/datetime/pathlib/typing only,
         # zero heavy engines) — rather than duplicating its filename-parsing
         # regex logic a second time. datetime is used for a best-effort
-        # chronological sort of the regime-transition points.
-        allowed = allowed | {"scripts", "datetime"}
+        # chronological sort of the regime-transition points. `validation` is
+        # allowed for validation.validation_history_store (SQLAlchemy +
+        # db_config + settings + stdlib only — confirmed dependency-light by
+        # inspection) read inside lazy, function-local imports (same pattern
+        # as pilots.sector_selection's data.sector_correlation_store read,
+        # below) — deliberately NOT validation.harness, whose top-level
+        # imports (yfinance, universe_engine, ...) are far heavier; `validation`
+        # has no __init__.py, so importing this one submodule does not
+        # transitively pull the package's other, heavier submodules.
+        allowed = allowed | {"scripts", "datetime", "validation"}
     if module_name == "sector_selection":
         # pilots.sector_selection reads data.sector_correlation_store
         # (SQLAlchemy + db_config only -- confirmed dependency-light by

@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 422,
+  "files_scanned": 423,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -465,7 +465,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 832,
+    "attr": 838,
     "factory_param": 4,
     "getattr_const": 360,
     "os_environ": 25
@@ -1019,6 +1019,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "validation/validation_history_store.py:85",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "volatility/iv_engine.py:41",
         "via": []
       }
@@ -1237,6 +1246,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "validation/validation_history_store.py:90",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "validation/validation_history_store.py:92",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "volatility/iv_engine.py:42",
         "via": []
       }
@@ -1447,6 +1474,24 @@
           "cross_module_init_helper"
         ],
         "site": "transactions_store.py:63",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "validation/validation_history_store.py:90",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "validation/validation_history_store.py:92",
         "via": []
       },
       {
@@ -2328,6 +2373,15 @@
         ],
         "site": "transactions_store.py:61",
         "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "validation/validation_history_store.py:90",
+        "via": []
       }
     ],
     "MCP_HTTP_BEARER_TOKEN": [
@@ -3049,7 +3103,7 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 73,
+    "cross_module_init_helper": 79,
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
