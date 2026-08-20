@@ -192,74 +192,154 @@ def _read_validation_history_rows(
     return rows
 
 
-def cross_strategy_snapshot(reports_dir: Optional[str] = None) -> Dict[str, Any]:
+def _clean_snapshot_row(s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    sid = _clean_str(s.get("strategy_id"))
+    if not sid:
+        return None
+    return {
+        "strategy_id": sid,
+        "deployable": _clean_bool(s.get("deployable")),
+        "pbo": _clean_float(s.get("pbo")),
+        "dsr": _clean_float(s.get("dsr")),
+        "sharpe": _clean_float(s.get("sharpe")),
+        "max_drawdown": _clean_float(s.get("max_drawdown")),
+        "is_options_selling": _clean_bool(s.get("is_options_selling")),
+        "stress_gate_passed": _clean_bool(s.get("stress_gate_passed")),
+        "report_date": _clean_str(s.get("report_date")),
+    }
+
+
+def _load_db_latest_per_strategy(db_url: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Latest recorded run per strategy from the durable ``validation_runs``
+    DB table (``validation/validation_history_store.py``) — a lazy,
+    function-local import (confirmed dependency-light by inspection: only
+    ``sqlalchemy``, ``db_config``, ``settings``, stdlib — deliberately NOT
+    ``validation.harness``, whose top-level imports are far heavier; see
+    ``validation``'s lack of an ``__init__.py``, which means importing this
+    submodule does not transitively pull the package's other, heavier
+    submodules). Degrades to ``{}`` on any failure (CONSTRAINT #6) so an
+    unavailable/unreachable DB falls back to today's pure-file behavior
+    rather than a 500.
+    """
+    try:
+        from validation.validation_history_store import ValidationHistoryStore
+
+        return ValidationHistoryStore(db_url=db_url, readonly=True).get_latest_per_strategy()
+    except Exception as exc:  # noqa: BLE001 - dead-letter, never raise
+        logger.debug("_load_db_latest_per_strategy failed: %s", exc)
+        return {}
+
+
+def cross_strategy_snapshot(
+    reports_dir: Optional[str] = None, db_url: Optional[str] = None
+) -> Dict[str, Any]:
     """Every validated strategy's current gate snapshot, regardless of
     whether it's wired to a catalog Pilot.
+
+    Reads the durable ``validation_runs`` DB table FIRST (shared across every
+    worktree/API process on this machine, unlike the worktree-local
+    ``reports/*_validation_summary.json`` files) and falls back to the file
+    snapshot only for a strategy the DB has no row for yet — e.g. one
+    validated in this exact environment before this DB-persistence feature
+    shipped. See ``validation/validation_history_store.py``'s module
+    docstring for why a second, durable home was needed.
 
     Returns ``{"strategies": [...], "reason": str | None}``. Each row:
     ``{strategy_id, deployable, pbo, dsr, sharpe, max_drawdown,
     is_options_selling, stress_gate_passed, report_date}``. Sorted by
     ``strategy_id`` for a deterministic response. ``reason`` is set (and
-    ``strategies`` is ``[]``) only when no summary files exist at all —
+    ``strategies`` is ``[]``) only when NEITHER source has anything at all —
     never on a partial/malformed set (a bad file is simply skipped, the
     good ones still render).
     """
+    db_latest = _load_db_latest_per_strategy(db_url)
+
     try:
         raw = _load_validation_summaries(reports_dir)
     except Exception as exc:  # noqa: BLE001 - dead-letter, never raise
         logger.debug("cross_strategy_snapshot failed: %s", exc)
-        return {"strategies": [], "reason": "Validation summaries unavailable."}
+        raw = []
 
-    rows = [
-        {
-            "strategy_id": _clean_str(s.get("strategy_id")),
-            "deployable": _clean_bool(s.get("deployable")),
-            "pbo": _clean_float(s.get("pbo")),
-            "dsr": _clean_float(s.get("dsr")),
-            "sharpe": _clean_float(s.get("sharpe")),
-            "max_drawdown": _clean_float(s.get("max_drawdown")),
-            "is_options_selling": _clean_bool(s.get("is_options_selling")),
-            "stress_gate_passed": _clean_bool(s.get("stress_gate_passed")),
-            "report_date": _clean_str(s.get("report_date")),
-        }
-        for s in raw
-        if s.get("strategy_id")
-    ]
-    rows.sort(key=lambda r: r["strategy_id"] or "")
+    merged: Dict[str, Dict[str, Any]] = {}
+    for s in raw:
+        row = _clean_snapshot_row(s)
+        if row:
+            merged[row["strategy_id"]] = row
+    for sid, db_row in db_latest.items():
+        row = _clean_snapshot_row(db_row)
+        if row:
+            merged[sid] = row  # DB wins over a file row for the same strategy
+
+    rows = sorted(merged.values(), key=lambda r: r["strategy_id"] or "")
     return {"strategies": rows, "reason": None if rows else _NO_SUMMARIES_REASON}
+
+
+def _trend_point(r: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "report_date": _clean_str(r.get("report_date")),
+        "pbo": _clean_float(r.get("pbo")),
+        "dsr": _clean_float(r.get("dsr")),
+        "sharpe": _clean_float(r.get("sharpe")),
+        "max_drawdown": _clean_float(r.get("max_drawdown")),
+        "deployable": _clean_bool(r.get("deployable")),
+    }
+
+
+def _load_db_trend_rows(
+    strategy_id: str, trend_limit: int, db_url: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Oldest-first trend rows for one strategy from the durable
+    ``validation_runs`` DB table, capped at ``trend_limit``. ``[]`` on any
+    failure or if the strategy has no DB rows (CONSTRAINT #6) — the caller
+    falls back to the JSONL file read in that case."""
+    try:
+        from validation.validation_history_store import ValidationHistoryStore
+
+        store = ValidationHistoryStore(db_url=db_url, readonly=True)
+        rows = store.get_recent(strategy_id, limit=trend_limit)  # most-recent-first
+        return list(reversed(rows))  # oldest-first, matching the file read's convention
+    except Exception as exc:  # noqa: BLE001 - dead-letter, never raise
+        logger.debug("_load_db_trend_rows(%s) failed: %s", strategy_id, exc)
+        return []
 
 
 def validation_history_trend(
     reports_dir: Optional[str] = None,
     history_dir: str = "reports/history",
     trend_limit: int = _DEFAULT_TREND_LIMIT,
+    db_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run-over-run PBO/DSR/Sharpe/MaxDD trend for every strategy with >= 2
     recorded harness runs.
 
+    For each strategy, prefers the durable ``validation_runs`` DB table
+    (shared across every worktree/API process on this machine) and falls
+    back to the worktree-local ``reports/history/<strategy>_validation_history.jsonl``
+    file only when the DB has fewer than 2 rows for that strategy — e.g. a
+    strategy validated in this exact environment before this DB-persistence
+    feature shipped. See ``validation/validation_history_store.py``'s module
+    docstring for why a second, durable home was needed.
+
     Returns ``{"trend": {strategy_id: [{"report_date","pbo","dsr","sharpe",
     "max_drawdown","deployable"}, ...]}, "reason": str | None}``. Only
-    strategies discovered via a CURRENT ``*_validation_summary.json`` (i.e.
-    :func:`cross_strategy_snapshot`'s own strategy set) are checked for
-    history — a strategy whose summary file was deleted but whose history
-    file lingers is intentionally NOT surfaced, mirroring the legacy panel's
-    own behavior (it iterates the just-loaded summaries list, not a separate
-    glob of ``reports/history/``). Oldest-first per strategy, capped at
-    ``trend_limit`` most recent runs. ``reason`` is set only when NO strategy
-    has 2+ runs yet — a strategy with exactly 1 run is silently omitted
-    rather than treated as an error.
+    strategies discovered via :func:`cross_strategy_snapshot`'s own strategy
+    set (file summaries UNION current DB rows) are checked for history — a
+    strategy with no current snapshot anywhere is intentionally NOT
+    surfaced, mirroring the legacy panel's own behavior. Oldest-first per
+    strategy, capped at ``trend_limit`` most recent runs. ``reason`` is set
+    only when NO strategy has 2+ runs yet — a strategy with exactly 1 run is
+    silently omitted rather than treated as an error.
     """
-    try:
-        summaries = _load_validation_summaries(reports_dir)
-    except Exception as exc:  # noqa: BLE001 - dead-letter, never raise
-        logger.debug("validation_history_trend: summary load failed: %s", exc)
-        return {"trend": {}, "reason": "Validation summaries unavailable."}
+    snapshot = cross_strategy_snapshot(reports_dir, db_url)
+    strategy_ids = [r["strategy_id"] for r in snapshot["strategies"] if r.get("strategy_id")]
 
     trend: Dict[str, List[Dict[str, Any]]] = {}
-    for s in summaries:
-        sid = _clean_str(s.get("strategy_id"))
-        if not sid:
+    for sid in strategy_ids:
+        db_rows = _load_db_trend_rows(sid, trend_limit, db_url)
+        if len(db_rows) >= 2:
+            trend[sid] = [_trend_point(r) for r in db_rows]
             continue
+
         try:
             rows = _read_validation_history_rows(sid, history_dir=history_dir)
         except Exception as exc:  # noqa: BLE001 - one bad strategy must not abort the rest
@@ -268,17 +348,7 @@ def validation_history_trend(
         if len(rows) < 2:
             continue
         tail = rows[-trend_limit:] if trend_limit else rows
-        trend[sid] = [
-            {
-                "report_date": _clean_str(r.get("report_date")),
-                "pbo": _clean_float(r.get("pbo")),
-                "dsr": _clean_float(r.get("dsr")),
-                "sharpe": _clean_float(r.get("sharpe")),
-                "max_drawdown": _clean_float(r.get("max_drawdown")),
-                "deployable": _clean_bool(r.get("deployable")),
-            }
-            for r in tail
-        ]
+        trend[sid] = [_trend_point(r) for r in tail]
 
     return {"trend": trend, "reason": None if trend else _NO_HISTORY_REASON}
 
@@ -359,12 +429,13 @@ def validation_trend_snapshot(
     history_dir: str = "reports/history",
     trend_limit: int = _DEFAULT_TREND_LIMIT,
     output_dir: Optional[Path] = None,
+    db_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Bundle all three sections into one payload for
     ``GET /strategy/validation-trend``. Each section degrades independently
     (CONSTRAINT #6) — a failure in one never blocks the other two."""
-    snapshot = cross_strategy_snapshot(reports_dir)
-    trend = validation_history_trend(reports_dir, history_dir, trend_limit)
+    snapshot = cross_strategy_snapshot(reports_dir, db_url)
+    trend = validation_history_trend(reports_dir, history_dir, trend_limit, db_url)
     regime = macro_regime_timeline(output_dir)
     return {
         "strategies": snapshot["strategies"],

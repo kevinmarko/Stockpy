@@ -985,6 +985,14 @@ class StrategyValidationHarness:
         # history reflects the report's final state either way.
         self._append_validation_history(report)
 
+        # 6d. Best-effort durable copy of this run in the validation_runs DB
+        # table — a second, durable home alongside reports/history/*.jsonl,
+        # which is worktree-local (invisible across the many git worktrees
+        # this repo runs) — see validation/validation_history_store.py's
+        # module docstring. Independent of 6c: a DB hiccup must never abort
+        # an otherwise-successful validation run, and vice versa.
+        self._record_validation_run_to_db(report)
+
         # 7. Render HTML report (after family_multiple_testing is populated so
         # the template can surface it if desired).
         self._render_html_report(report)
@@ -1066,6 +1074,27 @@ class StrategyValidationHarness:
         except Exception as exc:
             logger.warning(
                 "Failed to append validation history row for %s: %s", report.name, exc
+            )
+
+    def _record_validation_run_to_db(self, report: "ValidationReport") -> None:
+        """Best-effort durable copy of this run's summary in the
+        ``validation_runs`` DB table (see ``validation/validation_history_store.py``).
+
+        A second, durable home alongside ``reports/history/*.jsonl`` — that
+        file is worktree-local (this repo runs many simultaneous git
+        worktrees, and an untracked file written in one is invisible from
+        every other one), while the DB lives at the shared
+        ``settings.LOCAL_DATA_ROOT``. Dead-letter resilient (CONSTRAINT #6):
+        a DB hiccup must never abort an otherwise-successful validation run,
+        matching ``_append_validation_history``'s own contract.
+        """
+        try:
+            from validation.validation_history_store import ValidationHistoryStore
+
+            ValidationHistoryStore().record_run(report.to_summary_dict())
+        except Exception as exc:
+            logger.warning(
+                "Failed to record validation run to DB for %s: %s", report.name, exc
             )
 
     def _apply_cost_model(self, returns: pd.Series, turnover: float = 0.05) -> pd.Series:
@@ -1237,6 +1266,7 @@ class StrategyValidationHarness:
         harness_inst = cls(strategy_fn=lambda *args: [], reports_dir=reports_dir)
         harness_inst._write_json_summary(report)
         harness_inst._append_validation_history(report)
+        harness_inst._record_validation_run_to_db(report)
         return report
 
 def main() -> None:

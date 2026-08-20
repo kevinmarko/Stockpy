@@ -50,6 +50,15 @@ def _point_reports_at_fixtures(monkeypatch):
     monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(FIXTURES))
 
 
+# GET /strategy/validation-trend reads the durable validation_runs DB table
+# (validation/validation_history_store.py) via pilots.validation_trend, with
+# no db_url override at the API layer (by design -- production always wants
+# the real resolved DB). The root conftest.py's
+# `_isolate_validation_runs_db_in_tests` autouse fixture points the default
+# resolver at an in-memory db for every test in this file, so none of them
+# read the real, shared ~/.stockpy_local/quant_platform.db.
+
+
 # ---------------------------------------------------------------------------
 # /health — always open
 # ---------------------------------------------------------------------------

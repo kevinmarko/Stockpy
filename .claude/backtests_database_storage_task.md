@@ -1,0 +1,25 @@
+# Task: Persist backtest/validation runs to the database
+
+- [x] **Phase 1: Write path** <!-- id: p1 -->
+  - [x] New `validation/validation_history_store.py`: `ValidationRun` model + `validation_runs` table, `ValidationHistoryStore` (`record_run`/`get_recent`/`get_latest_per_strategy`), mirroring `desktop/run_history_store.py` <!-- id: p1_1 -->
+  - [x] Wire `StrategyValidationHarness.run()` (step 6d, after `_append_validation_history`) and `run_options_validation()` to best-effort call `_record_validation_run_to_db` <!-- id: p1_2 -->
+- [x] **Phase 2: Read path** <!-- id: p2 -->
+  - [x] `pilots/validation_trend.py::cross_strategy_snapshot()` reads DB first, falls back to file summaries <!-- id: p2_1 -->
+  - [x] `pilots/validation_trend.py::validation_history_trend()` reads DB first (>=2 rows), falls back to JSONL history <!-- id: p2_2 -->
+  - [x] Threaded `db_url` param through `validation_trend_snapshot()` for test isolation; confirmed `GET /strategy/validation-trend` response contract unchanged (zero webapp edits) <!-- id: p2_3 -->
+  - [x] Updated `tests/test_pilots_strategy_matrix.py`'s dependency-light AST allowlist for `validation_trend` <!-- id: p2_4 -->
+- [x] **Phase 3: Tests** <!-- id: p3 -->
+  - [x] New `tests/test_validation_history_store.py` (12 tests: round trip, ordering, latest-per-strategy, readonly contract, dead-letter degrade) <!-- id: p3_1 -->
+  - [x] Extended `tests/test_validation_history.py` (`TestRecordValidationRunToDb`, `TestRunRecordsValidationRunToDb`) <!-- id: p3_2 -->
+  - [x] Extended `tests/test_pilots_validation_trend.py` (`TestCrossStrategySnapshotDbSource`, `TestValidationHistoryTrendDbSource`) <!-- id: p3_3 -->
+- [x] **Phase 4: Test-isolation bug found mid-implementation, fixed** <!-- id: p4 -->
+  - [x] Discovered ~25 pre-existing test files call `StrategyValidationHarness.run()` for real, which would silently write into the real shared `~/.stockpy_local/quant_platform.db` on every test run <!-- id: p4_1 -->
+  - [x] Added session-wide autouse fixture `_isolate_validation_runs_db_in_tests` to root `conftest.py`, mirroring the existing `_no_gdelt_throttle_in_tests`/`_no_fmp_throttle_in_tests` pattern <!-- id: p4_2 -->
+  - [x] Cleaned up the one stray row already written to the real DB before the fixture landed <!-- id: p4_3 -->
+- [x] **Phase 5: Documentation & verification** <!-- id: p5 -->
+  - [x] Updated `docs/architecture/validation-and-signals.md` (`validation/harness.py` bullet + new `validation/validation_history_store.py` bullet) <!-- id: p5_1 -->
+  - [x] Updated `CLAUDE.md` (auto-synced to `AGENTS.md` via `sync_agent_docs.sh` hook) <!-- id: p5_2 -->
+  - [x] End-to-end verification: ran `rsi2_mean_reversion` through the real harness, confirmed a row landed in `validation_runs` and `pilots.validation_trend` read it back <!-- id: p5_3 -->
+  - [x] `ruff check --select=F821,F822,F823,E9` clean <!-- id: p5_4 -->
+  - [x] Full offline `pytest -m "not network and not slow"`: 11646 passed, 13 skipped, 21 failed — confirmed via `git stash` that all 21 are pre-existing on unmodified `main`, unrelated to this change <!-- id: p5_5 -->
+  - [x] Copy plan/task/walkthrough artifacts to `.claude/` <!-- id: p5_6 -->

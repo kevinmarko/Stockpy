@@ -10,7 +10,11 @@ module-level ``read_validation_history``), which lets PBO/DSR/Sharpe/MaxDD
 be plotted as a trend across multiple harness runs.
 
 All tests operate in an isolated ``tmp_path`` (via ``monkeypatch.chdir``) so
-nothing is written into the real repo ``reports/`` directory.
+nothing is written into the real repo ``reports/`` directory. The root
+``conftest.py``'s ``_isolate_validation_runs_db_in_tests`` autouse fixture
+gives the same isolation to ``_record_validation_run_to_db`` — every
+``harness.run()``/direct-call test in this file writes to an in-memory DB by
+default, never the real, shared ``~/.stockpy_local/quant_platform.db``.
 """
 from __future__ import annotations
 
@@ -291,6 +295,85 @@ class TestRunAppendsHistoryOnce:
         report = harness.run(
             start_date="2020-01-01", end_date="2020-12-31",
             X=X, y=y, strategy_name="RunOnceTest",
+        )
+
+        assert len(calls) == 1
+        assert calls[0] is report
+
+
+class TestRecordValidationRunToDb:
+    """StrategyValidationHarness._record_validation_run_to_db — the durable,
+    cross-worktree companion to _append_validation_history (see
+    validation/validation_history_store.py)."""
+
+    def test_writes_a_row_to_the_validation_runs_db(self, tmp_path, monkeypatch):
+        import validation.validation_history_store as store_mod
+
+        db_url = f"sqlite:///{tmp_path / 'validation.db'}"
+        monkeypatch.setattr(store_mod, "resolve_database_url", lambda: db_url)
+
+        harness = _harness()
+        harness._record_validation_run_to_db(_make_report(sharpe=0.42))
+
+        from validation.validation_history_store import ValidationHistoryStore
+
+        rows = ValidationHistoryStore(db_url=db_url, readonly=True).get_recent(limit=10)
+        assert len(rows) == 1
+        assert rows[0]["strategy_id"] == "TestStrategy"
+        assert rows[0]["sharpe"] == pytest.approx(0.42)
+
+    def test_db_failure_is_swallowed_not_raised(self, monkeypatch):
+        """A DB hiccup (e.g. sqlalchemy unavailable, unreachable Postgres)
+        must be logged, never propagated (CONSTRAINT #6) — mirrors
+        _append_validation_history's own dead-letter contract."""
+        import validation.validation_history_store as store_mod
+
+        def _boom(*a, **kw):
+            raise RuntimeError("db unreachable")
+
+        monkeypatch.setattr(store_mod, "ValidationHistoryStore", _boom)
+
+        harness = _harness()
+        harness._record_validation_run_to_db(_make_report())  # must not raise
+
+
+class TestRunRecordsValidationRunToDb:
+    def test_run_calls_record_validation_run_to_db_exactly_once(self, tmp_path, monkeypatch):
+        """Mirrors TestRunAppendsHistoryOnce's exact offline setup -- proves
+        step 6d is wired into run() alongside step 6c."""
+        import validation.harness as harness_mod
+        from execution.cost_model import TieredCostModel
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            harness_mod, "get_universe_with_survivorship_warning",
+            lambda as_of_date: (["SPY"], {"n_current": 500, "n_at_date": 500}),
+        )
+
+        rng = np.random.default_rng(seed=7)
+        idx = pd.bdate_range(end="2020-12-31", periods=120)
+        y = pd.Series(rng.normal(0.0005, 0.01, size=len(idx)), index=idx)
+        X = pd.DataFrame({"lag1": y.shift(1).fillna(0.0)}, index=idx)
+
+        def strategy_fn(X_train, y_train, X_test, y_test):
+            return [{"params": "buy_and_hold", "train_returns": y_train, "test_returns": y_test}]
+
+        harness = StrategyValidationHarness(
+            strategy_fn=strategy_fn,
+            universe_fn=lambda d: ["SPY"],
+            cost_model=TieredCostModel(),
+            n_cpcv_splits=5,
+            n_test_splits=2,
+        )
+
+        calls = []
+        monkeypatch.setattr(harness, "_record_validation_run_to_db", lambda report: calls.append(report))
+        monkeypatch.setattr(harness, "_render_html_report", lambda report: None)
+        monkeypatch.setattr(harness, "_render_cpcv_report", lambda report: None)
+
+        report = harness.run(
+            start_date="2020-01-01", end_date="2020-12-31",
+            X=X, y=y, strategy_name="RunRecordsDbTest",
         )
 
         assert len(calls) == 1

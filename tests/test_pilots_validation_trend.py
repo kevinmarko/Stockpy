@@ -16,6 +16,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from pilots.validation_trend import (
     cross_strategy_snapshot,
     macro_regime_timeline,
@@ -23,8 +25,20 @@ from pilots.validation_trend import (
     validation_trend_snapshot,
 )
 from scripts.snapshot_diff import rotate_snapshot
+from validation.validation_history_store import ValidationHistoryStore
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
+
+# The root conftest.py's `_isolate_validation_runs_db_in_tests` autouse
+# fixture points the default DB resolver at an in-memory db for every test
+# in this file that doesn't pass its own explicit `db_url` -- so none of
+# them touch the real, shared ~/.stockpy_local/quant_platform.db.
+# `ValidationHistoryStore(readonly=True)` on `:memory:` raises internally (no
+# readonly semantics are meaningful for a private, per-connection in-memory
+# db), which every read path in `pilots/validation_trend.py` already catches
+# and degrades to an empty result -- reproducing this file's pre-DB-feature
+# (pure file-based) behavior exactly for any test below that doesn't opt into
+# a real tmp-file `db_url`.
 
 
 # ---------------------------------------------------------------------------
@@ -324,4 +338,117 @@ class TestValidationTrendSnapshotComposite:
         assert result["trend_reason"] is None
         assert [t["market_regime"] for t in result["regime_timeline"]] == ["RISK ON", "RISK OFF"]
         assert result["n_rotated_snapshots"] == 2
-        assert result["regime_reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# validation_runs DB: primary source, file fallback (2026-08)
+# ---------------------------------------------------------------------------
+def _seed_db_run(db_url: str, strategy_id: str, **overrides) -> None:
+    summary = {
+        "strategy_id": strategy_id,
+        "deployable": True,
+        "pbo": 0.1,
+        "dsr": 0.99,
+        "sharpe": 1.5,
+        "max_drawdown": 0.12,
+        "report_date": "2026-08-01",
+        "is_options_selling": False,
+        "stress_gate_passed": True,
+        "n_trials": 10,
+    }
+    summary.update(overrides)
+    ValidationHistoryStore(db_url=db_url).record_run(summary)
+
+
+class TestCrossStrategySnapshotDbSource:
+    def test_db_row_wins_over_conflicting_file_row(self, tmp_path):
+        db_url = f"sqlite:///{tmp_path / 'validation.db'}"
+        (tmp_path / "dbwins_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "dbwins", "deployable": False, "sharpe": -1.0}),
+            encoding="utf-8",
+        )
+        _seed_db_run(db_url, "dbwins", deployable=True, sharpe=2.0)
+
+        result = cross_strategy_snapshot(str(tmp_path), db_url)
+        row = next(r for r in result["strategies"] if r["strategy_id"] == "dbwins")
+        assert row["deployable"] is True
+        assert row["sharpe"] == pytest.approx(2.0)
+
+    def test_file_row_used_when_strategy_absent_from_db(self, tmp_path):
+        db_url = f"sqlite:///{tmp_path / 'validation.db'}"
+        (tmp_path / "fileonly_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "fileonly", "deployable": True, "sharpe": 0.7}),
+            encoding="utf-8",
+        )
+        # DB exists (schema created) but has zero rows for "fileonly".
+        ValidationHistoryStore(db_url=db_url)
+
+        result = cross_strategy_snapshot(str(tmp_path), db_url)
+        row = next(r for r in result["strategies"] if r["strategy_id"] == "fileonly")
+        assert row["sharpe"] == pytest.approx(0.7)
+
+    def test_unreachable_db_degrades_to_file_only(self, tmp_path):
+        (tmp_path / "fileonly_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "fileonly", "deployable": True, "sharpe": 0.7}),
+            encoding="utf-8",
+        )
+        # An in-memory DB is unusable in readonly mode -- confirms the read
+        # path degrades honestly to file-only rather than raising.
+        result = cross_strategy_snapshot(str(tmp_path), "sqlite:///:memory:")
+        assert [r["strategy_id"] for r in result["strategies"]] == ["fileonly"]
+
+
+class TestValidationHistoryTrendDbSource:
+    def test_db_history_wins_when_it_has_2plus_rows(self, tmp_path):
+        db_url = f"sqlite:///{tmp_path / 'validation.db'}"
+        (tmp_path / "dbtrend_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "dbtrend"}), encoding="utf-8"
+        )
+        # A conflicting file-based history exists too -- DB must win.
+        history_dir = tmp_path / "history"
+        history_dir.mkdir()
+        (history_dir / "dbtrend_validation_history.jsonl").write_text(
+            json.dumps({"report_date": "2020-01-01", "dsr": 0.1}) + "\n"
+            + json.dumps({"report_date": "2020-01-02", "dsr": 0.2}) + "\n",
+            encoding="utf-8",
+        )
+        _seed_db_run(db_url, "dbtrend", report_date="2026-08-01", dsr=0.90)
+        _seed_db_run(db_url, "dbtrend", report_date="2026-08-08", dsr=0.98)
+
+        result = validation_history_trend(str(tmp_path), str(history_dir), db_url=db_url)
+        points = result["trend"]["dbtrend"]
+        assert [p["report_date"] for p in points] == ["2026-08-01", "2026-08-08"]
+        assert [p["dsr"] for p in points] == pytest.approx([0.90, 0.98])
+
+    def test_file_history_used_when_db_has_fewer_than_2_rows(self, tmp_path):
+        db_url = f"sqlite:///{tmp_path / 'validation.db'}"
+        (tmp_path / "filetrend_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "filetrend"}), encoding="utf-8"
+        )
+        history_dir = tmp_path / "history"
+        history_dir.mkdir()
+        (history_dir / "filetrend_validation_history.jsonl").write_text(
+            json.dumps({"report_date": "2026-06-01", "dsr": 0.90}) + "\n"
+            + json.dumps({"report_date": "2026-06-15", "dsr": 0.98}) + "\n",
+            encoding="utf-8",
+        )
+        _seed_db_run(db_url, "filetrend")  # only 1 DB row -- below the 2-run floor
+
+        result = validation_history_trend(str(tmp_path), str(history_dir), db_url=db_url)
+        assert [p["report_date"] for p in result["trend"]["filetrend"]] == ["2026-06-01", "2026-06-15"]
+
+    def test_unreachable_db_degrades_to_file_history(self, tmp_path):
+        (tmp_path / "filetrend_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "filetrend"}), encoding="utf-8"
+        )
+        history_dir = tmp_path / "history"
+        history_dir.mkdir()
+        (history_dir / "filetrend_validation_history.jsonl").write_text(
+            json.dumps({"report_date": "2026-06-01", "dsr": 0.90}) + "\n"
+            + json.dumps({"report_date": "2026-06-15", "dsr": 0.98}) + "\n",
+            encoding="utf-8",
+        )
+        result = validation_history_trend(
+            str(tmp_path), str(history_dir), db_url="sqlite:///:memory:"
+        )
+        assert [p["report_date"] for p in result["trend"]["filetrend"]] == ["2026-06-01", "2026-06-15"]

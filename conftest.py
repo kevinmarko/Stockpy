@@ -215,6 +215,38 @@ def _no_fmp_throttle_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_validation_runs_db_in_tests(monkeypatch):
+    """Point the default ``validation_runs`` DB resolver at an in-memory db
+    for every test, unless the test passes its own explicit ``db_url``.
+
+    ``StrategyValidationHarness.run()`` (``validation/harness.py``) writes a
+    best-effort row to the real, shared ``~/.stockpy_local/quant_platform.db``
+    on every call via ``_record_validation_run_to_db`` — unlike
+    ``TransactionsStore``/``RunHistoryStore``, whose every test call site
+    constructs the store directly with its own ``db_url``, this write
+    happens IMPLICITLY, deep inside ``run()``, with no way for the ~25
+    pre-existing test files across this suite that call ``.run()`` for real
+    (``tests/test_harness_*.py``, ``tests/test_validation_*.py``, ...) to opt
+    out short of editing every one of them. Left unguarded, running this
+    suite would silently write dozens of fake ``strategy_id`` rows (e.g.
+    ``"TestStrategy"``, ``"RunOnceTest"``) into a real operator's production
+    database on every test run — the same class of risk
+    ``_no_gdelt_throttle_in_tests``/``_no_fmp_throttle_in_tests`` above exist
+    to prevent for their own shared resources, and the reason for a
+    session-wide autouse fixture here rather than the file-local opt-in
+    pattern ``tests/conftest.py`` otherwise prefers.
+
+    Lazy import (mirrors the FMP/GDELT fixtures above) so a broken
+    ``validation/validation_history_store.py`` import surfaces as a test
+    failure for whichever test actually touches it, not a collection-time
+    failure for the entire suite.
+    """
+    import validation.validation_history_store as _vhs
+
+    monkeypatch.setattr(_vhs, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests():
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""
