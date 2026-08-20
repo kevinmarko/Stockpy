@@ -142,8 +142,19 @@ def _default_scans() -> List[Dict[str, Any]]:
             "updated_at": now,
         },
         {
+            # Robinhood's scanner has no dividend-yield or payout-ratio filter type at
+            # all (confirmed against a live get_scanner_filter_specs call, 2026-08-20)
+            # -- the original {"dividend_yield_min", "payout_ratio_max"} filters here
+            # were silently unrunnable since this row was first seeded. This is a
+            # sector-tilt PROXY (traditionally high-dividend sectors + an
+            # established-company market-cap floor), not a real yield/payout screen --
+            # the agentic-discovery skill translates these keys into real Robinhood
+            # filter objects at scan time, same as every other row here.
             "name": "dividend-income",
-            "filters": {"dividend_yield_min": 0.03, "payout_ratio_max": 0.6},
+            "filters": {
+                "sector": ["Utilities", "Real Estate", "Energy", "Financial Services"],
+                "market_cap_min": 1000000000,
+            },
             "enabled": True,
             "created_at": now,
             "updated_at": now,
