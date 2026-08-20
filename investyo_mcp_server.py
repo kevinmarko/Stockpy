@@ -3057,6 +3057,13 @@ def get_recommendation(symbol: str) -> str:
     except Exception as e:
         return f"Failed to compute recommendation for {symbol}: {str(e)}"
 
+class _MacroProxy:
+    """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
+    gui/panels/options_matrix.py::_MacroProxy / options_ondemand.py::_MacroProxy."""
+
+    def __init__(self, vix: float, market_regime: str):
+        self.vix = vix
+        self.market_regime = market_regime
 
 @mcp.tool()
 def get_options_directive(symbol: str) -> str:
@@ -3105,14 +3112,6 @@ def get_options_directive(symbol: str) -> str:
         # snapshot is missing/malformed, never a fabricated stress signal.
         _MACRO_DEFAULT_VIX = 15.0
         _MACRO_DEFAULT_REGIME = "RISK ON"
-
-        class _MacroProxy:
-            """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
-            gui/panels/options_matrix.py::_MacroProxy / options_ondemand.py::_MacroProxy."""
-
-            def __init__(self, vix: float, market_regime: str):
-                self.vix = vix
-                self.market_regime = market_regime
 
         snap = None
         try:
@@ -3341,11 +3340,6 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
             vix_val = 15.0
         regime_val = str(snap.get("market_regime") or "RISK ON")
 
-    class _MacroProxy:
-        def __init__(self, vix: float, market_regime: str):
-            self.vix = vix
-            self.market_regime = market_regime
-            
     macro_proxy = _MacroProxy(vix_val, regime_val)
 
     # 4. Directive
@@ -3407,21 +3401,26 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
-def simulate_0dte_payoff(ticker: str, contracts: int = 1) -> dict:
+def scan_0dte_signals(ticker: str, contracts: int = 1) -> dict:
     """
-    Simulates a same-session 0DTE contract's payoff and theta-decay path
-    using pilots.zero_dte_engine's real opening-range/squeeze detection and
-    contract-selection logic — never re-derives its own breakout or Greeks
-    math. Ships in simulation-only mode: the response's
-    `live_exit_gate_wired` field reflects whether the mandatory 15:45 ET
-    hard-exit is actually reachable from a production path today (it is
-    not, as of this tool's introduction — see the Agent 1 prerequisite in
-    this plan) and `strategy_registry_status` reports whether this pilot
-    has cleared the PBO/DSR/Sharpe/MaxDD + stress-scenario deployability
-    gate (it has not). This tool NEVER calls execute_0dte_trade or
-    execute_0dte_exits.
+    Scans for same-session 0DTE contract breakout signals and squeeze detection
+    using pilots.zero_dte_engine's logic — never re-derives its own breakout math.
+    This is a signal/status passthrough only (does not compute payoff or theta decay).
+    Ships in simulation-only mode: the response's `live_exit_gate_wired` field 
+    reflects whether the mandatory 15:45 ET hard-exit is actually wired and enabled
+    in production. `strategy_registry_status` reports whether this pilot has cleared
+    the PBO/DSR/Sharpe/MaxDD + stress-scenario deployability gate (it has not).
+    This tool NEVER calls execute_0dte_trade or execute_0dte_exits.
     """
     from pilots.zero_dte_engine import get_0dte_signals
+    
+    # 0DTE exit is wired into daemon_runtime.py but gated by OPTIONS_0DTE_ENABLED.
+    live_exit_gate_wired = False
+    try:
+        from settings import settings as _s
+        live_exit_gate_wired = bool(getattr(_s, "OPTIONS_0DTE_ENABLED", False))
+    except ImportError:
+        pass
 
     sym = ticker.upper().strip()
 
@@ -3435,7 +3434,7 @@ def simulate_0dte_payoff(ticker: str, contracts: int = 1) -> dict:
         "ticker": sym,
         "contracts": contracts,
         "signals": signals,
-        "live_exit_gate_wired": False,
+        "live_exit_gate_wired": live_exit_gate_wired,
         "strategy_registry_status": "unregistered"
     }
 

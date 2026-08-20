@@ -34,7 +34,7 @@ We will add two new functions decorated with `@mcp.tool(annotations={"readOnlyHi
 - **[NEW]** `.claude/mcp_options_analytics_task.md`
 - **[NEW]** `.claude/mcp_options_analytics_walkthrough.md`
 - **[MODIFY]** `docs/architecture/observability-and-apis.md` (Add bullets for both tools)
-- **[MODIFY]** `docs/architecture/execution.md` (Update options references)
+- (Note: `docs/architecture/execution.md` was originally planned to be updated but was dropped because the tools are read-only analytics passes and do not change the execution path.)
 
 ## User Review Required
 
