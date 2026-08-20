@@ -1567,7 +1567,8 @@ class GravityAIAuditor:
             retrain_gate_holds = detector.last_fit_date == fit_date_before
             probs_after = detector.predict_proba(features.loc[:D])
             prediction_unchanged = all(
-                abs(probs_before[k] - probs_after[k]) < 1e-9 for k in probs_before if k != "dominant_state"
+                abs(probs_before[k] - probs_after[k]) < 1e-9
+                for k in probs_before if k not in ("dominant_state", "regime_state_label")
             )
             hmm_report["retrain_gate_holds"] = retrain_gate_holds
             hmm_report["prediction_at_d_unchanged_after_noop_refit"] = prediction_unchanged
@@ -1583,7 +1584,8 @@ class GravityAIAuditor:
             perturbed.iloc[151:] = 99999.9
             perturbed_probs = detector.predict_proba(perturbed.loc[:D])
             ignores_future = all(
-                abs(probs_before[k] - perturbed_probs[k]) < 1e-9 for k in probs_before if k != "dominant_state"
+                abs(probs_before[k] - perturbed_probs[k]) < 1e-9
+                for k in probs_before if k not in ("dominant_state", "regime_state_label")
             )
             hmm_report["predict_proba_ignores_rows_after_cutoff"] = ignores_future
 

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "f68dc6e0194f49f32947ba49b24b4486cd423540",
+    "git_commit": "a95b8d09a7c080cdd041767c93e91340c51d4c25",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4279,7 +4279,7 @@
       "sites": [
         {
           "file": "Gravity AI Review Suite.py",
-          "line": 2731,
+          "line": 2733,
           "expr": "getattr(_rh_settings, _MISSING_ATTR, None)"
         },
         {
@@ -4801,7 +4801,7 @@
       {
         "field": "PROMPT_REGISTRY_REFRESH_SECONDS",
         "name_literal_sites": [
-          "Gravity AI Review Suite.py:11068"
+          "Gravity AI Review Suite.py:11070"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
