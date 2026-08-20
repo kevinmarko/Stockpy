@@ -297,6 +297,53 @@ describe("PaperBroker", () => {
     expect(await screen.findByText("Buy ZZZZ Stock")).toBeInTheDocument();
   });
 
+  it("quick trade: a ?quickTradeSymbol= URL param (handoff from SymbolScreener) prefills and fetches on mount", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getDataQuotes).mockResolvedValue({
+      ZZZZ: { symbol: "ZZZZ", price: 42.5, bid: 42.4, ask: 42.6, timestamp: "2026-08-20T14:00:00Z", is_stale: false, source: "fmp" },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/paper-broker?quickTradeSymbol=zzzz"]}>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.getDataQuotes).toHaveBeenCalledWith(["ZZZZ"]);
+    });
+    expect(await screen.findByText("Buy ZZZZ Stock")).toBeInTheDocument();
+    expect(screen.getByTestId("quick-trade-symbol-input")).toHaveValue("ZZZZ");
+  });
+
+  it("auto-execute: a ?scanSymbols= URL param (handoff from SymbolScreener) prefills the scan input on mount", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getStrategyOptionsCandidates).mockResolvedValue({ count: 0, candidates: [] });
+
+    render(
+      <MemoryRouter initialEntries={["/paper-broker?scanSymbols=AAPL,MSFT"]}>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.getStrategyOptionsCandidates).toHaveBeenCalledWith(["AAPL", "MSFT"]);
+    });
+    expect(screen.getByTestId("scan-symbols-input")).toHaveValue("AAPL,MSFT");
+  });
+
   it("quick trade: shows an honest error when no live quote is available, never a fabricated $0 ticket", async () => {
     vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
       equity: 105000,

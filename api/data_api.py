@@ -330,6 +330,136 @@ def get_peer_group(symbol: str) -> Dict[str, Any]:
     }
 
 
+@app.get("/data/symbol-search", dependencies=[Depends(require_token)])
+def get_symbol_search(query: str = Query(..., min_length=1), limit: Optional[int] = Query(None)) -> Dict[str, Any]:
+    """Company-name/ticker search, independent of the platform's tracked
+    watchlist/pipeline universe — powers the webapp's Symbol Screener free-text
+    search box.
+
+    Gated by ``settings.FMP_SCREENER_ENABLED`` (default ``True``).
+    ``data.fmp_screener.search_symbols`` never raises (CONSTRAINT #6 — it
+    degrades to ``[]`` on any failure), so the flag-off path and any live
+    fetch/parse failure both degrade to an honest empty list + ``reason``
+    string here, never a 500.
+    """
+    q = query.strip()
+    if not getattr(settings, "FMP_SCREENER_ENABLED", False):
+        return {
+            "query": q,
+            "results": [],
+            "reason": "Symbol search is disabled (FMP_SCREENER_ENABLED=False).",
+        }
+    from data.fmp_screener import search_symbols
+
+    try:
+        results = search_symbols(q, limit=limit)
+    except Exception as exc:  # defensive — search_symbols already dead-letters
+        logger.warning("data_api: symbol search failed for %r: %s", q, exc)
+        results = []
+    return {
+        "query": q,
+        "results": results,
+        "reason": None if results else "No matching symbols found.",
+    }
+
+
+@app.get("/data/screener", dependencies=[Depends(require_token)])
+def get_screener_results(
+    sector: Optional[str] = Query(None),
+    industry: Optional[str] = Query(None),
+    market_cap_more_than: Optional[float] = Query(None),
+    market_cap_lower_than: Optional[float] = Query(None),
+    price_more_than: Optional[float] = Query(None),
+    price_lower_than: Optional[float] = Query(None),
+    beta_more_than: Optional[float] = Query(None),
+    beta_lower_than: Optional[float] = Query(None),
+    dividend_more_than: Optional[float] = Query(None),
+    dividend_lower_than: Optional[float] = Query(None),
+    volume_more_than: Optional[float] = Query(None),
+    exchange: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    is_actively_trading: Optional[bool] = Query(None),
+    exclude_funds: bool = Query(False),
+    limit: Optional[int] = Query(None),
+    page: Optional[int] = Query(None),
+) -> Dict[str, Any]:
+    """Sector/industry/market-cap/price/beta/dividend/volume stock screener,
+    independent of the platform's tracked watchlist/pipeline universe —
+    powers the webapp's Symbol Screener filter form. ``exclude_funds=true``
+    filters out both ETFs and mutual funds client-side of the FMP call
+    (``isEtf``/``isFund`` are separate FMP filter params but the operator's
+    "just show me real companies" intent is one checkbox).
+
+    Gated by ``settings.FMP_SCREENER_ENABLED`` (default ``True``).
+    ``data.fmp_screener.screen_companies`` never raises (CONSTRAINT #6 — it
+    degrades to ``[]`` on any failure), so the flag-off path and any live
+    fetch/parse failure both degrade to an honest empty list + ``reason``
+    string here, never a 500.
+    """
+    if not getattr(settings, "FMP_SCREENER_ENABLED", False):
+        return {
+            "results": [],
+            "reason": "The symbol screener is disabled (FMP_SCREENER_ENABLED=False).",
+        }
+    from data.fmp_screener import screen_companies
+
+    filters: Dict[str, Any] = {
+        "sector": sector,
+        "industry": industry,
+        "marketCapMoreThan": market_cap_more_than,
+        "marketCapLowerThan": market_cap_lower_than,
+        "priceMoreThan": price_more_than,
+        "priceLowerThan": price_lower_than,
+        "betaMoreThan": beta_more_than,
+        "betaLowerThan": beta_lower_than,
+        "dividendMoreThan": dividend_more_than,
+        "dividendLowerThan": dividend_lower_than,
+        "volumeMoreThan": volume_more_than,
+        "exchange": exchange,
+        "country": country,
+        "isActivelyTrading": is_actively_trading,
+        "limit": limit,
+        "page": page,
+    }
+    if exclude_funds:
+        filters["isEtf"] = False
+        filters["isFund"] = False
+
+    try:
+        results = screen_companies(**filters)
+    except Exception as exc:  # defensive — screen_companies already dead-letters
+        logger.warning("data_api: screener query failed: %s", exc)
+        results = []
+    return {
+        "results": _clean_nan(results),
+        "reason": None if results else "No symbols matched these filters.",
+    }
+
+
+@app.get("/data/screener/filters", dependencies=[Depends(require_token)])
+def get_screener_filter_options() -> Dict[str, Any]:
+    """Sector/industry enum lists for the Symbol Screener's filter dropdowns.
+
+    Gated by ``settings.FMP_SCREENER_ENABLED`` (default ``True``). Never
+    raises — degrades to empty lists on any failure.
+    """
+    if not getattr(settings, "FMP_SCREENER_ENABLED", False):
+        return {"sectors": [], "industries": []}
+    from data.fmp_screener import list_industries, list_sectors
+
+    try:
+        sectors = list_sectors()
+    except Exception as exc:  # defensive — list_sectors already dead-letters
+        logger.warning("data_api: sector list fetch failed: %s", exc)
+        sectors = []
+    try:
+        industries = list_industries()
+    except Exception as exc:  # defensive — list_industries already dead-letters
+        logger.warning("data_api: industry list fetch failed: %s", exc)
+        industries = []
+    return {"sectors": sectors, "industries": industries}
+
+
 @app.get("/data/macro", dependencies=[Depends(require_token)])
 def get_macro_raw() -> Dict[str, Any]:
     """Raw current-snapshot macro dict (VIX, yield curve, Sahm, etc.)."""

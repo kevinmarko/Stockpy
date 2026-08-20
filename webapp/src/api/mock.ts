@@ -142,6 +142,11 @@ import type {
   SymbolCompareRow,
   SymbolCompareResponse,
   UniverseResponse,
+  SymbolSearchResponse,
+  ScreenerFilters,
+  ScreenerResult,
+  ScreenerResultsResponse,
+  ScreenerFilterOptions,
   SyncReportResponse,
   SyncReportSymbol,
   SymbolReincludeResult,
@@ -936,6 +941,46 @@ function seeded(seed: number): () => number {
     s = (s * 16807) % 2147483647;
     return (s - 1) / 2147483646;
   };
+}
+
+// Symbol Screener fixture universe -- small, deterministic, NOT the tracked
+// pipeline universe (this is the whole point: browse/filter/trade symbols
+// independent of it). Mirrors data.fmp_screener's reshaped field names
+// exactly (snake_case, matching ScreenerResult). One row ("DELISTEDCO") is
+// deliberately isActivelyTrading:false to exercise that filter; two rows
+// ("NODIVCO", "QQQ") deliberately carry null fields -- never an
+// all-populated happy-path-only fixture.
+const SCREENER_UNIVERSE: ScreenerResult[] = [
+  { symbol: "AAPL", company_name: "Apple Inc.", sector: "Technology", industry: "Consumer Electronics", market_cap: 3_400_000_000_000, price: 227.5, beta: 1.09, last_annual_dividend: 1.0, volume: 54_000_000, exchange: "NASDAQ", exchange_short_name: "NASDAQ", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "MSFT", company_name: "Microsoft Corporation", sector: "Technology", industry: "Software - Infrastructure", market_cap: 3_100_000_000_000, price: 415.2, beta: 0.9, last_annual_dividend: 3.0, volume: 20_000_000, exchange: "NASDAQ", exchange_short_name: "NASDAQ", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "NVDA", company_name: "NVIDIA Corporation", sector: "Technology", industry: "Semiconductors", market_cap: 2_900_000_000_000, price: 118.1, beta: 1.68, last_annual_dividend: 0.04, volume: 250_000_000, exchange: "NASDAQ", exchange_short_name: "NASDAQ", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "JNJ", company_name: "Johnson & Johnson", sector: "Healthcare", industry: "Drug Manufacturers - General", market_cap: 380_000_000_000, price: 158.4, beta: 0.5, last_annual_dividend: 4.8, volume: 6_500_000, exchange: "NYSE", exchange_short_name: "NYSE", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "UNH", company_name: "UnitedHealth Group Inc.", sector: "Healthcare", industry: "Healthcare Plans", market_cap: 460_000_000_000, price: 505.3, beta: 0.6, last_annual_dividend: 8.4, volume: 3_100_000, exchange: "NYSE", exchange_short_name: "NYSE", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "JPM", company_name: "JPMorgan Chase & Co.", sector: "Financial Services", industry: "Banks - Diversified", market_cap: 620_000_000_000, price: 215.6, beta: 1.1, last_annual_dividend: 4.6, volume: 8_200_000, exchange: "NYSE", exchange_short_name: "NYSE", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "XOM", company_name: "Exxon Mobil Corporation", sector: "Energy", industry: "Oil & Gas Integrated", market_cap: 490_000_000_000, price: 112.8, beta: 0.85, last_annual_dividend: 3.8, volume: 15_000_000, exchange: "NYSE", exchange_short_name: "NYSE", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "KO", company_name: "The Coca-Cola Company", sector: "Consumer Defensive", industry: "Beverages - Non-Alcoholic", market_cap: 280_000_000_000, price: 65.2, beta: 0.55, last_annual_dividend: 1.94, volume: 12_000_000, exchange: "NYSE", exchange_short_name: "NYSE", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "NODIVCO", company_name: "NoDiv Growth Corp.", sector: "Technology", industry: "Software - Application", market_cap: 8_500_000_000, price: 42.1, beta: 1.9, last_annual_dividend: null, volume: 2_100_000, exchange: "NASDAQ", exchange_short_name: "NASDAQ", country: "US", is_etf: false, is_fund: false, is_actively_trading: true },
+  { symbol: "DELISTEDCO", company_name: "Formerly Traded Inc.", sector: "Technology", industry: "Software - Infrastructure", market_cap: 1_200_000_000, price: 3.1, beta: 2.4, last_annual_dividend: null, volume: 0, exchange: "OTC", exchange_short_name: "OTC", country: "US", is_etf: false, is_fund: false, is_actively_trading: false },
+  { symbol: "QQQ", company_name: "Invesco QQQ Trust", sector: null, industry: null, market_cap: null, price: 505.6, beta: 1.15, last_annual_dividend: 2.5, volume: 40_000_000, exchange: "NASDAQ", exchange_short_name: "NASDAQ", country: "US", is_etf: true, is_fund: false, is_actively_trading: true },
+];
+
+function matchesScreenerFilters(row: ScreenerResult, f: ScreenerFilters): boolean {
+  if (f.sector && row.sector !== f.sector) return false;
+  if (f.industry && row.industry !== f.industry) return false;
+  if (f.marketCapMoreThan != null && (row.market_cap == null || row.market_cap < f.marketCapMoreThan)) return false;
+  if (f.marketCapLowerThan != null && (row.market_cap == null || row.market_cap > f.marketCapLowerThan)) return false;
+  if (f.priceMoreThan != null && (row.price == null || row.price < f.priceMoreThan)) return false;
+  if (f.priceLowerThan != null && (row.price == null || row.price > f.priceLowerThan)) return false;
+  if (f.betaMoreThan != null && (row.beta == null || row.beta < f.betaMoreThan)) return false;
+  if (f.betaLowerThan != null && (row.beta == null || row.beta > f.betaLowerThan)) return false;
+  if (f.dividendMoreThan != null && (row.last_annual_dividend == null || row.last_annual_dividend < f.dividendMoreThan)) return false;
+  if (f.dividendLowerThan != null && (row.last_annual_dividend == null || row.last_annual_dividend > f.dividendLowerThan)) return false;
+  if (f.volumeMoreThan != null && (row.volume == null || row.volume < f.volumeMoreThan)) return false;
+  if (f.exchange && row.exchange !== f.exchange) return false;
+  if (f.country && row.country !== f.country) return false;
+  if (f.isActivelyTrading != null && row.is_actively_trading !== f.isActivelyTrading) return false;
+  if (f.excludeFunds && (row.is_etf || row.is_fund)) return false;
+  return true;
 }
 
 function synthCurve(
@@ -10214,6 +10259,49 @@ export const mockApi = {
       peers,
       reason: peers.length ? null : "No peer data available for this symbol.",
     });
+  },
+
+  // Free-text name/ticker search over SCREENER_UNIVERSE (defined below, near
+  // seeded()). An honest empty result + reason when nothing matches -- never
+  // a fabricated hit.
+  async getSymbolSearch(query: string, limit?: number): Promise<SymbolSearchResponse> {
+    const q = query.trim().toLowerCase();
+    const results = q
+      ? SCREENER_UNIVERSE
+          .filter((r) => r.symbol.toLowerCase().includes(q) || (r.company_name ?? "").toLowerCase().includes(q))
+          .slice(0, limit ?? 20)
+          .map((r) => ({
+            symbol: r.symbol,
+            name: r.company_name,
+            currency: "USD",
+            exchange: r.exchange,
+            exchange_full_name: r.exchange_short_name,
+          }))
+      : [];
+    return delay<SymbolSearchResponse>({
+      query: query.trim(),
+      results,
+      reason: results.length ? null : "No matching symbols found.",
+    });
+  },
+
+  // Sector/industry/market-cap/price/beta/dividend/volume screener over
+  // SCREENER_UNIVERSE. An honest empty result + reason when a filter
+  // combination matches nothing.
+  async getScreenerResults(filters: ScreenerFilters): Promise<ScreenerResultsResponse> {
+    const results = SCREENER_UNIVERSE.filter((r) => matchesScreenerFilters(r, filters));
+    return delay<ScreenerResultsResponse>({
+      results,
+      reason: results.length ? null : "No symbols matched these filters.",
+    });
+  },
+
+  // Sector/industry enums derived from the SAME fixture universe (never a
+  // richer list than what the screener above can actually return).
+  async getScreenerFilterOptions(): Promise<ScreenerFilterOptions> {
+    const sectors = [...new Set(SCREENER_UNIVERSE.map((r) => r.sector).filter((s): s is string => !!s))].sort();
+    const industries = [...new Set(SCREENER_UNIVERSE.map((r) => r.industry).filter((s): s is string => !!s))].sort();
+    return delay<ScreenerFilterOptions>({ sectors, industries });
   },
 
   async getMacro(): Promise<MacroSnapshot> {

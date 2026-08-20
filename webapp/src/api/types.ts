@@ -301,6 +301,83 @@ export interface UniverseResponse {
   symbols: UniverseSymbol[];
 }
 
+/**
+ * One `GET /data/symbol-search` result row — mirrors
+ * `data.fmp_screener.search_symbols`'s reshaped dict exactly. Independent of
+ * the platform's tracked watchlist/pipeline universe (backed by FMP's real
+ * `/search-name`/`/search-symbol`). Any field FMP didn't return is `null`,
+ * never fabricated.
+ */
+export interface SymbolSearchResult {
+  symbol: string;
+  name: string | null;
+  currency: string | null;
+  exchange: string | null;
+  exchange_full_name: string | null;
+}
+
+export interface SymbolSearchResponse {
+  query: string;
+  results: SymbolSearchResult[];
+  reason: string | null;
+}
+
+/** All fields optional — only non-omitted ones are sent to `GET /data/screener`. */
+export interface ScreenerFilters {
+  sector?: string;
+  industry?: string;
+  marketCapMoreThan?: number;
+  marketCapLowerThan?: number;
+  priceMoreThan?: number;
+  priceLowerThan?: number;
+  betaMoreThan?: number;
+  betaLowerThan?: number;
+  dividendMoreThan?: number;
+  dividendLowerThan?: number;
+  volumeMoreThan?: number;
+  exchange?: string;
+  country?: string;
+  isActivelyTrading?: boolean;
+  excludeFunds?: boolean;
+  limit?: number;
+  page?: number;
+}
+
+/**
+ * One `GET /data/screener` result row — mirrors
+ * `data.fmp_screener.screen_companies`'s reshaped dict exactly (backed by
+ * FMP's real `/search-company-screener`). Any field FMP didn't return is
+ * `null`, never fabricated.
+ */
+export interface ScreenerResult {
+  symbol: string;
+  company_name: string | null;
+  market_cap: number | null;
+  sector: string | null;
+  industry: string | null;
+  beta: number | null;
+  price: number | null;
+  last_annual_dividend: number | null;
+  volume: number | null;
+  exchange: string | null;
+  exchange_short_name: string | null;
+  country: string | null;
+  is_etf: boolean | null;
+  is_fund: boolean | null;
+  is_actively_trading: boolean | null;
+}
+
+export interface ScreenerResultsResponse {
+  results: ScreenerResult[];
+  reason: string | null;
+}
+
+/** `GET /data/screener/filters`'s sector/industry enum lists for the filter dropdowns. */
+export interface ScreenerFilterOptions {
+  sectors: string[];
+  industries: string[];
+}
+
 /** One coverage-status bucket — mirrors data.portfolio_sync.CoverageStatus's values exactly. */
 export type CoverageStatus = "full" | "stale" | "quotes_only" | "equity_only" | "uncovered" | "unknown";
 

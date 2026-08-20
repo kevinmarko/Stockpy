@@ -841,3 +841,59 @@ def standard_deviation(symbol: str) -> Any:
     """Technical rolling standard deviation and realized volatility (``/standard-deviation``)."""
     return _fmp_get("standard-deviation", {"symbol": _sym(symbol)})
 
+
+def search_name(query: str, limit: Optional[int] = None) -> Any:
+    """Company-name search (``/search-name``). Returns a list of
+    ``{symbol, name, currency, exchangeFullName, exchange}`` — every exchange
+    variant of a matching name (e.g. searching "Apple" also returns its
+    Frankfurt/XETRA/Mexico listings alongside the primary NASDAQ ``AAPL``).
+    Verified live 2026-08 via an external FMP MCP connector (a real, working
+    FMP account) — NOT yet exercised through this repo's own ``_fmp_get``
+    throttle/retry/cooldown path or the operator's own ``FMP_API_KEY``/tier.
+    See ``docs/FMP_INTEGRATION.md`` §9."""
+    params: Dict[str, Any] = {"query": query}
+    if limit is not None:
+        params["limit"] = int(limit)
+    return _fmp_get("search-name", params)
+
+
+def search_symbol(query: str, limit: Optional[int] = None) -> Any:
+    """Stock ticker search (``/search-symbol``). Same response shape as
+    :func:`search_name`, matched against the symbol rather than the company
+    name. Same verification-status caveat as :func:`search_name`."""
+    params: Dict[str, Any] = {"query": query}
+    if limit is not None:
+        params["limit"] = int(limit)
+    return _fmp_get("search-symbol", params)
+
+
+def company_screener(**filters: Any) -> Any:
+    """Stock screener (``/search-company-screener``). Filters by sector,
+    industry, market cap, price, beta, dividend, volume, country, exchange,
+    ``isEtf``/``isFund``/``isActivelyTrading``, ``limit``/``page`` — pass any
+    of ``sector``, ``industry``, ``marketCapMoreThan``, ``marketCapLowerThan``,
+    ``priceMoreThan``, ``priceLowerThan``, ``betaMoreThan``, ``betaLowerThan``,
+    ``dividendMoreThan``, ``dividendLowerThan``, ``volumeMoreThan``,
+    ``volumeLowerThan``, ``country``, ``exchange``, ``isEtf``, ``isFund``,
+    ``isActivelyTrading``, ``limit``, ``page`` as keyword args; only
+    non-``None`` values are sent. Returns a list of ``{symbol, companyName,
+    marketCap, sector, industry, beta, price, lastAnnualDividend, volume,
+    exchange, exchangeShortName, country, isEtf, isFund, isActivelyTrading}``.
+    Same verification-status caveat as :func:`search_name`."""
+    params = {k: v for k, v in filters.items() if v is not None}
+    return _fmp_get("search-company-screener", params)
+
+
+def available_sectors() -> Any:
+    """Sector enum for the screener (``/available-sectors``), e.g.
+    ``[{"sector": "Technology"}, ...]``. Same verification-status caveat as
+    :func:`search_name`."""
+    return _fmp_get("available-sectors", {})
+
+
+def available_industries() -> Any:
+    """Industry enum for the screener (``/available-industries``), e.g.
+    ``[{"industry": "Semiconductors"}, ...]``. Same verification-status
+    caveat as :func:`search_name`."""
+    return _fmp_get("available-industries", {})
+

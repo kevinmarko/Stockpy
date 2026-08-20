@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
@@ -154,6 +154,7 @@ export function PaperBroker() {
   // (execution/fmp_paper_broker.py has no watchlist/universe gate) but the
   // UI never exposed.
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [quickTradeSymbol, setQuickTradeSymbol] = useState<string | null>(null);
   const [quickTradeQuote, setQuickTradeQuote] = useState<Quote | null>(null);
   const [quickTradeError, setQuickTradeError] = useState<string | null>(null);
@@ -204,6 +205,35 @@ export function PaperBroker() {
       setQuickTradeLoading(false);
     }
   };
+
+  // One-way, fire-and-forget handoff from webapp/src/screens/SymbolScreener.tsx
+  // -- the only cross-screen data-passing pattern already used in this
+  // codebase (matches Commands.tsx's `?builder=` param), so no new
+  // store/context is introduced. Each effect fires at most once per mount
+  // (a `useRef` guard, not the `searchParams` object itself, since a fresh
+  // `URLSearchParams` instance is constructed on every render and would
+  // otherwise refire the fetch/quote-lookup on every re-render).
+  const quickTradeHandoffDone = useRef(false);
+  useEffect(() => {
+    if (quickTradeHandoffDone.current) return;
+    const symbol = searchParams.get("quickTradeSymbol");
+    if (symbol) {
+      quickTradeHandoffDone.current = true;
+      void handleQuickTradeSubmit(symbol.trim().toUpperCase());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const scanSymbolsHandoffDone = useRef(false);
+  useEffect(() => {
+    if (scanSymbolsHandoffDone.current) return;
+    const list = searchParams.get("scanSymbols");
+    if (list) {
+      scanSymbolsHandoffDone.current = true;
+      setScanSymbolsInput(list);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleExecuteStrategyOptions = async () => {
     setExecStatus(null);
@@ -692,6 +722,8 @@ export function PaperBroker() {
             </div>
           </div>
           <SymbolInput
+            key={searchParams.get("quickTradeSymbol") ?? "quick-trade"}
+            initial={searchParams.get("quickTradeSymbol")?.trim().toUpperCase() ?? ""}
             label="Symbol"
             hint="Enter any ticker FMP can quote — not limited to your tracked watchlist."
             onSubmit={handleQuickTradeSubmit}
