@@ -3163,6 +3163,37 @@ def get_options_directive(symbol: str) -> str:
     except Exception as e:
         return f"Failed to build options directive for {symbol}: {str(e)}"
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def analyze_pairs_arbitrage(symbol_y: str, symbol_x: str) -> dict:
+    """
+    Analyzes a specific statistical arbitrage pair (Y, X) using the Kalman-filtered
+    mean-reversion engine. Returns spread z-score, half-life, cointegration p-value,
+    and a trade-signal verdict (ENTRY, EXIT, STOP_LOSS, CASH). Read-only; uses
+    live/cached intraday data but never executes orders.
+    """
+    from pairs_ondemand import analyze_pair
+    from data.market_data import get_provider
+    provider = get_provider()
+    try:
+        return analyze_pair(symbol_y, symbol_x, provider)
+    except Exception as e:
+        return {"error": str(e)}
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def scan_pairs_arbitrage() -> dict:
+    """
+    Scans the currently active watchlist/portfolio universe for cointegrated
+    statistical arbitrage pairs. Returns the top candidates ranked by cointegration
+    p-value. Read-only.
+    """
+    from pairs_ondemand import scan_pairs
+    from data.market_data import get_provider
+    provider = get_provider()
+    try:
+        return scan_pairs(provider)
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @mcp.tool(meta=_MACRO_RADAR_UI)
 def get_regime_status() -> str:

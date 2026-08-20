@@ -58,10 +58,16 @@ __all__ = [
 # Canonical pairs-trading rule thresholds — mirror the defaults in
 # signals.pairs_trading.generate_pairs_signals, gui/panels/pairs.py's module
 # constants, and reporting/pairs_snapshot.py's _ENTRY/_STOP/_EXIT/_ADF_EXIT.
-ENTRY_THRESHOLD = 2.0
+from validation.thresholds import (
+    PAIRS_ENTRY_Z_SCORE,
+    PAIRS_STOP_LOSS_Z_SCORE,
+    PAIRS_ADF_EXIT_PVALUE
+)
+
+ENTRY_THRESHOLD = PAIRS_ENTRY_Z_SCORE
 EXIT_THRESHOLD = 0.0
-STOP_LOSS_THRESHOLD = 4.0
-ADF_EXIT_THRESHOLD = 0.10
+STOP_LOSS_THRESHOLD = PAIRS_STOP_LOSS_Z_SCORE
+ADF_EXIT_THRESHOLD = PAIRS_ADF_EXIT_PVALUE
 MIN_HALF_LIFE_DAYS = 5
 MAX_HALF_LIFE_DAYS = 60
 ANALYZE_LOOKBACK_DAYS = 252
