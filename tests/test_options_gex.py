@@ -355,7 +355,133 @@ def test_calculate_gex_profile_empty_and_degenerate_degradation():
 
 
 # ---------------------------------------------------------------------------
-# 7. AST Import Safety Test (CONSTRAINT #1 & #3)
+# 7. get_options_gex_profile() Resolver -- Live Chain Shape Handling
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for a genuine bug (not a data-availability gap): the live
+# resolver's options-chain provider is `data.market_data.CompositeOptionsProvider`,
+# backed by yfinance's `Ticker.option_chain(expiration)`, which returns an `Options`
+# namedtuple carrying SEPARATE `.calls`/`.puts` DataFrames -- a shape
+# `_normalize_chain_data` has never understood (only a bare `pd.DataFrame` or a
+# `list`/`tuple` of dict-like records). Passing that namedtuple straight through
+# (the pre-fix behavior: `chain_map[str(exp)] = c`) silently produced an "Empty or
+# unparseable option chain data" diagnostic on every real, correctly-entitled,
+# non-empty chain fetch -- surfaced to the operator as "No real options chain data
+# available" even though the provider had real strikes/OI the whole time.
+
+class _FakeYFinanceOptions:
+    """Mimics yfinance's `Options` namedtuple shape: separate `.calls`/`.puts`
+    DataFrames (plus `.underlying`, unused here)."""
+
+    def __init__(self, calls: pd.DataFrame, puts: pd.DataFrame):
+        self.calls = calls
+        self.puts = puts
+        self.underlying = {}
+
+
+def _make_fake_yf_chain(spot: float = 500.0) -> _FakeYFinanceOptions:
+    calls = pd.DataFrame({
+        "contractSymbol": ["SYN260918C00490000", "SYN260918C00500000", "SYN260918C00510000"],
+        "strike": [490.0, 500.0, 510.0],
+        "openInterest": [1000, 3000, 1500],
+        "volume": [50, 150, 80],
+        "impliedVolatility": [0.22, 0.20, 0.19],
+    })
+    puts = pd.DataFrame({
+        "contractSymbol": ["SYN260918P00490000", "SYN260918P00500000", "SYN260918P00510000"],
+        "strike": [490.0, 500.0, 510.0],
+        "openInterest": [4000, 2000, 800],
+        "volume": [200, 100, 40],
+        "impliedVolatility": [0.24, 0.21, 0.19],
+    })
+    return _FakeYFinanceOptions(calls, puts)
+
+
+def test_flatten_provider_chain_entry_yfinance_shaped_namedtuple():
+    """The core bug fix: a yfinance-shaped Options object (.calls/.puts DataFrames)
+    must flatten into tagged CALL/PUT records, not silently vanish."""
+    from pilots.options_gex import _flatten_provider_chain_entry
+
+    chain_obj = _make_fake_yf_chain()
+    records = _flatten_provider_chain_entry(chain_obj, "2026-09-18")
+
+    assert len(records) == 6  # 3 calls + 3 puts
+    call_records = [r for r in records if r["option_type"] == "CALL"]
+    put_records = [r for r in records if r["option_type"] == "PUT"]
+    assert len(call_records) == 3
+    assert len(put_records) == 3
+    assert all(r["expiration"] == "2026-09-18" for r in records)
+    # Original yfinance column names (openInterest, impliedVolatility) survive
+    # untouched -- _normalize_chain_data is what maps those, not this helper.
+    assert call_records[0]["openInterest"] == 1000
+    assert call_records[0]["strike"] == 490.0
+
+
+def test_flatten_provider_chain_entry_dataframe_and_list_and_none():
+    from pilots.options_gex import _flatten_provider_chain_entry
+
+    # Bare DataFrame (already-flat shape) -- tolerated, expiration back-filled.
+    df = pd.DataFrame({
+        "strike": [100.0],
+        "option_type": ["CALL"],
+        "open_interest": [10],
+    })
+    df_records = _flatten_provider_chain_entry(df, "2026-09-18")
+    assert len(df_records) == 1
+    assert df_records[0]["expiration"] == "2026-09-18"
+
+    # List of dict records -- tolerated.
+    list_records = _flatten_provider_chain_entry(
+        [{"strike": 100.0, "option_type": "PUT", "open_interest": 5}], "2026-09-18"
+    )
+    assert len(list_records) == 1
+
+    # None / empty DataFrame / empty list -- degrade to [], never raise.
+    assert _flatten_provider_chain_entry(None, "2026-09-18") == []
+    assert _flatten_provider_chain_entry(pd.DataFrame(), "2026-09-18") == []
+    assert _flatten_provider_chain_entry([], "2026-09-18") == []
+
+
+def test_get_options_gex_profile_resolves_real_gex_from_yfinance_shaped_chain(monkeypatch):
+    """End-to-end regression: with a live spot quote AND a live yfinance-shaped
+    options chain both available, get_options_gex_profile() must compute a real,
+    non-degenerate GEX profile -- not the pre-fix "Empty or unparseable option
+    chain data" degradation that presented real market structure as unavailable."""
+    from unittest.mock import MagicMock, patch
+    from pilots.options_gex import get_options_gex_profile
+
+    mock_quote = MagicMock()
+    mock_quote.price = 500.0
+    mock_market_provider = MagicMock()
+    mock_market_provider.get_latest_quote.return_value = mock_quote
+
+    mock_options_provider = MagicMock()
+    mock_options_provider.fetch_options_chain.side_effect = (
+        lambda symbol, expiration=None: (
+            ["2026-09-18"] if expiration is None else _make_fake_yf_chain()
+        )
+    )
+
+    with patch("data.market_data.get_provider", return_value=mock_market_provider), \
+         patch("data.market_data.get_options_provider", return_value=mock_options_provider):
+        result = get_options_gex_profile("SPY")
+
+    assert result["spot_price_source"] == "live"
+    assert result["chain_source"] == "live"
+    assert result["diagnostics"].get("warning") is None
+    assert result["total_open_interest"] == 1000 + 3000 + 1500 + 4000 + 2000 + 800
+    # A real chain around spot=500 with meaningful OI on both sides must resolve real
+    # (non-degenerate) gamma walls and a non-zero Net GEX -- the exact symptom the
+    # pre-fix bug produced as "—" / "+$0.0M" despite genuine, correctly-entitled
+    # chain data being available the whole time.
+    assert result["call_wall_strike"] is not None
+    assert result["put_wall_strike"] is not None
+    assert result["net_gex"] != 0.0
+    assert len(result["strikes"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# 8. AST Import Safety Test (CONSTRAINT #1 & #3)
 # ---------------------------------------------------------------------------
 
 def test_options_gex_ast_import_safety():

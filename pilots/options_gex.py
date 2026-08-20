@@ -1080,6 +1080,68 @@ def generate_synthetic_options_chain(
     return chain
 
 
+def _flatten_provider_chain_entry(chain_obj: Any, expiration: str) -> List[Dict[str, Any]]:
+    """Normalizes ONE per-expiration options-chain provider response into a flat list
+    of dict records tagged with `option_type` + `expiration`, ready for
+    `_normalize_chain_data`.
+
+    `data.market_data.CompositeOptionsProvider.fetch_options_chain(symbol, expiration)`
+    is backed by yfinance's `Ticker.option_chain(expiration)`, which returns an
+    `Options` namedtuple carrying SEPARATE `.calls`/`.puts` DataFrames (neither a bare
+    `pd.DataFrame` nor a `list`/`tuple` of records) -- a shape `_normalize_chain_data`
+    has never understood (it only accepts a `pd.DataFrame` or a `list`/`tuple`,
+    `else: return []`). Passing that namedtuple straight through silently produced an
+    "Empty or unparseable option chain data" diagnostic on every real (non-empty,
+    correctly-entitled) chain fetch -- this is the fix, not a `_normalize_chain_data`
+    contract change, so every existing caller of that function is unaffected.
+
+    Also tolerates a bare DataFrame or a list of dict-like records so a future
+    options-chain provider swap (e.g. FMP) degrades gracefully rather than silently
+    re-breaking this path. Never raises (CONSTRAINT #6) -- any unrecognized shape
+    degrades to an empty list.
+    """
+    if chain_obj is None:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    try:
+        calls_df = getattr(chain_obj, "calls", None)
+        puts_df = getattr(chain_obj, "puts", None)
+        if isinstance(calls_df, pd.DataFrame) or isinstance(puts_df, pd.DataFrame):
+            # yfinance-shaped: Options(calls=DataFrame, puts=DataFrame, underlying=...)
+            if isinstance(calls_df, pd.DataFrame) and not calls_df.empty:
+                for rec in calls_df.to_dict(orient="records"):
+                    rec["option_type"] = "CALL"
+                    rec.setdefault("expiration", expiration)
+                    out.append(rec)
+            if isinstance(puts_df, pd.DataFrame) and not puts_df.empty:
+                for rec in puts_df.to_dict(orient="records"):
+                    rec["option_type"] = "PUT"
+                    rec.setdefault("expiration", expiration)
+                    out.append(rec)
+            return out
+
+        if isinstance(chain_obj, pd.DataFrame):
+            if chain_obj.empty:
+                return []
+            for rec in chain_obj.to_dict(orient="records"):
+                rec.setdefault("expiration", expiration)
+                out.append(rec)
+            return out
+
+        if isinstance(chain_obj, (list, tuple)):
+            for item in chain_obj:
+                if isinstance(item, dict):
+                    d = dict(item)
+                    d.setdefault("expiration", expiration)
+                    out.append(d)
+            return out
+    except Exception:
+        return []
+
+    return out
+
+
 def get_options_gex_profile(
     symbol: str,
     spot_price: Optional[float] = None,
@@ -1130,13 +1192,12 @@ def get_options_gex_profile(
             if options_provider is not None:
                 expirations = options_provider.fetch_options_chain(clean_sym)
                 if expirations and isinstance(expirations, list):
-                    chain_map = {}
+                    flat_records: List[Dict[str, Any]] = []
                     for exp in expirations[:5]:
                         c = options_provider.fetch_options_chain(clean_sym, exp)
-                        if c:
-                            chain_map[str(exp)] = c
-                    if chain_map:
-                        chain_data = chain_map
+                        flat_records.extend(_flatten_provider_chain_entry(c, str(exp)))
+                    if flat_records:
+                        chain_data = flat_records
         except Exception:
             chain_data = None
 
