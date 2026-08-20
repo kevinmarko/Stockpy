@@ -134,13 +134,13 @@ and invite questions before writing the file.
    `BUY` action is information, not consent — this step only runs when the
    operator explicitly names which symbol(s) to start tracking (e.g. "track
    YMM"), never automatically for every high-conviction hit.
-   1. Check whether the `WATCHLIST` env var is set (non-empty) in `.env` /
-      `os.environ`. `main._load_watchlist()` gives `WATCHLIST` precedence over
-      `watchlist.txt` — if it's set, appending to `watchlist.txt` would be
-      silently ineffective. Tell the operator, and ask whether to (a) append
-      to `WATCHLIST` instead (comma-separated) or (b) clear `WATCHLIST` so
-      `watchlist.txt` takes effect. Don't pick for them.
-   2. Otherwise, read `watchlist.txt` (create it if missing). Append the named
+   1. `main._load_watchlist()` unions BOTH the `WATCHLIST` env var and
+      `watchlist.txt`, deduped — its own docstring states plainly that
+      "neither one takes precedence over the other." So appending to
+      `watchlist.txt` is always effective regardless of whether `WATCHLIST`
+      is also set; there's no precedence conflict to check or ask the
+      operator to resolve here.
+   2. Read `watchlist.txt` (create it if missing). Append the named
       ticker(s), one per line, uppercase, skipping any already present
       (case-insensitive match against existing non-comment lines) — never
       duplicate. Add a `# added via agentic-discovery on <UTC date>` comment
