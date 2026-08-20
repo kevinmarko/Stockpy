@@ -27,7 +27,19 @@ export const SmartOrderRouterView: React.FC<SmartOrderRouterViewProps> = ({
   const [selectedRoute, setSelectedRoute] = useState<"COB_NET_PACKAGE" | "LEG_PASSIVE_FIRST" | "SPLIT_DIRECT">("LEG_PASSIVE_FIRST");
   const [routingStatus, setRoutingStatus] = useState<string | null>(null);
 
-  // Generate legs based on preset and spot price
+  // Generate legs based on preset and spot price.
+  //
+  // The bid/ask/mid premiums below are illustrative SEED values for each
+  // spread preset, not live option quotes -- this component has no options-
+  // chain/quote fetch of its own to price a specific strike (unlike, say,
+  // GexProfileView, which reads a real spot_price back from its own server
+  // fetch). These legs are only the INPUT the router then sends to the real
+  // backend analysis (api.analyzeOptionsRouting / api.simulateOptionsLegging
+  // below), which is what actually prices the routing decision and hazard
+  // stats the panel displays -- wiring real per-strike live quotes here would
+  // mean adding a new options-chain lookup this component doesn't have today,
+  // which is out of scope for this fix. Kept deliberately explicit so a future
+  // reader doesn't mistake these hardcoded numbers for real market data.
   const getPresetLegs = (preset: string, spot: number): SorLeg[] => {
     const roundedSpot = Math.round(spot);
     switch (preset) {
