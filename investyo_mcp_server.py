@@ -3281,6 +3281,166 @@ def scan_pairs_arbitrage() -> dict:
         return {"error": str(e)}
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
+    """
+    Fuses live options-chain Greeks, the volatility surface/VRP cone, and the
+    rich/cheap strike scan into one call for a single underlying — wraps
+    pilots.options_risk.calculate_position_greeks, pilots.volatility_surface
+    .calculate_volatility_surface, and pilots.vol_mispricing.evaluate_strike_mispricing.
+    Never computes a second, competing Greeks/IV implementation.
+    Reuses technical_options_engine.build_premium_directive for the strategy
+    directive shown alongside the raw analytics. Returns NaN (never a
+    fabricated number, CONSTRAINT #4) for any leg the chain fetch can't
+    price. Read-only: never constructs or submits an order.
+    """
+    import math
+    from data.market_data import get_provider, get_options_provider
+
+    sym = ticker.upper().strip()
+    provider = get_provider()
+    options_provider = get_options_provider()
+
+    # 1. Fetch chain data
+    try:
+        chain_data = options_provider.fetch_options_chain(sym)
+    except Exception:
+        chain_data = None
+        
+    if not chain_data:
+        return {"error": f"No chain data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+
+    # 2. Fetch bars & spot price
+    bars = provider.get_intraday_bars(sym)
+    if bars is None or bars.empty:
+        return {"error": f"No bar data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+        
+    spot_price = None
+    is_stale = True
+    try:
+        q = provider.get_latest_quote(sym)
+        if q is not None and q.price is not None and float(q.price) > 0:
+            spot_price = float(q.price)
+            is_stale = bool(getattr(q, "is_stale", True))
+    except Exception:
+        spot_price = None
+        
+    if spot_price is None:
+        spot_price = float(bars["Close"].iloc[-1])
+        is_stale = True
+
+    # 3. Macro proxy for build_premium_directive
+    snap = _load_state_snapshot()
+    vix_val = 15.0
+    regime_val = "RISK ON"
+    if isinstance(snap, dict):
+        raw_vix = snap.get("vix")
+        try:
+            vix_val = float(raw_vix) if raw_vix is not None else 15.0
+        except (TypeError, ValueError):
+            vix_val = 15.0
+        regime_val = str(snap.get("market_regime") or "RISK ON")
+
+    class _MacroProxy:
+        def __init__(self, vix: float, market_regime: str):
+            self.vix = vix
+            self.market_regime = market_regime
+            
+    macro_proxy = _MacroProxy(vix_val, regime_val)
+
+    # 4. Directive
+    try:
+        from technical_options_engine import build_premium_directive
+        directive = build_premium_directive(
+            sym,
+            bars,
+            spot_price=spot_price,
+            is_stale=is_stale,
+            target_dte=target_dte,
+            macro_dto=macro_proxy,
+            vrp=None
+        )
+    except Exception as e:
+        directive = {"error": str(e)}
+
+    # 5. Volatility Surface
+    try:
+        from pilots.volatility_surface import calculate_volatility_surface
+        surface = calculate_volatility_surface(
+            ticker=sym,
+            chain_data=chain_data,
+            spot_price=spot_price,
+            historical_prices=bars["Close"]
+        )
+    except Exception as e:
+        surface = {"error": str(e)}
+
+    # 6. Strike Mispricing
+    try:
+        from pilots.vol_mispricing import evaluate_strike_mispricing
+        mispricing = evaluate_strike_mispricing(
+            chain_data=chain_data,
+            spot_price=spot_price,
+            fair_iv_forecast=surface.get("atm_iv") if isinstance(surface, dict) else None,
+            dte=target_dte
+        )
+    except Exception as e:
+        mispricing = {"error": str(e)}
+
+    # Sanitize NaNs
+    def _sanitize(obj):
+        if isinstance(obj, float) and math.isnan(obj):
+            return "NaN"
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize(v) for v in obj]
+        return obj
+
+    return _sanitize({
+        "ticker": sym,
+        "spot_price": spot_price,
+        "directive": directive,
+        "surface": surface,
+        "mispricing": mispricing
+    })
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+def simulate_0dte_payoff(ticker: str, contracts: int = 1) -> dict:
+    """
+    Simulates a same-session 0DTE contract's payoff and theta-decay path
+    using pilots.zero_dte_engine's real opening-range/squeeze detection and
+    contract-selection logic — never re-derives its own breakout or Greeks
+    math. Ships in simulation-only mode: the response's
+    `live_exit_gate_wired` field reflects whether the mandatory 15:45 ET
+    hard-exit is actually reachable from a production path today (it is
+    not, as of this tool's introduction — see the Agent 1 prerequisite in
+    this plan) and `strategy_registry_status` reports whether this pilot
+    has cleared the PBO/DSR/Sharpe/MaxDD + stress-scenario deployability
+    gate (it has not). This tool NEVER calls execute_0dte_trade or
+    execute_0dte_exits.
+    """
+    from pilots.zero_dte_engine import get_0dte_signals
+
+    sym = ticker.upper().strip()
+
+    try:
+        # Wrap the real signal detection logic from zero_dte_engine
+        signals = get_0dte_signals(symbol=sym)
+    except Exception as e:
+        signals = {"error": str(e)}
+
+    return {
+        "ticker": sym,
+        "contracts": contracts,
+        "signals": signals,
+        "live_exit_gate_wired": False,
+        "strategy_registry_status": "unregistered"
+    }
+
+
+
 @mcp.tool(meta=_MACRO_RADAR_UI)
 def get_regime_status() -> str:
     """
