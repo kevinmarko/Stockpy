@@ -11,6 +11,7 @@ from data.paper_account_store import PaperAccountStore, PaperPosition
 from pilots.options_hedging import (
     calculate_delta_hedge_order,
     execute_delta_hedge,
+    get_delta_hedge_preview,
 )
 from settings import settings
 
@@ -220,6 +221,103 @@ def test_execute_delta_hedge_no_alert_within_tolerance():
 
     assert res["hedged"] is False
     mock_dispatch.assert_not_called()
+
+
+def test_execute_delta_hedge_refuses_when_spy_spot_unavailable():
+    """execute_delta_hedge must refuse (ok=False) rather than fabricate a SPY spot
+    price when the live quote lookup fails or returns <= 0 (CONSTRAINT #4) -- a
+    fabricated price would be written into the real paper-account ledger as
+    fill_price. Mirrors get_delta_hedge_preview's identical refusal below.
+    """
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+
+    with mock.patch("pilots.price_provider.get_current_price", return_value=0.0):
+        res = execute_delta_hedge(
+            store=store,
+            portfolio_greeks={"beta_weighted_delta_spy": 100.0},
+            spy_spot=None,
+            tolerance_band_shares=25.0,
+        )
+
+    assert res["ok"] is False
+    assert res["hedged"] is False
+    assert res["reason"] == "SPY spot price unavailable"
+    assert res["order"] is None
+    assert res["fill"] is None
+
+    # No fabricated fill was ever written to the ledger.
+    assert store.get_open_positions() == []
+
+
+def test_get_delta_hedge_preview_refuses_when_spy_spot_unavailable():
+    """Regression test: get_delta_hedge_preview() must NOT fall back to a
+    hardcoded spy_spot=500.0 when the live SPY quote lookup fails or returns
+    <= 0. It must instead degrade honestly (CONSTRAINT #4) -- available=False,
+    every Greek/hedge field that would be derived from the fabricated price is
+    None, and spy_spot itself is None -- rather than silently returning a
+    plausible-but-fake hedge recommendation.
+    """
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+
+    with mock.patch("pilots.price_provider.get_current_price", return_value=0.0):
+        preview = get_delta_hedge_preview(
+            store=store,
+            portfolio_greeks={"beta_weighted_delta_spy": 100.0},
+            spy_spot=None,
+            tolerance_band_shares=25.0,
+        )
+
+    assert preview["available"] is False
+    assert preview["spy_spot"] is None
+    assert preview["net_dollar_delta"] is None
+    assert preview["beta_weighted_delta_spy"] is None
+    assert preview["target_hedge_shares"] is None
+    assert preview["action"] == "HOLD"
+    assert preview["shares"] == 0.0
+    assert preview["required_action"] is False
+    assert preview["reason"] == "SPY spot price unavailable"
+    # The old hardcoded fallback -- must never appear anywhere in the response.
+    assert 500.0 not in preview.values()
+
+
+def test_get_delta_hedge_preview_refuses_when_price_lookup_raises():
+    """Same refusal when the price provider raises outright (e.g. FMP_API_KEY
+    missing / quote provider hiccup), not just when it returns a non-positive
+    price.
+    """
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+
+    with mock.patch(
+        "pilots.price_provider.get_current_price", side_effect=RuntimeError("boom")
+    ):
+        preview = get_delta_hedge_preview(
+            store=store,
+            portfolio_greeks={"beta_weighted_delta_spy": 100.0},
+            spy_spot=None,
+            tolerance_band_shares=25.0,
+        )
+
+    assert preview["available"] is False
+    assert preview["spy_spot"] is None
+
+
+def test_get_delta_hedge_preview_available_when_spy_spot_provided():
+    """Sanity check: when a real spy_spot is supplied (or resolvable), the
+    preview is available=True and carries real, non-None numbers -- the
+    refusal path above only engages on an actual lookup failure.
+    """
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    preview = get_delta_hedge_preview(
+        store=store,
+        portfolio_greeks={"beta_weighted_delta_spy": 100.0},
+        spy_spot=500.0,
+        tolerance_band_shares=25.0,
+    )
+
+    assert preview["available"] is True
+    assert preview["spy_spot"] == 500.0
+    assert preview["action"] == "SELL"
+    assert preview["required_action"] is True
 
 
 def test_options_hedging_ast_import_safety():

@@ -98,9 +98,32 @@ def get_delta_hedge_preview(
         try:
             from pilots.price_provider import get_current_price
             resolved_price = get_current_price("SPY")
-            spy_spot = resolved_price if resolved_price > 0 else 500.0
+            spy_spot = resolved_price if resolved_price and resolved_price > 0 else None
         except Exception:
-            spy_spot = 500.0
+            spy_spot = None
+
+        if spy_spot is None:
+            # No honest SPY price available -- refuse to fabricate one
+            # (CONSTRAINT #4), mirroring execute_delta_hedge's identical
+            # refusal below. A fabricated 500.0 here used to silently drive
+            # beta_weighted_delta_spy/net_dollar_delta/target_hedge_shares
+            # and get echoed back as `spy_spot`, rendering a plausible-but-
+            # fake hedge recommendation on the Paper Broker screen instead
+            # of an honest "unavailable" state.
+            return {
+                "symbol": "SPY",
+                "available": False,
+                "net_dollar_delta": None,
+                "beta_weighted_delta_spy": None,
+                "target_hedge_shares": None,
+                "tolerance_band_shares": tolerance_band_shares,
+                "action": "HOLD",
+                "shares": 0.0,
+                "required_action": False,
+                "reason": "SPY spot price unavailable",
+                "message": "Delta hedge preview unavailable: no live SPY quote available (refusing to fabricate a price).",
+                "spy_spot": None,
+            }
 
     if portfolio_greeks is None and store is not None:
         try:
@@ -125,6 +148,7 @@ def get_delta_hedge_preview(
     if order is None:
         return {
             "symbol": "SPY",
+            "available": True,
             "net_dollar_delta": round(net_dollar_delta, 2),
             "beta_weighted_delta_spy": round(beta_delta, 2),
             "target_hedge_shares": round(-beta_delta, 2),
@@ -138,6 +162,7 @@ def get_delta_hedge_preview(
     else:
         preview = {
             "symbol": "SPY",
+            "available": True,
             "net_dollar_delta": round(net_dollar_delta, 2),
             "beta_weighted_delta_spy": round(beta_delta, 2),
             "target_hedge_shares": round(order["shares_needed"], 2),
