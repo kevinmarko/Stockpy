@@ -2895,6 +2895,89 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
 # markdown plus a compact machine-readable JSON block (real values only; NaN/None
 # serialized as null, never fabricated).
 
+@mcp.tool()
+def calculate_margin_kelly_size(
+    win_prob: float, 
+    payoff_ratio: float, 
+    margin_requirement: float = 1.0, 
+    kelly_fraction: float = 0.5, 
+    cap: float = 0.20
+) -> str:
+    """
+    Calculate Kelly criterion-based position sizing and adjust it for margin requirements.
+    This tool reuses the existing Kelly logic and returns a theoretical sizing recommendation.
+    READ-ONLY: This is a theoretical calculation and does NOT imply or perform a live 
+    buying-power or margin check against the broker.
+    """
+    import json
+    import math
+
+    try:
+        from sizing.kelly import fractional_kelly
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        # Clean inputs
+        p = _num(win_prob)
+        b = _num(payoff_ratio)
+        m = _num(margin_requirement)
+        f = _num(kelly_fraction)
+        c = _num(cap)
+
+        # Fallbacks for missing/invalid non-core inputs
+        if m is None or m <= 0:
+            m = 1.0
+        if f is None or f <= 0:
+            f = 0.5
+        if c is None or c <= 0:
+            c = 0.20
+
+        # Kelly calculation
+        kelly_size = fractional_kelly(p=p, b=b, fraction=f, cap=c)
+        kelly_size = _num(kelly_size)
+
+        # Margin adjustment
+        cash_required_pct = None
+        if kelly_size is not None and m is not None:
+            cash_required_pct = kelly_size * m
+
+        lines = ["# Kelly Sizing & Margin Recommendation\n"]
+        lines.append(f"> **Disclaimer**: This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker.\n")
+        lines.append(f"- **Win Probability**: {p:.4f}" if p is not None else "- **Win Probability**: N/A")
+        lines.append(f"- **Payoff Ratio**: {b:.4f}" if b is not None else "- **Payoff Ratio**: N/A")
+        lines.append(f"- **Kelly Fraction**: {f:.4f}")
+        lines.append(f"- **Cap**: {c:.4f}")
+        lines.append(f"- **Margin Requirement**: {m:.4f}")
+        lines.append("")
+        lines.append(f"- **Recommended Position Size (Notional %)**: {kelly_size:.4f}" if kelly_size is not None else "- **Recommended Position Size (Notional %)**: N/A")
+        lines.append(f"- **Required Margin Cash %**: {cash_required_pct:.4f}" if cash_required_pct is not None else "- **Required Margin Cash %**: N/A")
+
+        payload = {
+            "inputs": {
+                "win_prob": p,
+                "payoff_ratio": b,
+                "margin_requirement": m,
+                "kelly_fraction": f,
+                "cap": c
+            },
+            "outputs": {
+                "recommended_position_pct": kelly_size,
+                "required_margin_cash_pct": cash_required_pct,
+                "disclaimer": "This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker."
+            }
+        }
+
+        return "\n".join(lines) + "\n\n```json\n" + json.dumps(payload, indent=2) + "\n```\n\n"
+    except Exception as e:
+        return f"Error calculating margin Kelly size: {e}"
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def check_overnight_liquidity(symbol: str) -> str:
