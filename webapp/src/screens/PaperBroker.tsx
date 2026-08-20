@@ -46,6 +46,40 @@ function CoreSectionError({ label, error }: { label: string; error: string }) {
   );
 }
 
+// --- Options-desk panel spot-price defaults --------------------------------
+// SmartOrderRouterView, GexProfileView, LobDepthView, and MarketMakerAgentView
+// below used to be passed `spotPrice={account.data?.equity ? 546.50 : 546.50}`
+// -- a dead ternary that always evaluated to the same literal regardless of
+// its condition (a live-quote wire-up that was started and abandoned; the
+// account's equity was never actually a SPY quote). Per-panel investigation:
+//   - GexProfileView already prefers its OWN server-fetched `data.spot_price`
+//     -- this prop is only a placeholder shown before that first fetch resolves.
+//   - LobDepthView doesn't read this prop at all (destructured as `_spotPrice`
+//     inside the component) -- its LOB queue simulation is fully server-side.
+//   - MarketMakerAgentView lets the operator switch symbols (SPY/QQQ/NVDA/...)
+//     but this screen has only one spot value to offer, which would be wrong
+//     for every symbol except SPY -- wiring a real per-symbol quote belongs in
+//     that component itself, not here.
+//   - SmartOrderRouterView is SPY-only and DOES forward this value to the
+//     backend routing/legging simulation, so a real live quote would genuinely
+//     improve it -- but this screen has no live-tick feed already open, and
+//     opening a persistent per-symbol WebSocket (see hooks/useLiveTick.ts) just
+//     to seed one collapsible desk panel is a separate, larger change than this
+//     fix.
+// None of this is live pricing -- it's a UI seed/default the panels use (or
+// ignore) while showing their own real, server-computed numbers. Named as a
+// constant instead of a fake conditional so a future reader doesn't mistake it
+// for a wire-up in progress.
+const DEFAULT_DESK_SPOT_PRICE = 546.5;
+
+// GammaScalperView seeds its own fully-editable spot/strike simulation inputs
+// from this value (the operator can change both before running the sim) -- a
+// starting default, not a live price display. Same dead-ternary fix as
+// DEFAULT_DESK_SPOT_PRICE above; kept as its own distinct constant (505.20 vs.
+// 546.50) to preserve today's exact default rather than silently unifying two
+// previously-independent literals.
+const DEFAULT_GAMMA_SCALPER_SPOT_PRICE = 505.2;
+
 export function PaperBroker() {
   const account = useApi(() => api.getPaperBrokerAccount());
   const positions = useApi(() => api.getPaperBrokerPositions());
@@ -623,7 +657,7 @@ export function PaperBroker() {
         {showSor && (
           <SmartOrderRouterView
             initialSymbol="SPY"
-            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            spotPrice={DEFAULT_DESK_SPOT_PRICE}
             onClose={() => setShowSor(false)}
           />
         )}
@@ -632,7 +666,7 @@ export function PaperBroker() {
         {showGex && (
           <GexProfileView
             initialSymbol="SPY"
-            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            spotPrice={DEFAULT_DESK_SPOT_PRICE}
             onClose={() => setShowGex(false)}
           />
         )}
@@ -641,7 +675,7 @@ export function PaperBroker() {
         {showLob && (
           <LobDepthView
             initialSymbol="SPY"
-            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            spotPrice={DEFAULT_DESK_SPOT_PRICE}
             onClose={() => setShowLob(false)}
           />
         )}
@@ -658,7 +692,7 @@ export function PaperBroker() {
         {showMarketMaker && (
           <MarketMakerAgentView
             initialSymbol="SPY"
-            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            spotPrice={DEFAULT_DESK_SPOT_PRICE}
             onClose={() => setShowMarketMaker(false)}
           />
         )}
@@ -756,7 +790,7 @@ export function PaperBroker() {
 
         {/* Gamma Scalping Simulator */}
         {showGammaScalper && (
-          <GammaScalperView initialSymbol="SPY" spotPrice={account.data?.equity ? 505.20 : 505.20} onClose={() => setShowGammaScalper(false)} />
+          <GammaScalperView initialSymbol="SPY" spotPrice={DEFAULT_GAMMA_SCALPER_SPOT_PRICE} onClose={() => setShowGammaScalper(false)} />
         )}
 
         {/* Volatility Surface Drawer/Section */}
