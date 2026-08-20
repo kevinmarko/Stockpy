@@ -5075,7 +5075,11 @@ export interface AlmgrenChrissTrajectoryPoint {
   step: number;
   shares_remaining: number;
   trade_size: number;
-  expected_price: number;
+  // Null when no live quote was available for the requested symbol -- the
+  // impact-adjusted price is never fabricated off a placeholder base price
+  // (CONSTRAINT #4). See `spot_price`/`spot_price_reason` on the parent
+  // response for why.
+  expected_price: number | null;
 }
 
 export interface AlmgrenChrissOptimizeResponse {
@@ -5085,6 +5089,11 @@ export interface AlmgrenChrissOptimizeResponse {
   expected_shortfall: number;
   variance: number;
   half_life: number;
+  // Real current spot price used as the base for every trajectory point's
+  // `expected_price`; null when no live quote was available for `symbol`
+  // (see `spot_price_reason` for why).
+  spot_price?: number | null;
+  spot_price_reason?: string | null;
   as_of?: string;
 }
 

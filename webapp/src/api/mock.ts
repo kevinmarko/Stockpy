@@ -10952,6 +10952,8 @@ export const mockApi = {
       expected_shortfall: expectedShortfall,
       variance: variance,
       half_life: halfLife,
+      spot_price: 100.0,
+      spot_price_reason: null,
       as_of: new Date().toISOString(),
     }, 400);
   },

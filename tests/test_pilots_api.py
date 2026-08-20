@@ -7063,6 +7063,60 @@ class TestFixGatewaySessionEndpoints:
         assert "Heartbeat" in body["message"]
         assert body["session_state"] == "ACTIVE"
         assert "round_trip_ms" in body
+        # Real measurement, not the fixed sentinel this endpoint used to return
+        # for every call regardless of how long the round trip actually took.
+        assert isinstance(body["round_trip_ms"], (int, float))
+        assert body["round_trip_ms"] >= 0.0
+
+    def test_post_fix_session_test_request_round_trip_reflects_real_elapsed_time(self):
+        """`round_trip_ms` must be computed from real elapsed wall-clock time
+        (CONSTRAINT #4), not the old hardcoded `1.25` constant -- proven by
+        injecting a real, measurable `time.sleep()` into the session's own
+        `simulate_receive` call (this repo's established pattern for
+        timing-sensitive tests, see `tests/test_market_data.py`) and
+        asserting the returned value reflects it. This deliberately does NOT
+        try to fully control `time.perf_counter()` globally, since
+        ASGI/Starlette internals make their own untracked calls to it during
+        a request."""
+        import time as time_module
+
+        from execution.fix_gateway import get_global_fix_session
+
+        session = get_global_fix_session()
+        real_simulate_receive = session.simulate_receive
+
+        def _make_slow_simulate_receive(delay_s):
+            def _fn(*args, **kwargs):
+                time_module.sleep(delay_s)
+                return real_simulate_receive(*args, **kwargs)
+            return _fn
+
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+                mock.patch.object(session, "simulate_receive", side_effect=_make_slow_simulate_receive(0.05)):
+            resp = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={"test_req_id": "TEST-TIMING-01"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Must reflect (at least most of) the injected 50ms delay -- a
+        # hardcoded 1.25 could never do this.
+        assert body["round_trip_ms"] >= 0.05 * 1000 * 0.8
+        assert body["round_trip_ms"] != 1.25
+
+        # A LONGER injected delay must produce a LARGER round_trip_ms --
+        # proving this isn't a constant in disguise.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
+                mock.patch.object(session, "simulate_receive", side_effect=_make_slow_simulate_receive(0.15)):
+            resp2 = client.post(
+                "/pilots/execution/fix/session/test-request",
+                json={"test_req_id": "TEST-TIMING-02"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp2.status_code == 200
+        body2 = resp2.json()
+        assert body2["round_trip_ms"] > body["round_trip_ms"]
 
     def test_post_fix_session_reset_seq_hard_and_gap_fill(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
