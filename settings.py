@@ -1365,6 +1365,12 @@ class Settings(BaseSettings):
             "(0 = MARKET orders; >0 = LIMIT orders, price resolved downstream)."
         ),
     )
+    # Heuristic multiplier used by the check_overnight_liquidity MCP tool to approximate
+    # depth notional from Average Daily Volume (ADV) in the absence of real Level-2 data.
+    OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC: float = Field(
+        default=0.01,
+        description="Heuristic multiplier (e.g. 0.01 = 1% ADV) to approximate overnight depth notional.",
+    )
     # execution/compose.py (cross-Pilot + advisory queue composer) reads a
     # per-source JSON file (output/queue_sources/<source_id>.json) for the
     # advisory pipeline and for every actively-followed Pilot. A follow's

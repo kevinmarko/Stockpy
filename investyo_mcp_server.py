@@ -2896,6 +2896,92 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
 # serialized as null, never fabricated).
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def check_overnight_liquidity(symbol: str) -> str:
+    """
+    Returns an approximation of overnight liquidity based on Top-of-Book spread
+    and Average Daily Volume. Explicitly does NOT use Level-2 data.
+    """
+    import json
+    import math
+
+    try:
+        from data.market_data import get_provider
+        import yfinance as yf
+
+        sym = symbol.upper().strip()
+        quote = get_provider().get_latest_quote(sym)
+
+        # Approximate ADV using yfinance (e.g. trailing 10 days)
+        ticker = yf.Ticker(sym)
+        hist = ticker.history(period="10d")
+
+        adv = None
+        if not hist.empty and "Volume" in hist.columns:
+            adv = float(hist["Volume"].mean())
+
+        def _num(v):
+            if v is None:
+                return None
+            try:
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except Exception:
+                return None
+
+        ask = _num(quote.ask)
+        bid = _num(quote.bid)
+        price = _num(quote.price)
+
+        spread = None
+        spread_bps = None
+        if ask is not None and bid is not None and ask >= bid:
+            spread = ask - bid
+            if price and price > 0:
+                spread_bps = (spread / price) * 10000.0
+
+        approximate_depth_notional = None
+        if adv is not None and price is not None and price > 0:
+            from settings import settings
+            # Heuristic approximation of depth without Level-2 data
+            multiplier = settings.OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC
+            approximate_depth_notional = adv * price * multiplier
+
+        payload = {
+            "symbol": sym,
+            "quote": {
+                "price": price,
+                "bid": bid,
+                "ask": ask,
+                "spread": spread,
+                "spread_bps": spread_bps
+            },
+            "approximation": {
+                "adv_10d": adv,
+                "approximate_depth_notional": approximate_depth_notional,
+                "disclaimer": "Data source is an approximation based on Top-of-Book spread and Average Daily Volume. No claims of real Level-2 data exist."
+            },
+            "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
+            "is_stale": quote.is_stale,
+            "source": quote.source
+        }
+
+        lines = [
+            f"# Overnight Liquidity Approximation — {sym}\n",
+            "> **NOTE:** Data source is an approximation based on Top-of-Book spread and Average Daily Volume. No claims of real Level-2 data exist.\n",
+            f"- **Price**: {price:.2f}" if price else "- **Price**: N/A",
+            f"- **Spread (bps)**: {spread_bps:.1f}" if spread_bps is not None else "- **Spread (bps)**: N/A",
+            f"- **ADV (10d)**: {adv:,.0f}" if adv else "- **ADV (10d)**: N/A",
+            f"- **Approx. Depth Notional (1% ADV)**: ${approximate_depth_notional:,.2f}" if approximate_depth_notional else "- **Approx. Depth Notional**: N/A",
+            "\n```json",
+            json.dumps(payload, indent=2),
+            "```"
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error approximating overnight liquidity for {symbol}: {str(e)}"
+
+
 @mcp.tool()
 def get_recommendation(symbol: str) -> str:
     """
