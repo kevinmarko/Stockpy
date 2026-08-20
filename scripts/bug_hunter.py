@@ -26,6 +26,7 @@ import sys
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -358,34 +359,74 @@ def main():
         "scans": {}
     }
 
-    # 1. Static AST Audit
-    step += 1
-    print(f"🔍 [{step}/{total_steps}] Running Static AST Code Auditor...")
-    ast_res = run_static_ast_audit(ROOT_DIR, include_tests=args.include_tests,
-                                   fail_on=args.fail_on)
+    # 1-4. Static AST Audit, Webapp Typecheck, Preflight Check, Pytest Verification.
+    # These are four independent, I/O-bound subprocess.run() calls with no data
+    # dependency on one another -- run them concurrently on a small thread pool
+    # (threads, not processes: each thread spends nearly all its time blocked
+    # inside subprocess.run() waiting on a child process, so the GIL is a
+    # non-issue) instead of sequentially, to cut wall-clock from
+    # sum(step_times) to roughly max(step_times).
+    #
+    # UX: announce all four steps up front (so it's clear what's running and
+    # under what step numbers), then print each one's result the moment its
+    # future completes -- in whatever order they actually finish in, which is
+    # an honest reflection of genuine concurrent progress rather than a faked
+    # sequential readout.
+    step_defs = [
+        (1, "ast_audit", "Static AST Code Auditor",
+         run_static_ast_audit, (ROOT_DIR,),
+         {"include_tests": args.include_tests, "fail_on": args.fail_on}),
+        (2, "webapp_typecheck", "Webapp TypeScript Typecheck",
+         run_webapp_typecheck, (ROOT_DIR,), {}),
+        (3, "preflight", "Preflight Readiness Check",
+         run_preflight_check, (ROOT_DIR,), {}),
+        (4, "pytest", f"Pytest Suite ({'Quick' if args.quick else 'Full'})",
+         run_pytest_verification, (ROOT_DIR,), {"quick": args.quick}),
+    ]
+
+    for num, _key, label, _fn, _fn_args, _fn_kwargs in step_defs:
+        print(f"🔍 [{num}/{total_steps}] Running {label}...")
+    print("   (steps 1-4 run concurrently; results below as each finishes)")
+
+    def _run_step_safe(fn, fn_args, fn_kwargs):
+        """Defensive wrapper: a step thread must never silently vanish a
+        failure. Each run_*() helper already catches its own exceptions
+        internally, but if one somehow still raises, surface it the same
+        way a synchronous call raising would have -- as an ERROR result,
+        not a swallowed/crashed thread."""
+        try:
+            return fn(*fn_args, **fn_kwargs)
+        except Exception as e:
+            return {"status": "ERROR", "message": f"Unhandled exception: {e}", "findings": []}
+
+    step_results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=len(step_defs)) as executor:
+        future_to_step = {
+            executor.submit(_run_step_safe, fn, fn_args, fn_kwargs): (num, key, label)
+            for num, key, label, fn, fn_args, fn_kwargs in step_defs
+        }
+        for future in as_completed(future_to_step):
+            num, key, label = future_to_step[future]
+            # future.result() re-raises here if the future itself failed in a
+            # way _run_step_safe couldn't catch (e.g. cancellation) -- that
+            # would propagate out of main() exactly as a synchronous call
+            # raising would have, rather than being silently swallowed.
+            res = future.result()
+            step_results[key] = res
+            extra = f" | Total Findings: {len(res.get('findings', []))}" if key == "ast_audit" else ""
+            print(f"   ✔ [{num}/{total_steps}] {label} finished — Status: {res.get('status', 'ERROR')}{extra}")
+
+    ast_res = step_results["ast_audit"]
+    webapp_res = step_results["webapp_typecheck"]
+    preflight_res = step_results["preflight"]
+    pytest_res = step_results["pytest"]
+
     report["scans"]["ast_audit"] = ast_res
-    print(f"   Status: {ast_res['status']} | Total Findings: {len(ast_res.get('findings', []))}")
-
-    # 2. Webapp Typecheck
-    step += 1
-    print(f"🔍 [{step}/{total_steps}] Running Webapp TypeScript Typecheck...")
-    webapp_res = run_webapp_typecheck(ROOT_DIR)
     report["scans"]["webapp_typecheck"] = webapp_res
-    print(f"   Status: {webapp_res['status']}")
-
-    # 3. Preflight Readiness Check
-    step += 1
-    print(f"🔍 [{step}/{total_steps}] Running Preflight Readiness Check...")
-    preflight_res = run_preflight_check(ROOT_DIR)
     report["scans"]["preflight"] = preflight_res
-    print(f"   Status: {preflight_res['status']}")
-
-    # 4. Pytest Verification
-    step += 1
-    print(f"🔍 [{step}/{total_steps}] Running Pytest Suite ({'Quick' if args.quick else 'Full'})...")
-    pytest_res = run_pytest_verification(ROOT_DIR, quick=args.quick)
     report["scans"]["pytest"] = pytest_res
-    print(f"   Status: {pytest_res['status']}")
+
+    step = 4
 
     # 5. Known Issues Index
     step += 1

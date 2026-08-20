@@ -678,6 +678,24 @@ def test_main_orchestrator_pipeline():
     quant_platform.db every day the cached row goes stale (mirrors the
     same trap already guarded against in test_processing_engine.py and
     test_macro_engine.py).
+
+    SECTOR_HEAT_ENABLED / WIKIPEDIA_ATTENTION_ENABLED disabled: both flags'
+    actual settings.py Field default is True, which contradicts their own
+    docstrings ("False (the default) is a complete no-op") and diverges
+    from what CLAUDE.md documents. Left at that default, this test made a
+    REAL outbound network call to GDELT
+    (pipeline/production_steps.py::_apply_sector_heat_factor ->
+    data/sentiment_sources.py::compute_sector_heat_factors) that reliably
+    hit a 10s read timeout in this offline test environment -- ~85% of this
+    test's entire runtime -- for a diagnostic-only feature
+    (Sector_Heat_Factor/Attention_Score) that neither this test's
+    assertions nor DashboardSchema (both columns are nullable) depend on.
+    Disabling them here is not a coverage change: NaN in those two columns
+    is the documented, intended behavior when the flags are off, and this
+    offline suite is not meant to depend on live network (see the
+    `-m "not network"` convention elsewhere in this repo). The Field
+    default itself is a separate, pre-existing bug outside this test's
+    scope -- not touched here.
     """
     from unittest import mock
     from main_orchestrator import run_pipeline
@@ -690,7 +708,9 @@ def test_main_orchestrator_pipeline():
     fund_raw = mock_de.fetch_fundamentals_raw(tickers)
     tech_raw = mock_de.fetch_technical_raw(tickers)
 
-    with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
+    with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False), \
+         mock.patch("settings.settings.SECTOR_HEAT_ENABLED", False), \
+         mock.patch("settings.settings.WIKIPEDIA_ATTENTION_ENABLED", False):
         final_df, _macro_dto, _shared_ctx = run_pipeline(tickers, macro_raw, fund_raw, tech_raw)
     assert not final_df.empty
 
