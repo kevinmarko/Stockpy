@@ -381,6 +381,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "The platform's recommended-stock picks, plus the raw data layer for any symbol — daily price bars, current fundamentals, and the macro snapshot (VIX, 10y-2y curve, Sahm Rule, HY OAS). Manage which tickers are tracked from Settings.",
     keyConcepts: [],
   },
+  "symbol-screener": {
+    title: "Symbol screener",
+    description:
+      "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist. Send a discovered symbol straight to Paper Broker's Quick Trade, or a whole selection to its Strategy Scan.",
+    keyConcepts: [],
+  },
   attribution: {
     title: "Portfolio attribution",
     description:

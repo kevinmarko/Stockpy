@@ -1,7 +1,7 @@
 # FMP Data Integration
 
-**Source:** `data/fmp_client.py`, `data/fmp_fundamentals.py`, `data/fmp_macro.py`, `data/fmp_feeds_company.py`, `data/fmp_feeds_market.py`, `FMPProvider` in `data/market_data.py`. News (§7, 2026-08 addition): `data/fmp_client.py::stock_news`/`parse_news_published_date`, `data/sentiment_sources.py::FMPNewsSource`, `signals/news_catalyst.py::fetch_company_headlines`/`fetch_next_earnings_any`.
-**Verification gate:** `scripts/verify_fmp_bars.py`
+**Source:** `data/fmp_client.py`, `data/fmp_fundamentals.py`, `data/fmp_macro.py`, `data/fmp_feeds_company.py`, `data/fmp_feeds_market.py`, `FMPProvider` in `data/market_data.py`. News (§7, 2026-08 addition): `data/fmp_client.py::stock_news`/`parse_news_published_date`, `data/sentiment_sources.py::FMPNewsSource`, `signals/news_catalyst.py::fetch_company_headlines`/`fetch_next_earnings_any`. Symbol search & screener (§9, 2026-08 addition): `data/fmp_client.py::search_name`/`search_symbol`/`company_screener`/`available_sectors`/`available_industries`, `data/fmp_screener.py`.
+**Verification gates:** `scripts/verify_fmp_bars.py` (bars adjustment convention), `scripts/verify_fmp_screener.py` (§9 — symbol search & sector/industry screener, against the operator's own key)
 **Architecture reference:** `docs/architecture/data-layer.md`'s "FMP data layer" bullet
 **Planning source:** this document, `docs/architecture/data-layer.md`, and `CLAUDE.md`'s FMP bullet are all derived from the integration plan (`i-just-signed-up-modular-abelson`); where a claim below could not be independently re-verified against a live response by the agent that wrote it, that is stated explicitly rather than presented as confirmed.
 
@@ -34,7 +34,7 @@ Two honest, permanent consequences follow, stated plainly so nobody re-discovers
 
 ## 3. Settings reference
 
-All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (data/fmp_client.py) ---` (the three news settings — §7 — were added 2026-08, next to `FMP_EARNINGS_ENABLED`/`FMP_ECON_INDICATORS`; `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, and `FMP_PEERS_ENABLED` — §3a/§3b below — were added alongside them), are mirrored in `.env.example`, and (except the credential) are GUI-writable via `gui/env_io.py`'s `ALLOWED_KEYS` (the desktop GUI itself is decommissioned as of 2026-07-20 — see `CLAUDE.md`'s "Frontend strategy" — so these settings are allowlisted for write access but have no new `gui/panels/settings_manager.py` widget). **`FMP_API_KEY` alone never elects FMP as the active provider for anything.** All feed master gates enforce a genuine two-gate convention (the `STOCKTWITS_ENABLED` precedent) where a source is actually being REPLACED: quotes need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_QUOTES_ENABLED`; bars need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_BARS_ENABLED`, independently of the quotes gate; fundamentals need `FUNDAMENTALS_SOURCE=fmp` **and** `FMP_FUNDAMENTALS_ENABLED`; news needs `FMP_NEWS_ENABLED` **and** `FMP_API_KEY` (see §7); the eight diagnostic feeds (`FMP_ANALYST_ENABLED`, `FMP_EARNINGS_ENABLED`, `FMP_MACRO_ENABLED`, `FMP_INSIDER_ENABLED`, `FMP_SECTOR_SNAPSHOT_ENABLED`, `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, `FMP_PEERS_ENABLED`) are each a single, standalone gate — they add new columns/surfaces rather than replacing an existing source, so there is no second selector to require. When `MARKET_DATA_PROVIDER=fmp`/`FUNDAMENTALS_SOURCE=fmp` is set but the matching capability flag is `False`, that capability falls through **unconditionally** to the pre-existing default (Alpaca-if-keyed-else-yfinance for quotes/bars, Yahoo-derived for fundamentals) — this is deliberately independent of `FMP_FALLBACK_ENABLED`, since FMP is never attempted in the first place and there is nothing to fall back *from*. `CompositeProvider.quote_source`/`.is_realtime`/`.source_name` always report the provider that is genuinely serving, never `"fmp"` while its capability gate is off. `FMP_QUOTES_ENABLED` and `FMP_BARS_ENABLED` are fully independent: an operator can run quotes on FMP while bars stay on yfinance, or vice versa, from the same `MARKET_DATA_PROVIDER=fmp` selection.
+All 32 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (data/fmp_client.py) ---` (the three news settings — §7 — were added 2026-08, next to `FMP_EARNINGS_ENABLED`/`FMP_ECON_INDICATORS`; `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, and `FMP_PEERS_ENABLED` — §3a/§3b below — were added alongside them; `FMP_SCREENER_ENABLED` — §9 below — was added next to `FMP_UNIVERSE_ENABLED`), are mirrored in `.env.example`, and (except the credential) are GUI-writable via `gui/env_io.py`'s `ALLOWED_KEYS` (the desktop GUI itself is decommissioned as of 2026-07-20 — see `CLAUDE.md`'s "Frontend strategy" — so these settings are allowlisted for write access but have no new `gui/panels/settings_manager.py` widget). **`FMP_API_KEY` alone never elects FMP as the active provider for anything.** All feed master gates enforce a genuine two-gate convention (the `STOCKTWITS_ENABLED` precedent) where a source is actually being REPLACED: quotes need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_QUOTES_ENABLED`; bars need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_BARS_ENABLED`, independently of the quotes gate; fundamentals need `FUNDAMENTALS_SOURCE=fmp` **and** `FMP_FUNDAMENTALS_ENABLED`; news needs `FMP_NEWS_ENABLED` **and** `FMP_API_KEY` (see §7); the eight diagnostic feeds (`FMP_ANALYST_ENABLED`, `FMP_EARNINGS_ENABLED`, `FMP_MACRO_ENABLED`, `FMP_INSIDER_ENABLED`, `FMP_SECTOR_SNAPSHOT_ENABLED`, `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, `FMP_PEERS_ENABLED`) are each a single, standalone gate — they add new columns/surfaces rather than replacing an existing source, so there is no second selector to require. When `MARKET_DATA_PROVIDER=fmp`/`FUNDAMENTALS_SOURCE=fmp` is set but the matching capability flag is `False`, that capability falls through **unconditionally** to the pre-existing default (Alpaca-if-keyed-else-yfinance for quotes/bars, Yahoo-derived for fundamentals) — this is deliberately independent of `FMP_FALLBACK_ENABLED`, since FMP is never attempted in the first place and there is nothing to fall back *from*. `CompositeProvider.quote_source`/`.is_realtime`/`.source_name` always report the provider that is genuinely serving, never `"fmp"` while its capability gate is off. `FMP_QUOTES_ENABLED` and `FMP_BARS_ENABLED` are fully independent: an operator can run quotes on FMP while bars stay on yfinance, or vice versa, from the same `MARKET_DATA_PROVIDER=fmp` selection.
 
 ### Credential (1) — `SECRET_KEYS` only, never GUI-writable
 
@@ -56,7 +56,7 @@ All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 
 `FMP_MIN_REQUEST_INTERVAL_SECONDS=0` with `FMP_MAX_RETRIES=0` and `FMP_COOLDOWN_THRESHOLD=0` reproduces un-throttled behavior exactly (the `GDELT_*` comment convention).
 
-### Master feed gates (14) — default `True` by operator decision
+### Master feed gates (15) — default `True` by operator decision
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
@@ -74,6 +74,7 @@ All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 | `FMP_OPTIONS_CONTEXT_ENABLED` | `bool` | `True` | Master switch for the market/qualitative-context overlay on the options premium-directive matrix (news headlines, capped at 3/symbol, + peer-comparison tickers). Single gate bundling two endpoints, deliberately separate from `FMP_OPTIONS_HEALTH_ENABLED`. See §3b below. |
 | `FMP_PEERS_ENABLED` | `bool` | `True` | Master switch for the on-demand `GET /data/peers/{symbol}` peer-group lookup (webapp's Symbol Comparison "suggest peers" affordance). Single gate, deliberately separate from `FMP_OPTIONS_CONTEXT_ENABLED` despite both calling the same `fetch_peer_group` — different cadence/rate-limit shape (per-click vs. per-cycle batch). See §3b below. |
 | `FMP_UNIVERSE_ENABLED` | `bool` | `True` | Master switch for using FMP's historical S&P 500 constituent-changes feed as the PRIMARY source for `universe_engine.py`'s point-in-time survivorship-bias reconstruction, with the Wikipedia "Selected changes" table scrape (removed from the live page entirely as of 2026-08) demoted to a fallback. Single gate. See §8 below. |
+| `FMP_SCREENER_ENABLED` | `bool` | `True` | Master switch for the symbol-search + sector/industry-screener feed (`GET /data/symbol-search`, `GET /data/screener`, `GET /data/screener/filters`) — a universe-BROWSE capability, independent of the platform's own tracked watchlist/pipeline universe. Single gate covering all four wrapped endpoints. See §9 below. |
 
 ### Behavior knobs (9)
 
@@ -337,3 +338,83 @@ calls — `data/fmp_client.py` is never even imported by `universe_engine.py` in
 that case (the import is lazy, inside `fetch_and_cache_universe()`) — reproducing
 today's exact Wikipedia-changes-table behavior. Proven by
 `tests/test_dead_letter_resilience.py::TestFetchAndCacheUniverseFMPPrimarySource::test_fmp_disabled_by_default_uses_wikipedia_changes_table`.
+
+---
+
+## 9. Symbol search & sector/industry screener (2026-08 addition)
+
+Added because the Pilots PWA's Paper Broker "Quick Trade" panel and
+"Automated Strategy Options Execution" auto-scan (see `CLAUDE.md`'s FMP
+paper-trading-engine bullet) could already trade or scan any symbol, but had
+no way to *discover* one outside the platform's own tracked watchlist — an
+operator had to already know a ticker. This closes that gap: a real
+symbol-name/ticker search plus a sector/industry/market-cap/price/beta/
+dividend/volume screener, independent of `main.py`'s tracked universe
+(held positions ∪ `WATCHLIST` ∪ `watchlist.txt`).
+
+**Endpoints used:** `data/fmp_client.py::search_name`/`search_symbol` wrap
+`GET /search-name`/`GET /search-symbol` (company-name and ticker search,
+respectively — `data/fmp_screener.py::search_symbols` tries the name search
+first and falls back to the ticker search only if that yields nothing).
+`company_screener` wraps `GET /search-company-screener` (sector, industry,
+market-cap/price/beta/dividend/volume range filters, country, exchange,
+`isEtf`/`isFund`/`isActivelyTrading`). `available_sectors`/
+`available_industries` wrap `GET /available-sectors`/`GET /available-industries`
+(static-ish enums for the screener's filter dropdowns).
+
+**Verification status — distinct from both §7 and §8's precedents.** All
+four endpoints were live-verified 2026-08, but via an **external FMP MCP
+connector** (a separate, real, working FMP account) — not through this
+repo's own `_fmp_get` throttle/retry/cooldown path, and not against the
+operator's own `FMP_API_KEY`/tier. Confirmed response shapes (field names
+below are exact, not best-effort):
+- `search-name` / `search-symbol` → `[{"symbol", "name", "currency",
+  "exchangeFullName", "exchange"}]`.
+- `search-company-screener` → `[{"symbol", "companyName", "marketCap",
+  "sector", "industry", "beta", "price", "lastAnnualDividend", "volume",
+  "exchange", "exchangeShortName", "country", "isEtf", "isFund",
+  "isActivelyTrading"}]`.
+- `available-sectors` / `available-industries` → `[{"sector": "..."}]` /
+  `[{"industry": "..."}]`.
+
+**Before relying on `FMP_SCREENER_ENABLED=True` against the operator's own
+key**: run `python scripts/verify_fmp_screener.py` — a real, network-dependent
+manual gate (mirrors `scripts/verify_fmp_bars.py`'s convention exactly) that
+exercises all five wrapped endpoints against the key actually configured in
+`.env` and fails loudly (never a silent pass) if a row is missing an expected
+field or a filter isn't honored server-side. Correction to an earlier
+version of this note: this sandbox genuinely HAS live-market network access
+to `financialmodelingprep.com` (confirmed live 2026-08 — a real HTTP 401 came
+back for a deliberately invalid key) — the actual blocker to verifying this
+feed end-to-end during development was the absence of a configured
+`FMP_API_KEY`/`.env` file in the sandbox, not a network restriction. Only the
+operator's own key/tier can complete this check; `scripts/verify_fmp_screener.py`
+is the repeatable way to do it whenever that key is available.
+
+**Not a `SignalModule`, not written into `SIGNAL_WEIGHTS`.** Like the other
+diagnostic feeds in §1, FMP serves only the current search/screener result —
+there is no point-in-time history to backtest against, so this is a
+read-only, on-demand, request-scoped capability only, with no lookahead-test
+obligation.
+
+**Consumers:**
+- `api/data_api.py::get_symbol_search` (`GET /data/symbol-search`),
+  `get_screener_results` (`GET /data/screener`), and
+  `get_screener_filter_options` (`GET /data/screener/filters`) — all three
+  gated by `FMP_SCREENER_ENABLED`, all three degrade to an honest empty
+  result + `reason` string on any failure, never a 500.
+- `webapp/src/screens/SymbolScreener.tsx` — the Pilots PWA screen exposing
+  free-text search, the filter form, and a handful of pure client-side
+  filter presets (no new backend logic). Selected symbols hand off via URL
+  query params (this codebase's one existing cross-screen pattern, see
+  `Commands.tsx`'s `?builder=` param) into Paper Broker's existing Quick
+  Trade panel (`?quickTradeSymbol=`) or auto-execute scan input
+  (`?scanSymbols=`).
+
+**Flag-off is byte-identical.** With `FMP_SCREENER_ENABLED=False`,
+`data/fmp_screener.py`'s four functions all return `[]` with zero network
+calls and `data/fmp_client.py`'s new wrappers are never even imported (every
+import is lazy, inside the function body). Proven by
+`tests/test_fmp_screener.py` (module-level gate/degrade coverage) and
+`tests/test_data_api_screener.py` (endpoint-level flag-off/honest-reason
+coverage for all three routes).

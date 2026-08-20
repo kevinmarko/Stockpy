@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { TabGuide } from "../components/TabGuide";
 import { Modal } from "../components/Modal";
+import { SymbolInput } from "../components/SymbolInput";
 import { theme } from "../theme";
+import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
 import { ScenarioHeatmap } from "../components/options/ScenarioHeatmap";
 import { VolSurfaceView } from "../components/options/VolSurfaceView";
 import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
@@ -25,7 +28,7 @@ import { ResearchCopilotView } from "../components/ai/ResearchCopilotView";
 import { MultiBrokerGatewayView } from "../components/execution/MultiBrokerGatewayView";
 import { SecRule606ReportView } from "../components/execution/SecRule606ReportView";
 import { FixGatewayStatusRadar } from "../components/execution/FixGatewayStatusRadar";
-import type { RollOrderRequest } from "../api/types";
+import type { RollOrderRequest, Quote } from "../api/types";
 
 // Loading/error placeholder for the screen's core (always-on) data sections --
 // mirrors the visual pattern already used by the toggleable options-desk
@@ -84,7 +87,26 @@ export function PaperBroker() {
   const account = useApi(() => api.getPaperBrokerAccount());
   const positions = useApi(() => api.getPaperBrokerPositions());
   const orders = useApi(() => api.getPaperBrokerOrders(100));
-  const candidates = useApi(() => api.getStrategyOptionsCandidates());
+
+  // Automated Strategy Options Execution: optional operator-supplied symbol
+  // list. Blank preserves today's exact default (getStrategyOptionsCandidates
+  // / executeStrategyOptions called with no `symbols` arg, which the backend
+  // resolves to settings.WATCHLIST); populated, it scans exactly those
+  // symbols instead -- independent of the pipeline's tracked universe.
+  const [scanSymbolsInput, setScanSymbolsInput] = useState("");
+  const scanSymbols = useMemo(
+    () =>
+      scanSymbolsInput
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean),
+    [scanSymbolsInput]
+  );
+
+  const candidates = useApi(
+    () => api.getStrategyOptionsCandidates(scanSymbols.length ? scanSymbols : undefined),
+    [scanSymbols.join(",")]
+  );
   const greeks = useApi(() => api.getPaperBrokerGreeks());
   const deltaHedge = useApi(() => api.getDeltaHedgePreview());
   const metaStatus = useApi(() => api.getOptionsMetaModelStatus());
@@ -124,8 +146,22 @@ export function PaperBroker() {
   const [backtestEnd, setBacktestEnd] = useState("2024-01-01");
   const [backtestResult, setBacktestResult] = useState<import("../api/types").OptionsBacktestResponse | null>(null);
 
+  // Quick Trade state -- a free-text "trade any FMP-quotable symbol" entry
+  // point. Everything else on this screen (positions, orders, auto-execute
+  // candidates) only ever surfaces symbols the platform already tracks; this
+  // is the one path that lets the operator paper-trade a ticker outside the
+  // pipeline's watchlist/universe, which the backend has always allowed
+  // (execution/fmp_paper_broker.py has no watchlist/universe gate) but the
+  // UI never exposed.
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [quickTradeSymbol, setQuickTradeSymbol] = useState<string | null>(null);
+  const [quickTradeQuote, setQuickTradeQuote] = useState<Quote | null>(null);
+  const [quickTradeError, setQuickTradeError] = useState<string | null>(null);
+  const [quickTradeLoading, setQuickTradeLoading] = useState(false);
+
   const resetMutation = useMutation((cash: number) => api.resetPaperBroker(cash));
-  const execMutation = useMutation(() => api.executeStrategyOptions());
+  const execMutation = useMutation(() => api.executeStrategyOptions(scanSymbols.length ? scanSymbols : undefined));
   const settleMutation = useMutation(() => api.settleExpiredPaperOptions());
   const retrainMutation = useMutation(() => api.retrainOptionsMetaModel());
   const backtestMutation = useMutation((params: import("../api/types").OptionsBacktestParams) => api.runOptionsBacktest(params));
@@ -145,6 +181,59 @@ export function PaperBroker() {
       deltaHedge.reload();
     }
   };
+
+  const handleQuickTradeSubmit = async (symbol: string) => {
+    setQuickTradeError(null);
+    setQuickTradeQuote(null);
+    setQuickTradeSymbol(null);
+    setQuickTradeLoading(true);
+    try {
+      const quotes = await api.getDataQuotes([symbol]);
+      const quote = quotes[symbol];
+      // Fail closed (CONSTRAINT #6): no quote, or a quote with a null price,
+      // must never open an order ticket seeded with a fabricated $0 spot
+      // price -- surface an honest error instead.
+      if (!quote || quote.price == null) {
+        setQuickTradeError(`No live quote available for "${symbol}". Check the ticker and try again.`);
+      } else {
+        setQuickTradeQuote(quote);
+        setQuickTradeSymbol(symbol);
+      }
+    } catch (e) {
+      setQuickTradeError(e instanceof Error ? e.message : "Quote lookup failed.");
+    } finally {
+      setQuickTradeLoading(false);
+    }
+  };
+
+  // One-way, fire-and-forget handoff from webapp/src/screens/SymbolScreener.tsx
+  // -- the only cross-screen data-passing pattern already used in this
+  // codebase (matches Commands.tsx's `?builder=` param), so no new
+  // store/context is introduced. Each effect fires at most once per mount
+  // (a `useRef` guard, not the `searchParams` object itself, since a fresh
+  // `URLSearchParams` instance is constructed on every render and would
+  // otherwise refire the fetch/quote-lookup on every re-render).
+  const quickTradeHandoffDone = useRef(false);
+  useEffect(() => {
+    if (quickTradeHandoffDone.current) return;
+    const symbol = searchParams.get("quickTradeSymbol");
+    if (symbol) {
+      quickTradeHandoffDone.current = true;
+      void handleQuickTradeSubmit(symbol.trim().toUpperCase());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const scanSymbolsHandoffDone = useRef(false);
+  useEffect(() => {
+    if (scanSymbolsHandoffDone.current) return;
+    const list = searchParams.get("scanSymbols");
+    if (list) {
+      scanSymbolsHandoffDone.current = true;
+      setScanSymbolsInput(list);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleExecuteStrategyOptions = async () => {
     setExecStatus(null);
@@ -613,6 +702,87 @@ export function PaperBroker() {
       <div style={{ flex: 1, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 24 }}>
         <TabGuide tabKey="paper-broker" />
 
+        {/* Quick Trade -- paper-trade ANY FMP-quotable symbol, not just what's
+            already tracked in your watchlist/pipeline universe. Everything
+            else on this screen (positions, orders, auto-execute candidates)
+            only ever surfaces symbols the platform already knows about. */}
+        <div style={{
+          padding: 20,
+          background: theme.surface,
+          borderRadius: 8,
+          border: `1px solid ${theme.border}`,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12
+        }}>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 4px 0" }}>🔍 Quick Trade — Any Symbol</h2>
+            <div style={{ color: theme.textSecondary, fontSize: 13 }}>
+              Paper-trade any FMP-quotable ticker, even one outside your tracked watchlist.
+            </div>
+          </div>
+          <SymbolInput
+            key={searchParams.get("quickTradeSymbol") ?? "quick-trade"}
+            initial={searchParams.get("quickTradeSymbol")?.trim().toUpperCase() ?? ""}
+            label="Symbol"
+            hint="Enter any ticker FMP can quote — not limited to your tracked watchlist."
+            onSubmit={handleQuickTradeSubmit}
+            pending={quickTradeLoading}
+            buttonText="Get Quote"
+            testId="quick-trade-symbol-input"
+          />
+          {quickTradeError && (
+            <div style={{
+              padding: "10px 14px",
+              background: "rgba(239, 68, 68, 0.15)",
+              color: theme.decline,
+              borderRadius: 6,
+              fontSize: 13,
+              fontWeight: 500
+            }}>
+              {quickTradeError}
+            </div>
+          )}
+          {quickTradeSymbol && quickTradeQuote && quickTradeQuote.price != null && (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 13, color: theme.textSecondary }}>
+                  {quickTradeSymbol}: <strong style={{ color: theme.textPrimary }}>${quickTradeQuote.price.toFixed(2)}</strong>
+                  {quickTradeQuote.is_stale && <span style={{ color: theme.caution, marginLeft: 6 }}>(delayed)</span>}
+                </div>
+                <button
+                  onClick={() => navigate(`/symbol/${quickTradeSymbol}/options`)}
+                  style={{
+                    padding: "6px 12px",
+                    background: "transparent",
+                    border: `1px solid ${theme.border}`,
+                    color: theme.accent,
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: 12,
+                  }}
+                >
+                  View Options Chain →
+                </button>
+              </div>
+              <OptionsOrderTicket
+                key={`quick-trade-${quickTradeSymbol}`}
+                symbol={quickTradeSymbol}
+                assetType="stock"
+                spotPrice={quickTradeQuote.price}
+                onClear={() => {
+                  setQuickTradeSymbol(null);
+                  setQuickTradeQuote(null);
+                  account.reload();
+                  positions.reload();
+                  orders.reload();
+                }}
+              />
+            </>
+          )}
+        </div>
+
         {/* Dispersion Arbitrage Desk */}
         {showDispersion && (
           <DispersionScanner
@@ -1063,6 +1233,36 @@ export function PaperBroker() {
             >
               {execMutation.pending ? "Executing..." : `Execute ${candidates.data?.candidates?.length || 0} Strategy Trades`}
             </button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <label htmlFor="scan-symbols-input" style={{ fontSize: 12, color: theme.textSecondary, fontWeight: 600, whiteSpace: "nowrap" }}>
+                Scan symbols (optional):
+              </label>
+              <input
+                id="scan-symbols-input"
+                type="text"
+                data-testid="scan-symbols-input"
+                value={scanSymbolsInput}
+                onChange={(e) => setScanSymbolsInput(e.target.value)}
+                placeholder="Leave blank to scan your WATCHLIST, or e.g. AAPL, MSFT, XOM"
+                style={{
+                  flex: 1,
+                  padding: "6px 10px",
+                  background: theme.base,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 4,
+                  color: theme.textPrimary,
+                  fontSize: 13,
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 12, color: theme.textSecondary }}>
+              {scanSymbols.length > 0
+                ? `Scanning ${scanSymbols.length} symbol${scanSymbols.length > 1 ? "s" : ""} you entered (${scanSymbols.join(", ")}), independent of your tracked watchlist.`
+                : "Scanning your WATCHLIST (default). Enter tickers above to scan different symbols instead."}
+            </div>
           </div>
 
           {execStatus && (
