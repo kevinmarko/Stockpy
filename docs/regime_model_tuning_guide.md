@@ -18,3 +18,16 @@ To audit the regime model, use the following CLI command:
 ```bash
 python -m scripts.audit_regime_model
 ```
+
+## Testing
+`tests/test_audit_regime_model.py` covers the audit CLI itself (distinct from
+`tests/test_regime_diagnostics.py`, which covers the underlying
+`validation/regime_diagnostics.py` walk-forward/comparison engine this script
+calls): a `typing.get_type_hints()` regression check on `load_historical_data`
+and `main` (added 2026-08 after a missing `Tuple`/`Optional` import shipped in
+PR #791 and broke `main`'s CI — see `docs/architecture/testing.md`'s entry for
+why `from __future__ import annotations` doesn't shield this class of bug from
+ruff's `F821` check); `load_historical_data()`'s SQLite read path against a
+real temporary DB (happy path, `BAMLH0A0HYM2` absent → `credit_series is None`,
+missing DB file, empty `price_bars`/`macro_history`); and an argparse-only
+smoke test for the `--compare`/`--json`/`--states`/`--cov`/`--output` flags.
