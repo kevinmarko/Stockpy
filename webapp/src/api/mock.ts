@@ -4847,12 +4847,16 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   // -- Diagnostic & Data Features (read-only measurement/data-source
   // master switches, feed no scoring or sizing decision) --
+  // NOTE: all 7 of these default to False in settings.py (each is a data
+  // source / diagnostic feature, not an admin/write/execution gate, so
+  // none qualify for the 2026-08-03 default-on convention) -- mirror that
+  // here, not the mass-flip regression a prior commit briefly introduced.
   {
     group: "Diagnostic & Data Features",
     key: "SECTOR_HEAT_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description:
       "Enables Sector Heat Factor computation from GDELT article volume.",
   },
@@ -4860,8 +4864,8 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Data Features",
     key: "WIKIPEDIA_ATTENTION_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description:
       "Enables Attention Score computation from Wikipedia pageviews.",
   },
@@ -4869,8 +4873,8 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Data Features",
     key: "ETF_HOLDINGS_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description:
       "Enables fetching ETF constituent baskets for exposure analysis.",
   },
@@ -4878,8 +4882,8 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Data Features",
     key: "ETF_TRANSMISSION_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description:
       "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
   },
@@ -4887,24 +4891,24 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Data Features",
     key: "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description: "Tracks and surfaces real-time market data feed latency.",
   },
   {
     group: "Diagnostic & Data Features",
     key: "SENTIMENT_INDEX_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description: "Computes composite sentiment index from news and reviews.",
   },
   {
     group: "Diagnostic & Data Features",
     key: "EDGAR_FULLTEXT_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description: "Enables full-text ingestion of 10-K/10-Q SEC filings.",
   },
 ];

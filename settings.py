@@ -645,7 +645,7 @@ class Settings(BaseSettings):
         ),
     )
     MARKET_DATA_LATENCY_TRACKING_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Automatic, in-process instrumentation (market_data_latency.py) of "
             "CompositeProvider.get_latest_quote's real (non-cache-hit) fetch "
@@ -2587,8 +2587,8 @@ class Settings(BaseSettings):
             "-- Yahoo RSS/GDELT/Reddit/EDGAR). False (the default) is a complete "
             "no-op: no network call is attempted for any symbol, matching this "
             "codebase's convention for opt-in networked features "
-            "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED, "
-            "PILOTS_API_ENABLED all default True the same way). This exists "
+            "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED "
+            "default False the same way). This exists "
             "because two of the four sources (Yahoo RSS, GDELT) need no API key "
             "and so have no other way to stay quiet by default -- unlike "
             "Finnhub/Reddit/EDGAR, which already degrade to a no-op when their "
@@ -2669,7 +2669,7 @@ class Settings(BaseSettings):
         ),
     )
     SENTIMENT_INDEX_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for the composite sentiment index S_t = "
             "w1*news_score + w2*review_score (signals/sentiment_index.py). "
@@ -2958,7 +2958,7 @@ class Settings(BaseSettings):
         ),
     )
     EDGAR_FULLTEXT_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for the SEC EDGAR full-text search (EFTS) "
             "additions to EdgarSource -- fetching and chunking 10-K/10-Q "
@@ -2988,7 +2988,7 @@ class Settings(BaseSettings):
         ),
     )
     SECTOR_HEAT_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for the GDELT article-volume-based 'Sector Heat "
             "Factor' attention feature (cross-sectional news-volume z-score "
@@ -3130,7 +3130,7 @@ class Settings(BaseSettings):
     )
 
     WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for the Wikipedia-pageviews-based attention "
             "feature (per-symbol article pageview volume as a retail-"
@@ -3198,7 +3198,7 @@ class Settings(BaseSettings):
     # defaults False and is a complete no-op (zero network calls, all three
     # columns NaN).
     ETF_TRANSMISSION_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for the ETF volatility-transmission measurement "
             "columns (risk/etf_transmission.py, wired by "
@@ -4393,7 +4393,7 @@ class Settings(BaseSettings):
     # Journal of Finance 73(6):2471-2535.  Nothing in the platform consumes
     # these holdings yet — this is a self-contained data-layer capability.
     ETF_HOLDINGS_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for live ETF constituent-holdings ingestion "
             "(SEC N-PORT primary, optional iShares CSV secondary). False "

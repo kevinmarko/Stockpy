@@ -100,13 +100,19 @@ def test_settings_defaults(monkeypatch, tmp_path):
 
 
 # =============================================================================
-# 2b. SENTIMENT/ATTENTION DATA SOURCE SCAFFOLDING DEFAULTS (Sentiment
-#     Pipeline Phase 4 groundwork) — Google News RSS, EDGAR full-text
-#     search, GDELT Sector Heat Factor, Wikipedia/pytrends attention.
-#     None of these are wired to any consuming code yet; every default must
-#     preserve today's exact behavior (nothing new enabled) so this branch
-#     is a pure no-op until a follow-on branch both wires the feature AND an
-#     operator opts in.
+# 2b. SENTIMENT/ATTENTION/DIAGNOSTIC DATA SOURCE SCAFFOLDING DEFAULTS
+#     (Sentiment Pipeline Phase 4 groundwork, plus the sibling diagnostic
+#     master switches caught by the same 2026-08-07 mass default-flip
+#     commit, PR reverting scope creep) — Google News RSS, EDGAR full-text
+#     search, GDELT Sector Heat Factor, Wikipedia/pytrends attention,
+#     the composite sentiment index, ETF holdings/transmission
+#     measurement, and market-data latency instrumentation. None of these
+#     change trading behavior on their own (no SignalModule/SIGNAL_WEIGHTS
+#     entry for any of them) and none are admin/write/execution API gates,
+#     so none qualify for the 2026-08-03 default-on convention documented
+#     in CLAUDE.md — every default here must preserve today's exact
+#     behavior (nothing new enabled, zero network calls) until an operator
+#     explicitly opts in.
 # =============================================================================
 def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
     for key in (
@@ -120,6 +126,10 @@ def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
         "WIKIPEDIA_ATTENTION_ENABLED",
         "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
         "PYTRENDS_ENABLED",
+        "SENTIMENT_INDEX_ENABLED",
+        "ETF_TRANSMISSION_ENABLED",
+        "ETF_HOLDINGS_ENABLED",
+        "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
@@ -127,15 +137,19 @@ def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
     s = Settings(_env_file=None)
 
     assert s.GOOGLE_NEWS_LOOKBACK_WINDOW == "7d"
-    assert s.EDGAR_FULLTEXT_ENABLED is True
+    assert s.EDGAR_FULLTEXT_ENABLED is False
     assert s.EDGAR_FULLTEXT_FORMS == "8-K,10-K,10-Q"
     assert s.EDGAR_FULLTEXT_CHUNK_TOKENS == 512
-    assert s.SECTOR_HEAT_ENABLED is True
+    assert s.SECTOR_HEAT_ENABLED is False
     assert s.SECTOR_HEAT_SMOOTHING_SIGMA == pytest.approx(1.0)
     assert s.SECTOR_HEAT_LOOKBACK_DAYS == 7
-    assert s.WIKIPEDIA_ATTENTION_ENABLED is True
+    assert s.WIKIPEDIA_ATTENTION_ENABLED is False
     assert s.WIKIPEDIA_ATTENTION_LOOKBACK_DAYS == 30
     assert s.PYTRENDS_ENABLED is False
+    assert s.SENTIMENT_INDEX_ENABLED is False
+    assert s.ETF_TRANSMISSION_ENABLED is False
+    assert s.ETF_HOLDINGS_ENABLED is False
+    assert s.MARKET_DATA_LATENCY_TRACKING_ENABLED is False
 
 
 # =============================================================================
