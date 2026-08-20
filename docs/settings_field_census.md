@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `3ea34471c83d53dac5b9375fa64b8e2a709bd814`
+- Measured at commit: `81003bf38678d0a67a17192f7066f656ce25d66a`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -78,15 +78,15 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
-| `ALERT_FILE_PATH` | L1525 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L4911 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4145 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L3970 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LOCAL_DATA_ROOT` | L1778 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
-| `OUTPUT_DIR` | L1795 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4297 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L1808 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L3855 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `ALERT_FILE_PATH` | L1540 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
+| `GCLOUD_BIN` | L4926 | yes | Path to the gcloud binary for environment integrations. |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4160 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L3985 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L1793 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L1810 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4312 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L1823 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L3870 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -128,17 +128,17 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 | Field | Marker site(s) | In `ALLOWED_KEYS` now | In `SECRET_KEYS` | Claim holds |
 |---|---|---|---|---|
-| `FMP_API_KEY` | `settings.py:782` | no | yes | yes |
-| `FOLLOW_API_TOKEN` | `settings.py:420` | no | yes | yes |
-| `JULES_API_KEY` | `settings.py:590` | no | yes | yes |
-| `MCP_HTTP_BEARER_TOKEN` | `settings.py:434` | no | yes | yes |
-| `MCP_OAUTH_PASSWORD` | `settings.py:482` | no | yes | yes |
-| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:401` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4262` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4270` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4254` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4246` | no | yes | yes |
-| `STATE_API_TOKEN` | `settings.py:393` | no | yes | yes |
+| `FMP_API_KEY` | `settings.py:797` | no | yes | yes |
+| `FOLLOW_API_TOKEN` | `settings.py:435` | no | yes | yes |
+| `JULES_API_KEY` | `settings.py:605` | no | yes | yes |
+| `MCP_HTTP_BEARER_TOKEN` | `settings.py:449` | no | yes | yes |
+| `MCP_OAUTH_PASSWORD` | `settings.py:497` | no | yes | yes |
+| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:416` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4277` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4285` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4269` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4261` | no | yes | yes |
+| `STATE_API_TOKEN` | `settings.py:408` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
