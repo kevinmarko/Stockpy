@@ -44,16 +44,16 @@ describe("PaperBroker", () => {
     vi.mocked(api.getStrategyOptionsCandidates).mockResolvedValue({ count: 0, candidates: [] });
 
     vi.mocked(api.getDeltaHedgePreview).mockResolvedValue({
-      net_delta_shares: 48.5,
+      symbol: "SPY",
       net_dollar_delta: 24500,
       beta_weighted_delta_spy: 48.5,
-      spy_spot_price: 505.20,
-      required_hedge_shares: -48,
-      action: "SELL",
-      hedge_symbol: "SPY",
-      estimated_cost: 24249.60,
+      target_hedge_shares: -48.5,
       tolerance_band_shares: 25.0,
-      is_within_tolerance: false,
+      action: "SELL",
+      shares: 48,
+      required_action: true,
+      reason: "Delta imbalance (+48.50 SPY-equiv) exceeds tolerance band (±25.0 shares)",
+      spy_spot: 505.20,
     });
 
     vi.mocked(api.getScenarioMatrix).mockResolvedValue({
@@ -393,11 +393,11 @@ describe("PaperBroker", () => {
     vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
     vi.mocked(api.executeDeltaHedge).mockResolvedValue({
       ok: true,
+      hedged: true,
       order_id: "ord_hedge_123",
       shares: 48,
       symbol: "SPY",
-      side: "SELL",
-      price: 505.20,
+      action: "SELL",
       message: "Sold 48 SPY shares",
     });
 

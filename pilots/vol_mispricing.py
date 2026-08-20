@@ -67,6 +67,7 @@ __all__ = [
     "build_candidate_strategy_trades",
     "evaluate_strike_mispricing",
     "get_volatility_mispricing_data",
+    "to_vol_mispricing_response",
     "execute_vol_mispricing_trade",
 ]
 
@@ -1413,6 +1414,97 @@ def get_volatility_mispricing_data(
     result["as_of"] = datetime.now(timezone.utc).isoformat()
     result["har_forecast_summary"] = har_forecast
     return result
+
+
+# Per-strike valuation_tag -> the frontend's suggested_action literal union. A faithful,
+# deterministic relabeling of the SAME classification the backend already computed --
+# not a fabricated recommendation (CONSTRAINT #4).
+_VALUATION_TAG_TO_ACTION = {
+    "RICH": "SELL_PREMIUM",
+    "CHEAP": "BUY_GAMMA",
+    "NEUTRAL": "NEUTRAL",
+}
+
+
+def to_vol_mispricing_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshapes get_volatility_mispricing_data()'s internal result (MispricingAnalysis.to_dict()
+    -- baseline_fair_iv/rich_candidates_count/strike_mispricings with valuation_tag/spread --
+    the shape every existing test in tests/test_vol_mispricing.py asserts on) into the
+    VolMispricingResponse contract webapp/src/api/types.ts and
+    webapp/src/components/options/VolForecastScanner.tsx already agree on
+    (fair_iv_baseline/rich_strikes_count/strikes with classification/iv_spread/
+    suggested_action/trade_recommendations).
+
+    Two field-NAME mismatches here were silently breaking a whole feature rather than
+    crashing (CONSTRAINT #4 still applies -- a silently-wrong "0 rich strikes" or an
+    always-empty Rich/Cheap filter is exactly the kind of unannounced-fabrication failure
+    mode this constraint exists to prevent): every strike's real `valuation_tag` was never
+    named `classification` on the wire, so `s.classification === "RICH"` was always false
+    and the Rich/Cheap strike filter buttons silently returned zero results forever, no
+    matter how many strikes the backend had genuinely classified.
+
+    Kept as a separate step from get_volatility_mispricing_data() itself (applied at the
+    API handler for GET /pilots/options/forecast/mispricing instead) so every existing
+    caller/test of the pure evaluation function is unaffected.
+    """
+    summary = raw.get("summary") or {}
+
+    def _to_strike(s: Dict[str, Any]) -> Dict[str, Any]:
+        classification = s.get("valuation_tag") or "UNKNOWN"
+        item: Dict[str, Any] = {
+            "strike": s.get("strike"),
+            "option_type": str(s.get("option_type") or "").upper(),
+            "market_iv": s.get("market_iv"),
+            "fair_iv": s.get("fair_iv"),
+            "iv_spread": s.get("spread"),
+            "classification": classification,
+            "suggested_action": _VALUATION_TAG_TO_ACTION.get(classification, "HOLD"),
+        }
+        for key in ("bid", "ask", "delta", "gamma", "vega", "theta"):
+            if s.get(key) is not None:
+                item[key] = s[key]
+        if s.get("mid_price") is not None:
+            item["mid"] = s["mid_price"]
+        return item
+
+    strikes = [_to_strike(s) for s in (raw.get("strikes") or raw.get("strike_mispricings") or [])]
+
+    trade_recommendations = []
+    for t in raw.get("candidate_trades") or []:
+        leg_strikes = sorted({
+            leg["strike"] for leg in (t.get("legs") or []) if leg.get("strike") is not None
+        })
+        trade_recommendations.append({
+            "strategy": t.get("name") or t.get("strategy_type") or "",
+            "direction": "SELL_VOL" if t.get("is_credit") else "BUY_VOL",
+            "strikes": leg_strikes,
+            "reason": t.get("rationale") or "",
+            "estimated_edge_pct": t.get("mispricing_score", 0.0),
+        })
+
+    expiration = raw.get("expiration") or ""
+
+    response: Dict[str, Any] = {
+        "symbol": raw.get("symbol") or "",
+        "spot_price": raw.get("spot_price"),
+        "expiration": expiration,
+        "expirations": [expiration] if expiration else [],
+        "dte": raw.get("dte"),
+        "rich_strikes_count": summary.get("rich_strikes_count", 0),
+        "cheap_strikes_count": summary.get("cheap_strikes_count", 0),
+        "strikes": strikes,
+        "trade_recommendations": trade_recommendations,
+        "as_of": raw.get("as_of") or "",
+    }
+
+    fair_iv_baseline = raw.get("baseline_fair_iv", raw.get("fair_atm_iv"))
+    if fair_iv_baseline is not None:
+        response["fair_iv_baseline"] = fair_iv_baseline
+    if raw.get("market_atm_iv") is not None:
+        response["market_atm_iv"] = raw["market_atm_iv"]
+
+    return response
 
 
 # ---------------------------------------------------------------------------

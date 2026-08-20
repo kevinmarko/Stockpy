@@ -393,10 +393,12 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                 Zero-Gamma Flip Level
               </span>
               <div style={{ fontSize: "1.5rem", fontWeight: 800, color: theme.caution }}>
-                ${data.zero_gamma_flip.toFixed(2)}
+                {data.zero_gamma_flip != null ? `$${data.zero_gamma_flip.toFixed(2)}` : "—"}
               </div>
               <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
-                {currentSpot >= data.zero_gamma_flip
+                {data.zero_gamma_flip == null
+                  ? "No real options chain data available to solve for a flip boundary"
+                  : currentSpot >= data.zero_gamma_flip
                   ? `+${((currentSpot / data.zero_gamma_flip - 1) * 100).toFixed(1)}% above flip boundary`
                   : `-${((1 - currentSpot / data.zero_gamma_flip) * 100).toFixed(1)}% below flip boundary`}
               </span>
@@ -419,7 +421,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
               </span>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "0.8rem", color: theme.growth, fontWeight: 600 }}>
-                  📈 Call Wall: ${data.call_wall_strike.toFixed(2)}
+                  📈 Call Wall: {data.call_wall_strike != null ? `$${data.call_wall_strike.toFixed(2)}` : "—"}
                 </span>
                 <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
                   Pin Resistance
@@ -427,7 +429,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: "0.8rem", color: theme.decline, fontWeight: 600 }}>
-                  📉 Put Wall: ${data.put_wall_strike.toFixed(2)}
+                  📉 Put Wall: {data.put_wall_strike != null ? `$${data.put_wall_strike.toFixed(2)}` : "—"}
                 </span>
                 <span style={{ fontSize: "0.75rem", color: theme.textSecondary }}>
                   Support Floor
@@ -513,7 +515,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                 {data.strikes.map((s) => {
                   const isCallWall = s.strike === data.call_wall_strike;
                   const isPutWall = s.strike === data.put_wall_strike;
-                  const isFlipStrike = Math.abs(s.strike - data.zero_gamma_flip) < 2.5;
+                  const isFlipStrike = data.zero_gamma_flip != null && Math.abs(s.strike - data.zero_gamma_flip) < 2.5;
                   const isNearSpot = Math.abs(s.strike - currentSpot) < 2.0;
                   const isHovered = hoveredStrike?.strike === s.strike;
 
@@ -726,7 +728,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                     {data.strikes.map((s) => {
                       const isCallWall = s.strike === data.call_wall_strike;
                       const isPutWall = s.strike === data.put_wall_strike;
-                      const isZeroFlip = Math.abs(s.strike - data.zero_gamma_flip) < 2.5;
+                      const isZeroFlip = data.zero_gamma_flip != null && Math.abs(s.strike - data.zero_gamma_flip) < 2.5;
                       const isNearSpot = Math.abs(s.strike - currentSpot) < 2.0;
 
                       return (

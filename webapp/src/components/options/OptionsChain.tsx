@@ -41,7 +41,7 @@ export const OptionsChain: React.FC<Props> = ({ data, activeTab, onSelectContrac
       metricCols.push({ header: 'OI', key: 'openInterest', render: (c: OptionContract) => fmtNum(c.openInterest) });
     }
     if (selectedMetrics.includes('impliedVolatility')) {
-      metricCols.push({ header: 'IV', key: 'impliedVolatility', render: (c: OptionContract) => `${fmtNum(c.impliedVolatility * 100, 1)}%` });
+      metricCols.push({ header: 'IV', key: 'impliedVolatility', render: (c: OptionContract) => c.impliedVolatility != null ? `${fmtNum(c.impliedVolatility * 100, 1)}%` : '—' });
     }
     if (selectedMetrics.includes('chanceOfProfit')) {
       metricCols.push({ header: 'PoP', key: 'chanceOfProfit', render: (c: OptionContract) => `${fmtNum(c.greeks.chanceOfProfit * 100, 1)}%` });

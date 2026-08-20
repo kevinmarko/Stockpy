@@ -110,6 +110,11 @@ class VPINBucket:
     end_time: Optional[str] = None
     trade_count: int = 0
     price_change: float = 0.0
+    # Real first/last trade price observed within this bucket (not fabricated -- these are
+    # already computed internally by compute_vpin_buckets to derive `price_change`, just not
+    # previously surfaced on the dataclass).
+    price_start: float = 0.0
+    price_end: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -123,6 +128,8 @@ class VPINBucket:
             "end_time": self.end_time,
             "trade_count": self.trade_count,
             "price_change": round(float(self.price_change), 4),
+            "price_start": round(float(self.price_start), 4),
+            "price_end": round(float(self.price_end), 4),
         }
 
 
@@ -369,6 +376,8 @@ def compute_vpin_buckets(
                     end_time=cur_end_time,
                     trade_count=cur_trade_count,
                     price_change=price_change,
+                    price_start=bucket_first_price,
+                    price_end=bucket_last_price,
                 )
                 buckets.append(bucket)
 
@@ -658,4 +667,64 @@ def get_options_vpin_metrics(
     concession = apply_defensive_spread_concession(0.05, result.vpin)
     res_dict["recommended_spread_concession"] = concession
     return res_dict
+
+
+def get_options_vpin_metrics_for_frontend(
+    symbol: str,
+    num_buckets: int = DEFAULT_NUM_BUCKETS,
+    bucket_size: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Adapts `get_options_vpin_metrics()`'s internal result into the shape
+    `webapp/src/api/types.ts::VpinMetricsResponse` declares for the Pilots PWA's VpinGauge
+    screen -- `get_options_vpin_metrics()`'s own return shape/keys are untouched by this
+    function (`toxicity_regime`, `recommended_spread_concession`, per-bucket `volume`/
+    `order_imbalance`, ...); this is the ONLY function `/pilots/options/vpin/metrics` should
+    call.
+
+    `toxicity_percentile` is never computed by this module (there is no historical VPIN
+    distribution to rank against) and is honestly `None` (CONSTRAINT #4) rather than a
+    fabricated median. `warning_message` is synthesized here from the real `toxicity_regime`
+    the backend computed, since the frontend banner needs a message string, not a boolean.
+    """
+    result = get_options_vpin_metrics(symbol=symbol, num_buckets=num_buckets, bucket_size=bucket_size)
+
+    sym = result.get("symbol") or symbol
+    regime = result.get("toxicity_regime", "MODERATE")
+    vpin = result.get("vpin")
+
+    warning_message = None
+    if regime == "HIGH_TOXICITY" and vpin is not None:
+        warning_message = (
+            f"Elevated order-flow toxicity detected for {sym} (VPIN={vpin:.2f}) -- "
+            "adverse selection risk is high; defensive spread widening is recommended."
+        )
+
+    buckets_out = [
+        {
+            "bucket_index": b.get("bucket_index"),
+            "buy_volume": b.get("buy_volume"),
+            "sell_volume": b.get("sell_volume"),
+            "total_volume": b.get("volume"),
+            "price_start": b.get("price_start"),
+            "price_end": b.get("price_end"),
+            "price_change": b.get("price_change"),
+            "imbalance": b.get("order_imbalance"),
+            "timestamp": b.get("end_time") or b.get("start_time"),
+        }
+        for b in (result.get("buckets") or [])
+    ]
+
+    return {
+        "symbol": sym,
+        "vpin": vpin,
+        "regime": regime,
+        "toxicity_percentile": None,
+        "bucket_size": result.get("bucket_size"),
+        "num_buckets": result.get("num_buckets"),
+        "buckets": buckets_out,
+        "defensive_spread_concession": result.get("recommended_spread_concession"),
+        "warning_message": warning_message,
+        "as_of": result.get("timestamp"),
+    }
 

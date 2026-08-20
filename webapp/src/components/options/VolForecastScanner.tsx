@@ -202,14 +202,15 @@ export const VolForecastScanner: React.FC<VolForecastScannerProps> = ({
                 fontSize: 18,
                 fontWeight: 600,
                 marginTop: 4,
-                color: mispricing.market_atm_iv > forecast.fair_iv_blend ? theme.caution : theme.growth,
+                color: (mispricing.market_atm_iv ?? 0) > forecast.fair_iv_blend ? theme.caution : theme.growth,
               }}
             >
-              {(mispricing.market_atm_iv * 100).toFixed(2)}% vs {(mispricing.fair_iv_baseline * 100).toFixed(2)}%
+              {mispricing.market_atm_iv != null ? `${(mispricing.market_atm_iv * 100).toFixed(2)}%` : "—"} vs {mispricing.fair_iv_baseline != null ? `${(mispricing.fair_iv_baseline * 100).toFixed(2)}%` : "—"}
             </div>
             <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
-              Spread: {((mispricing.market_atm_iv - mispricing.fair_iv_baseline) * 100 > 0 ? "+" : "") +
-                ((mispricing.market_atm_iv - mispricing.fair_iv_baseline) * 100).toFixed(2)}%
+              Spread: {mispricing.market_atm_iv != null && mispricing.fair_iv_baseline != null
+                ? `${(mispricing.market_atm_iv - mispricing.fair_iv_baseline) * 100 > 0 ? "+" : ""}${((mispricing.market_atm_iv - mispricing.fair_iv_baseline) * 100).toFixed(2)}%`
+                : "—"}
             </div>
           </div>
 
@@ -517,7 +518,9 @@ export const VolForecastScanner: React.FC<VolForecastScannerProps> = ({
                         {s.iv_spread > 0 ? "+" : ""}
                         {(s.iv_spread * 100).toFixed(1)}%
                       </td>
-                      <td style={{ padding: "6px 8px" }}>{s.spread_zscore > 0 ? `+${s.spread_zscore}` : s.spread_zscore}σ</td>
+                      <td style={{ padding: "6px 8px" }}>
+                        {s.spread_zscore != null ? `${s.spread_zscore > 0 ? "+" : ""}${s.spread_zscore}σ` : "—"}
+                      </td>
                       <td style={{ padding: "6px 8px" }}>
                         <span
                           style={{

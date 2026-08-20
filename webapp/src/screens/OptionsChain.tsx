@@ -5,6 +5,7 @@ import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import { OptionChainResponse } from "../api/types";
 import { theme } from "../theme";
+import { fmtUsd } from "../format";
 import { OptionsChain as OptionsChainGrid } from "../components/options/OptionsChain";
 import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
 import { OptionsMetricSelector, MetricColumn } from "../components/options/OptionsMetricSelector";
@@ -111,7 +112,9 @@ export function OptionsChain() {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: "0.85rem", color: theme.textSecondary }}>Share price</span>
-          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>${spotPrice.toFixed(2)}</span>
+          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>
+            {chainData?.spot_price != null ? fmtUsd(chainData.spot_price) : "—"}
+          </span>
         </div>
         <button
           onClick={() => {
@@ -336,7 +339,7 @@ export function OptionsChain() {
               expiration={selectedExp || undefined}
               legs={selectedLegs}
               assetType={isStockTradeOpen ? "stock" : "option"}
-              spotPrice={spotPrice}
+              spotPrice={chainData?.spot_price ?? null}
               onClear={() => {
                 setSelectedLegs([]);
                 setIsStockTradeOpen(false);

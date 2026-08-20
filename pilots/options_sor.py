@@ -59,6 +59,8 @@ __all__ = [
     "RoutingAnalysisResult",
     "analyze_routing_options",
     "simulate_legging_execution",
+    "analyze_routing_options_for_frontend",
+    "simulate_legging_execution_for_frontend",
     "parse_leg_symbol",
     "calculate_leg_greeks",
 ]
@@ -873,7 +875,9 @@ def simulate_legging_execution(
 
     # Total slippage cost across all runs (now honestly includes the naked-exposure unwind
     # cost incurred on hung paths, rather than silently ignoring that risk).
-    avg_slippage_cost = float(np.mean(np.maximum(0.0, adverse_slippage)))
+    clipped_slippage = np.maximum(0.0, adverse_slippage)
+    avg_slippage_cost = float(np.mean(clipped_slippage))
+    slippage_p95 = float(np.percentile(clipped_slippage, 95))
 
     # Net dollar savings distribution = Gross Spread Savings - Adverse Slippage (incl. the
     # naked-exposure unwind cost charged above on hung paths).
@@ -929,7 +933,13 @@ def simulate_legging_execution(
             "p50": round(savings_p50, 4),
             "p95": round(savings_p95, 4),
             "mean": round(expected_net_edge_captured, 4),
+            "std": round(float(np.std(simulated_savings)), 4),
             "var_95": round(var_95, 4),
+            "adverse_selection_p95": round(slippage_p95, 4),
+            # Real (truncated, not fabricated) sample of the simulated net-edge-captured
+            # distribution -- mirrors "sample_prices" above -- so a caller can build an honest
+            # histogram instead of only percentile summary stats.
+            "sample_savings": [round(x, 4) for x in simulated_savings[:200].tolist()],
         },
     }
 
@@ -989,3 +999,179 @@ def simulate_legging_execution(
         var_95=round(var_95, 4),
         is_legging_favorable=is_favorable,
     )
+
+
+_LEG_ROLE_TO_PRIORITY = {"passive": 1, "direct": 1, "active": 2, "neutral": 2}
+
+
+def _leg_breakdown_for_frontend(parsed_legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Adapts `analyze_routing_options()`'s internal per-leg dicts (lowercase `action`/
+    `option_type`, a `role` string) into `webapp/src/api/types.ts::SorLegBreakdown`'s shape
+    (uppercase `action`/`option_type` enums, a `fill_priority`/`fill_style` pair)."""
+    out = []
+    for pl in parsed_legs:
+        role = pl.get("role", "neutral")
+        out.append({
+            "strike": pl.get("strike"),
+            "option_type": str(pl.get("option_type", "call")).upper(),
+            "action": str(pl.get("action", "buy")).upper(),
+            "bid": pl.get("bid"),
+            "ask": pl.get("ask"),
+            "mid": pl.get("mid"),
+            "fill_priority": _LEG_ROLE_TO_PRIORITY.get(role, 2),
+            "fill_style": "PASSIVE" if role in ("passive", "direct") else "ACTIVE",
+        })
+    return out
+
+
+def analyze_routing_options_for_frontend(
+    legs: List[Dict[str, Any]],
+    spot_price: float,
+    quotes_map: Optional[Dict[str, Any]] = None,
+    volatility: float = 0.25,
+    order_size: int = 1,
+    latency_ms: Optional[float] = None,
+    symbol: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Adapts `analyze_routing_options()`'s internal `RoutingAnalysisResult` (nested `cob_pricing`/
+    `synthetic_legging` dicts, `recommended_policy`/`policy_rationale` field names, lowercase
+    per-leg `action`/`option_type`) into the flat shape
+    `webapp/src/api/types.ts::SorAnalysisResponse` declares for the Pilots PWA's
+    SmartOrderRouterView screen. `analyze_routing_options()`'s own return shape/tests
+    (`tests/test_options_sor.py`) are untouched by this function -- it is the ONLY function
+    `/pilots/options/sor/analyze` should call.
+
+    `analyze_routing_options()` itself has no `symbol` parameter -- it derives one from the
+    first leg's own `symbol` field, which the Pilots PWA's SmartOrderRouterView never sets on
+    its synthetic preset legs, so that derivation always fell back to a placeholder like
+    "LEG_1 ...". The caller-supplied `symbol` (the real underlying the legs were built against)
+    is used here when the derived one looks like that placeholder, rather than silently
+    reporting the wrong ticker.
+    """
+    res = analyze_routing_options(
+        legs=legs,
+        spot_price=spot_price,
+        quotes_map=quotes_map,
+        volatility=volatility,
+        order_size=order_size,
+    )
+
+    cob = res.cob_pricing or {}
+    synth = res.synthetic_legging or {}
+
+    resolved_symbol = res.symbol
+    if symbol and (not resolved_symbol or resolved_symbol in ("MULTI", "UNKNOWN") or resolved_symbol.startswith("LEG_")):
+        resolved_symbol = symbol.strip().upper()
+
+    return {
+        "symbol": resolved_symbol,
+        "recommended_route": res.recommended_policy,
+        "cob_net_price": cob.get("net_mid", 0.0),
+        "cob_natural_price": cob.get("net_natural", 0.0),
+        "synthetic_net_price": synth.get("net_price_passive_first", 0.0),
+        "expected_savings": synth.get("net_edge", 0.0),
+        "hung_leg_probability": synth.get("hung_leg_probability", 0.0),
+        "adverse_selection_cost": synth.get("estimated_adverse_hazard", 0.0),
+        "latency_ms": latency_ms if latency_ms is not None else 0.0,
+        "legs_breakdown": _leg_breakdown_for_frontend(res.legs_breakdown or []),
+        "rationale": res.policy_rationale,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# Representative latency points (ms) used to build the frontend's latency-decay curve. A
+# reduced simulation count per point keeps the total Monte Carlo work for one API call
+# bounded (10 points x _LATENCY_CURVE_SIMULATIONS instead of one point x the caller's full
+# num_simulations) while still being a real re-run of `simulate_legging_execution` at each
+# point, not an interpolated/fabricated curve.
+_LATENCY_CURVE_POINTS_MS = [50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000]
+_LATENCY_CURVE_SIMULATIONS = 300
+
+
+def simulate_legging_execution_for_frontend(
+    legs: List[Dict[str, Any]],
+    spot_price: float,
+    volatility: float = 0.20,
+    latency_seconds: float = 2.0,
+    num_simulations: int = 1000,
+    drift: float = 0.0,
+    random_seed: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Adapts `simulate_legging_execution()`'s internal `LeggingSimulationResult` into the shape
+    `webapp/src/api/types.ts::LeggingSimulationResponse` declares for the Pilots PWA's
+    SmartOrderRouterView screen. `simulate_legging_execution()`'s own return shape/tests
+    (`tests/test_options_sor.py`) are untouched by this function -- it is the ONLY function
+    `/pilots/options/sor/simulate-legging` should call.
+
+    Builds two things the frontend needs that the core simulation doesn't itself compute:
+    - `pnl_distribution`: a real (not fabricated) histogram over the simulated net-edge-captured
+      sample the core function now also returns (`distribution["savings_distribution"]
+      ["sample_savings"]`) -- never fewer than 1 bin, degrades to an empty list on an invalid
+      (e.g. <2-leg) simulation rather than a fabricated bell curve.
+    - `latency_curve`: re-runs the same simulation at `_LATENCY_CURVE_POINTS_MS` (a fixed,
+      reduced-simulation-count sweep) since the core function only ever evaluates ONE latency
+      value per call -- there is no single-call primitive that returns a curve.
+    """
+    result = simulate_legging_execution(
+        legs=legs,
+        spot_price=spot_price,
+        volatility=volatility,
+        latency_seconds=latency_seconds,
+        num_simulations=num_simulations,
+        random_seed=random_seed,
+    )
+
+    dist = result.distribution or {}
+    savings_dist = dist.get("savings_distribution") or {}
+    sample_savings = savings_dist.get("sample_savings") or []
+
+    pnl_distribution: List[Dict[str, Any]] = []
+    if sample_savings:
+        lo, hi = min(sample_savings), max(sample_savings)
+        n_bins = 12
+        if hi - lo < 1e-9:
+            pnl_distribution = [{"bin_edge": round(lo, 2), "count": len(sample_savings), "probability": 1.0}]
+        else:
+            counts, edges = np.histogram(sample_savings, bins=n_bins, range=(lo, hi))
+            total = int(counts.sum()) or 1
+            pnl_distribution = [
+                {
+                    "bin_edge": round(float(edges[i]), 2),
+                    "count": int(counts[i]),
+                    "probability": round(float(counts[i]) / total, 4),
+                }
+                for i in range(n_bins)
+            ]
+
+    latency_curve: List[Dict[str, Any]] = []
+    if result.valid and legs and len(legs) >= 2:
+        for lat_ms in _LATENCY_CURVE_POINTS_MS:
+            pt = simulate_legging_execution(
+                legs=legs,
+                spot_price=spot_price,
+                volatility=volatility,
+                latency_seconds=lat_ms / 1000.0,
+                num_simulations=_LATENCY_CURVE_SIMULATIONS,
+                random_seed=random_seed,
+            )
+            latency_curve.append({
+                "latency_ms": lat_ms,
+                "hung_leg_rate": pt.probability_of_hung_leg,
+                "expected_edge": pt.expected_net_edge_captured,
+            })
+
+    return {
+        "symbol": (legs[0].get("symbol") if legs and isinstance(legs[0], dict) else None) or "MULTI",
+        "num_simulations": result.num_simulations,
+        "latency_seconds": result.latency_seconds,
+        "hung_leg_rate": result.probability_of_hung_leg,
+        "expected_edge_dollars": result.expected_net_edge_captured,
+        "edge_std_dollars": savings_dist.get("std", 0.0),
+        "worst_case_loss_dollars": result.var_95,
+        "p95_adverse_selection": savings_dist.get("adverse_selection_p95", 0.0),
+        "pnl_distribution": pnl_distribution,
+        "latency_curve": latency_curve,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }

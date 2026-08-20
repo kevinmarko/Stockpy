@@ -12295,27 +12295,27 @@ export const mockApi = {
   },
   async getDeltaHedgePreview() {
     return delay<DeltaHedgePreview>({
-      net_delta_shares: 48.5,
+      symbol: "SPY",
       net_dollar_delta: 24502.20,
       beta_weighted_delta_spy: 48.5,
-      spy_spot_price: 505.20,
-      required_hedge_shares: -48,
-      action: "SELL",
-      hedge_symbol: "SPY",
-      estimated_cost: 24249.60,
+      target_hedge_shares: -48.5,
       tolerance_band_shares: 25.0,
-      is_within_tolerance: false,
+      action: "SELL",
+      shares: 48,
+      required_action: true,
+      reason: "Delta imbalance (+48.50 SPY-equiv) exceeds tolerance band (±25.0 shares)",
+      spy_spot: 505.20,
     });
   },
   async executeDeltaHedge(_params?: { target_delta?: number; confirm?: boolean }) {
     return delay<DeltaHedgeResult>({
       ok: true,
+      hedged: true,
       order_id: `ord_hedge_${Date.now()}`,
       shares: 48,
       symbol: "SPY",
-      side: "SELL",
-      price: 505.20,
-      message: "Executed delta hedge order: SOLD 48 SPY shares @ $505.20 (Portfolio Delta neutralized to 0.5 shares).",
+      action: "SELL",
+      message: "Delta hedge executed: SELL 48 SPY at $505.20 (commission: $1.00).",
     });
   },
   async managePaperOptionsExits(_params?: { force?: boolean }) {
@@ -12785,7 +12785,7 @@ export const mockApi = {
       const iv_spread = Number((market_iv - fair_iv).toFixed(4));
       const spread_zscore = Number((iv_spread / 0.025).toFixed(2));
 
-      let classification: "RICH" | "CHEAP" | "FAIR" = "FAIR";
+      let classification: "RICH" | "CHEAP" | "NEUTRAL" | "UNKNOWN" = "NEUTRAL";
       let suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL" = "NEUTRAL";
       let suggested_trade: string | undefined = undefined;
 
@@ -12798,7 +12798,7 @@ export const mockApi = {
         suggested_action = "BUY_GAMMA";
         suggested_trade = "Buy Debit Spread / Long Straddle";
       } else {
-        classification = "FAIR";
+        classification = "NEUTRAL";
         suggested_action = "HOLD";
       }
 
@@ -14057,7 +14057,10 @@ export const mockApi = {
     const stdDelta = Math.sqrt(pnlDeltas.map(d => (d - meanDelta) ** 2).reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1)) || 0.01;
     const annualizedSharpe = Number(((meanDelta / stdDelta) * Math.sqrt(252 * 390)).toFixed(2));
     const avgSpread = Number((sumSpread / totalSteps).toFixed(3));
-    const fillRate = Number(((totalTrades / (totalSteps * 2)) * 100).toFixed(1));
+    // fill_rate is a 0-1 fraction (matching ml/drl_market_maker.py's
+    // `total_trades / max(1, 2 * n_steps)`), NOT a 0-100 percentage — the
+    // component multiplies by 100 at render time.
+    const fillRate = Number((totalTrades / (totalSteps * 2)).toFixed(4));
 
     return delay<MarketMakerSimResponse>({
       symbol: sym,

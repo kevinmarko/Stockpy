@@ -240,10 +240,19 @@ class TestJsonReportOutput(unittest.TestCase):
 
         try:
             import subprocess
+            # `bug_hunter.py --quick` internally budgets up to 120s for its own
+            # AST-audit subprocess step alone (see run_static_ast_audit's own
+            # `timeout=120`) -- an outer deadline of 60s here could never
+            # reliably wait out a legitimately-slow-but-still-passing internal
+            # step, and a local zero-contention run already measures ~49s,
+            # leaving under 20% headroom before a normal CI-runner slowdown
+            # (shared/loaded hosts) tips this over. Matches this test's own
+            # 60s->measured-49s margin problem, not anything scaling with a
+            # PR's diff size -- the AST audit scans the whole tree regardless.
             res = subprocess.run(
                 [sys.executable, str(ROOT_DIR / "scripts" / "bug_hunter.py"),
                  "--quick", "--json", tmp_path, "--fail-on", "NONE"],
-                capture_output=True, text=True, timeout=60, cwd=str(ROOT_DIR)
+                capture_output=True, text=True, timeout=180, cwd=str(ROOT_DIR)
             )
             self.assertTrue(Path(tmp_path).exists(),
                             "JSON report file should be created")

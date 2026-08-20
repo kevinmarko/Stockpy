@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "simulate_gamma_scalping",
+    "to_gamma_scalp_response",
     "generate_gbm_price_path",
     "generate_synthetic_price_path",
     "GammaScalpResult",
@@ -701,6 +702,107 @@ def simulate_gamma_scalping(
     }
 
     return GammaScalpResult(result_dict)
+
+
+def to_gamma_scalp_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshapes simulate_gamma_scalping()'s internal result dict (theoretical_gamma_rent /
+    theta_time_decay / total_transaction_costs / path_history / trades-without-cumulative-
+    P&L -- the shape every existing test in tests/test_gamma_scalper.py asserts on) into
+    the GammaScalpResponse contract webapp/src/api/types.ts and
+    webapp/src/components/options/GammaScalperView.tsx already agree on (gamma_rent_total /
+    theta_burn_total / transaction_costs / pnl_path / trades with per-trade cumulative P&L).
+
+    webapp/src/components/options/GammaScalperView.tsx reads `result.pnl_path.length`
+    unconditionally on mount (the panel auto-runs a simulation via useEffect) -- the live
+    endpoint was handing back a response with no `pnl_path` key at all (only `path_history`,
+    a differently-shaped array), so `result.pnl_path` was `undefined` and `.length` crashed
+    with "Cannot read properties of undefined (reading 'length')" every time this panel
+    opened, before the operator could interact with anything.
+
+    Per-trade `cash_flow` is recomputed from the SAME formula the simulation loop itself
+    uses (`-shares * spot_price` -- see the `total_cash_flow -=` line above), and
+    `stock_position`/`total_pnl`/`gamma_rent_cumulative`/`theta_decay_cumulative` are joined
+    from `path_history`/`hedge_history` by the shared `step` index -- real, already-computed
+    values, never fabricated (CONSTRAINT #4). `timestamp` has no wall-clock equivalent in
+    this abstract step-indexed simulation, so an honest `"t+<step>"` label is used rather
+    than a synthetic ISO datetime that would misrepresent it as real time.
+
+    Kept as a separate step from simulate_gamma_scalping() itself (applied at the API
+    handler for POST /pilots/options/gamma-scalp/simulate instead) so every existing
+    caller/test of the pure simulation function is unaffected.
+    """
+    path_history = raw.get("path_history") or []
+    hedge_history = raw.get("hedge_history") or []
+    trades_raw = raw.get("trades") or []
+
+    path_by_step = {p.get("step"): p for p in path_history if p.get("step") is not None}
+    hedge_by_step = {h.get("step"): h for h in hedge_history if h.get("step") is not None}
+    initial_snapshot = hedge_history[0] if hedge_history else {}
+
+    def _to_trade(t: Dict[str, Any]) -> Dict[str, Any]:
+        step = t.get("step")
+        path_pt = path_by_step.get(step) or {}
+        hedge_pt = hedge_by_step.get(step) or {}
+        shares = t.get("shares", 0.0) or 0.0
+        spot_price = t.get("spot_price", 0.0) or 0.0
+        side_raw = str(t.get("side", "")).upper()
+        side = side_raw if side_raw in ("BUY", "SELL") else "HOLD"
+        return {
+            "step": step,
+            "timestamp": f"t+{step}",
+            "spot_price": spot_price,
+            "pre_delta": t.get("net_delta_before", 0.0),
+            "post_delta": t.get("net_delta_after", 0.0),
+            "shares_traded": shares,
+            "side": side,
+            "trade_price": spot_price,
+            "cash_flow": round(-shares * spot_price, 4),
+            "stock_position": hedge_pt.get("stock_shares", path_pt.get("stock_shares", 0.0)),
+            "option_mtm": path_pt.get("option_value", 0.0),
+            "total_pnl": path_pt.get("total_pnl", 0.0),
+            "gamma_rent_cumulative": path_pt.get("gamma_rent", 0.0),
+            "theta_decay_cumulative": path_pt.get("theta_decay", 0.0),
+        }
+
+    pnl_path = [
+        {
+            "step": p.get("step"),
+            "spot": p.get("spot_price"),
+            "total_pnl": p.get("total_pnl"),
+            "gamma_rent": p.get("gamma_rent"),
+            "theta_decay": p.get("theta_decay"),
+            "option_mtm": p.get("option_value"),
+            "stock_pnl": p.get("stock_pnl"),
+        }
+        for p in path_history
+    ]
+
+    price_path = [p["spot_price"] for p in path_history if p.get("spot_price") is not None]
+
+    return {
+        "symbol": raw.get("symbol", ""),
+        "spot_price": raw.get("initial_spot", 0.0),
+        "initial_delta": initial_snapshot.get("option_delta_shares", 0.0),
+        "initial_gamma": initial_snapshot.get("option_gamma_shares", 0.0),
+        "initial_theta": initial_snapshot.get("option_theta_annual", 0.0),
+        "total_trades": raw.get("total_trades_count", len(trades_raw)),
+        "rebalance_count": raw.get("rebalance_count", len(trades_raw)),
+        "delta_threshold": raw.get("delta_threshold", 0.0),
+        "total_pnl": raw.get("total_pnl", 0.0),
+        # `theta_decay_cost` (not the raw `theta_time_decay` P&L, which can be negative) --
+        # the frontend renders this as a fixed "-$..." magnitude, matching the codebase's
+        # own theta_decay_cost = -theta_time_decay-when-negative-else-0 convention above.
+        "gamma_rent_total": raw.get("theoretical_gamma_rent", 0.0),
+        "theta_burn_total": raw.get("theta_decay_cost", 0.0),
+        "stock_pnl": raw.get("stock_pnl", 0.0),
+        "option_pnl": raw.get("option_pnl", 0.0),
+        "transaction_costs": raw.get("total_transaction_costs", 0.0),
+        "net_edge": raw.get("net_edge", 0.0),
+        "trades": [_to_trade(t) for t in trades_raw],
+        "price_path": price_path,
+        "pnl_path": pnl_path,
+    }
 
 
 def generate_gbm_price_path(

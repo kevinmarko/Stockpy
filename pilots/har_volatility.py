@@ -54,6 +54,7 @@ __all__ = [
     "fit_har_rv_model",
     "forecast_forward_volatility",
     "get_har_volatility_forecast",
+    "to_har_rv_forecast_response",
     "HARModelResult",
     "HARForecastResult",
     "TRADING_DAYS_PER_YEAR",
@@ -718,6 +719,7 @@ def get_har_volatility_forecast(
     """
     sym = symbol.upper().strip()
     returns: Optional[np.ndarray] = None
+    last_close: Optional[float] = None
 
     if market_provider is None:
         try:
@@ -734,6 +736,7 @@ def get_har_volatility_forecast(
                 closes = closes[closes > 0]
                 if len(closes) >= _MIN_OBSERVATIONS_FOR_FIT:
                     returns = np.diff(np.log(closes))
+                    last_close = float(closes[-1])
         except Exception as exc:
             logger.debug("Failed to get historical bars for %s: %s", sym, exc)
 
@@ -745,6 +748,82 @@ def get_har_volatility_forecast(
         returns = np.random.normal(loc=0.0003, scale=daily_sigma, size=252)
 
     res = forecast_forward_volatility(returns, symbol=sym, horizon_days=horizon_days, return_details=True)
-    if isinstance(res, HARForecastResult):
-        return res.to_dict()
-    return {"symbol": sym, "forecast_annualized_vol": res}
+    result = res.to_dict() if isinstance(res, HARForecastResult) else {"symbol": sym, "forecast_annualized_vol": res}
+    # `last_close` is the real trailing close price used to compute `returns` above (never a
+    # fabricated quote -- CONSTRAINT #4); omitted entirely when no real bars were available
+    # (the parametric-fallback branch), rather than reporting a synthetic price as if it were real.
+    if last_close is not None:
+        result["last_close"] = last_close
+    return result
+
+
+def to_har_rv_forecast_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshapes get_har_volatility_forecast()'s internal result (forecast_annualized_vol /
+    model_fit / current_rv_daily / forecast_rv_1d -- the shape every existing test in
+    tests/test_har_volatility.py asserts on, in raw daily-VARIANCE units) into the
+    HarRvForecastResponse contract webapp/src/api/types.ts and
+    webapp/src/components/options/VolForecastScanner.tsx already agree on (rv_daily/
+    rv_weekly/rv_monthly/forecast_vol_* as ANNUALIZED VOLATILITY percentages, and a
+    `coefficients` object rather than a bare `model_fit` dict).
+
+    webapp/src/components/options/VolForecastScanner.tsx reads
+    `forecast.coefficients.beta_0.toFixed(3)` unconditionally -- the live endpoint was
+    handing the frontend a response with no `coefficients` key at all (only `model_fit`),
+    so `forecast.coefficients` was `undefined` and `.beta_0` crashed with "Cannot read
+    properties of undefined (reading 'beta_0')" every time this panel opened.
+
+    Every raw *_daily/*_weekly/*_monthly/forecast_rv_* field here is a realized DAILY
+    VARIANCE (r_t^2 scale, e.g. ~0.0001), not a volatility -- annualizing via
+    sqrt(variance * TRADING_DAYS_PER_YEAR) (the same convention this module's own
+    `annualized_har_volatility`/`annualized_historical_volatility` already use) is what
+    makes the frontend's own "* 100 -> %" rendering produce a sane number instead of a
+    display bug two orders of magnitude too small.
+
+    Kept as a separate step from get_har_volatility_forecast() itself (applied at the API
+    handler for GET /pilots/options/forecast/har-rv instead) so every existing caller/test
+    of the pure forecast function is unaffected.
+    """
+    def _annualized_vol(variance: Any, fallback: Any = None) -> Optional[float]:
+        try:
+            v = float(variance)
+        except (TypeError, ValueError):
+            v = None
+        if v is None or v < 0:
+            if fallback is None:
+                return None
+            try:
+                return round(float(fallback), 6)
+            except (TypeError, ValueError):
+                return None
+        return round(math.sqrt(v * TRADING_DAYS_PER_YEAR), 6)
+
+    annualized_hist_vol = raw.get("annualized_historical_volatility")
+    model_fit = raw.get("model_fit") or {}
+
+    response: Dict[str, Any] = {
+        "symbol": raw.get("symbol", ""),
+        "as_of": raw.get("as_of") or datetime.now(timezone.utc).isoformat(),
+        "rv_daily": _annualized_vol(raw.get("current_rv_daily"), annualized_hist_vol),
+        "rv_weekly": _annualized_vol(raw.get("current_rv_weekly"), annualized_hist_vol),
+        "rv_monthly": _annualized_vol(raw.get("current_rv_monthly"), annualized_hist_vol),
+        "forecast_vol_1d": _annualized_vol(raw.get("forecast_rv_1d"), annualized_hist_vol),
+        "forecast_vol_5d": _annualized_vol(raw.get("forecast_rv_5d"), annualized_hist_vol),
+        "forecast_vol_22d": _annualized_vol(raw.get("forecast_rv_22d"), annualized_hist_vol),
+        "forecast_vol_30d": _annualized_vol(raw.get("forecast_rv_30d"), annualized_hist_vol),
+        "fair_iv_blend": raw.get("forecast_annualized_vol") or annualized_hist_vol or 0.0,
+        "coefficients": {
+            "beta_0": model_fit.get("beta_0", 0.0),
+            "beta_d": model_fit.get("beta_d", 0.0),
+            "beta_w": model_fit.get("beta_w", 0.0),
+            "beta_m": model_fit.get("beta_m", 0.0),
+        },
+    }
+
+    if raw.get("last_close") is not None:
+        response["spot_price"] = raw["last_close"]
+    r_squared = model_fit.get("r2", model_fit.get("r_squared"))
+    if r_squared is not None:
+        response["r_squared"] = r_squared
+
+    return response

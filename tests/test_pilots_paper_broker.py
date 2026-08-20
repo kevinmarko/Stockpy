@@ -571,24 +571,43 @@ class TestDeltaHedgeEndpoints:
 class TestVolSurfaceEndpoint:
     @patch("pilots.volatility_surface.get_volatility_surface_data")
     def test_get_vol_surface_success(self, mock_vol):
+        # Real shape produced by calculate_volatility_surface()/get_volatility_surface_data()
+        # (see tests/test_volatility_surface.py) -- NOT the frontend's VolSurfaceResponse
+        # contract. The endpoint is responsible for reshaping via to_vol_surface_response()
+        # (docs/known_issues/scenario_matrix_field_mismatch.md's bug class -- here `smiles`
+        # dict-of-expirations vs. a flat `smile_points` array, `skew_summary` vs. `skew`,
+        # `term_structure` as an interpolated-grid object vs. a per-expiration array).
         mock_vol.return_value = {
             "symbol": "SPY",
             "spot_price": 500.0,
-            "base_iv": 0.22,
-            "surface": [
-                {"strike": 500.0, "moneyness": 1.0, "dte": 30, "expiration": "2026-09-18", "iv": 0.22, "delta": 0.50, "option_type": "call"}
-            ],
-            "term_structure": [
-                {"dte": 30, "expiration": "2026-09-18", "atm_iv": 0.22}
-            ],
-            "skew_25d": {
-                "put_iv": 0.24,
-                "call_iv": 0.20,
-                "skew": 0.04,
+            "as_of": "2026-08-19",
+            "expirations": ["2026-09-18"],
+            "smiles": {
+                "2026-09-18": {
+                    "expiration": "2026-09-18",
+                    "dte": 30,
+                    "atm_iv": 0.22,
+                    "skew_25d": 0.04,
+                    "put_25d_iv": 0.24,
+                    "call_25d_iv": 0.20,
+                    "curve": [
+                        {"strike": 500.0, "moneyness": 1.0, "iv": 0.22, "call_delta": 0.50, "put_delta": -0.50},
+                    ],
+                    "strikes": [
+                        {"strike": 500.0, "moneyness": 1.0, "iv": 0.22, "call_bid": 4.5, "call_ask": 4.7, "put_bid": None, "put_ask": None},
+                    ],
+                }
             },
-            "vrp_cone": [
-                {"window_days": 30, "realized_vol": 0.18, "implied_vol": 0.22, "vrp": 0.04}
-            ],
+            "term_structure": {"points": [], "term_slope_30_90": None, "term_slope_7_30": None, "structure_regime": "unknown"},
+            "skew_summary": {"front_month_skew_25d": 0.04, "average_skew_25d": 0.04, "expirations_skew": {"2026-09-18": 0.04}},
+            "vrp_cone": {
+                "10d": {"window_days": 10, "implied_vol": 0.22, "realized_vol": 0.19, "vrp": 0.03, "vrp_ratio": 1.16, "regime": "premium_rich"},
+                "30d": {"window_days": 30, "implied_vol": 0.22, "realized_vol": 0.18, "vrp": 0.04, "vrp_ratio": 1.22, "regime": "premium_rich"},
+            },
+            "surface_grid": [],
+            "missing_data": False,
+            "reason": None,
+            "warnings": [],
         }
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
@@ -599,10 +618,22 @@ class TestVolSurfaceEndpoint:
         body = resp.json()
         assert body["symbol"] == "SPY"
         assert body["spot_price"] == 500.0
-        assert len(body["surface"]) == 1
+        assert body["selected_expiration"] == "2026-09-18"
+        # Reshaped field names the frontend (VolSurfaceView.tsx / webapp/src/api/types.ts)
+        # actually reads.
+        assert len(body["smile_points"]) == 1
+        assert body["smile_points"][0]["strike"] == 500.0
         assert len(body["term_structure"]) == 1
-        assert body["skew_25d"]["skew"] == 0.04
-        assert len(body["vrp_cone"]) == 1
+        assert body["term_structure"][0]["atm_iv"] == 0.22
+        assert body["skew"]["skew_25delta"] == 0.04
+        assert body["skew"]["put_25delta_iv"] == 0.24
+        assert body["skew"]["call_25delta_iv"] == 0.20
+        assert body["skew"]["realized_vol_30d"] == 0.18
+        assert body["skew"]["vrp_spread"] == 0.04
+        # Raw internal keys must NOT leak through.
+        assert "smiles" not in body
+        assert "skew_summary" not in body
+        assert "surface_grid" not in body
 
     def test_get_vol_surface_requires_symbol(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -664,30 +695,43 @@ class TestScenarioMatrixEndpoint:
 class TestEarningsCrushEndpoints:
     @patch("pilots.earnings_crush.get_earnings_crush_candidates")
     def test_get_earnings_crush_candidates_success(self, mock_get_candidates):
+        # Real shape produced by evaluate_earnings_crush_candidates() /
+        # get_earnings_crush_candidates() (see tests/test_earnings_crush.py) --
+        # NOT the frontend's EarningsCrushCandidate contract. The endpoint is
+        # responsible for reshaping via to_earnings_crush_candidate_response()
+        # (docs/known_issues/scenario_matrix_field_mismatch.md's bug class).
         mock_get_candidates.return_value = [
             {
                 "symbol": "NVDA",
+                "spot": 125.0,
                 "earnings_date": "2026-08-20",
-                "earnings_timing": "AMC",
                 "days_to_earnings": 2,
-                "spot_price": 125.0,
+                "expiration": "2026-08-21",
+                "dte": 3,
                 "atm_iv": 0.65,
-                "expected_move_dollar": 11.20,
+                "expected_move_usd": 11.20,
                 "expected_move_pct": 0.0896,
-                "historical_median_move_pct": 0.055,
+                "realized_move_pct": 0.055,
                 "crush_edge_ratio": 1.63,
-                "qualifies_edge": True,
-                "recommended_strategy": "Iron Condor",
+                "is_recommended": True,
+                "strategy": "Iron Condor",
                 "strikes": {
                     "long_put": 110.0,
                     "short_put": 114.0,
                     "short_call": 136.0,
                     "long_call": 140.0,
                 },
-                "estimated_credit": 1.40,
-                "max_loss": 2.60,
-                "estimated_roi_pct": 53.8,
-                "historical_moves": [],
+                "legs": [],
+                "net_credit": 1.40,
+                "max_profit": 140.0,
+                "max_loss": 260.0,
+                "pricing_is_estimated": False,
+                "historical_summary": {
+                    "quarters_count": 8,
+                    "median_move_pct": 0.055,
+                    "sparse_history": False,
+                    "fallback": False,
+                },
             }
         ]
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -698,9 +742,23 @@ class TestEarningsCrushEndpoints:
         assert resp.status_code == 200
         body = resp.json()
         assert body["count"] == 1
-        assert body["candidates"][0]["symbol"] == "NVDA"
-        assert body["candidates"][0]["crush_edge_ratio"] == 1.63
-        assert body["candidates"][0]["qualifies_edge"] is True
+        candidate = body["candidates"][0]
+        assert candidate["symbol"] == "NVDA"
+        assert candidate["crush_edge_ratio"] == 1.63
+        assert candidate["edge_passed"] is True
+        # Reshaped field names the frontend (EarningsCrushScanner.tsx /
+        # webapp/src/api/types.ts) actually reads -- a bare pass-through of the
+        # raw candidate dict would leave these absent and crash the UI.
+        assert candidate["spot_price"] == 125.0
+        assert candidate["report_date"] == "2026-08-20"
+        assert candidate["expected_move_dollar"] == 11.20
+        assert candidate["median_realized_move_pct"] == 0.055
+        assert candidate["suggested_strategy"] == "Iron Condor"
+        assert candidate["estimated_credit"] == 1.40
+        assert candidate["put_wing_strike"] == 110.0
+        assert candidate["short_put_strike"] == 114.0
+        assert candidate["short_call_strike"] == 136.0
+        assert candidate["call_wing_strike"] == 140.0
 
     def test_get_earnings_crush_candidates_fails_closed_with_wrong_token(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -806,6 +864,22 @@ class TestUnusualFlowEndpoints:
         assert body["records"][0]["trade_type"] == "SWEEP"
         assert body["records"][0]["sentiment"] == "BULLISH"
 
+    @patch("pilots.unusual_options_flow.get_unusual_options_activity")
+    def test_get_unusual_flow_honors_singular_symbol_param(self, mock_get_uoa):
+        # webapp/src/api/client.ts::getUnusualOptionsFlow sends `symbol` (singular),
+        # not `symbols` -- before this fix the query param had no matching handler
+        # argument, so FastAPI silently ignored it and the ticker filter was a
+        # complete no-op against the live backend.
+        mock_get_uoa.return_value = []
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/unusual?symbol=NVDA",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        mock_get_uoa.assert_called_once()
+        assert mock_get_uoa.call_args.kwargs["symbols"] == ["NVDA"]
+
     def test_get_unusual_flow_fails_closed_with_wrong_token(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
@@ -816,19 +890,24 @@ class TestUnusualFlowEndpoints:
 
     @patch("pilots.unusual_options_flow.get_flow_sentiment")
     def test_get_flow_sentiment_success(self, mock_sentiment):
+        # Real shape produced by calculate_net_flow_sentiment()/get_flow_sentiment()
+        # (see tests/test_unusual_options_flow.py) -- NOT the frontend's FlowSentimentData
+        # contract. The endpoint is responsible for reshaping via
+        # to_flow_sentiment_response() (docs/known_issues/scenario_matrix_field_mismatch.md's
+        # bug class -- here call_put_ratio vs. put_call_ratio, a reciprocal, not a rename).
         mock_sentiment.return_value = {
             "symbol": "NVDA",
             "sentiment_score": 0.72,
-            "sentiment_label": "VERY BULLISH",
+            "sentiment_label": "VERY_BULLISH",
+            "bullish_notional": 18500000.0,
+            "bearish_notional": 3000000.0,
+            "neutral_notional": 0.0,
+            "total_notional": 21500000.0,
             "call_volume": 45000,
             "put_volume": 12000,
             "call_put_ratio": 3.75,
-            "total_bullish_notional": 18500000.0,
-            "total_bearish_notional": 3000000.0,
-            "total_notional": 21500000.0,
-            "top_active_strikes": [{"strike": 130.0, "volume": 15000}],
+            "top_active_strikes": [{"strike": 130.0, "volume": 15000, "option_type": "CALL", "notional": 6500000.0}],
             "record_count": 8,
-            "as_of": "2026-08-14T15:00:00Z",
         }
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
@@ -839,8 +918,12 @@ class TestUnusualFlowEndpoints:
         body = resp.json()
         assert body["symbol"] == "NVDA"
         assert body["sentiment_score"] == 0.72
-        assert body["sentiment_label"] == "VERY BULLISH"
-        assert body["call_put_ratio"] == 3.75
+        assert body["sentiment_label"] == "VERY_BULLISH"
+        # Reshaped field the frontend (UnusualFlowFeed.tsx / webapp/src/api/types.ts)
+        # actually reads -- put_call_ratio is the RECIPROCAL of call_put_ratio
+        # (put_volume / call_volume = 12000 / 45000), not merely a renamed copy.
+        assert "call_put_ratio" not in body
+        assert abs(body["put_call_ratio"] - (12000 / 45000)) < 1e-4
         assert len(body["top_active_strikes"]) == 1
 
     def test_get_flow_sentiment_requires_symbol(self):
@@ -867,6 +950,14 @@ class TestUnusualFlowEndpoints:
 
 class TestOptionsForecastHarRvEndpoint:
     def test_get_forecast_har_rv_success(self):
+        # The live endpoint reshapes get_har_volatility_forecast()'s raw internal result
+        # (forecast_annualized_vol/model_fit/forecast_rv_1d, in daily-VARIANCE units -- see
+        # tests/test_har_volatility.py for coverage of that shape) into the frontend's
+        # HarRvForecastResponse contract via to_har_rv_forecast_response() -- ANNUALIZED
+        # VOLATILITY, and a `coefficients` object instead of a bare `model_fit` dict.
+        # webapp/src/components/options/VolForecastScanner.tsx reads
+        # forecast.coefficients.beta_0 unconditionally; a bare pass-through of the raw
+        # result (no `coefficients` key at all) crashed that panel on every live load.
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
                 "/pilots/options/forecast/har-rv?symbol=SPY",
@@ -875,15 +966,18 @@ class TestOptionsForecastHarRvEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "SPY"
-        assert "forecast_annualized_vol" in body
-        assert body["forecast_annualized_vol"] is not None and body["forecast_annualized_vol"] > 0
-        assert "forecast_rv_1d" in body
-        assert "forecast_rv_5d" in body
-        assert "forecast_rv_22d" in body
-        assert "model_fit" in body
-        fit = body["model_fit"]
-        assert "beta_0" in fit and "beta_d" in fit and "beta_w" in fit and "beta_m" in fit
-        assert fit["beta_d"] >= 0 and fit["beta_w"] >= 0 and fit["beta_m"] >= 0
+        assert "fair_iv_blend" in body
+        assert body["fair_iv_blend"] is not None and body["fair_iv_blend"] > 0
+        for key in ("rv_daily", "rv_weekly", "rv_monthly", "forecast_vol_1d", "forecast_vol_5d", "forecast_vol_22d", "forecast_vol_30d"):
+            assert key in body and body[key] is not None and body[key] >= 0
+        assert "coefficients" in body
+        coeffs = body["coefficients"]
+        assert "beta_0" in coeffs and "beta_d" in coeffs and "beta_w" in coeffs and "beta_m" in coeffs
+        assert coeffs["beta_d"] >= 0 and coeffs["beta_w"] >= 0 and coeffs["beta_m"] >= 0
+        # The raw internal keys must NOT leak through -- they'd be a silent contract drift
+        # the frontend would never notice (it never reads them).
+        assert "model_fit" not in body
+        assert "forecast_annualized_vol" not in body
 
     def test_get_forecast_har_rv_requires_symbol(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -915,6 +1009,17 @@ class TestOptionsForecastHarRvEndpoint:
 
 class TestOptionsForecastMispricingEndpoint:
     def test_get_forecast_mispricing_success(self):
+        # The live endpoint reshapes get_volatility_mispricing_data()'s raw internal
+        # result (MispricingAnalysis.to_dict() -- baseline_fair_iv/rich_candidates_count/
+        # strike_mispricings with valuation_tag+spread -- see tests/test_vol_mispricing.py
+        # for coverage of that shape) into the frontend's VolMispricingResponse contract
+        # via to_vol_mispricing_response(): fair_iv_baseline/rich_strikes_count/strikes
+        # with classification+iv_spread+suggested_action, plus trade_recommendations.
+        # webapp/src/components/options/VolForecastScanner.tsx reads
+        # `s.classification === "RICH"` per strike -- a bare pass-through of the raw
+        # `valuation_tag` field name meant the Rich/Cheap filter buttons silently
+        # returned zero results forever on live data (CONSTRAINT #4: a silent "0 rich
+        # strikes" is exactly the unannounced-fabrication failure mode to catch here).
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
                 "/pilots/options/forecast/mispricing?symbol=SPY",
@@ -924,14 +1029,22 @@ class TestOptionsForecastMispricingEndpoint:
         body = resp.json()
         assert body["symbol"] == "SPY"
         assert "spot_price" in body
-        assert "fair_atm_iv" in body
+        assert "fair_iv_baseline" in body
         assert "market_atm_iv" in body
-        assert "iv_mispricing_spread" in body
-        assert "regime_bias" in body
-        assert "rich_candidates" in body
-        assert "cheap_candidates" in body
-        assert "strike_mispricings" in body
-        assert len(body["strike_mispricings"]) > 0
+        assert "rich_strikes_count" in body
+        assert "cheap_strikes_count" in body
+        assert "strikes" in body
+        assert len(body["strikes"]) > 0
+        first = body["strikes"][0]
+        assert "classification" in first and first["classification"] in ("RICH", "CHEAP", "NEUTRAL", "UNKNOWN")
+        assert "iv_spread" in first
+        assert "suggested_action" in first
+        # Raw internal keys must NOT leak through.
+        assert "valuation_tag" not in first
+        assert "spread" not in first
+        assert "baseline_fair_iv" not in body
+        assert "rich_candidates_count" not in body
+        assert "strike_mispricings" not in body
 
     def test_get_forecast_mispricing_requires_symbol(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -962,6 +1075,15 @@ class TestOptionsForecastMispricingEndpoint:
 
 
 class TestOptionsGammaScalpSimulateEndpoint:
+    # The live endpoint reshapes simulate_gamma_scalping()'s raw internal result
+    # (success/attribution/path_history/theoretical_gamma_rent -- see
+    # tests/test_gamma_scalper.py for coverage of that shape) into the frontend's
+    # GammaScalpResponse contract via to_gamma_scalp_response(): gamma_rent_total/
+    # theta_burn_total/transaction_costs/pnl_path (not path_history).
+    # webapp/src/components/options/GammaScalperView.tsx reads `result.pnl_path.length`
+    # unconditionally right after the panel auto-simulates on mount; a bare pass-through
+    # of the raw result (no `pnl_path` key at all) crashed that panel immediately every
+    # time it opened.
     def test_post_gamma_scalp_simulate_default(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.post(
@@ -971,20 +1093,22 @@ class TestOptionsGammaScalpSimulateEndpoint:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["success"] is True
         assert "rebalance_count" in body
         assert "stock_pnl" in body
         assert "option_pnl" in body
         assert "total_pnl" in body
-        assert "attribution" in body
-        attr = body["attribution"]
-        assert "gamma_rent" in attr
-        assert "theta_decay" in attr
-        assert "transaction_costs" in attr
+        assert "gamma_rent_total" in body
+        assert "theta_burn_total" in body
+        assert "transaction_costs" in body
         assert "trades" in body
-        assert "path_history" in body
+        assert "pnl_path" in body
+        # Raw internal keys must NOT leak through.
+        assert "attribution" not in body
+        assert "path_history" not in body
+        assert "theoretical_gamma_rent" not in body
 
     def test_post_gamma_scalp_simulate_custom_path(self):
+        # Still supports the raw/advanced position+price_path shape directly.
         custom_payload = {
             "position": {
                 "symbol": "SPY",
@@ -1008,11 +1132,42 @@ class TestOptionsGammaScalpSimulateEndpoint:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["success"] is True
         assert body["symbol"] == "SPY"
         assert body["rebalance_count"] >= 1
         assert len(body["trades"]) >= 1
-        assert len(body["path_history"]) == 6
+        assert len(body["pnl_path"]) == 6
+        first_trade = body["trades"][0]
+        assert first_trade["side"] in ("BUY", "SELL", "HOLD")
+        assert "shares_traded" in first_trade
+        assert "cash_flow" in first_trade
+        assert "total_pnl" in first_trade
+
+    def test_post_gamma_scalp_simulate_webapp_request_shape_is_honored(self):
+        # webapp/src/api/client.ts::simulateGammaScalping posts exactly this flat shape
+        # (GammaScalpRequest) -- before this fix, none of these fields had a matching
+        # Pydantic model field, so every operator-configured symbol/strike/IV/option-type/
+        # contracts/price-path selection was silently dropped and the live endpoint always
+        # simulated a hardcoded default position on a freshly regenerated random path.
+        payload = {
+            "symbol": "NVDA",
+            "spot_price": 128.5,
+            "option_type": "PUT",
+            "strike": 125.0,
+            "contracts": 5,
+            "delta_threshold": 0.10,
+            "iv": 0.55,
+            "underlying_price_path": [128.5, 130.0, 126.0, 129.0],
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/gamma-scalp/simulate",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "NVDA"
+        assert body["price_path"] == [128.5, 130.0, 126.0, 129.0]
 
     def test_post_gamma_scalp_simulate_fails_closed_with_wrong_token(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -1030,7 +1185,7 @@ class TestOptionsGammaScalpSimulateEndpoint:
                 json={},
             )
         assert resp.status_code == 200
-        assert resp.json()["success"] is True
+        assert "total_pnl" in resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -1161,12 +1316,18 @@ class TestOptionsDispersionEndpoints:
         assert "realized_correlation" in opp
         assert "correlation_spread" in opp
         assert "regime" in opp
-        assert "basket" in opp
-        basket = opp["basket"]
-        assert "index_symbol" in basket
-        assert "constituent_symbols" in basket
-        assert "basket_vega" in basket
-        assert "vega_neutrality_ratio" in basket
+        # Flat card shape from `_opportunity_to_frontend_card()` -- matches
+        # webapp/src/api/types.ts::DispersionOpportunity, NOT the raw nested `basket`
+        # shape `evaluate_dispersion_opportunity()` itself returns.
+        assert "id" in opp
+        assert "index_spot" in opp
+        assert "index_iv" in opp
+        assert "vega_neutrality_ratio" in opp
+        assert "constituents" in opp
+        assert isinstance(opp["constituents"], list)
+        assert opp["constituents"]
+        assert "symbol" in opp["constituents"][0]
+        assert "weight" in opp["constituents"][0]
 
     def test_get_dispersion_opportunities_with_index_filter(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -1291,15 +1452,20 @@ class TestOptionsZeroDteEndpoints:
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "SPY"
-        assert "spot" in body
-        assert "signal" in body
-        assert "opening_range" in body
-        assert "high" in body["opening_range"]
-        assert "low" in body["opening_range"]
-        assert "squeeze" in body
-        assert "risk_parameters" in body
-        assert body["risk_parameters"]["profit_target_pct"] == 0.75
-        assert body["risk_parameters"]["stop_loss_pct"] == 0.30
+        assert "as_of" in body
+        # `{signals: [...]}` card shape from `get_0dte_signals_for_frontend()` -- matches
+        # webapp/src/api/types.ts::ZeroDteSignalResponse, NOT get_0dte_signals()'s own
+        # flat internal dict (which uses `spot`/`opening_range`/`squeeze` directly).
+        assert "signals" in body
+        assert len(body["signals"]) == 1
+        card = body["signals"][0]
+        assert card["symbol"] == "SPY"
+        assert "spot_price" in card
+        assert "opening_range_high" in card
+        assert "opening_range_low" in card
+        assert "ttm_squeeze_active" in card
+        assert card["momentum_direction"] in ("BULLISH_BREAKOUT", "BEARISH_BREAKDOWN", "IN_RANGE")
+        assert card["suggested_action"] in ("BUY_CALL", "BUY_PUT", "WAIT")
 
     def test_get_zero_dte_signals_missing_symbol_422(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -1442,12 +1608,20 @@ class TestOptionsVpinEndpoint:
         assert body["symbol"] == "SPY"
         assert "vpin" in body
         assert 0.0 <= body["vpin"] <= 1.0
-        assert body["toxicity_regime"] in ["LOW", "MODERATE", "HIGH_TOXICITY"]
-        assert isinstance(body["is_toxic"], bool)
-        assert "bucket_history" in body
-        assert len(body["bucket_history"]) > 0
-        assert "recommended_spread_concession" in body
-        assert "sample_time" in body
+        # Field names from `get_options_vpin_metrics_for_frontend()` -- matches
+        # webapp/src/api/types.ts::VpinMetricsResponse, NOT
+        # get_options_vpin_metrics()'s own internal `toxicity_regime`/`is_toxic`/
+        # `bucket_history`/`recommended_spread_concession`/`sample_time` keys.
+        assert body["regime"] in ["LOW", "MODERATE", "HIGH_TOXICITY"]
+        assert "buckets" in body
+        assert len(body["buckets"]) > 0
+        bucket = body["buckets"][0]
+        assert "total_volume" in bucket
+        assert "imbalance" in bucket
+        assert "price_start" in bucket
+        assert "price_end" in bucket
+        assert "defensive_spread_concession" in body
+        assert "as_of" in body
 
     def test_get_vpin_metrics_missing_symbol_422(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -1517,14 +1691,21 @@ class TestOptionsSorAnalyzeEndpoint:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["valid"] is True
+        # Field names from `analyze_routing_options_for_frontend()` -- matches
+        # webapp/src/api/types.ts::SorAnalysisResponse, NOT
+        # analyze_routing_options()'s own internal `valid`/`legs_count`/
+        # `cob_pricing`/`synthetic_legging`/`recommended_policy`/`policy_rationale`/
+        # `policies_comparison` keys.
         assert body["symbol"] == "SPY"
-        assert body["legs_count"] == 2
-        assert "cob_pricing" in body
-        assert "synthetic_legging" in body
-        assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
-        assert "policy_rationale" in body
-        assert "policies_comparison" in body
+        assert body["recommended_route"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
+        assert "cob_net_price" in body
+        assert "cob_natural_price" in body
+        assert "synthetic_net_price" in body
+        assert "expected_savings" in body
+        assert 0.0 <= body["hung_leg_probability"] <= 1.0
+        assert "adverse_selection_cost" in body
+        assert "rationale" in body
+        assert len(body["legs_breakdown"]) == 2
 
     def test_post_sor_analyze_empty_legs_graceful_fallback(self):
         payload = {"symbol": "AAPL", "legs": []}
@@ -1536,9 +1717,12 @@ class TestOptionsSorAnalyzeEndpoint:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["valid"] is False
-        assert body["legs_count"] == 0
-        assert body["recommended_policy"] == "COB_NET_PACKAGE"
+        # No legs -> honest zeroed-out card (no `valid`/`legs_count` flags in the
+        # frontend contract; see the "success" test above for why).
+        assert body["symbol"] == "AAPL"
+        assert body["legs_breakdown"] == []
+        assert body["hung_leg_probability"] == 0.0
+        assert body["recommended_route"] == "COB_NET_PACKAGE"
 
     def test_post_sor_analyze_fails_with_wrong_token(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
@@ -1593,13 +1777,21 @@ class TestOptionsSorSimulateLeggingEndpoint:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["valid"] is True
+        # Field names from `simulate_legging_execution_for_frontend()` -- matches
+        # webapp/src/api/types.ts::LeggingSimulationResponse, NOT
+        # simulate_legging_execution()'s own internal `valid`/`hung_leg_probability`/
+        # `distribution.percentiles`/`recommended_policy` keys. This endpoint reports
+        # execution-latency risk for a fixed leg set -- it has no COB-vs-legging
+        # routing recommendation of its own (that's `sor/analyze`'s job).
         assert body["num_simulations"] == 500
         assert body["latency_seconds"] == 2.0
-        assert 0.0 <= body["hung_leg_probability"] <= 1.0
-        assert "distribution" in body
-        assert "percentiles" in body["distribution"]
-        assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
+        assert 0.0 <= body["hung_leg_rate"] <= 1.0
+        assert "expected_edge_dollars" in body
+        assert "edge_std_dollars" in body
+        assert "worst_case_loss_dollars" in body
+        assert "p95_adverse_selection" in body
+        assert len(body["pnl_distribution"]) > 0
+        assert len(body["latency_curve"]) > 0
 
     def test_post_sor_simulate_legging_empty_legs_fallback(self):
         payload = {"legs": [], "num_simulations": 100}
@@ -1611,9 +1803,12 @@ class TestOptionsSorSimulateLeggingEndpoint:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["valid"] is False
-        assert body["hung_leg_probability"] == 0.0
-        assert body["recommended_policy"] == "COB_NET_PACKAGE"
+        # No legs -> honest zeroed-out card, empty distribution/curve (never a
+        # fabricated non-empty histogram -- CONSTRAINT #4).
+        assert body["symbol"] == "MULTI"
+        assert body["hung_leg_rate"] == 0.0
+        assert body["pnl_distribution"] == []
+        assert body["latency_curve"] == []
 
 
     def test_post_sor_simulate_legging_fails_with_wrong_token(self):

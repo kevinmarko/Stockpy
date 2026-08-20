@@ -137,7 +137,12 @@ export function PaperBroker() {
     setExecStatus(null);
     const res = await deltaHedgeMutation.run();
     if (res) {
-      setExecStatus(res.message || `Successfully executed delta hedge order: ${res.side} ${res.shares} ${res.symbol} @ $${res.price.toFixed(2)}.`);
+      setExecStatus(
+        res.message ||
+          (res.action && res.shares != null && res.symbol
+            ? `Successfully executed delta hedge order: ${res.action} ${res.shares} ${res.symbol}.`
+            : "Delta hedge order submitted.")
+      );
       account.reload();
       positions.reload();
       orders.reload();
@@ -848,14 +853,24 @@ export function PaperBroker() {
             )}
 
             {/* Dynamic Delta Hedge Risk Neutralization Card */}
-            {deltaHedge.data && (
+            {deltaHedge.data && (() => {
+              // "HOLD" is the backend's only "no rebalance needed" sentinel
+              // (`pilots/options_hedging.py::get_delta_hedge_preview` never
+              // returns "NONE") -- `required_action` carries the same fact
+              // as a plain boolean, so prefer it for the conditionals below.
+              const isHold = !deltaHedge.data.required_action || deltaHedge.data.action === "HOLD";
+              // Not a backend field -- a straightforward, honest client-side
+              // derivation (order size x spot price) from two real numbers
+              // the backend does return, not a fabricated metric.
+              const estimatedCost = deltaHedge.data.shares * deltaHedge.data.spy_spot;
+              return (
               <div
                 style={{
                   marginTop: 12,
                   padding: 16,
                   background: theme.surface,
                   borderRadius: 8,
-                  border: `1px solid ${deltaHedge.data.is_within_tolerance ? theme.border : theme.caution}`,
+                  border: `1px solid ${isHold ? theme.border : theme.caution}`,
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
@@ -872,20 +887,20 @@ export function PaperBroker() {
                         padding: "2px 8px",
                         borderRadius: 4,
                         fontWeight: 600,
-                        background: deltaHedge.data.is_within_tolerance
+                        background: isHold
                           ? "rgba(16, 185, 129, 0.15)"
                           : "rgba(245, 158, 11, 0.15)",
-                        color: deltaHedge.data.is_within_tolerance ? theme.growth : theme.caution,
+                        color: isHold ? theme.growth : theme.caution,
                       }}
                     >
-                      {deltaHedge.data.is_within_tolerance ? "✓ Within Tolerance (±25 sh)" : "⚠ Rebalance Required"}
+                      {isHold ? `✓ Within Tolerance (±${deltaHedge.data.tolerance_band_shares.toFixed(0)} sh)` : "⚠ Rebalance Required"}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
                     Net Exposure: {deltaHedge.data.beta_weighted_delta_spy > 0 ? "+" : ""}{deltaHedge.data.beta_weighted_delta_spy.toFixed(1)} SPY sh (${deltaHedge.data.net_dollar_delta.toLocaleString()} notional).
-                    {deltaHedge.data.action !== "NONE" ? (
+                    {!isHold ? (
                       <span style={{ marginLeft: 6, color: theme.accent, fontWeight: 500 }}>
-                        Target Order: {deltaHedge.data.action} {Math.abs(deltaHedge.data.required_hedge_shares)} SPY @ ~${deltaHedge.data.spy_spot_price.toFixed(2)} (Est. Cost: ${deltaHedge.data.estimated_cost.toLocaleString()})
+                        Target Order: {deltaHedge.data.action} {deltaHedge.data.shares} SPY @ ~${deltaHedge.data.spy_spot.toFixed(2)} (Est. Cost: ${estimatedCost.toLocaleString()})
                       </span>
                     ) : (
                       <span style={{ marginLeft: 6, color: theme.textMuted }}> Portfolio is delta-neutral within tolerance band.</span>
@@ -895,26 +910,27 @@ export function PaperBroker() {
 
                 <button
                   onClick={handleExecuteDeltaHedge}
-                  disabled={deltaHedgeMutation.pending || deltaHedge.data.action === "NONE"}
+                  disabled={deltaHedgeMutation.pending || isHold}
                   style={{
                     padding: "8px 16px",
-                    background: deltaHedge.data.action !== "NONE" ? theme.accent : theme.surface3,
+                    background: !isHold ? theme.accent : theme.surface3,
                     border: "none",
-                    color: deltaHedge.data.action !== "NONE" ? "#000" : theme.textMuted,
+                    color: !isHold ? "#000" : theme.textMuted,
                     borderRadius: 4,
-                    cursor: (deltaHedgeMutation.pending || deltaHedge.data.action === "NONE") ? "not-allowed" : "pointer",
+                    cursor: (deltaHedgeMutation.pending || isHold) ? "not-allowed" : "pointer",
                     fontWeight: 600,
                     fontSize: 13,
                   }}
                 >
                   {deltaHedgeMutation.pending
                     ? "Hedging..."
-                    : deltaHedge.data.action !== "NONE"
-                    ? `Execute Delta Hedge (${deltaHedge.data.action} ${Math.abs(deltaHedge.data.required_hedge_shares)} SPY)`
+                    : !isHold
+                    ? `Execute Delta Hedge (${deltaHedge.data.action} ${deltaHedge.data.shares} SPY)`
                     : "Portfolio Delta Neutral"}
                 </button>
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
@@ -1098,19 +1114,19 @@ export function PaperBroker() {
                         {p.qty}
                       </td>
                       <td style={{ padding: "12px 16px", textAlign: "right" }}>${p.avg_cost.toFixed(2)}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right" }}>{p.current_price ? `$${p.current_price.toFixed(2)}` : "—"}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right" }}>{p.market_value ? `$${p.market_value.toFixed(2)}` : "—"}</td>
+                      <td style={{ padding: "12px 16px", textAlign: "right" }}>{p.current_price != null ? `$${p.current_price.toFixed(2)}` : "—"}</td>
+                      <td style={{ padding: "12px 16px", textAlign: "right" }}>{p.market_value != null ? `$${p.market_value.toFixed(2)}` : "—"}</td>
                       <td style={{ padding: "12px 16px", textAlign: "right", color: (posGreek?.position_delta ?? 0) >= 0 ? theme.growth : theme.decline }}>
-                        {posGreek ? `${posGreek.position_delta > 0 ? "+" : ""}${posGreek.position_delta.toFixed(1)}` : "—"}
+                        {posGreek?.position_delta != null ? `${posGreek.position_delta > 0 ? "+" : ""}${posGreek.position_delta.toFixed(1)}` : "—"}
                       </td>
                       <td style={{ padding: "12px 16px", textAlign: "right", color: (posGreek?.position_theta_daily ?? 0) >= 0 ? theme.growth : theme.decline }}>
-                        {posGreek ? `${posGreek.position_theta_daily >= 0 ? "+" : ""}$${posGreek.position_theta_daily.toFixed(2)}` : "—"}
+                        {posGreek?.position_theta_daily != null ? `${posGreek.position_theta_daily >= 0 ? "+" : ""}$${posGreek.position_theta_daily.toFixed(2)}` : "—"}
                       </td>
                       <td style={{ padding: "12px 16px", textAlign: "right", color: (posGreek?.position_vega_1pct ?? 0) >= 0 ? theme.growth : theme.decline }}>
-                        {posGreek ? `${posGreek.position_vega_1pct >= 0 ? "+" : ""}$${posGreek.position_vega_1pct.toFixed(2)}` : "—"}
+                        {posGreek?.position_vega_1pct != null ? `${posGreek.position_vega_1pct >= 0 ? "+" : ""}$${posGreek.position_vega_1pct.toFixed(2)}` : "—"}
                       </td>
-                      <td style={{ padding: "12px 16px", textAlign: "right", color: p.unrealized_pl && p.unrealized_pl >= 0 ? theme.growth : theme.decline }}>
-                        {p.unrealized_pl ? `$${p.unrealized_pl.toFixed(2)}` : "—"}
+                      <td style={{ padding: "12px 16px", textAlign: "right", color: (p.unrealized_pl ?? 0) >= 0 ? theme.growth : theme.decline }}>
+                        {p.unrealized_pl != null ? `$${p.unrealized_pl.toFixed(2)}` : "—"}
                         {p.unrealized_pl_pct != null && ` (${(p.unrealized_pl_pct * 100).toFixed(2)}%)`}
                       </td>
                       <td style={{ padding: "12px 16px", textAlign: "right" }}>
@@ -1180,7 +1196,7 @@ export function PaperBroker() {
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>${o.price.toFixed(2)}</td>
                     <td style={{ padding: "12px 16px" }}>{o.status}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                      {o.filled_qty} {o.filled_avg_price ? ` @ $${o.filled_avg_price.toFixed(2)}` : ""}
+                      {o.filled_qty} {o.filled_avg_price != null ? ` @ $${o.filled_avg_price.toFixed(2)}` : ""}
                     </td>
                   </tr>
                 ))}

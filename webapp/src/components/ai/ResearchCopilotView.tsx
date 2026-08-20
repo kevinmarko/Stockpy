@@ -747,49 +747,49 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
           >
             <MetricCard
               label="Sharpe Ratio"
-              value={backtestResult.sharpe_ratio.toFixed(2)}
-              sub={`OOS: ${(backtestResult.cpcv_mean_oos_sharpe ?? 0).toFixed(2)}`}
-              color={backtestResult.sharpe_ratio >= 1.5 ? theme.growth : theme.accent}
+              value={backtestResult.sharpe_ratio != null ? backtestResult.sharpe_ratio.toFixed(2) : "—"}
+              sub={backtestResult.cpcv_mean_oos_sharpe != null ? `OOS: ${backtestResult.cpcv_mean_oos_sharpe.toFixed(2)}` : "OOS: —"}
+              color={backtestResult.sharpe_ratio != null && backtestResult.sharpe_ratio >= 1.5 ? theme.growth : theme.accent}
             />
             <MetricCard
               label="Sortino Ratio"
-              value={backtestResult.sortino_ratio.toFixed(2)}
+              value={backtestResult.sortino_ratio != null ? backtestResult.sortino_ratio.toFixed(2) : "—"}
               sub="Downside Adjusted"
               color={theme.growth}
             />
             <MetricCard
               label="PBO Overfitting"
-              value={`${(backtestResult.pbo * 100).toFixed(1)}%`}
+              value={backtestResult.pbo != null ? `${(backtestResult.pbo * 100).toFixed(1)}%` : "—"}
               sub="Bailey < 50%"
-              color={backtestResult.pbo < 0.3 ? theme.growth : theme.caution}
+              color={backtestResult.pbo != null && backtestResult.pbo < 0.3 ? theme.growth : theme.caution}
             />
             <MetricCard
               label="Deflated Sharpe (DSR)"
-              value={backtestResult.dsr.toFixed(3)}
+              value={backtestResult.dsr != null ? backtestResult.dsr.toFixed(3) : "—"}
               sub="DSR > 0.95 Gate"
-              color={backtestResult.dsr >= 0.95 ? theme.growth : theme.decline}
+              color={backtestResult.dsr != null && backtestResult.dsr >= 0.95 ? theme.growth : theme.decline}
             />
             <MetricCard
               label="Max Drawdown"
-              value={`-${(backtestResult.max_drawdown * 100).toFixed(1)}%`}
+              value={backtestResult.max_drawdown != null ? `-${(backtestResult.max_drawdown * 100).toFixed(1)}%` : "—"}
               sub="Peak-to-Trough"
-              color={backtestResult.max_drawdown < 0.15 ? theme.growth : theme.decline}
+              color={backtestResult.max_drawdown != null && backtestResult.max_drawdown < 0.15 ? theme.growth : theme.decline}
             />
             <MetricCard
               label="Annualized Return"
-              value={`+${(backtestResult.annualized_return * 100).toFixed(1)}%`}
-              sub={`Win: ${(backtestResult.win_rate * 100).toFixed(0)}%`}
+              value={backtestResult.annualized_return != null ? `+${(backtestResult.annualized_return * 100).toFixed(1)}%` : "—"}
+              sub={backtestResult.win_rate != null ? `Win: ${(backtestResult.win_rate * 100).toFixed(0)}%` : "Win: —"}
               color={theme.growth}
             />
             <MetricCard
               label="Calmar Ratio"
-              value={backtestResult.calmar_ratio.toFixed(2)}
+              value={backtestResult.calmar_ratio != null ? backtestResult.calmar_ratio.toFixed(2) : "—"}
               sub="Ret / MaxDD"
               color={theme.accent}
             />
             <MetricCard
               label="Daily Turnover"
-              value={`${(backtestResult.turnover * 100).toFixed(0)}%`}
+              value={backtestResult.turnover != null ? `${(backtestResult.turnover * 100).toFixed(0)}%` : "—"}
               sub="Rebalance Cost"
               color={theme.textPrimary}
             />

@@ -70,6 +70,7 @@ __all__ = [
     "detect_volatility_squeeze",
     "scan_0dte_breakouts",
     "get_0dte_signals",
+    "get_0dte_signals_for_frontend",
     "evaluate_0dte_exits",
     "execute_0dte_trade",
     "execute_0dte_exits",
@@ -844,6 +845,106 @@ def get_0dte_signals(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+
+
+def get_0dte_signals_for_frontend(symbol: str = "SPY", range_minutes: int = 15) -> Dict[str, Any]:
+    """
+    Adapts `get_0dte_signals()`'s internal result into the flat `{signals: [...]}` card shape
+    `webapp/src/api/types.ts::ZeroDteSignalResponse` declares for the Pilots PWA's ZeroDteDesk
+    screen. `get_0dte_signals()`'s own return shape (a single flat dict, snake_case-mismatched
+    field names, no `signals` wrapper) is left untouched -- and so are its existing tests
+    (`tests/test_zero_dte_engine.py`) -- this is the ONLY function
+    `/pilots/options/zero-dte/signals` should call.
+
+    Fields this repo genuinely never computes today (per-symbol `relative_volume_15m`,
+    `momentum_score` when the squeeze detector had no real data, `ttm_squeeze_bars`, and
+    `implied_vol` on a candidate contract) are honestly `None` (CONSTRAINT #4) rather than a
+    fabricated number -- this module has no intraday bar or options-chain source wired up (see
+    `get_0dte_signals`'s own docstring), so in practice every real response degrades to an
+    opening range/candidate-contract-free "no signal" card; this adapter must not turn that
+    honest absence into a fabricated zero.
+    """
+    result = get_0dte_signals(symbol=symbol, range_minutes=range_minutes)
+
+    spot = result.get("spot") or 0.0
+    opening_range = result.get("opening_range") or {}
+    squeeze = result.get("squeeze") or {}
+    risk_params = result.get("risk_parameters") or {}
+
+    signal_type = result.get("signal", "NO_SIGNAL")
+    if signal_type == "BULLISH_BREAKOUT":
+        momentum_direction = "BULLISH_BREAKOUT"
+    elif signal_type == "BEARISH_BREAKDOWN":
+        momentum_direction = "BEARISH_BREAKDOWN"
+    else:
+        momentum_direction = "IN_RANGE"
+
+    action = result.get("action", "NO_ACTION")
+    suggested_action = action if action in ("BUY_CALL", "BUY_PUT") else "WAIT"
+
+    orb_valid = bool(opening_range.get("valid"))
+    orb_high = opening_range.get("high") if orb_valid else None
+    orb_low = opening_range.get("low") if orb_valid else None
+    orb_width_pct = (
+        (orb_high - orb_low) / spot
+        if (orb_valid and spot and spot > 0 and orb_high is not None and orb_low is not None)
+        else None
+    )
+
+    squeeze_has_data = squeeze.get("status") != "NO_DATA"
+    ttm_squeeze_active = bool(squeeze.get("squeeze_on")) if squeeze_has_data else False
+    momentum_score = squeeze.get("momentum") if squeeze_has_data else None
+
+    candidate = result.get("selected_contract")
+    recommended_contract: Optional[Dict[str, Any]] = None
+    if candidate:
+        mid_price = candidate.get("mid_price")
+        profit_target_pct = float(risk_params.get("profit_target_pct", 0.75))
+        stop_loss_pct = float(risk_params.get("stop_loss_pct", 0.30))
+        recommended_contract = {
+            "option_type": candidate.get("option_type"),
+            "strike": candidate.get("strike"),
+            "expiration": candidate.get("expiration"),
+            "dte": candidate.get("dte"),
+            "delta": candidate.get("delta"),
+            "gamma": None,
+            "theta": None,
+            "vega": None,
+            "bid": candidate.get("bid"),
+            "ask": candidate.get("ask"),
+            "mid": mid_price,
+            "implied_vol": None,
+            "target_price": (
+                round(mid_price * (1 + profit_target_pct), 4) if mid_price is not None else None
+            ),
+            "stop_loss_price": (
+                round(mid_price * (1 - stop_loss_pct), 4) if mid_price is not None else None
+            ),
+            "hard_exit_time": risk_params.get("hard_exit_time"),
+        }
+
+    signal_card = {
+        "symbol": result.get("symbol", symbol),
+        "spot_price": spot,
+        "timestamp": result.get("timestamp"),
+        "opening_range_high": orb_high,
+        "opening_range_low": orb_low,
+        "opening_range_width_pct": orb_width_pct,
+        "ttm_squeeze_active": ttm_squeeze_active,
+        "ttm_squeeze_bars": None,
+        "momentum_direction": momentum_direction,
+        "momentum_score": momentum_score,
+        "relative_volume_15m": None,
+        "suggested_action": suggested_action,
+        "recommended_contract": recommended_contract,
+        "trigger_reason": result.get("reason"),
+    }
+
+    return {
+        "signals": [signal_card],
+        "symbol": result.get("symbol", symbol),
+        "as_of": result.get("timestamp"),
+    }
 
 
 def _to_et_time(dt: datetime) -> time:
