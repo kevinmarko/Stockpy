@@ -191,11 +191,8 @@ anything touching `pilots/`, `sizing/`, `signals/`, `execution/`, or
 Don't rediscover these from scratch, and don't assume they're fixed just
 because they aren't mentioned in whatever task you're on:
 
-- `pilots/zero_dte_engine.py`'s 15:45 ET hard-exit gate is dead code in
-  production (implemented, tested, never called).
-- `earnings_crush`, `vol_mispricing`, `dispersion_trading`,
-  `zero_dte_engine`, `gamma_scalper`, and `copula_stat_arb` have zero
-  `STRATEGY_REGISTRY` entries despite live paper-trade execution.
+- **Is the 0DTE live-exit gate real?** `manage_0dte_exits()` IS actively wired in `desktop/daemon_runtime.py:634-640` and conditioned on `settings.OPTIONS_0DTE_ENABLED`. Do not claim it is dead code or unconnected.
+- **Is the strategy registry honest?** Don't hallucinate that a strategy is registered if it isn't. The 5 strategies `earnings_crush`, `dispersion_trading`, `zero_dte_engine`, `gamma_scalper`, and `copula_stat_arb` have zero `STRATEGY_REGISTRY` entries. However, `vol_mispricing` IS explicitly registered in `scripts/refresh_validations.py:3496` with a measured fail. Know the difference between unregistered and registered-but-failing.
 
 If a task touches any of these modules and doesn't mention fixing the gap,
 flag it in your response rather than silently working around it.
