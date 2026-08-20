@@ -1064,6 +1064,25 @@ class Settings(BaseSettings):
             "half is FMP-eligible."
         ),
     )
+    FMP_SCREENER_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the symbol-search/sector-industry-screener "
+            "feed (data/fmp_screener.py, wrapping data/fmp_client.py's "
+            "search_name/search_symbol/company_screener/available_sectors/"
+            "available_industries) behind GET /data/symbol-search, "
+            "GET /data/screener, and GET /data/screener/filters "
+            "(api/data_api.py) -- one flag covers all four, matching "
+            "FMP_PEERS_ENABLED's single-gate reasoning since they're the "
+            "same read-only, on-demand call-site cadence. Defaults True by "
+            "explicit operator decision, accepting that this endpoint set "
+            "has NOT been verified against the operator's own FMP_API_KEY/"
+            "tier in this sandbox (verified live 2026-08 only via an "
+            "external FMP MCP connector on a different account -- see "
+            "docs/FMP_INTEGRATION.md §9). data/fmp_screener.py degrades to "
+            "[] on any failure, never raises."
+        ),
+    )
     # ── FMP behavior knobs ───────────────────────────────────────────────
     FMP_FALLBACK_ENABLED: bool = Field(
         default=True,

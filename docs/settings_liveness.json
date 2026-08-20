@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 316,
+    "live_safe": 317,
     "no_op": 3,
     "restart_required": 104,
-    "total": 423
+    "total": 424
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 423,
+  "files_scanned": 425,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -247,6 +247,7 @@
     "FMP_PEERS_ENABLED",
     "FMP_QUOTES_ENABLED",
     "FMP_RETRY_BACKOFF_SECONDS",
+    "FMP_SCREENER_ENABLED",
     "FMP_SECTOR_SNAPSHOT_ENABLED",
     "FMP_TIMEOUT_SECONDS",
     "FMP_UNIVERSE_ENABLED",
@@ -465,15 +466,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 838,
+    "attr": 839,
     "factory_param": 4,
-    "getattr_const": 360,
+    "getattr_const": 364,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 247,
     "factory_param": 4,
-    "getattr_const": 204,
+    "getattr_const": 205,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",

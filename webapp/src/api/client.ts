@@ -88,6 +88,10 @@ import type {
   SymbolDetail,
   SymbolCompareResponse,
   UniverseResponse,
+  SymbolSearchResponse,
+  ScreenerFilters,
+  ScreenerResultsResponse,
+  ScreenerFilterOptions,
   SyncReportResponse,
   SymbolReincludeResult,
   RecommendationsResponse,
@@ -610,6 +614,41 @@ const liveApi = {
     http<QuotesResponse>(
       `/data/quotes?symbols=${encodeURIComponent(symbols.join(","))}`
     ),
+  // Symbol Screener: free-text name/ticker search, independent of the
+  // tracked watchlist/pipeline universe (data base, :8603, FMP-backed,
+  // FMP_SCREENER_ENABLED-gated -- degrades to an honest empty `results` +
+  // `reason` string, never a 500).
+  getSymbolSearch: (query: string, limit?: number) => {
+    const q = new URLSearchParams({ query });
+    if (limit != null) q.set("limit", String(limit));
+    return http<SymbolSearchResponse>(`/data/symbol-search?${q.toString()}`);
+  },
+  // Symbol Screener: sector/industry/market-cap/price/beta/dividend/volume
+  // filter query. Only non-omitted filters are sent.
+  getScreenerResults: (filters: ScreenerFilters) => {
+    const q = new URLSearchParams();
+    if (filters.sector) q.set("sector", filters.sector);
+    if (filters.industry) q.set("industry", filters.industry);
+    if (filters.marketCapMoreThan != null) q.set("market_cap_more_than", String(filters.marketCapMoreThan));
+    if (filters.marketCapLowerThan != null) q.set("market_cap_lower_than", String(filters.marketCapLowerThan));
+    if (filters.priceMoreThan != null) q.set("price_more_than", String(filters.priceMoreThan));
+    if (filters.priceLowerThan != null) q.set("price_lower_than", String(filters.priceLowerThan));
+    if (filters.betaMoreThan != null) q.set("beta_more_than", String(filters.betaMoreThan));
+    if (filters.betaLowerThan != null) q.set("beta_lower_than", String(filters.betaLowerThan));
+    if (filters.dividendMoreThan != null) q.set("dividend_more_than", String(filters.dividendMoreThan));
+    if (filters.dividendLowerThan != null) q.set("dividend_lower_than", String(filters.dividendLowerThan));
+    if (filters.volumeMoreThan != null) q.set("volume_more_than", String(filters.volumeMoreThan));
+    if (filters.exchange) q.set("exchange", filters.exchange);
+    if (filters.country) q.set("country", filters.country);
+    if (filters.isActivelyTrading != null) q.set("is_actively_trading", String(filters.isActivelyTrading));
+    if (filters.excludeFunds) q.set("exclude_funds", "true");
+    if (filters.limit != null) q.set("limit", String(filters.limit));
+    if (filters.page != null) q.set("page", String(filters.page));
+    const qs = q.toString();
+    return http<ScreenerResultsResponse>(`/data/screener${qs ? `?${qs}` : ""}`);
+  },
+  // Symbol Screener: sector/industry enum lists for the filter dropdowns.
+  getScreenerFilterOptions: () => http<ScreenerFilterOptions>("/data/screener/filters"),
   // Live portfolio & watchlist coverage-reconciliation report — computed
   // fresh on every call from data.portfolio_sync.build_sync_report (data
   // base, :8603). Distinct from getDataUniverse's plain add/remove list:
