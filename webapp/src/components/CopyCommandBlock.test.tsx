@@ -5,7 +5,7 @@
  * "Copied" clearing (Commands.tsx relies on this to clear the indicator on
  * every keystroke, not just when the composed command text itself changes).
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CopyCommandBlock } from "./CopyCommandBlock";
 
@@ -45,14 +45,32 @@ describe("CopyCommandBlock", () => {
     expect(writeText).toHaveBeenCalledWith("python -m main.py --interval 60");
   });
 
-  it("the button label flips from Copy to Copied after a click", () => {
+  it("the button label flips from Copy to Copied after a click", async () => {
     mockClipboard();
     render(<CopyCommandBlock command="python -m main.py" />);
 
     const btn = screen.getByTestId("command-copy");
     expect(btn).toHaveTextContent("Copy");
     fireEvent.click(btn);
-    expect(btn).toHaveTextContent("Copied");
+    await waitFor(() => expect(btn).toHaveTextContent("Copied"));
+  });
+
+  it("a rejected clipboard write does NOT flip the label to Copied", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("Write permission denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    render(<CopyCommandBlock command="python -m main.py" />);
+
+    const btn = screen.getByTestId("command-copy");
+    fireEvent.click(btn);
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    // Give the rejected promise's .then() handler a tick to run, then
+    // assert the label never claimed success it didn't have.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(btn).toHaveTextContent("Copy");
   });
 
   it("disabled: the Copy button is disabled and clicking it never calls the clipboard", () => {
@@ -92,14 +110,14 @@ describe("CopyCommandBlock", () => {
     expect(screen.queryByTestId("command-composed")).not.toBeInTheDocument();
   });
 
-  it("Copied clears when resetKey changes, even if the command text itself is unchanged", () => {
+  it("Copied clears when resetKey changes, even if the command text itself is unchanged", async () => {
     mockClipboard();
     const { rerender } = render(
       <CopyCommandBlock command="python -m main.py" resetKey="v1" />
     );
     const btn = screen.getByTestId("command-copy");
     fireEvent.click(btn);
-    expect(btn).toHaveTextContent("Copied");
+    await waitFor(() => expect(btn).toHaveTextContent("Copied"));
 
     // Same command text, but resetKey changed (mirrors Commands.tsx passing
     // the raw input string, which changes on every keystroke even when the
@@ -108,12 +126,12 @@ describe("CopyCommandBlock", () => {
     expect(btn).toHaveTextContent("Copy");
   });
 
-  it("without an explicit resetKey, Copied clears once the command itself changes", () => {
+  it("without an explicit resetKey, Copied clears once the command itself changes", async () => {
     mockClipboard();
     const { rerender } = render(<CopyCommandBlock command="python -m main.py" />);
     const btn = screen.getByTestId("command-copy");
     fireEvent.click(btn);
-    expect(btn).toHaveTextContent("Copied");
+    await waitFor(() => expect(btn).toHaveTextContent("Copied"));
 
     rerender(<CopyCommandBlock command="python -m main.py --interval 60" />);
     expect(btn).toHaveTextContent("Copy");

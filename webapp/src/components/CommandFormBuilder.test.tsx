@@ -2,14 +2,42 @@
  * CommandFormBuilder.test.tsx — the "Form Mode" drawer that maps a
  * CommandSpec's options onto visual controls (toggle/select/date/text) and
  * compiles them into a runnable CLI string. Covers each control kind, the
- * subcommand switch, Reset, and the Close/Execute action bar.
+ * subcommand switch, Reset, the Close button, and the embedded Run control
+ * (which reuses RunCommandControl's exact job-creation logic -- see
+ * Commands.test.tsx's "Run button" describe block for the sibling coverage
+ * of that same control via the free-text Command Bar's entry point).
  */
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import toast from "react-hot-toast";
 import { CommandFormBuilder } from "./CommandFormBuilder";
+import { api } from "../api/client";
 import { REGISTERED_STRATEGIES } from "../commandParse";
-import type { CommandSpec } from "../api/types";
+import type { CommandSpec, JobRecord } from "../api/types";
+
+// Mirrors Commands.test.tsx's exact convention: react-hot-toast's `toast()`
+// needs no <Toaster/> mounted to run safely in jsdom.
+vi.mock("react-hot-toast", () => {
+  const mock = Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() });
+  return { default: mock };
+});
+
+beforeEach(() => {
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
+});
+
+/** A believable "running" JobRecord for a command job -- mirrors
+ * Commands.test.tsx's own commandJobRecord helper. */
+function commandJobRecord(job_id: string): JobRecord {
+  return {
+    job_id,
+    job_type: "command" as unknown as JobRecord["job_type"],
+    status: "running",
+    cancellable: true,
+  };
+}
 
 const HARNESS_COMMAND: CommandSpec = {
   name: "validation.harness",
@@ -117,7 +145,31 @@ const PARENT_WITH_SUBCOMMANDS: CommandSpec = {
   options: [],
 };
 
+const KILL_SWITCH_COMMAND: CommandSpec = {
+  name: "execution.kill_switch",
+  invocation: "python -m execution.kill_switch",
+  aliases: [],
+  description: "Global kill switch control.",
+  positionals: [],
+  subcommands: [],
+  options: [
+    {
+      name: "--activate",
+      aliases: ["--activate"],
+      description: "activate the global kill switch",
+      default: false,
+      choices: null,
+      required: false,
+      arg_kind: "optional",
+      metavar: null,
+      takes_value: false,
+    },
+  ],
+};
+
 describe("CommandFormBuilder", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("returns null when command is null", () => {
     const { container } = render(
       <CommandFormBuilder command={null} onClose={vi.fn()} />
@@ -199,28 +251,86 @@ describe("CommandFormBuilder", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("Execute Command is absent when onRunCommand is not provided", () => {
+  it("a Run control is always present for a runnable command", () => {
     render(<CommandFormBuilder command={NO_OPTIONS_COMMAND} onClose={vi.fn()} />);
-    expect(screen.queryByTestId("form-builder-run-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("command-run-button")).toBeInTheDocument();
   });
 
-  it("Execute Command calls onRunCommand with the composed string, then onClose", async () => {
-    const user = userEvent.setup();
-    const onRunCommand = vi.fn();
+  it("Run actually launches the command via createJob, shows status, and does NOT close the modal", async () => {
+    const createJobSpy = vi
+      .spyOn(api, "createJob")
+      .mockResolvedValueOnce(commandJobRecord("mock-job-1"));
     const onClose = vi.fn();
-    render(
-      <CommandFormBuilder
-        command={NO_OPTIONS_COMMAND}
-        onClose={onClose}
-        onRunCommand={onRunCommand}
-      />
+
+    render(<CommandFormBuilder command={NO_OPTIONS_COMMAND} onClose={onClose} />);
+    fireEvent.click(screen.getByTestId("command-run-button"));
+
+    await waitFor(() =>
+      expect(createJobSpy).toHaveBeenCalledWith(
+        "command",
+        expect.objectContaining({
+          command: NO_OPTIONS_COMMAND.name,
+          subcommand: null,
+          args: [],
+          confirm: true,
+        })
+      )
     );
-    await user.click(screen.getByTestId("form-builder-run-button"));
-    expect(onRunCommand).toHaveBeenCalledWith(
-      NO_OPTIONS_COMMAND.invocation,
-      NO_OPTIONS_COMMAND,
-      []
+    expect(await screen.findByTestId("command-run-status")).toBeInTheDocument();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    // The whole point of this fix: launching a run must NOT close the modal
+    // out from under the operator before they can see the job status/log.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("a selected subcommand is sent separately, not folded into args", async () => {
+    const user = userEvent.setup();
+    const createJobSpy = vi
+      .spyOn(api, "createJob")
+      .mockResolvedValueOnce(commandJobRecord("mock-job-2"));
+
+    render(<CommandFormBuilder command={PARENT_WITH_SUBCOMMANDS} onClose={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Select Subcommand"), "pin");
+    await user.type(screen.getByPlaceholderText("Enter value..."), "v2");
+    fireEvent.click(screen.getByTestId("command-run-button"));
+
+    await waitFor(() =>
+      expect(createJobSpy).toHaveBeenCalledWith(
+        "command",
+        expect.objectContaining({
+          command: "prompt_registry",
+          subcommand: "pin",
+          args: ["--version", "v2"],
+          confirm: true,
+        })
+      )
     );
-    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a high-stakes command opens a confirm dialog nested inside the form builder, and confirming still calls createJob", async () => {
+    const user = userEvent.setup();
+    const createJobSpy = vi
+      .spyOn(api, "createJob")
+      .mockResolvedValueOnce(commandJobRecord("mock-job-3"));
+
+    render(<CommandFormBuilder command={KILL_SWITCH_COMMAND} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("switch", { name: "--activate" }));
+    fireEvent.click(screen.getByTestId("command-run-button"));
+
+    const dialog = await screen.findByTestId("command-confirm");
+    expect(createJobSpy).not.toHaveBeenCalled();
+    expect(within(dialog).getByText(/kill switch/i)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByTestId("command-confirm-yes"));
+    await waitFor(() =>
+      expect(createJobSpy).toHaveBeenCalledWith(
+        "command",
+        expect.objectContaining({
+          command: "execution.kill_switch",
+          args: ["--activate"],
+          confirm: true,
+        })
+      )
+    );
   });
 });
