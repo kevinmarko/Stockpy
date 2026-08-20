@@ -4,8 +4,8 @@
  * wired into Console.tsx's job history. Covers filtering, sorting, grouping,
  * and the empty state, since nothing else in the app tests it yet.
  */
-import { render, screen, fireEvent, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DataTable, type Column } from "./DataTable";
 import { DensityProvider } from "./DensityContext";
 
@@ -37,6 +37,21 @@ function renderTable(props: Partial<React.ComponentProps<typeof DataTable<Row>>>
 }
 
 describe("DataTable", () => {
+  const originalClipboard = navigator.clipboard;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: originalClipboard,
+      writable: true,
+      configurable: true,
+    });
+    // vi.spyOn on an already-spied method (e.g. a second test's
+    // `vi.spyOn(window, "alert")`) returns the SAME mock instance with its
+    // prior calls still recorded, not a fresh one -- restore real
+    // implementations between tests so each alert spy starts clean.
+    vi.restoreAllMocks();
+  });
+
   it("renders every row's cells", () => {
     renderTable();
     expect(screen.getByText("Zebra")).toBeInTheDocument();
@@ -86,14 +101,36 @@ describe("DataTable", () => {
     expect(screen.getByText("Apple")).toBeInTheDocument();
   });
 
-  it("copies a row as JSON to the clipboard", () => {
-    const writeText = vi.fn();
-    Object.assign(navigator, { clipboard: { writeText } });
-    vi.spyOn(window, "alert").mockImplementation(() => {});
+  it("copies a row as JSON to the clipboard and alerts on success", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
     renderTable();
 
     fireEvent.click(screen.getAllByText("JSON")[0]);
     expect(writeText).toHaveBeenCalledWith(JSON.stringify(ROWS[0], null, 2));
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Copied event context as JSON to clipboard!"));
+  });
+
+  it("a rejected clipboard write does NOT alert success and leaves no unhandled rejection", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    renderTable();
+
+    fireEvent.click(screen.getAllByText("JSON")[0]);
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify(ROWS[0], null, 2));
+    // Flush the rejected microtask; the success alert must never fire.
+    await Promise.resolve().then(() => Promise.resolve());
+    expect(alertSpy).not.toHaveBeenCalled();
   });
 
   it("uses a custom render function for a column when provided", () => {

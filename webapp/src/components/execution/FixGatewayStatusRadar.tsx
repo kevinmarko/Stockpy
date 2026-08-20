@@ -137,9 +137,18 @@ export const FixGatewayStatusRadar: React.FC<FixGatewayStatusRadarProps> = ({
   };
 
   const handleCopyLog = (rawText: string, index: number) => {
-    navigator.clipboard.writeText(rawText);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
+    navigator.clipboard.writeText(rawText).then(
+      () => {
+        setCopiedIndex(index);
+        setTimeout(() => setCopiedIndex(null), 2000);
+      },
+      () => {
+        // Clipboard writes can be rejected (permission denied, an
+        // insecure/sandboxed context, etc.) -- don't claim Copied when it
+        // didn't happen, and don't leave an unhandled promise rejection in
+        // the console.
+      }
+    );
   };
 
   // State Badge Helpers

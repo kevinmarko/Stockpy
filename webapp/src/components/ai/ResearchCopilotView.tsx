@@ -147,9 +147,18 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
 
   const handleCopyCode = () => {
     if (!synthesisResult?.code) return;
-    navigator.clipboard.writeText(synthesisResult.code);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
+    navigator.clipboard.writeText(synthesisResult.code).then(
+      () => {
+        setCopiedCode(true);
+        setTimeout(() => setCopiedCode(false), 2000);
+      },
+      () => {
+        // Clipboard writes can be rejected (permission denied, an
+        // insecure/sandboxed context, etc.) -- don't claim Copied when it
+        // didn't happen, and don't leave an unhandled promise rejection in
+        // the console.
+      }
+    );
   };
 
   return (
