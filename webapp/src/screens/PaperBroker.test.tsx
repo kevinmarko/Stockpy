@@ -34,6 +34,11 @@ vi.mock("../api/client", async (importOriginal) => {
       getUnusualOptionsFlow: vi.fn(),
       getOptionsFlowSentiment: vi.fn(),
       getThresholds: vi.fn(() => Promise.resolve({ VRP: 0, MAX_KELLY: 0, VIX_HIGH: 0, OPTION_MIN_IVR: 0, REGIME_LOOKAHEAD_DAYS: 0 })),
+      // Quick Trade (any FMP-quotable symbol) + the SymbolInput it uses.
+      getDataQuotes: vi.fn(),
+      postOptionsOrder: vi.fn(),
+      watchCandidate: vi.fn(),
+      getUniverse: vi.fn(),
     },
   };
 });
@@ -49,6 +54,9 @@ describe("PaperBroker", () => {
       enabled: true,
     });
     vi.mocked(api.getStrategyOptionsCandidates).mockResolvedValue({ count: 0, candidates: [] });
+    // SymbolInput's shared universe fetch -- give it a default resolved value
+    // so its lazy `loadUniverse()` effect never hits an unmocked call.
+    vi.mocked(api.getUniverse).mockResolvedValue({ symbols: [] });
 
     vi.mocked(api.getDeltaHedgePreview).mockResolvedValue({
       symbol: "SPY",
@@ -253,6 +261,124 @@ describe("PaperBroker", () => {
 
     await waitFor(() => {
       expect(api.executeStrategyOptions).toHaveBeenCalled();
+    });
+  });
+
+  it("quick trade: fetches a quote for an arbitrary symbol and opens the order ticket", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getDataQuotes).mockResolvedValue({
+      ZZZZ: { symbol: "ZZZZ", price: 42.5, bid: 42.4, ask: 42.6, timestamp: "2026-08-20T14:00:00Z", is_stale: false, source: "fmp" },
+    });
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("$105,000.00")).toBeInTheDocument();
+
+    const input = screen.getByTestId("quick-trade-symbol-input");
+    fireEvent.change(input, { target: { value: "zzzz" } });
+    fireEvent.click(screen.getByText("Get Quote"));
+
+    await waitFor(() => {
+      expect(api.getDataQuotes).toHaveBeenCalledWith(["ZZZZ"]);
+    });
+
+    // Order ticket opens for the arbitrary (untracked) symbol, seeded with
+    // the real fetched quote -- not a fabricated price.
+    expect(await screen.findByText("Buy ZZZZ Stock")).toBeInTheDocument();
+  });
+
+  it("quick trade: shows an honest error when no live quote is available, never a fabricated $0 ticket", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    // No entry for the requested symbol -- simulates an unquotable/delisted ticker.
+    vi.mocked(api.getDataQuotes).mockResolvedValue({});
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("$105,000.00")).toBeInTheDocument();
+
+    const input = screen.getByTestId("quick-trade-symbol-input");
+    fireEvent.change(input, { target: { value: "nosuch" } });
+    fireEvent.click(screen.getByText("Get Quote"));
+
+    expect(await screen.findByText(/No live quote available for "NOSUCH"/i)).toBeInTheDocument();
+    expect(screen.queryByText("Buy NOSUCH Stock")).not.toBeInTheDocument();
+  });
+
+  it("auto-execute: entering a symbol list scans those symbols instead of WATCHLIST", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getStrategyOptionsCandidates).mockResolvedValue({
+      count: 1,
+      candidates: [
+        {
+          symbol: "AAPL",
+          strategy: "Put Credit Spread",
+          action: "Open",
+          net_premium: 1.5,
+          ivr: 65,
+          trend_bias: "Bullish",
+          target_dte: 30,
+          legs: [],
+        },
+      ],
+    });
+    vi.mocked(api.executeStrategyOptions).mockResolvedValue({
+      executed_count: 1,
+      skipped_count: 0,
+      failed_count: 0,
+      executed: [{ symbol: "AAPL", strategy: "Put Credit Spread", contracts: 1, net_price: 1.5, net_cash_impact: 148.7 }],
+      skipped: [],
+      failed: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Put Credit Spread")).toBeInTheDocument();
+
+    // Blank input preserves today's exact default: no `symbols` argument,
+    // which the backend resolves to settings.WATCHLIST.
+    expect(api.getStrategyOptionsCandidates).toHaveBeenCalledWith(undefined);
+
+    const scanInput = screen.getByTestId("scan-symbols-input");
+    fireEvent.change(scanInput, { target: { value: "aapl, msft ,  xom" } });
+
+    await waitFor(() => {
+      expect(api.getStrategyOptionsCandidates).toHaveBeenCalledWith(["AAPL", "MSFT", "XOM"]);
+    });
+
+    fireEvent.click(screen.getByText(/Execute \d+ Strategy Trades/));
+
+    await waitFor(() => {
+      expect(api.executeStrategyOptions).toHaveBeenCalledWith(["AAPL", "MSFT", "XOM"]);
     });
   });
 
