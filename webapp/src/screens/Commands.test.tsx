@@ -488,6 +488,50 @@ describe("Commands screen — Run button", () => {
     );
   });
 
+  it("Configure -> Form Mode -> Run actually launches the command (regression guard for the two run paths drifting apart)", async () => {
+    const createJobSpy = vi
+      .spyOn(api, "createJob")
+      .mockResolvedValueOnce(commandJobRecord("mock-job-5"));
+
+    renderCommands();
+    await screen.findByText("main.py");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Configure prompt_registry" }));
+    const modal = await screen.findByTestId("command-form-builder");
+    fireEvent.change(within(modal).getByLabelText("Select Subcommand"), { target: { value: "list" } });
+
+    fireEvent.click(within(modal).getByTestId("command-run-button"));
+
+    await waitFor(() =>
+      expect(createJobSpy).toHaveBeenCalledWith(
+        "command",
+        expect.objectContaining({
+          command: "prompt_registry",
+          subcommand: "list",
+          args: [],
+          confirm: true,
+        })
+      )
+    );
+    // The modal stays open so the operator can watch the job status.
+    expect(await within(modal).findByTestId("command-run-status")).toBeInTheDocument();
+  });
+
+  it("the grid card's copy button confirms the copy instead of giving silent feedback", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    renderCommands();
+    await screen.findByText("main.py");
+
+    const copyButton = await screen.findByRole("button", { name: "Copy main.py" });
+    expect(copyButton).toHaveTextContent("📋");
+    fireEvent.click(copyButton);
+
+    expect(writeText).toHaveBeenCalledWith("python3 main.py");
+    expect(copyButton).toHaveTextContent("✅");
+  });
+
   it("a rejected createJob renders an inline error message, toasts a failure, and does not crash", async () => {
     vi.spyOn(api, "createJob").mockRejectedValueOnce(
       new ApiError("COMMAND_EXECUTION_ENABLED is False.", 403)

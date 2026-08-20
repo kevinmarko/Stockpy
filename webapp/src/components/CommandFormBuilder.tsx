@@ -3,6 +3,7 @@ import { Modal } from "./Modal";
 import { Button } from "./ui";
 import { Toggle } from "./Toggle";
 import { CopyCommandBlock } from "./CopyCommandBlock";
+import { RunCommandControl } from "./RunCommandControl";
 import type { CommandSpec, CommandOption } from "../api/types";
 import { REGISTERED_STRATEGIES } from "../commandParse";
 import { theme } from "../theme";
@@ -10,10 +11,9 @@ import { theme } from "../theme";
 interface CommandFormBuilderProps {
   command: CommandSpec | null;
   onClose: () => void;
-  onRunCommand?: (composed: string, spec: CommandSpec, argTokens: string[]) => void;
 }
 
-export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFormBuilderProps) {
+export function CommandFormBuilder({ command, onClose }: CommandFormBuilderProps) {
   if (!command) return null;
 
   const [selectedSubcommandName, setSelectedSubcommandName] = useState<string>(
@@ -25,6 +25,15 @@ export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFo
       return command.subcommands.find((s) => s.name === selectedSubcommandName) ?? command;
     }
     return command;
+  }, [command, selectedSubcommandName]);
+
+  // The subcommand spec (if any) as its own value, separate from activeSpec --
+  // RunCommandControl needs the parent command + subcommand threaded as two
+  // distinct params (matching commandParse.ts's parseCommandLine contract),
+  // not bundled together the way activeSpec is for rendering the form.
+  const subcommandSpec = useMemo<CommandSpec | null>(() => {
+    if (command.subcommands.length === 0) return null;
+    return command.subcommands.find((s) => s.name === selectedSubcommandName) ?? null;
   }, [command, selectedSubcommandName]);
 
   // Form values state: flag alias -> string | boolean
@@ -46,12 +55,13 @@ export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFo
     setOptionValues((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Compile argTokens and composed string from form state
+  // Compile argTokens and composed string from form state. The subcommand
+  // name (if any) is deliberately NOT included in argTokens -- it's threaded
+  // separately via subcommandSpec, matching commandParse.ts's parseCommandLine
+  // contract (RunCommandControl sends `subcommand` as its own job param, not
+  // folded into `args`).
   const { argTokens, composed } = useMemo(() => {
     const tokens: string[] = [];
-    if (command.subcommands.length > 0 && selectedSubcommandName) {
-      tokens.push(selectedSubcommandName);
-    }
 
     for (const opt of activeSpec.options) {
       const val = optionValues[opt.name];
@@ -65,9 +75,9 @@ export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFo
       }
     }
 
-    const fullComposed = [activeSpec.invocation, ...tokens.slice(command.subcommands.length > 0 ? 1 : 0)].join(" ");
+    const fullComposed = [activeSpec.invocation, ...tokens].join(" ").trim();
     return { argTokens: tokens, composed: fullComposed };
-  }, [command, selectedSubcommandName, activeSpec, optionValues]);
+  }, [activeSpec, optionValues]);
 
   return (
     <Modal ariaLabel={`Form Builder: ${command.name}`} onClose={onClose} size="wide">
@@ -168,19 +178,26 @@ export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFo
               <Button variant="neutral" onClick={onClose}>
                 Close
               </Button>
-              {onRunCommand && (
-                <Button
-                  variant="primary"
-                  onClick={() => {
-                    onRunCommand(composed, command, argTokens);
-                    onClose();
-                  }}
-                  data-testid="form-builder-run-button"
-                >
-                  Execute Command 🚀
-                </Button>
-              )}
             </div>
+          </div>
+
+          {/* Run control -- reuses the exact same job-creation/toast/status/log
+              logic as the free-text Command Bar's Run button, so this path
+              can't silently drift back into a no-op. Deliberately does NOT
+              call onClose() on launch: the operator needs to watch the job
+              status/log right here; they dismiss manually via Close above
+              once done. (If they close early, the job keeps running
+              server-side -- same as navigating away from the Command Bar
+              mid-run today.) */}
+          <div style={{ marginTop: "var(--s-4)" }}>
+            <RunCommandControl
+              command={command}
+              subcommand={subcommandSpec}
+              argTokens={argTokens}
+              disabled={false}
+              composed={composed}
+              resetKey={composed}
+            />
           </div>
         </div>
       </div>
