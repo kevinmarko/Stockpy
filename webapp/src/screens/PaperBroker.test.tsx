@@ -45,6 +45,7 @@ describe("PaperBroker", () => {
 
     vi.mocked(api.getDeltaHedgePreview).mockResolvedValue({
       symbol: "SPY",
+      available: true,
       net_dollar_delta: 24500,
       beta_weighted_delta_spy: 48.5,
       target_hedge_shares: -48.5,

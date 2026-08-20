@@ -853,16 +853,40 @@ export function PaperBroker() {
             )}
 
             {/* Dynamic Delta Hedge Risk Neutralization Card */}
-            {deltaHedge.data && (() => {
+            {deltaHedge.data && !deltaHedge.data.available && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 16,
+                  background: theme.surface,
+                  borderRadius: 8,
+                  border: `1px solid ${theme.border}`,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 14, fontWeight: 600 }}>⚖️ Dynamic Delta Hedging (SPY β-Weighted)</span>
+                <span style={{ fontSize: 12, color: theme.textMuted }}>
+                  Hedge data unavailable — no live SPY quote available (refusing to show a fabricated recommendation).
+                </span>
+              </div>
+            )}
+            {deltaHedge.data && deltaHedge.data.available && (() => {
+              // Capture into a local const so TS narrows `available: true`
+              // (and every associated non-null field) for the rest of this
+              // closure -- narrowing a property access like `deltaHedge.data`
+              // doesn't reliably survive into a nested function body.
+              const hedge = deltaHedge.data;
               // "HOLD" is the backend's only "no rebalance needed" sentinel
               // (`pilots/options_hedging.py::get_delta_hedge_preview` never
               // returns "NONE") -- `required_action` carries the same fact
               // as a plain boolean, so prefer it for the conditionals below.
-              const isHold = !deltaHedge.data.required_action || deltaHedge.data.action === "HOLD";
+              const isHold = !hedge.required_action || hedge.action === "HOLD";
               // Not a backend field -- a straightforward, honest client-side
               // derivation (order size x spot price) from two real numbers
               // the backend does return, not a fabricated metric.
-              const estimatedCost = deltaHedge.data.shares * deltaHedge.data.spy_spot;
+              const estimatedCost = hedge.shares * hedge.spy_spot;
               return (
               <div
                 style={{
@@ -893,14 +917,14 @@ export function PaperBroker() {
                         color: isHold ? theme.growth : theme.caution,
                       }}
                     >
-                      {isHold ? `✓ Within Tolerance (±${deltaHedge.data.tolerance_band_shares.toFixed(0)} sh)` : "⚠ Rebalance Required"}
+                      {isHold ? `✓ Within Tolerance (±${hedge.tolerance_band_shares.toFixed(0)} sh)` : "⚠ Rebalance Required"}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
-                    Net Exposure: {deltaHedge.data.beta_weighted_delta_spy > 0 ? "+" : ""}{deltaHedge.data.beta_weighted_delta_spy.toFixed(1)} SPY sh (${deltaHedge.data.net_dollar_delta.toLocaleString()} notional).
+                    Net Exposure: {hedge.beta_weighted_delta_spy > 0 ? "+" : ""}{hedge.beta_weighted_delta_spy.toFixed(1)} SPY sh (${hedge.net_dollar_delta.toLocaleString()} notional).
                     {!isHold ? (
                       <span style={{ marginLeft: 6, color: theme.accent, fontWeight: 500 }}>
-                        Target Order: {deltaHedge.data.action} {deltaHedge.data.shares} SPY @ ~${deltaHedge.data.spy_spot.toFixed(2)} (Est. Cost: ${estimatedCost.toLocaleString()})
+                        Target Order: {hedge.action} {hedge.shares} SPY @ ~${hedge.spy_spot.toFixed(2)} (Est. Cost: ${estimatedCost.toLocaleString()})
                       </span>
                     ) : (
                       <span style={{ marginLeft: 6, color: theme.textMuted }}> Portfolio is delta-neutral within tolerance band.</span>
@@ -925,7 +949,7 @@ export function PaperBroker() {
                   {deltaHedgeMutation.pending
                     ? "Hedging..."
                     : !isHold
-                    ? `Execute Delta Hedge (${deltaHedge.data.action} ${deltaHedge.data.shares} SPY)`
+                    ? `Execute Delta Hedge (${hedge.action} ${hedge.shares} SPY)`
                     : "Portfolio Delta Neutral"}
                 </button>
               </div>

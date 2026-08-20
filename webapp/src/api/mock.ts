@@ -12300,6 +12300,7 @@ export const mockApi = {
   async getDeltaHedgePreview() {
     return delay<DeltaHedgePreview>({
       symbol: "SPY",
+      available: true,
       net_dollar_delta: 24502.20,
       beta_weighted_delta_spy: 48.5,
       target_hedge_shares: -48.5,
