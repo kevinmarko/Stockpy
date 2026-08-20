@@ -106,8 +106,15 @@ export function DataTable<T extends Record<string, any>>({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              navigator.clipboard.writeText(JSON.stringify(info.row.original, null, 2));
-              alert("Copied event context as JSON to clipboard!");
+              navigator.clipboard.writeText(JSON.stringify(info.row.original, null, 2)).then(
+                () => alert("Copied event context as JSON to clipboard!"),
+                () => {
+                  // Clipboard writes can be rejected (permission denied, an
+                  // insecure/sandboxed context, etc.) -- don't claim success
+                  // when it didn't happen, and don't leave an unhandled
+                  // promise rejection in the console.
+                }
+              );
             }}
             style={{
               background: "var(--surface-2)",

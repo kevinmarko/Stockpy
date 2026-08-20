@@ -151,6 +151,29 @@ describe("NotebookMLExport component (R4)", () => {
     expect(parsed.portfolio.total_equity).toBe(0);
   });
 
+  // A rejected clipboard write (permission denied, insecure context, etc.)
+  // is already caught by the component's own try/catch around the awaited
+  // writeText call -- verifying it here locks in that the failure path
+  // never flips to "Copied! ✓" and never leaves an unhandled rejection.
+  it("a rejected clipboard write does NOT flip to Copied and surfaces the failure warning instead", async () => {
+    const writeTextMock = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      writable: true,
+      configurable: true,
+    });
+
+    render(<NotebookMLExport portfolio={makePortfolio()} />);
+    const copyBtn = await screen.findByTestId("copy-export-btn");
+    fireEvent.click(copyBtn);
+
+    expect(writeTextMock).toHaveBeenCalled();
+    expect(await screen.findByTestId("clipboard-fallback-warning")).toHaveTextContent(
+      "Failed to copy to clipboard."
+    );
+    expect(screen.queryByText("Copied! ✓")).not.toBeInTheDocument();
+  });
+
   // T2.2: Secure Context Clipboard Fallback
   it("displays fallback message if navigator.clipboard is absent", async () => {
     Object.defineProperty(navigator, "clipboard", {

@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ResearchCopilotView } from "./ResearchCopilotView";
 import { api } from "../../api/client";
 
@@ -16,8 +16,18 @@ vi.mock("../../api/client", async (importOriginal) => {
 });
 
 describe("ResearchCopilotView", () => {
+  const originalClipboard = navigator.clipboard;
+
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: originalClipboard,
+      writable: true,
+      configurable: true,
+    });
   });
 
   it("renders header, archetype templates, and input controls", () => {
@@ -233,5 +243,71 @@ describe("ResearchCopilotView", () => {
     expect(screen.getByText("HIGH VOL BEAR")).toBeInTheDocument();
     expect(screen.getByText("300 bars")).toBeInTheDocument();
     expect(screen.getByText("180 bars")).toBeInTheDocument();
+  });
+
+  it("copies the synthesized code to the clipboard and flips the label to Copied", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+
+    const code = "def generate_signals(df):\n    return df['close'] * 0";
+    vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
+      success: true,
+      code,
+      metadata: { lookback: 20 },
+      validation_passed: true,
+      validation_errors: [],
+      source_prompt: "Test prompt",
+      synthesis_mode: "hypothesis",
+      explanation: "Vectorized Z-Score calculation with volatility targeting.",
+      target_asset_class: null,
+      strategy_type: "Mean Reversion",
+    });
+
+    render(<ResearchCopilotView />);
+    fireEvent.click(screen.getByRole("button", { name: /Synthesize Strategy/i }));
+    await waitFor(() => expect(screen.getByText("Copy Code")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Copy Code"));
+    expect(writeText).toHaveBeenCalledWith(code);
+    await waitFor(() => expect(screen.getByText("Copied")).toBeInTheDocument());
+  });
+
+  it("a rejected clipboard write does NOT flip the label to Copied", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+
+    const code = "def generate_signals(df):\n    return df['close'] * 0";
+    vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
+      success: true,
+      code,
+      metadata: { lookback: 20 },
+      validation_passed: true,
+      validation_errors: [],
+      source_prompt: "Test prompt",
+      synthesis_mode: "hypothesis",
+      explanation: "Vectorized Z-Score calculation with volatility targeting.",
+      target_asset_class: null,
+      strategy_type: "Mean Reversion",
+    });
+
+    render(<ResearchCopilotView />);
+    fireEvent.click(screen.getByRole("button", { name: /Synthesize Strategy/i }));
+    await waitFor(() => expect(screen.getByText("Copy Code")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Copy Code"));
+    expect(writeText).toHaveBeenCalledWith(code);
+    // Flush the rejected microtask; there must be no unhandled rejection and
+    // the label must never claim a successful copy.
+    await Promise.resolve().then(() => Promise.resolve());
+    expect(screen.getByText("Copy Code")).toBeInTheDocument();
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { FixGatewayStatusRadar } from "./FixGatewayStatusRadar";
 import { api } from "../../api/client";
 import type {
@@ -110,6 +110,16 @@ const mockFixStatusData: FixSessionStatusResponse = {
 };
 
 describe("FixGatewayStatusRadar", () => {
+  const originalClipboard = navigator.clipboard;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: originalClipboard,
+      writable: true,
+      configurable: true,
+    });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     (api.getFixSessionStatus as any).mockResolvedValue(mockFixStatusData);
@@ -246,5 +256,54 @@ describe("FixGatewayStatusRadar", () => {
     await waitFor(() => {
       expect(screen.getByText("ORD-99124")).toBeInTheDocument();
     });
+  });
+
+  it("copies a raw FIX log line to the clipboard and flips the copy icon's color on success", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+
+    render(<FixGatewayStatusRadar />);
+    await waitFor(() => {
+      expect(screen.getByText(/Raw FIX 4\.4 Audit Log Viewer/i)).toBeInTheDocument();
+    });
+
+    const copyBtn = screen.getByRole("button", { name: "Copy FIX message 1" });
+    const colorBeforeClick = copyBtn.style.color;
+    fireEvent.click(copyBtn);
+
+    expect(writeText).toHaveBeenCalledWith(mockFixStatusData.audit_log![0]);
+    // On a resolved write, copiedIndex flips to this row's index, which
+    // recolors the button (theme.growth instead of theme.textMuted).
+    await waitFor(() => {
+      expect(copyBtn.style.color).not.toBe(colorBeforeClick);
+    });
+  });
+
+  it("a rejected clipboard write does NOT recolor the copy button and leaves no unhandled rejection", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+
+    render(<FixGatewayStatusRadar />);
+    await waitFor(() => {
+      expect(screen.getByText(/Raw FIX 4\.4 Audit Log Viewer/i)).toBeInTheDocument();
+    });
+
+    const copyBtn = screen.getByRole("button", { name: "Copy FIX message 1" });
+    const colorBeforeClick = copyBtn.style.color;
+    fireEvent.click(copyBtn);
+
+    expect(writeText).toHaveBeenCalledWith(mockFixStatusData.audit_log![0]);
+    // Flush the rejected microtask; there must be no unhandled rejection and
+    // the button must never claim a successful copy by recoloring.
+    await Promise.resolve().then(() => Promise.resolve());
+    expect(copyBtn.style.color).toBe(colorBeforeClick);
   });
 });
