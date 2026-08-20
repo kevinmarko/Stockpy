@@ -13,6 +13,7 @@ exist after training runs). They validate:
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +23,15 @@ import yaml
 
 _REGISTRY_PATH = Path(__file__).parent.parent / "ml" / "registry.yaml"
 _REQUIRED_MODEL_FIELDS = {"role", "path", "trained_date", "cpcv_dsr", "pbo", "deployable", "notes"}
+
+
+def _real_lgbm_trained_date() -> date:
+    """The REAL, git-tracked ml/registry.yaml's current lgbm_ranker.trained_date
+    -- read fresh, never hardcoded. A prior version of the tests below hardcoded
+    a snapshot of this value ('2026-08-14') and broke the instant a real
+    retraining run legitimately updated the committed file past it."""
+    real = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8"))
+    return date.fromisoformat(real["models"]["lgbm_ranker"]["trained_date"])
 
 
 # ---------------------------------------------------------------------------
@@ -226,15 +236,21 @@ models:
     artifact_file: lgbm_20260801.pkl
 """, encoding="utf-8")
 
-    # Create a newer physical artifact on disk with matching artifact_file
-    (models_dir / "lgbm_20260814.pkl").write_text("binary", encoding="utf-8")
+    # Create a newer physical artifact on disk with a mismatched artifact_file.
+    # Must be newer than the REAL, git-tracked ml/registry.yaml's current
+    # lgbm_ranker.trained_date too -- not just the '2026-08-01' fixture above --
+    # or the smart-merge step ahead of self-healing picks the (newer) git entry
+    # instead and self-healing never triggers. See _real_lgbm_trained_date()'s
+    # docstring for why this is read fresh rather than hardcoded.
+    newer = _real_lgbm_trained_date() + timedelta(days=365)
+    (models_dir / f"lgbm_{newer.strftime('%Y%m%d')}.pkl").write_text("binary", encoding="utf-8")
 
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
 
     rows = model_registry_rows()
     row = next(r for r in rows if r["name"] == "lgbm_ranker")
     # Self-healed to the newer physical artifact date
-    assert row["trained_date"] == "2026-08-14"
+    assert row["trained_date"] == newer.isoformat()
 
 
 def test_model_registry_rows_unvalidated_artifact_resets_metrics(tmp_path, monkeypatch):
@@ -262,13 +278,16 @@ models:
     artifact_file: lgbm_20260801.pkl
 """, encoding="utf-8")
 
-    # New artifact on disk with different filename/date
-    (models_dir / "lgbm_20260815.pkl").write_text("binary", encoding="utf-8")
+    # New artifact on disk with a different filename/date -- must be newer than
+    # the real, git-tracked registry's current date too (see
+    # _real_lgbm_trained_date()'s docstring / the self-healing test above).
+    newer = _real_lgbm_trained_date() + timedelta(days=366)
+    (models_dir / f"lgbm_{newer.strftime('%Y%m%d')}.pkl").write_text("binary", encoding="utf-8")
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
 
     rows = model_registry_rows()
     row = next(r for r in rows if r["name"] == "lgbm_ranker")
-    assert row["trained_date"] == "2026-08-15"
+    assert row["trained_date"] == newer.isoformat()
     assert row["cpcv_dsr"] is None
     assert row["pbo"] is None
     assert row["deployable"] is False
@@ -283,14 +302,17 @@ def test_load_registry_smart_merge_git_newer(tmp_path, monkeypatch):
     models_dir = fake_local / "ml_models"
     models_dir.mkdir(parents=True)
 
-    # Local has an older model
+    # Local has an OLDER model than the real, git-tracked ml/registry.yaml --
+    # 2020-01-01 is guaranteed older than any real committed registry entry
+    # for the lifetime of this repo, so (unlike the "git wins" assertion below)
+    # this literal doesn't need to track the real file's current date.
     local_reg = models_dir / "registry.yaml"
     local_reg.write_text("""
 models:
   lgbm_ranker:
     role: cross_sectional_ranker
     path: ml/models/lgbm_latest.pkl
-    trained_date: '2026-08-01'
+    trained_date: '2020-01-01'
     cpcv_dsr: 0.90
     pbo: 0.4
     n_train: 300
@@ -299,11 +321,15 @@ models:
 
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
 
-    # load_registry merges with repo _DEFAULT_REGISTRY_PATH (which has 2026-08-14)
+    # load_registry merges with the real repo _DEFAULT_REGISTRY_PATH -- read its
+    # CURRENT lgbm_ranker entry fresh rather than hardcoding a snapshot of it
+    # (a hardcoded '2026-08-14' here already broke once, when a real retrain
+    # bumped the committed file past it).
+    real = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8"))["models"]["lgbm_ranker"]
     data = load_registry()
     assert "models" in data
-    assert data["models"]["lgbm_ranker"]["trained_date"] == "2026-08-14"
-    assert data["models"]["lgbm_ranker"]["deployable"] is True
+    assert data["models"]["lgbm_ranker"]["trained_date"] == real["trained_date"]
+    assert data["models"]["lgbm_ranker"]["deployable"] == real["deployable"]
 
 
 def test_load_registry_smart_merge_local_newer(tmp_path, monkeypatch):
