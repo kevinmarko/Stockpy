@@ -4,32 +4,39 @@ import { MemoryRouter } from "react-router";
 import { PaperBroker } from "./PaperBroker";
 import { api } from "../api/client";
 
-vi.mock("../api/client", () => ({
-  api: {
-    getPaperBrokerAccount: vi.fn(),
-    getPaperBrokerPositions: vi.fn(),
-    getPaperBrokerOrders: vi.fn(),
-    resetPaperBroker: vi.fn(),
-    getStrategyOptionsCandidates: vi.fn(),
-    executeStrategyOptions: vi.fn(),
-    getPaperBrokerGreeks: vi.fn(),
-    getOptionsMetaModelStatus: vi.fn(),
-    retrainOptionsMetaModel: vi.fn(),
-    runOptionsBacktest: vi.fn(),
-    settleExpiredPaperOptions: vi.fn(),
-    getVolSurface: vi.fn(),
-    getScenarioMatrix: vi.fn(),
-    getDeltaHedgePreview: vi.fn(),
-    executeDeltaHedge: vi.fn(),
-    managePaperOptionsExits: vi.fn(),
-    rollPaperOptionPosition: vi.fn(),
-    getEarningsCrushCandidates: vi.fn(),
-    executeEarningsCrushTrade: vi.fn(),
-    getUnusualOptionsFlow: vi.fn(),
-    getOptionsFlowSentiment: vi.fn(),
-    getThresholds: vi.fn(() => Promise.resolve({ VRP: 0, MAX_KELLY: 0, VIX_HIGH: 0, OPTION_MIN_IVR: 0, REGIME_LOOKAHEAD_DAYS: 0 })),
-  },
-}));
+vi.mock("../api/client", async (importOriginal) => {
+  // Real `ApiError` re-export preserved (rather than a fully synthetic mock)
+  // so `useApi`'s `e instanceof ApiError` check keeps working for the
+  // core-hook loading/error UI tests below, which reject with plain Errors.
+  const actual = await importOriginal<typeof import("../api/client")>();
+  return {
+    ApiError: actual.ApiError,
+    api: {
+      getPaperBrokerAccount: vi.fn(),
+      getPaperBrokerPositions: vi.fn(),
+      getPaperBrokerOrders: vi.fn(),
+      resetPaperBroker: vi.fn(),
+      getStrategyOptionsCandidates: vi.fn(),
+      executeStrategyOptions: vi.fn(),
+      getPaperBrokerGreeks: vi.fn(),
+      getOptionsMetaModelStatus: vi.fn(),
+      retrainOptionsMetaModel: vi.fn(),
+      runOptionsBacktest: vi.fn(),
+      settleExpiredPaperOptions: vi.fn(),
+      getVolSurface: vi.fn(),
+      getScenarioMatrix: vi.fn(),
+      getDeltaHedgePreview: vi.fn(),
+      executeDeltaHedge: vi.fn(),
+      managePaperOptionsExits: vi.fn(),
+      rollPaperOptionPosition: vi.fn(),
+      getEarningsCrushCandidates: vi.fn(),
+      executeEarningsCrushTrade: vi.fn(),
+      getUnusualOptionsFlow: vi.fn(),
+      getOptionsFlowSentiment: vi.fn(),
+      getThresholds: vi.fn(() => Promise.resolve({ VRP: 0, MAX_KELLY: 0, VIX_HIGH: 0, OPTION_MIN_IVR: 0, REGIME_LOOKAHEAD_DAYS: 0 })),
+    },
+  };
+});
 
 describe("PaperBroker", () => {
   beforeEach(() => {
@@ -545,6 +552,125 @@ describe("PaperBroker", () => {
     fireEvent.click(flowBtn);
 
     expect(await screen.findByText(/Unusual Options Activity & Order Flow Feed/i)).toBeInTheDocument();
+  });
+
+  describe("core hook loading/error UI", () => {
+    // Deliberately never resolved/rejected within the test -- keeps the
+    // corresponding useApi hook pinned in its initial `loading: true` state
+    // so the loading skeleton assertion is stable.
+    function pending<T>(): Promise<T> {
+      return new Promise<T>(() => {});
+    }
+
+    it("shows a loading placeholder for positions while the fetch is pending", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockReturnValue(pending());
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText("Loading positions...")).toBeInTheDocument();
+    });
+
+    it("shows an inline error message for positions when the fetch rejects", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockRejectedValue(new Error("positions boom"));
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText(/Failed to load positions: positions boom/i)).toBeInTheDocument();
+    });
+
+    it("shows a loading placeholder for portfolio Greeks while the fetch is pending", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerGreeks).mockReturnValue(pending());
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText("Loading portfolio risk & Greeks...")).toBeInTheDocument();
+      expect(screen.queryByText(/Portfolio Risk & Aggregate Greeks/i)).not.toBeInTheDocument();
+    });
+
+    it("shows an inline error message for portfolio Greeks when the fetch rejects", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerGreeks).mockRejectedValue(new Error("greeks boom"));
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText(/Failed to load portfolio risk & Greeks: greeks boom/i)).toBeInTheDocument();
+    });
+
+    it("shows a loading placeholder for the account summary while the fetch is pending", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockReturnValue(pending());
+      vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText("Loading account summary...")).toBeInTheDocument();
+    });
+
+    it("shows an inline error message when the strategy options candidates fetch rejects", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+      vi.mocked(api.getStrategyOptionsCandidates).mockRejectedValue(new Error("candidates boom"));
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(
+        await screen.findByText(/Failed to load strategy options candidates: candidates boom/i)
+      ).toBeInTheDocument();
+    });
   });
 });
 
