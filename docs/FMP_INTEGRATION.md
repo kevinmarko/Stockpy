@@ -1,7 +1,7 @@
 # FMP Data Integration
 
 **Source:** `data/fmp_client.py`, `data/fmp_fundamentals.py`, `data/fmp_macro.py`, `data/fmp_feeds_company.py`, `data/fmp_feeds_market.py`, `FMPProvider` in `data/market_data.py`. News (§7, 2026-08 addition): `data/fmp_client.py::stock_news`/`parse_news_published_date`, `data/sentiment_sources.py::FMPNewsSource`, `signals/news_catalyst.py::fetch_company_headlines`/`fetch_next_earnings_any`. Symbol search & screener (§9, 2026-08 addition): `data/fmp_client.py::search_name`/`search_symbol`/`company_screener`/`available_sectors`/`available_industries`, `data/fmp_screener.py`.
-**Verification gate:** `scripts/verify_fmp_bars.py`
+**Verification gates:** `scripts/verify_fmp_bars.py` (bars adjustment convention), `scripts/verify_fmp_screener.py` (§9 — symbol search & sector/industry screener, against the operator's own key)
 **Architecture reference:** `docs/architecture/data-layer.md`'s "FMP data layer" bullet
 **Planning source:** this document, `docs/architecture/data-layer.md`, and `CLAUDE.md`'s FMP bullet are all derived from the integration plan (`i-just-signed-up-modular-abelson`); where a claim below could not be independently re-verified against a live response by the agent that wrote it, that is stated explicitly rather than presented as confirmed.
 
@@ -378,11 +378,18 @@ below are exact, not best-effort):
   `[{"industry": "..."}]`.
 
 **Before relying on `FMP_SCREENER_ENABLED=True` against the operator's own
-key**: run one live (non-mock) request against `GET /data/screener` locally
-and confirm it returns real rows rather than an entitlement-denial
-degrading silently to an empty list — this sandboxed environment has no
-live-market network access to do that verification itself, the same
-limitation §8 discloses for the S&P 500 constituent-changes feed.
+key**: run `python scripts/verify_fmp_screener.py` — a real, network-dependent
+manual gate (mirrors `scripts/verify_fmp_bars.py`'s convention exactly) that
+exercises all five wrapped endpoints against the key actually configured in
+`.env` and fails loudly (never a silent pass) if a row is missing an expected
+field or a filter isn't honored server-side. Correction to an earlier
+version of this note: this sandbox genuinely HAS live-market network access
+to `financialmodelingprep.com` (confirmed live 2026-08 — a real HTTP 401 came
+back for a deliberately invalid key) — the actual blocker to verifying this
+feed end-to-end during development was the absence of a configured
+`FMP_API_KEY`/`.env` file in the sandbox, not a network restriction. Only the
+operator's own key/tier can complete this check; `scripts/verify_fmp_screener.py`
+is the repeatable way to do it whenever that key is available.
 
 **Not a `SignalModule`, not written into `SIGNAL_WEIGHTS`.** Like the other
 diagnostic feeds in §1, FMP serves only the current search/screener result —
