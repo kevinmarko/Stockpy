@@ -222,7 +222,22 @@ class Settings(BaseSettings):
     )
     PAPER_BROKER_WRITES_ENABLED: bool = Field(
         default=True,
-        description="Gates POST /pilots/paper-broker/reset endpoint. If False, resets are blocked."
+        description=(
+            "Gates every write/execution endpoint on the options desk's paper "
+            "broker (api/pilots_api.py's require_paper_broker_writes_enabled "
+            "dependency, alongside the command token on each route): "
+            "POST /pilots/paper-broker/reset, /brokerage/options/order, "
+            "/pilots/paper-broker/strategy-options/execute, "
+            "/pilots/paper-broker/manage-exits, /pilots/paper-broker/roll, "
+            "/pilots/paper-broker/delta-hedge/execute, "
+            "/pilots/options/meta-model/retrain, "
+            "/pilots/paper-broker/settle-expired, "
+            "/pilots/options/earnings-crush/execute, "
+            "/pilots/options/mispricing/execute, "
+            "/pilots/options/dispersion/execute, "
+            "/pilots/options/zero-dte/execute, and "
+            "/pilots/options/0dte/manage-exits. If False, all of these are blocked."
+        ),
     )
     PAPER_OPTIONS_AUTO_EXECUTE_ENABLED: bool = Field(
         default=False,
