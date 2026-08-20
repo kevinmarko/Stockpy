@@ -31,6 +31,7 @@ Coverage
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1753,6 +1754,61 @@ class TestAdvisoryAutoSkip:
         for name in _ADVISORY_AUTO_SKIP:
             assert by_name[name].passed, f"Expected {name} to be auto-skipped (PASS)"
             assert "ADVISORY_ONLY" in by_name[name].reason
+
+
+# ---------------------------------------------------------------------------
+# calibration_drift
+# ---------------------------------------------------------------------------
+
+class TestCalibrationDrift:
+    """check_calibration_drift() takes a fast path that avoids importing
+    ``evaluation_engine`` (which pulls in pandas transitively — the single
+    largest import cost in this script) whenever the decision log doesn't
+    exist yet, since ``recommendation_tracking_report()`` would immediately
+    hit the same empty-rows branch anyway. The fast path must report the
+    exact same PASS/warning verdict and reason text as the real function's
+    own empty-rows branch — this is a performance change, not a behavior
+    change.
+    """
+
+    def test_fast_path_skips_heavy_import_when_log_missing(self, monkeypatch, tmp_path):
+        from scripts.preflight_check import check_calibration_drift
+
+        monkeypatch.chdir(tmp_path)  # no output/decision_log.jsonl here
+        # Poison the import: if a future edit removes the fast path and this
+        # check falls through to `from evaluation_engine import ...`, that
+        # import now raises instead of silently succeeding — turning a
+        # perf regression into a visible test failure via the assertions
+        # below, rather than this test staying green while quietly paying
+        # the pandas import cost again.
+        monkeypatch.setitem(sys.modules, "evaluation_engine", None)
+
+        r = check_calibration_drift()
+
+        assert r.passed is True
+        assert r.warning is True
+        assert "Insufficient history" in r.reason
+        assert "could not run" not in r.reason  # would indicate the except-clause fallback fired
+
+    def test_real_path_still_used_when_log_file_present_but_empty(self, monkeypatch, tmp_path):
+        """When the log file DOES exist (even empty), the real
+        ``recommendation_tracking_report()`` machinery must still run
+        normally — the fast path must never trigger on a false positive."""
+        from scripts.preflight_check import check_calibration_drift
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "output").mkdir()
+        (tmp_path / "output" / "decision_log.jsonl").write_text("")
+
+        r = check_calibration_drift()
+
+        assert r.passed is True
+        assert r.warning is True
+        assert "Insufficient history" in r.reason
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_calibration_drift
+        assert check_calibration_drift in ALL_CHECKS
 
 
 # ---------------------------------------------------------------------------

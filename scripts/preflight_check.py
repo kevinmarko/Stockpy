@@ -1744,6 +1744,32 @@ def check_calibration_drift() -> CheckResult:
     """
     name = "calibration_drift"
     try:
+        # Fast path: recommendation_tracking_report() immediately returns
+        # zero rows whenever the decision log doesn't exist yet
+        # (gui.decision_log.read_decisions degrades a missing file to []
+        # rather than raising — see its own docstring) — the common state
+        # on a fresh deployment or CI sandbox with no live trading history.
+        # Importing evaluation_engine (which pulls in pandas transitively —
+        # ~300-400ms cold, measured the single largest cost in this whole
+        # script) only to immediately hit that same empty-rows branch is
+        # pure overhead in that case, so check for the file first and skip
+        # the heavy import entirely when it's absent. This literal must
+        # match evaluation_engine._DEFAULT_DECISION_LOG_PATH exactly
+        # (repo/cwd-relative "output/decision_log.jsonl", NOT
+        # settings.OUTPUT_DIR) — that's what recommendation_tracking_report()
+        # actually reads when called with no log_path argument, as it always
+        # is here — so this can only ever short-circuit into the identical
+        # empty-rows branch the real function would have taken; it never
+        # changes what this check reports, only how fast it gets there.
+        if not Path("output/decision_log.jsonl").exists():
+            return CheckResult(
+                name, True,
+                "Insufficient history — no live-vs-recommendation tracking rows "
+                "available yet (output/decision_log.jsonl empty or missing). "
+                "This is expected on a fresh deployment.",
+                warning=True,
+            )
+
         from evaluation_engine import recommendation_tracking_report
         from validation.drift import check_and_alert_recommendation_drift
 
