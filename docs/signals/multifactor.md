@@ -179,3 +179,42 @@ the same conclusion. See
 | **Max Drawdown** | 13.78% |
 | **Deployable** | ✅ True |
 
+### 2026-08-21 addendum: tiered universe widening (real S&P 500 roster)
+
+`STRATEGY_REGISTRY["multifactor_lowvol_size"]`'s universe changed from a hand-picked
+9-name list (`["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"]`) to the
+real, current S&P 500 constituent roster sourced live from
+`universe_engine.get_sp500_constituents()` (`_XSEC_UNIVERSE_WIDE`, plus SPY — 504
+total), via a new `scripts/refresh_validations.py::_load_wide_universe()` loader. SPY
+remains a benchmark-only input for the adapter's Faber SMA-200 trend-gate overlay and is
+excluded from the tradeable Low-Vol/Size cross-section itself, exactly as before. Since
+this adapter's Low-Vol/Size scoring collapses per-ticker computation into date-indexed
+columns before CPCV ever sees the data, CPCV cost is `O(dates)` regardless of ticker
+count — the widened universe was free to apply here, and (unlike the other six affected
+strategies) this one is also the sole adapter whose Size factor actually reads a
+shares-outstanding number, so it remains the only member of the new
+`_STRATEGIES_NEEDING_SHARES` set that still pays a live `yfinance` `fast_info` fetch per
+ticker.
+
+| Metric | Before (9-name hand list) | After (504-name real roster) | Gate |
+|---|---|---|---|
+| Sharpe | 0.675 | **0.979** | > 0.50 ✅ |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ (unchanged) |
+| DSR | 0.999 | 1.000 | > 0.95 ✅ |
+| MaxDD | 29.3% | **18.8%** | < 30% ✅ |
+| `deployable` | True | **True** (unchanged) | |
+
+The "before" row above is one of four `cross_sectional_momentum`/`relative_strength_xsec`/
+`multifactor_lowvol_size`/`signal_replay_balanced_blend` rows that reported
+near-identical Sharpe/PBO/DSR/MaxDD to 5-6 significant figures in the baseline capture
+for this change — flagged as a possible harness-invocation bug in
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry, unresolved as of this writing;
+read the "before" column with that caveat.
+
+**Scope, honestly stated**: this widens BREADTH, not point-in-time survivorship-bias
+correction — `universe_engine.get_sp500_constituents()` currently returns the same
+current ~503-name roster for every historical date (Wikipedia's historical-changes table
+was removed in 2026-08 and the FMP fallback needs an unconfigured API key in this
+environment). See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full
+before/after table across all 7 affected strategies and the complete scope statement.
+

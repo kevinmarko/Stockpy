@@ -53,6 +53,35 @@ _DEFAULT_PARAMS: dict = {
 }
 
 
+def _positional_query_groups(keys: Optional[np.ndarray], positions: np.ndarray) -> list[int]:
+    """LightGBM ``group`` sizes for the rows at ``positions`` (already in the
+    row order LightGBM will receive them), run-length-encoding consecutive
+    identical ``keys`` values into one query each.
+
+    Contiguity holds by construction here: ``CombinatorialPurgedCV.split()``
+    (``validation/purged_cv.py``) partitions an already date-sorted array
+    into POSITIONAL blocks and returns train/test indices as boolean-mask
+    filters over that array -- filtering preserves relative row order and
+    never interleaves rows from two different original blocks, so any given
+    date's surviving rows (some may be purged/embargoed away) remain a
+    contiguous run within the filtered subset even though they may no longer
+    be a contiguous run in the ORIGINAL unfiltered array.
+
+    ``keys=None`` (the non-MultiIndex case -- no real per-date query
+    structure to recover) preserves this function's pre-existing single-group
+    behavior: every row in ``positions`` is treated as one query, unchanged.
+    """
+    n = len(positions)
+    if n == 0:
+        return []
+    if keys is None:
+        return [n]
+    sub = np.asarray(keys)[positions]
+    change = np.concatenate(([True], sub[1:] != sub[:-1]))
+    starts = np.flatnonzero(change)
+    return np.diff(np.append(starts, n)).tolist()
+
+
 class LGBMCrossSectionalRanker(Model):
     """LightGBM LambdaRank model trained inside purged k-fold CV.
 
@@ -165,8 +194,16 @@ class LGBMCrossSectionalRanker(Model):
         # If MultiIndex, group by first level (date); else treat all as one group.
         if is_multi:
             groups = X.index.get_level_values(0).value_counts().sort_index().values
+            # Per-row date label, in X's own row order (X is sort_index(level=0)'d
+            # above, so X_arr below -- built from this same X -- has rows grouped
+            # contiguously by date already). Used to derive correct per-fold/
+            # per-final-fit LightGBM `group` arrays below, regardless of which CV
+            # index branch (native MultiIndex vs flatten) is taken for cv.split()
+            # itself -- X_arr's row order never depends on that branch.
+            group_keys: Optional[np.ndarray] = X.index.get_level_values(0).values
         else:
             groups = np.array([len(X)])
+            group_keys = None
 
         # Scale target to 5 fixed relevance grades (0–4), the standard approach
         # for LambdaRank. Fixed grade count avoids the LightGBM constraint that
@@ -227,15 +264,25 @@ class LGBMCrossSectionalRanker(Model):
             X_tr, X_te = X_arr[train_idx], X_arr[test_idx]
             y_tr, y_te = y_arr[train_idx], y_arr[test_idx]
 
-            # Each fold is treated as one query group (purged CV slices arbitrarily)
+            # Per-date query groups (see _positional_query_groups) -- NOT one
+            # giant group spanning the whole fold. A single group covering
+            # every (date, ticker) row in the fold both defeats LambdaRank's
+            # actual objective (it would rank tickers against OTHER DATES'
+            # tickers, not just same-date peers) and, at a wide enough
+            # universe/fold size, exceeds LightGBM's internal ~10000-row
+            # per-query limit outright (confirmed: this crashed in production
+            # at a 100-ticker capped universe -- see
+            # docs/known_issues/lgbm_ranker_query_group_bug.md).
+            group_tr = _positional_query_groups(group_keys, train_idx)
+            group_te = _positional_query_groups(group_keys, test_idx)
             fold_model = lgb.LGBMRanker(**{k: v for k, v in self.params.items()
                                            if k not in ("n_estimators", "early_stopping_rounds")})
             try:
                 fold_model.fit(
                     X_tr, y_tr,
-                    group=[len(y_tr)],
+                    group=group_tr,
                     eval_set=[(X_te, y_te)],
-                    eval_group=[[len(y_te)]],
+                    eval_group=[group_te],
                     callbacks=[lgb.early_stopping(
                         stopping_rounds=self.params.get("early_stopping_rounds", 50),
                         verbose=False,
@@ -249,10 +296,12 @@ class LGBMCrossSectionalRanker(Model):
             logger.info("LGBMRanker CV NDCG@1 mean=%.4f std=%.4f over %d folds",
                         np.mean(oof_scores), np.std(oof_scores), len(oof_scores))
 
-        # Final model on full data (single-group mode)
+        # Final model on full data -- real per-date query groups (same fix as
+        # the per-fold CV fits above), not one single group spanning every row.
+        group_full = _positional_query_groups(group_keys, np.arange(len(X_arr)))
         final_model = lgb.LGBMRanker(**{k: v for k, v in self.params.items()
                                          if k not in ("early_stopping_rounds",)})
-        final_model.fit(X_arr, y_arr, group=[len(y_arr)])
+        final_model.fit(X_arr, y_arr, group=group_full)
 
         self._model = final_model
         self._last_trained = datetime.now(tz=None)

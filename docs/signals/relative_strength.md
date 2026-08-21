@@ -133,3 +133,36 @@ the same conclusion. See
 | **Max Drawdown** | 16.02% |
 | **Deployable** | ✅ True |
 
+### 2026-08-21 addendum: tiered universe widening (real S&P 500 roster)
+
+`STRATEGY_REGISTRY["relative_strength_xsec"]`'s universe changed from a hardcoded
+30-name list (`_XSEC_UNIVERSE_30`, plus SPY as benchmark — 31 total) to the real,
+current S&P 500 constituent roster sourced live from `universe_engine.get_sp500_constituents()`
+(`_XSEC_UNIVERSE_WIDE`, plus SPY — 504 total), via a new `scripts/refresh_validations.py::
+_load_wide_universe()` loader. Like `cross_sectional_momentum`, this adapter's
+per-ticker computation collapses into date-indexed columns before CPCV ever sees the
+data, so CPCV cost is `O(dates)` regardless of ticker count — the widened universe was
+free to apply here.
+
+| Metric | Before (30-name list) | After (504-name real roster) | Gate |
+|---|---|---|---|
+| Sharpe | 0.675 | **0.912** | > 0.50 ✅ |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ (unchanged) |
+| DSR | 0.999 | 1.000 | > 0.95 ✅ |
+| MaxDD | 29.3% | **22.2%** | < 30% ✅ |
+| `deployable` | True | **True** (unchanged) | |
+
+The "before" row above is one of four `cross_sectional_momentum`/`relative_strength_xsec`/
+`multifactor_lowvol_size`/`signal_replay_balanced_blend` rows that reported
+near-identical Sharpe/PBO/DSR/MaxDD to 5-6 significant figures in the baseline capture
+for this change — flagged as a possible harness-invocation bug in
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry, unresolved as of this writing;
+read the "before" column with that caveat.
+
+**Scope, honestly stated**: this widens BREADTH, not point-in-time survivorship-bias
+correction — `universe_engine.get_sp500_constituents()` currently returns the same
+current ~503-name roster for every historical date (Wikipedia's historical-changes table
+was removed in 2026-08 and the FMP fallback needs an unconfigured API key in this
+environment). See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full
+before/after table across all 7 affected strategies and the complete scope statement.
+

@@ -268,9 +268,11 @@ selection-bias risk on top of whatever the signal's real edge (or lack of one) i
 **Max Drawdown passes by a narrow margin (28.4% vs. the 30% gate)** — worth flagging
 honestly rather than glossing over: a 12-name, 2-sector universe concentrated further
 into a ~6-name top-half book is meaningfully less diversified than this file's 30-name
-cross-sectional adapters, so a wider future universe (once EDGAR PIT accrual/GP data
-is wired through `HistoricalStore` for more names) would be expected to reduce this
-drawdown via broader diversification, not because today's number is unreliable.
+cross-sectional adapters. **A wider universe was tried (2026-08-21) — MaxDD got WORSE,
+not better.** This drawdown was NOT reduced by broader diversification as originally
+expected; moving to a real 100-name, 8-sector universe instead pushed MaxDD to 34.2% and
+flipped the strategy to `deployable=False`. See the addendum immediately below for the
+real numbers and the honest, unresolved "why" question.
 
 **What this DOES and DOES NOT validate:** this confirms the SNEQR mechanism (real
 Sloan accrual quality + Novy-Marx gross profitability, ranked within-sector) produces
@@ -297,6 +299,44 @@ slicing, missing-EDGAR-data dead-letter), `tests/test_validation_sector_quality_
 | **DSR** | 1.0000 |
 | **Max Drawdown** | 19.57% |
 | **Deployable** | ✅ True |
+
+### 2026-08-21 addendum: tiered universe widening — a real, measured drawdown regression
+
+`SNEQR_UNIVERSE` changed from the 12-name, 2-sector hand-picked list documented above
+(Technology 7, Consumer Defensive 5) to `_XSEC_UNIVERSE_CAPPED` — a deterministic,
+alphabetically-sorted 100-name slice of the real, current S&P 500 constituent roster
+sourced live from `universe_engine.get_sp500_constituents()`, shared with
+`signal_replay_balanced_blend`/`lgbm_ranker` (the other two adapters whose cost scales
+with ticker count). `forecasting/data/ticker_sectors.csv` was independently regenerated
+to full 503/503 coverage as part of the same change, so this is a real, well-covered
+measurement, not an artifact of a partially-populated sector lookup. Within this 100-name
+universe, **8 sectors** now clear `MIN_SECTOR_SIZE=5` (vs. the old universe's 2):
+Financial Services (24), Technology (16), Healthcare (12), Consumer Cyclical (12),
+Industrials (10), Consumer Defensive (6), Utilities (6), Real Estate (6).
+
+| Metric | Before (12-name, 2-sector universe) | After (100-name, 8-sector universe) | Gate |
+|---|---|---|---|
+| Sharpe | 0.979 | 0.919 | > 0.50 ✅ |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ (unchanged) |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ (unchanged) |
+| MaxDD | 19.6% | **34.2%** | < 30% ❌ **FAIL** |
+| `deployable` | True | **False** | |
+
+**Real, measured, counterintuitive — not asserted as understood.** Sharpe and DSR barely
+moved and PBO stayed 0.000, but MaxDD rose from 19.6% to 34.2%, crossing the 30% gate
+and flipping this strategy from `deployable=True` to `deployable=False`. This is the
+opposite of the "broader diversification reduces drawdown" expectation this section
+previously stated before the wider universe was actually measured. No root cause is
+asserted here beyond the observation itself — a within-sector top-half book spread
+across more sectors and roughly 8x more names (from a ~6-name book to a real ~50-name
+book) did not produce the naively-expected drawdown reduction in this measurement. Left
+as an open question for a future investigation rather than papered over with a
+plausible-sounding but unverified explanation (CONSTRAINT #4). `sector_quality_rank`'s
+live status is unaffected either way — the module remains dormant in production (see
+"Data Availability Gap" above) regardless of this backtest's `deployable` value. See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full cross-strategy
+writeup and the honest survivorship-bias scope caveat (this widening is BREADTH only,
+not point-in-time constituent-membership correction).
 
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

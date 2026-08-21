@@ -113,7 +113,7 @@ recommended without also re-validating the strategy harness (`python -m validati
 ### Fix Mechanics & Causal Levers
 1. **Full Backdated History (2005–2026) with Real Credit Spread Integration**: Rather than truncating the backtest at 2023-08 when local `BAMLH0A0HYM2` (HY OAS) coverage begins, the adapter dynamically utilizes Moody's Seasoned Baa Corporate Bond Spread (`BAA10Y`, available from FRED continuously back to 1986), ensuring continuous real corporate credit stress detection across the entire 21+ year timeline alongside real FRED yield curve (`T10Y2Y`), publication-lagged unemployment/Sahm Rule (`UNRATE`), and volatility (`VIXCLS`) data.
 2. **Systemic Macro Allocation Scaling**: In favorable macroeconomic conditions (`RISK ON`), equity exposure is 100%. In `NEUTRAL`, baseline exposure is 70%. In stressed conditions (`RECESSION`, `CREDIT EVENT`, or `killSwitch` active), portfolio exposure scales to cash (0.0), insulating the book from systemic market crashes.
-3. **Risk-Parity Cross-Section**: The 30 large-cap names are weighted proportional to inverse 60-day realized volatility (lagged 1 day), preventing volatile single stocks from dominating portfolio risk.
+3. **Risk-Parity Cross-Section**: Universe names (503 large-cap names as of the 2026-08-21 universe widening — see the addendum below; 30 large-cap names before it) are weighted proportional to inverse 60-day realized volatility (lagged 1 day), preventing volatile single stocks from dominating portfolio risk.
 4. **Market Trend Overlay (Faber SMA-200, Category A lever)**: Incorporating `SPY` as a benchmark trend filter gates exposure to cash when SPY is below its 200-day SMA, cutting MaxDD from ~30% to 14.4%.
 5. **Single Robust Variant (Category B lever)**: Emitting a single robust variant (`MacroRegime_TrendGated`) eliminates multi-trial selection noise, establishing PBO=0.000 and DSR=1.000 across the full CPCV split distribution.
 
@@ -129,4 +129,39 @@ See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) f
 | **DSR** | 0.9999 |
 | **Max Drawdown** | 11.89% |
 | **Deployable** | ✅ True |
+
+### 2026-08-21 addendum: tiered universe widening (real S&P 500 roster)
+
+`STRATEGY_REGISTRY["macro_regime_pit"]`'s universe changed from a hardcoded 30-name list
+(`_XSEC_UNIVERSE_30`, plus SPY as benchmark — 31 total) to the real, current S&P 500
+constituent roster sourced live from `universe_engine.get_sp500_constituents()`
+(`_XSEC_UNIVERSE_WIDE`, plus SPY — 504 total), via a new `scripts/refresh_validations.py::
+_load_wide_universe()` loader. This adapter's regime-scaled, risk-parity-weighted
+cross-section collapses per-ticker computation into date-indexed columns before CPCV
+ever sees the data, so CPCV cost is `O(dates)` regardless of ticker count — the widened
+universe was free to apply here.
+
+| Metric | Before (30-name list, stale window †) | After (504-name real roster) | Gate |
+|---|---|---|---|
+| Sharpe | 0.580 | **0.806** | > 0.50 ✅ |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ (unchanged) |
+| DSR | 0.957 | 1.000 | > 0.95 ✅ |
+| MaxDD | 13.3% | 19.0% | < 30% ✅ |
+| `deployable` | True | **True** (unchanged) | |
+
+**† The "before" row above is not a like-for-like comparison** — it is a stale,
+leftover result from a differently-windowed prior run (`2015-01-01`–`2023-12-31`, not
+this entry's `2005-01-01`–present) that predates the "before" baseline-capture run for
+this change; no fresh, same-window "before" number was available at capture time. MaxDD
+moving from 13.3% to 19.0% should not be read as "the wider universe made drawdown
+worse" given the mismatched windows — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s
+2026-08-21 entry for the full caveat and the other six strategies' cleaner before/after
+comparisons.
+
+**Scope, honestly stated**: this widens BREADTH, not point-in-time survivorship-bias
+correction — `universe_engine.get_sp500_constituents()` currently returns the same
+current ~503-name roster for every historical date (Wikipedia's historical-changes table
+was removed in 2026-08 and the FMP fallback needs an unconfigured API key in this
+environment). See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full
+before/after table across all 7 affected strategies and the complete scope statement.
 
