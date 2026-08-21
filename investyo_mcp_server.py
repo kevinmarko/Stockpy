@@ -3354,11 +3354,23 @@ def scan_pairs_arbitrage() -> dict:
     statistical arbitrage pairs. Returns the top candidates ranked by cointegration
     p-value. Read-only.
     """
-    from pairs_ondemand import scan_pairs
+    from pairs_ondemand import scan_pairs, SCAN_MIN_SYMBOLS, SCAN_MAX_SYMBOLS
     from data.market_data import get_provider
-    provider = get_provider()
+    from data.portfolio_sync import resolve_universe
     try:
-        return scan_pairs(provider)
+        symbols = resolve_universe("all")
+        if len(symbols) < SCAN_MIN_SYMBOLS:
+            return {
+                "error": (
+                    f"Not enough symbols in the active universe to scan "
+                    f"(need at least {SCAN_MIN_SYMBOLS}, have {len(symbols)})."
+                )
+            }
+        if len(symbols) > SCAN_MAX_SYMBOLS:
+            symbols = sorted(set(symbols))[:SCAN_MAX_SYMBOLS]
+
+        provider = get_provider()
+        return scan_pairs(symbols, provider)
     except Exception as e:
         return {"error": str(e)}
 
