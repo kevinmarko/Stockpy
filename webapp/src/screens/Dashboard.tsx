@@ -9,11 +9,14 @@ import { Toggle } from "../components/Toggle";
 import { TabGuide } from "../components/TabGuide";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { NotebookMLExport } from "../components/NotebookMLExport";
-import { PerfLine, Sparkline } from "../components/charts";
+import { Sparkline } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
+import { Modal } from "../components/Modal";
 import { theme } from "../theme";
 import { fmtUsd, fmtSignedUsd } from "../format";
 import { deriveAttentionItems } from "../observabilityAttention";
+import AccountPerformanceChart from "../components/AccountPerformanceChart";
+import { PortfolioPieChart } from "../components/PortfolioPieChart";
 
 
 
@@ -52,6 +55,34 @@ export function Dashboard() {
   );
 
   const [selectedTopPilots, setSelectedTopPilots] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState<"sr" | "strategy" | "active">("sr");
+  const [manualActionModal, setManualActionModal] = useState<"Liquidate" | "Rebalance" | null>(null);
+
+  const sortedPilots = useMemo(() => {
+    if (!pilots.data) return [];
+    return [...pilots.data].sort((a, b) => {
+      if (sortBy === "sr") {
+        // null values sort to the bottom (they represent missing data, not 0)
+        const aVal = a.headline.sharpe;
+        const bVal = b.headline.sharpe;
+        if (aVal === null && bVal === null) return 0;
+        if (aVal === null) return 1;
+        if (bVal === null) return -1;
+        return bVal - aVal;
+      } else if (sortBy === "strategy") {
+        return a.category.localeCompare(b.category);
+      } else {
+        // deployable: true ranks first, then null (not yet validated --
+        // "unknown", not "known-bad"), then false (measured, failed the
+        // deployability gate) last. Coercing null and false to the same 0
+        // would conflate "we don't know yet" with "we know it failed" --
+        // the same distinction the "sr" branch above already makes for a
+        // missing vs. a real 0 Sharpe.
+        const activeScore = (d: boolean | null) => (d === true ? 2 : d === null ? 1 : 0);
+        return activeScore(b.headline.deployable) - activeScore(a.headline.deployable);
+      }
+    });
+  }, [pilots.data, sortBy]);
 
 
   // Retain the last successfully-loaded portfolio so a FAILED refresh keeps the
@@ -69,6 +100,7 @@ export function Dashboard() {
   const portfolioIsOffline =
     !port.loading &&
     (port.stale || (!port.data && !!port.error && !!lastGoodPortfolio));
+  
   // Local for clean type-narrowing of the (nullable) equity curve in the JSX.
   const equityCurve: CurvePoint[] | null = equity.data?.curve ?? null;
 
@@ -171,14 +203,18 @@ export function Dashboard() {
                   <div className="num" style={{ fontSize: 24, fontWeight: 800 }}>
                     {fmtUsd(shownPortfolio.total_equity)}
                   </div>
-                  <button
-                    className="btn"
-                    onClick={port.reload}
-                    style={{ fontSize: 10, padding: "var(--s-0-5) var(--s-1-5)" }}
-                    data-testid="portfolio-refresh-btn"
-                  >
-                    Refresh
-                  </button>
+                  <div style={{ display: 'flex', gap: 'var(--s-1)' }}>
+                    <button className="btn" onClick={() => setManualActionModal("Liquidate")} style={{ fontSize: 10, padding: "var(--s-0-5) var(--s-1-5)" }}>Liquidate</button>
+                    <button className="btn" onClick={() => setManualActionModal("Rebalance")} style={{ fontSize: 10, padding: "var(--s-0-5) var(--s-1-5)" }}>Rebalance</button>
+                    <button
+                      className="btn"
+                      onClick={port.reload}
+                      style={{ fontSize: 10, padding: "var(--s-0-5) var(--s-1-5)" }}
+                      data-testid="portfolio-refresh-btn"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
                 <div className="num" style={{ color: shownPortfolio.total_unrealized_pl >= 0 ? theme.growth : theme.decline, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
                   {fmtSignedUsd(shownPortfolio.total_unrealized_pl)} unrealized
@@ -187,6 +223,7 @@ export function Dashboard() {
                   <Tile label="Buying Power" value={fmtUsd(shownPortfolio.buying_power)} />
                   <Tile label="Positions" value={shownPortfolio.position_count} />
                 </div>
+                <PortfolioPieChart positions={shownPortfolio.positions} />
               </div>
             )}
           </div>
@@ -214,25 +251,13 @@ export function Dashboard() {
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Account Performance</span>
           </div>
-          <div style={{ flex: 1, overflow: "auto" }}>
+          <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
             {equity.loading ? (
               <div className="skeleton" style={{ height: 150 }} />
             ) : Array.isArray(equityCurve) && equityCurve.length > 0 ? (
-              <PerfLine data={equityCurve} valueFormat="currency" />
+              <AccountPerformanceChart data={equityCurve} />
             ) : (
-              <div
-                className="empty"
-                data-testid="equity-empty"
-                style={{ padding: "var(--s-8) var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-md)" }}
-              >
-                <div style={{ fontWeight: 600, color: theme.textSecondary }}>
-                  No account performance data yet
-                </div>
-                <div style={{ marginTop: "var(--s-1-5)", fontSize: "var(--t-body)" }}>
-                  No curve data available. Run the Stockpy pipeline to accumulate an
-                  account equity history.
-                </div>
-              </div>
+              <AccountPerformanceChart data={[]} />
             )}
             <div style={{ marginTop: "var(--s-2)" }}>
               <RangeToggle value={range} onChange={setRange} />
@@ -296,8 +321,14 @@ export function Dashboard() {
               <ErrorState message={pilots.error ?? "No data"} status={pilots.status} onRetry={pilots.reload} />
             ) : (
               <div>
+                <div style={{ display: 'flex', gap: 'var(--s-2)', marginBottom: 'var(--s-3)' }}>
+                  <span style={{ fontSize: 'var(--t-caption)', color: theme.textSecondary, alignSelf: 'center' }}>Sort by:</span>
+                  <button className={`btn ${sortBy === 'sr' ? 'btn-primary' : ''}`} style={{ fontSize: 10 }} onClick={() => setSortBy('sr')}>SR</button>
+                  <button className={`btn ${sortBy === 'strategy' ? 'btn-primary' : ''}`} style={{ fontSize: 10 }} onClick={() => setSortBy('strategy')}>Strategy</button>
+                  <button className={`btn ${sortBy === 'active' ? 'btn-primary' : ''}`} style={{ fontSize: 10 }} onClick={() => setSortBy('active')}>Active</button>
+                </div>
                 <div className="list" style={{ marginBottom: "var(--s-3)" }}>
-                  {pilots.data.slice(0, 5).map(p => (
+                  {sortedPilots.slice(0, 5).map(p => (
                     <PilotRow 
                       key={p.id} 
                       pilot={p} 
@@ -347,6 +378,20 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {manualActionModal && (
+        <Modal ariaLabel={`${manualActionModal} Portfolio`} onClose={() => setManualActionModal(null)}>
+          <div style={{ padding: "var(--s-4)" }}>
+            <h2 style={{ marginBottom: "var(--s-4)" }}>{manualActionModal} Portfolio</h2>
+            <p style={{ marginBottom: "var(--s-4)" }}>
+              Stockpy is an advisory-only platform. To <strong>{manualActionModal.toLowerCase()}</strong> your portfolio, you must manually open your Robinhood app and execute the trades.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button className="btn btn-primary" onClick={() => setManualActionModal(null)}>Understood</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -387,7 +432,10 @@ function PilotRow({
       </div>
       <div className="row-end" style={{ flexShrink: 0, width: 70, textAlign: "right" }}>
         <div className="num" style={{ fontWeight: 700 }}>
-          {pilot.headline.sharpe ? `SR: ${pilot.headline.sharpe.toFixed(2)}` : "SR: —"}
+          {/* !== null, not a truthy check -- a genuine Sharpe of exactly 0
+              is real, meaningful data (falsy in JS) and must not render
+              identically to a missing/null value. */}
+          {pilot.headline.sharpe !== null ? `SR: ${pilot.headline.sharpe.toFixed(2)}` : "SR: —"}
         </div>
       </div>
     </div>
