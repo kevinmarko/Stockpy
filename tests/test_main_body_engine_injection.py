@@ -53,6 +53,16 @@ class TestDataEngineInjection:
         monkeypatch.setattr(mo, "fetch_all_data_async", _ok_fetch_factory())
         monkeypatch.setattr(mo, "GlobalKillSwitch", lambda *a, **k: _inactive_kill_switch())
         monkeypatch.setattr(mo.settings, "DEFAULT_TICKERS", ["AAPL"], raising=False)
+        # This test's data_engine-injected path runs the real
+        # pipeline.production_steps.AsyncDataFetchStep, which unconditionally
+        # merges pilots.discovery.discovery()'s scan candidates ahead of
+        # DEFAULT_TICKERS. discovery() reads settings.OUTPUT_DIR -- a
+        # machine-global settings.LOCAL_DATA_ROOT path -- so a real
+        # ~/.stockpy_local/output/scan_candidates.json (e.g. from a real
+        # agentic-discovery skill run) would otherwise override the
+        # DEFAULT_TICKERS=["AAPL"] set above and break this test's
+        # `captured["tickers"] == ["AAPL"]` assertion below.
+        monkeypatch.setattr("pilots.discovery.discovery", lambda *a, **kw: {"candidates": []})
 
         captured = {}
 
