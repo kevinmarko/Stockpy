@@ -5,16 +5,22 @@ import { Toggle } from "./Toggle";
 import { CopyCommandBlock } from "./CopyCommandBlock";
 import { RunCommandControl } from "./RunCommandControl";
 import type { CommandSpec, CommandOption } from "../api/types";
-import { REGISTERED_STRATEGIES } from "../commandParse";
+import { REGISTERED_OPTIONS_STRATEGIES, REGISTERED_STRATEGIES } from "../commandParse";
 import { theme } from "../theme";
 
 interface CommandFormBuilderProps {
   command: CommandSpec | null;
   onClose: () => void;
   strategyRegistry?: string[];
+  optionsStrategyRegistry?: string[];
 }
 
-export function CommandFormBuilder({ command, onClose, strategyRegistry = [] }: CommandFormBuilderProps) {
+export function CommandFormBuilder({
+  command,
+  onClose,
+  strategyRegistry = [],
+  optionsStrategyRegistry = [],
+}: CommandFormBuilderProps) {
   if (!command) return null;
 
   const [selectedSubcommandName, setSelectedSubcommandName] = useState<string>(
@@ -45,6 +51,29 @@ export function CommandFormBuilder({ command, onClose, strategyRegistry = [] }: 
     [strategyRegistry]
   );
 
+  // validation.harness's own plural --strategies is a SEPARATE registry from
+  // the equity/cross-sectional one above: that CLI's bulk mode only ever
+  // gives real, name-specific results for options strategies (see its
+  // main()'s docstring), so it needs its own list rather than sharing
+  // effectiveStrategies -- which the singular --strategy control on this
+  // same command still uses unchanged (see registryForOption below).
+  const effectiveOptionsStrategies = useMemo(
+    () => (optionsStrategyRegistry.length > 0 ? optionsStrategyRegistry : REGISTERED_OPTIONS_STRATEGIES),
+    [optionsStrategyRegistry]
+  );
+
+  // Picks which registry a given option's multi-select should draw from.
+  // Only validation.harness's plural --strategies differs from the default
+  // (equity) registry -- deliberately NOT keyed on option name alone, so this
+  // never touches validation.harness's own singular --strategy control (a
+  // separate, pre-existing, admittedly-imperfect behavior left untouched --
+  // see CommandFormBuilder.test.tsx's "does NOT affect the singular
+  // --strategy select on validation.harness" regression test).
+  const registryForOption = (optName: string): string[] =>
+    optName === "--strategies" && command.name === "validation.harness"
+      ? effectiveOptionsStrategies
+      : effectiveStrategies;
+
   // Form values state: flag alias -> string | boolean
   const [optionValues, setOptionValues] = useState<Record<string, string | boolean>>(() => {
     const initial: Record<string, string | boolean> = {};
@@ -54,10 +83,11 @@ export function CommandFormBuilder({ command, onClose, strategyRegistry = [] }: 
       } else if (opt.default !== null && opt.default !== undefined) {
         initial[opt.name] = String(opt.default);
       } else if (opt.name === "--strategies") {
-        // refresh_validations.py's plural --strategies defaults to "the
-        // whole registry" when omitted -- make that default explicit and
-        // visible in the form instead of leaving it silently blank.
-        initial[opt.name] = effectiveStrategies.join(",");
+        // Plural --strategies defaults to "the whole registry" when omitted
+        // (both refresh_validations.py and validation.harness's bulk mode) --
+        // make that default explicit and visible in the form instead of
+        // leaving it silently blank.
+        initial[opt.name] = registryForOption(opt.name).join(",");
       } else {
         initial[opt.name] = "";
       }
@@ -161,7 +191,7 @@ export function CommandFormBuilder({ command, onClose, strategyRegistry = [] }: 
                   option={opt}
                   value={optionValues[opt.name]}
                   onChange={(val) => handleOptionChange(opt.name, val)}
-                  strategyRegistry={effectiveStrategies}
+                  strategyRegistry={registryForOption(opt.name)}
                 />
               ))}
             </div>
@@ -181,7 +211,7 @@ export function CommandFormBuilder({ command, onClose, strategyRegistry = [] }: 
                 for (const opt of activeSpec.options) {
                   if (!opt.takes_value) reset[opt.name] = Boolean(opt.default);
                   else if (opt.default !== null && opt.default !== undefined) reset[opt.name] = String(opt.default);
-                  else if (opt.name === "--strategies") reset[opt.name] = effectiveStrategies.join(",");
+                  else if (opt.name === "--strategies") reset[opt.name] = registryForOption(opt.name).join(",");
                   else reset[opt.name] = "";
                 }
                 setOptionValues(reset);

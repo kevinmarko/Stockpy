@@ -67,6 +67,22 @@ def _make_position(symbol: str, qty: float = 10.0, avg_cost: float = 100.0) -> M
     return pos
 
 
+@pytest.fixture(autouse=True)
+def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize main.discovery() so every test's universe-building
+    assertions are deterministic regardless of whether a real
+    ~/.stockpy_local/output/scan_candidates.json happens to exist on the
+    machine running the suite (e.g. from a real agentic-discovery skill
+    run). _build_universe() unconditionally unions discovery()'s scan
+    candidates into the universe (see main.py's own docstring), and
+    pilots.discovery.discovery() reads settings.OUTPUT_DIR -- a
+    machine-global settings.LOCAL_DATA_ROOT path, not a repo/test-scoped
+    one, so neither monkeypatch.chdir(tmp_path) nor a fresh checkout
+    isolates it. A test that wants to exercise the merge itself should
+    override this fixture's patch with its own monkeypatch.setattr call."""
+    monkeypatch.setattr("main.discovery", lambda *a, **kw: {"candidates": []})
+
+
 def _make_recommendation(symbol: str, action: str = "HOLD") -> Recommendation:
     return Recommendation(
         symbol=symbol,
@@ -527,14 +543,8 @@ class TestRunOnce:
         """No held symbols and no watchlist → empty RunResult; advisory never called."""
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
-        # _build_universe() also unions discovery()'s scan candidates in BEFORE
-        # consulting DEFAULT_TICKERS, and discovery() reads settings.OUTPUT_DIR /
-        # "scan_candidates.json" -- a machine-global LOCAL_DATA_ROOT path that
-        # monkeypatch.chdir(tmp_path) below does NOT isolate. Without this, a
-        # machine/CI runner with a real prior agentic-discovery run would make
-        # the universe non-empty here and this "empty universe" assertion would
-        # flake exactly like the DEFAULT_TICKERS gap this test already guards.
-        monkeypatch.setattr("main.discovery", lambda *a, **kw: {"candidates": []})
+        # discovery() is neutralized file-wide by the _isolate_scan_discovery
+        # autouse fixture above.
         monkeypatch.chdir(tmp_path)
         mock_snap.return_value = _make_snapshot(positions={})
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)

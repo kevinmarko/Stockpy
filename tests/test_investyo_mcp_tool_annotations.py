@@ -103,3 +103,15 @@ class TestReadOnlyPilotToolAnnotations:
         readOnlyHint=True, same as follow_pilot."""
         tool = _get_tool("unfollow_pilot")
         assert tool.annotations is None or tool.annotations.readOnlyHint is not True
+
+    def test_get_robinhood_account_snapshot_is_marked_read_only(self):
+        """get_robinhood_account_snapshot exposes the real Robinhood account
+        (equity, buying power, positions) but strictly read-only -- it must
+        carry readOnlyHint=True so an MCP host's tool-selection reasoning
+        (and a human skimming the tool list before pointing a coding agent
+        at this server) can see it never places, cancels, or exercises an
+        order."""
+        tool = _get_tool("get_robinhood_account_snapshot")
+        assert tool.annotations is not None
+        assert isinstance(tool.annotations, ToolAnnotations)
+        assert tool.annotations.readOnlyHint is True

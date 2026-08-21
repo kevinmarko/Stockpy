@@ -189,6 +189,19 @@ class TestRunOncePipeline:
         import main as m
         monkeypatch.setattr(m, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
 
+    @pytest.fixture(autouse=True)
+    def _isolate_scan_discovery(self, monkeypatch):
+        """Neutralize main.discovery() for the same reason as
+        _isolate_watchlist_file above: _build_universe() unconditionally
+        unions discovery()'s scan candidates into the universe, and
+        pilots.discovery.discovery() reads settings.OUTPUT_DIR -- a
+        machine-global settings.LOCAL_DATA_ROOT path, not repo/test-scoped,
+        so a real ~/.stockpy_local/output/scan_candidates.json (e.g. from a
+        real agentic-discovery skill run) would otherwise leak extra
+        symbols into these tests' universe-size assertions."""
+        import main as m
+        monkeypatch.setattr(m, "discovery", lambda *a, **kw: {"candidates": []})
+
     def _neutral_macro(self) -> MagicMock:
         m = MagicMock()
         m.market_regime = "RISK ON"

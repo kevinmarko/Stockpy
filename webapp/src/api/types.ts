@@ -3135,6 +3135,18 @@ export interface CommandManifest {
    * constant when this is absent or empty.
    */
   strategy_registry?: string[];
+  /**
+   * Live options-strategy names from validation/options_harness.py's
+   * STANDARD_OPTIONS_STRATEGIES, generated into the manifest by
+   * scripts/build_command_manifest.py. Distinct from `strategy_registry`
+   * above: `validation.harness`'s bulk (`--strategies`) mode only ever gives
+   * real, name-specific results for options strategies -- see that module's
+   * `main()` docstring -- so it needs its own registry, not the equity/
+   * cross-sectional STRATEGY_REGISTRY names. Optional for backward compat
+   * with older mocks/manifests; consumers should fall back to
+   * commandParse.ts's REGISTERED_OPTIONS_STRATEGIES constant when absent.
+   */
+  options_strategy_registry?: string[];
   commands: CommandSpec[];
   reason: string | null;
 }

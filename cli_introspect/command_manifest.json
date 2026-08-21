@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-21T11:14:29.753534+00:00",
-  "command_count": 12,
+  "generated_at": "2026-08-21T17:29:44.417654+00:00",
+  "command_count": 13,
   "dead_letters": [],
   "commands": [
     {
@@ -246,11 +246,24 @@
           "aliases": [
             "--strategy"
           ],
-          "description": "Name of the strategy to validate",
+          "description": "Name of a single strategy to validate",
           "default": null,
           "choices": null,
-          "required": true,
-          "arg_kind": "required",
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--strategies",
+          "aliases": [
+            "--strategies"
+          ],
+          "description": "Comma-separated OPTIONS strategy names to validate in bulk. Only names registered in validation.options_harness.STANDARD_OPTIONS_STRATEGIES are supported here -- for equity/cross-sectional strategies use `python -m scripts.refresh_validations --strategies ...` instead.",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
           "metavar": null,
           "takes_value": true
         },
@@ -292,6 +305,33 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": true
+        },
+        {
+          "name": "--workers",
+          "aliases": [
+            "--workers",
+            "-w"
+          ],
+          "description": "Number of concurrent workers for bulk (--strategies) validation (default: 1 for sequential).",
+          "default": 1,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--json",
+          "aliases": [
+            "--json"
+          ],
+          "description": "In bulk mode, also print ONE machine-readable JSON line (the LAST line of stdout) mapping strategy name -> {deployable, pbo, dsr, sharpe, max_drawdown[, error]}. The human pass/fail table is still printed above it.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
         }
       ],
       "positionals": [],
@@ -723,7 +763,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/giant-master-plan-review-a7d205/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/code-review-786-91e400/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -759,7 +799,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/giant-master-plan-review-a7d205/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/code-review-786-91e400/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -789,6 +829,68 @@
       "aliases": [],
       "description": "InvestYo database schema setup -- CREATE TABLE IF NOT EXISTS against quant_platform.db, driven by config.COLUMN_SCHEMA. Idempotent; additive migrations only (never drops/alters destructively).",
       "options": [],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "repair_price_bars_adjustment.py",
+      "invocation": "python scripts/repair_price_bars_adjustment.py",
+      "aliases": [],
+      "description": "CLI remediation script for a bars-adjustment-convention mismatch already persisted into\n`price_bars` (e.g. FMP_BARS_ADJUSTMENT was set to 'full'/'light' \u2014 split-only \u2014 instead of the\ncorrect 'dividend-adjusted' convention for a period of time, or any future provider/config\nchange that similarly splices two adjustment conventions into one (symbol, date) series).\n\nWhere to add symbols for this process: the --tickers argument below. This is the durable,\ndiscoverable home for that \u2014 not a hardcoded list in this script, and not a one-off inline\ncommand. See --help for the three ways to specify a ticker set.\n\nWhat it does per symbol\n------------------------\n1. Finds the earliest date in `price_bars` written under --source (default 'fmpprovider') --\n   i.e. the first date that could have been fetched under the bad adjustment convention.\n2. Deletes ALL rows for that symbol from that date forward (any source, not just --source) --\n   the safe choice, because price_bars is keyed by (symbol, date) and a stale row from another\n   source sitting inside the affected window would leave the same adjustment-convention splice\n   the cleanup is meant to remove. Rows strictly BEFORE the first affected date are left alone\n   (genuinely unaffected history is not thrown away just because the symbol also has some FMP\n   rows).\n3. Calls HistoricalStore.get_bars(symbol), which re-fetches from whatever provider chain is\n   CURRENTLY configured (settings.MARKET_DATA_PROVIDER / FMP_BARS_ADJUSTMENT) via its existing\n   incremental-top-up logic -- filling exactly the gap just opened, no bespoke date-range-fetch\n   code needed.\n\nIf a symbol has no rows from --source at all, it's skipped (nothing to repair) and reported\nseparately -- never silently treated as \"processed\".\n\nNever raises out of the per-symbol loop (dead-letter resilience, matching every other backfill\nscript in scripts/) -- one bad symbol does not abort the batch.\n",
+      "options": [
+        {
+          "name": "--tickers",
+          "aliases": [
+            "--tickers"
+          ],
+          "description": "Comma-separated ticker list (e.g. 'AAPL,MSFT'), 'universe' for the operator's tracked universe (held \u222a watchlists \u222a DEFAULT_TICKERS, via resolve_universe), or 'all' for every symbol currently carrying a --source row in price_bars.",
+          "default": null,
+          "choices": null,
+          "required": true,
+          "arg_kind": "required",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--random",
+          "aliases": [
+            "--random"
+          ],
+          "description": "Add this many additional random symbols (from every symbol carrying a --source row in price_bars) on top of --tickers. Skips symbols already selected.",
+          "default": 0,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--source",
+          "aliases": [
+            "--source"
+          ],
+          "description": "price_bars.source value that identifies the affected rows (default: 'fmpprovider').",
+          "default": "fmpprovider",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--dry-run",
+          "aliases": [
+            "--dry-run"
+          ],
+          "description": "Report what would be deleted/re-fetched per symbol without touching the DB.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
       "positionals": [],
       "subcommands": []
     }
@@ -823,5 +925,13 @@
     "value_quality_edgar_pit",
     "vol_mispricing",
     "vrp_premium_selling"
+  ],
+  "options_strategy_registry": [
+    "Bear Put Spread",
+    "Bull Call Spread",
+    "Call Credit Spread",
+    "Iron Condor",
+    "Long Straddle",
+    "Put Credit Spread"
   ]
 }

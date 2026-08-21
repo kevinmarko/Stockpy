@@ -5,6 +5,7 @@ import {
   getGhostText,
   tokenizeForHighlighting,
   REGISTERED_STRATEGIES,
+  REGISTERED_OPTIONS_STRATEGIES,
 } from "./commandParse";
 import type { CommandSpec } from "./api/types";
 
@@ -41,7 +42,20 @@ const COMMANDS: CommandSpec[] = [
     description: "validation harness",
     positionals: [],
     subcommands: [],
-    options: [opt("--strategy", { required: true, arg_kind: "required" }), opt("--start", { default: "2020-01-01" })],
+    options: [
+      opt("--strategy", { required: true, arg_kind: "required" }),
+      opt("--strategies", { metavar: "NAMES" }),
+      opt("--start", { default: "2020-01-01" }),
+    ],
+  },
+  {
+    name: "refresh_validations.py",
+    invocation: "python -m scripts.refresh_validations",
+    aliases: [],
+    description: "walk-forward strategy validation cadence",
+    positionals: [],
+    subcommands: [],
+    options: [opt("--strategies", { metavar: "NAMES" }), opt("--workers", { default: 4 })],
   },
   {
     name: "snapshot_diff.py",
@@ -184,6 +198,52 @@ describe("parseCommandLine", () => {
 
   it("falls back to REGISTERED_STRATEGIES when strategyRegistry is omitted", () => {
     const r = parseCommandLine("validation.harness --strategy ", COMMANDS);
+    expect(r.suggestions.map((s) => s.value).sort()).toEqual([...REGISTERED_STRATEGIES].sort());
+  });
+
+  it("validation.harness's plural --strategies draws from optionsStrategyRegistry, not the equity registry", () => {
+    const r = parseCommandLine(
+      "validation.harness --strategies ",
+      COMMANDS,
+      [],
+      ["Iron Condor", "Put Credit Spread"]
+    );
+    expect(r.suggestions.map((s) => s.value)).toEqual(["Iron Condor", "Put Credit Spread"]);
+    expect(r.suggestions.every((s) => s.kind === "value")).toBe(true);
+  });
+
+  it("validation.harness's plural --strategies falls back to REGISTERED_OPTIONS_STRATEGIES when optionsStrategyRegistry is omitted", () => {
+    const r = parseCommandLine("validation.harness --strategies ", COMMANDS);
+    expect(r.suggestions.map((s) => s.value).sort()).toEqual([...REGISTERED_OPTIONS_STRATEGIES].sort());
+    // The equity fallback list must not leak in.
+    expect(r.suggestions.map((s) => s.value)).not.toEqual(expect.arrayContaining(["garch_vol_target"]));
+  });
+
+  it("validation.harness's SINGULAR --strategy stays on the equity registry even when a non-empty optionsStrategyRegistry is also passed", () => {
+    const r = parseCommandLine(
+      "validation.harness --strategy ",
+      COMMANDS,
+      [],
+      ["Iron Condor", "Put Credit Spread"]
+    );
+    expect(r.suggestions.map((s) => s.value).sort()).toEqual([...REGISTERED_STRATEGIES].sort());
+    // None of the options-strategy names leak into the singular suggestion list.
+    expect(r.suggestions.map((s) => s.value)).not.toEqual(expect.arrayContaining(["Iron Condor", "Put Credit Spread"]));
+  });
+
+  it("a different command's --strategies option (refresh_validations.py) still uses strategyRegistry, never optionsStrategyRegistry", () => {
+    const r = parseCommandLine(
+      "refresh_validations.py --strategies ",
+      COMMANDS,
+      ["custom_strategy_a", "custom_strategy_b"],
+      ["Iron Condor", "Put Credit Spread"]
+    );
+    expect(r.suggestions.map((s) => s.value).sort()).toEqual(["custom_strategy_a", "custom_strategy_b"]);
+    expect(r.suggestions.map((s) => s.value)).not.toEqual(expect.arrayContaining(["Iron Condor", "Put Credit Spread"]));
+  });
+
+  it("a different command's --strategies option falls back to REGISTERED_STRATEGIES (not REGISTERED_OPTIONS_STRATEGIES) when both registries are omitted", () => {
+    const r = parseCommandLine("refresh_validations.py --strategies ", COMMANDS);
     expect(r.suggestions.map((s) => s.value).sort()).toEqual([...REGISTERED_STRATEGIES].sort());
   });
 

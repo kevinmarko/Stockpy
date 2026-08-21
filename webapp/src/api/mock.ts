@@ -7634,6 +7634,16 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
     "copula_stat_arb",
     "aroon_trend",
   ],
+  // The live STANDARD_OPTIONS_STRATEGIES from validation/options_harness.py --
+  // validation.harness's bulk (--strategies) mode only supports these.
+  options_strategy_registry: [
+    "Bear Put Spread",
+    "Bull Call Spread",
+    "Call Credit Spread",
+    "Iron Condor",
+    "Long Straddle",
+    "Put Credit Spread",
+  ],
   commands: [
     {
       name: "main.py",
@@ -7720,6 +7730,40 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
           arg_kind: "optional",
           metavar: null,
           takes_value: true,
+        },
+        {
+          name: "--strategies",
+          aliases: ["--strategies"],
+          description:
+            "Comma-separated OPTIONS strategy names to validate in bulk (mutually exclusive with --strategy).",
+          default: null,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: true,
+        },
+        {
+          name: "--workers",
+          aliases: ["--workers", "-w"],
+          description: "Number of concurrent workers for bulk (--strategies) validation (default: 1).",
+          default: 1,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: true,
+        },
+        {
+          name: "--json",
+          aliases: ["--json"],
+          description: "In bulk mode, also print one machine-readable JSON line.",
+          default: false,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: false,
         },
       ],
     },
