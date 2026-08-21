@@ -1821,3 +1821,66 @@ validation'` (826 passed, 0 failed, re-confirmed in this phase); a live controll
 spot-check on `rsi2_mean_reversion` (bit-identical pre-fix vs. post-fix on frozen real
 market data, see above) — no genuine regression found in any of the three verification
 layers.
+
+## 2026-08-21 (cont.): "Adapter returned an empty feature/return frame" — diagnostic-only fix, root cause not fully closed
+
+An operator-reported `scripts/refresh_validations.py` run showed 19 of 29 registered
+strategies with `Status: ERROR`, four of which had their traceback pasted in full — all
+four (`sortino_drawdown`, `timeseries_momentum`, `vrp_premium_selling`, `vol_mispricing`)
+raised the identical `RuntimeError: Adapter returned an empty feature/return frame —
+insufficient history for this start/end range.` at `_validate_single_strategy`
+(`scripts/refresh_validations.py`).
+
+### What was ruled out
+
+The earlier `available = [t for t in universe if t in closes_df.columns and
+closes_df[t].notna().any()]` check a few lines above this raise did NOT fire (it raises a
+different, more diagnostic message: `"No price data downloaded for universe [...]"`) —
+meaning `closes_df["SPY"]` genuinely had *some* non-empty, non-NaN data for all four
+strategies. This rules out the most likely culprit from the 2026-08-21 FMP-migration entry
+above (a symbol-level FMP fetch failure with the ticker simply absent from `closes_df`).
+
+A local `HistoricalStore().get_macro("VIXCLS")` check in this sandbox returned 9,256 rows
+back to 1990 — VIX coverage is not the bottleneck here, at least not in this sandboxed
+DB's copy of that table (the four failing adapters are the two longest-lookback pure-price
+strategies, `sortino_drawdown`'s 504-day rolling window and `timeseries_momentum`'s 253-day
+shift, plus the two adapters that additionally require VIX overlap,
+`vrp_premium_selling`/`vol_mispricing` — `validation/options_selling_backtest.py` hard-
+requires a real VIX reading per date and returns `None` otherwise, by design, never
+fabricating one).
+
+### What was NOT verified (honest gap)
+
+This sandbox has no `FMP_API_KEY` configured and no live-market network access, so the
+actual `_download_closes(["SPY", ...], "2005-01-01", <today>)` call the operator's run made
+could not be reproduced here. The precise reason SPY's downloaded span was short enough to
+starve a 504-day/253-day rolling window — a transient FMP rate-limit/circuit-breaker
+event during the ~505-ticker batch fetch, a plan/tier limitation on historical depth, or
+something else — remains unconfirmed. Per this repo's CONSTRAINT #4 discipline, no guess
+was hard-coded as a "fix"; the adapters' fail-closed behavior (return an empty frame rather
+than proceed on a truncated window) is correct and was left unchanged.
+
+### What was fixed
+
+The error message itself was genuinely unhelpful — identical fixed text regardless of
+whether a ticker had 0 rows, 50 rows, or 5,000 rows that just didn't overlap another
+required series on any date. `_describe_universe_coverage(universe, closes_df)`
+(`scripts/refresh_validations.py`, pure, never raises) now appends a per-ticker row-
+count/date-range summary to the `RuntimeError`, so a future occurrence of this error
+immediately shows e.g. `SPY: 50 rows (2024-10-18→2024-12-31)` instead of requiring the
+same multi-step manual investigation this entry documents. See
+`docs/architecture/validation-and-signals.md`'s `scripts/refresh_validations.py` bullet for
+the implementation summary.
+
+**No `STRATEGY_REGISTRY` deployability numbers changed** — this is diagnostics-only, not a
+strategy fix; none of the four strategies' `deployable` status is affected (they still
+error the same way, just with a more useful message). Follow-up needed: re-run
+`scripts.refresh_validations` in an environment with a real `FMP_API_KEY` and read the new
+diagnostic text to actually close the root cause — this entry is intentionally not marked
+resolved.
+
+Tests: `tests/test_refresh_validations.py::TestDescribeUniverseCoverage` (4 tests: present-
+ticker row count/date range, missing-ticker-vs-short-ticker distinction, all-NaN column,
+never-raises-on-lookup-failure), `TestRunValidations::test_empty_frame_error_reports_per_ticker_coverage`
+(end-to-end via `run_validations()` with a synthetic 50-row SPY series against
+`sortino_drawdown`'s real 504-day-window adapter).

@@ -1544,6 +1544,65 @@ class TestMakeStrategyFn:
 
 
 # ---------------------------------------------------------------------------
+# TestDescribeUniverseCoverage
+# ---------------------------------------------------------------------------
+
+class TestDescribeUniverseCoverage:
+    """``_describe_universe_coverage`` — the pure diagnostic helper behind
+    the "empty feature/return frame" RuntimeError's message. Never raises;
+    each of the three real-world coverage states (missing column, present
+    but all-NaN, present with N real rows) must be independently
+    distinguishable in the returned string."""
+
+    def test_reports_row_count_and_date_range_for_present_ticker(self) -> None:
+        from scripts.refresh_validations import _describe_universe_coverage
+
+        idx = pd.bdate_range(end="2024-12-31", periods=10)
+        closes_df = pd.DataFrame({"SPY": np.linspace(300, 310, 10)}, index=idx)
+
+        desc = _describe_universe_coverage(["SPY"], closes_df)
+
+        assert "SPY" in desc
+        assert "10 rows" in desc
+        assert str(idx.min().date()) in desc
+        assert str(idx.max().date()) in desc
+
+    def test_reports_missing_ticker_distinctly_from_short_ticker(self) -> None:
+        from scripts.refresh_validations import _describe_universe_coverage
+
+        idx = pd.bdate_range(end="2024-12-31", periods=5)
+        closes_df = pd.DataFrame({"SPY": np.linspace(300, 305, 5)}, index=idx)
+
+        desc = _describe_universe_coverage(["SPY", "XOM"], closes_df)
+
+        assert "SPY: 5 rows" in desc
+        assert "XOM: missing from closes_df" in desc
+
+    def test_reports_all_nan_column_as_zero_valid_rows(self) -> None:
+        from scripts.refresh_validations import _describe_universe_coverage
+
+        idx = pd.bdate_range(end="2024-12-31", periods=5)
+        closes_df = pd.DataFrame({"SPY": [float("nan")] * 5}, index=idx)
+
+        desc = _describe_universe_coverage(["SPY"], closes_df)
+
+        assert "SPY: 0 valid rows" in desc
+
+    def test_never_raises_on_lookup_failure(self) -> None:
+        """A malformed ``closes_df`` (anything that raises on attribute
+        access, e.g. ``None`` reaching this helper) must degrade to a
+        diagnostic fragment, not propagate — this function exists purely to
+        enrich an error message and must never itself become a new crash
+        site."""
+        from scripts.refresh_validations import _describe_universe_coverage
+
+        desc = _describe_universe_coverage(["SPY"], None)  # type: ignore[arg-type]
+
+        assert "SPY" in desc
+        assert "error reading coverage" in desc
+
+
+# ---------------------------------------------------------------------------
 # TestRunValidations
 # ---------------------------------------------------------------------------
 
@@ -1726,6 +1785,42 @@ class TestRunValidations:
         r = results["rsi2_mean_reversion"]
         assert r["deployable"] is False
         assert "adapter exploded" in r["error"]
+
+    def test_empty_frame_error_reports_per_ticker_coverage(
+        self, tmp_path: Path
+    ) -> None:
+        """When an adapter's own rolling-window logic leaves it with zero
+        valid rows (real-world trigger: SPY genuinely downloaded, but with
+        fewer rows than the adapter's lookback needs — see
+        docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-21 entry), the
+        resulting RuntimeError must say HOW MUCH data was actually
+        downloaded, not just repeat the generic "insufficient history" text.
+        Uses ``sortino_drawdown`` (504-day rolling window,
+        ``_build_sortino_drawdown_adapter``) fed a synthetic 50-row SPY
+        series — real rows, just not enough of them."""
+        from scripts.refresh_validations import run_validations
+
+        short_spy = _synthetic_closes(["SPY"], n=50)
+
+        with (
+            patch(
+                "scripts.refresh_validations._download_closes",
+                return_value=short_spy,
+            ),
+            self._patch_shares(),
+            self._patch_cost(),
+        ):
+            results = run_validations(
+                strategies=["sortino_drawdown"], output_dir=tmp_path
+            )
+
+        r = results["sortino_drawdown"]
+        assert r["deployable"] is False
+        assert "insufficient history" in r["error"]
+        # The diagnostic must name the actual ticker and its real row count —
+        # this is the whole point of the fix, not just that an error occurred.
+        assert "SPY" in r["error"]
+        assert "50 rows" in r["error"]
 
     def test_single_strategy_filter(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import run_validations
