@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-21T11:14:29.753534+00:00",
+  "generated_at": "2026-08-21T16:28:30.672378+00:00",
   "command_count": 12,
   "dead_letters": [],
   "commands": [
@@ -246,11 +246,24 @@
           "aliases": [
             "--strategy"
           ],
-          "description": "Name of the strategy to validate",
+          "description": "Name of a single strategy to validate",
           "default": null,
           "choices": null,
-          "required": true,
-          "arg_kind": "required",
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--strategies",
+          "aliases": [
+            "--strategies"
+          ],
+          "description": "Comma-separated OPTIONS strategy names to validate in bulk. Only names registered in validation.options_harness.STANDARD_OPTIONS_STRATEGIES are supported here -- for equity/cross-sectional strategies use `python -m scripts.refresh_validations --strategies ...` instead.",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
           "metavar": null,
           "takes_value": true
         },
@@ -292,6 +305,33 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": true
+        },
+        {
+          "name": "--workers",
+          "aliases": [
+            "--workers",
+            "-w"
+          ],
+          "description": "Number of concurrent workers for bulk (--strategies) validation (default: 1 for sequential).",
+          "default": 1,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--json",
+          "aliases": [
+            "--json"
+          ],
+          "description": "In bulk mode, also print ONE machine-readable JSON line (the LAST line of stdout) mapping strategy name -> {deployable, pbo, dsr, sharpe, max_drawdown[, error]}. The human pass/fail table is still printed above it.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
         }
       ],
       "positionals": [],
@@ -823,5 +863,13 @@
     "value_quality_edgar_pit",
     "vol_mispricing",
     "vrp_premium_selling"
+  ],
+  "options_strategy_registry": [
+    "Bear Put Spread",
+    "Bull Call Spread",
+    "Call Credit Spread",
+    "Iron Condor",
+    "Long Straddle",
+    "Put Credit Spread"
   ]
 }

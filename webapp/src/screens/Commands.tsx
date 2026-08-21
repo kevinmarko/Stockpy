@@ -49,6 +49,7 @@ export function Commands() {
     useApi<CommandManifest>(() => api.getCommands(), []);
 
   const strategyRegistry = data?.strategy_registry ?? [];
+  const optionsStrategyRegistry = data?.options_strategy_registry ?? [];
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"launcher" | "queue">("launcher");
@@ -59,6 +60,9 @@ export function Commands() {
   // refresh_validations.py must not show a button that opens nothing useful.
   const bulkValidateCommand =
     data?.commands.find((c) => c.name === "refresh_validations.py") ?? null;
+  // Same guard, for validation.harness's own bulk (options-only) mode.
+  const bulkValidateOptionsCommand =
+    data?.commands.find((c) => c.name === "validation.harness") ?? null;
 
   // Check URL query parameters for builderCommand trigger (e.g. ?builder=validation.harness)
   useEffect(() => {
@@ -110,14 +114,24 @@ export function Commands() {
         </div>
       </div>
 
-      {bulkValidateCommand && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--s-3)" }}>
-          <Button
-            variant="primary"
-            onClick={() => setBuilderCommand(bulkValidateCommand)}
-          >
-            🧪 Bulk Validate All Strategies
-          </Button>
+      {(bulkValidateCommand || bulkValidateOptionsCommand) && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+          {bulkValidateCommand && (
+            <Button
+              variant="primary"
+              onClick={() => setBuilderCommand(bulkValidateCommand)}
+            >
+              🧪 Bulk Validate All Strategies
+            </Button>
+          )}
+          {bulkValidateOptionsCommand && (
+            <Button
+              variant="primary"
+              onClick={() => setBuilderCommand(bulkValidateOptionsCommand)}
+            >
+              🧪 Bulk Validate Options Strategies
+            </Button>
+          )}
         </div>
       )}
 
@@ -163,6 +177,7 @@ export function Commands() {
         <CommandFormBuilder
           command={builderCommand}
           strategyRegistry={strategyRegistry}
+          optionsStrategyRegistry={optionsStrategyRegistry}
           onClose={() => {
             setBuilderCommand(null);
             if (searchParams.has("builder")) {
