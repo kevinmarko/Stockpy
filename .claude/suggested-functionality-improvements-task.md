@@ -1,0 +1,11 @@
+- [x] Backend
+  - [x] Create `stockpy_historian.py`
+  - [x] Install Python dependencies (`fastapi`, `uvicorn`, `robin_stocks`)
+- [x] Frontend
+  - [x] Install `recharts` in `webapp`
+  - [x] Create `AccountPerformanceChart.tsx`
+  - [x] Configure `ALERT_FILE_PATH` in `.env`
+  - [x] Update `Dashboard.tsx` (Pie chart, sorting, buttons, new chart)
+- [x] Verification
+  - [x] Run `npm run typecheck`
+  - [x] Check dashboard visually in browser (instruct user to run Historian)
