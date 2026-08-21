@@ -5,7 +5,7 @@ import { Dashboard } from "./Dashboard";
 import { Comparison } from "./Comparison";
 import { Observability } from "./Observability";
 import { api } from "../api/client";
-import { ApiError } from "../api/types";
+import { ApiError, type PilotSummary } from "../api/types";
 import { theme } from "../theme";
 
 describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
@@ -25,6 +25,24 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
 
   // T3.2: Widget to Comparison Redirection (R1+R2)
   it("redirects to Comparison page with selected pilots pre-populated", async () => {
+    // Top Pilots now sorts (default: Sharpe descending) and shows only the
+    // top 5 (Dashboard.tsx's sortedPilots.slice(0, 5)) -- the full default
+    // mock catalog has 15+ pilots, and "dip-buyer" (sharpe 0.83) doesn't
+    // rank inside the top 5 there. Pin a small, self-contained fixture
+    // guaranteeing both pilots this test needs render, independent of the
+    // full catalog's exact composition drifting later. `getPilot` (used by
+    // the Comparison screen this test navigates to) is untouched -- it
+    // still resolves "trend-following"/"dip-buyer" from the real catalog.
+    const pilot = (id: string, name: string, sharpe: number): PilotSummary => ({
+      id, name, category: "Momentum", description: "",
+      headline: { sharpe, dsr: 0.97, pbo: 0.3, max_drawdown: -0.15, deployable: true },
+      holdings_count: 0, top_holdings: [], aum_proxy: 0, followers_proxy: 0, long_only: true,
+    });
+    vi.spyOn(api, "listPilots").mockResolvedValue([
+      pilot("trend-following", "Trend Follower", 1.12),
+      pilot("dip-buyer", "Dip Buyer", 0.83),
+    ]);
+
     render(
       <MemoryRouter initialEntries={["/"]}>
         <Routes>

@@ -2,7 +2,7 @@
   - [x] Create `stockpy_historian.py`
   - [x] Install Python dependencies (`fastapi`, `uvicorn`, `robin_stocks`)
 - [x] Frontend
-  - [x] Install `recharts` in `webapp`
+  - [x] `recharts` already a `webapp` dependency (added in the original PWA scaffold) — nothing to install
   - [x] Create `AccountPerformanceChart.tsx`
   - [x] Configure `ALERT_FILE_PATH` in `.env`
   - [x] Update `Dashboard.tsx` (Pie chart, sorting, buttons, new chart)

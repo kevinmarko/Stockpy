@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./Dashboard";
 import { api } from "../api/client";
-import { ApiError, type ObservabilitySummary } from "../api/types";
+import { ApiError, type ObservabilitySummary, type PilotSummary } from "../api/types";
 import {
   mockEtfTransmissionDisabled,
   mockForecastSkillBySymbolEmpty,
@@ -124,5 +125,115 @@ describe("Dashboard screen — Mission Control attention banner", () => {
     renderDashboard();
     expect(await screen.findByTestId("dashboard-title")).toBeInTheDocument();
     expect(screen.queryByTestId("dashboard-attention-banner")).not.toBeInTheDocument();
+  });
+});
+
+function makePilot(overrides: Partial<PilotSummary> & Pick<PilotSummary, "id" | "name" | "category">): PilotSummary {
+  return {
+    description: "",
+    headline: { sharpe: null, dsr: null, pbo: null, max_drawdown: null, deployable: null },
+    holdings_count: 0,
+    top_holdings: [],
+    aum_proxy: 0,
+    followers_proxy: 0,
+    long_only: true,
+    ...overrides,
+  };
+}
+
+// Three pilots chosen so all three sort modes ("sr" / "strategy" / "active")
+// produce a DIFFERENT, individually distinguishable order from this same
+// fixture array — [Alpha, Beta, Gamma] as returned by the mocked API.
+const ALPHA = makePilot({
+  id: "p-alpha", name: "Alpha Strategy", category: "Momentum",
+  headline: { sharpe: 1.5, dsr: 0.98, pbo: 0.1, max_drawdown: -0.1, deployable: true },
+});
+const BETA = makePilot({
+  id: "p-beta", name: "Beta Strategy", category: "Blend",
+  // Cold-start pilot: no backtest yet, so `sharpe`/`deployable` are `null`
+  // (not `0`/`false`) — must sort to the very bottom on "sr", never a
+  // fabricated middling rank (CONSTRAINT #4).
+  headline: { sharpe: null, dsr: null, pbo: null, max_drawdown: null, deployable: null },
+});
+const GAMMA = makePilot({
+  id: "p-gamma", name: "Gamma Strategy", category: "Factor",
+  headline: { sharpe: 0.8, dsr: 0.6, pbo: 0.4, max_drawdown: -0.2, deployable: false },
+});
+
+describe("Dashboard screen — Top Pilots sorting", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function pilotOrder(): string[] {
+    return Array.from(document.querySelectorAll(".row-title")).map((el) => el.textContent ?? "");
+  }
+
+  it("defaults to Sharpe descending, with a cold-start (null Sharpe) pilot sorted to the bottom and shown as SR: —", async () => {
+    vi.spyOn(api, "listPilots").mockResolvedValue([ALPHA, BETA, GAMMA]);
+    renderDashboard();
+
+    await screen.findByText("Alpha Strategy");
+    expect(pilotOrder()).toEqual(["Alpha Strategy", "Gamma Strategy", "Beta Strategy"]);
+    expect(screen.getByText("SR: 1.50")).toBeInTheDocument();
+    expect(screen.getByText("SR: 0.80")).toBeInTheDocument();
+    expect(screen.getByText("SR: —")).toBeInTheDocument();
+  });
+
+  it("sorts alphabetically by category (Strategy) when that sort button is clicked", async () => {
+    vi.spyOn(api, "listPilots").mockResolvedValue([ALPHA, BETA, GAMMA]);
+    const user = userEvent.setup();
+    renderDashboard();
+    await screen.findByText("Alpha Strategy");
+
+    await user.click(screen.getByRole("button", { name: "Strategy" }));
+
+    // Blend < Factor < Momentum, alphabetically.
+    expect(pilotOrder()).toEqual(["Beta Strategy", "Gamma Strategy", "Alpha Strategy"]);
+  });
+
+  it("sorts deployable pilots first (Active) when that sort button is clicked, treating a cold-start null the same as a failed gate", async () => {
+    vi.spyOn(api, "listPilots").mockResolvedValue([ALPHA, BETA, GAMMA]);
+    const user = userEvent.setup();
+    renderDashboard();
+    await screen.findByText("Alpha Strategy");
+
+    await user.click(screen.getByRole("button", { name: "Active" }));
+
+    // ALPHA (deployable: true) sorts first; BETA (null) and GAMMA (false)
+    // are tied at "not deployable" and keep their original relative order
+    // (a stable sort), i.e. Beta before Gamma.
+    expect(pilotOrder()).toEqual(["Alpha Strategy", "Beta Strategy", "Gamma Strategy"]);
+  });
+});
+
+describe("Dashboard screen — Liquidate/Rebalance advisory modal", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens a safe advisory-only modal on Liquidate — never a live order action", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+    // findBy* polls until the portfolio finishes loading and the button
+    // actually exists -- widget-portfolio-summary's container div is
+    // present from the very first (loading-skeleton) render.
+    const liquidateBtn = await screen.findByRole("button", { name: "Liquidate" });
+
+    await user.click(liquidateBtn);
+
+    const dialog = await screen.findByRole("dialog", { name: "Liquidate Portfolio" });
+    expect(within(dialog).getByText(/advisory-only platform/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/manually open your Robinhood app/i)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Understood" }));
+    expect(screen.queryByRole("dialog", { name: "Liquidate Portfolio" })).not.toBeInTheDocument();
+  });
+
+  it("opens the same advisory modal, correctly labeled, on Rebalance", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+    const rebalanceBtn = await screen.findByRole("button", { name: "Rebalance" });
+
+    await user.click(rebalanceBtn);
+
+    const dialog = await screen.findByRole("dialog", { name: "Rebalance Portfolio" });
+    expect(within(dialog).getByText(/advisory-only platform/i)).toBeInTheDocument();
   });
 });
