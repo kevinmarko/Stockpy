@@ -19,6 +19,17 @@ on:
   schedule:
     - cron: '45 3 * * 5'
 
+# Cancel a superseded run when new commits land on the same branch/PR --
+# mirrors ci.yml's identical concurrency block. Without this, a branch that
+# gets pushed to rapidly (common in this repo) leaves every prior CodeQL run
+# for a since-superseded commit running to completion instead of being
+# cancelled, wasting runner slots and leaving stale/duplicate checks in the
+# PR's check list. See docs/known_issues/codeql_advanced_outage_and_bandit_addition.md
+# for the broader CodeQL Advanced context this workflow already carries.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})

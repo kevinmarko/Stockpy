@@ -21,6 +21,9 @@ def generate_pairs_signals(
     adf_exit_threshold: float = None,
     half_life_lookback: int = 63
 ) -> pd.DataFrame:
+    entry_threshold = entry_threshold if entry_threshold is not None else PAIRS_ENTRY_Z_SCORE
+    stop_loss_threshold = stop_loss_threshold if stop_loss_threshold is not None else PAIRS_STOP_LOSS_Z_SCORE
+    adf_exit_threshold = adf_exit_threshold if adf_exit_threshold is not None else PAIRS_ADF_EXIT_PVALUE
     """
     Generates trading signals for a pair of cointegrated assets Y and X.
     Uses a Kalman Filter to dynamically estimate the hedge ratio (beta) and intercept (alpha).

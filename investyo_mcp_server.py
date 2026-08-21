@@ -3596,7 +3596,6 @@ def scan_0dte_signals(ticker: str, contracts: int = 1) -> dict:
     }
 
 
-
 @mcp.tool(meta=_MACRO_RADAR_UI)
 def get_regime_status() -> str:
     """
