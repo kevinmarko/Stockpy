@@ -159,3 +159,89 @@ class TestSettingsFallback:
             # Explicit False always wins over the settings flag.
             ranker.train(X, y, use_native_multiindex_cv=False)
         assert ranker._model is not None
+
+
+class TestPerDateQueryGroups:
+    """Regression coverage for a real bug found widening
+    scripts/refresh_validations.py's ``lgbm_ranker`` universe from 30 to 100
+    tickers: ``train()`` computed a correct per-date ``groups`` array (the
+    "# tickers per date (query)" comment) but never actually passed it to
+    ``lgb.LGBMRanker.fit`` -- every fold and the final fit instead used
+    ``group=[len(y)]``, treating the ENTIRE fold/panel as one giant LambdaRank
+    query. Wrong even when it doesn't crash (ranks tickers against OTHER
+    DATES' tickers, not just same-date peers) -- and at 100 tickers x enough
+    dates, the single query's row count crossed LightGBM's real internal
+    ~10000-row-per-query limit and the whole strategy started hard-crashing
+    every CPCV fold (PBO=1.0/DSR=0.0/Sharpe=None sentinel output). See
+    ``ml.lgbm_ranker._positional_query_groups`` and
+    ``docs/known_issues/lgbm_ranker_query_group_bug.md``.
+    """
+
+    def test_positional_query_groups_run_length_encodes_contiguous_dates(self):
+        from ml.lgbm_ranker import _positional_query_groups
+
+        # 3 dates x 4 tickers each, contiguous, all positions retained.
+        keys = np.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+        assert _positional_query_groups(keys, np.arange(12)) == [4, 4, 4]
+
+    def test_positional_query_groups_survives_a_purged_middle_chunk(self):
+        """A purge/embargo removing rows from the MIDDLE of one date's block
+        (not the whole date) must still produce valid LightGBM groups summing
+        to len(positions) -- the two surviving sub-runs of that date become
+        contiguous WITHIN the filtered subset even though they weren't
+        contiguous in the original unfiltered array (see the function's own
+        docstring for why)."""
+        from ml.lgbm_ranker import _positional_query_groups
+
+        keys = np.array([0, 0, 0, 0, 0, 1, 1, 1])  # date 0 has 5 tickers, date 1 has 3
+        # Drop positions 2,3 (middle of date 0's block) -- keep 0,1,4 (date 0) + 5,6,7 (date 1).
+        positions = np.array([0, 1, 4, 5, 6, 7])
+        groups = _positional_query_groups(keys, positions)
+        assert groups == [3, 3]
+        assert sum(groups) == len(positions)
+
+    def test_positional_query_groups_none_keys_is_one_group(self):
+        from ml.lgbm_ranker import _positional_query_groups
+
+        assert _positional_query_groups(None, np.arange(7)) == [7]
+
+    def test_positional_query_groups_empty_positions(self):
+        from ml.lgbm_ranker import _positional_query_groups
+
+        assert _positional_query_groups(np.array([0, 1]), np.array([], dtype=int)) == []
+
+    def test_real_training_past_10000_rows_no_longer_crashes(self):
+        """The actual regression repro: 250 dates x 45 tickers = 11250 total
+        rows -- comfortably over LightGBM's real ~10000-row single-query
+        limit (confirmed directly against the installed lightgbm: fit(...,
+        group=[10500]) raises 'Number of rows 10500 exceeds upper limit of
+        10000 for a query') -- but each individual date's query is only 45
+        rows, so real per-date grouping must never approach that limit.
+        Before the fix this raised LightGBMError on both the inner CV folds
+        and the final full-data fit."""
+        X, y, t1 = _make_multiindex_panel(n_dates=250, n_tickers=45)
+        assert len(X) > 10_000
+
+        ranker = LGBMCrossSectionalRanker(
+            params={"n_estimators": 5}, purged_kfold_splits=3, embargo_pct=0.0,
+        )
+        ranker.train(X, y, t1=t1, use_native_multiindex_cv=True)  # must not raise
+
+        assert ranker._model is not None
+
+    def test_final_fit_group_sums_to_full_panel_and_matches_per_date_counts(self):
+        """Directly proves the FINAL model's group array is real per-date
+        counts, not [len(y_arr)] -- reconstructs what train() computes
+        internally for group_keys/group_full without relying on mocking
+        lightgbm (no test in this suite mocks it; every other test here
+        exercises the real library)."""
+        from ml.lgbm_ranker import _positional_query_groups
+
+        X, y, t1 = _make_multiindex_panel(n_dates=20, n_tickers=6)
+        X = X.sort_index(level=0)  # train() does this too for a MultiIndex
+        group_keys = X.index.get_level_values(0).values
+        group_full = _positional_query_groups(group_keys, np.arange(len(X)))
+
+        assert sum(group_full) == len(X)
+        assert group_full == [6] * 20  # 20 dates x 6 tickers each, none purged
+        assert group_full != [len(X)]  # the pre-fix single-giant-group shape

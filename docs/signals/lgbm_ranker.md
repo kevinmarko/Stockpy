@@ -224,5 +224,56 @@ with either of them until this is fixed and re-run. See
 `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full cross-strategy
 writeup.
 
+### 2026-08-21 follow-up: crash root-caused and fixed — but the resulting number still isn't a clean measurement
+
+The crash above **is fixed and verified**, superseding the "not root-caused further"
+note above. Root cause: `ml/lgbm_ranker.py::LGBMCrossSectionalRanker.train()` computed
+a correct per-date LambdaRank query-group array but never passed it to LightGBM — every
+fit used `group=[len(y)]`, treating the entire fold/panel as ONE query. Wrong even when
+it doesn't crash (ranks tickers against other dates' tickers, not just same-date peers),
+and at 100 tickers the single query's row count crossed LightGBM's real internal
+~10,000-row-per-query limit. **This also affects the real production training path**
+(`scripts/train_lgbm.py`, the `ml-cross-sectional-rank` Pilot) — see
+`docs/known_issues/lgbm_ranker_query_group_bug.md` for the full write-up, fix, and test
+coverage (`tests/test_lgbm_ranker_native_cv.py::TestPerDateQueryGroups`, including a
+real, non-mocked 11,250-row reproduction that crashed before the fix and now trains
+cleanly).
+
+Re-running `lgbm_ranker`'s full validation post-fix (`--n-cpcv-splits 15
+--n-test-splits 4`, all 1365 CPCV paths, same command as above) completed without a
+single crash — but reported `sharpe=24.886`, `max_drawdown=0.36%`, `pbo=0.000`,
+`dsr=0.696` (`deployable=False`, DSR still well under the 0.95 gate). **A Sharpe of
+~25 is not a trustworthy number and is deliberately NOT presented as this strategy's
+real measured performance.** Investigation traced it to (at least) two compounding,
+pre-existing effects independent of the query-group fix, neither introduced by it:
+
+1. **`settings.VALIDATION_HARNESS_OOS_GATE_ENABLED` is `False` (this repo's current
+   default)**, so the reported `sharpe`/`max_drawdown` came from
+   `self.strategy_fn(X, y, X, y)` — an IN-SAMPLE evaluation (test set identical to the
+   training set) — exactly the already-documented integrity gap in this file's own
+   2026-08-08 entry above, where `lgbm_ranker`'s in-sample Sharpe of 2.702 was shown to
+   collapse to a genuinely-OOS 0.308. That gap is real and already on record; it was
+   never re-verified for `lgbm_ranker` at the new 100-ticker universe.
+2. **A newly-found, distinct annualization-frequency bug**: `validation/metrics.py`'s
+   `sharpe_ratio(returns, freq=252)` unconditionally assumes daily observations for
+   every strategy in the registry, with no mechanism for an adapter to declare its own
+   observation cadence. `lgbm_ranker`'s own return series
+   (`scripts/train_lgbm.py::_long_short_returns`) is a ~21-trading-day forward
+   long-short spread per panel date (matching the adapter's `horizon_days=21` training
+   target) — a monthly-ish cadence, not daily. Verified directly against this run's own
+   `equity_curve` (120 points, ~20/year, not 252/year): compounding the curve's own
+   per-step returns and annualizing by `√252` reproduces ≈26.3, matching the reported
+   24.886 almost exactly. This is a harness-wide gap (any adapter whose return
+   observations aren't literally daily is subject to it), not specific to this fix,
+   but `lgbm_ranker` is the first adapter observed to expose it this dramatically.
+
+Both are being addressed as a dedicated harness fix (annualization-frequency handling
+in `validation/metrics.py`/`validation/harness.py`) — see
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s follow-up entry once that lands for the real,
+clean post-fix numbers. Until then, `lgbm_ranker`'s Sharpe/DSR should be read as
+**"crash fixed, magnitude not yet trustworthy"** rather than either a pass or a
+measured fail — `deployable=False` is the one conclusion that holds regardless (DSR
+0.696 is well under 0.95 even at this inflated Sharpe).
+
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

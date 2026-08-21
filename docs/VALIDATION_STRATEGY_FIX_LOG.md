@@ -1600,3 +1600,56 @@ sector-coverage tests) were independently resolved by the parallel
 matching test-file update — both confirmed via a fresh full-file run, not assumed);
 `tests/test_validation_sector_quality_rank.py`, `tests/test_harness_multiindex_t1.py`
 (both unaffected by this change, re-run as part of the full-file pass above).
+
+## 2026-08-21 follow-up: `lgbm_ranker` crash fixed and root-caused; the resulting Sharpe is not yet a clean measurement
+
+Corrects finding #1 above, which was flagged as "not yet fixed." The crash **is now
+fixed**: root cause was `ml/lgbm_ranker.py::LGBMCrossSectionalRanker.train()` computing
+a correct per-date LambdaRank query-group array and then never passing it to LightGBM —
+every fit used `group=[len(y)]` (the whole fold/panel as ONE query) instead of one query
+per date, which is wrong even without crashing (ranks tickers cross-date, not just
+same-date) and, at the widened 100-ticker universe, crossed LightGBM's real
+~10,000-row-per-query limit outright. **This also affects the real production training
+path** (`scripts/train_lgbm.py`'s `ranker.train(panel.X, panel.y, panel.t1)` call, the
+`ml-cross-sectional-rank` Pilot) — not just this validation script. Full write-up, fix,
+and test coverage: `docs/known_issues/lgbm_ranker_query_group_bug.md` and
+`docs/signals/lgbm_ranker.md`'s own 2026-08-21 follow-up section.
+
+Re-running the full validation post-fix (identical command/settings as the "after" run
+above) now completes all 1365 CPCV paths with zero crashes — but reports
+`sharpe=24.886`, `max_drawdown=0.36%`, `pbo=0.000`, `dsr=0.696`
+(`deployable=False` unchanged — DSR 0.696 stays well under the 0.95 gate either way).
+**This Sharpe is not presented as a real measurement of the strategy.** A Sharpe near
+25 was investigated, not accepted at face value, and traced to two compounding,
+pre-existing effects — neither introduced by the query-group fix above:
+
+1. `settings.VALIDATION_HARNESS_OOS_GATE_ENABLED` is `False` (this repo's current
+   default), so the reported numbers came from `self.strategy_fn(X, y, X, y)` — an
+   IN-SAMPLE evaluation — the same integrity gap this file's 2026-08-08 entry already
+   documented for this exact strategy (in-sample Sharpe 2.702 → genuinely-OOS 0.308).
+   That gap was never re-verified for `lgbm_ranker` at the new 100-ticker universe.
+2. A newly-found, distinct bug: `validation/metrics.py::sharpe_ratio(returns,
+   freq=252)` unconditionally assumes daily observations for every strategy in the
+   registry — there is no mechanism anywhere in `StrategyValidationHarness` for an
+   adapter to declare its own observation cadence. `lgbm_ranker`'s own return series
+   (`scripts/train_lgbm.py::_long_short_returns`) is a ~21-trading-day forward
+   long-short spread per panel date (matching `horizon_days=21`) — monthly-ish, not
+   daily. Verified directly: this run's own `equity_curve` (120 points spanning ~6
+   years, ≈20 points/year, not 252) reproduces ≈26.3 when its own realized per-step
+   returns are annualized by `√252` — matching the reported 24.886 almost exactly. This
+   is a harness-wide gap (affects any adapter whose observations aren't literally
+   daily), first exposed this dramatically by `lgbm_ranker`.
+
+**Decision**: fix the annualization-frequency handling in `validation/metrics.py`/
+`validation/harness.py` as a dedicated follow-up (shared validation code, benefits any
+future non-daily-cadence strategy) rather than patch around it for `lgbm_ranker` alone.
+Whether to separately flip `VALIDATION_HARNESS_OOS_GATE_ENABLED`'s default is an
+independent, already-on-record decision this entry does not make on the operator's
+behalf (see the 2026-07-29 entry's own "Recommendation" section). Until the
+annualization fix lands, `lgbm_ranker`'s Sharpe/DSR should be read as "crash fixed,
+magnitude not yet trustworthy," not as either a pass or a measured fail.
+
+Tests: `tests/test_lgbm_ranker_native_cv.py::TestPerDateQueryGroups` (5 new tests,
+including a real non-mocked 11,250-row reproduction that crashed before this fix and
+now trains cleanly); full pre-existing `ml/lgbm_ranker.py`-adjacent suite (58 tests
+across 8 files) re-run clean, 0 regressions.
