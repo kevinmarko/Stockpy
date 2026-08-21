@@ -2498,7 +2498,9 @@ class TestPilotsExecutionFixEndpoints:
         assert body["quantity"] == 2500.0
         assert len(body["fills"]) >= 2
         total_fill_qty = sum(f["fill_qty"] for f in body["fills"])
-        assert total_fill_qty <= 2500.0
+        # Allow a tiny float-summation epsilon (IEEE 754 accumulation across
+        # multiple venue fills can land a few ULPs above the exact target).
+        assert total_fill_qty <= 2500.0 + 1e-9
         assert len(body["fix_audit_log"]) == len(body["fills"])
 
     def test_post_execution_fix_route_invalid_side(self):
