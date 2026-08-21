@@ -98,6 +98,40 @@ def _active_universe() -> list:
         return ["AAPL", "MSFT", "JNJ", "AGNC"]
 
 
+# yfinance-style period string -> lookback_days, shared by every MCP tool
+# below that used to pass its own `period` argument straight through to
+# `yf.Ticker(...).history(period=period)`. Now that these tools route
+# through data.market_data.CompositeProvider.get_intraday_bars() (a
+# day-count API, not a period-string one), this is the single translation
+# table so callers can keep passing the same yfinance-style period strings
+# without any change to this file's public tool signatures.
+_PERIOD_TO_LOOKBACK_DAYS = {
+    "1d": 1,
+    "5d": 5,
+    "1mo": 30,
+    "3mo": 90,
+    "6mo": 180,
+    "1y": 365,
+    "2y": 730,
+    "5y": 1825,
+    "10y": 3650,
+    "ytd": 365,
+    "max": 3650,
+}
+
+
+def _period_to_lookback_days(period: str) -> int:
+    """
+    Maps a yfinance-style period string (e.g. "1y", "6mo") to an equivalent
+    ``lookback_days`` value for ``CompositeProvider.get_intraday_bars()``.
+    Unknown/unrecognized period strings default to 365 days (same as "1y")
+    rather than raising -- matching this codebase's dead-letter-resilience
+    convention -- since a garbage period string previously would have been
+    passed straight through to yfinance and handled (or rejected) there.
+    """
+    return _PERIOD_TO_LOOKBACK_DAYS.get(str(period).strip().lower(), 365)
+
+
 @lru_cache(maxsize=None)
 def _readonly_engine(db_url: str):
     """Cached DATABASE-LEVEL read-only SQLAlchemy engine for the Postgres path.
@@ -428,28 +462,37 @@ def get_database_schema() -> str:
 def get_ticker_context(symbol: str) -> str:
     """
     Returns a unified, markdown-formatted context for a given stock symbol.
-    Fetches recent price history, corporate profile info, and ratios.
+    Fetches recent price history, corporate profile info, and ratios via the
+    platform's own market-data layer (data.market_data.CompositeProvider --
+    FMP by default per settings.MARKET_DATA_PROVIDER="fmp", with automatic
+    Alpaca/yfinance fallback on failure -- the same provider every other
+    read path in this codebase uses, via data.market_data.get_provider()).
     """
-    import yfinance as yf
+    from data.market_data import get_provider
     try:
-        ticker = yf.Ticker(symbol)
-        history = ticker.history(period="10d")
+        provider = get_provider()
+        sym = symbol.upper().strip()
+        history = provider.get_intraday_bars(sym, lookback_days=10)
         if history.empty:
             return f"No pricing data found for symbol: {symbol}"
-        
-        info = ticker.info
+
+        # get_fundamentals() returns a dict shaped as a yfinance .info dict
+        # (same key names) regardless of which underlying source actually
+        # served it -- see data/market_data.py's CompositeProvider.get_fundamentals
+        # docstring.
+        info = provider.get_fundamentals(sym) or {}
         name = info.get("longName", symbol)
         sector = info.get("sector", "N/A")
         pe = info.get("trailingPE", "N/A")
         pb = info.get("priceToBook", "N/A")
-        
+
         summary = f"# Ticker Context: {symbol} ({name})\n"
         summary += f"- **Sector**: {sector}\n"
         summary += f"- **Trailing P/E**: {pe}\n"
         summary += f"- **Price-to-Book**: {pb}\n\n"
         summary += "## Recent Price History (Last 10 Days)\n"
         summary += history[['Open', 'High', 'Low', 'Close', 'Volume']].to_markdown()
-        
+
         return summary
     except Exception as e:
         return f"Error retrieving context for {symbol}: {str(e)}"
@@ -1139,15 +1182,18 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
     import contextlib
     import json
     import pandas as pd
-    import yfinance as yf
     from simulation_engine import run_backtrader_simulation
-    
+    from data.market_data import get_provider, MarketDataError
+
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period)
+        provider = get_provider()
+        try:
+            df = provider.get_intraday_bars(symbol, lookback_days=_period_to_lookback_days(period))
+        except MarketDataError:
+            df = pd.DataFrame()
         if df.empty:
             return f"Error: No historical data found for {symbol}."
-        
+
         # Standardize column names to lowercase for Backtrader feed
         df.columns = [col.lower() for col in df.columns]
         
@@ -1572,40 +1618,44 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
     """
     import io
     import contextlib
-    import yfinance as yf
+    import pandas as pd
     import backtrader as bt
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from simulation_engine import InstitutionalStrategy
-    
+    from data.market_data import get_provider, MarketDataError
+
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period)
+        provider = get_provider()
+        try:
+            df = provider.get_intraday_bars(symbol, lookback_days=_period_to_lookback_days(period))
+        except MarketDataError:
+            df = pd.DataFrame()
         if df.empty:
             return f"Error: No data found for {symbol}."
-            
+
         df.columns = [col.lower() for col in df.columns]
-        
+
         cerebro = bt.Cerebro()
         cerebro.addstrategy(InstitutionalStrategy)
-        
+
         data = bt.feeds.PandasData(dataname=df)
         cerebro.adddata(data)
-        
+
         cerebro.broker.setcash(100000.0)
         cerebro.broker.setcommission(commission=0.001)
         cerebro.broker.set_slippage_perc(perc=0.0005)
-        
+
         cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
-        
+
         f = io.StringIO()
         with contextlib.redirect_stdout(f):
             results = cerebro.run()
-            
+
         strat = results[0]
         time_return = strat.analyzers.timereturn.get_analysis()
-        
+
         import numpy as np
         dates = sorted(time_return.keys())
         returns = [time_return[d] for d in dates]
@@ -1662,30 +1712,35 @@ def get_portfolio_summary() -> str:
     realized and unrealized P&L, win rate, and total portfolio performance metrics.
     """
     from transactions_store import TransactionsStore
-    import yfinance as yf
+    from data.market_data import get_provider
     import pandas as pd
-    
+
     try:
         store = TransactionsStore()
         open_df = store.open_trades_df()
         closed_df = store.closed_trades_df()
-        
+
         summary = ["# Paper Portfolio Summary\n"]
-        
+
         # 1. Open Positions (Holdings)
         unrealized_pl = 0.0
         holdings_value = 0.0
-        
+
         if not open_df.empty:
             summary.append("## Current Holdings")
             holdings_rows = []
             unique_symbols = open_df['symbol'].unique().tolist()
             current_prices = {}
             if unique_symbols:
-                tickers = yf.Tickers(" ".join(unique_symbols))
+                provider = get_provider()
+                # No batch quote method on the public CompositeProvider
+                # interface -- a per-symbol loop, each independently
+                # try/excepted, is this codebase's convention (see this
+                # file's "Loops over tickers ... wrap each ticker in
+                # try/except" rule).
                 for sym in unique_symbols:
                     try:
-                        current_prices[sym] = tickers.tickers[sym].history(period="1d")['Close'].iloc[-1]
+                        current_prices[sym] = provider.get_latest_quote(sym).price
                     except Exception:
                         current_prices[sym] = None
             
@@ -1925,7 +1980,6 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     and saves the PNG plot to artifacts.
     """
     import os
-    import yfinance as yf
     import backtrader as bt
     import numpy as np
     import pandas as pd
@@ -1933,15 +1987,20 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from simulation_engine import InstitutionalStrategy
+    from data.market_data import get_provider, MarketDataError
 
     current_tickers = _active_universe()
+    lookback_days = _period_to_lookback_days(period)
 
     try:
+        provider = get_provider()
         portfolio_curves = []
-        
+
         for symbol in current_tickers:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period)
+            try:
+                df = provider.get_intraday_bars(symbol, lookback_days=lookback_days)
+            except MarketDataError:
+                continue
             if df.empty:
                 continue
             df.columns = [col.lower() for col in df.columns]
@@ -1976,8 +2035,10 @@ def plot_portfolio_equity(period: str = "1y") -> str:
         portfolio_equity = 100000.0 * np.cumprod(1.0 + combined_returns.values)
         portfolio_series = pd.Series(portfolio_equity, index=combined_returns.index)
         
-        spy = yf.Ticker("SPY")
-        spy_df = spy.history(period=period)
+        try:
+            spy_df = provider.get_intraday_bars("SPY", lookback_days=lookback_days)
+        except MarketDataError:
+            spy_df = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
         spy_returns = spy_df['Close'].pct_change().dropna()
         spy_aligned = spy_returns.reindex(portfolio_series.index).fillna(0.0)
         spy_equity = 100000.0 * np.cumprod(1.0 + spy_aligned.values)
@@ -3921,10 +3982,11 @@ def get_portfolio_coverage() -> str:
 def get_quote(symbol: str) -> str:
     """
     Latest live/delayed quote for one symbol via the platform's own
-    market-data layer (data.market_data.CompositeProvider -- Alpaca when
-    configured, else yfinance; the SAME provider every other read path in
-    this codebase uses, via data.market_data.get_provider()). Honest about
-    staleness: is_stale is unconditionally True for yfinance quotes by
+    market-data layer (data.market_data.CompositeProvider -- FMP by default
+    per settings.MARKET_DATA_PROVIDER="fmp", falling back to Alpaca (if
+    configured) then yfinance on failure; the SAME provider every other read
+    path in this codebase uses, via data.market_data.get_provider()). Honest
+    about staleness: is_stale is unconditionally True for yfinance quotes by
     design, and is surfaced explicitly rather than hidden behind a plain
     price. READ-ONLY; no order code.
 

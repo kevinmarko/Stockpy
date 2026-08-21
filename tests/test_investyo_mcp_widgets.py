@@ -465,21 +465,18 @@ class TestAnalyticsWidgetsSmoke:
 
     def test_plot_equity_curve_emits_json_payload_matching_widget_schema(self, monkeypatch):
         import investyo_mcp_server as srv
+        import data.market_data as md_mod
+        import pandas as pd
+        from unittest.mock import MagicMock
 
-        class _FakeTicker:
-            def __init__(self, *_a, **_k):
-                pass
-
-            def history(self, period="1y"):
-                import pandas as pd
-
-                idx = pd.date_range("2024-01-02", periods=60, freq="B")
-                return pd.DataFrame(
-                    {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000},
-                    index=idx,
-                )
-
-        monkeypatch.setattr(srv, "yf", type("_yf", (), {"Ticker": _FakeTicker}), raising=False)
+        idx = pd.date_range("2024-01-02", periods=60, freq="B")
+        hist = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000},
+            index=idx,
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         result = srv.plot_equity_curve("AAPL", period="3mo")
 
@@ -543,8 +540,10 @@ class TestAnalyticsWidgetsSmoke:
     def test_run_backtest_emits_json_matching_widget_schema(self, monkeypatch):
         """Tests that run_backtest emits full JSON matching backtest-tearsheet.html contract."""
         import investyo_mcp_server as srv
+        import data.market_data as md_mod
         import pandas as pd
         import numpy as np
+        from unittest.mock import MagicMock
 
         dates = pd.date_range("2023-01-01", periods=100, freq="B")
         fake_df = pd.DataFrame({
@@ -555,11 +554,9 @@ class TestAnalyticsWidgetsSmoke:
             "Volume": np.full(100, 10000),
         }, index=dates)
 
-        class FakeTicker:
-            def history(self, period="1y"):
-                return fake_df
-
-        monkeypatch.setattr("yfinance.Ticker", lambda sym: FakeTicker())
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = fake_df
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
         monkeypatch.setattr("simulation_engine.run_backtrader_simulation", lambda df: print("Starting Portfolio Value: $100,000.00\nFinal Portfolio Value: $115,000.00"))
 
         result = srv.run_backtest("AAPL", period="1y")
