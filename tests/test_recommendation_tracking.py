@@ -669,3 +669,39 @@ class TestModuleSurface:
         target = datetime(2024, 1, 6, 15, 0, 0)
         result = _price_at_or_before(bars, target)
         assert result == 14.0
+
+    def test_price_at_or_before_nan_target_returns_nan(self) -> None:
+        # A NaT/unparseable target must never fabricate the latest Close.
+        from evaluation_engine import _price_at_or_before
+        dates = pd.date_range("2024-01-01", periods=5, freq="B")
+        closes = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0], index=dates)
+        bars = pd.DataFrame({"Close": closes}, index=dates)
+        assert math.isnan(_price_at_or_before(bars, None))
+
+    def test_price_at_or_before_nan_before_all_data(self) -> None:
+        from evaluation_engine import _price_at_or_before
+        dates = pd.date_range("2024-01-02", periods=5, freq="B")
+        closes = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0], index=dates)
+        bars = pd.DataFrame({"Close": closes}, index=dates)
+        target = datetime(2024, 1, 1)  # strictly before the first bar
+        assert math.isnan(_price_at_or_before(bars, target))
+
+    def test_price_at_or_before_duplicate_dates_uses_last(self) -> None:
+        # Ties on the target date should resolve to the last row, matching
+        # the pre-optimization boolean-mask `.iloc[-1]` semantics.
+        from evaluation_engine import _price_at_or_before
+        dates = pd.DatetimeIndex(["2024-01-01", "2024-01-01", "2024-01-02"])
+        closes = pd.Series([10.0, 10.5, 11.0], index=dates)
+        bars = pd.DataFrame({"Close": closes}, index=dates)
+        target = datetime(2024, 1, 1)
+        assert _price_at_or_before(bars, target) == 10.5
+
+    def test_price_at_or_before_unsorted_index_raises(self) -> None:
+        # HistoricalStore.get_bars() guarantees a sorted-ascending index;
+        # a violation should surface loudly rather than silently degrade.
+        from evaluation_engine import _price_at_or_before
+        dates = pd.DatetimeIndex(["2024-01-03", "2024-01-01", "2024-01-02"])
+        closes = pd.Series([12.0, 10.0, 11.0], index=dates)
+        bars = pd.DataFrame({"Close": closes}, index=dates)
+        with pytest.raises(ValueError):
+            _price_at_or_before(bars, datetime(2024, 1, 2))

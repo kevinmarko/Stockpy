@@ -937,23 +937,24 @@ _TRACKING_EMPTY: Dict[str, Any] = {
 
 
 def _price_at_or_before(bars: pd.DataFrame, target: datetime) -> float:
-    """Return the Close price at or before *target*; NaN when no bars available."""
+    """Return the Close price at or before *target*; NaN when no bars available.
+
+    Uses ``Series.asof()`` (binary search on the sorted index — same idiom as
+    ``api/pilots_api.py``'s macro as-of lookups) instead of a hand-rolled
+    ``searchsorted``/boolean-mask dispatch: a NaT/unparseable *target*
+    correctly yields NaN (asof() never fabricates a value for one), and an
+    unsorted ``bars`` index raises loudly (``HistoricalStore.get_bars()``
+    guarantees sorted-ascending; a violation should surface, not silently
+    degrade to an untested linear-scan fallback).
+    """
     if bars is None or bars.empty:
         return float("nan")
-    ts = pd.Timestamp(target).normalize()
-
-    # Fast path: O(log N) binary search on sorted index
-    if bars.index.is_monotonic_increasing:
-        idx = bars.index.searchsorted(ts, side='right') - 1
-        if idx < 0:
-            return float("nan")
-        return float(bars["Close"].iloc[idx])
-
-    # Fallback: O(N) linear filter for unsorted index
-    subset = bars.loc[bars.index <= ts]
-    if subset.empty:
+    ts = pd.Timestamp(target)
+    if pd.isna(ts):
         return float("nan")
-    return float(subset["Close"].iloc[-1])
+    ts = ts.normalize()
+    price = bars["Close"].asof(ts)
+    return float(price) if pd.notna(price) else float("nan")
 
 
 def recommendation_tracking_report(
