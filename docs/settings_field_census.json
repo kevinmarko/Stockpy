@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "fed6b2812c22bf0dc8d9430516b782eea34f96c9",
+    "git_commit": "3a28e62dfe37187db54e7ce11455b010a5789a01",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4073,7 +4073,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 365,
+      "total_reads": 366,
       "distinct_fields": 205,
       "counts": {
         "FMP_API_KEY": 11,
@@ -4098,6 +4098,7 @@
         "OPTIONS_0DTE_HARD_EXIT_TIME": 4,
         "OPTIONS_AUTO_EXIT_ENABLED": 4,
         "ROBINHOOD_EXECUTION_MODE": 4,
+        "FMP_BARS_ADJUSTMENT": 3,
         "FMP_NEWS_MAX_PAGES": 3,
         "FMP_NEWS_PAGE_LIMIT": 3,
         "HISTORICAL_STORE_ENABLED": 3,
@@ -4121,7 +4122,6 @@
         "ETF_HOLDINGS_MARKET_PROXY": 2,
         "ETF_TRANSMISSION_WRAPPERS": 2,
         "FMP_ANALYST_ENABLED": 2,
-        "FMP_BARS_ADJUSTMENT": 2,
         "FMP_EARNINGS_ENABLED": 2,
         "FMP_FALLBACK_ENABLED": 2,
         "FORECAST_BACKFILL_HORIZONS": 2,
