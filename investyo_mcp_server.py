@@ -2907,18 +2907,10 @@ def check_overnight_liquidity(symbol: str) -> str:
 
     try:
         from data.market_data import get_provider
-        import yfinance as yf
 
         sym = symbol.upper().strip()
-        quote = get_provider().get_latest_quote(sym)
-
-        # Approximate ADV using yfinance (e.g. trailing 10 days)
-        ticker = yf.Ticker(sym)
-        hist = ticker.history(period="10d")
-
-        adv = None
-        if not hist.empty and "Volume" in hist.columns:
-            adv = float(hist["Volume"].mean())
+        provider = get_provider()
+        quote = provider.get_latest_quote(sym)
 
         def _num(v):
             if v is None:
@@ -2928,6 +2920,18 @@ def check_overnight_liquidity(symbol: str) -> str:
                 return None if math.isnan(f) or math.isinf(f) else f
             except Exception:
                 return None
+
+        # Approximate ADV via the mandated CompositeProvider abstraction
+        # (never a direct yfinance call — see CLAUDE.md's market-data-layer
+        # convention). Guarded independently so a provider failure degrades
+        # adv to None instead of taking down the whole tool.
+        adv = None
+        try:
+            hist = provider.get_intraday_bars(sym, lookback_days=10, interval="1d")
+            if hist is not None and not hist.empty and "Volume" in hist.columns:
+                adv = _num(hist["Volume"].mean())
+        except Exception:
+            adv = None
 
         ask = _num(quote.ask)
         bid = _num(quote.bid)
@@ -2969,10 +2973,10 @@ def check_overnight_liquidity(symbol: str) -> str:
         lines = [
             f"# Overnight Liquidity Approximation — {sym}\n",
             "> **NOTE:** Data source is an approximation based on Top-of-Book spread and Average Daily Volume. No claims of real Level-2 data exist.\n",
-            f"- **Price**: {price:.2f}" if price else "- **Price**: N/A",
+            f"- **Price**: {price:.2f}" if price is not None else "- **Price**: N/A",
             f"- **Spread (bps)**: {spread_bps:.1f}" if spread_bps is not None else "- **Spread (bps)**: N/A",
-            f"- **ADV (10d)**: {adv:,.0f}" if adv else "- **ADV (10d)**: N/A",
-            f"- **Approx. Depth Notional (1% ADV)**: ${approximate_depth_notional:,.2f}" if approximate_depth_notional else "- **Approx. Depth Notional**: N/A",
+            f"- **ADV (10d)**: {adv:,.0f}" if adv is not None else "- **ADV (10d)**: N/A",
+            f"- **Approx. Depth Notional (1% ADV)**: ${approximate_depth_notional:,.2f}" if approximate_depth_notional is not None else "- **Approx. Depth Notional**: N/A",
             "\n```json",
             json.dumps(payload, indent=2),
             "```"
