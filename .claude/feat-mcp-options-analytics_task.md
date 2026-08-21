@@ -1,0 +1,9 @@
+- `[/]` Agent 1: `feat-mcp-options-analytics`
+  - `[x]` Write PR Artifacts (`implementation_plan`, `task`) in `.claude/`
+  - `[ ]` Read backing modules (`pilots/options_risk.py`, `volatility_surface.py`, `vol_mispricing.py`, `zero_dte_engine.py`)
+  - `[ ]` Implement `analyze_options_chain` in `investyo_mcp_server.py`
+  - `[ ]` Implement `scan_0dte_signals` in `investyo_mcp_server.py`
+  - `[ ]` Write tests in `tests/test_investyo_mcp_options_analytics.py`
+  - `[ ]` Run and pass tests
+  - `[ ]` Update `docs/architecture/observability-and-apis.md` and `docs/architecture/execution.md`
+  - `[ ]` Write `.claude/mcp_options_analytics_walkthrough.md`

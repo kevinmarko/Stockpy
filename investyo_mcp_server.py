@@ -2895,6 +2895,89 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
 # markdown plus a compact machine-readable JSON block (real values only; NaN/None
 # serialized as null, never fabricated).
 
+@mcp.tool()
+def calculate_margin_kelly_size(
+    win_prob: float, 
+    payoff_ratio: float, 
+    margin_requirement: float = 1.0, 
+    kelly_fraction: float = 0.5, 
+    cap: float = 0.20
+) -> str:
+    """
+    Calculate Kelly criterion-based position sizing and adjust it for margin requirements.
+    This tool reuses the existing Kelly logic and returns a theoretical sizing recommendation.
+    READ-ONLY: This is a theoretical calculation and does NOT imply or perform a live 
+    buying-power or margin check against the broker.
+    """
+    import json
+    import math
+
+    try:
+        from sizing.kelly import fractional_kelly
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        # Clean inputs
+        p = _num(win_prob)
+        b = _num(payoff_ratio)
+        m = _num(margin_requirement)
+        f = _num(kelly_fraction)
+        c = _num(cap)
+
+        # Fallbacks for missing/invalid non-core inputs
+        if m is None or m <= 0:
+            m = 1.0
+        if f is None or f <= 0:
+            f = 0.5
+        if c is None or c <= 0:
+            c = 0.20
+
+        # Kelly calculation
+        kelly_size = fractional_kelly(p=p, b=b, fraction=f, cap=c)
+        kelly_size = _num(kelly_size)
+
+        # Margin adjustment
+        cash_required_pct = None
+        if kelly_size is not None and m is not None:
+            cash_required_pct = kelly_size * m
+
+        lines = ["# Kelly Sizing & Margin Recommendation\n"]
+        lines.append(f"> **Disclaimer**: This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker.\n")
+        lines.append(f"- **Win Probability**: {p:.4f}" if p is not None else "- **Win Probability**: N/A")
+        lines.append(f"- **Payoff Ratio**: {b:.4f}" if b is not None else "- **Payoff Ratio**: N/A")
+        lines.append(f"- **Kelly Fraction**: {f:.4f}")
+        lines.append(f"- **Cap**: {c:.4f}")
+        lines.append(f"- **Margin Requirement**: {m:.4f}")
+        lines.append("")
+        lines.append(f"- **Recommended Position Size (Notional %)**: {kelly_size:.4f}" if kelly_size is not None else "- **Recommended Position Size (Notional %)**: N/A")
+        lines.append(f"- **Required Margin Cash %**: {cash_required_pct:.4f}" if cash_required_pct is not None else "- **Required Margin Cash %**: N/A")
+
+        payload = {
+            "inputs": {
+                "win_prob": p,
+                "payoff_ratio": b,
+                "margin_requirement": m,
+                "kelly_fraction": f,
+                "cap": c
+            },
+            "outputs": {
+                "recommended_position_pct": kelly_size,
+                "required_margin_cash_pct": cash_required_pct,
+                "disclaimer": "This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker."
+            }
+        }
+
+        return "\n".join(lines) + "\n\n```json\n" + json.dumps(payload, indent=2) + "\n```\n\n"
+    except Exception as e:
+        return f"Error calculating margin Kelly size: {e}"
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def check_overnight_liquidity(symbol: str) -> str:
@@ -3057,6 +3140,13 @@ def get_recommendation(symbol: str) -> str:
     except Exception as e:
         return f"Failed to compute recommendation for {symbol}: {str(e)}"
 
+class _MacroProxy:
+    """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
+    gui/panels/options_matrix.py::_MacroProxy / options_ondemand.py::_MacroProxy."""
+
+    def __init__(self, vix: float, market_regime: str):
+        self.vix = vix
+        self.market_regime = market_regime
 
 @mcp.tool()
 def get_options_directive(symbol: str) -> str:
@@ -3105,14 +3195,6 @@ def get_options_directive(symbol: str) -> str:
         # snapshot is missing/malformed, never a fabricated stress signal.
         _MACRO_DEFAULT_VIX = 15.0
         _MACRO_DEFAULT_REGIME = "RISK ON"
-
-        class _MacroProxy:
-            """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
-            gui/panels/options_matrix.py::_MacroProxy / options_ondemand.py::_MacroProxy."""
-
-            def __init__(self, vix: float, market_regime: str):
-                self.vix = vix
-                self.market_regime = market_regime
 
         snap = None
         try:
@@ -3279,6 +3361,166 @@ def scan_pairs_arbitrage() -> dict:
         return scan_pairs(provider)
     except Exception as e:
         return {"error": str(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
+    """
+    Fuses live options-chain Greeks, the volatility surface/VRP cone, and the
+    rich/cheap strike scan into one call for a single underlying — wraps
+    pilots.options_risk.calculate_position_greeks, pilots.volatility_surface
+    .calculate_volatility_surface, and pilots.vol_mispricing.evaluate_strike_mispricing.
+    Never computes a second, competing Greeks/IV implementation.
+    Reuses technical_options_engine.build_premium_directive for the strategy
+    directive shown alongside the raw analytics. Returns NaN (never a
+    fabricated number, CONSTRAINT #4) for any leg the chain fetch can't
+    price. Read-only: never constructs or submits an order.
+    """
+    import math
+    from data.market_data import get_provider, get_options_provider
+
+    sym = ticker.upper().strip()
+    provider = get_provider()
+    options_provider = get_options_provider()
+
+    # 1. Fetch chain data
+    try:
+        chain_data = options_provider.fetch_options_chain(sym)
+    except Exception:
+        chain_data = None
+        
+    if not chain_data:
+        return {"error": f"No chain data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+
+    # 2. Fetch bars & spot price
+    bars = provider.get_intraday_bars(sym)
+    if bars is None or bars.empty:
+        return {"error": f"No bar data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+        
+    spot_price = None
+    is_stale = True
+    try:
+        q = provider.get_latest_quote(sym)
+        if q is not None and q.price is not None and float(q.price) > 0:
+            spot_price = float(q.price)
+            is_stale = bool(getattr(q, "is_stale", True))
+    except Exception:
+        spot_price = None
+        
+    if spot_price is None:
+        spot_price = float(bars["Close"].iloc[-1])
+        is_stale = True
+
+    # 3. Macro proxy for build_premium_directive
+    snap = _load_state_snapshot()
+    vix_val = 15.0
+    regime_val = "RISK ON"
+    if isinstance(snap, dict):
+        raw_vix = snap.get("vix")
+        try:
+            vix_val = float(raw_vix) if raw_vix is not None else 15.0
+        except (TypeError, ValueError):
+            vix_val = 15.0
+        regime_val = str(snap.get("market_regime") or "RISK ON")
+
+    macro_proxy = _MacroProxy(vix_val, regime_val)
+
+    # 4. Directive
+    try:
+        from technical_options_engine import build_premium_directive
+        directive = build_premium_directive(
+            sym,
+            bars,
+            spot_price=spot_price,
+            is_stale=is_stale,
+            target_dte=target_dte,
+            macro_dto=macro_proxy,
+            vrp=None
+        )
+    except Exception as e:
+        directive = {"error": str(e)}
+
+    # 5. Volatility Surface
+    try:
+        from pilots.volatility_surface import calculate_volatility_surface
+        surface = calculate_volatility_surface(
+            ticker=sym,
+            chain_data=chain_data,
+            spot_price=spot_price,
+            historical_prices=bars["Close"]
+        )
+    except Exception as e:
+        surface = {"error": str(e)}
+
+    # 6. Strike Mispricing
+    try:
+        from pilots.vol_mispricing import evaluate_strike_mispricing
+        mispricing = evaluate_strike_mispricing(
+            chain_data=chain_data,
+            spot_price=spot_price,
+            fair_iv_forecast=surface.get("atm_iv") if isinstance(surface, dict) else None,
+            dte=target_dte
+        )
+    except Exception as e:
+        mispricing = {"error": str(e)}
+
+    # Sanitize NaNs
+    def _sanitize(obj):
+        if isinstance(obj, float) and math.isnan(obj):
+            return "NaN"
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize(v) for v in obj]
+        return obj
+
+    return _sanitize({
+        "ticker": sym,
+        "spot_price": spot_price,
+        "directive": directive,
+        "surface": surface,
+        "mispricing": mispricing
+    })
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
+def scan_0dte_signals(ticker: str, contracts: int = 1) -> dict:
+    """
+    Scans for same-session 0DTE contract breakout signals and squeeze detection
+    using pilots.zero_dte_engine's logic — never re-derives its own breakout math.
+    This is a signal/status passthrough only (does not compute payoff or theta decay).
+    Ships in simulation-only mode: the response's `live_exit_gate_wired` field 
+    reflects whether the mandatory 15:45 ET hard-exit is actually wired and enabled
+    in production. `strategy_registry_status` reports whether this pilot has cleared
+    the PBO/DSR/Sharpe/MaxDD + stress-scenario deployability gate (it has not).
+    This tool NEVER calls execute_0dte_trade or execute_0dte_exits.
+    """
+    from pilots.zero_dte_engine import get_0dte_signals
+    
+    # 0DTE exit is wired into daemon_runtime.py but gated by OPTIONS_0DTE_ENABLED.
+    live_exit_gate_wired = False
+    try:
+        from settings import settings as _s
+        live_exit_gate_wired = bool(getattr(_s, "OPTIONS_0DTE_ENABLED", False))
+    except ImportError:
+        pass
+
+    sym = ticker.upper().strip()
+
+    try:
+        # Wrap the real signal detection logic from zero_dte_engine
+        signals = get_0dte_signals(symbol=sym)
+    except Exception as e:
+        signals = {"error": str(e)}
+
+    return {
+        "ticker": sym,
+        "contracts": contracts,
+        "signals": signals,
+        "live_exit_gate_wired": live_exit_gate_wired,
+        "strategy_registry_status": "unregistered"
+    }
+
 
 
 @mcp.tool(meta=_MACRO_RADAR_UI)

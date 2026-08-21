@@ -1,0 +1,4 @@
+- [x] Implement `calculate_margin_kelly_size` tool in `investyo_mcp_server.py`.
+- [x] Add tool documentation to `docs/architecture/observability-and-apis.md`.
+- [x] Write unit tests in `tests/test_investyo_mcp_margin_kelly.py`.
+- [x] Run tests and verify handling of `NaN` and explicit disclaimers.
