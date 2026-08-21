@@ -153,6 +153,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (see reporting/progress.py + gui/orchestrator_runner.py::compute_run_progress).
     # Non-secret; scalar (not JSON-encoded).
     "PROGRESS_POLL_SECONDS",
+    # Heuristic multiplier the check_overnight_liquidity MCP tool uses to
+    # approximate depth notional from ADV (e.g. 0.01 = 1% ADV). Non-secret,
+    # plain float tunable -- no credential material.
+    "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC",
     "LOG_LEVEL",
     "DRY_RUN",
     # Persistent orchestrator daemon cutover flag. Non-secret (no credential
