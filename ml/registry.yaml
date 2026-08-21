@@ -34,8 +34,8 @@ models:
   lgbm_ranker:
     role: cross_sectional_ranker
     path: ml/models/lgbm_latest.pkl
-    trained_date: '2026-08-20'
-    cpcv_dsr: 0.9999999870189549
+    trained_date: '2026-08-14'
+    cpcv_dsr: 0.9924906429751158
     pbo: 0.26666666666666666
     n_train: 460
     deployable: true
@@ -43,7 +43,7 @@ models:
       expanding window of dashboard_df snapshots via PITFeatureStore. NDCG@1 monitored in CV logs. Weight
       in settings.SIGNAL_WEIGHTS["lgbm_ranker"] = 0.10 (modest until validated at > 200 out-of-sample
       dates).
-    artifact_file: lgbm_20260820.pkl
+    artifact_file: lgbm_20260814.pkl
     hyperparameters:
       objective: lambdarank
       metric: ndcg
@@ -57,8 +57,8 @@ models:
       bagging_freq: 1
       verbose: -1
     train_window:
-      start: '2025-08-27'
-      end: '2026-07-22'
+      start: '2025-08-19'
+      end: '2026-07-14'
       n_dates: 46
     features:
     - ROC_12M
@@ -90,20 +90,20 @@ models:
     - earnings_yield_rank
     - quality_factor_score_rank
     - low_vol_score_rank
-    cpcv_mean_oos_sharpe: 5.131822013299442
-    cpcv_mean_oos_max_dd: 0.012389953377557906
+    cpcv_mean_oos_sharpe: 2.44254533455499
+    cpcv_mean_oos_max_dd: 0.012603120222581282
   meta_labeler_timeseries_momentum:
     role: meta_labeler
     path: ml/models/meta_timeseries_momentum_latest.pkl
-    trained_date: '2026-08-20'
-    cpcv_dsr: 2.743599570249782e-47
+    trained_date: '2026-08-14'
+    cpcv_dsr: 5.382150328888693e-45
     pbo: 0.0
-    n_train: 16455
+    n_train: 16469
     deployable: false
     notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct). Trained on triple-barrier
       labels from ml/triple_barrier.py. If predict_proba < settings.META_LABEL_MIN_CONFIDENCE (0.4), the
       position size for that cycle is zeroed by SignalAggregator.
-    artifact_file: meta_timeseries_momentum_20260820.pkl
+    artifact_file: meta_timeseries_momentum_20260814.pkl
     hyperparameters:
       objective: binary
       metric: binary_logloss
@@ -118,29 +118,29 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2012-02-22'
-      end: '2026-08-20'
-      n_dates: 3645
+      start: '2012-02-16'
+      end: '2026-08-14'
+      n_dates: 3644
     features:
     - momentum
     - realized_vol_20d
     - dist_sma_50
     - vol_ewma
     - primary_score
-    cpcv_mean_oos_sharpe: -0.7422600682695134
+    cpcv_mean_oos_sharpe: -0.6992039531766724
     cpcv_mean_oos_max_dd: 1.0
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
     path: ml/models/meta_cross_sectional_momentum_latest.pkl
-    trained_date: '2026-08-20'
-    cpcv_dsr: 3.0437462014664787e-07
-    pbo: 0.06666666666666667
-    n_train: 16443
+    trained_date: '2026-08-14'
+    cpcv_dsr: 1.0618087052837167e-07
+    pbo: 0.0
+    n_train: 16454
     deployable: false
     notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct). Shares the
       same triple-barrier label construction and feature set as the timeseries momentum meta-labeler;
       trained and persisted independently.
-    artifact_file: meta_cross_sectional_momentum_20260820.pkl
+    artifact_file: meta_cross_sectional_momentum_20260814.pkl
     hyperparameters:
       objective: binary
       metric: binary_logloss
@@ -155,14 +155,14 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2012-02-22'
-      end: '2026-08-20'
-      n_dates: 3645
+      start: '2012-02-16'
+      end: '2026-08-14'
+      n_dates: 3644
     features:
     - momentum
     - realized_vol_20d
     - dist_sma_50
     - vol_ewma
     - primary_score
-    cpcv_mean_oos_sharpe: 0.35097747346927183
+    cpcv_mean_oos_sharpe: 0.337563938674809
     cpcv_mean_oos_max_dd: 1.0

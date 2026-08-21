@@ -941,6 +941,15 @@ def _price_at_or_before(bars: pd.DataFrame, target: datetime) -> float:
     if bars is None or bars.empty:
         return float("nan")
     ts = pd.Timestamp(target).normalize()
+
+    # Fast path: O(log N) binary search on sorted index
+    if bars.index.is_monotonic_increasing:
+        idx = bars.index.searchsorted(ts, side='right') - 1
+        if idx < 0:
+            return float("nan")
+        return float(bars["Close"].iloc[idx])
+
+    # Fallback: O(N) linear filter for unsorted index
     subset = bars.loc[bars.index <= ts]
     if subset.empty:
         return float("nan")

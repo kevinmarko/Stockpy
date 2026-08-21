@@ -1847,7 +1847,7 @@ class TestOptionsGexProfileEndpoint:
         assert "call_wall_strike" in body
         assert "put_wall_strike" in body
         assert "gamma_regime" in body
-        assert body["gamma_regime"] in ["POSITIVE_GAMMA", "NEGATIVE_GAMMA", "NEUTRAL_GAMMA"]
+        assert body["gamma_regime"] in ["POSITIVE_GAMMA", "NEGATIVE_GAMMA", "PIN_RISK_HIGH"]
         assert "regime_description" in body
         assert "dealer_hedging_flow" in body
         assert "dealer_hedging_shares_per_1pct_move" in body
