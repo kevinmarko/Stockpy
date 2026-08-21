@@ -309,6 +309,8 @@ export default function App() {
               isOpen={isPaletteOpen}
               onClose={() => setIsPaletteOpen(false)}
               commands={commandManifest?.commands ?? []}
+              strategyRegistry={commandManifest?.strategy_registry ?? []}
+              optionsStrategyRegistry={commandManifest?.options_strategy_registry ?? []}
               onSelectCommandForBuilder={(spec) => {
                 setIsPaletteOpen(false);
                 navigate(`/commands?builder=${spec.name}`);

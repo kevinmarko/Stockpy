@@ -309,10 +309,35 @@ function optionSuggestions(spec: CommandSpec, usedAliases: Set<string>, partial:
     }));
 }
 
-function valueSuggestions(option: CommandOption, partial: string, strategyRegistry: string[] = []): Suggestion[] {
+function valueSuggestions(
+  option: CommandOption,
+  partial: string,
+  strategyRegistry: string[] = [],
+  optionsStrategyRegistry: string[] = [],
+  commandName: string = ""
+): Suggestion[] {
   let choices = option.choices ?? [];
-  if (choices.length === 0 && option.name.includes("strategy")) {
-    choices = strategyRegistry.length > 0 ? strategyRegistry : REGISTERED_STRATEGIES;
+  // "strateg" (not "strategy") on purpose: "--strategies".includes("strategy")
+  // is FALSE in JS -- the two strings diverge at "strateg[i]es" vs
+  // "strateg[y]" -- so a "strategy"-only check silently never matched the
+  // plural flag at all. Confirmed no other manifest option name contains
+  // "strateg" as a substring (see cli_introspect/command_manifest.json).
+  if (choices.length === 0 && option.name.includes("strateg")) {
+    // validation.harness's plural --strategies is options-strategies-only
+    // (see that CLI's own main() docstring) -- draw from the options
+    // registry there, and from the equity one for every other
+    // strategy-named option (including validation.harness's OWN singular
+    // --strategy, which stays on the equity fallback unchanged -- see
+    // CommandFormBuilder.tsx's identical, deliberate split for the Form-Mode
+    // multi-select).
+    const isOptionsHarnessBulk = commandName === "validation.harness" && option.name === "--strategies";
+    choices = isOptionsHarnessBulk
+      ? optionsStrategyRegistry.length > 0
+        ? optionsStrategyRegistry
+        : REGISTERED_OPTIONS_STRATEGIES
+      : strategyRegistry.length > 0
+        ? strategyRegistry
+        : REGISTERED_STRATEGIES;
   }
   if (choices.length === 0 && (option.name.includes("start") || option.name.includes("end") || option.name.includes("date"))) {
     const currentYear = new Date().getFullYear();
@@ -464,7 +489,12 @@ function validate(spec: CommandSpec, argTokens: string[]): ValidationHint[] {
   return hints;
 }
 
-export function parseCommandLine(input: string, commands: CommandSpec[], strategyRegistry: string[] = []): ParseResult {
+export function parseCommandLine(
+  input: string,
+  commands: CommandSpec[],
+  strategyRegistry: string[] = [],
+  optionsStrategyRegistry: string[] = []
+): ParseResult {
   const empty: ParseResult = {
     command: null,
     subcommand: null,
@@ -546,12 +576,16 @@ export function parseCommandLine(input: string, commands: CommandSpec[], strateg
     prevOption &&
     prevOption.takes_value &&
     (prevOption.choices ||
-      prevOption.name.includes("strategy") ||
+      // "strateg" not "strategy" -- see valueSuggestions' own comment above:
+      // "--strategies".includes("strategy") is false in JS, which silently
+      // made this whole branch dead code for both refresh_validations.py's
+      // and validation.harness's plural --strategies option.
+      prevOption.name.includes("strateg") ||
       prevOption.name.includes("start") ||
       prevOption.name.includes("end") ||
       prevOption.name.includes("date"))
   ) {
-    suggestions = valueSuggestions(prevOption, partial, strategyRegistry);
+    suggestions = valueSuggestions(prevOption, partial, strategyRegistry, optionsStrategyRegistry, command.name);
   } else if (prevOption && prevOption.takes_value) {
     suggestions = []; // free value expected (e.g. a date, a name)
   } else {
