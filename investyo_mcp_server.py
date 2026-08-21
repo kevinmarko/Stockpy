@@ -2931,13 +2931,23 @@ def calculate_margin_kelly_size(
         f = _num(kelly_fraction)
         c = _num(cap)
 
-        # Fallbacks for missing/invalid non-core inputs
+        # Fallbacks for missing/invalid non-core inputs.
+        # margin_requirement of exactly 0% is not economically meaningful (implies
+        # infinite leverage), so it is defaulted like any other non-positive value.
         if m is None or m <= 0:
             m = 1.0
-        if f is None or f <= 0:
+        # kelly_fraction/cap of exactly 0 are legitimate, meaningful inputs (e.g.
+        # "recommend zero position size" / "cap the position at zero") and must be
+        # respected as-is -- only a missing/unparseable value falls back to the
+        # documented default, and only a negative value clamps to 0.0.
+        if f is None:
             f = 0.5
-        if c is None or c <= 0:
+        elif f < 0:
+            f = 0.0
+        if c is None:
             c = 0.20
+        elif c < 0:
+            c = 0.0
 
         # Kelly calculation
         kelly_size = fractional_kelly(p=p, b=b, fraction=f, cap=c)
