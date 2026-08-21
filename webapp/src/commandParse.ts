@@ -59,6 +59,15 @@ const HIGH_STAKES_COMMANDS: Record<string, { flags: string[]; reason: string }[]
   "main.py": [
     { flags: ["--refresh-account"], reason: "This forces a fresh Robinhood login, bypassing the daily account-snapshot cache." },
   ],
+  // Same "no single flag to gate on" shape as gui/orchestrator_runner.py's
+  // database_setup.py entry: an empty flags array matches vacuously (every
+  // element of [] passes .every(...)), so this triggers on ANY invocation --
+  // including --dry-run, which is otherwise safe. There's no way to express
+  // "confirm unless --dry-run" with this table; see the server-side comment
+  // for the same trade-off.
+  "repair_price_bars_adjustment.py": [
+    { flags: [], reason: "This deletes price_bars rows for the given symbols from their earliest affected date forward and re-fetches them from the currently configured provider -- a real historical-data rewrite. Pass --dry-run first to preview without confirming." },
+  ],
 };
 
 /** Non-null when running `command` with `argTokens` needs explicit operator
@@ -123,7 +132,7 @@ export function getCommandCategory(name: string): CommandCategory {
   const n = name.toLowerCase();
   if (n.includes("main") || n.includes("app_shell") || n.includes("orchestrator")) return "pipeline";
   if (n.includes("validation") || n.includes("preflight") || n.includes("test")) return "testing";
-  if (n.includes("database") || n.includes("kill_switch") || n.includes("prompt")) return "database";
+  if (n.includes("database") || n.includes("kill_switch") || n.includes("prompt") || n.includes("repair") || n.includes("price_bars")) return "database";
   if (n.includes("briefing") || n.includes("track_record") || n.includes("report")) return "reporting";
   return "pipeline";
 }

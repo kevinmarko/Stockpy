@@ -1111,6 +1111,15 @@ HIGH_STAKES_COMMANDS: Dict[str, Dict[frozenset, str]] = {
     "database_setup.py": {
         frozenset(): "This (re)initializes/migrates the SQLite schema in quant_platform.db (CREATE TABLE IF NOT EXISTS -- idempotent, additive-only, but a real schema write).",
     },
+    # Same "no single flag to gate on" shape as database_setup.py above: the
+    # command's own --dry-run flag makes a preview genuinely safe, but this
+    # table can only express "these flags must be present", not "this flag
+    # must be absent" -- so, like database_setup.py, it gates on frozenset()
+    # (always matches) rather than under-gating the real (non-dry-run)
+    # invocation that deletes price_bars rows.
+    "repair_price_bars_adjustment.py": {
+        frozenset(): "This deletes price_bars rows for the given symbols from their earliest affected date forward and re-fetches them from the currently configured provider -- a real historical-data rewrite. Pass --dry-run first to preview without confirming.",
+    },
 }
 
 # app_shell.py pops a native desktop window (pywebview) on whichever machine
