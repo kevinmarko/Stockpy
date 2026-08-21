@@ -52,6 +52,37 @@ Branch: `claude/validation-harness-bulk-menu-48c980`
       follow-up bullet after the "Commands screen strategy-registry sync"
       bullet it closes part of).
 
+## Follow-up (same PR, post-review): free-text autocomplete + PR #841 merge conflict
+
+- [x] Resolved PR #841's merge conflict against `main`'s new commit #839
+      (annualization-frequency fix) — rebased cleanly; only
+      `docs/architecture/validation-and-signals.md`'s `validation/harness.py`
+      bullet needed manual merging (both sides added text to the same bullet),
+      combined programmatically to avoid transcription errors on the huge
+      dense lines this repo's docs use.
+- [x] Closed the disclosed "free-text Command Bar autocomplete isn't
+      options-aware" gap: `commandParse.ts::parseCommandLine`/`valueSuggestions`
+      gained `optionsStrategyRegistry`/`commandName` params, routing
+      `validation.harness`'s plural `--strategies` to the options registry
+      while every other strategy-named option (incl. its own singular
+      `--strategy`) stays on the equity registry. Threaded through
+      `Commands.tsx`'s free-text bar AND (bonus fix) `CommandPaletteModal.tsx`'s
+      Cmd+K palette, which previously received no live `strategyRegistry` at
+      all for ANY command.
+- [x] **Second, deeper bug found independently by two parallel test-writing
+      agents** (via genuinely failing tests, not a code read): both the outer
+      gate in `parseCommandLine` and the inner one in `valueSuggestions` were
+      guarded on `option.name.includes("strategy")` — but
+      `"--strategies".includes("strategy")` is `false` in JS, making the ENTIRE
+      `--strategies` suggestion path dead code for both `validation.harness`
+      and `refresh_validations.py`, in every surface, even before this PR.
+      Fixed by widening both to `option.name.includes("strateg")`.
+- [x] Used 4 agents: 2 for test-writing (`commandParse.test.ts`,
+      `CommandPaletteModal.test.tsx`), 1 for docs, and did final full-suite
+      verification myself (typecheck + full `vitest run`: 167 files / 1825
+      tests passed, up from 1817 — 8 new tests, all real, none weakened to
+      match the bug).
+
 ## Verification (all run, all green except pre-existing/unrelated)
 
 - [x] `python -m ruff check . --select=F821,F822,F823,E9` — clean.
