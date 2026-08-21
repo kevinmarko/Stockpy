@@ -1065,77 +1065,82 @@ export function OptionsMatrix() {
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
 
-      {!loading && !error && data && directives.length === 0 && (
-        <div className="empty" style={{ padding: "var(--s-7-5)" }}>
-          {data.reason ?? "No options directives generated yet."}
-        </div>
-      )}
-
-      {!loading && !error && data && directives.length > 0 && (
+      {!loading && !error && data && (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-          {/* Read-only context row */}
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "var(--s-2)",
-              margin: "var(--s-2) 0 var(--s-3)",
-              fontSize: "var(--t-label)",
-              color: theme.textSecondary,
-            }}
-          >
-            <span className="chip">
-              Target DTE {data.target_dte ?? "—"}
-            </span>
-            <span className="chip">VIX {fmtNum(data.vix ?? null, 1)}</span>
-            <span className="chip">{data.market_regime ?? "—"}</span>
-          </div>
+          {directives.length > 0 && (
+            <>
+              {/* Read-only context row */}
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "var(--s-2)",
+                  margin: "var(--s-2) 0 var(--s-3)",
+                  fontSize: "var(--t-label)",
+                  color: theme.textSecondary,
+                }}
+              >
+                <span className="chip">
+                  Target DTE {data.target_dte ?? "—"}
+                </span>
+                <span className="chip">VIX {fmtNum(data.vix ?? null, 1)}</span>
+                <span className="chip">{data.market_regime ?? "—"}</span>
+              </div>
 
-          {/* Persistent honesty banner — reflects what THIS cycle's data actually
-              is, not a static claim. When settings.OPTIONS_TRUE_IVR_ENABLED is on
-              and at least one symbol resolved a real options-chain-derived IV
-              rank, say so — but the fallback is per-row (see `effectiveIvr`), so
-              even here the banner names the fallback explicitly rather than
-              implying every row is chain-derived. */}
-          {trueIvrCount === 0 ? (
-            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
-              <span>
-                <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
-                chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
-                orders are placed.
-              </span>
-            </Notice>
-          ) : (
-            <Notice variant="info" style={{ marginBottom: "var(--s-3)" }}>
-              <span>
-                <strong>IVR</strong> is a real, options-chain-derived 30-day ATM IV rank for{" "}
-                {trueIvrCount} of {directives.length} symbols this cycle (marked "chain" below),
-                falling back to a realized-volatility proxy (marked "proxy") where chain or
-                history data wasn't available. Advisory only; no orders are placed.
-              </span>
-            </Notice>
+              {/* Persistent honesty banner — reflects what THIS cycle's data actually
+                  is, not a static claim. When settings.OPTIONS_TRUE_IVR_ENABLED is on
+                  and at least one symbol resolved a real options-chain-derived IV
+                  rank, say so — but the fallback is per-row (see `effectiveIvr`), so
+                  even here the banner names the fallback explicitly rather than
+                  implying every row is chain-derived. */}
+              {trueIvrCount === 0 ? (
+                <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
+                  <span>
+                    <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
+                    chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
+                    orders are placed.
+                  </span>
+                </Notice>
+              ) : (
+                <Notice variant="info" style={{ marginBottom: "var(--s-3)" }}>
+                  <span>
+                    <strong>IVR</strong> is a real, options-chain-derived 30-day ATM IV rank for{" "}
+                    {trueIvrCount} of {directives.length} symbols this cycle (marked "chain" below),
+                    falling back to a realized-volatility proxy (marked "proxy") where chain or
+                    history data wasn't available. Advisory only; no orders are placed.
+                  </span>
+                </Notice>
+              )}
+
+              {/* Summary Metrics Banner */}
+              <div className="glass-panel" style={{ display: "flex", gap: "var(--s-4)", padding: "var(--s-3) var(--s-4)", borderRadius: "var(--r-md)", marginBottom: "var(--s-4)", alignItems: "center" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Actionable Premium</div>
+                  <div className="num" style={{ fontSize: "var(--t-display)", fontWeight: 700, color: theme.growth }}>
+                    {fmtUsd(directives.filter(isActionable).reduce((sum, d) => sum + (d.Net_Premium || 0), 0))}
+                  </div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Integrity</div>
+                  <div style={{ fontSize: "var(--t-subhead)", fontWeight: 700 }}>
+                    {flaggedCount === 0 ? (
+                      <span style={{ color: theme.growth }}>✅ All Clean</span>
+                    ) : (
+                      <span style={{ color: theme.caution }}>⚠️ {flaggedCount} Flagged</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
           )}
 
-          {/* Summary Metrics Banner */}
-          <div className="glass-panel" style={{ display: "flex", gap: "var(--s-4)", padding: "var(--s-3) var(--s-4)", borderRadius: "var(--r-md)", marginBottom: "var(--s-4)", alignItems: "center" }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Actionable Premium</div>
-              <div className="num" style={{ fontSize: "var(--t-display)", fontWeight: 700, color: theme.growth }}>
-                {fmtUsd(directives.filter(isActionable).reduce((sum, d) => sum + (d.Net_Premium || 0), 0))}
-              </div>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Integrity</div>
-              <div style={{ fontSize: "var(--t-subhead)", fontWeight: 700 }}>
-                {flaggedCount === 0 ? (
-                  <span style={{ color: theme.growth }}>✅ All Clean</span>
-                ) : (
-                  <span style={{ color: theme.caution }}>⚠️ {flaggedCount} Flagged</span>
-                )}
-              </div>
-            </div>
-          </div>
-
+          {/* Search / Sort / Filter chrome is ALWAYS rendered (disabled, not
+              hidden, when there's nothing to act on yet) so this screen has
+              the same shape whether options-matrix generation is on or off —
+              a live deployment with OPTIONS_MATRIX_ENABLED=False (the
+              default) used to make this whole row vanish entirely, which
+              read as a mock/live parity bug rather than the honest "nothing
+              to filter yet" it actually is. */}
           <div style={{ display: "flex", gap: "var(--s-3)", marginBottom: "var(--s-3)", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: "200px" }}>
               <Input
@@ -1145,6 +1150,7 @@ export function OptionsMatrix() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="glass-input"
+                disabled={directives.length === 0}
               />
             </div>
             <div style={{ flex: 1, minWidth: "200px" }}>
@@ -1154,6 +1160,7 @@ export function OptionsMatrix() {
                 onChange={(e) => setSort(e.target.value as Sort)}
                 options={SORT_OPTIONS}
                 className="glass-input"
+                disabled={directives.length === 0}
               />
             </div>
           </div>
@@ -1169,6 +1176,7 @@ export function OptionsMatrix() {
                   type="button"
                   onClick={() => setFilter(f.key)}
                   className={active ? "on" : ""}
+                  disabled={directives.length === 0}
                   style={{ padding: "0 var(--s-2)", whiteSpace: "nowrap" }}
                 >
                   {f.label} <span className="num" style={{ fontSize: "0.85em", opacity: 0.7 }}>{count}</span>
@@ -1177,9 +1185,11 @@ export function OptionsMatrix() {
             })}
           </div>
 
-
-
-          {visible.length === 0 ? (
+          {directives.length === 0 ? (
+            <div className="empty" style={{ padding: "var(--s-7-5)" }}>
+              {data.reason ?? "No options directives generated yet."}
+            </div>
+          ) : visible.length === 0 ? (
             <div className="empty" style={{ padding: "var(--s-6)" }}>
               No directives match this filter.
             </div>
@@ -1195,9 +1205,11 @@ export function OptionsMatrix() {
             </div>
           )}
 
-          <div style={{ marginTop: "var(--s-4)" }}>
-            <GreeksRollup directives={directives} />
-          </div>
+          {directives.length > 0 && (
+            <div style={{ marginTop: "var(--s-4)" }}>
+              <GreeksRollup directives={directives} />
+            </div>
+          )}
         </div>
       )}
 

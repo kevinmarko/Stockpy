@@ -848,6 +848,10 @@ button:focus-visible {
   background: var(--surface-3);
   color: var(--text-primary);
 }
+.segmented button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* ---- Modal / sheet ---- */
 .sheet-backdrop {
