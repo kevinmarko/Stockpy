@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-16T00:29:32.284289+00:00",
+  "generated_at": "2026-08-21T11:14:29.753534+00:00",
   "command_count": 12,
   "dead_letters": [],
   "commands": [
@@ -158,7 +158,7 @@
           "aliases": [
             "--activate"
           ],
-          "description": "Activate the kill switch.",
+          "description": "Activate the global kill switch.",
           "default": false,
           "choices": null,
           "required": false,
@@ -171,7 +171,33 @@
           "aliases": [
             "--deactivate"
           ],
-          "description": "Deactivate the kill switch.",
+          "description": "Deactivate the global kill switch.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--activate-soft-halt",
+          "aliases": [
+            "--activate-soft-halt"
+          ],
+          "description": "Activate soft halt (block BUYs).",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--deactivate-soft-halt",
+          "aliases": [
+            "--deactivate-soft-halt"
+          ],
+          "description": "Deactivate soft halt.",
           "default": false,
           "choices": null,
           "required": false,
@@ -197,7 +223,7 @@
           "aliases": [
             "--reason"
           ],
-          "description": "Reason text (--activate only).",
+          "description": "Reason text (--activate / --activate-soft-halt).",
           "default": "",
           "choices": null,
           "required": false,
@@ -581,7 +607,7 @@
           "aliases": [
             "--strategies"
           ],
-          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, options_flow_sentiment, pairs_trading, put_credit_spread, put_debit_spread, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vrp_premium_selling).",
+          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, copula_stat_arb, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, options_flow_sentiment, pairs_trading, put_credit_spread, put_debit_spread, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vol_mispricing, vrp_premium_selling).",
           "default": null,
           "choices": null,
           "required": false,
@@ -697,7 +723,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/giant-master-plan-review-a7d205/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -733,7 +759,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/evaluate_four_trading_options/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/giant-master-plan-review-a7d205/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -766,5 +792,36 @@
       "positionals": [],
       "subcommands": []
     }
+  ],
+  "strategy_registry": [
+    "aroon_trend",
+    "call_credit_spread",
+    "call_debit_spread",
+    "coppock_momentum",
+    "copula_stat_arb",
+    "covered_call",
+    "cross_sectional_momentum",
+    "deep_value_edgar_pit",
+    "dividend_yield_edgar_pit",
+    "forecast_direction_arima_hw",
+    "garch_vol_target",
+    "lgbm_ranker",
+    "macd_trend",
+    "macro_regime_pit",
+    "multifactor_lowvol_size",
+    "options_flow_sentiment",
+    "pairs_trading",
+    "put_credit_spread",
+    "put_debit_spread",
+    "relative_strength_xsec",
+    "rsi14_extremes",
+    "rsi2_mean_reversion",
+    "sector_quality_rank",
+    "signal_replay_balanced_blend",
+    "sortino_drawdown",
+    "timeseries_momentum",
+    "value_quality_edgar_pit",
+    "vol_mispricing",
+    "vrp_premium_selling"
   ]
 }

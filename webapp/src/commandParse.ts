@@ -157,14 +157,21 @@ export function fuzzyMatch(pattern: string, text: string): boolean {
 }
 
 /**
- * Known strategy names for contextual autocompletion of --strategy option.
+ * Fallback-of-last-resort strategy list, used only when the manifest's own
+ * `strategy_registry` field (generated live from `STRATEGY_REGISTRY` by
+ * `scripts/build_command_manifest.py`, threaded in via the `strategyRegistry`
+ * parameter below) is absent or empty. Kept reasonably fresh but not the
+ * source of truth any more.
+ *
  * `validation/harness.py`'s `--strategy` argparse arg has no `choices=` (it
  * can't import `scripts.refresh_validations.STRATEGY_REGISTRY` without a
- * circular import — that module imports the harness), so the manifest never
- * carries real choices for this flag. This list must be kept in sync by hand
- * with the keys of `STRATEGY_REGISTRY` in `scripts/refresh_validations.py`.
+ * circular import — that module imports the harness), so the manifest's
+ * per-option `choices` field never carries real choices for this flag either
+ * way; `strategy_registry` is a separate, top-level manifest field for
+ * exactly this reason.
  */
 export const REGISTERED_STRATEGIES = [
+  "options_flow_sentiment",
   "rsi2_mean_reversion",
   "timeseries_momentum",
   "macd_trend",
@@ -181,6 +188,18 @@ export const REGISTERED_STRATEGIES = [
   "macro_regime_pit",
   "forecast_direction_arima_hw",
   "signal_replay_balanced_blend",
+  "sector_quality_rank",
+  "lgbm_ranker",
+  "vrp_premium_selling",
+  "vol_mispricing",
+  "put_credit_spread",
+  "call_credit_spread",
+  "call_debit_spread",
+  "put_debit_spread",
+  "covered_call",
+  "pairs_trading",
+  "copula_stat_arb",
+  "aroon_trend",
 ];
 
 /** Substring or fuzzy match on any command key — for suggestions while still typing. */
@@ -271,10 +290,10 @@ function optionSuggestions(spec: CommandSpec, usedAliases: Set<string>, partial:
     }));
 }
 
-function valueSuggestions(option: CommandOption, partial: string): Suggestion[] {
+function valueSuggestions(option: CommandOption, partial: string, strategyRegistry: string[] = []): Suggestion[] {
   let choices = option.choices ?? [];
   if (choices.length === 0 && option.name.includes("strategy")) {
-    choices = REGISTERED_STRATEGIES;
+    choices = strategyRegistry.length > 0 ? strategyRegistry : REGISTERED_STRATEGIES;
   }
   if (choices.length === 0 && (option.name.includes("start") || option.name.includes("end") || option.name.includes("date"))) {
     const currentYear = new Date().getFullYear();
@@ -426,7 +445,7 @@ function validate(spec: CommandSpec, argTokens: string[]): ValidationHint[] {
   return hints;
 }
 
-export function parseCommandLine(input: string, commands: CommandSpec[]): ParseResult {
+export function parseCommandLine(input: string, commands: CommandSpec[], strategyRegistry: string[] = []): ParseResult {
   const empty: ParseResult = {
     command: null,
     subcommand: null,
@@ -504,8 +523,16 @@ export function parseCommandLine(input: string, commands: CommandSpec[]): ParseR
 
   if (partial.startsWith("-")) {
     suggestions = optionSuggestions(active, usedAliases, partial);
-  } else if (prevOption && prevOption.takes_value && prevOption.choices) {
-    suggestions = valueSuggestions(prevOption, partial);
+  } else if (
+    prevOption &&
+    prevOption.takes_value &&
+    (prevOption.choices ||
+      prevOption.name.includes("strategy") ||
+      prevOption.name.includes("start") ||
+      prevOption.name.includes("end") ||
+      prevOption.name.includes("date"))
+  ) {
+    suggestions = valueSuggestions(prevOption, partial, strategyRegistry);
   } else if (prevOption && prevOption.takes_value) {
     suggestions = []; // free value expected (e.g. a date, a name)
   } else {

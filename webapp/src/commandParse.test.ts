@@ -4,6 +4,7 @@ import {
   getCommandCategory,
   getGhostText,
   tokenizeForHighlighting,
+  REGISTERED_STRATEGIES,
 } from "./commandParse";
 import type { CommandSpec } from "./api/types";
 
@@ -155,6 +156,35 @@ describe("parseCommandLine", () => {
 
   it("generates ghost text for top suggestions", () => {
     expect(getGhostText("val", [{ value: "validation.harness", label: "v", description: "", kind: "command" }])).toBe("idation.harness");
+  });
+
+  it("suggests strategy values for --strategy even though choices is null (dead-code bug fix)", () => {
+    // validation.harness's --strategy option has choices: null (argparse can't
+    // populate it -- see commandParse.ts's REGISTERED_STRATEGIES doc comment).
+    // Before the fix, valueSuggestions() was only ever invoked when
+    // prevOption.choices was truthy, so this always returned zero suggestions.
+    const r = parseCommandLine("validation.harness --strategy ", COMMANDS);
+    expect(r.suggestions.length).toBeGreaterThan(0);
+    expect(r.suggestions.every((s) => s.kind === "value")).toBe(true);
+    expect(r.suggestions.map((s) => s.value)).toEqual(
+      expect.arrayContaining(["garch_vol_target", "rsi2_mean_reversion"])
+    );
+  });
+
+  it("prefers an explicit strategyRegistry over REGISTERED_STRATEGIES when non-empty", () => {
+    const r = parseCommandLine(
+      "validation.harness --strategy ",
+      COMMANDS,
+      ["custom_strategy_a", "custom_strategy_b"]
+    );
+    expect(r.suggestions.map((s) => s.value).sort()).toEqual(["custom_strategy_a", "custom_strategy_b"]);
+    // None of the hardcoded fallback names leak in when a live list is supplied.
+    expect(r.suggestions.map((s) => s.value)).not.toEqual(expect.arrayContaining(["garch_vol_target"]));
+  });
+
+  it("falls back to REGISTERED_STRATEGIES when strategyRegistry is omitted", () => {
+    const r = parseCommandLine("validation.harness --strategy ", COMMANDS);
+    expect(r.suggestions.map((s) => s.value).sort()).toEqual([...REGISTERED_STRATEGIES].sort());
   });
 
   it("tokenizes commands for syntax highlighting", () => {

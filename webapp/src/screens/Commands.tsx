@@ -48,9 +48,17 @@ export function Commands() {
   const { data, loading, error, status, stale, cachedAt, reload } =
     useApi<CommandManifest>(() => api.getCommands(), []);
 
+  const strategyRegistry = data?.strategy_registry ?? [];
+
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"launcher" | "queue">("launcher");
   const [builderCommand, setBuilderCommand] = useState<CommandSpec | null>(null);
+
+  // Only render the bulk-validate entry point when the manifest actually
+  // exposes the command it targets -- an older/degraded manifest without
+  // refresh_validations.py must not show a button that opens nothing useful.
+  const bulkValidateCommand =
+    data?.commands.find((c) => c.name === "refresh_validations.py") ?? null;
 
   // Check URL query parameters for builderCommand trigger (e.g. ?builder=validation.harness)
   useEffect(() => {
@@ -102,6 +110,17 @@ export function Commands() {
         </div>
       </div>
 
+      {bulkValidateCommand && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--s-3)" }}>
+          <Button
+            variant="primary"
+            onClick={() => setBuilderCommand(bulkValidateCommand)}
+          >
+            🧪 Bulk Validate All Strategies
+          </Button>
+        </div>
+      )}
+
       <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
         Autocomplete and parameter builder for the platform's command-line tools. Compose commands,
         configure flags via Form Mode, or trigger global Command Palette with <kbd style={{ background: theme.surface3, padding: "2px 6px", borderRadius: 4 }}>Cmd + K</kbd>.
@@ -127,6 +146,7 @@ export function Commands() {
               <CommandLauncher
                 commands={data.commands}
                 onOpenBuilder={(cmd) => setBuilderCommand(cmd)}
+                strategyRegistry={strategyRegistry}
               />
             )}
             {(activeTab === "queue" || activeTab === "launcher") && (
@@ -142,6 +162,7 @@ export function Commands() {
       {builderCommand && (
         <CommandFormBuilder
           command={builderCommand}
+          strategyRegistry={strategyRegistry}
           onClose={() => {
             setBuilderCommand(null);
             if (searchParams.has("builder")) {
@@ -158,9 +179,11 @@ export function Commands() {
 function CommandLauncher({
   commands,
   onOpenBuilder,
+  strategyRegistry,
 }: {
   commands: CommandManifest["commands"];
   onOpenBuilder: (cmd: CommandSpec) => void;
+  strategyRegistry: string[];
 }) {
   const [selectedCategory, setSelectedCategory] = useState<CommandCategory | "all">("all");
   const [favorites, setFavorites] = useState<string[]>(() => getFavoriteCommands());
@@ -182,7 +205,7 @@ function CommandLauncher({
   return (
     <div>
       {/* Autocomplete Input Bar */}
-      <CommandBar commands={commands} onOpenBuilder={onOpenBuilder} />
+      <CommandBar commands={commands} onOpenBuilder={onOpenBuilder} strategyRegistry={strategyRegistry} />
 
       {/* Category Badges Filter */}
       <div style={{ display: "flex", gap: "var(--s-2)", margin: "var(--s-5) 0 var(--s-3)", flexWrap: "wrap" }}>
@@ -330,16 +353,21 @@ function CommandLauncher({
 function CommandBar({
   commands,
   onOpenBuilder,
+  strategyRegistry,
 }: {
   commands: CommandManifest["commands"];
   onOpenBuilder: (cmd: CommandSpec) => void;
+  strategyRegistry: string[];
 }) {
   const [input, setInput] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [open, setOpen] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const parsed = useMemo(() => parseCommandLine(input, commands), [input, commands]);
+  const parsed = useMemo(
+    () => parseCommandLine(input, commands, strategyRegistry),
+    [input, commands, strategyRegistry]
+  );
   const suggestions = parsed.suggestions;
   const errors = parsed.hints.filter((h) => h.level === "error");
 

@@ -35,7 +35,7 @@ _CORRUPT_REASON = "Command manifest is unreadable or malformed — regenerate it
 
 
 def _empty(reason: str) -> Dict[str, Any]:
-    return {"generated_at": None, "command_count": 0, "commands": [], "reason": reason}
+    return {"generated_at": None, "command_count": 0, "commands": [], "strategy_registry": [], "reason": reason}
 
 
 def command_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -63,6 +63,7 @@ def command_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
         "command_count": len(commands),
         "dead_letters": data.get("dead_letters", []),
         "commands": commands,
+        "strategy_registry": data.get("strategy_registry", []),
         "reason": None,
     }
 

@@ -94,6 +94,41 @@ const HARNESS_COMMAND: CommandSpec = {
   ],
 };
 
+const REFRESH_VALIDATIONS_COMMAND: CommandSpec = {
+  name: "refresh_validations.py",
+  invocation: "python -m scripts.refresh_validations",
+  aliases: [],
+  description: "Walk-forward strategy validation cadence (concurrent).",
+  positionals: [],
+  subcommands: [],
+  options: [
+    {
+      name: "--strategies",
+      aliases: ["--strategies"],
+      description: "Comma-separated strategies to validate; omit for the whole registry.",
+      default: null,
+      choices: null,
+      required: false,
+      arg_kind: "optional",
+      metavar: "NAMES",
+      takes_value: true,
+    },
+    {
+      name: "--workers",
+      aliases: ["--workers"],
+      description: "Concurrent workers",
+      default: "4",
+      choices: null,
+      required: false,
+      arg_kind: "optional",
+      metavar: "N",
+      takes_value: true,
+    },
+  ],
+};
+
+const FAKE_STRATEGY_REGISTRY = ["alpha_strat", "beta_strat", "gamma_strat", "delta_strat", "epsilon_strat"];
+
 const NO_OPTIONS_COMMAND: CommandSpec = {
   name: "scripts/preflight_check.py",
   invocation: "python3 scripts/preflight_check.py",
@@ -332,5 +367,81 @@ describe("CommandFormBuilder", () => {
         })
       )
     );
+  });
+
+  describe("plural --strategies multi-select (scripts/refresh_validations.py)", () => {
+    it("defaults to every strategy in the supplied registry pre-selected", () => {
+      render(
+        <CommandFormBuilder
+          command={REFRESH_VALIDATIONS_COMMAND}
+          onClose={vi.fn()}
+          strategyRegistry={FAKE_STRATEGY_REGISTRY}
+        />
+      );
+
+      const composed = screen.getByTestId("command-composed");
+      for (const name of FAKE_STRATEGY_REGISTRY) {
+        expect(composed.textContent).toContain(name);
+      }
+      expect(screen.getByText(`${FAKE_STRATEGY_REGISTRY.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
+    });
+
+    it("Clear then re-toggling one name back on leaves only that name in the compiled command", async () => {
+      const user = userEvent.setup();
+      render(
+        <CommandFormBuilder
+          command={REFRESH_VALIDATIONS_COMMAND}
+          onClose={vi.fn()}
+          strategyRegistry={FAKE_STRATEGY_REGISTRY}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "Clear" }));
+      expect(screen.getByText(`0 of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("switch", { name: FAKE_STRATEGY_REGISTRY[1] }));
+
+      const composed = screen.getByTestId("command-composed");
+      expect(composed.textContent).toContain(FAKE_STRATEGY_REGISTRY[1]);
+      for (const name of FAKE_STRATEGY_REGISTRY) {
+        if (name !== FAKE_STRATEGY_REGISTRY[1]) {
+          expect(composed.textContent).not.toContain(name);
+        }
+      }
+    });
+
+    it("Select All after Clear restores the full comma-joined list", async () => {
+      const user = userEvent.setup();
+      render(
+        <CommandFormBuilder
+          command={REFRESH_VALIDATIONS_COMMAND}
+          onClose={vi.fn()}
+          strategyRegistry={FAKE_STRATEGY_REGISTRY}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "Clear" }));
+      await user.click(screen.getByRole("button", { name: "Select All" }));
+
+      const composed = screen.getByTestId("command-composed");
+      for (const name of FAKE_STRATEGY_REGISTRY) {
+        expect(composed.textContent).toContain(name);
+      }
+      expect(screen.getByText(`${FAKE_STRATEGY_REGISTRY.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
+    });
+
+    it("falls back to REGISTERED_STRATEGIES when no strategyRegistry prop is passed", () => {
+      render(<CommandFormBuilder command={REFRESH_VALIDATIONS_COMMAND} onClose={vi.fn()} />);
+      expect(screen.getByText(`${REGISTERED_STRATEGIES.length} of ${REGISTERED_STRATEGIES.length} selected`)).toBeInTheDocument();
+    });
+
+    it("does NOT affect the singular --strategy select on validation.harness -- still starts empty with no strategyRegistry prop", () => {
+      render(<CommandFormBuilder command={HARNESS_COMMAND} onClose={vi.fn()} />);
+      const select = screen.getByDisplayValue("-- Select --strategy --");
+      expect(select.tagName).toBe("SELECT");
+      for (const strategy of REGISTERED_STRATEGIES) {
+        expect(within(select).getByRole("option", { name: strategy })).toBeInTheDocument();
+      }
+    });
   });
 });
