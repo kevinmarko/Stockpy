@@ -202,6 +202,25 @@ export const REGISTERED_STRATEGIES = [
   "aroon_trend",
 ];
 
+/**
+ * Fallback-of-last-resort options-strategy list for `validation.harness`'s
+ * bulk (`--strategies`) mode, used only when the manifest's own
+ * `options_strategy_registry` field (generated live from
+ * `STANDARD_OPTIONS_STRATEGIES` by `scripts/build_command_manifest.py`) is
+ * absent or empty. Sibling of `REGISTERED_STRATEGIES` above -- kept separate
+ * because `validation.harness --strategies` only ever gives real,
+ * name-specific results for options strategies, not the equity/
+ * cross-sectional names in `REGISTERED_STRATEGIES`/`STRATEGY_REGISTRY`.
+ */
+export const REGISTERED_OPTIONS_STRATEGIES = [
+  "Put Credit Spread",
+  "Call Credit Spread",
+  "Iron Condor",
+  "Bull Call Spread",
+  "Bear Put Spread",
+  "Long Straddle",
+];
+
 /** Substring or fuzzy match on any command key — for suggestions while still typing. */
 function matchCommands(commands: CommandSpec[], partial: string): CommandSpec[] {
   if (!partial) return commands;

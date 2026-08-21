@@ -41,6 +41,48 @@ MANIFEST_PATH = _REPO_ROOT / "cli_introspect" / "command_manifest.json"
 _STRATEGY_REGISTRY_TIMEOUT = 60
 
 
+def _fetch_registry_via_subprocess(*, label: str, child_code: str, timeout: int) -> list[str]:
+    """Run ``child_code`` in an isolated subprocess and parse its stdout as a
+    JSON list of strings. Shared by ``_fetch_strategy_registry`` and
+    ``_fetch_options_strategy_registry`` -- see their docstrings for the
+    isolation rationale. Degrades to ``[]`` (never raises -- dead-letter, don't
+    crash) on ANY failure: timeout, non-zero exit, or unparseable/wrong-shaped
+    output.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", child_code],
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO_ROOT),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("%s: fetch timed out after %ss -- degraded to []", label, timeout)
+        return []
+
+    if proc.returncode != 0 or not proc.stdout.strip():
+        detail = (proc.stderr or "").strip().splitlines()
+        logger.warning(
+            "%s: fetch failed (exit %s)%s -- degraded to []",
+            label,
+            proc.returncode,
+            f": {detail[-1]}" if detail else "",
+        )
+        return []
+
+    try:
+        names = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning("%s: unparseable output: %s -- degraded to []", label, exc)
+        return []
+
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        logger.warning("%s: unexpected shape %r -- degraded to []", label, type(names).__name__)
+        return []
+    return names
+
+
 def _fetch_strategy_registry(*, timeout: int = _STRATEGY_REGISTRY_TIMEOUT) -> list[str]:
     """Fetch ``sorted(STRATEGY_REGISTRY.keys())`` via an isolated subprocess.
 
@@ -65,37 +107,29 @@ def _fetch_strategy_registry(*, timeout: int = _STRATEGY_REGISTRY_TIMEOUT) -> li
         "from scripts.refresh_validations import STRATEGY_REGISTRY\n"
         "print(json.dumps(sorted(STRATEGY_REGISTRY.keys())))\n"
     )
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", child_code],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO_ROOT),
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("strategy_registry: fetch timed out after %ss -- degraded to []", timeout)
-        return []
+    return _fetch_registry_via_subprocess(label="strategy_registry", child_code=child_code, timeout=timeout)
 
-    if proc.returncode != 0 or not proc.stdout.strip():
-        detail = (proc.stderr or "").strip().splitlines()
-        logger.warning(
-            "strategy_registry: fetch failed (exit %s)%s -- degraded to []",
-            proc.returncode,
-            f": {detail[-1]}" if detail else "",
-        )
-        return []
 
-    try:
-        names = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("strategy_registry: unparseable output: %s -- degraded to []", exc)
-        return []
+def _fetch_options_strategy_registry(*, timeout: int = _STRATEGY_REGISTRY_TIMEOUT) -> list[str]:
+    """Fetch ``sorted(STANDARD_OPTIONS_STRATEGIES.keys())`` via an isolated subprocess.
 
-    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-        logger.warning("strategy_registry: unexpected shape %r -- degraded to []", type(names).__name__)
-        return []
-    return names
+    Sibling of ``_fetch_strategy_registry`` -- same isolation rationale, same
+    dead-letter-to-``[]`` behavior on any failure. This is the source of truth
+    the webapp Commands screen's ``validation.harness --strategies`` bulk-mode
+    multi-select reads (via the manifest's ``options_strategy_registry`` field,
+    threaded through ``pilots/commands.py``), distinct from ``strategy_registry``
+    above: ``validation.harness --strategies`` only ever gives real,
+    name-specific results for options strategies (see that module's ``main()``
+    docstring), so it needs its own registry rather than sharing
+    ``STRATEGY_REGISTRY``'s equity/cross-sectional names.
+    """
+    child_code = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(_REPO_ROOT)!r})\n"
+        "from validation.options_harness import STANDARD_OPTIONS_STRATEGIES\n"
+        "print(json.dumps(sorted(STANDARD_OPTIONS_STRATEGIES.keys())))\n"
+    )
+    return _fetch_registry_via_subprocess(label="options_strategy_registry", child_code=child_code, timeout=timeout)
 
 
 def build_manifest() -> dict:
@@ -110,12 +144,15 @@ def build_manifest() -> dict:
             logger.info("introspected %s (%d option(s))", t.name, len(spec.get("options", [])))
     strategy_registry = _fetch_strategy_registry()
     logger.info("strategy_registry: %d strategy name(s)", len(strategy_registry))
+    options_strategy_registry = _fetch_options_strategy_registry()
+    logger.info("options_strategy_registry: %d strategy name(s)", len(options_strategy_registry))
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "command_count": len(commands),
         "dead_letters": dead_letters,
         "commands": commands,
         "strategy_registry": strategy_registry,
+        "options_strategy_registry": options_strategy_registry,
     }
 
 
