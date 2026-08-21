@@ -36,4 +36,10 @@ TARGETS: list[Target] = [
     Target("path", "scripts/daily_briefing.py", "daily_briefing.py", "python scripts/daily_briefing.py"),
     Target("path", "scripts/track_record_status.py", "track_record_status.py", "python scripts/track_record_status.py"),
     Target("path", "database_setup.py", "database_setup.py", "python3 database_setup.py"),
+    Target(
+        "path",
+        "scripts/repair_price_bars_adjustment.py",
+        "repair_price_bars_adjustment.py",
+        "python scripts/repair_price_bars_adjustment.py",
+    ),
 ]
