@@ -779,16 +779,23 @@ class TestApplyFmpEconCalendar:
         monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
         df = pd.DataFrame({"Symbol": ["AAPL", "MSFT"]})
 
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("America/New_York"))
+        tomorrow = now + timedelta(days=1)
+        next_week = now + timedelta(days=7)
+
         fake_events = [
             {
                 "event": "FOMC Rate Decision",
-                "date": "2026-09-16 14:00:00",
+                "date": next_week.strftime("%Y-%m-%d 14:00:00"),
                 "country": "US",
                 "impact": "High",
             },
             {
                 "event": "Initial Jobless Claims",
-                "date": "2026-08-20 08:30:00",
+                "date": tomorrow.strftime("%Y-%m-%d 08:30:00"),
                 "country": "US",
                 "impact": "High",
             },
@@ -796,11 +803,13 @@ class TestApplyFmpEconCalendar:
         with patch("data.fmp_feeds_market.fetch_economics_calendar", return_value=fake_events):
             _apply_fmp_econ_calendar(df)
 
-        # Earliest US/High impact event is Initial Jobless Claims on 2026-08-20
+        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+
+        # Earliest US/High impact event is Initial Jobless Claims tomorrow
         assert df["Next_Macro_Event"].iloc[0] == "Initial Jobless Claims"
-        assert df["Next_Macro_Event_Date"].iloc[0] == "2026-08-20"
+        assert df["Next_Macro_Event_Date"].iloc[0] == tomorrow_str
         assert df["Next_Macro_Event"].iloc[1] == "Initial Jobless Claims"
-        assert df["Next_Macro_Event_Date"].iloc[1] == "2026-08-20"
+        assert df["Next_Macro_Event_Date"].iloc[1] == tomorrow_str
 
     def test_gate_on_empty_events_leaves_nan(self, monkeypatch):
         monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
