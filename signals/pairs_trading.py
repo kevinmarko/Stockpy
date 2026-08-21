@@ -42,6 +42,10 @@ def generate_pairs_signals(
     - pd.DataFrame containing columns:
       y, x, alpha, beta, spread, z_score, rolling_p, position, daily_returns, turnover
     """
+    entry_threshold = entry_threshold if entry_threshold is not None else PAIRS_ENTRY_Z_SCORE
+    stop_loss_threshold = stop_loss_threshold if stop_loss_threshold is not None else PAIRS_STOP_LOSS_Z_SCORE
+    adf_exit_threshold = adf_exit_threshold if adf_exit_threshold is not None else PAIRS_ADF_EXIT_PVALUE
+
     kh = KalmanHedgeRatio()
     hedge_df = kh.estimate_hedge_ratio(y_prices, x_prices)
     

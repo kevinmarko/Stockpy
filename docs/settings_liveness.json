@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 317,
+    "live_safe": 318,
     "no_op": 3,
     "restart_required": 104,
-    "total": 424
+    "total": 425
   },
   "dynamic_sites": [
     {
@@ -358,6 +358,7 @@
     "ORCHESTRATOR_API_PORT",
     "ORCHESTRATOR_DAEMON_ENABLED",
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
+    "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC",
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
@@ -466,13 +467,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 839,
+    "attr": 840,
     "factory_param": 4,
-    "getattr_const": 364,
+    "getattr_const": 365,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 247,
+    "attr": 248,
     "factory_param": 4,
     "getattr_const": 205,
     "os_environ": 18
@@ -892,7 +893,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/pairs.py:141",
+        "site": "gui/panels/pairs.py:147",
         "via": []
       }
     ],
@@ -2392,7 +2393,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5317",
+        "site": "investyo_mcp_server.py:5718",
         "via": []
       }
     ],
@@ -2412,7 +2413,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5269",
+        "site": "investyo_mcp_server.py:5670",
         "via": []
       }
     ],
@@ -2452,7 +2453,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5277",
+        "site": "investyo_mcp_server.py:5678",
         "via": []
       }
     ],

@@ -42,16 +42,22 @@ from settings import settings
 from gui import help_widgets
 from gui.panels._shared import _active_symbols
 from gui.panels import load_state_snapshot
+from validation.thresholds import (
+    PAIRS_ENTRY_Z_SCORE,
+    PAIRS_STOP_LOSS_Z_SCORE,
+    PAIRS_ADF_EXIT_PVALUE,
+)
 
 logger = logging.getLogger(__name__)
 
-# Canonical pairs-trading rule thresholds (mirror the defaults in
-# ``signals.pairs_trading.generate_pairs_signals``).  Kept as module constants
-# so the KPI captions and ``_signal_label`` never drift from the engine.
-ENTRY_THRESHOLD = 2.0
+# Canonical pairs-trading rule thresholds (single source of truth:
+# ``validation.thresholds`` — mirrors ``signals.pairs_trading.generate_pairs_signals``'s
+# own defaults).  Kept as module constants so the KPI captions and
+# ``_signal_label`` never drift from the engine.
+ENTRY_THRESHOLD = PAIRS_ENTRY_Z_SCORE
 EXIT_THRESHOLD = 0.0
-STOP_LOSS_THRESHOLD = 4.0
-ADF_EXIT_THRESHOLD = 0.10
+STOP_LOSS_THRESHOLD = PAIRS_STOP_LOSS_Z_SCORE
+ADF_EXIT_THRESHOLD = PAIRS_ADF_EXIT_PVALUE
 MIN_HALF_LIFE_DAYS = 5
 MAX_HALF_LIFE_DAYS = 60
 

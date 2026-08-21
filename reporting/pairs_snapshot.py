@@ -38,6 +38,11 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from settings import settings
+from validation.thresholds import (
+    PAIRS_ENTRY_Z_SCORE,
+    PAIRS_STOP_LOSS_Z_SCORE,
+    PAIRS_ADF_EXIT_PVALUE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +50,13 @@ __all__ = ["write_pairs_snapshot", "PAIRS_FILENAME"]
 
 PAIRS_FILENAME = "pairs.json"
 
-# Engine convention thresholds (mirror signals/pairs_trading defaults + the GUI).
-_ENTRY = 2.0
-_STOP = 4.0
+# Engine convention thresholds — single source of truth: ``validation.thresholds``
+# (mirrors signals/pairs_trading defaults + the GUI). ``_EXIT`` (the 0.0 z-score
+# exit crossing) is not part of the migrated threshold set.
+_ENTRY = PAIRS_ENTRY_Z_SCORE
+_STOP = PAIRS_STOP_LOSS_Z_SCORE
 _EXIT = 0.0
-_ADF_EXIT = 0.10
+_ADF_EXIT = PAIRS_ADF_EXIT_PVALUE
 
 
 def _finite_or_none(value: Any) -> Optional[float]:
