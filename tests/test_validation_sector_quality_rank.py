@@ -74,7 +74,14 @@ class TestAdapterAgainstRealEdgarData:
         assert X["gross_profitability"].notna().any(), (
             "no real gross_profitability values at all -- EDGAR fetch may have failed"
         )
-        assert set(X["sector"].unique()) == {"Technology", "Consumer Defensive"}
+        # Loosened to a subset check (2026-08 universe widening): SNEQR_UNIVERSE
+        # is now _XSEC_UNIVERSE_CAPPED (a 100-name slice of the real S&P 500
+        # roster), which clears MIN_SECTOR_SIZE for several more sectors than
+        # the old hand-picked 12-ticker list did -- an exact-set assertion
+        # would be brittle against live CSV/roster data. Technology and
+        # Consumer Defensive have always cleared the bar; that's still
+        # asserted, just not that they're the only ones that do.
+        assert {"Technology", "Consumer Defensive"}.issubset(set(X["sector"].unique()))
 
     def test_full_harness_run_is_well_formed(self, real_closes: pd.DataFrame, tmp_path) -> None:
         """The actual end-to-end validation this Pilot's honest backtest

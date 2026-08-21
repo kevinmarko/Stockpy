@@ -174,5 +174,55 @@ here — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08 entry for the full 
 | **Max Drawdown** | 2.33% |
 | **Deployable** | ✅ True |
 
+### 2026-08-21 addendum: tiered universe widening — a genuine regression, not yet fixed
+
+`STRATEGY_REGISTRY["lgbm_ranker"]`'s universe changed from `_XSEC_UNIVERSE_30` (30
+hardcoded names, no SPY) to `_XSEC_UNIVERSE_CAPPED` (100 names, no SPY) — a
+deterministic, alphabetically-sorted slice of the real S&P 500 roster sourced live from
+`universe_engine.get_sp500_constituents()`, capped at 100 because this adapter's genuine
+per-CPCV-fold LightGBM retrain is one of the three adapters whose cost scales with
+ticker count (unlike `cross_sectional_momentum`/`relative_strength_xsec`, which moved to
+the full ~500-name tier).
+
+**Re-running the harness against the widened universe surfaced a real, measured
+regression, not a "no edge" result**:
+
+| Metric | Before (30-name universe, 2026-08-18) | After (100-name universe, 2026-08-21) | Gate |
+|---|---|---|---|
+| Sharpe | 1.514 | — (null) | > 0.50 ❌ |
+| PBO | 0.000 | 1.000 | < 0.50 ❌ |
+| DSR | 0.951 | 0.000 | > 0.95 ❌ |
+| MaxDD | 2.33% | 0.0% | < 30% (uninformative — see below) |
+| `deployable` | True | **False** | |
+
+**What actually happened**: `python -m scripts.refresh_validations --strategies
+lgbm_ranker ... --start 2005-01-01 --n-cpcv-splits 15 --n-test-splits 4 --workers 1
+--json` (2026-08-21) logged `[LightGBM] [Fatal] Number of rows <N> exceeds upper limit
+of 10000 for a query` **5,476 times**, exclusively during the `lgbm_ranker` validation
+window, with `N` ranging 11,666–29,398 (scaling with each CPCV fold's training-panel
+size). Every per-fold `ranker.train(...)` call failed outright as a result. The
+`PBO=1.000`/`DSR=0.000`/`Sharpe=None`/`MaxDD=0.0%` numbers above are the harness's own
+all-folds-failed sentinel output — CONSTRAINT #6's fail-closed behavior working exactly
+as intended — not a genuine backtest measurement of the strategy losing its edge on a
+wider universe. The 100-ticker `_XSEC_UNIVERSE_CAPPED` panel's per-fold row count now
+crosses whatever internal LightGBM 4.7.0 query-size limit is triggering this; the exact
+mechanism (a `lambdarank`/ranking-objective internal constraint, not a licensing limit —
+this is the stock open-source MIT-licensed `lightgbm==4.7.0` wheel, confirmed via `pip
+show`) was not root-caused further as part of this documentation pass.
+
+**Not fixed here — a real, disclosed follow-up**: either shrink this adapter's own
+universe/window further (independent of the shared `_XSEC_UNIVERSE_CAPPED` tier the
+other two expensive-tier adapters still use successfully), or find and raise/avoid the
+LightGBM row limit. `lgbm_ranker` was already, and remains, `deployable=False` either
+way (this backtest question is separate from the live signal module's own dormant
+status — see above), so this regression does not change any live deployability status,
+but the FAIL reason is now "training crashed" (this entry), a different failure mode
+from either prior real result on record for this strategy — the original 2026-08 entry
+above's honest measured loss (net-of-cost Sharpe -0.334, a real backtest result) and the
+2026-08-18 entry's `deployable=True` (Sharpe 1.514) PASS — and should not be conflated
+with either of them until this is fixed and re-run. See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full cross-strategy
+writeup.
+
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

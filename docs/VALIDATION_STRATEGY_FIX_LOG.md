@@ -1430,3 +1430,173 @@ buffer, full training-loop functional tests, the same honest plateau-based conve
 convention `train_market_maker_policy` established, evaluation metric-shape parity with the
 closed-form comparison, deterministic-evaluation reproducibility, non-negative action-space
 contract, AST import safety).
+
+---
+
+## 2026-08-21: Tiered universe widening for 7 cross-sectional strategies — a real S&P 500 roster via `universe_engine`, not a hand-picked list
+
+**What changed, mechanically**: `scripts/refresh_validations.py` retired its three hardcoded
+cross-sectional ticker lists — the 30-name `_XSEC_UNIVERSE_30` (used by
+`cross_sectional_momentum`/`relative_strength_xsec`/`macro_regime_pit`/`signal_replay_balanced_blend`/
+`lgbm_ranker`), the 9-name hand list (`multifactor_lowvol_size`), and the 12-name,
+2-sector-only `SNEQR_UNIVERSE` (`sector_quality_rank`) — in favor of a new
+`_load_wide_universe()` loader that pulls the real current S&P 500 roster from
+`universe_engine.get_sp500_constituents()`, deduplicated, SPY-excluded, and sorted
+alphabetically for determinism. Two tiers are exposed: `_XSEC_UNIVERSE_WIDE` (the full
+roster) for the four adapters whose CPCV cost is `O(dates)` regardless of ticker count
+(they collapse per-ticker computation into date-indexed columns before CPCV ever sees the
+data), and `_XSEC_UNIVERSE_CAPPED` (`_XSEC_UNIVERSE_WIDE[:100]`) for the three adapters
+whose cost scales with ticker count (`sector_quality_rank`'s genuine `(Date, Ticker)`
+MultiIndex panel, `signal_replay_balanced_blend`'s raw unvectorized per-ticker
+`aggregate()` replay, and `lgbm_ranker`'s genuine per-CPCV-fold LightGBM retrain).
+`_XSEC_UNIVERSE_30_LEGACY` (the old 30-name list, unchanged content) survives only as
+`_load_wide_universe`'s own fallback for an environment with no `~/.stockpy_local/
+universe_cache.parquet` and no network — never raises, degrades silently to it
+(CONSTRAINT #6). A companion fix: `run_validations()`'s `share_tickers` build used to
+download a shares-outstanding snapshot for every multi-ticker strategy's *entire*
+universe (cheap when the shared universe topped out at 30 names); it now checks a new
+`_STRATEGIES_NEEDING_SHARES = {"multifactor_lowvol_size"}` set — the only adapter whose
+scoring math actually reads the `shares` dict — avoiding ~500 wasted sequential
+`yfinance` `fast_info` calls per run for the other six strategies.
+
+### Universe size, before → after
+
+| Strategy | Old universe | Old size | New universe | New size |
+|---|---|---|---|---|
+| `cross_sectional_momentum` | SPY + `_XSEC_UNIVERSE_30` (hardcoded) | 31 | SPY + `_XSEC_UNIVERSE_WIDE` (real S&P 500 roster) | 504 |
+| `relative_strength_xsec` | SPY + `_XSEC_UNIVERSE_30` | 31 | SPY + `_XSEC_UNIVERSE_WIDE` | 504 |
+| `multifactor_lowvol_size` | SPY + 8 hand-picked names | 9 | SPY + `_XSEC_UNIVERSE_WIDE` | 504 |
+| `macro_regime_pit` | SPY + `_XSEC_UNIVERSE_30` | 31 | SPY + `_XSEC_UNIVERSE_WIDE` | 504 |
+| `signal_replay_balanced_blend` | SPY + `_XSEC_UNIVERSE_30` | 31 | SPY + `_XSEC_UNIVERSE_CAPPED` (real roster, capped) | 101 |
+| `lgbm_ranker` | `_XSEC_UNIVERSE_30` (no SPY) | 30 | `_XSEC_UNIVERSE_CAPPED` (no SPY) | 100 |
+| `sector_quality_rank` | `SNEQR_UNIVERSE`, hand-picked, 2 sectors (Technology 7, Consumer Defensive 5) | 12 | `SNEQR_UNIVERSE = _XSEC_UNIVERSE_CAPPED`, 8 sectors clearing `MIN_SECTOR_SIZE=5` (Financial Services 24, Technology 16, Healthcare 12, Consumer Cyclical 12, Industrials 10, Consumer Defensive 6, Utilities 6, Real Estate 6) | 100 |
+
+`_XSEC_UNIVERSE_WIDE`/`_XSEC_UNIVERSE_CAPPED` were verified live in this environment (a
+real `~/.stockpy_local/universe_cache.parquet` exists here, so `_load_wide_universe`
+engaged `universe_engine.get_sp500_constituents` for real, not the legacy fallback):
+`_XSEC_UNIVERSE_WIDE` = 503 names (`get_sp500_constituents()`'s roster minus SPY),
+`_XSEC_UNIVERSE_CAPPED` = `_XSEC_UNIVERSE_WIDE[:100]` = 100 names, `SNEQR_UNIVERSE is
+_XSEC_UNIVERSE_CAPPED` is `True`. The `forecasting/data/ticker_sectors.csv` sector lookup
+`sector_quality_rank` depends on was regenerated in parallel with this change and now
+covers all 503 wide-universe tickers (was 49 rows before that regeneration), so the
+8-sector breakdown above reflects real, full sector coverage — not an artifact of a
+partially-populated lookup table.
+
+### Real, measured numbers
+
+Two back-to-back runs, same day, both `--start 2005-01-01`, `--n-cpcv-splits 15`,
+`--n-test-splits 4`, `--workers 1`, `--json`:
+
+* **Before**: `python -m scripts.refresh_validations --start 2005-01-01 --n-cpcv-splits 15
+  --n-test-splits 4 --workers 1` — a full 26/27-strategy registry run against the
+  *pre-widening* code, started 06:18 ET in the main checkout (`/Users/kevinlee/Stockpy-live`,
+  which does not carry this worktree's code change). Still in progress at the time this
+  entry's numbers were captured — see the per-strategy caveats below.
+* **After**: `python -m scripts.refresh_validations --strategies cross_sectional_momentum,
+  relative_strength_xsec, multifactor_lowvol_size, macro_regime_pit,
+  signal_replay_balanced_blend, lgbm_ranker, sector_quality_rank --start 2005-01-01
+  --output-dir reports --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json` — run
+  against this worktree's widened-universe code, completed the same day; this is the run
+  whose numbers are actually new here.
+
+| Strategy | Sharpe (before) | Sharpe (after) | PBO (before) | PBO (after) | DSR (before) | DSR (after) | MaxDD (before) | MaxDD (after) | Deploy (before) | Deploy (after) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `cross_sectional_momentum` | 0.675 | 0.995 | 0.000 | 0.492 | 0.999 | 1.000 | 29.3% | 25.0% | ✅ | ✅ |
+| `relative_strength_xsec` | 0.675 | 0.912 | 0.000 | 0.000 | 0.999 | 1.000 | 29.3% | 22.2% | ✅ | ✅ |
+| `multifactor_lowvol_size` | 0.675 | 0.979 | 0.000 | 0.000 | 0.999 | 1.000 | 29.3% | 18.8% | ✅ | ✅ |
+| `macro_regime_pit` | 0.580 †stale | 0.806 | 0.000 | 0.000 | 0.957 | 1.000 | 13.3% | 19.0% | ✅ | ✅ |
+| `signal_replay_balanced_blend` | 0.675 | 0.876 | 0.000 | 0.000 | 0.999 | 1.000 | 29.3% | 21.4% | ✅ | ✅ |
+| `lgbm_ranker` | 1.514 †2026-08-18 | — | 0.000 †2026-08-18 | 1.000 | 0.951 †2026-08-18 | 0.000 | 2.3% †2026-08-18 | 0.0% | ✅ †2026-08-18 | ❌ **FAIL** |
+| `sector_quality_rank` | 0.979 †2026-08-18 | 0.919 | 0.000 †2026-08-18 | 0.000 | 1.000 †2026-08-18 | 1.000 | 19.6% †2026-08-18 | 34.2% | ✅ †2026-08-18 | ❌ **FAIL — flip** |
+
+**Reading the `†` markers honestly**: the "before" run above (PID 81038, main checkout)
+had not yet reached `lgbm_ranker` or `sector_quality_rank` at the time this entry's
+numbers were captured — no `<strategy>_validation_summary.json` existed for either in
+that run. Rather than leave those cells blank, the `†2026-08-18` before-values are the
+last real, previously-recorded numbers for each strategy — this file's own **"2026-08-18
+Full Validation Run"** entries in `docs/signals/lgbm_ranker.md` and
+`docs/signals/sector_quality_rank.md` — computed against the OLD (pre-widening) 30-name
+and 12-name universes respectively, not against this specific baseline-capture run. They
+are real, not fabricated, but are one day older than the other five rows' before-values
+and should be read as "last known prior state," not "same-run baseline." The
+`macro_regime_pit` `†stale` before-value is real too, but from a stale, differently-windowed
+(`2015-01-01`–`2023-12-31` vs. this entry's `2005-01-01`–) prior run's leftover file
+(mtime 2026-08-15, predating the "before" run's own 06:18 start) — flagged, not treated as
+a like-for-like comparison; also note the anomaly this file's baseline capture already
+flagged separately: `cross_sectional_momentum`/`relative_strength_xsec`/
+`multifactor_lowvol_size`/`signal_replay_balanced_blend`'s four "before" rows report
+near-identical Sharpe/PBO/DSR/MaxDD to 5-6 significant figures, which is not expected for
+four structurally distinct strategies and is unresolved as of this writing — treat those
+four before-numbers as suspect pending investigation of the currently-running harness
+invocation, not as confirmed clean baselines.
+
+**Two real findings from the "after" numbers, neither glossed over:**
+
+1. **`lgbm_ranker` regression — genuine, caused by this change, not yet fixed.** The
+   widened universe pushed `lgbm_ranker` from `deployable=True` (Sharpe 1.514, the old
+   30-ticker universe) to a hard failure: `sharpe=null`, `pbo=1.000`, `dsr=0.000`,
+   `max_drawdown=0.0%`. This is NOT a "the edge disappeared with more names" result — the
+   run log (`5,476` occurrences) shows LightGBM 4.7.0 raising `[LightGBM] [Fatal] Number
+   of rows <N> exceeds upper limit of 10000 for a query` on every fold during the
+   `lgbm_ranker` validation window specifically (`N` ranging 11,666–29,398, scaling with
+   each fold's training-panel size), meaning every per-fold retrain failed outright and
+   the harness's own all-folds-failed sentinel metrics (PBO=1.0/DSR=0.0/Sharpe=None) are
+   what got reported — not a real backtest result. The 100-ticker `_XSEC_UNIVERSE_CAPPED`
+   panel's per-fold row count now crosses whatever internal query-size limit is
+   triggering this (not root-caused further here — a real, separate follow-up: either
+   shrink `lgbm_ranker`'s own universe/window further, or find and raise the limit). Flagged
+   here rather than silently left for someone to rediscover; `lgbm_ranker` was already, and
+   remains, `deployable=False` either way, so this does not change any live status, but the
+   FAIL reason is now "training crashed," not "no edge," and should not be read as the
+   latter until this is fixed and re-run.
+2. **`sector_quality_rank` MaxDD got WORSE, not better, flipping `deployable=True →
+   False` — the opposite of what the file's own prior forward-looking note expected.**
+   `docs/signals/sector_quality_rank.md`'s pre-widening text speculated that "a wider
+   future universe... would be expected to reduce this drawdown via broader
+   diversification." The actual, now-measured outcome is the reverse: MaxDD moved from
+   19.6% (12 names, 2 sectors, ~6-name top-half book) to **34.2%** (100 names, 8 sectors
+   clearing `MIN_SECTOR_SIZE=5`, a real ~50-name top-half book), crossing the 30% gate and
+   flipping the strategy to `deployable=False`. Sharpe (0.979 → 0.919) and DSR (1.000 →
+   1.000) barely moved; PBO stayed 0.000. This is a real, measured, counterintuitive
+   result — not a data-coverage artifact (the sector lookup was independently regenerated
+   to full 503/503 coverage before this run, so the wider result is not thinner-sector
+   noise) — and no root cause is asserted here beyond the observation itself: a
+   within-sector top-half book spread across more, and more varied, sectors did not
+   produce the naively-expected drawdown reduction in this measurement. Flagging this as
+   an open question for a future investigation, not asserting an explanation for it.
+
+**`cross_sectional_momentum`'s PBO also moved from 0.000 to 0.492** — still under the
+`< 0.50` gate, but only just, and with `n_trials` moving from 1 to 2 in the same run (the
+wider universe changed which variants the adapter's own trial-count bookkeeping sees).
+Worth watching on a future re-run rather than treated as settled.
+
+**Scope, honestly stated:** this change widens BREADTH/diversification — trading a
+hand-picked list of a few dozen tickers for a real, current S&P 500 constituent list of
+several hundred — for the seven cross-sectional strategies above. **It does NOT achieve
+point-in-time survivorship-bias correction.** `universe_engine.get_sp500_constituents()`
+currently returns the SAME current ~503-name roster for every historical date passed to
+it: Wikipedia removed the "Selected changes to the list of S&P 500 components" table this
+file's own 2026-08 `universe_engine.py` entry above already documents, and the FMP
+fallback (`FMP_UNIVERSE_ENABLED`) needs an `FMP_API_KEY` that is not configured in this
+environment, so neither path can reconstruct which 500 names were actually in the index
+on, say, 2005-01-01. Every backtest above (both before and after) still runs today's
+S&P 500 constituents against 2005-2026 price history — companies that were added to the
+index after 2005, delisted, merged, or removed are handled exactly as they were before
+this change (silently absent from the "before" universe entirely, silently present for
+their full available price history in the "after" universe regardless of when they
+actually joined the index). True point-in-time membership reconstruction remains a
+disclosed, separate follow-up — not attempted here, and not claimed.
+
+**Reproducibility**: re-run the exact "after" command above against this worktree's code
+to reproduce; `_load_wide_universe()`'s alphabetical-sort + `date.today()`-anchored
+`get_sp500_constituents()` call means the exact 504/101/100-name membership will drift
+day-to-day only if the S&P 500's actual current roster changes, not run-to-run.
+
+Tests: `tests/test_refresh_validations.py` (full file, 119 tests, all passing as of this
+entry — the 3 failures the introducing code change flagged as out-of-scope
+(`TestLoadTickerSectors`'s old-name import, two `TestBuildSectorQualityRankAdapter`
+sector-coverage tests) were independently resolved by the parallel
+`forecasting/data/ticker_sectors.csv` regeneration to full 503-row coverage plus a
+matching test-file update — both confirmed via a fresh full-file run, not assumed);
+`tests/test_validation_sector_quality_rank.py`, `tests/test_harness_multiindex_t1.py`
+(both unaffected by this change, re-run as part of the full-file pass above).

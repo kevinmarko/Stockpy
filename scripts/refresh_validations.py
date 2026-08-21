@@ -143,6 +143,104 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Cross-sectional universe tiers (2026-08 widening)
+# =============================================================================
+# Defined up top, before any adapter, because ``SNEQR_UNIVERSE`` (near the
+# ``_build_sector_quality_rank_adapter`` section below) assigns directly from
+# ``_XSEC_UNIVERSE_CAPPED`` at module-parse time and needs it to already
+# exist -- unlike the old ``_XSEC_UNIVERSE_30`` (referenced only inside
+# ``STRATEGY_REGISTRY`` entries much further down), this reuse forces these
+# constants to live above every one of their consumers.
+
+# LEGACY FALLBACK ONLY (2026-08 widening -- see _load_wide_universe below):
+# this used to be the primary cross-sectional universe for every multi-name
+# adapter in this registry. It is now consulted ONLY when universe_engine
+# can't produce a real S&P 500 roster (a fresh clone/CI runner with no local
+# ~/.stockpy_local/universe_cache.parquet and no network) -- 30 liquid,
+# large-cap tickers with full pre-2005 trading history under their current
+# symbol, diversified across sectors so no single industry dominates the
+# cross-sectional z-score. Kept verbatim (not renamed content, only renamed
+# identifier) so the fallback behavior is byte-identical to what every
+# adapter already validated against before this change.
+_XSEC_UNIVERSE_30_LEGACY: List[str] = [
+    "AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
+    "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO",
+    "MRK", "DIS", "GE", "VZ", "BA", "CAT", "MMM", "AXP",
+    "TXN", "ORCL", "ABT", "MO", "COST", "NKE",
+]
+
+
+def _load_wide_universe(cap: Optional[int] = None) -> List[str]:
+    """Real current S&P 500 roster via ``universe_engine.get_sp500_constituents``,
+    sorted alphabetically for determinism. Falls back to the legacy 30-name
+    list (never raises) if ``universe_engine`` can't produce a roster -- e.g. a
+    fresh clone/CI runner with no local ``~/.stockpy_local/universe_cache.parquet``
+    and no network. HONEST SCOPE (CONSTRAINT #4): this is NOT a point-in-time
+    reconstruction -- ``universe_engine.get_sp500_constituents`` currently returns
+    the same current ~500-name roster for every historical date, since
+    Wikipedia removed its historical-changes table in 2026-08 and the FMP
+    fallback needs an unconfigured API key in this environment (see
+    ``universe_engine.py``'s own docstring). This widens BREADTH/diversification
+    for the cross-sectional strategies below; it does not fix survivorship
+    bias in the point-in-time-membership sense -- see
+    ``docs/VALIDATION_STRATEGY_FIX_LOG.md``'s entry on this change for the full
+    honest scope statement.
+    """
+    try:
+        from universe_engine import get_sp500_constituents
+
+        tickers = sorted(set(get_sp500_constituents(date.today())) - {"SPY"})
+        if not tickers:
+            raise RuntimeError("universe_engine returned an empty roster")
+        return tickers[:cap] if cap else tickers
+    except Exception as exc:
+        logger.warning("_load_wide_universe: falling back to legacy 30-name list: %s", exc)
+        legacy = _XSEC_UNIVERSE_30_LEGACY
+        return legacy[:cap] if cap else legacy
+
+
+# Real ~500-name S&P 500 roster, alphabetically sorted for determinism, minus
+# SPY. Used by the CHEAP-tier adapters below -- cross_sectional_momentum /
+# relative_strength_xsec / macro_regime_pit / multifactor_lowvol_size all
+# collapse per-ticker computation into date-indexed columns BEFORE the CPCV
+# harness ever sees the data, so CPCV cost is O(dates) regardless of universe
+# width and there is no reason to keep them artificially narrow.
+_XSEC_UNIVERSE_WIDE: List[str] = _load_wide_universe()
+
+# A deterministic, alphabetically-sorted 100-name SLICE of the same real
+# roster above (NOT a market-cap or liquidity ranking -- kept simple and
+# reproducible run-to-run). Used by the EXPENSIVE-tier adapters below --
+# sector_quality_rank (genuine (Date, Ticker) MultiIndex, CPCV row count =
+# trading_days * n_tickers), signal_replay_balanced_blend (raw unvectorized
+# per-(date, ticker) SignalAggregator.aggregate() replay), and lgbm_ranker
+# (a genuine per-CPCV-fold LightGBM retrain, so more rows per date means a
+# slower fold) -- all have cost that scales with ticker count, unlike the
+# four WIDE-tier adapters above. 100 names is wide enough to give
+# sector_quality_rank's within-sector ranking real breadth (more sectors
+# clearing MIN_SECTOR_SIZE=5, not just the 2 the old 12-ticker universe
+# happened to cover) without letting any one adapter's per-fold cost blow up
+# to the full ~500-name roster.
+_XSEC_UNIVERSE_CAPPED: List[str] = _load_wide_universe(cap=100)
+
+
+# Cross-sectional adapters whose universe is downloaded for price history but
+# whose scoring math never actually reads a shares-outstanding number --
+# ``multifactor_lowvol_size`` (``_build_lowvol_size_adapter``) is the ONLY
+# adapter in this registry that consumes the ``shares`` dict passed into it
+# (for its Size factor's ``log(price × shares)`` term); every other
+# multi-name adapter accepts ``shares`` purely to satisfy the shared adapter
+# signature and ignores it. Before the 2026-08 universe widening this waste
+# was cheap enough to ignore (the shared universe topped out at 30 names);
+# now that the cheap tier is ~500 names, downloading a shares-outstanding
+# snapshot for every multi-name strategy's FULL universe would mean ~500
+# sequential, unthrottled ``yfinance`` ``fast_info`` calls for strategies
+# that throw the result away. ``run_validations`` intersects this set with
+# ``known`` (the strategies actually selected) before building
+# ``share_tickers`` -- see that function's own comment.
+_STRATEGIES_NEEDING_SHARES = {"multifactor_lowvol_size"}
+
+
+# =============================================================================
 # Strategy adapters
 # =============================================================================
 
@@ -706,12 +804,14 @@ def _build_xsec_momentum_adapter(
     so a long-only tilt is the honest analog of "what does Following this
     Pilot actually buy."
 
-    HONEST SCOPE (CONSTRAINT #4): the 30-name universe (``_XSEC_UNIVERSE_30``) gives
-    a top tertile ~10 names — finer-grained than an 8-16 name cross-section without
-    fabricating any data (still real, liquid, long-history large caps); long-only per
-    the module's documented scope.  ``shares`` is accepted only to satisfy the
-    multi-ticker adapter signature and is unused.  The 252-day formation warm-up is
-    trimmed.
+    HONEST SCOPE (CONSTRAINT #4): the wide universe (``_XSEC_UNIVERSE_WIDE``, the
+    real ~500-name S&P 500 roster via ``universe_engine`` — see
+    ``_load_wide_universe``) gives a top-half book of ~250 names, far
+    finer-grained than the old fixed 30-name cross-section, without fabricating
+    any data (still real, liquid names drawn from the real current index
+    roster); long-only per the module's documented scope. ``shares`` is
+    accepted only to satisfy the multi-ticker adapter signature and is unused.
+    The 252-day formation warm-up is trimmed.
 
     **Market-trend de-risking overlay (Faber 2007):** a fully-invested, full-beta
     long-only cross-sectional momentum book still carries the whole market's
@@ -1474,8 +1574,9 @@ def _build_macro_regime_adapter(
       strategy variant (``MacroRegime_TrendGated``) structurally eliminates
       variant selection noise, achieving PBO=0.000 and DSR=1.000.
 
-    Long-only universe per ``_XSEC_UNIVERSE_30``; strictly ``.shift(1)`` lagged
-    with zero lookahead bias.
+    Long-only universe per ``_XSEC_UNIVERSE_WIDE`` (the real ~500-name S&P 500
+    roster — see ``_load_wide_universe``); strictly ``.shift(1)`` lagged with
+    zero lookahead bias.
     """
     from data.historical_store import HistoricalStore
 
@@ -1917,13 +2018,19 @@ def _build_signal_replay_adapter(
     to the original total weight mass, so the score scale still spans the
     live aggregate's ~50±X range rather than collapsing toward neutral.
 
-    Cost: ~14 modules x ~N dates x ~30 tickers via per-ticker ``aggregate()``
+    Cost: ~14 modules x ~N dates x up to 100 tickers (``_XSEC_UNIVERSE_CAPPED``
+    — see that constant's own comment for why this adapter stays on the
+    capped tier rather than the ~500-name ``_XSEC_UNIVERSE_WIDE`` the SPY-
+    benchmark cross-sectional adapters use) via per-ticker ``aggregate()``
     (not ``aggregate_vectorized()`` — 4 of the 14 survivors, including
     ``multifactor``/``cross_sectional_momentum``/``macro_regime``, don't
     implement ``compute_vectorized()``, and ``SignalRegistry.
-    compute_all_vectorized()`` has no per-module fallback). A few minutes,
-    one-time, same order of magnitude as ``forecast_direction_arima_hw``'s
-    accepted cost.
+    compute_all_vectorized()`` has no per-module fallback). One-time cost
+    that now scales with the capped universe's own size (was ~30 tickers,
+    "a few minutes"; capping at 100 rather than following the full roster is
+    precisely what keeps this in the same order of magnitude as
+    ``forecast_direction_arima_hw``'s accepted cost, not a claim that the
+    cost is unchanged.
 
     Requires ``"SPY"`` present in ``closes.columns`` (relative_strength and
     cross_sectional_momentum both need it as benchmark) — raises cleanly,
@@ -2275,26 +2382,36 @@ def _build_signal_replay_adapter(
 # throttle) consumer of it. The alternative was fabricating the two raw
 # inputs, which CONSTRAINT #4 forbids outright.
 
-# Deliberately NARROW, hand-picked universe (NOT the 10-ticker EDGAR-PIT
-# universe shared by the dividend/deep-value/value-quality siblings above,
-# and NOT the full 30-name _XSEC_UNIVERSE_30): SNEQR's entire mechanism is
-# WITHIN-SECTOR ranking (see signals/sector_quality_rank.py's
-# MIN_SECTOR_SIZE=5 thin-sector guard, imported below rather than
-# re-typed). Verified against forecasting/data/ticker_sectors.csv: the
-# 10-ticker EDGAR-PIT universe has (at most) 2 names per sector -- EVERY
-# ticker would be excluded as a thin sector, producing a vacuous, always-flat
-# backtest that tests nothing. This 12-ticker universe was chosen because it
-# contains exactly the two sectors that clear MIN_SECTOR_SIZE among this
-# file's already-vetted large-cap names: Technology (7: AAPL/CSCO/IBM/INTC/
-# MSFT/ORCL/TXN) and Consumer Defensive (5: COST/KO/MO/PG/WMT) -- confirmed
-# via the same ticker_sectors.csv lookup _load_ticker_sectors() already uses.
-# Kept to these 12 (not the full 30) to bound both the EDGAR companyfacts
-# fetch cost (12 direct network calls, ~0.5s each measured) and the CPCV
-# purge-loop cost (row count = trading_days * len(universe)).
-SNEQR_UNIVERSE: List[str] = [
-    "AAPL", "CSCO", "IBM", "INTC", "MSFT", "ORCL", "TXN",  # Technology (7)
-    "COST", "KO", "MO", "PG", "WMT",                        # Consumer Defensive (5)
-]
+# EXPENSIVE-tier universe (2026-08 widening): NOT the 10-ticker EDGAR-PIT
+# universe shared by the dividend/deep-value/value-quality siblings above
+# (SNEQR's entire mechanism is WITHIN-SECTOR ranking -- see
+# signals/sector_quality_rank.py's MIN_SECTOR_SIZE=5 thin-sector guard,
+# imported below rather than re-typed -- and that 10-ticker universe has at
+# most 2 names per sector, which would exclude every ticker as a thin sector
+# and produce a vacuous, always-flat backtest that tests nothing), and NOT
+# the full ~500-name _XSEC_UNIVERSE_WIDE either.
+#
+# SNEQR_UNIVERSE is now the SAME deterministic, alphabetically-sorted
+# 100-name slice of the real S&P 500 roster (``_XSEC_UNIVERSE_CAPPED`` --
+# see ``_load_wide_universe``) shared with the other two adapters whose cost
+# scales with ticker count: ``signal_replay_balanced_blend`` (a raw
+# unvectorized per-(date, ticker) SignalAggregator.aggregate() replay) and
+# ``lgbm_ranker`` (a genuine per-CPCV-fold LightGBM retrain). Sharing one
+# capped universe across all three keeps the "expensive tier" a single,
+# consistently-sized concept instead of three independently hand-tuned
+# lists, and 100 names gives SNEQR's within-sector ranking real breadth --
+# however many sectors clear MIN_SECTOR_SIZE among this slice, not just the
+# 2 (Technology, Consumer Defensive) the old hand-picked 12-ticker universe
+# happened to cover -- determined at runtime by whatever coverage
+# ``forecasting/data/ticker_sectors.csv`` provides via
+# ``_load_ticker_sectors()``, never hardcoded here.
+#
+# The EDGAR companyfacts fetch cost scales with this too (was 12 direct
+# network calls at ~0.5s each measured; now up to 100), which is why this
+# stays capped rather than following the WIDE (~500-name) tier the four
+# cheap adapters use -- see ``_STRATEGIES_NEEDING_SHARES``'s neighboring
+# comment for the parallel reasoning on the shares-outstanding download.
+SNEQR_UNIVERSE: List[str] = _XSEC_UNIVERSE_CAPPED
 
 # accrual_ratio/gross_profitability only refresh on a NEW 10-Q/10-K filing --
 # a quarterly cadence -- so a rebalance-horizon t1 shorter than roughly one
@@ -2466,18 +2583,20 @@ def _build_sector_quality_rank_adapter(
          and accepted for ``macro_regime_pit``/``signal_replay_balanced_blend``
          above).
       3. Faithful reproduction of ``SectorNeutralQualitySignal.pre_compute()``'s
-         real math, vectorized over TIME instead of a single date: within each
-         of the two sectors that clear ``MIN_SECTOR_SIZE`` in this universe
-         (Technology, Consumer Defensive -- see the module-level comment
-         above), z-score accrual_ratio and gross_profitability SEPARATELY
-         within that sector's own cross-section on each date (mirrors
+         real math, vectorized over TIME instead of a single date: within
+         WHICHEVER sectors clear ``MIN_SECTOR_SIZE`` in this universe --
+         data-dependent on ``forecasting/data/ticker_sectors.csv``'s coverage
+         via ``_load_ticker_sectors()``, not hardcoded here (see the
+         module-level comment above) -- z-score accrual_ratio and
+         gross_profitability SEPARATELY within that sector's own
+         cross-section on each date (mirrors
          ``groupby(sector).transform(_zscore_winsorize)`` exactly, just
          vectorized across all dates at once for performance -- same
          mean/std-over-non-NaN-values semantics), average into a composite,
          then rank WITHIN SECTOR to a percentile (mirrors
          ``composite_z.groupby(eligible_sector).rank(pct=True)`` exactly --
-         a Technology name is ranked ONLY against other Technology names,
-         never against Consumer Defensive names, which is the entire
+         a name in one sector is ranked ONLY against other names in that
+         SAME sector, never across sectors, which is the entire
          sector-neutral point).
       4. BOOK CONSTRUCTION CHOICE (documented, per the task's own "your call"):
          long-only, equal-weighted, TOP-HALF WITHIN SECTOR (percentile >=
@@ -2541,7 +2660,8 @@ def _build_sector_quality_rank_adapter(
     # Real sector-size count within OUR OWN universe (not the live platform's
     # full universe) -- deliberately, since MIN_SECTOR_SIZE's whole purpose is
     # "enough peers in THIS cycle's cross-section", and this backtest's
-    # cross-section IS the 12-ticker SNEQR_UNIVERSE.
+    # cross-section IS the (up to) 100-ticker SNEQR_UNIVERSE
+    # (``_XSEC_UNIVERSE_CAPPED``).
     sector_counts: Dict[str, List[str]] = {}
     for t in universe:
         s = sector_of.get(t)
@@ -2634,9 +2754,11 @@ def _build_sector_quality_rank_adapter(
     X.index = X.index.set_names(["Date", "Ticker"])
     X = X.sort_index(level=0)
     # Deliberately NOT `.astype(str)` here: a ticker missing from sector_of
-    # (not the case for today's hand-verified SNEQR_UNIVERSE, but a real risk
-    # for a future universe expansion) maps to a genuine NaN via .map() --
-    # forcing that to str would silently rewrite it as the literal 4-char
+    # (a real, now-live risk since the 2026-08 widening moved SNEQR_UNIVERSE
+    # to a 100-name slice of the live S&P 500 roster -- not every member is
+    # guaranteed coverage in forecasting/data/ticker_sectors.csv) maps to a
+    # genuine NaN via .map() -- forcing that to str would silently rewrite
+    # it as the literal 4-char
     # string "nan" instead of an honestly-missing value (CONSTRAINT #4).
     X["sector"] = X.index.get_level_values("Ticker").map(sector_of)
 
@@ -2759,12 +2881,17 @@ def _build_lgbm_ranker_adapter(
 
     HONEST SCOPE (CONSTRAINT #4):
 
-    * Universe: ``_XSEC_UNIVERSE_30`` (same as ``cross_sectional_momentum`` /
-      ``relative_strength_xsec``), no SPY trend-gate benchmark used here.
+    * Universe: ``_XSEC_UNIVERSE_CAPPED`` (the SAME 100-name capped tier
+      shared with ``sector_quality_rank``/``signal_replay_balanced_blend`` —
+      see that constant's own comment for why a genuine per-CPCV-fold LightGBM
+      retrain stays capped rather than following ``cross_sectional_momentum``/
+      ``relative_strength_xsec`` onto the full ~500-name
+      ``_XSEC_UNIVERSE_WIDE``), no SPY trend-gate benchmark used here.
     * Feature panel window is BOUNDED to the last ~6 years of ``closes``'s
       own date range (not the full requested backtest window, which for the
-      CLI default 2005-2024 span would mean building 20 years × 30 tickers of
-      point-in-time features per validation run) — the SAME "computationally
+      CLI default 2005-2024 span would mean building 20 years × up to 100
+      tickers of point-in-time features per validation run) — the SAME
+      "computationally
       infeasible to re-fit at every historical date across the full 20-year
       window" reasoning ``forecast_direction_arima_hw``'s own docstring
       already documents for its bounded 5-year window. This is a real,
@@ -2791,12 +2918,12 @@ def _build_lgbm_ranker_adapter(
     from ml.training_data import build_training_panel
     from scripts.train_lgbm import _long_short_returns
 
-    universe = [t for t in _XSEC_UNIVERSE_30 if t in closes.columns]
+    universe = [t for t in _XSEC_UNIVERSE_CAPPED if t in closes.columns]
     if len(universe) < 5:
         logger.warning(
             "_build_lgbm_ranker_adapter: only %d/%d universe names present in "
             "`closes` — insufficient for a cross-sectional ranker.", len(universe),
-            len(_XSEC_UNIVERSE_30),
+            len(_XSEC_UNIVERSE_CAPPED),
         )
         return pd.DataFrame(), pd.Series(dtype=float), {}
 
@@ -3445,18 +3572,6 @@ def _build_options_flow_sentiment_adapter(
     return X, y, precomputed
 
 
-# 30 liquid, large-cap tickers with full pre-2005 trading history under their
-# current symbol — a wide enough cross-section for cross_sectional_momentum /
-# relative_strength_xsec to produce meaningfully fine-grained ranks (a 16-name
-# cross-section made "top tertile" only ~5 names). Diversified across sectors
-# so no single industry dominates the cross-sectional z-score.
-_XSEC_UNIVERSE_30: List[str] = [
-    "AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
-    "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO",
-    "MRK", "DIS", "GE", "VZ", "BA", "CAT", "MMM", "AXP",
-    "TXN", "ORCL", "ABT", "MO", "COST", "NKE",
-]
-
 STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "options_flow_sentiment": (_build_options_flow_sentiment_adapter, 0.04, ["SPY"]),
     # Turnover corrected 2026-08 (empirical measurement): Connors RSI(2) on SPY
@@ -3469,23 +3584,29 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "multifactor_lowvol_size": (
         _build_lowvol_size_adapter,
         0.05,
-        # "SPY" added (2026-07) as a BENCHMARK-ONLY input for the adapter's
-        # market-trend (Faber SMA-200) de-risking overlay — see
+        # 2026-08 widening: was a hand-picked 9-ticker list ("SPY" +  8
+        # names); now the SAME real ~500-name S&P 500 roster
+        # (_XSEC_UNIVERSE_WIDE) the other cheap-tier cross-sectional
+        # adapters below use, since this adapter also collapses per-ticker
+        # computation into date-indexed columns before CPCV ever sees it
+        # (CPCV cost is O(dates), not O(dates * tickers)) -- there is no
+        # cost reason left to keep this narrower than its siblings. "SPY"
+        # stays a BENCHMARK-ONLY input for the adapter's market-trend
+        # (Faber SMA-200) de-risking overlay -- see
         # _build_lowvol_size_adapter's docstring. SPY is excluded from the
-        # tradeable Low-Vol/Size cross-section and from y; it is downloaded
-        # alongside the other 8 names solely to compute the trend gate.
-        ["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"],
+        # tradeable Low-Vol/Size cross-section and from y.
+        ["SPY", *_XSEC_UNIVERSE_WIDE],
     ),
     "garch_vol_target": (_build_garch_voltarget_adapter, 0.02, ["SPY"]),
     "cross_sectional_momentum": (
         _build_xsec_momentum_adapter,
         0.03,
-        ["SPY", *_XSEC_UNIVERSE_30],
+        ["SPY", *_XSEC_UNIVERSE_WIDE],
     ),
     "relative_strength_xsec": (
         _build_relative_strength_adapter,
         0.03,
-        ["SPY", *_XSEC_UNIVERSE_30],
+        ["SPY", *_XSEC_UNIVERSE_WIDE],
     ),
     # Turnover corrected 2026-08 (empirical measurement): Wilder RSI(14) 30/70
     # oversold dips in uptrends occur ~4-8 times/year. Mean daily turnover is ~0.005-0.01/day.
@@ -3550,7 +3671,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # _build_macro_regime_adapter's docstring for the full honesty contract:
     # real MacroEconomicDTO reuse, HMM-downgrade-excluded v1 scope, and the
     # documented "Consumer Staples" vs "Consumer Defensive" fidelity note).
-    "macro_regime_pit": (_build_macro_regime_adapter, 0.02, ["SPY", *_XSEC_UNIVERSE_30]),
+    "macro_regime_pit": (_build_macro_regime_adapter, 0.02, ["SPY", *_XSEC_UNIVERSE_WIDE]),
     # Narrower ARIMA+Holt-Winters forecast-direction proxy (see
     # _build_forecast_direction_adapter's docstring for the full honesty
     # contract: bounded 5yr window, weekly cadence, real ForecastAlignmentSignal
@@ -3565,10 +3686,15 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # _build_signal_replay_adapter's docstring for the full honesty contract:
     # 14/18 modules replayed, real weight renormalization, real DTO reuse).
     # SPY required as benchmark for relative_strength/cross_sectional_momentum.
+    # Universe is the CAPPED (100-name) tier, not WIDE -- this adapter's cost
+    # scales with ticker count (a raw unvectorized per-(date, ticker)
+    # aggregate() replay), unlike its cross_sectional_momentum/
+    # relative_strength_xsec cousins above -- see _XSEC_UNIVERSE_CAPPED's
+    # own comment.
     "signal_replay_balanced_blend": (
         _build_signal_replay_adapter,
         0.06,
-        ["SPY", *_XSEC_UNIVERSE_30],
+        ["SPY", *_XSEC_UNIVERSE_CAPPED],
     ),
     # Real point-in-time, sector-neutral earnings-quality backtest -- native
     # MultiIndex CPCV (see _build_sector_quality_rank_adapter's own docstring
@@ -3589,7 +3715,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # cross_sectional_momentum/relative_strength_xsec's daily-rebalance
     # estimate) — the 0.03 here is unused by run_validations' dispatch for a
     # callable adapter but kept non-zero/documented rather than a misleading 0.
-    "lgbm_ranker": (_build_lgbm_ranker_adapter, 0.03, _XSEC_UNIVERSE_30),
+    "lgbm_ranker": (_build_lgbm_ranker_adapter, 0.03, _XSEC_UNIVERSE_CAPPED),
     # Real Black-Scholes Iron Condor simulation (see
     # _build_vrp_premium_selling_adapter's docstring and
     # validation/options_selling_backtest.py's module docstring for the full
@@ -3972,8 +4098,18 @@ def run_validations(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Union of tickers required by the selected (known) strategies, plus the
-    # subset that additionally needs a current shares-outstanding snapshot
-    # (multi-name cross-sectional universes only).
+    # subset that additionally needs a current shares-outstanding snapshot.
+    # Only ``_STRATEGIES_NEEDING_SHARES`` (today, just multifactor_lowvol_size
+    # -- the sole adapter whose scoring math actually reads the ``shares``
+    # dict) drives ``share_tickers`` -- NOT "every multi-name strategy" as
+    # this used to read. Before the 2026-08 universe widening that
+    # over-broad condition was cheap to ignore (the shared universe topped
+    # out at 30 names); now that the cheap tier is ~500 names, downloading a
+    # shares-outstanding snapshot for every multi-name strategy's full
+    # universe would mean ~500 sequential, unthrottled ``yfinance``
+    # ``fast_info`` calls for strategies (cross_sectional_momentum,
+    # relative_strength_xsec, macro_regime_pit, signal_replay_balanced_blend,
+    # sector_quality_rank, lgbm_ranker) that never read the result.
     known = [s for s in strategies if s in STRATEGY_REGISTRY]
     ticker_union = sorted({
         t for s in known for t in STRATEGY_REGISTRY[s][2]
@@ -3981,7 +4117,7 @@ def run_validations(
     share_tickers = sorted({
         t
         for s in known
-        if len(STRATEGY_REGISTRY[s][2]) > 1
+        if s in _STRATEGIES_NEEDING_SHARES
         for t in STRATEGY_REGISTRY[s][2]
     })
 

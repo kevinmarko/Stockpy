@@ -746,6 +746,70 @@ class TestBuildSortinoDrawdownAdapter:
 
 
 # ---------------------------------------------------------------------------
+# TestLoadWideUniverse
+# ---------------------------------------------------------------------------
+# _load_wide_universe() is the 2026-08 widening's loader: real current S&P
+# 500 roster via universe_engine.get_sp500_constituents, falling back to the
+# legacy 30-name list (never raising) on any failure -- a fresh clone/CI
+# runner with no local ~/.stockpy_local/universe_cache.parquet and no
+# network is the expected trigger for that fallback in practice.
+
+class TestLoadWideUniverse:
+    def test_falls_back_to_legacy_30_on_get_sp500_constituents_failure(self) -> None:
+        import scripts.refresh_validations as rv
+
+        with patch(
+            "universe_engine.get_sp500_constituents",
+            side_effect=RuntimeError("no network / no cached universe_cache.parquet"),
+        ):
+            result = rv._load_wide_universe()
+
+        assert result == rv._XSEC_UNIVERSE_30_LEGACY
+
+    def test_fallback_respects_cap_argument(self) -> None:
+        """The ``cap`` kwarg (used by the CAPPED tier, e.g. SNEQR_UNIVERSE)
+        must still be honored on the fallback path, not just the happy
+        path -- an uncapped fallback would silently hand the expensive-tier
+        adapters the full 30-name list instead of the requested slice."""
+        import scripts.refresh_validations as rv
+
+        with patch(
+            "universe_engine.get_sp500_constituents",
+            side_effect=RuntimeError("no network"),
+        ):
+            result = rv._load_wide_universe(cap=10)
+
+        assert result == rv._XSEC_UNIVERSE_30_LEGACY[:10]
+        assert len(result) == 10
+
+    def test_falls_back_when_constituents_come_back_empty(self) -> None:
+        """An empty (not exceptional) roster is also treated as a failure --
+        ``get_sp500_constituents`` returning ``[]`` must not silently hand
+        every adapter a zero-ticker universe."""
+        import scripts.refresh_validations as rv
+
+        with patch("universe_engine.get_sp500_constituents", return_value=[]):
+            result = rv._load_wide_universe()
+
+        assert result == rv._XSEC_UNIVERSE_30_LEGACY
+
+    def test_happy_path_excludes_spy_and_is_sorted(self) -> None:
+        """Confirms the real (non-fallback) path's own documented contract
+        -- alphabetically sorted, deduplicated, SPY excluded (SPY is added
+        back explicitly by whichever STRATEGY_REGISTRY entry needs it as a
+        benchmark, never baked into the universe constant itself)."""
+        import scripts.refresh_validations as rv
+
+        with patch(
+            "universe_engine.get_sp500_constituents",
+            return_value=["MSFT", "AAPL", "SPY", "AAPL"],
+        ):
+            result = rv._load_wide_universe()
+
+        assert result == ["AAPL", "MSFT"]
+
+
+# ---------------------------------------------------------------------------
 # TestLoadTickerSectors
 # ---------------------------------------------------------------------------
 
@@ -757,15 +821,65 @@ class TestLoadTickerSectors:
         assert isinstance(mapping, dict)
         assert mapping.get("AAPL") == "Technology"
 
-    def test_covers_the_full_xsec_universe_30(self) -> None:
+    def test_covers_the_legacy_xsec_universe_30(self) -> None:
         """Regression guard for the Phase 0b sector-map backfill: every ticker
-        in _XSEC_UNIVERSE_30 must resolve to a real sector (needed by the
-        macro_regime_pit / signal_replay adapters' sector-rotation scoring)."""
-        from scripts.refresh_validations import _load_ticker_sectors, _XSEC_UNIVERSE_30
+        in the legacy 30-name offline fallback (_XSEC_UNIVERSE_30_LEGACY)
+        must resolve to a real sector (needed by the macro_regime_pit /
+        signal_replay adapters' sector-rotation scoring). Kept as a STRICT
+        zero-missing check -- unlike the wide-universe test below, this is a
+        small, hand-picked, deliberately well-known list (see
+        _XSEC_UNIVERSE_30_LEGACY's own module comment), so there is no
+        legitimate reason for any of its 30 members to be absent from the
+        committed CSV."""
+        from scripts.refresh_validations import _load_ticker_sectors, _XSEC_UNIVERSE_30_LEGACY
 
         mapping = _load_ticker_sectors()
-        missing = [t for t in _XSEC_UNIVERSE_30 if t not in mapping]
+        missing = [t for t in _XSEC_UNIVERSE_30_LEGACY if t not in mapping]
         assert missing == [], f"missing sector coverage for: {missing}"
+
+    def test_covers_most_of_the_wide_xsec_universe(self) -> None:
+        """Companion guard for the 2026-08 universe widening: the WIDE tier
+        (_XSEC_UNIVERSE_WIDE, the real ~500-name S&P 500 roster via
+        _load_wide_universe) should overwhelmingly resolve to real sectors
+        too, since macro_regime_pit's sector-rotation scoring reads from the
+        same _load_ticker_sectors() mapping regardless of which universe
+        tier feeds it.
+
+        Deliberately NOT a strict zero-missing assertion the way the legacy
+        30-name check above is: forecasting/data/ticker_sectors.csv is a
+        separately-maintained, hand-curated file that may legitimately lag a
+        few names behind the live S&P 500 roster (a recent addition, or a
+        ticker that changed symbol -- e.g. FISV -> FI -- between when the
+        CSV was last regenerated and when universe_engine last refreshed its
+        own cache). A hard "every single one of ~500 names must resolve"
+        assertion would make this test flaky against routine CSV/roster
+        drift that isn't actually a bug. Instead this asserts (a) coverage
+        is overwhelming -- fewer than 5% of the wide universe is missing --
+        and (b) every well-known, long-tenured large-cap name from the
+        legacy list that's also part of the current wide universe still
+        resolves, so a real regression (the CSV silently losing bulk
+        coverage) still fails loudly."""
+        from scripts.refresh_validations import (
+            _load_ticker_sectors,
+            _XSEC_UNIVERSE_30_LEGACY,
+            _XSEC_UNIVERSE_WIDE,
+        )
+
+        mapping = _load_ticker_sectors()
+        missing = [t for t in _XSEC_UNIVERSE_WIDE if t not in mapping]
+        missing_pct = len(missing) / len(_XSEC_UNIVERSE_WIDE)
+        assert missing_pct < 0.05, (
+            f"{len(missing)}/{len(_XSEC_UNIVERSE_WIDE)} wide-universe tickers "
+            f"({missing_pct:.1%}) have no sector coverage -- expected < 5%: {missing}"
+        )
+
+        well_known_and_current = [
+            t for t in _XSEC_UNIVERSE_30_LEGACY if t in _XSEC_UNIVERSE_WIDE
+        ]
+        still_missing = [t for t in well_known_and_current if t not in mapping]
+        assert still_missing == [], (
+            f"well-known large-cap names lost sector coverage: {still_missing}"
+        )
 
     def test_missing_file_degrades_to_empty_dict(self, monkeypatch) -> None:
         import scripts.refresh_validations as rv
@@ -849,19 +963,27 @@ class TestBuildSectorQualityRankAdapter:
         assert (t1.values == expected.values).all()
 
     def test_only_eligible_sectors_get_a_real_percentile(self) -> None:
-        """Technology (7 names) and Consumer Defensive (5 names) both clear
-        MIN_SECTOR_SIZE=5 in SNEQR_UNIVERSE -- every ticker should get a
-        non-NaN accrual_ratio/gross_profitability at some point (thin-sector
-        exclusion only applies when a sector has too FEW members, which does
-        not happen for this deliberately-chosen 12-ticker universe -- see the
-        adapter's module-level comment)."""
+        """Technology and Consumer Defensive both clear MIN_SECTOR_SIZE=5 in
+        SNEQR_UNIVERSE -- every ticker in either sector should get a non-NaN
+        accrual_ratio/gross_profitability at some point (thin-sector
+        exclusion only applies when a sector has too FEW members).
+
+        Loosened to a subset check (2026-08 universe widening): SNEQR_UNIVERSE
+        is now _XSEC_UNIVERSE_CAPPED, a 100-name deterministic slice of the
+        real S&P 500 roster rather than the old hand-picked 12-ticker list, so
+        it now legitimately clears MIN_SECTOR_SIZE for several MORE sectors
+        (Financial Services, Healthcare, Consumer Cyclical, Industrials, ...)
+        depending on live CSV/roster data -- an exact-set assertion here would
+        be brittle against that. Technology/Consumer Defensive clearing the
+        bar is still asserted (they always have, historically), just not that
+        they're the ONLY ones that do."""
         import scripts.refresh_validations as rv
 
         with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
             X, y, _ = rv._build_sector_quality_rank_adapter(self._closes(), {})
 
         sectors_present = set(X["sector"].unique())
-        assert sectors_present == {"Technology", "Consumer Defensive"}
+        assert {"Technology", "Consumer Defensive"}.issubset(sectors_present)
 
     def test_thin_sector_excluded_from_ranking(self) -> None:
         """A ticker whose sector has FEWER than MIN_SECTOR_SIZE members in
@@ -990,19 +1112,28 @@ class TestBuildSectorQualityRankAdapter:
         "nan" a blanket `.astype(str)` would fabricate (CONSTRAINT #4). Not
         reachable with today's hand-verified SNEQR_UNIVERSE (every member has
         a real sector), so this is exercised directly against a stubbed
-        sector map with one ticker deliberately omitted."""
+        sector map with one ticker deliberately omitted.
+
+        The omitted ticker is picked dynamically from SNEQR_UNIVERSE (2026-08
+        universe widening: SNEQR_UNIVERSE is now the alphabetically-sorted
+        100-name _XSEC_UNIVERSE_CAPPED slice, not the old hand-picked
+        12-ticker list) rather than hardcoded "IBM" -- IBM alphabetically
+        falls outside the current 100-name slice, so a hardcoded literal
+        would silently test nothing (``X.xs("IBM", ...)`` would raise
+        KeyError since IBM was never in the panel to begin with)."""
         import scripts.refresh_validations as rv
 
+        target = rv.SNEQR_UNIVERSE[0]
         base_sectors = rv._load_ticker_sectors()
-        stubbed = {t: s for t, s in base_sectors.items() if t != "IBM"}
+        stubbed = {t: s for t, s in base_sectors.items() if t != target}
 
         with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts), \
              patch.object(rv, "_load_ticker_sectors", return_value=stubbed):
             X, y, _ = rv._build_sector_quality_rank_adapter(self._closes(), {})
 
-        ibm_sector = X.xs("IBM", level="Ticker")["sector"]
-        assert not ibm_sector.empty
-        assert ibm_sector.isna().all()
+        target_sector = X.xs(target, level="Ticker")["sector"]
+        assert not target_sector.empty
+        assert target_sector.isna().all()
 
 
 # ---------------------------------------------------------------------------
@@ -1620,6 +1751,61 @@ class TestRunValidations:
 
         assert "multifactor_lowvol_size" in results
         assert "error" not in results["multifactor_lowvol_size"]
+
+    def test_share_tickers_scoped_to_strategies_needing_shares(
+        self, tmp_path: Path
+    ) -> None:
+        """``share_tickers`` (used only to fetch a current shares-outstanding
+        snapshot for the Size factor) must be built from ONLY the strategies
+        listed in ``_STRATEGIES_NEEDING_SHARES`` -- not the full ticker union
+        of every selected multi-ticker strategy. Before the 2026-08 widening
+        this distinction was cheap to blur (the shared universe topped out
+        at 30 names); at the new ~500-name WIDE tier, unioning in a strategy
+        that never reads the ``shares`` dict would mean hundreds of wasted,
+        unthrottled ``yfinance`` ``fast_info`` calls.
+
+        Deliberately uses STUBBED registry entries with disjoint universes
+        rather than the real ``cross_sectional_momentum`` /
+        ``multifactor_lowvol_size`` pair: post-widening, those two real
+        entries share the exact SAME universe list (both are
+        ``["SPY", *_XSEC_UNIVERSE_WIDE]``), so a real-registry pairing could
+        not actually distinguish "share_tickers == only multifactor's
+        universe" from "share_tickers == the union of both" -- the two sets
+        are identical either way. Disjoint stub universes make this a
+        genuine, non-tautological proof of the scoping logic."""
+        import scripts.refresh_validations as rv
+
+        def _stub_adapter(*_args: Any) -> Any:
+            idx = pd.bdate_range(end="2024-12-31", periods=30)
+            X = pd.DataFrame({"feature": np.arange(30, dtype=float)}, index=idx)
+            y = pd.Series(np.full(30, 0.001), index=idx)
+            precomputed = {"stub": pd.Series(np.full(30, 0.001), index=idx)}
+            return X, y, precomputed
+
+        stub_registry = {
+            "multifactor_lowvol_size": (_stub_adapter, 0.02, ["SHARES_A", "SHARES_B"]),
+            "cross_sectional_momentum": (_stub_adapter, 0.03, ["OTHER_C", "OTHER_D"]),
+        }
+
+        with (
+            patch("scripts.refresh_validations.STRATEGY_REGISTRY", stub_registry),
+            self._patch_closes(),
+            self._patch_harness(),
+            self._patch_cost(),
+            patch(
+                "scripts.refresh_validations._download_shares",
+                side_effect=lambda tickers: {t: 1_000_000_000.0 for t in tickers},
+            ) as mock_shares,
+        ):
+            results = rv.run_validations(
+                strategies=["cross_sectional_momentum", "multifactor_lowvol_size"],
+                output_dir=tmp_path,
+            )
+
+        assert set(results) == {"cross_sectional_momentum", "multifactor_lowvol_size"}
+        mock_shares.assert_called_once()
+        called_tickers = mock_shares.call_args.args[0]
+        assert sorted(called_tickers) == ["SHARES_A", "SHARES_B"]
 
     def test_max_workers_concurrency(self, tmp_path: Path) -> None:
         """Verify run_validations works identically with max_workers > 1."""
