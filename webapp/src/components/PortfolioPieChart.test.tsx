@@ -54,6 +54,21 @@ describe("PortfolioPieChart", () => {
     expect(() => render(<PortfolioPieChart positions={positions} />)).not.toThrow();
   });
 
+  it("renders nothing when positions exist but none have a usable market_value (all null/zero/negative)", () => {
+    // Regression: the empty-state guard used to check the raw `positions`
+    // array's length, not the filtered chart data -- a portfolio with
+    // positions present but every market_value unresolved/zero/negative
+    // passed that guard and rendered a blank Pie region instead of an
+    // honest "nothing to show" state.
+    const positions = [
+      makePosition("DELISTED", null),
+      makePosition("ZEROVAL", 0),
+      makePosition("SHORT", -100),
+    ];
+    const { container } = render(<PortfolioPieChart positions={positions} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("does not crash with more than 10 positions (top-10-by-value slice)", () => {
     const positions = Array.from({ length: 15 }, (_, i) =>
       makePosition(`SYM${i}`, 1000 - i * 10)

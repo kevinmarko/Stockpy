@@ -72,7 +72,14 @@ export function Dashboard() {
       } else if (sortBy === "strategy") {
         return a.category.localeCompare(b.category);
       } else {
-        return (b.headline.deployable ? 1 : 0) - (a.headline.deployable ? 1 : 0);
+        // deployable: true ranks first, then null (not yet validated --
+        // "unknown", not "known-bad"), then false (measured, failed the
+        // deployability gate) last. Coercing null and false to the same 0
+        // would conflate "we don't know yet" with "we know it failed" --
+        // the same distinction the "sr" branch above already makes for a
+        // missing vs. a real 0 Sharpe.
+        const activeScore = (d: boolean | null) => (d === true ? 2 : d === null ? 1 : 0);
+        return activeScore(b.headline.deployable) - activeScore(a.headline.deployable);
       }
     });
   }, [pilots.data, sortBy]);
@@ -425,7 +432,10 @@ function PilotRow({
       </div>
       <div className="row-end" style={{ flexShrink: 0, width: 70, textAlign: "right" }}>
         <div className="num" style={{ fontWeight: 700 }}>
-          {pilot.headline.sharpe ? `SR: ${pilot.headline.sharpe.toFixed(2)}` : "SR: —"}
+          {/* !== null, not a truthy check -- a genuine Sharpe of exactly 0
+              is real, meaningful data (falsy in JS) and must not render
+              identically to a missing/null value. */}
+          {pilot.headline.sharpe !== null ? `SR: ${pilot.headline.sharpe.toFixed(2)}` : "SR: —"}
         </div>
       </div>
     </div>

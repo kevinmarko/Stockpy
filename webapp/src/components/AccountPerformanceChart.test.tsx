@@ -22,8 +22,9 @@
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import AccountPerformanceChart from "./AccountPerformanceChart";
+import AccountPerformanceChart, { accountEquityStroke } from "./AccountPerformanceChart";
 import { fmtDate } from "../format";
+import { theme } from "../theme";
 import type { CurvePoint } from "../api/types";
 
 const DATA: CurvePoint[] = [
@@ -67,5 +68,34 @@ describe("AccountPerformanceChart", () => {
     // this component actually delegates rather than re-implementing its
     // own (buggy) formatting inline.
     expect(fmtDate("2026-06-01")).toBe("Jun 1");
+  });
+
+  it("colors the line green (theme.growth) when the account equity rose over the shown window", () => {
+    // Regression pin: PerfLine (charts.tsx) colors its line by direction
+    // (up = green, down = red); AccountPerformanceChart previously hardcoded
+    // theme.growth unconditionally, which would render a losing account in
+    // the app's "gains/positive" color. Asserted via the exported pure
+    // helper, not rendered SVG output -- see this file's own docstring for
+    // why (jsdom's ResponsiveContainer measures 0x0, so Recharts never
+    // actually draws the line here).
+    expect(accountEquityStroke(DATA)).toBe(theme.growth);
+  });
+
+  it("colors the line red (theme.decline) when the account equity fell over the shown window", () => {
+    const DOWN: CurvePoint[] = [
+      { date: "2026-06-01", value: 44012.5 },
+      { date: "2026-06-02", value: 43950.8 },
+      { date: "2026-06-03", value: 43800.12 },
+    ];
+    expect(accountEquityStroke(DOWN)).toBe(theme.decline);
+  });
+
+  it("renders without crashing for a declining equity curve too", () => {
+    const DOWN: CurvePoint[] = [
+      { date: "2026-06-01", value: 44012.5 },
+      { date: "2026-06-02", value: 43950.8 },
+      { date: "2026-06-03", value: 43800.12 },
+    ];
+    expect(() => render(<AccountPerformanceChart data={DOWN} />)).not.toThrow();
   });
 });

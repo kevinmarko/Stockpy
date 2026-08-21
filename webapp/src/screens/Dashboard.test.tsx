@@ -178,6 +178,22 @@ describe("Dashboard screen — Top Pilots sorting", () => {
     expect(screen.getByText("SR: —")).toBeInTheDocument();
   });
 
+  it("displays a genuine Sharpe of exactly 0.00 as a real value, not as missing (SR: —)", async () => {
+    // Regression: 0 is falsy in JS -- a naive `pilot.headline.sharpe ? ... :
+    // "SR: —"` check renders a real, meaningful sharpe: 0 identically
+    // to a null/missing value. `sortedPilots`'s own comparator already
+    // distinguishes `=== null` from a real 0; the display must too.
+    const ZERO = makePilot({
+      id: "p-zero", name: "Zero Strategy", category: "Risk",
+      headline: { sharpe: 0, dsr: 0.9, pbo: 0.2, max_drawdown: -0.05, deployable: true },
+    });
+    vi.spyOn(api, "listPilots").mockResolvedValue([ZERO, BETA]);
+    renderDashboard();
+
+    await screen.findByText("Zero Strategy");
+    expect(screen.getByText("SR: 0.00")).toBeInTheDocument();
+  });
+
   it("sorts alphabetically by category (Strategy) when that sort button is clicked", async () => {
     vi.spyOn(api, "listPilots").mockResolvedValue([ALPHA, BETA, GAMMA]);
     const user = userEvent.setup();
@@ -190,7 +206,7 @@ describe("Dashboard screen — Top Pilots sorting", () => {
     expect(pilotOrder()).toEqual(["Beta Strategy", "Gamma Strategy", "Alpha Strategy"]);
   });
 
-  it("sorts deployable pilots first (Active) when that sort button is clicked, treating a cold-start null the same as a failed gate", async () => {
+  it("sorts deployable pilots first (Active) when that sort button is clicked, ranking a cold-start null above a measured failed gate", async () => {
     vi.spyOn(api, "listPilots").mockResolvedValue([ALPHA, BETA, GAMMA]);
     const user = userEvent.setup();
     renderDashboard();
@@ -198,9 +214,26 @@ describe("Dashboard screen — Top Pilots sorting", () => {
 
     await user.click(screen.getByRole("button", { name: "Active" }));
 
-    // ALPHA (deployable: true) sorts first; BETA (null) and GAMMA (false)
-    // are tied at "not deployable" and keep their original relative order
-    // (a stable sort), i.e. Beta before Gamma.
+    // ALPHA (deployable: true) sorts first; BETA (null — not yet validated,
+    // "unknown") sorts above GAMMA (false — measured, failed the
+    // deployability gate). Unknown must never be conflated with known-bad.
+    expect(pilotOrder()).toEqual(["Alpha Strategy", "Beta Strategy", "Gamma Strategy"]);
+  });
+
+  it("Active sort still ranks a null (unvalidated) pilot above a false (failed-gate) one when the failed-gate pilot comes first in the source list", async () => {
+    // Distinguishes "null ranks above false" from the coincidental "stable
+    // sort preserved BETA-before-GAMMA source order" outcome above — feeding
+    // the API in the OPPOSITE order (GAMMA, then BETA) would leave a stable
+    // sort's original relative order unchanged if null and false were tied,
+    // but must still produce Beta (null) before Gamma (false) now that the
+    // two are ranked distinctly.
+    vi.spyOn(api, "listPilots").mockResolvedValue([ALPHA, GAMMA, BETA]);
+    const user = userEvent.setup();
+    renderDashboard();
+    await screen.findByText("Alpha Strategy");
+
+    await user.click(screen.getByRole("button", { name: "Active" }));
+
     expect(pilotOrder()).toEqual(["Alpha Strategy", "Beta Strategy", "Gamma Strategy"]);
   });
 });

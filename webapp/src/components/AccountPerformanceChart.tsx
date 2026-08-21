@@ -16,6 +16,21 @@ interface Props {
   data: CurvePoint[];
 }
 
+/**
+ * Direction-based line color, matching PerfLine's own convention (charts.tsx)
+ * -- green when the account equity rose over the shown window, red when it
+ * fell. A hardcoded "always green" stroke would misrepresent a drawdown as a
+ * gain on the platform's own P&L dashboard. Exported as a plain function
+ * (rather than inlined) so it's unit-testable directly: jsdom's
+ * ResponsiveContainer measures 0x0 (no real layout engine), so asserting on
+ * the actually-rendered SVG stroke isn't reliable here -- see this file's
+ * own test file's docstring for the same caveat.
+ */
+export function accountEquityStroke(data: CurvePoint[]): string {
+  const up = data[data.length - 1].value >= data[0].value;
+  return up ? theme.growth : theme.decline;
+}
+
 export default function AccountPerformanceChart({ data }: Props) {
   if (!data || data.length === 0) {
     return (
@@ -34,6 +49,8 @@ export default function AccountPerformanceChart({ data }: Props) {
       </div>
     );
   }
+
+  const stroke = accountEquityStroke(data);
 
   return (
     // Fixed pixel height (matching PerfLine's own convention in charts.tsx),
@@ -74,10 +91,11 @@ export default function AccountPerformanceChart({ data }: Props) {
           <Line
             type="monotone"
             dataKey="value"
-            stroke={theme.growth}
+            stroke={stroke}
             strokeWidth={2.5}
             dot={false}
-            activeDot={{ r: 5, fill: theme.growth, stroke: theme.surface, strokeWidth: 2 }}
+            isAnimationActive={false}
+            activeDot={{ r: 5, fill: stroke, stroke: theme.surface, strokeWidth: 2 }}
           />
         </LineChart>
       </ResponsiveContainer>
