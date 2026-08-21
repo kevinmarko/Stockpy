@@ -1822,7 +1822,7 @@ spot-check on `rsi2_mean_reversion` (bit-identical pre-fix vs. post-fix on froze
 market data, see above) — no genuine regression found in any of the three verification
 layers.
 
-## 2026-08-21 (cont.): "Adapter returned an empty feature/return frame" — diagnostic-only fix, root cause not fully closed
+## 2026-08-21 (cont.): "Adapter returned an empty feature/return frame" — diagnostic-only fix, root cause closed by follow-up re-run (see below)
 
 An operator-reported `scripts/refresh_validations.py` run showed 19 of 29 registered
 strategies with `Status: ERROR`, four of which had their traceback pasted in full — all
@@ -1872,15 +1872,96 @@ same multi-step manual investigation this entry documents. See
 `docs/architecture/validation-and-signals.md`'s `scripts/refresh_validations.py` bullet for
 the implementation summary.
 
-**No `STRATEGY_REGISTRY` deployability numbers changed** — this is diagnostics-only, not a
-strategy fix; none of the four strategies' `deployable` status is affected (they still
-error the same way, just with a more useful message). Follow-up needed: re-run
-`scripts.refresh_validations` in an environment with a real `FMP_API_KEY` and read the new
-diagnostic text to actually close the root cause — this entry is intentionally not marked
-resolved.
+**No `STRATEGY_REGISTRY` deployability numbers changed by this diagnostic-only PR** — see
+the follow-up entry immediately below, which closes the disclosed gap with a real
+`FMP_API_KEY` re-run and reports genuine (not simulated) results for all four strategies.
 
 Tests: `tests/test_refresh_validations.py::TestDescribeUniverseCoverage` (4 tests: present-
 ticker row count/date range, missing-ticker-vs-short-ticker distinction, all-NaN column,
 never-raises-on-lookup-failure), `TestRunValidations::test_empty_frame_error_reports_per_ticker_coverage`
 (end-to-end via `run_validations()` with a synthetic 50-row SPY series against
 `sortino_drawdown`'s real 504-day-window adapter).
+
+## 2026-08-21 (cont.): Follow-up re-run with a real `FMP_API_KEY` — root cause confirmed environmental, plus a new finding (FMP's 5,000-row cap)
+
+Per the operator's explicit go-ahead to use the credential already in their `.env`
+(temporary, to be rotated afterward — never written into this sandbox's own `.env`, never
+printed; loaded via `export FMP_API_KEY=$(...)` for the duration of one-off subprocess
+calls only), the four strategies from the entry above were re-run against real FMP data.
+
+### Root cause: confirmed environmental, not a code defect
+
+A quick connectivity check (`fmp_client.historical_eod('SPY', ..., from_date='2025-01-01',
+to_date='2025-01-10')`) returned 6 correctly-shaped rows immediately — FMP is live and
+reachable. All four adapters were then called directly against a real `_download_closes`
+fetch:
+
+| Strategy | `X.shape` | `y.shape` | `precomputed` |
+|---|---|---|---|
+| `sortino_drawdown` | (4496, 3) | (4496,) | truthy |
+| `timeseries_momentum` | (4747, 3) | (4747,) | truthy |
+| `vrp_premium_selling` | (5000, 1) | (5000,) | truthy |
+| `vol_mispricing` | (5000, 1) | (5000,) | truthy |
+
+None empty. This confirms the original "insufficient history" failures were a transient/
+environmental condition specific to that one run (most likely no/invalid `FMP_API_KEY` in
+that environment, or a momentary rate-limit/circuit-breaker event) — not a structural
+defect in any of the four adapters. The adapters' own fail-closed guard behaved exactly as
+designed: when data genuinely was short, it refused to proceed rather than compute on a
+truncated window.
+
+### New finding, disclosed but not fixed here: FMP silently caps history at 5,000 rows
+
+While investigating, a real, previously-undocumented behavior was found:
+`fmp_client.historical_eod('SPY', ..., from_date='2005-01-01', to_date='2026-08-21')`
+returns exactly **5,000 rows spanning 2006-10-05 → 2026-08-21** — silently dropping the
+requested 2005-01-01 → 2006-10-04 window (~22 months) rather than paginating or raising.
+5,000 is almost certainly a hard per-request cap on this endpoint/tier. `_download_closes`/
+`_fetch_fmp_ohlcv_batch` (`scripts/refresh_validations.py`) do not currently paginate past
+this cap, so **any `refresh_validations` run requesting the full `--start 2005-01-01`
+default silently gets a ~19.8-year window instead, for every ticker, every run** — not
+unique to these four strategies. This did not cause the original failures investigated in
+this entry (the resulting window is still far longer than any adapter's own lookback), but
+it does mean every previously-recorded `docs/VALIDATION_STRATEGY_FIX_LOG.md`/
+`docs/signals/<name>.md` "2005-present" backtest number in this file was actually computed
+over whatever ~5,000-row window FMP happened to return at the time it ran — not literally
+2005-2026. **Not fixed in this pass** — pagination is a real, separate `_fetch_fmp_ohlcv_batch`
+change (touching every registered strategy's fetch path) that deserves its own plan and
+review, not a same-session addition bolted onto a diagnostics PR. Flagged here so it isn't
+lost.
+
+### Real, measured results (`--strategies sortino_drawdown,timeseries_momentum,vrp_premium_selling,vol_mispricing --start 2005-01-01`)
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | `deployable` | vs. last recorded |
+|---|---|---|---|---|---|---|
+| `sortino_drawdown` | 0.801 | 0.022 | 0.985 | 20.6% | ✅ **True** | Consistent (was True, Sharpe 0.706-0.801 range across runs) |
+| `timeseries_momentum` | 0.477 | 0.000 | 0.983 | 26.0% | ❌ **False** | **Regression** — was `True` (Sharpe 0.523, DSR 0.990) as of the 2026-08 addendum in `docs/signals/timeseries_momentum.md` |
+| `vrp_premium_selling` | 0.189 | 0.000 | 1.000 | 12.1% | ❌ False | Consistent (was False, Sharpe 0.377 as of 2026-08-18) |
+| `vol_mispricing` | -0.140 | 0.302† | — | 100.0% | ❌ False | Consistent — 4th independent confirmation of the OCT_2008 blow-up (bit-identical per-window stress figures to the 2015-2026 walk-forward run in `docs/signals/vol_mispricing.md`) |
+
+†`vol_mispricing`'s DSR column in the table above; PBO is `0.000` (both PASS on the DSR/PBO
+distinction — the failure is Sharpe + MaxDD + the stress gate, not PBO/DSR).
+
+**`vol_mispricing`'s tail-scenario stress gate FAILED** (mandatory for options-selling
+strategies per `validation/stress_scenarios.py` — max DD < 50% AND survival in every dated
+window): OCT_2008 showed 203.8% MaxDD, -75.5% final return, **did not survive** — bit-
+identical to three prior independent runs (2026-08-15, -17, -18), so this is not a fluke of
+this run's data window. Already correctly `deployable=False` with an enforced execution
+override gate per `docs/signals/vol_mispricing.md`'s "Live Paper-Execution Status" section
+— no action needed there, this run is confirmatory only.
+
+**`timeseries_momentum` flipping from `True` to `False` is a genuine, disclosed regression**
+— NOT reverted or re-measured with a different window to force a pass, per this repo's rule
+that gates are never loosened. Two open questions, deliberately left as a follow-up rather
+than guessed at: (1) whether this is real momentum-factor decay in the most recent ~20
+months, or an artifact of the FMP 5,000-row cap silently excluding the 2005-2006 window the
+prior 0.523 measurement likely included; (2) once (1) is answered, whether
+`ml/registry.yaml`'s recorded `deployable` status for `timeseries_momentum` needs updating.
+Full detail in `docs/signals/timeseries_momentum.md`'s 2026-08-21 entry — do not let this
+regression go unreviewed.
+
+Per-strategy `docs/signals/<name>.md` updates: `sortino_drawdown.md`, `timeseries_momentum.md`,
+`vrp_premium_selling.md`, `vol_mispricing.md` — each has a new 2026-08-21 dated section with
+the numbers above and the same caveats. No test changes in this follow-up (no code changed —
+this was a real-data verification run only); the diagnostic fix itself is tested as described
+in the entry above.

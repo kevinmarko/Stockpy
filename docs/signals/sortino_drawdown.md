@@ -88,3 +88,27 @@ deep current drawdown tells you about present capital damage.
 | **Max Drawdown** | 17.03% |
 | **Deployable** | ✅ True |
 
+
+### 2026-08-21 Re-verification (closes `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s disclosed gap)
+
+A subsequent `scripts.refresh_validations` run in a network-isolated sandbox (no `FMP_API_KEY`
+configured there) hit `RuntimeError: Adapter returned an empty feature/return frame —
+insufficient history for this start/end range` for this strategy, despite the 2026-08-18
+run above passing cleanly. Investigated and fixed diagnostically in
+[#850](https://github.com/kevinmarko/Stockpy/pull/850) (a self-diagnosing error message,
+not a strategy-logic change). Re-run with a real `FMP_API_KEY` on 2026-08-21 to confirm the
+adapter itself is sound:
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.801 |
+| **PBO** | 0.022 |
+| **DSR** | 0.985 |
+| **Max Drawdown** | 20.6% |
+| **Deployable** | ✅ True |
+
+Confirms the earlier "insufficient history" failure was environmental (no/invalid FMP
+credentials or a transient fetch issue in that specific run), not a defect in this
+adapter — `_build_sortino_drawdown_adapter` produces a healthy 4,496-row feature/return
+frame from a real 5,000-row SPY fetch. See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s
+2026-08-21 entry for the full investigation.
