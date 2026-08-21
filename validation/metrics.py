@@ -17,6 +17,120 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 # Set up module logger
 logger = logging.getLogger("Validation_Metrics")
 
+# ---------------------------------------------------------------------------
+# Annualization-frequency inference
+# ---------------------------------------------------------------------------
+# This codebase's existing daily-trading-year convention -- kept as a LOCAL
+# copy per this file's own precedent (see e.g. technical_options_engine.py's
+# TRADING_DAYS_PER_YEAR, pilots/har_volatility.py's, pilots/volatility_surface.py's
+# -- every one of these modules independently declares its own copy rather
+# than importing a shared constant; validation/metrics.py currently has zero
+# project-internal imports and this fix does not introduce one).
+TRADING_DAYS_PER_YEAR = 252.0
+
+# Standard (leap-year-corrected) calendar year length -- the SAME constant
+# this codebase's own CAGR annualization already uses
+# (evaluation_engine.py::calculate_equity_curve_metrics: `365.25 / days_elapsed`).
+CALENDAR_DAYS_PER_YEAR = 365.25
+
+# Minimum observations before trusting a median-gap estimate at all -- below
+# this, a handful of gaps is too little evidence (CONSTRAINT #6: fail safe
+# to `default` rather than infer from noise).
+MIN_OBSERVATIONS_FOR_FREQ_INFERENCE = 5
+
+# A median consecutive-observation gap at or below this many CALENDAR days is
+# treated as a genuine daily-trading-calendar series and snapped EXACTLY to
+# TRADING_DAYS_PER_YEAR, rather than run through the general calendar-day
+# formula below. This is not an approximation choice -- see this function's
+# own docstring for why a real market DatetimeIndex's median gap is always
+# 1.0 calendar days (never higher), and why converting it via
+# CALENDAR_DAYS_PER_YEAR / 1.0 = 365.25 would be a ~45% overstatement versus
+# the correct 252. 2.0 (not exactly 1.0) gives headroom for a small-N CPCV
+# fold slice without ever colliding with any real coarser cadence in
+# scripts/refresh_validations.py's STRATEGY_REGISTRY today (lgbm_ranker, the
+# only non-daily entry, steps every ~5 trading days / ~7 calendar days --
+# more than 3x this threshold).
+DAILY_GAP_SNAP_THRESHOLD_DAYS = 2.0
+
+
+def infer_annualization_freq(returns: pd.Series, default: int = 252) -> float:
+    """Infers the number of return observations per year from *returns*'
+    own DatetimeIndex spacing, instead of assuming every series is daily.
+
+    Motivating bug: scripts/refresh_validations.py's lgbm_ranker adapter
+    produces ~21-trading-day forward long-short spread observations, sampled
+    every ~5-20+ trading days depending on which CPCV test block was
+    selected -- NOT one observation per trading day. Every call into
+    sharpe_ratio()/deflated_sharpe_ratio()/run_cpcv_evaluation() from
+    validation/harness.py silently used the default freq=252 (a daily-data
+    assumption), annualizing a ~20-observations-per-year series with
+    sqrt(252) as if it were daily -- a real re-run reported Sharpe=24.886 for
+    this strategy, reproduced independently at ~26.3 by applying the same
+    sqrt(252) bug to the run's own equity curve.
+
+    Method: computes the MEDIAN (not mean -- robust to one or two irregular
+    gaps, e.g. a CPCV path/purge boundary) gap between consecutive
+    observation dates, in calendar days.
+
+      * A median gap <= DAILY_GAP_SNAP_THRESHOLD_DAYS is recognized as a real
+        daily trading calendar (see module-level comment for why this must
+        be an explicit snap, not the general formula below) and returns
+        TRADING_DAYS_PER_YEAR (252.0) EXACTLY -- byte-identical to today's
+        hardcoded default for every genuinely daily strategy.
+      * A coarser median gap is converted via
+        CALENDAR_DAYS_PER_YEAR / median_gap_days (the same calendar-day
+        annualization convention this codebase's own CAGR calculation
+        already uses in evaluation_engine.py).
+
+    Fails safe to `default` (CONSTRAINT #6 -- a frequency-inference bug must
+    never silently corrupt every OTHER strategy's Sharpe) when:
+      * `returns` has fewer than MIN_OBSERVATIONS_FOR_FREQ_INFERENCE
+        observations,
+      * `returns.index` is not a real pd.DatetimeIndex (covers a MultiIndex
+        panel, a plain RangeIndex, an object index, etc. uniformly -- see
+        this function's own module docstring for why sector_quality_rank's
+        MultiIndex `y` deliberately falls into this branch, and why that is
+        verified-correct for every strategy currently registered),
+      * the computed value is non-finite, <= 0, or implausible (< 1.0 or
+        > TRADING_DAYS_PER_YEAR -- nothing in this registry can legitimately
+        be observed MORE often than once per trading day), or
+      * any unexpected exception occurs during computation.
+
+    Never raises.
+    """
+    try:
+        if returns is None or len(returns) < MIN_OBSERVATIONS_FOR_FREQ_INFERENCE:
+            return float(default)
+
+        idx = returns.index
+        if not isinstance(idx, pd.DatetimeIndex):
+            return float(default)
+
+        idx_sorted = pd.DatetimeIndex(idx).sort_values()
+        gaps_days = idx_sorted.to_series().diff().dropna().dt.days.astype(float)
+        # Duplicate/unsorted-degenerate timestamps produce zero gaps; these
+        # carry no spacing information and would corrupt the median.
+        gaps_days = gaps_days[gaps_days > 0]
+        if gaps_days.empty:
+            return float(default)
+
+        median_gap_days = float(gaps_days.median())
+        if not np.isfinite(median_gap_days) or median_gap_days <= 0:
+            return float(default)
+
+        if median_gap_days <= DAILY_GAP_SNAP_THRESHOLD_DAYS:
+            return float(TRADING_DAYS_PER_YEAR)
+
+        periods_per_year = CALENDAR_DAYS_PER_YEAR / median_gap_days
+
+        if not np.isfinite(periods_per_year) or not (1.0 <= periods_per_year <= TRADING_DAYS_PER_YEAR):
+            return float(default)
+
+        return float(periods_per_year)
+    except Exception:  # noqa: BLE001 -- CONSTRAINT #6
+        return float(default)
+
+
 def sharpe_ratio(returns: pd.Series, freq: int = 252) -> float:
     """
     Calculates the standard annualized Sharpe Ratio.

@@ -19,7 +19,10 @@ import yfinance as yf
 
 from universe_engine import get_universe_with_survivorship_warning
 from execution.cost_model import TieredCostModel
-from validation.metrics import run_cpcv_evaluation, sharpe_ratio, deflated_sharpe_ratio, probability_of_backtest_overfitting
+from validation.metrics import (
+    run_cpcv_evaluation, sharpe_ratio, deflated_sharpe_ratio,
+    probability_of_backtest_overfitting, infer_annualization_freq,
+)
 from validation.stress_scenarios import (
     StressResult,
     run_stress_tests,
@@ -717,7 +720,21 @@ class StrategyValidationHarness:
             y = y_series
             
         n_samples = len(X)
-        
+
+        # Infer this run's annualization frequency ONCE, from the adapter's own `y`
+        # return-observation cadence (validation/metrics.py::infer_annualization_freq)
+        # -- threaded through every Sharpe/Sortino/Calmar/DSR computation below so a
+        # single run never mixes two different annualization assumptions across its
+        # own walk-forward/CPCV/full-sample metrics (see that function's own
+        # docstring for the motivating lgbm_ranker bug and the daily-cadence-snap
+        # math). `y` is used (rather than `full_returns`, which isn't computed until
+        # step 5) because it is available this early and, for every adapter in
+        # scripts.refresh_validations.STRATEGY_REGISTRY, its own DatetimeIndex
+        # already carries the SAME cadence the adapter's precomputed/strategy_fn
+        # returns are sliced onto (see the STRATEGY_REGISTRY cadence survey in the
+        # PR that introduced this fix).
+        inferred_freq = infer_annualization_freq(y)
+
         # 3. Walk-Forward Stability Checks (60/40, 70/30, 80/20)
         wf_sharpes = {}
         for split_pct in [0.60, 0.70, 0.80]:
@@ -728,7 +745,7 @@ class StrategyValidationHarness:
             trials = self.strategy_fn(X_train, y_train, X_test, y_test)
             if trials:
                 # Find best in-sample configuration
-                is_sharpes = [sharpe_ratio(t["train_returns"]) for t in trials]
+                is_sharpes = [sharpe_ratio(t["train_returns"], freq=inferred_freq) for t in trials]
                 # nanargmax raises ValueError on an all-NaN slice (e.g. constant
                 # returns have zero std → NaN Sharpe); guard with any-valid check.
                 has_valid = any(not np.isnan(s) for s in is_sharpes)
@@ -738,7 +755,7 @@ class StrategyValidationHarness:
                 # Apply transaction cost model to test returns
                 turnover = best_trial.get("turnover", 0.05)
                 net_test_returns = self._apply_cost_model(best_trial["test_returns"], turnover=turnover)
-                wf_sr = sharpe_ratio(net_test_returns)
+                wf_sr = sharpe_ratio(net_test_returns, freq=inferred_freq)
                 wf_sharpes[split_pct] = wf_sr if not np.isnan(wf_sr) else 0.0
             else:
                 wf_sharpes[split_pct] = 0.0
@@ -764,6 +781,7 @@ class StrategyValidationHarness:
             t1=t1,
             n_splits=self.n_cpcv_splits,
             n_test_splits=self.n_test_splits,
+            freq=inferred_freq,
             cost_model_fn=self._apply_cost_model if oos_gate_enabled else None,
         )
 
@@ -771,7 +789,7 @@ class StrategyValidationHarness:
         # Evaluate strategy over full sample
         full_trials = self.strategy_fn(X, y, X, y)
         if full_trials:
-            is_sharpes = [sharpe_ratio(t["train_returns"]) for t in full_trials]
+            is_sharpes = [sharpe_ratio(t["train_returns"], freq=inferred_freq) for t in full_trials]
             has_valid = any(not np.isnan(s) for s in is_sharpes)
             best_idx = int(np.nanargmax(is_sharpes)) if has_valid else 0
             best_trial = full_trials[best_idx]
@@ -785,7 +803,7 @@ class StrategyValidationHarness:
             n_trials = 1
 
         # Standard Performance calculations
-        sharpe = sharpe_ratio(full_returns)
+        sharpe = sharpe_ratio(full_returns, freq=inferred_freq)
 
         # Sortino
         downside_returns = full_returns[full_returns < 0]
@@ -796,7 +814,7 @@ class StrategyValidationHarness:
         # all-zero book after a flat per-day cost deduction), not real
         # signal; dividing by it would explode into an absurd ratio.
         sortino = (
-            (full_returns.mean() / downside_std * np.sqrt(252))
+            (full_returns.mean() / downside_std * np.sqrt(inferred_freq))
             if downside_std >= 1e-12 else np.nan
         )
         
@@ -809,7 +827,7 @@ class StrategyValidationHarness:
         # (but not exactly zero) max_dd is floating-point noise from a
         # constant/near-constant compounded equity curve, not a real drawdown;
         # dividing by it would explode into an absurd ratio.
-        calmar = (full_returns.mean() * 252 / max_dd) if max_dd >= 1e-12 else np.nan
+        calmar = (full_returns.mean() * inferred_freq / max_dd) if max_dd >= 1e-12 else np.nan
         
         # Turnover & Trade metrics
         trade_days = full_returns != 0
@@ -844,7 +862,7 @@ class StrategyValidationHarness:
             # unconditional per-path-mean-return aggregate, purpose-built to
             # mirror full_returns.mean() for exactly this calculation.
             calmar = (
-                (cpcv_results["mean_oos_return"] * 252 / max_dd)
+                (cpcv_results["mean_oos_return"] * inferred_freq / max_dd)
                 if (not np.isnan(max_dd) and max_dd >= 1e-12) else np.nan
             )
             hit_rate = cpcv_results["mean_oos_hit_rate"]

@@ -1653,3 +1653,171 @@ Tests: `tests/test_lgbm_ranker_native_cv.py::TestPerDateQueryGroups` (5 new test
 including a real non-mocked 11,250-row reproduction that crashed before this fix and
 now trains cleanly); full pre-existing `ml/lgbm_ranker.py`-adjacent suite (58 tests
 across 8 files) re-run clean, 0 regressions.
+
+## 2026-08-21 (cont.): Annualization-frequency fix — harness-level, resolves the `lgbm_ranker` Sharpe=24.886 measurement gap
+
+Closes the gap the entry immediately above this one left open: `lgbm_ranker`'s crash was
+fixed, but its post-fix Sharpe (24.886) was flagged as "not yet a clean measurement,"
+traced in part to `validation/metrics.py::sharpe_ratio(returns, freq=252)` unconditionally
+assuming daily observations for every strategy in `STRATEGY_REGISTRY`, with no mechanism
+for an adapter to declare its own observation cadence.
+
+### The fix
+
+`validation/metrics.py` gains one new function, `infer_annualization_freq(returns,
+default=252)`, plus four supporting constants (`TRADING_DAYS_PER_YEAR=252.0`,
+`CALENDAR_DAYS_PER_YEAR=365.25`, `MIN_OBSERVATIONS_FOR_FREQ_INFERENCE=5`,
+`DAILY_GAP_SNAP_THRESHOLD_DAYS=2.0`). It infers periods/year from a returns Series' own
+`DatetimeIndex` median consecutive-observation gap:
+
+* A median gap `<= 2.0` calendar days is recognized as a real daily trading calendar
+  (weekday gaps are `[1,1,1,3]` even across a weekend crossing — the median is always
+  exactly `1.0`) and snaps to `TRADING_DAYS_PER_YEAR` (`252.0`) **exactly** — bit-identical
+  to today's hardcoded default, not merely close. This snap is deliberate: the naive
+  `365.25 / median_gap_days` formula would infer `365.25` for a daily series (a ~45%
+  overstatement), not `252`.
+* A coarser median gap uses `CALENDAR_DAYS_PER_YEAR / median_gap_days` — the same
+  calendar-day annualization convention `evaluation_engine.py`'s CAGR calculation already
+  uses.
+* Fails safe to `default` (never raises) on fewer than 5 observations, a non-`DatetimeIndex`
+  (covers a MultiIndex panel, a `RangeIndex`, etc. uniformly), all-zero/duplicate-timestamp
+  gaps, a non-finite/implausible result, or any exception.
+
+No existing `metrics.py` function signature or default changed. `validation/harness.py`'s
+`StrategyValidationHarness.run()` computes `inferred_freq = infer_annualization_freq(y)`
+**once per call**, immediately after `n_samples = len(X)`, and threads that single value
+explicitly into all 8 sites that previously used the hardcoded `252` default: both
+walk-forward Sharpes, the `run_cpcv_evaluation(freq=inferred_freq)` call (which alone
+propagates it through every CPCV path's internal per-trial Sharpe, `deflated_sharpe_ratio`,
+and per-path OOS Sortino), the full-sample in-sample-trial-selection Sharpe, the
+gate-critical full-sample Sharpe, and — previously not even routed through `sharpe_ratio`
+at all — the full-sample Sortino and both Calmar calculations (in-sample and OOS-gate
+branches). Computing it once and threading it explicitly (rather than letting each site
+infer independently) guarantees one run never mixes two different annualization
+assumptions across its own metrics, which matters most for `lgbm_ranker`, whose different
+CPCV folds/paths genuinely observe different cadences depending on which combinatorial
+test blocks were selected. `ulcer_performance_index` was confirmed unreachable from
+`validation/harness.py`'s `STRATEGY_REGISTRY` path and is out of scope.
+
+### `STRATEGY_REGISTRY` cadence survey (all 29 entries, read end-to-end)
+
+Classification method: for each adapter, what `DatetimeIndex` the actual
+`train_returns`/`test_returns` Series handed to `sharpe_ratio()` carries — not necessarily
+`X`'s own index.
+
+**Result: 28/29 daily, 1/29 (`lgbm_ranker`) genuinely sparse.** Every strategy except
+`lgbm_ranker` — RSI2, TSMOM, MACD, Coppock, multifactor low-vol/size, GARCH vol-target,
+cross-sectional momentum, relative strength, RSI14 extremes, Sortino drawdown, the three
+EDGAR-PIT adapters (dividend yield / deep value / value quality), macro regime PIT,
+forecast-direction ARIMA/HW, signal-replay balanced blend, sector quality rank, the six
+options-selling adapters (VRP, vol mispricing, put/call credit/debit spreads, covered
+call), pairs trading, copula stat-arb, and Aroon trend — scores a genuinely daily
+`DatetimeIndex`. `sector_quality_rank` is the one structurally distinct case worth naming:
+its `X`/`y` are a `(Date, Ticker)` MultiIndex panel, so `infer_annualization_freq(y)` hits
+the non-`DatetimeIndex` fallback branch and returns the `default` (252) — verified correct
+because the adapter's `strategy_fn` closure actually scores `book_returns.reindex(...)`, a
+flat daily-indexed Series, computed once over the full daily calendar before any CPCV fold
+sees it. `lgbm_ranker`'s `X_outer`/`y_outer` are indexed on `dates =
+X_panel.index.get_level_values(0).unique()`, sampled every 5 trading days
+(`build_training_panel(..., step_days=5)`) over a bounded 6-year window — the only registry
+entry with a non-daily return-observation cadence.
+
+### Regression-safety verification (three independent layers, not just unit tests)
+
+1. **Unit + integration tests** (`tests/test_annualization_frequency.py`, 26 tests,
+   written in the prior phase of this same fix): fail-safe edge cases, a bit-identical
+   proof for synthetic daily-cadence proxies of two real registry strategies
+   (`garch_vol_target`, `multifactor_lowvol_size`) at both the isolated-function and
+   full-`StrategyValidationHarness.run()` level, and a proof that a synthetic sparse
+   ~20-observations/year series (matching `lgbm_ranker`'s real cadence) is no longer
+   overstated by the `sqrt(252/20)` factor that produced the original bug.
+2. **Full required test command**, re-run in this phase:
+   `pytest -q -m 'not network' -k 'metrics or harness or pbo or dsr or cpcv or validation'`
+   → **826 passed, 0 failed**, 11070 deselected. No regressions.
+3. **Live controlled A/B spot-check** (this phase, beyond what the prior test phase ran):
+   `rsi2_mean_reversion` (a real, `STRATEGY_REGISTRY`-registered daily-cadence strategy)
+   was re-run twice via the actual CLI (`python -m scripts.refresh_validations
+   --strategies rsi2_mean_reversion --start 2005-01-01 --n-cpcv-splits 15
+   --n-test-splits 4 --workers 1 --json`) and its numbers **did not match** the most
+   recent prior recorded row in `reports/history/rsi2_mean_reversion_validation_history.jsonl`
+   (Sharpe 0.675/MaxDD 29.3% recorded vs. Sharpe 0.601/MaxDD 9.0% freshly measured) — an
+   8x swing in MaxDD that, taken at face value, would have looked like a real regression
+   from this fix. Investigation before accepting either number: the JSONL history for this
+   same strategy already shows **three different Sharpe values recorded earlier the same
+   day** (0.675, 0.6005166, 0.5921539) — proving live-data run-to-run variance already
+   existed in this pipeline, unrelated to this change (yfinance re-downloads SPY's full
+   2005–today history fresh on every invocation, and `end_date` defaults to `date.today()`,
+   so a run during market hours pulls a still-forming intraday bar for "today" that differs
+   run to run). To isolate the code as the only variable, the price data was fetched once,
+   pickled, and `scripts.refresh_validations._download_closes` was monkeypatched to serve
+   that frozen data; `run_validations(["rsi2_mean_reversion"], ...)` was then called
+   in-process twice — once against this fix's code, once against the pre-fix code (via
+   `git stash` on `validation/harness.py`/`validation/metrics.py` only, then `git stash
+   pop` to restore) — holding every other input constant. Result: **bit-identical**
+   (`sharpe=0.600515383217523`, `dsr=0.9961111787379472`,
+   `max_drawdown=0.08971137104049667`, `pbo=0.0`, all digits, both runs). This confirms
+   the earlier 0.675-vs-0.601 discrepancy was pre-existing live-data noise, not a
+   regression introduced by this fix, and directly demonstrates (not just proves in the
+   abstract) the bit-identical regression-safety claim on a real registered strategy
+   through the real CLI code path — not only the synthetic proxies in
+   `tests/test_annualization_frequency.py`.
+
+### `lgbm_ranker`'s real, measured post-fix numbers
+
+A genuine, end-to-end re-run was started for this entry (not merely proposed) to get a
+real, trustworthy `lgbm_ranker` measurement now that the annualization fix is in place:
+
+```
+cd /Users/kevinlee/Stockpy-live && .venv/bin/python -m scripts.refresh_validations \
+  --strategies lgbm_ranker --start 2005-01-01 --output-dir reports \
+  --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json
+```
+
+Started 2026-08-21 10:46:49 ET as a detached background process (`nohup ... & disown`,
+PID 29534, log at `/tmp/validation_runs/lgbm_ranker_postfix.log`) — the same exact
+settings as the "before" (crash-then-fixed, wrong-annualization) run this entry corrects.
+As documented in the entry immediately above, an identical prior run at these settings
+(1365 CPCV paths, `n_splits=15`/`n_test_splits=4`) took roughly 2 hours wall-clock;
+progress checked during this session (109 fold-retrains in the first ~10.5 minutes, a
+steady ~10.4 retrains/minute) is consistent with that same ~2-hour total, and the run
+was **still in progress, not yet complete**, at the time this entry was written — the
+CPU-bound nature of a real per-fold LightGBM retrain (not a replayed precomputed series,
+unlike every other adapter in the registry) makes this the one validation run in this
+codebase that cannot be waited out synchronously within a single session turn.
+
+**No number is fabricated or estimated here.** Per this repo's CONSTRAINT #4, `lgbm_ranker`'s
+real post-fix Sharpe/DSR/PBO/MaxDD are being left as **PENDING** in this entry rather than
+guessed from the in-progress log. To get the real numbers once the run completes:
+
+```
+# Check whether it's still running:
+ps -p 29534
+
+# Once it's finished, the result is both printed at the end of the log and written to
+# the standard JSON/HTML report locations:
+tail -40 /tmp/validation_runs/lgbm_ranker_postfix.log
+cat reports/lgbm_ranker_validation_summary.json
+tail -1 reports/history/lgbm_ranker_validation_history.jsonl
+```
+
+The prior (pre-annualization-fix) numbers this run supersedes, for reference: `sharpe=24.886`,
+`max_drawdown=0.36%`, `pbo=0.000`, `dsr=0.696`, `deployable=False` (in-sample evaluation,
+wrong `sqrt(252)` annualization on a ~20-observations/year series). The fix is expected to
+deflate the reported Sharpe/DSR materially (by roughly `sqrt(252/20) ≈ 3.5x` on the
+annualization axis alone, before accounting for the separate, already-documented in-sample
+gate at `settings.VALIDATION_HARNESS_OOS_GATE_ENABLED=False`) — but the actual corrected
+value is not asserted here pending the real re-run's completion. `deployable=False` is
+very likely to remain unchanged either way (DSR 0.696 was already well under the 0.95 gate
+before this fix, and annualization/OOS-gate corrections only ever reduce an inflated
+Sharpe/DSR, never increase one), but this entry does not claim that outcome as measured
+until the run's own JSON summary says so. **Follow-up needed**: once
+`reports/lgbm_ranker_validation_summary.json` exists for this run, append the real numbers
+to this entry and to `docs/signals/lgbm_ranker.md`'s corresponding follow-up section (both
+currently marked PENDING) — do not let this PENDING marker go stale.
+
+Tests: `tests/test_annualization_frequency.py` (26 tests, all passing); full required
+command `pytest -q -m 'not network' -k 'metrics or harness or pbo or dsr or cpcv or
+validation'` (826 passed, 0 failed, re-confirmed in this phase); a live controlled A/B
+spot-check on `rsi2_mean_reversion` (bit-identical pre-fix vs. post-fix on frozen real
+market data, see above) — no genuine regression found in any of the three verification
+layers.
