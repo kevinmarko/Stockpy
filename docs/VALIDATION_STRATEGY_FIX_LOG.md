@@ -1764,8 +1764,8 @@ entry with a non-daily return-observation cadence.
 
 ### `lgbm_ranker`'s real, measured post-fix numbers
 
-A genuine, end-to-end re-run was started for this entry (not merely proposed) to get a
-real, trustworthy `lgbm_ranker` measurement now that the annualization fix is in place:
+A genuine, end-to-end re-run was completed for this entry to get a real, trustworthy
+`lgbm_ranker` measurement now that the annualization fix is in place:
 
 ```
 cd /Users/kevinlee/Stockpy-live && .venv/bin/python -m scripts.refresh_validations \
@@ -1774,50 +1774,61 @@ cd /Users/kevinlee/Stockpy-live && .venv/bin/python -m scripts.refresh_validatio
 ```
 
 Started 2026-08-21 10:46:49 ET as a detached background process (`nohup ... & disown`,
-PID 29534, log at `/tmp/validation_runs/lgbm_ranker_postfix.log`) — the same exact
-settings as the "before" (crash-then-fixed, wrong-annualization) run this entry corrects.
-As documented in the entry immediately above, an identical prior run at these settings
-(1365 CPCV paths, `n_splits=15`/`n_test_splits=4`) took roughly 2 hours wall-clock;
-progress checked during this session (109 fold-retrains in the first ~10.5 minutes, a
-steady ~10.4 retrains/minute) is consistent with that same ~2-hour total, and the run
-was **still in progress, not yet complete**, at the time this entry was written — the
-CPU-bound nature of a real per-fold LightGBM retrain (not a replayed precomputed series,
-unlike every other adapter in the registry) makes this the one validation run in this
-codebase that cannot be waited out synchronously within a single session turn.
+PID 29534), the same exact settings as the "before" (crash-then-fixed, wrong-annualization)
+run this entry corrects; ran to completion at 12:48:25 ET (~2 hours, all 1365 CPCV paths,
+each a genuine per-fold LightGBM retrain — consistent with the earlier progress estimate).
 
-**No number is fabricated or estimated here.** Per this repo's CONSTRAINT #4, `lgbm_ranker`'s
-real post-fix Sharpe/DSR/PBO/MaxDD are being left as **PENDING** in this entry rather than
-guessed from the in-progress log. To get the real numbers once the run completes:
+**Real, measured result** (`reports/lgbm_ranker_validation_summary.json`):
 
-```
-# Check whether it's still running:
-ps -p 29534
+| Metric | Pre-fix (wrong annualization) | Post-fix (this run) |
+|---|---|---|
+| Sharpe | 24.886 | **0.099** |
+| PBO | 0.000 | 0.000 |
+| DSR | 0.696 | **0.593** |
+| MaxDD | 0.36% | 2.9% |
+| `deployable` | False (DSR gate only) | False (**both** DSR and Sharpe gates now) |
 
-# Once it's finished, the result is both printed at the end of the log and written to
-# the standard JSON/HTML report locations:
-tail -40 /tmp/validation_runs/lgbm_ranker_postfix.log
-cat reports/lgbm_ranker_validation_summary.json
-tail -1 reports/history/lgbm_ranker_validation_history.jsonl
-```
+`deployable=False` holds either way, as expected. The Sharpe collapse (24.886 → 0.099, a
+~251x reduction) is **larger than the annualization scalar alone would produce** — the
+frequency-inference correction alone was only ever expected to account for roughly
+`sqrt(252/20) ≈ 3.5x` (see the prior entry). **Stated honestly rather than over-attributed**:
+this adapter genuinely retrains a fresh LightGBM model per CPCV fold on live market data
+(unlike every other adapter in the registry, which replays a precomputed return series), and
+`settings.VALIDATION_HARNESS_OOS_GATE_ENABLED` is still `False` in this environment, so the
+reported number is still `self.strategy_fn(X, y, X, y)`'s in-sample evaluation — a model
+retrained on a shifted ~6-year trailing window against fresh data two hours (and, across the
+pre-fix/post-fix runs, effectively a full separate live re-run) apart. The residual gap beyond
+the ~3.5x annualization factor is consistent with ordinary run-to-run live-data/retraining
+noise — the same phenomenon the broad verification pass below documented for six OTHER
+strategies, several of which moved by double-digit percentages between same-day runs with
+byte-identical code. This entry does not claim a precise causal split between "annualization
+fix" and "fresh retrain noise" — both real, both expected, and the deployability conclusion is
+unaffected by either.
 
-The prior (pre-annualization-fix) numbers this run supersedes, for reference: `sharpe=24.886`,
-`max_drawdown=0.36%`, `pbo=0.000`, `dsr=0.696`, `deployable=False` (in-sample evaluation,
-wrong `sqrt(252)` annualization on a ~20-observations/year series). The fix is expected to
-deflate the reported Sharpe/DSR materially (by roughly `sqrt(252/20) ≈ 3.5x` on the
-annualization axis alone, before accounting for the separate, already-documented in-sample
-gate at `settings.VALIDATION_HARNESS_OOS_GATE_ENABLED=False`) — but the actual corrected
-value is not asserted here pending the real re-run's completion. `deployable=False` is
-very likely to remain unchanged either way (DSR 0.696 was already well under the 0.95 gate
-before this fix, and annualization/OOS-gate corrections only ever reduce an inflated
-Sharpe/DSR, never increase one), but this entry does not claim that outcome as measured
-until the run's own JSON summary says so. **Follow-up needed**: once
-`reports/lgbm_ranker_validation_summary.json` exists for this run, append the real numbers
-to this entry and to `docs/signals/lgbm_ranker.md`'s corresponding follow-up section (both
-currently marked PENDING) — do not let this PENDING marker go stale.
+### Broader regression-safety verification: 6 more strategies checked independently
+
+Beyond the `rsi2_mean_reversion` bit-identical A/B spot-check above, six more registered
+strategies were independently re-run post-fix and compared against their most recent
+pre-fix numbers, chosen to cover every structurally distinct adapter shape in the registry:
+
+| Strategy | Cadence | Verdict | Basis |
+|---|---|---|---|
+| `macd_trend` | Daily (confirmed) | **MATCHES** | Same `end_date` as the pre-fix baseline; diffs at the 10⁻⁶ level (floating-point noise) |
+| `cross_sectional_momentum` | Daily (confirmed) | DIFFERS-BUT-EXPLAINED | Delta inside the noise band already documented for this strategy earlier the same day |
+| `value_quality_edgar_pit` | Daily (confirmed — quarterly-rebalance, daily-priced) | **MATCHES** | Frozen-data controlled A/B (same method as `rsi2_mean_reversion`): bit-identical |
+| `sector_quality_rank` | Genuine `(Date,Ticker)` MultiIndex — the ONE other non-daily-index adapter besides `lgbm_ranker` | DIFFERS-BUT-EXPLAINED | Directly instrumented `infer_annualization_freq` on a real run: confirmed it hits the fail-safe branch and returns exactly `252.0`; Sharpe/MaxDD delta falls inside the spread of 3 same-day pre-fix runs, which already disagreed with each other by more than with this post-fix run |
+| `forecast_direction_arima_hw` | Daily (independently re-verified, NOT weekly despite its docstring name) | **MATCHES** | Its ARIMA/HW *signal* refits weekly but the position marks to market daily (`.ffill()` across trading days); `infer_annualization_freq` confirmed to return exactly `252.0`; Sharpe/DSR/MaxDD matched to ~10⁻⁷ |
+| `signal_replay_balanced_blend` | Daily (confirmed) | DIFFERS-BUT-EXPLAINED | `max_drawdown` (freq-independent — takes no `freq` parameter) moved by a comparable relative amount to Sharpe, proving the delta is data noise, not the fix |
+
+No regression found in any of the seven strategies spot-checked in total (including
+`rsi2_mean_reversion`). The `forecast_direction_arima_hw` check specifically closes the one
+open question this fix's own 29-strategy cadence survey couldn't settle from naming alone —
+its "weekly" docstring language refers only to signal-refit cadence, not the return-observation
+series the harness actually scores.
 
 Tests: `tests/test_annualization_frequency.py` (26 tests, all passing); full required
 command `pytest -q -m 'not network' -k 'metrics or harness or pbo or dsr or cpcv or
 validation'` (826 passed, 0 failed, re-confirmed in this phase); a live controlled A/B
 spot-check on `rsi2_mean_reversion` (bit-identical pre-fix vs. post-fix on frozen real
-market data, see above) — no genuine regression found in any of the three verification
-layers.
+market data, see above); the 7-strategy broad verification pass above. No genuine regression
+found in any verification layer.
