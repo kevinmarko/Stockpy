@@ -23,7 +23,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { CircuitBreakerState, CircuitBreakerStatusResponse } from "../../api/types";
 import { timeAgo } from "../../format";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 
 export interface DynamicCircuitBreakerBadgeProps {
   /** Optional pre-fetched or controlled status object */
@@ -54,7 +54,7 @@ function getStateConfig(state: CircuitBreakerState): StateConfig {
       return {
         label: "CAUTION",
         color: theme.caution,
-        bg: `${theme.caution}20`,
+        bg: alpha(theme.caution, "20"),
         pulseClass: "pulse-dot",
         description: "Elevated market toxicity or volatility detected",
       };
@@ -62,7 +62,7 @@ function getStateConfig(state: CircuitBreakerState): StateConfig {
       return {
         label: "SOFT HALT",
         color: theme.decline,
-        bg: `${theme.decline}20`,
+        bg: alpha(theme.decline, "20"),
         pulseClass: "pulse-dot",
         description: "New risk-increasing BUY orders paused; exits permitted",
       };
@@ -70,7 +70,7 @@ function getStateConfig(state: CircuitBreakerState): StateConfig {
       return {
         label: "HARD HALT",
         color: theme.decline,
-        bg: `${theme.decline}25`,
+        bg: alpha(theme.decline, "25"),
         pulseClass: "pulse-dot",
         description: "Critical breach — all order submissions blocked",
       };
@@ -79,7 +79,7 @@ function getStateConfig(state: CircuitBreakerState): StateConfig {
       return {
         label: "NORMAL",
         color: theme.growth,
-        bg: `${theme.growth}20`,
+        bg: alpha(theme.growth, "20"),
         pulseClass: "pulse-dot",
         description: "Standard trading conditions — all guardrails clear",
       };
@@ -171,7 +171,7 @@ export const DynamicCircuitBreakerBadge: React.FC<DynamicCircuitBreakerBadgeProp
         data-testid="circuit-breaker-error"
         className={className}
         style={{
-          background: `${theme.decline}15`,
+          background: alpha(theme.decline, "15"),
           border: `1px solid ${theme.decline}`,
           borderRadius: compact ? "var(--r-pill)" : "var(--r-md)",
           padding: compact ? "4px 10px" : "12px 16px",

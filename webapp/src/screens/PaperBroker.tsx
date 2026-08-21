@@ -1224,7 +1224,7 @@ export function PaperBroker() {
                 padding: "8px 16px",
                 background: theme.accent,
                 border: "none",
-                color: theme.base,
+                color: theme.onAccent,
                 borderRadius: 4,
                 cursor: (execMutation.pending || !candidates.data?.candidates?.length) ? "not-allowed" : "pointer",
                 fontWeight: 600,

@@ -4,12 +4,14 @@
  * theme.ts and index.css declare the SAME palette twice (theme.ts exists only
  * because Recharts needs JS color values, not CSS vars). Its docstring says
  * "Change a value here AND in index.css together" — this test turns that
- * hand-sync comment into a CI gate: it reads the `:root` block out of index.css
- * and asserts each of the 14 scalar tokens matches its theme.ts counterpart.
- *
- * Values are compared WHITESPACE-NORMALIZED on purpose — index.css writes
- * `rgba(255, 255, 255, 0.08)` while theme.ts writes `rgba(255,255,255,0.08)`;
- * those are the same color and must not fail the test over a space.
+ * hand-sync comment into a CI gate: it reads the `:root` block(s) out of
+ * index.css and checks each of the 16 scalar tokens two ways: (1) theme.ts's
+ * value is the literal string `var(--x)` for its mapped CSS var (theme.ts no
+ * longer holds resolved colors at all, now that light/dark switching lives
+ * in the CSS cascade — see theme.ts's module docstring), and (2) that CSS
+ * var is actually declared somewhere in index.css's `:root` block(s), so a
+ * renamed/removed token fails loudly instead of silently resolving to
+ * nothing at paint time.
  *
  * Only these scalars are checked. SECTOR_PALETTE / CATEGORY_PALETTE /
  * SERIES_PALETTE have no CSS-var counterpart by design (they're chart-only
@@ -62,17 +64,16 @@ const KEY_TO_CSS_VAR: Record<keyof typeof theme, string> = {
   decline: "--decline",
   caution: "--caution",
   accent: "--accent",
+  onAccent: "--ink-on-accent",
 };
-
-const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
 
 /**
  * Parse `--name: value;` declarations out of EVERY `:root { ... }` block —
  * index.css has more than one (the base token block, plus a small later one
  * for `--safe-bottom`/`--safe-top`). Merging all of them, not just the first,
  * is what makes this a correct "is --x declared anywhere" source of truth for
- * the undeclared-var guard below; it's a superset for the 13-scalar parity
- * check above too (those 13 all live in the first block, so no change there).
+ * the undeclared-var guard below; it's a superset for the 16-scalar parity
+ * check above too (those 16 all live in the first block, so no change there).
  */
 function readRootVars(): Record<string, string> {
   const blocks = [...indexCss.matchAll(/:root\s*\{([\s\S]*?)\}/g)];

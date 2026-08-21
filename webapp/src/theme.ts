@@ -87,7 +87,47 @@ export const theme = {
 
   // Brand accent (interactive / focus)
   accent: "var(--accent)",
+
+  // Ink for text/icons placed on top of a SOLID semantic-color fill (e.g.
+  // GlobalStatusBanner's amber "Advisory Only" bar, a solid accent button).
+  // Deliberately NOT theme-reactive (no :root[data-theme="light"] override
+  // in index.css) -- growth/decline/caution/accent are all mid-to-bright
+  // saturated colors in BOTH themes (that's what makes a good status-fill
+  // color), so the ink on top of one needs to stay dark regardless of which
+  // theme is active. A prior version of this code used theme.base for this
+  // (it happened to equal near-black, since that was the only theme), which
+  // silently broke to near-white-on-amber once --base became theme-reactive.
+  onAccent: "var(--ink-on-accent)",
 } as const;
+
+/**
+ * Translucent tint of a semantic/status color, for a background/border fill
+ * (e.g. a "growth" badge background, a "caution" chip tint).
+ *
+ * Pre-migration, `theme.ts` held literal hex strings, so call sites built a
+ * translucent variant by string-concatenating a 2-digit hex alpha suffix
+ * directly onto the color (`` `${theme.growth}20` `` -> `"#10b98120"`, a
+ * valid 8-digit hex-with-alpha color). Now that every `theme.X` value is a
+ * CSS custom-property reference like `var(--growth)` (see the module
+ * docstring above), that same concatenation produces the STRING
+ * `"var(--growth)20"` -- not a color at all. That's invalid CSS the browser
+ * silently drops (the background/border falls back to
+ * transparent/inherited, no error, no visual difference from "unstyled")
+ * -- this shipped broken across ~20 components before being caught by
+ * manual browser verification.
+ *
+ * `alpha()` is the `var()`-safe replacement, via `color-mix()` (baseline
+ * across evergreen browsers since 2023) so the tint stays reactive to the
+ * live theme exactly like every other `var()` reference here. `hexAlpha` is
+ * the SAME 2-digit hex alpha byte the old suffix trick used (e.g. "20",
+ * "25") -- kept in hex so every call site's exact original opacity carries
+ * over unchanged; this just converts it to the percentage `color-mix()`
+ * wants.
+ */
+export function alpha(cssVar: string, hexAlpha: string): string {
+  const pct = (parseInt(hexAlpha, 16) / 255) * 100;
+  return `color-mix(in srgb, ${cssVar} ${pct}%, transparent)`;
+}
 
 /**
  * Categorical palette for the sector-allocation donut.

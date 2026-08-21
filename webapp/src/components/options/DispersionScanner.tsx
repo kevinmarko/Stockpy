@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { useMutation } from "../../hooks/useMutation";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type {
   DispersionOpportunity,
   DispersionBasketResponse,
@@ -107,7 +107,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.accent}25`,
+                background: alpha(theme.accent, "25"),
                 color: theme.accent,
                 fontWeight: 600,
               }}
@@ -160,7 +160,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
           style={{
             padding: "12px 16px",
             borderRadius: 8,
-            background: statusMessage.type === "success" ? `${theme.growth}20` : `${theme.decline}20`,
+            background: statusMessage.type === "success" ? alpha(theme.growth, "20") : alpha(theme.decline, "20"),
             border: `1px solid ${statusMessage.type === "success" ? theme.growth : theme.decline}`,
             color: statusMessage.type === "success" ? theme.growth : theme.decline,
             fontSize: "0.9rem",
@@ -221,7 +221,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                     fontSize: "0.7rem",
                     padding: "1px 5px",
                     borderRadius: 8,
-                    background: isSelected ? "rgba(0,0,0,0.2)" : `${theme.growth}30`,
+                    background: isSelected ? "rgba(0,0,0,0.2)" : alpha(theme.growth, "30"),
                     color: isSelected ? "#000" : theme.growth,
                   }}
                 >
@@ -239,7 +239,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
               padding: "6px 12px",
               borderRadius: 8,
               border: `1px solid ${filterLongDispersionOnly ? theme.growth : theme.border}`,
-              background: filterLongDispersionOnly ? `${theme.growth}20` : theme.surface,
+              background: filterLongDispersionOnly ? alpha(theme.growth, "20") : theme.surface,
               color: filterLongDispersionOnly ? theme.growth : theme.textSecondary,
               fontSize: "0.8rem",
               fontWeight: 600,
@@ -307,9 +307,9 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                     borderRadius: 6,
                     background:
                       activeOpp.regime === "LONG_DISPERSION"
-                        ? `${theme.growth}25`
+                        ? alpha(theme.growth, "25")
                         : activeOpp.regime === "SHORT_DISPERSION"
-                        ? `${theme.decline}25`
+                        ? alpha(theme.decline, "25")
                         : `${theme.surface3}`,
                     color:
                       activeOpp.regime === "LONG_DISPERSION"
@@ -420,7 +420,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                     fontWeight: 700,
                     padding: "3px 8px",
                     borderRadius: 6,
-                    background: `${theme.growth}25`,
+                    background: alpha(theme.growth, "25"),
                     color: theme.growth,
                   }}
                 >
@@ -590,7 +590,7 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                             style={{
                               padding: "3px 8px",
                               borderRadius: 6,
-                              background: `${theme.growth}20`,
+                              background: alpha(theme.growth, "20"),
                               color: theme.growth,
                               fontWeight: 700,
                               fontSize: "0.75rem",

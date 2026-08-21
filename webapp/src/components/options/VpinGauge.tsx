@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type { VpinMetricsResponse, VpinBucket } from "../../api/types";
 
 interface VpinGaugeProps {
@@ -39,10 +39,10 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
     : theme.decline;
 
   const regimeBg = isLow
-    ? `${theme.growth}20`
+    ? alpha(theme.growth, "20")
     : isModerate
-    ? `${theme.caution}20`
-    : `${theme.decline}20`;
+    ? alpha(theme.caution, "20")
+    : alpha(theme.decline, "20");
 
   // Semicircle gauge parameters (SVG)
   const radius = 80;
@@ -95,7 +95,7 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.accent}25`,
+                background: alpha(theme.accent, "25"),
                 color: theme.accent,
                 fontWeight: 600,
               }}
@@ -213,7 +213,7 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
           style={{
             padding: "12px 16px",
             borderRadius: 8,
-            background: `${theme.decline}20`,
+            background: alpha(theme.decline, "20"),
             border: `1px solid ${theme.decline}`,
             color: theme.decline,
             fontSize: "0.9rem",

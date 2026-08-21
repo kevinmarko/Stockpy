@@ -4,7 +4,7 @@ import { ArrowLeft, Settings } from "lucide-react";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import { OptionChainResponse } from "../api/types";
-import { theme } from "../theme";
+import { theme, alpha } from "../theme";
 import { fmtUsd } from "../format";
 import { OptionsChain as OptionsChainGrid } from "../components/options/OptionsChain";
 import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
@@ -122,7 +122,7 @@ export function OptionsChain() {
             setSelectedLegs([]);
           }}
           style={{
-            background: `${theme.accent}20`,
+            background: alpha(theme.accent, "20"),
             border: `1px solid ${theme.accent}`,
             color: theme.accent,
             borderRadius: 14,

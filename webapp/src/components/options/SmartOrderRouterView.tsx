@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type {
   SorAnalysisResponse,
   LeggingSimulationResponse,
@@ -152,7 +152,7 @@ export const SmartOrderRouterView: React.FC<SmartOrderRouterViewProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.accent}25`,
+                background: alpha(theme.accent, "25"),
                 color: theme.accent,
                 fontWeight: 600,
               }}
@@ -208,7 +208,7 @@ export const SmartOrderRouterView: React.FC<SmartOrderRouterViewProps> = ({
           style={{
             padding: "12px 16px",
             borderRadius: 8,
-            background: `${theme.growth}20`,
+            background: alpha(theme.growth, "20"),
             border: `1px solid ${theme.growth}`,
             color: theme.growth,
             fontSize: "0.9rem",
@@ -309,7 +309,7 @@ export const SmartOrderRouterView: React.FC<SmartOrderRouterViewProps> = ({
                   fontSize: "0.75rem",
                   padding: "3px 8px",
                   borderRadius: 6,
-                  background: `${theme.growth}20`,
+                  background: alpha(theme.growth, "20"),
                   color: theme.growth,
                   fontWeight: 700,
                 }}
@@ -394,7 +394,7 @@ export const SmartOrderRouterView: React.FC<SmartOrderRouterViewProps> = ({
                             borderRadius: 4,
                             fontSize: "0.7rem",
                             fontWeight: 700,
-                            background: l.action === "BUY" ? `${theme.growth}20` : `${theme.decline}20`,
+                            background: l.action === "BUY" ? alpha(theme.growth, "20") : alpha(theme.decline, "20"),
                             color: l.action === "BUY" ? theme.growth : theme.decline,
                           }}
                         >
@@ -413,7 +413,7 @@ export const SmartOrderRouterView: React.FC<SmartOrderRouterViewProps> = ({
                             padding: "1px 6px",
                             borderRadius: 4,
                             fontSize: "0.7rem",
-                            background: l.fill_priority === 1 ? `${theme.accent}25` : theme.surface3,
+                            background: l.fill_priority === 1 ? alpha(theme.accent, "25") : theme.surface3,
                             color: l.fill_priority === 1 ? theme.accent : theme.textSecondary,
                             fontWeight: 600,
                           }}
