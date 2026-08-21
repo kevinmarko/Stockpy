@@ -122,7 +122,12 @@ class CrossSectionalMomentumSignal(SignalModule):
         pct_ranks: pd.Series = valid_returns.rank(pct=True, ascending=True)
 
         context.xsec_percentile_ranks = pct_ranks.to_dict()
-        logger.info(
+        # DEBUG, not INFO: pre_compute runs once per date in a backtest/replay
+        # loop (e.g. signal_replay_balanced_blend's day-by-day adapter can call
+        # this thousands of times in a single validation run), so INFO here
+        # floods the log without adding signal beyond the once-a-day production
+        # case DEBUG already covers.
+        logger.debug(
             "CrossSectionalMomentumSignal.pre_compute: ranked %d tickers.",
             len(pct_ranks),
         )

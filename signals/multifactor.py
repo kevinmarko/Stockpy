@@ -207,7 +207,12 @@ class MultifactorSignal(SignalModule):
             }
 
         context.multifactor_scores = scores
-        logger.info(
+        # DEBUG, not INFO: pre_compute runs once per date in a backtest/replay
+        # loop (e.g. signal_replay_balanced_blend's day-by-day adapter can call
+        # this thousands of times in a single validation run), so INFO here
+        # floods the log without adding signal beyond the once-a-day production
+        # case DEBUG already covers.
+        logger.debug(
             "MultifactorSignal.pre_compute: scored %d tickers (%d microcap-excluded).",
             len(scores), int(is_microcap.sum()),
         )
