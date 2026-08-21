@@ -43,6 +43,30 @@ const PREFLIGHT_COMMAND: CommandSpec = {
 
 const COMMANDS = [HARNESS_COMMAND, PREFLIGHT_COMMAND];
 
+// validation.harness carrying BOTH the singular --strategy and the plural
+// --strategies options, used to prove the palette routes each one to the
+// correct live registry prop (strategyRegistry vs. optionsStrategyRegistry).
+const HARNESS_COMMAND_WITH_STRATEGIES: CommandSpec = {
+  ...HARNESS_COMMAND,
+  options: [
+    ...HARNESS_COMMAND.options,
+    {
+      name: "--strategies",
+      aliases: ["--strategies"],
+      description: "Comma-separated strategies to bulk-validate",
+      default: null,
+      choices: null,
+      required: false,
+      arg_kind: "optional",
+      metavar: "NAMES",
+      takes_value: true,
+    },
+  ],
+};
+
+const STRATEGY_REGISTRY_FIXTURE = ["equity_a", "equity_b"];
+const OPTIONS_STRATEGY_REGISTRY_FIXTURE = ["Iron Condor", "Put Credit Spread"];
+
 describe("CommandPaletteModal", () => {
   it("renders nothing when isOpen is false", () => {
     const { container } = render(
@@ -171,6 +195,70 @@ describe("CommandPaletteModal", () => {
     render(<CommandPaletteModal isOpen onClose={onClose} commands={COMMANDS} />);
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("plural --strategies suggestions come from optionsStrategyRegistry, not strategyRegistry", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPaletteModal
+        isOpen
+        onClose={vi.fn()}
+        commands={[HARNESS_COMMAND_WITH_STRATEGIES, PREFLIGHT_COMMAND]}
+        strategyRegistry={STRATEGY_REGISTRY_FIXTURE}
+        optionsStrategyRegistry={OPTIONS_STRATEGY_REGISTRY_FIXTURE}
+      />
+    );
+
+    await user.type(
+      screen.getByTestId("command-palette-input"),
+      "validation.harness --strategies "
+    );
+
+    expect(screen.getByText("Iron Condor")).toBeInTheDocument();
+    expect(screen.getByText("Put Credit Spread")).toBeInTheDocument();
+    expect(screen.queryByText("equity_a")).not.toBeInTheDocument();
+    expect(screen.queryByText("equity_b")).not.toBeInTheDocument();
+  });
+
+  it("singular --strategy suggestions come from strategyRegistry, not optionsStrategyRegistry", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPaletteModal
+        isOpen
+        onClose={vi.fn()}
+        commands={[HARNESS_COMMAND_WITH_STRATEGIES, PREFLIGHT_COMMAND]}
+        strategyRegistry={STRATEGY_REGISTRY_FIXTURE}
+        optionsStrategyRegistry={OPTIONS_STRATEGY_REGISTRY_FIXTURE}
+      />
+    );
+
+    await user.type(
+      screen.getByTestId("command-palette-input"),
+      "validation.harness --strategy "
+    );
+
+    expect(screen.getByText("equity_a")).toBeInTheDocument();
+    expect(screen.getByText("equity_b")).toBeInTheDocument();
+    expect(screen.queryByText("Iron Condor")).not.toBeInTheDocument();
+  });
+
+  it("renders and functions without the new registry props (falls back to hardcoded constants)", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPaletteModal
+        isOpen
+        onClose={vi.fn()}
+        commands={[HARNESS_COMMAND_WITH_STRATEGIES, PREFLIGHT_COMMAND]}
+      />
+    );
+
+    expect(screen.getByTestId("command-palette-modal")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByTestId("command-palette-input"),
+      "validation.harness --strategy "
+    );
+    expect(screen.getByText(/Suggestions/)).toBeInTheDocument();
   });
 
   it("reopening resets the input to empty", async () => {
