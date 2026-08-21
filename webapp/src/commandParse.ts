@@ -292,7 +292,7 @@ function optionSuggestions(spec: CommandSpec, usedAliases: Set<string>, partial:
 
 function valueSuggestions(option: CommandOption, partial: string, strategyRegistry: string[] = []): Suggestion[] {
   let choices = option.choices ?? [];
-  if (choices.length === 0 && option.name.includes("strategy")) {
+  if (choices.length === 0 && option.name.includes("strateg")) {
     choices = strategyRegistry.length > 0 ? strategyRegistry : REGISTERED_STRATEGIES;
   }
   if (choices.length === 0 && (option.name.includes("start") || option.name.includes("end") || option.name.includes("date"))) {
@@ -527,7 +527,7 @@ export function parseCommandLine(input: string, commands: CommandSpec[], strateg
     prevOption &&
     prevOption.takes_value &&
     (prevOption.choices ||
-      prevOption.name.includes("strategy") ||
+      prevOption.name.includes("strateg") ||
       prevOption.name.includes("start") ||
       prevOption.name.includes("end") ||
       prevOption.name.includes("date"))
