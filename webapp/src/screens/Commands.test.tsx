@@ -548,6 +548,30 @@ describe("Commands screen — Run button", () => {
     expect(copyButton).toHaveTextContent("📋");
   });
 
+  it("shows the Bulk Validate All Strategies button when refresh_validations.py is in the manifest, and clicking it opens Form Mode for that command", async () => {
+    renderCommands();
+    await screen.findByText("main.py");
+
+    const bulkButton = await screen.findByRole("button", {
+      name: /Bulk Validate All Strategies/i,
+    });
+    fireEvent.click(bulkButton);
+
+    const modal = await screen.findByTestId("command-form-builder");
+    expect(within(modal).getByText("refresh_validations.py")).toBeInTheDocument();
+  });
+
+  it("does not render the Bulk Validate All Strategies button when the manifest lacks refresh_validations.py", async () => {
+    vi.spyOn(api, "getCommands").mockResolvedValueOnce(buildManifest([MAIN_PY_COMMAND]));
+
+    renderCommands();
+    await screen.findByText("main.py");
+
+    expect(
+      screen.queryByRole("button", { name: /Bulk Validate All Strategies/i })
+    ).not.toBeInTheDocument();
+  });
+
   it("a rejected createJob renders an inline error message, toasts a failure, and does not crash", async () => {
     vi.spyOn(api, "createJob").mockRejectedValueOnce(
       new ApiError("COMMAND_EXECUTION_ENABLED is False.", 403)

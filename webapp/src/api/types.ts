@@ -3127,6 +3127,14 @@ export interface CommandManifest {
   generated_at: string | null;
   command_count: number;
   dead_letters?: string[];
+  /**
+   * Live strategy names from scripts/refresh_validations.py's STRATEGY_REGISTRY,
+   * generated into the manifest by scripts/build_command_manifest.py. Optional
+   * for backward compat with older mocks/manifests (mirrors `dead_letters?`) --
+   * consumers should fall back to commandParse.ts's REGISTERED_STRATEGIES
+   * constant when this is absent or empty.
+   */
+  strategy_registry?: string[];
   commands: CommandSpec[];
   reason: string | null;
 }

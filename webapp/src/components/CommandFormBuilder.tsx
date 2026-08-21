@@ -11,9 +11,10 @@ import { theme } from "../theme";
 interface CommandFormBuilderProps {
   command: CommandSpec | null;
   onClose: () => void;
+  strategyRegistry?: string[];
 }
 
-export function CommandFormBuilder({ command, onClose }: CommandFormBuilderProps) {
+export function CommandFormBuilder({ command, onClose, strategyRegistry = [] }: CommandFormBuilderProps) {
   if (!command) return null;
 
   const [selectedSubcommandName, setSelectedSubcommandName] = useState<string>(
@@ -36,6 +37,14 @@ export function CommandFormBuilder({ command, onClose }: CommandFormBuilderProps
     return command.subcommands.find((s) => s.name === selectedSubcommandName) ?? null;
   }, [command, selectedSubcommandName]);
 
+  // The live registry passed in by Commands.tsx wins when present; otherwise
+  // fall back to the hardcoded commandParse.ts list so this component works
+  // correctly whether or not the caller threads the prop through.
+  const effectiveStrategies = useMemo(
+    () => (strategyRegistry.length > 0 ? strategyRegistry : REGISTERED_STRATEGIES),
+    [strategyRegistry]
+  );
+
   // Form values state: flag alias -> string | boolean
   const [optionValues, setOptionValues] = useState<Record<string, string | boolean>>(() => {
     const initial: Record<string, string | boolean> = {};
@@ -44,6 +53,11 @@ export function CommandFormBuilder({ command, onClose }: CommandFormBuilderProps
         initial[opt.name] = Boolean(opt.default);
       } else if (opt.default !== null && opt.default !== undefined) {
         initial[opt.name] = String(opt.default);
+      } else if (opt.name === "--strategies") {
+        // refresh_validations.py's plural --strategies defaults to "the
+        // whole registry" when omitted -- make that default explicit and
+        // visible in the form instead of leaving it silently blank.
+        initial[opt.name] = effectiveStrategies.join(",");
       } else {
         initial[opt.name] = "";
       }
@@ -147,6 +161,7 @@ export function CommandFormBuilder({ command, onClose }: CommandFormBuilderProps
                   option={opt}
                   value={optionValues[opt.name]}
                   onChange={(val) => handleOptionChange(opt.name, val)}
+                  strategyRegistry={effectiveStrategies}
                 />
               ))}
             </div>
@@ -166,6 +181,7 @@ export function CommandFormBuilder({ command, onClose }: CommandFormBuilderProps
                 for (const opt of activeSpec.options) {
                   if (!opt.takes_value) reset[opt.name] = Boolean(opt.default);
                   else if (opt.default !== null && opt.default !== undefined) reset[opt.name] = String(opt.default);
+                  else if (opt.name === "--strategies") reset[opt.name] = effectiveStrategies.join(",");
                   else reset[opt.name] = "";
                 }
                 setOptionValues(reset);
@@ -209,14 +225,23 @@ function OptionFormControl({
   option,
   value,
   onChange,
+  strategyRegistry,
 }: {
   option: CommandOption;
   value: string | boolean | undefined;
   onChange: (val: string | boolean) => void;
+  strategyRegistry: string[];
 }) {
-  const isStrategy = option.name.includes("strategy");
+  // Exact-name matches only -- NOT a loose `.includes("strategy")` check.
+  // validation.harness's singular --strategy (one value, a <select>) and
+  // scripts/refresh_validations.py's plural --strategies (a comma-separated
+  // list, a real multi-select) need genuinely different controls; a substring
+  // match would leak the multi-select's "pre-select everything" default onto
+  // the singular flag too.
+  const isSingleStrategy = option.name === "--strategy";
+  const isMultiStrategy = option.name === "--strategies";
   const isDate = option.name.includes("start") || option.name.includes("end") || option.name.includes("date");
-  const choices = option.choices && option.choices.length > 0 ? option.choices : isStrategy ? REGISTERED_STRATEGIES : null;
+  const choices = option.choices && option.choices.length > 0 ? option.choices : isSingleStrategy ? strategyRegistry : null;
 
   if (!option.takes_value) {
     return (
@@ -232,6 +257,17 @@ function OptionFormControl({
           </div>
         )}
       </div>
+    );
+  }
+
+  if (isMultiStrategy) {
+    return (
+      <StrategyMultiSelectControl
+        option={option}
+        value={value}
+        onChange={onChange}
+        strategies={strategyRegistry}
+      />
     );
   }
 
@@ -287,6 +323,96 @@ function OptionFormControl({
           style={{ width: "100%", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Multi-select control for scripts/refresh_validations.py's plural
+ * `--strategies` -- a comma-separated list of strategy names, or omitted
+ * entirely to validate the whole registry (mirrors gui/panels/validation_lab.py's
+ * `st.multiselect(..., default=options)` for the Streamlit "Validation Lab"
+ * tab's equivalent control). Defaults to every strategy selected; "Select
+ * All"/"Clear" plus a per-name Toggle let the operator narrow it down for a
+ * real bulk validation run.
+ */
+function StrategyMultiSelectControl({
+  option,
+  value,
+  onChange,
+  strategies,
+}: {
+  option: CommandOption;
+  value: string | boolean | undefined;
+  onChange: (val: string | boolean) => void;
+  strategies: string[];
+}) {
+  const selected = useMemo(() => {
+    const raw = typeof value === "string" ? value : "";
+    return new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s !== "")
+    );
+  }, [value]);
+
+  const applySelection = (next: Set<string>) => {
+    onChange([...next].sort().join(","));
+  };
+
+  return (
+    <div style={{ background: theme.surface, padding: "var(--s-2-5) var(--s-3)", borderRadius: "var(--r-sm)", border: `1px solid ${theme.border}` }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "var(--s-1)" }}>
+        <label style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: theme.textPrimary, fontSize: "var(--t-body)" }}>
+          {option.name}
+          {option.required && <span style={{ color: theme.decline, marginLeft: 4 }}>*</span>}
+        </label>
+        {option.default !== null && option.default !== undefined && (
+          <span style={{ fontSize: "var(--t-micro)", color: theme.textMuted }}>
+            Default: {String(option.default)}
+          </span>
+        )}
+      </div>
+
+      {option.description && (
+        <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginBottom: "var(--s-1-5)" }}>
+          {option.description}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-1-5)", gap: "var(--s-2)" }}>
+        <div style={{ display: "flex", gap: "var(--s-2)" }}>
+          <Button variant="neutral" onClick={() => applySelection(new Set(strategies))}>
+            Select All
+          </Button>
+          <Button variant="neutral" onClick={() => applySelection(new Set())}>
+            Clear
+          </Button>
+        </div>
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted, whiteSpace: "nowrap" }}>
+          {selected.size} of {strategies.length} selected
+        </span>
+      </div>
+
+      <div style={{ maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: "var(--s-1-5)", paddingRight: "var(--s-1)" }}>
+        {strategies.map((name) => (
+          <Toggle
+            key={name}
+            checked={selected.has(name)}
+            onChange={(checked) => {
+              const next = new Set(selected);
+              if (checked) {
+                next.add(name);
+              } else {
+                next.delete(name);
+              }
+              applySelection(next);
+            }}
+            label={name}
+          />
+        ))}
+      </div>
     </div>
   );
 }
