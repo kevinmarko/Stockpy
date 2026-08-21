@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { useMutation } from "../../hooks/useMutation";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type {
   ZeroDteSignal,
   ZeroDteSignalResponse,
@@ -100,7 +100,7 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.accent}25`,
+                background: alpha(theme.accent, "25"),
                 color: theme.accent,
                 fontWeight: 600,
               }}
@@ -153,7 +153,7 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
           style={{
             padding: "12px 16px",
             borderRadius: 8,
-            background: statusMessage.type === "success" ? `${theme.growth}20` : `${theme.decline}20`,
+            background: statusMessage.type === "success" ? alpha(theme.growth, "20") : alpha(theme.decline, "20"),
             border: `1px solid ${statusMessage.type === "success" ? theme.growth : theme.decline}`,
             color: statusMessage.type === "success" ? theme.growth : theme.decline,
             fontSize: "0.9rem",
@@ -223,9 +223,9 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                   background: isSelected
                     ? "rgba(0,0,0,0.2)"
                     : isBull
-                    ? `${theme.growth}25`
+                    ? alpha(theme.growth, "25")
                     : isBear
-                    ? `${theme.decline}25`
+                    ? alpha(theme.decline, "25")
                     : theme.surface3,
                   color: isSelected
                     ? "#000"
@@ -516,7 +516,7 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                     fontSize: "0.75rem",
                     padding: "3px 8px",
                     borderRadius: 6,
-                    background: `${theme.accent}20`,
+                    background: alpha(theme.accent, "20"),
                     color: theme.accent,
                     fontWeight: 700,
                   }}

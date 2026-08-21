@@ -1,0 +1,25 @@
+# Add Light Theme to Webapp Tasks
+
+- [ ] Update `index.css`
+  - [ ] Wrap existing variables in `:root`
+  - [ ] Add `:root[data-theme='light']` with inverted palette
+  - [ ] Add categorical CSS variables (`--sector-0`, `--category-momentum`, etc.) to both dark and light roots
+- [x] Update `index.css`
+  - [x] Wrap existing variables in `:root`
+  - [x] Add `:root[data-theme='light']` with inverted palette
+  - [x] Add categorical CSS variables (`--sector-0`, `--category-momentum`, etc.) to both dark and light roots
+- [x] Update `theme.ts`
+  - [x] Change exported values from hardcoded hex strings to CSS `var(...)` references
+  - [x] Map arrays (`SECTOR_PALETTE`, `SERIES_PALETTE`) and object (`CATEGORY_PALETTE`) to CSS vars
+- [x] Create Context and Toggle
+  - [x] Create `ThemeContext.tsx`
+  - [x] Create `ThemeToggle.tsx`
+  - [x] Wrap application with `<ThemeProvider>` in `App.tsx`
+  - [x] Add `<ThemeToggle />` to `TopStatusBar.tsx`
+- [x] Testing & Verification
+  - [x] Run typecheck (`npm run typecheck`)
+  - [x] Run tests (`npm run test`)
+  - [x] Manual verification via `npm run dev` in the browser
+- [ ] PR & Documentation
+  - [ ] Copy plan artifacts to `.claude/` prefixing with branch name as per `CLAUDE.md` rules
+  - [ ] Commit and create PR

@@ -25,7 +25,7 @@ export function GlobalStatusBanner() {
   return (
     <div style={{
       background: bannerColor,
-      color: theme.base,
+      color: theme.onAccent,
       padding: "var(--s-2) var(--s-4)",
       borderRadius: "var(--r-md)",
       fontWeight: 600,

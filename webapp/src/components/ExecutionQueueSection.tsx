@@ -7,7 +7,7 @@ import { useExecutionMode } from "../hooks/useExecutionMode";
 import type { ExecutionQueue, ExecutionQueueIntent, DecisionCreateRequest } from "../api/types";
 import { Chip, EmptyState, ErrorState, Loading, StaleDataNotice, Notice } from "./ui";
 import { timeAgo } from "../format";
-import { theme } from "../theme";
+import { theme, alpha } from "../theme";
 import { ChevronDown, ChevronRight, Check, X } from "lucide-react";
 import { SignalContributionPanel } from "./SignalContributionPanel";
 
@@ -270,7 +270,7 @@ function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueI
       className="intent-card-mobile"
       style={{
         padding: "var(--s-2-5) var(--s-3)",
-        background: reviewed ? `${theme.surface}88` : theme.surface,
+        background: reviewed ? alpha(theme.surface, "88") : theme.surface,
         border: `1px solid ${reviewed ? theme.borderStrong : theme.border}`,
         borderRadius: "var(--r-sm)",
         opacity: reviewed ? 0.7 : 1,

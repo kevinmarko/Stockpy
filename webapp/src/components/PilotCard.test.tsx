@@ -79,7 +79,7 @@ describe("PilotCard (real mock API)", () => {
     const chip = screen.getByText(trendFollowing.top_holdings[0].symbol);
     // The chip is colored via theme.growth for a BUY action -- assert the
     // recognizable visual indicator, not just that the symbol text exists.
-    expect(chip).toHaveStyle({ color: "#10b981" });
+    expect(chip).toHaveStyle({ color: "var(--growth)" });
   });
 
   it("shows the DSR chip when headline.dsr is non-null", () => {

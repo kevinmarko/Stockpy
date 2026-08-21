@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type { GexProfileResponse, GexStrikePoint } from "../../api/types";
 
 interface GexProfileViewProps {
@@ -37,7 +37,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
   const netGexM = netGex / 1e6;
   const isVolDampener = data?.gamma_regime === "POSITIVE_GAMMA";
   const regimeColor = isVolDampener ? theme.growth : theme.decline;
-  const regimeBg = isVolDampener ? `${theme.growth}20` : `${theme.decline}20`;
+  const regimeBg = isVolDampener ? alpha(theme.growth, "20") : alpha(theme.decline, "20");
 
   const activeSymbols = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "MSFT"];
 
@@ -94,7 +94,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.accent}25`,
+                background: alpha(theme.accent, "25"),
                 color: theme.accent,
                 fontWeight: 600,
               }}
@@ -289,7 +289,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
         <div
           style={{
             padding: 16,
-            background: `${theme.decline}20`,
+            background: alpha(theme.decline, "20"),
             color: theme.decline,
             borderRadius: 8,
             border: `1px solid ${theme.decline}`,
@@ -737,7 +737,7 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                           onClick={() => onSelectStrike && onSelectStrike(s.strike)}
                           style={{
                             borderBottom: `1px solid ${theme.border}`,
-                            background: isNearSpot ? `${theme.accent}15` : "transparent",
+                            background: isNearSpot ? alpha(theme.accent, "15") : "transparent",
                             cursor: "pointer",
                           }}
                         >
@@ -768,17 +768,17 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
                           </td>
                           <td style={{ padding: "10px 14px", textAlign: "center" }}>
                             {isCallWall && (
-                              <span style={{ fontSize: "0.7rem", padding: "2px 6px", borderRadius: 4, background: `${theme.growth}25`, color: theme.growth, fontWeight: 700 }}>
+                              <span style={{ fontSize: "0.7rem", padding: "2px 6px", borderRadius: 4, background: alpha(theme.growth, "25"), color: theme.growth, fontWeight: 700 }}>
                                 CALL WALL
                               </span>
                             )}
                             {isPutWall && (
-                              <span style={{ fontSize: "0.7rem", padding: "2px 6px", borderRadius: 4, background: `${theme.decline}25`, color: theme.decline, fontWeight: 700 }}>
+                              <span style={{ fontSize: "0.7rem", padding: "2px 6px", borderRadius: 4, background: alpha(theme.decline, "25"), color: theme.decline, fontWeight: 700 }}>
                                 PUT WALL
                               </span>
                             )}
                             {isZeroFlip && (
-                              <span style={{ fontSize: "0.7rem", padding: "2px 6px", borderRadius: 4, background: `${theme.caution}25`, color: theme.caution, fontWeight: 700 }}>
+                              <span style={{ fontSize: "0.7rem", padding: "2px 6px", borderRadius: 4, background: alpha(theme.caution, "25"), color: theme.caution, fontWeight: 700 }}>
                                 ZERO FLIP
                               </span>
                             )}

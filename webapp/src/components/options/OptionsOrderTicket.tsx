@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { OptionContract } from '../../api/types';
 import { Toggle } from '../Toggle';
-import { theme } from '../../theme';
+import { theme, alpha } from '../../theme';
 import { fmtNum, fmtUsd } from '../../format';
 import { api } from '../../api/client';
 import { Modal } from '../Modal';
@@ -266,7 +266,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
                 flex: 1,
                 padding: '8px 0',
                 background: stockAction === act 
-                  ? (act === 'Buy' ? `${theme.growth}25` : `${theme.decline}25`)
+                  ? (act === 'Buy' ? alpha(theme.growth, "25") : alpha(theme.decline, "25"))
                   : theme.surface2,
                 color: stockAction === act 
                   ? (act === 'Buy' ? theme.growth : theme.decline)
@@ -378,7 +378,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
                     flex: 1,
                     minWidth: 50,
                     padding: '4px 6px',
-                    background: dollarAmount === val ? `${theme.accent}30` : theme.base,
+                    background: dollarAmount === val ? alpha(theme.accent, "30") : theme.base,
                     border: `1px solid ${dollarAmount === val ? theme.accent : theme.border}`,
                     color: dollarAmount === val ? theme.accent : theme.textSecondary,
                     borderRadius: 6,
@@ -646,7 +646,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
         <div style={{
           padding: '8px 12px',
           borderRadius: 8,
-          background: `${theme.decline}15`,
+          background: alpha(theme.decline, "15"),
           border: `1px solid ${theme.decline}`,
           color: theme.decline,
           fontSize: 12,
@@ -688,7 +688,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
           <div style={{
             padding: '10px 12px',
             borderRadius: 8,
-            background: `${theme.decline}15`,
+            background: alpha(theme.decline, "15"),
             border: `1px solid ${theme.decline}`,
             color: theme.decline,
             fontSize: 13,
@@ -747,7 +747,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
               the advisory-only constraints noted below.
             </p>
             
-            <div style={{ padding: '14px', background: `${theme.decline}15`, border: `1px solid ${theme.decline}`, borderRadius: 8 }}>
+            <div style={{ padding: '14px', background: alpha(theme.decline, "15"), border: `1px solid ${theme.decline}`, borderRadius: 8 }}>
               <span style={{ fontSize: 13, color: theme.decline, fontWeight: 600 }}>WARNING: ADVISORY ONLY MODE</span>
               <p style={{ margin: '6px 0 0 0', fontSize: 12, color: theme.textSecondary }}>
                 Live order placement is currently subject to advisory constraints and human approval.

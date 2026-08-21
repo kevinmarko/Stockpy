@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../../api/client";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type { MarketMakerSimResponse, MarketMakerStepPoint } from "../../api/types";
 
 interface MarketMakerAgentViewProps {
@@ -153,7 +153,7 @@ export const MarketMakerAgentView: React.FC<MarketMakerAgentViewProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.growth}25`,
+                background: alpha(theme.growth, "25"),
                 color: theme.growth,
                 fontWeight: 600,
               }}
@@ -342,8 +342,8 @@ export const MarketMakerAgentView: React.FC<MarketMakerAgentViewProps> = ({
         <div
           style={{
             padding: "12px 16px",
-            background: `${theme.decline}15`,
-            border: `1px solid ${theme.decline}40`,
+            background: alpha(theme.decline, "15"),
+            border: `1px solid ${alpha(theme.decline, "40")}`,
             borderRadius: 8,
             color: theme.decline,
             fontSize: "0.85rem",

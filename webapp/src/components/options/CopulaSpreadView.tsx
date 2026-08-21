@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../../api/client";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type { CopulaPairsResponse, CopulaSeriesPoint } from "../../api/types";
 
 interface CopulaSpreadViewProps {
@@ -183,7 +183,7 @@ export const CopulaSpreadView: React.FC<CopulaSpreadViewProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.accent}25`,
+                background: alpha(theme.accent, "25"),
                 color: theme.accent,
                 fontWeight: 600,
               }}
@@ -340,8 +340,8 @@ export const CopulaSpreadView: React.FC<CopulaSpreadViewProps> = ({
         <div
           style={{
             padding: "12px 16px",
-            background: `${theme.decline}15`,
-            border: `1px solid ${theme.decline}40`,
+            background: alpha(theme.decline, "15"),
+            border: `1px solid ${alpha(theme.decline, "40")}`,
             borderRadius: 8,
             color: theme.decline,
             fontSize: "0.85rem",

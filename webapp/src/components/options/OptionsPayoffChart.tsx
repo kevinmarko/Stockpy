@@ -1,5 +1,5 @@
 import React from 'react';
-import { theme } from '../../theme';
+import { theme, alpha } from '../../theme';
 
 export type PayoffShape = 'call-spread' | 'put-spread' | 'straddle' | 'strangle' | 'calendar';
 
@@ -50,7 +50,7 @@ export const OptionsPayoffChart: React.FC<Props> = ({ type }) => {
       <line x1="0" y1={mid} x2={w} y2={mid} stroke={theme.borderStrong} strokeWidth="1" strokeDasharray="2 2" />
       
       {/* Fill Area */}
-      <path d={fillPath} fill={`${theme.accent}20`} />
+      <path d={fillPath} fill={alpha(theme.accent, "20")} />
       
       {/* Payoff line */}
       <path d={path} fill="none" stroke={theme.accent} strokeWidth="2" strokeLinejoin="round" />

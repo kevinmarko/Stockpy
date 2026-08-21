@@ -28,6 +28,136 @@
   --caution: #f59e0b;
   --accent: #38bdf8;
 
+  /* Ink for text/icons on a SOLID semantic-color fill (status banners, solid
+     accent buttons). Deliberately declared ONLY here, with no
+     :root[data-theme="light"] override -- see theme.ts's onAccent for why
+     this must stay dark in both themes rather than tracking --text-primary. */
+  --ink-on-accent: #0b0e11;
+
+  /* Glassmorphism overlay tints (.glass-card/.glass-chip/.glass-input/
+     .spinner/.chat-markdown code below). These were previously one-off
+     rgba(255,255,255,X)/rgba(18,22,28,X) literals baked for the dark
+     surface only -- invisible or inverted-looking once a light surface
+     exists, since a "translucent white" tint reads as nothing on white and
+     a literal dark-surface color reads as a solid near-black box. Light
+     mode below re-tints these to a translucent BLACK instead (same alpha
+     steps, same convention as --border/--border-strong/--chart-grid above). */
+  --glass-weak: rgba(255, 255, 255, 0.05);
+  --glass-faint: rgba(255, 255, 255, 0.01);
+  --glass: rgba(255, 255, 255, 0.08);
+  --glass-strong: rgba(255, 255, 255, 0.1);
+  --glass-hover: rgba(255, 255, 255, 0.15);
+  --glass-ring: rgba(255, 255, 255, 0.25);
+  /* .glass-input's own surface tint -- NOT the generic --glass-* overlay
+     scale above, since an input needs to read as an actual translucent
+     surface (matching --surface's hue), not a faint white/black wash. */
+  --glass-surface: rgba(18, 22, 28, 0.6);
+  --glass-surface-focus: rgba(18, 22, 28, 0.8);
+
+  /* Categorical (Sector) */
+  --sector-0: #3987e5;
+  --sector-1: #199e70;
+  --sector-2: #c98500;
+  --sector-3: #9085e9;
+  --sector-4: #e66767;
+  --sector-5: #d55181;
+  --sector-6: #d95926;
+  --sector-7: #5a9bd4;
+
+  /* Categorical (Series) */
+  --series-0: #3987e5;
+  --series-1: #c98500;
+  --series-2: #199e70;
+
+  /* Categorical (Pilot Category) */
+  --cat-momentum: #6366f1;
+  --cat-mean-reversion: #c2410c;
+  --cat-factor: #0d9488;
+  --cat-blend: #e11d48;
+  --cat-macro: #0891b2;
+  --cat-risk: #a16207;
+  --cat-sentiment: #c026d3;
+  --cat-forecast: #65a30d;
+}
+
+:root[data-theme="light"] {
+  /* Surfaces */
+  --base: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --surface-glass: rgba(255, 255, 255, 0.7);
+
+  /* Ink */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  /* Hairlines */
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --chart-grid: rgba(0, 0, 0, 0.06);
+
+  /* Semantic status */
+  --growth: #059669; /* emerald-600 */
+  --decline: #dc2626; /* red-600 */
+  --caution: #d97706; /* amber-600 */
+  --accent: #0284c7; /* sky-600 */
+
+  /* Glassmorphism overlay tints -- see the dark :root block above for why
+     these exist. A "translucent white" tint is invisible against a white
+     surface, so light mode uses a translucent BLACK instead, at the same
+     alpha steps (matching --border/--border-strong/--chart-grid). */
+  --glass-weak: rgba(0, 0, 0, 0.04);
+  --glass-faint: rgba(0, 0, 0, 0.01);
+  --glass: rgba(0, 0, 0, 0.06);
+  --glass-strong: rgba(0, 0, 0, 0.08);
+  --glass-hover: rgba(0, 0, 0, 0.12);
+  --glass-ring: rgba(0, 0, 0, 0.15);
+  /* .glass-input's surface tint: a translucent WHITE (matching --surface's
+     hue in light mode) instead of the dark block's translucent near-black
+     -- the dark literal was the bug (verified live: a solid near-black
+     search box on an otherwise white Options Matrix toolbar). */
+  --glass-surface: rgba(255, 255, 255, 0.6);
+  --glass-surface-focus: rgba(255, 255, 255, 0.85);
+
+  /* --shadow-card override: the dark value's inset highlight
+     (rgba(255,255,255,0.03)) is a no-op on a white card, and 0.35 black
+     opacity reads as too heavy against light surfaces vs. the softer shadow
+     convention light UIs use. Declared here (not in the radii/spacing
+     :root block below) purely for proximity to the rest of this theme's
+     token overrides -- attribute-selector specificity wins regardless of
+     source order. */
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 8px 24px rgba(15, 23, 42, 0.1);
+
+  /* Categorical (Sector) - darker variants for light mode contrast */
+  --sector-0: #2563eb; /* blue-600 */
+  --sector-1: #059669; /* emerald-600 */
+  --sector-2: #b45309; /* amber-700 */
+  --sector-3: #7c3aed; /* violet-600 */
+  --sector-4: #dc2626; /* red-600 */
+  --sector-5: #be185d; /* pink-700 */
+  --sector-6: #c2410c; /* orange-700 */
+  --sector-7: #0284c7; /* sky-600 */
+
+  /* Categorical (Series) */
+  --series-0: #2563eb;
+  --series-1: #b45309;
+  --series-2: #059669;
+
+  /* Categorical (Pilot Category) */
+  --cat-momentum: #4f46e5; /* indigo-600 */
+  --cat-mean-reversion: #9a3412; /* orange-800 */
+  --cat-factor: #0f766e; /* teal-700 */
+  --cat-blend: #e11d48; /* rose-600 */
+  --cat-macro: #0369a1; /* sky-700 */
+  --cat-risk: #b45309; /* amber-700 */
+  --cat-sentiment: #c026d3; /* fuchsia-600 */
+  --cat-forecast: #4d7c0f; /* lime-700 */
+}
+
+:root {
   /* Radii / spacing */
   --r-2xs: 4px;
   --r-xs: 6px;
@@ -106,7 +236,7 @@
   --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
     0 8px 24px rgba(0, 0, 0, 0.35);
 
-  color-scheme: dark;
+  color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -1171,7 +1301,7 @@ button:focus-visible {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.25);
+  border: 2px solid var(--glass-ring);
   border-top-color: #06281d;
   animation: spin 0.7s linear infinite;
 }
@@ -1409,36 +1539,36 @@ button:focus-visible {
 }
 
 .glass-card {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+  background: linear-gradient(135deg, var(--glass-weak) 0%, var(--glass-faint) 100%);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--glass);
   box-shadow: var(--shadow-card);
   border-radius: var(--r-lg);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .glass-card:hover {
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--glass-hover);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   transform: translateY(-2px);
   transition: all 0.2s ease;
 }
 
 .glass-chip {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--glass-weak);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--glass-strong);
 }
 
 .glass-input {
-  background: rgba(18, 22, 28, 0.6);
+  background: var(--glass-surface);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--glass-strong);
 }
 .glass-input:focus {
-  background: rgba(18, 22, 28, 0.8);
+  background: var(--glass-surface-focus);
   border-color: var(--accent);
 }
 
@@ -1508,7 +1638,7 @@ button:focus-visible {
   margin: var(--s-3) 0 var(--s-1);
 }
 .chat-markdown code {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--glass);
   padding: 1px 5px;
   border-radius: var(--r-2xs);
   font-family: var(--font-mono, ui-monospace, monospace);

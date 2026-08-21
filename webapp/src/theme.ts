@@ -40,16 +40,19 @@
  *    for any 8-hue categorical set) — acceptable here because every category
  *    chip always renders its name as visible text (CategoryChip), so identity
  *    is never color-alone (the required secondary-encoding mitigation).
+ *
+ * NOTE: Values here are now mapped to CSS variables to support light/dark
+ * modes dynamically via the CSS :root cascade rather than JS state.
  */
 
 import type { PilotCategory } from "./api/types";
 
 export const theme = {
   // Surfaces (dark fintech base)
-  base: "#0b0e11", // page plane
-  surface: "#12161c", // card / chart surface
-  surface2: "#1a212b", // raised surface (chips, inputs)
-  surface3: "#232c38", // hover / pressed
+  base: "var(--base)", // page plane
+  surface: "var(--surface)", // card / chart surface
+  surface2: "var(--surface-2)", // raised surface (chips, inputs)
+  surface3: "var(--surface-3)", // hover / pressed
 
   // Mirrors index.css's --surface-glass (same value, same "why"): a
   // translucent overlay surface for glassmorphic UI that needs backdrop
@@ -60,31 +63,71 @@ export const theme = {
   // tooltips: chartChrome.test.ts pins those to the opaque theme.surface3
   // to stay byte-equal with index.css's `.recharts-default-tooltip`
   // fallback rule (see that const's doc comment in charts.tsx).
-  surfaceGlass: "rgba(18, 22, 28, 0.7)",
+  surfaceGlass: "var(--surface-glass)",
 
   // Ink
-  textPrimary: "#f2f5f8",
-  textSecondary: "#9aa7b4",
-  textMuted: "#67727f",
+  textPrimary: "var(--text-primary)",
+  textSecondary: "var(--text-secondary)",
+  textMuted: "var(--text-muted)",
 
   // Hairlines
-  border: "rgba(255,255,255,0.08)",
-  borderStrong: "rgba(255,255,255,0.14)",
+  border: "var(--border)",
+  borderStrong: "var(--border-strong)",
 
   // Chart gridlines — its own token because chart grid strokes need to be
   // recessive against --border (0.08): two competing untokenized literals
   // (rgba(...,0.05) and rgba(...,0.06)) were in use across chart files
   // before this was declared. 0.06 was the majority value; kept as-is.
-  chartGrid: "rgba(255,255,255,0.06)",
+  chartGrid: "var(--chart-grid)",
 
   // Semantic (status) — reserved meaning, never used as a categorical series slot
-  growth: "#10b981", // green — gains / positive / deployable
-  decline: "#ef4444", // red — losses / negative / not deployable
-  caution: "#f59e0b", // amber — warnings / pending / gated
+  growth: "var(--growth)", // green — gains / positive / deployable
+  decline: "var(--decline)", // red — losses / negative / not deployable
+  caution: "var(--caution)", // amber — warnings / pending / gated
 
   // Brand accent (interactive / focus)
-  accent: "#38bdf8",
+  accent: "var(--accent)",
+
+  // Ink for text/icons placed on top of a SOLID semantic-color fill (e.g.
+  // GlobalStatusBanner's amber "Advisory Only" bar, a solid accent button).
+  // Deliberately NOT theme-reactive (no :root[data-theme="light"] override
+  // in index.css) -- growth/decline/caution/accent are all mid-to-bright
+  // saturated colors in BOTH themes (that's what makes a good status-fill
+  // color), so the ink on top of one needs to stay dark regardless of which
+  // theme is active. A prior version of this code used theme.base for this
+  // (it happened to equal near-black, since that was the only theme), which
+  // silently broke to near-white-on-amber once --base became theme-reactive.
+  onAccent: "var(--ink-on-accent)",
 } as const;
+
+/**
+ * Translucent tint of a semantic/status color, for a background/border fill
+ * (e.g. a "growth" badge background, a "caution" chip tint).
+ *
+ * Pre-migration, `theme.ts` held literal hex strings, so call sites built a
+ * translucent variant by string-concatenating a 2-digit hex alpha suffix
+ * directly onto the color (`` `${theme.growth}20` `` -> `"#10b98120"`, a
+ * valid 8-digit hex-with-alpha color). Now that every `theme.X` value is a
+ * CSS custom-property reference like `var(--growth)` (see the module
+ * docstring above), that same concatenation produces the STRING
+ * `"var(--growth)20"` -- not a color at all. That's invalid CSS the browser
+ * silently drops (the background/border falls back to
+ * transparent/inherited, no error, no visual difference from "unstyled")
+ * -- this shipped broken across ~20 components before being caught by
+ * manual browser verification.
+ *
+ * `alpha()` is the `var()`-safe replacement, via `color-mix()` (baseline
+ * across evergreen browsers since 2023) so the tint stays reactive to the
+ * live theme exactly like every other `var()` reference here. `hexAlpha` is
+ * the SAME 2-digit hex alpha byte the old suffix trick used (e.g. "20",
+ * "25") -- kept in hex so every call site's exact original opacity carries
+ * over unchanged; this just converts it to the percentage `color-mix()`
+ * wants.
+ */
+export function alpha(cssVar: string, hexAlpha: string): string {
+  const pct = (parseInt(hexAlpha, 16) / 255) * 100;
+  return `color-mix(in srgb, ${cssVar} ${pct}%, transparent)`;
+}
 
 /**
  * Categorical palette for the sector-allocation donut.
@@ -92,14 +135,14 @@ export const theme = {
  * so a sector slice never impersonates the semantic "growth" green.
  */
 export const SECTOR_PALETTE: string[] = [
-  "#3987e5", // blue
-  "#199e70", // aqua
-  "#c98500", // yellow
-  "#9085e9", // violet
-  "#e66767", // red
-  "#d55181", // magenta
-  "#d95926", // orange
-  "#5a9bd4", // light blue
+  "var(--sector-0)", // blue
+  "var(--sector-1)", // aqua
+  "var(--sector-2)", // yellow
+  "var(--sector-3)", // violet
+  "var(--sector-4)", // red
+  "var(--sector-5)", // magenta
+  "var(--sector-6)", // orange
+  "var(--sector-7)", // light blue
 ];
 
 /** Deterministic slot for a sector name (fixed order, never cycled arbitrarily). */
@@ -118,9 +161,9 @@ export function sectorColor(index: number): string {
  * hues: see the module docstring for why a 4th could not be validated.
  */
 export const SERIES_PALETTE: string[] = [
-  "#3987e5", // blue
-  "#c98500", // mustard
-  "#199e70", // teal
+  "var(--series-0)", // blue
+  "var(--series-1)", // mustard
+  "var(--series-2)", // teal
 ];
 
 /**
@@ -142,14 +185,14 @@ export function seriesColor(index: number): string {
  * (see the module docstring above for the validation result).
  */
 export const CATEGORY_PALETTE: Record<PilotCategory, string> = {
-  Momentum: "#6366f1", // indigo
-  "Mean Reversion": "#c2410c", // copper
-  Factor: "#0d9488", // teal
-  Blend: "#e11d48", // rose
-  Macro: "#0891b2", // ocean
-  Risk: "#a16207", // amber
-  Sentiment: "#c026d3", // fuchsia
-  Forecast: "#65a30d", // lime
+  Momentum: "var(--cat-momentum)", // indigo
+  "Mean Reversion": "var(--cat-mean-reversion)", // copper
+  Factor: "var(--cat-factor)", // teal
+  Blend: "var(--cat-blend)", // rose
+  Macro: "var(--cat-macro)", // ocean
+  Risk: "var(--cat-risk)", // amber
+  Sentiment: "var(--cat-sentiment)", // fuchsia
+  Forecast: "var(--cat-forecast)", // lime
 };
 
 /** Deterministic color for a Pilot category (fixed name-keyed slot, never cycled). */

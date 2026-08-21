@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api/client";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 import type { LobQueueSimulationResponse } from "../../api/types";
 
 interface LobDepthViewProps {
@@ -99,7 +99,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
                 fontSize: "0.75rem",
                 padding: "2px 8px",
                 borderRadius: 10,
-                background: `${theme.growth}25`,
+                background: alpha(theme.growth, "25"),
                 color: theme.growth,
                 fontWeight: 600,
               }}
@@ -299,7 +299,7 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
       </div>
 
       {simError && (
-        <div style={{ padding: 12, background: `${theme.decline}20`, color: theme.decline, borderRadius: 8 }}>
+        <div style={{ padding: 12, background: alpha(theme.decline, "20"), color: theme.decline, borderRadius: 8 }}>
           {simError}
         </div>
       )}
