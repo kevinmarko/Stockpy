@@ -1767,6 +1767,79 @@ def get_portfolio_summary() -> str:
         return f"Failed to retrieve portfolio summary: {str(e)}"
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_robinhood_account_snapshot() -> str:
+    """
+    READ-ONLY view of the operator's real Robinhood account: total equity,
+    buying power, total dividends received, and per-symbol positions
+    (quantity, average cost, current price, unrealized P&L, dividends).
+
+    Sourced from data.robinhood_portfolio.fetch_account_snapshot(), the
+    platform's governed three-tier read path (DB -> JSON cache; NEVER a
+    live Robinhood login from this call). This tool cannot place, cancel,
+    or exercise any order under any circumstances: data/robinhood_portfolio.py
+    is a structurally order-code-free module (see its own module
+    docstring -- "ADVISORY ONLY -- this module ... contains NO
+    order-submission, order-modification, or order-cancellation code of
+    any kind"), and this call always passes allow_live_fetch=False, so it
+    can never trigger Robinhood's device-approval login push either. Use
+    this for portfolio-aware coding/research context ("what am I
+    holding", "how much buying power is free") -- order placement stays
+    entirely out of scope for this server (see AGENTS.md's ADVISORY-ONLY
+    posture).
+
+    Degrades to an honest "no cached snapshot" message -- never
+    fabricates figures -- when nothing has been fetched yet; populate one
+    via `main.py --refresh-account` or the Pilots PWA's Connect/Refresh
+    flow, then retry.
+    """
+    from data.robinhood_portfolio import fetch_account_snapshot
+
+    try:
+        snap = fetch_account_snapshot(force=False, allow_live_fetch=False)
+    except Exception as e:
+        return (
+            "No cached Robinhood account snapshot is available yet "
+            f"({type(e).__name__}: {e}). This tool never triggers a live "
+            "login itself -- populate a snapshot via `main.py "
+            "--refresh-account` or the Pilots PWA's Connect/Refresh flow, "
+            "then retry."
+        )
+
+    lines = ["# Robinhood Account Snapshot (read-only)\n"]
+    staleness = f" -- STALE ({snap.age_hours():.1f}h old)" if snap.is_stale() else ""
+    lines.append(f"- **Snapshot age**: {snap.age_hours():.1f}h{staleness}")
+    lines.append(f"- **Total equity**: ${snap.total_equity:,.2f}")
+    lines.append(f"- **Buying power**: ${snap.buying_power:,.2f}")
+    lines.append(f"- **Total dividends received**: ${snap.total_dividends:,.2f}\n")
+
+    if snap.positions:
+        import pandas as pd
+
+        lines.append("## Positions")
+        rows = [
+            {
+                "Symbol": sym,
+                "Qty": pos.quantity,
+                "Avg Cost": f"${pos.average_cost:.2f}",
+                "Current Price": f"${pos.current_price:.2f}",
+                "Market Value": f"${pos.market_value:,.2f}",
+                "Unrealized P&L": f"${pos.unrealized_pl:+,.2f} ({pos.unrealized_pl_pct:+.1f}%)",
+                "Dividends": f"${pos.dividends_received:,.2f}",
+            }
+            for sym, pos in sorted(snap.positions.items())
+        ]
+        lines.append(pd.DataFrame(rows).to_markdown(index=False))
+    else:
+        lines.append("No open positions.")
+
+    lines.append(
+        "\n_Read-only. No order-placement, cancellation, or exercise "
+        "capability exists anywhere in this MCP server._"
+    )
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def get_portfolio_context_note() -> str:
     """

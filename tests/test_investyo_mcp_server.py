@@ -171,7 +171,7 @@ import json
 import os
 import sqlite3
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -1486,6 +1486,117 @@ class TestGetPortfolioSummary:
         monkeypatch.setattr(transactions_store, "TransactionsStore", _raise)
 
         assert "Failed to retrieve portfolio summary" in srv.get_portfolio_summary()
+
+
+# ---------------------------------------------------------------------------
+# get_robinhood_account_snapshot
+# ---------------------------------------------------------------------------
+
+
+class TestGetRobinhoodAccountSnapshot:
+    def _snapshot(self, *, positions=None, stale=False):
+        import data.robinhood_portfolio as rhp
+
+        fetched_at = datetime.now(timezone.utc) - (
+            timedelta(hours=25) if stale else timedelta(hours=1)
+        )
+        return rhp.AccountSnapshot(
+            positions=positions or {},
+            buying_power=5000.0,
+            total_equity=12000.0,
+            total_dividends=15.5,
+            fetched_at=fetched_at,
+        )
+
+    def _position(self, **overrides):
+        import data.robinhood_portfolio as rhp
+
+        defaults = dict(
+            symbol="AAPL",
+            quantity=10.0,
+            average_cost=100.0,
+            current_price=150.0,
+            market_value=1500.0,
+            unrealized_pl=500.0,
+            unrealized_pl_pct=50.0,
+            dividends_received=12.5,
+            name="Apple Inc.",
+        )
+        defaults.update(overrides)
+        return rhp.PortfolioPosition(**defaults)
+
+    def test_never_forces_a_live_login(self, monkeypatch):
+        """Regression: this tool must always call fetch_account_snapshot with
+        force=False, allow_live_fetch=False -- it must never be able to spawn
+        a device-approval login push on an agent's behalf."""
+        import data.robinhood_portfolio as rhp
+
+        calls = []
+
+        def _fake_fetch(*args, **kwargs):
+            calls.append((args, kwargs))
+            return self._snapshot()
+
+        monkeypatch.setattr(rhp, "fetch_account_snapshot", _fake_fetch)
+
+        srv.get_robinhood_account_snapshot()
+
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert kwargs.get("force") is False
+        assert kwargs.get("allow_live_fetch") is False
+
+    def test_no_cached_snapshot_degrades_honestly(self, monkeypatch):
+        import data.robinhood_portfolio as rhp
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("no cache anywhere")
+
+        monkeypatch.setattr(rhp, "fetch_account_snapshot", _raise)
+
+        result = srv.get_robinhood_account_snapshot()
+
+        assert "No cached Robinhood account snapshot is available" in result
+        assert "never triggers a live login" in result
+        # Never fabricates a number in the failure path.
+        assert "$" not in result
+
+    def test_empty_positions_renders_account_totals(self, monkeypatch):
+        import data.robinhood_portfolio as rhp
+
+        monkeypatch.setattr(
+            rhp, "fetch_account_snapshot", lambda *a, **k: self._snapshot()
+        )
+
+        result = srv.get_robinhood_account_snapshot()
+
+        assert "$12,000.00" in result  # total_equity
+        assert "$5,000.00" in result  # buying_power
+        assert "$15.50" in result  # total_dividends
+        assert "No open positions." in result
+        assert "Read-only" in result
+
+    def test_positions_render_as_table(self, monkeypatch):
+        import data.robinhood_portfolio as rhp
+
+        snap = self._snapshot(positions={"AAPL": self._position()})
+        monkeypatch.setattr(rhp, "fetch_account_snapshot", lambda *a, **k: snap)
+
+        result = srv.get_robinhood_account_snapshot()
+
+        assert "AAPL" in result
+        assert "$1,500.00" in result  # market value
+        assert "+$500.00" in result or "500.00" in result  # unrealized P&L
+
+    def test_stale_snapshot_is_flagged(self, monkeypatch):
+        import data.robinhood_portfolio as rhp
+
+        snap = self._snapshot(stale=True)
+        monkeypatch.setattr(rhp, "fetch_account_snapshot", lambda *a, **k: snap)
+
+        result = srv.get_robinhood_account_snapshot()
+
+        assert "STALE" in result
 
 
 # ---------------------------------------------------------------------------
