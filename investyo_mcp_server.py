@@ -3395,108 +3395,156 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
     import math
     from data.market_data import get_provider, get_options_provider
 
-    sym = ticker.upper().strip()
-    provider = get_provider()
-    options_provider = get_options_provider()
-
-    # 1. Fetch chain data
     try:
-        chain_data = options_provider.fetch_options_chain(sym)
-    except Exception:
+        sym = ticker.upper().strip()
+        provider = get_provider()
+        options_provider = get_options_provider()
+
+        # 1. Fetch chain data — fetch_options_chain(symbol) with no expiration returns
+        # a bare list of expiration-date strings, not real per-strike chain data.
+        # Mirror pilots.volatility_surface.get_volatility_surface_data's /
+        # pilots.vol_mispricing.get_volatility_mispricing_data's two-step pattern:
+        # fetch the expirations list, then fetch each expiration's real chain,
+        # building a {expiration_str: chain_object_or_dict} map. A single expiration
+        # that fails to fetch (falsy/None return) is skipped rather than aborting
+        # the whole call.
         chain_data = None
-        
-    if not chain_data:
-        return {"error": f"No chain data available for {sym}", "directive": None, "surface": None, "mispricing": None}
-
-    # 2. Fetch bars & spot price
-    bars = provider.get_intraday_bars(sym)
-    if bars is None or bars.empty:
-        return {"error": f"No bar data available for {sym}", "directive": None, "surface": None, "mispricing": None}
-        
-    spot_price = None
-    is_stale = True
-    try:
-        q = provider.get_latest_quote(sym)
-        if q is not None and q.price is not None and float(q.price) > 0:
-            spot_price = float(q.price)
-            is_stale = bool(getattr(q, "is_stale", True))
-    except Exception:
-        spot_price = None
-        
-    if spot_price is None:
-        spot_price = float(bars["Close"].iloc[-1])
-        is_stale = True
-
-    # 3. Macro proxy for build_premium_directive
-    snap = _load_state_snapshot()
-    vix_val = 15.0
-    regime_val = "RISK ON"
-    if isinstance(snap, dict):
-        raw_vix = snap.get("vix")
         try:
-            vix_val = float(raw_vix) if raw_vix is not None else 15.0
-        except (TypeError, ValueError):
-            vix_val = 15.0
-        regime_val = str(snap.get("market_regime") or "RISK ON")
+            expirations = options_provider.fetch_options_chain(sym)
+            if expirations and isinstance(expirations, list):
+                chain_map = {}
+                for exp in expirations[:5]:
+                    c = options_provider.fetch_options_chain(sym, exp)
+                    if c:
+                        chain_map[str(exp)] = c
+                if chain_map:
+                    chain_data = chain_map
+        except Exception:
+            chain_data = None
 
-    macro_proxy = _MacroProxy(vix_val, regime_val)
+        if not chain_data:
+            return {"error": f"No chain data available for {sym}", "directive": None, "surface": None, "mispricing": None}
 
-    # 4. Directive
-    try:
-        from technical_options_engine import build_premium_directive
-        directive = build_premium_directive(
-            sym,
-            bars,
-            spot_price=spot_price,
-            is_stale=is_stale,
-            target_dte=target_dte,
-            macro_dto=macro_proxy,
-            vrp=None
-        )
+        # 2. Fetch bars & spot price
+        bars = provider.get_intraday_bars(sym)
+        if bars is None or bars.empty:
+            return {"error": f"No bar data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+
+        spot_price = None
+        is_stale = True
+        try:
+            q = provider.get_latest_quote(sym)
+            if q is not None and q.price is not None and float(q.price) > 0:
+                spot_price = float(q.price)
+                is_stale = bool(getattr(q, "is_stale", True))
+        except Exception:
+            spot_price = None
+
+        if spot_price is None:
+            spot_price = float(bars["Close"].iloc[-1])
+            is_stale = True
+
+        # 3. Macro proxy for build_premium_directive
+        snap = _load_state_snapshot()
+        vix_val = 15.0
+        regime_val = "RISK ON"
+        if isinstance(snap, dict):
+            raw_vix = snap.get("vix")
+            try:
+                vix_val = float(raw_vix) if raw_vix is not None else 15.0
+            except (TypeError, ValueError):
+                vix_val = 15.0
+            regime_val = str(snap.get("market_regime") or "RISK ON")
+
+        macro_proxy = _MacroProxy(vix_val, regime_val)
+
+        # 4. Directive
+        try:
+            from technical_options_engine import build_premium_directive
+            directive = build_premium_directive(
+                sym,
+                bars,
+                spot_price=spot_price,
+                is_stale=is_stale,
+                target_dte=target_dte,
+                macro_dto=macro_proxy,
+                vrp=None
+            )
+        except Exception as e:
+            directive = {"error": str(e)}
+
+        # 5. Volatility Surface
+        try:
+            from pilots.volatility_surface import calculate_volatility_surface
+            surface = calculate_volatility_surface(
+                ticker=sym,
+                chain_data=chain_data,
+                spot_price=spot_price,
+                historical_prices=bars["Close"]
+            )
+        except Exception as e:
+            surface = {"error": str(e)}
+
+        # 6. Strike Mispricing — calculate_volatility_surface's return dict has no
+        # top-level "atm_iv"; it's nested per-expiration under smiles[exp_date]["atm_iv"].
+        # Derive a fair_iv_forecast scalar from the smile whose own "dte" is nearest to
+        # target_dte (the real, already-computed surface — never a second, competing IV
+        # source) instead of reading a key that never existed.
+        fair_iv_forecast = None
+        if isinstance(surface, dict):
+            smiles = surface.get("smiles")
+            if isinstance(smiles, dict) and smiles:
+                best_entry = None
+                best_diff = None
+                for entry in smiles.values():
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_dte = entry.get("dte")
+                    entry_atm_iv = entry.get("atm_iv")
+                    if entry_dte is None or entry_atm_iv is None:
+                        continue
+                    diff = abs(float(entry_dte) - float(target_dte))
+                    if best_diff is None or diff < best_diff:
+                        best_diff = diff
+                        best_entry = entry
+                if best_entry is not None:
+                    fair_iv_forecast = best_entry.get("atm_iv")
+
+        try:
+            from pilots.vol_mispricing import evaluate_strike_mispricing, MispricingAnalysis
+            mispricing_result = evaluate_strike_mispricing(
+                chain_data=chain_data,
+                spot_price=spot_price,
+                fair_iv_forecast=fair_iv_forecast,
+                dte=target_dte
+            )
+            # evaluate_strike_mispricing returns a MispricingAnalysis dataclass, not a
+            # plain dict — every real caller (e.g. get_volatility_mispricing_data)
+            # calls .to_dict() on it before returning/using it.
+            mispricing = mispricing_result.to_dict() if isinstance(mispricing_result, MispricingAnalysis) else mispricing_result
+        except Exception as e:
+            mispricing = {"error": str(e)}
+
+        # Sanitize NaNs — matches the ~10 other NaN-handling sites in this file, which
+        # all convert to None (JSON null), never the string "NaN".
+        def _sanitize(obj):
+            if isinstance(obj, float) and math.isnan(obj):
+                return None
+            if isinstance(obj, dict):
+                return {k: _sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_sanitize(v) for v in obj]
+            return obj
+
+        return _sanitize({
+            "ticker": sym,
+            "spot_price": spot_price,
+            "directive": directive,
+            "surface": surface,
+            "mispricing": mispricing
+        })
     except Exception as e:
-        directive = {"error": str(e)}
-
-    # 5. Volatility Surface
-    try:
-        from pilots.volatility_surface import calculate_volatility_surface
-        surface = calculate_volatility_surface(
-            ticker=sym,
-            chain_data=chain_data,
-            spot_price=spot_price,
-            historical_prices=bars["Close"]
-        )
-    except Exception as e:
-        surface = {"error": str(e)}
-
-    # 6. Strike Mispricing
-    try:
-        from pilots.vol_mispricing import evaluate_strike_mispricing
-        mispricing = evaluate_strike_mispricing(
-            chain_data=chain_data,
-            spot_price=spot_price,
-            fair_iv_forecast=surface.get("atm_iv") if isinstance(surface, dict) else None,
-            dte=target_dte
-        )
-    except Exception as e:
-        mispricing = {"error": str(e)}
-
-    # Sanitize NaNs
-    def _sanitize(obj):
-        if isinstance(obj, float) and math.isnan(obj):
-            return "NaN"
-        if isinstance(obj, dict):
-            return {k: _sanitize(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_sanitize(v) for v in obj]
-        return obj
-
-    return _sanitize({
-        "ticker": sym,
-        "spot_price": spot_price,
-        "directive": directive,
-        "surface": surface,
-        "mispricing": mispricing
-    })
+        return {"error": f"Failed to analyze options chain for {ticker}: {str(e)}", "directive": None, "surface": None, "mispricing": None}
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
