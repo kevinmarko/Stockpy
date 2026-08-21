@@ -1972,3 +1972,276 @@ class TestMainCLI:
             main(["--workers", "4", "--output-dir", str(tmp_path)])
 
         assert captured["max_workers"] == 4
+
+
+# ---------------------------------------------------------------------------
+# TestFmpBackedDownloadFunctions
+# ---------------------------------------------------------------------------
+#
+# Every other test in this file patches `_download_closes`/`_download_shares`/
+# `_download_ohlcv` WHOLESALE, so the real yfinance->FMP migration bodies
+# (`_fetch_fmp_ohlcv_batch` and its two thin wrappers, plus `_download_shares`)
+# have never actually been exercised. These tests instead mock at the
+# `data.fmp_client` / `data.market_data` boundary -- matching
+# tests/test_fmp_provider.py's own convention for this exact reshape helper --
+# so the real fetch/reshape/threading/dead-letter code runs for real.
+
+class TestFmpBackedDownloadFunctions:
+    @staticmethod
+    def _fmp_eod_payload(prices: List[float], start: str = "2024-01-01") -> List[Dict[str, Any]]:
+        """A real ``dividend-adjusted`` ``/historical-price-eod`` payload
+        shape -- a list of per-bar dicts keyed by adjOpen/adjHigh/adjLow/
+        adjClose/volume (see data/market_data.py::_fmp_bars_payload_to_df's
+        docstring and tests/test_fmp_provider.py's identical fixture)."""
+        idx = pd.bdate_range(start=start, periods=len(prices))
+        return [
+            {
+                "date": d.strftime("%Y-%m-%d"),
+                "adjOpen": p - 0.5, "adjHigh": p + 0.5,
+                "adjLow": p - 1.0, "adjClose": p,
+                "volume": 1_000_000,
+            }
+            for d, p in zip(idx, prices)
+        ]
+
+    def setup_method(self) -> None:
+        # The FMP_BARS_ADJUSTMENT mismatch warning is a once-per-process
+        # module-level latch (data/market_data.py) -- reset it before each
+        # test so the warning-plumbing tests below aren't silently
+        # short-circuited by a previous test in this class or file.
+        from data.market_data import reset_fmp_bars_adjustment_warning
+        reset_fmp_bars_adjustment_warning()
+
+    # -- _download_closes -----------------------------------------------
+
+    def test_download_closes_happy_path_multi_ticker(self) -> None:
+        from scripts.refresh_validations import _download_closes
+
+        payloads = {
+            "AAPL": self._fmp_eod_payload([100.0, 101.0, 102.0]),
+            "MSFT": self._fmp_eod_payload([200.0, 201.0, 202.0]),
+        }
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            return payloads[symbol]
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod):
+            closes = _download_closes(["AAPL", "MSFT"], "2024-01-01", "2024-01-05")
+
+        assert list(closes.columns) == ["AAPL", "MSFT"]
+        assert closes["AAPL"].tolist() == pytest.approx([100.0, 101.0, 102.0], abs=1e-5)
+        assert closes["MSFT"].tolist() == pytest.approx([200.0, 201.0, 202.0], abs=1e-5)
+        assert isinstance(closes.index, pd.DatetimeIndex)
+        assert closes.index.is_monotonic_increasing
+
+    def test_download_closes_columns_follow_requested_order_not_fetch_order(self) -> None:
+        from scripts.refresh_validations import _download_closes
+
+        payloads = {
+            "MSFT": self._fmp_eod_payload([200.0, 201.0]),
+            "AAPL": self._fmp_eod_payload([100.0, 101.0]),
+            "GOOG": self._fmp_eod_payload([300.0, 301.0]),
+        }
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            return payloads[symbol]
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod):
+            closes = _download_closes(["MSFT", "AAPL", "GOOG"], "2024-01-01", "2024-01-05")
+
+        assert list(closes.columns) == ["MSFT", "AAPL", "GOOG"]
+
+    def test_download_closes_partial_failure_bad_ticker_silently_absent(self) -> None:
+        from scripts.refresh_validations import _download_closes
+
+        good_payload = self._fmp_eod_payload([100.0, 101.0, 102.0])
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            if symbol == "BADCO":
+                raise RuntimeError("simulated FMP failure")
+            return good_payload
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod):
+            closes = _download_closes(["AAPL", "BADCO", "MSFT"], "2024-01-01", "2024-01-05")
+
+        assert "BADCO" not in closes.columns
+        assert list(closes.columns) == ["AAPL", "MSFT"]
+        assert closes["AAPL"].tolist() == pytest.approx([100.0, 101.0, 102.0], abs=1e-5)
+        assert closes["MSFT"].tolist() == pytest.approx([100.0, 101.0, 102.0], abs=1e-5)
+
+    def test_download_closes_empty_payload_ticker_silently_absent(self) -> None:
+        """A ticker whose fetch returns an empty payload (not an exception)
+        must also be absent from the result, never fabricated."""
+        from scripts.refresh_validations import _download_closes
+
+        good_payload = self._fmp_eod_payload([100.0, 101.0])
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            if symbol == "EMPTY":
+                return []
+            return good_payload
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod):
+            closes = _download_closes(["AAPL", "EMPTY"], "2024-01-01", "2024-01-05")
+
+        assert list(closes.columns) == ["AAPL"]
+
+    def test_download_closes_total_failure_raises_runtime_error(self) -> None:
+        from scripts.refresh_validations import _download_closes
+
+        with patch("data.fmp_client.historical_eod", side_effect=RuntimeError("FMP is down")):
+            with pytest.raises(RuntimeError, match="Failed to download price data"):
+                _download_closes(["AAPL", "MSFT"], "2024-01-01", "2024-01-05")
+
+    # -- _download_ohlcv --------------------------------------------------
+
+    def test_download_ohlcv_happy_path_column_shape(self) -> None:
+        from scripts.refresh_validations import _download_ohlcv
+
+        payloads = {
+            "AAPL": self._fmp_eod_payload([100.0, 101.0, 102.0]),
+            "MSFT": self._fmp_eod_payload([200.0, 201.0, 202.0]),
+        }
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            return payloads[symbol]
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod):
+            ohlcv = _download_ohlcv(["AAPL", "MSFT"], "2024-01-01", "2024-01-05")
+
+        assert set(ohlcv.keys()) == {"AAPL", "MSFT"}
+        for bars in ohlcv.values():
+            assert list(bars.columns) == ["Open", "High", "Low", "Close", "Volume"]
+            assert isinstance(bars.index, pd.DatetimeIndex)
+        assert ohlcv["AAPL"]["Close"].tolist() == pytest.approx([100.0, 101.0, 102.0], abs=1e-5)
+
+    def test_download_ohlcv_dead_letters_per_ticker_failure(self) -> None:
+        from scripts.refresh_validations import _download_ohlcv
+
+        good_payload = self._fmp_eod_payload([100.0, 101.0])
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            if symbol == "BADCO":
+                raise RuntimeError("simulated FMP failure")
+            return good_payload
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod):
+            ohlcv = _download_ohlcv(["AAPL", "BADCO"], "2024-01-01", "2024-01-05")
+
+        assert set(ohlcv.keys()) == {"AAPL"}
+
+    # -- _download_shares ---------------------------------------------------
+
+    def test_download_shares_happy_path_list_wrapped_dict(self) -> None:
+        """FMP's typical response shape: a non-empty list wrapping one dict."""
+        from scripts.refresh_validations import _download_shares
+
+        def fake_shares_float(symbol):
+            return [{"symbol": symbol, "outstandingShares": 1_000_000.0}]
+
+        with patch("data.fmp_client.shares_float", side_effect=fake_shares_float):
+            out = _download_shares(["AAPL"])
+
+        assert out == {"AAPL": 1_000_000.0}
+
+    def test_download_shares_happy_path_bare_dict(self) -> None:
+        """Locks in that reusing `_first` (also handling a bare-dict payload,
+        not just a list-wrapped one) didn't change behavior."""
+        from scripts.refresh_validations import _download_shares
+
+        def fake_shares_float(symbol):
+            return {"symbol": symbol, "outstandingShares": 2_000_000.0}
+
+        with patch("data.fmp_client.shares_float", side_effect=fake_shares_float):
+            out = _download_shares(["MSFT"])
+
+        assert out == {"MSFT": 2_000_000.0}
+
+    def test_download_shares_missing_field_ticker_absent(self) -> None:
+        from scripts.refresh_validations import _download_shares
+
+        def fake_shares_float(symbol):
+            return [{"symbol": symbol}]  # no outstandingShares field at all
+
+        with patch("data.fmp_client.shares_float", side_effect=fake_shares_float):
+            out = _download_shares(["AAPL"])
+
+        assert out == {}
+
+    def test_download_shares_falsy_field_ticker_absent_not_fabricated_zero(self) -> None:
+        from scripts.refresh_validations import _download_shares
+
+        def fake_shares_float(symbol):
+            return [{"symbol": symbol, "outstandingShares": 0}]
+
+        with patch("data.fmp_client.shares_float", side_effect=fake_shares_float):
+            out = _download_shares(["AAPL"])
+
+        assert out == {}
+        assert "AAPL" not in out
+
+    def test_download_shares_partial_failure_dead_lettered(self) -> None:
+        from scripts.refresh_validations import _download_shares
+
+        def fake_shares_float(symbol):
+            if symbol == "BADCO":
+                raise RuntimeError("simulated FMP failure")
+            return [{"symbol": symbol, "outstandingShares": 500_000.0}]
+
+        with patch("data.fmp_client.shares_float", side_effect=fake_shares_float):
+            out = _download_shares(["AAPL", "BADCO"])
+
+        assert out == {"AAPL": 500_000.0}
+
+    # -- FMP_BARS_ADJUSTMENT variant plumbing --------------------------------
+
+    def test_variant_sourced_from_settings_fmp_bars_adjustment(self) -> None:
+        """historical_eod must be called with variant=settings.FMP_BARS_ADJUSTMENT,
+        not a hardcoded literal."""
+        from scripts.refresh_validations import _download_closes
+
+        payload = self._fmp_eod_payload([100.0, 101.0])
+        with patch("settings.settings.FMP_BARS_ADJUSTMENT", "full"), \
+             patch("data.fmp_client.historical_eod", return_value=payload) as mock_eod:
+            _download_closes(["AAPL"], "2024-01-01", "2024-01-05")
+
+        assert mock_eod.call_args.kwargs["variant"] == "full"
+
+    def test_default_variant_is_dividend_adjusted(self) -> None:
+        from scripts.refresh_validations import _download_closes
+
+        payload = self._fmp_eod_payload([100.0, 101.0])
+        with patch("settings.settings.FMP_BARS_ADJUSTMENT", "dividend-adjusted"), \
+             patch("data.fmp_client.historical_eod", return_value=payload) as mock_eod:
+            _download_closes(["AAPL"], "2024-01-01", "2024-01-05")
+
+        assert mock_eod.call_args.kwargs["variant"] == "dividend-adjusted"
+
+    def test_mismatched_variant_triggers_mismatch_warning(self, caplog) -> None:
+        import logging
+
+        from scripts.refresh_validations import _download_closes
+
+        payload = self._fmp_eod_payload([100.0, 101.0])
+        with patch("settings.settings.FMP_BARS_ADJUSTMENT", "full"), \
+             patch("data.fmp_client.historical_eod", return_value=payload), \
+             caplog.at_level(logging.WARNING, logger="data.market_data"):
+            _download_closes(["AAPL"], "2024-01-01", "2024-01-05")
+
+        assert any(
+            "FMP_BARS_ADJUSTMENT" in r.message and "full" in r.message
+            for r in caplog.records
+        )
+
+    def test_default_variant_does_not_trigger_mismatch_warning(self, caplog) -> None:
+        import logging
+
+        from scripts.refresh_validations import _download_closes
+
+        payload = self._fmp_eod_payload([100.0, 101.0])
+        with patch("settings.settings.FMP_BARS_ADJUSTMENT", "dividend-adjusted"), \
+             patch("data.fmp_client.historical_eod", return_value=payload), \
+             caplog.at_level(logging.WARNING, logger="data.market_data"):
+            _download_closes(["AAPL"], "2024-01-01", "2024-01-05")
+
+        assert not any("FMP_BARS_ADJUSTMENT" in r.message for r in caplog.records)

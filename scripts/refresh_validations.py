@@ -108,12 +108,18 @@ Design constraints
 * CONSTRAINT #4 — fabricated/synthetic returns are never passed to the harness;
   if the adapter cannot build valid X/y the strategy is skipped with an error.
   No fabricated point-in-time fundamentals (see the sections above).
-* CONSTRAINT #7 — price/shares fetching uses yfinance (same library as the
-  existing test harnesses in ``tests/test_validation_*.py``); no new data
-  providers are added to THIS module's own fetch surface. The EDGAR-PIT
-  adapters add no new network call here — they only read the existing,
-  already-shipped internal ``HistoricalStore`` abstraction other code already
-  populates and consumes.
+* CONSTRAINT #7 — price/shares fetching goes through FMP (``data/fmp_client.py``),
+  per-ticker, reusing ``data/market_data.py``'s existing adjustment-aware
+  ``_fmp_bars_payload_to_df`` reshape helper rather than reimplementing its
+  adjX/X field-name-fallback logic. Every request is paced by
+  ``fmp_client``'s own module-level throttle/retry/circuit-breaker
+  (``FMP_MIN_REQUEST_INTERVAL_SECONDS``/``FMP_MAX_RETRIES``/
+  ``FMP_COOLDOWN_THRESHOLD``) — the same protection ``data/sentiment_sources.
+  py``'s GDELT limiter mirrors — so a wide (~500-ticker) universe fetch
+  degrades gracefully instead of hammering one host unthrottled. The
+  EDGAR-PIT adapters add no new network call here — they only read the
+  existing, already-shipped internal ``HistoricalStore`` abstraction other
+  code already populates and consumes.
 """
 from __future__ import annotations
 
@@ -233,8 +239,10 @@ _XSEC_UNIVERSE_CAPPED: List[str] = _load_wide_universe(cap=100)
 # was cheap enough to ignore (the shared universe topped out at 30 names);
 # now that the cheap tier is ~500 names, downloading a shares-outstanding
 # snapshot for every multi-name strategy's FULL universe would mean ~500
-# sequential, unthrottled ``yfinance`` ``fast_info`` calls for strategies
-# that throw the result away. ``run_validations`` intersects this set with
+# FMP ``/shares-float`` calls (each paced by ``FMP_MIN_REQUEST_INTERVAL_
+# SECONDS`` with retry/circuit-breaker protection, so throttled rather than
+# unbounded — but still real request volume) for strategies that throw the
+# result away. ``run_validations`` intersects this set with
 # ``known`` (the strategies actually selected) before building
 # ``share_tickers`` -- see that function's own comment.
 _STRATEGIES_NEEDING_SHARES = {"multifactor_lowvol_size"}
@@ -1874,42 +1882,95 @@ _AROON_LENGTH = 25
 _EWMA_VOL_ALPHA = 0.06  # RiskMetrics lambda=0.94, same as _build_garch_voltarget_adapter
 
 
-def _download_ohlcv(
+def _fetch_fmp_ohlcv_batch(
     tickers: List[str], start_date: str, end_date: str
 ) -> Dict[str, pd.DataFrame]:
-    """Download full OHLCV (not just Close) via yfinance, one DataFrame per
-    ticker. Every other adapter in this module only needs Close; Aroon needs
-    High/Low too. Per-ticker failures are logged and skipped (never abort
-    the whole batch); a ticker absent from the return dict simply has no
-    Aroon/trend_strength contribution downstream (never fabricated).
+    """Fetch full OHLCV bars per ticker via FMP — the ONE shared fetch path
+    behind both ``_download_ohlcv`` (needs the full OHLCV shape) and
+    ``_download_closes`` (extracts just ``Close`` from what this returns).
+
+    Factored out so the adjustment-convention-sensitive fetch/reshape logic
+    (``settings.FMP_BARS_ADJUSTMENT`` resolution + the once-per-process
+    mismatch warning + ``data.market_data._fmp_bars_payload_to_df``'s adjX/X
+    field-name fallback) lives in exactly ONE place rather than two
+    near-identical copies that could silently drift apart on a future edit —
+    this repo's own documentation calls an adjustment-convention mismatch the
+    single highest-risk class of bug in any FMP integration.
+
+    Each ticker is fetched independently via ``data.fmp_client.historical_eod``
+    (variant = ``settings.FMP_BARS_ADJUSTMENT``, default ``"dividend-adjusted"``)
+    and reshaped through ``data.market_data._fmp_bars_payload_to_df`` — the
+    SAME adjustment-aware reshape helper ``FMPProvider.get_intraday_bars``
+    uses, reused rather than reimplemented so the adjX/X field-name fallback
+    (and thus the yfinance-equivalent adjustment convention) stays correct.
+    The per-ticker fetches run inside a bounded ``ThreadPoolExecutor`` to
+    overlap network latency across threads; ``fmp_client``'s own
+    module-level throttle lock still serializes actual request issuance
+    process-wide (``FMP_MIN_REQUEST_INTERVAL_SECONDS``/``FMP_MAX_RETRIES``/
+    ``FMP_COOLDOWN_THRESHOLD``), so this does not bypass FMP's rate limit.
+    Per-ticker failures (including ``FMPUnavailable`` when ``FMP_API_KEY`` is
+    unset) are logged and skipped (never abort the whole batch); a ticker
+    absent from the return dict simply has no data downstream (never
+    fabricated).
+
+    Returns a dict keyed by ticker, each value a DataFrame with columns
+    exactly ``['Open', 'High', 'Low', 'Close', 'Volume']`` and a tz-naive,
+    ascending-sorted ``DatetimeIndex``.
     """
-    import yfinance as yf
+    from data import fmp_client
+    from data.market_data import (
+        _fmp_bars_payload_to_df,
+        _warn_once_if_fmp_bars_adjustment_mismatched,
+    )
+    from settings import settings
 
     out: Dict[str, pd.DataFrame] = {}
     ordered = list(dict.fromkeys(tickers))
-    try:
-        df = yf.download(
-            ordered, start=start_date, end=end_date, progress=False,
-            auto_adjust=True, group_by="ticker",
-        )
-    except Exception as exc:
-        logger.warning("_download_ohlcv: yf.download failed: %s", exc)
-        df = None
-    if df is None or df.empty:
+    if not ordered:
         return out
-    for ticker in ordered:
+
+    variant = str(getattr(settings, "FMP_BARS_ADJUSTMENT", "dividend-adjusted") or "dividend-adjusted")
+    _warn_once_if_fmp_bars_adjustment_mismatched(variant)
+
+    def _fetch_one(ticker: str) -> Tuple[str, Optional[pd.DataFrame]]:
         try:
-            if isinstance(df.columns, pd.MultiIndex):
-                sub = df[ticker][["Open", "High", "Low", "Close", "Volume"]].copy()
-            else:
-                sub = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-            sub.index = pd.to_datetime(sub.index)
+            payload = fmp_client.historical_eod(
+                ticker, variant=variant, from_date=start_date, to_date=end_date,
+            )
+            sub = _fmp_bars_payload_to_df(payload)
+            if sub is None or sub.empty:
+                return ticker, None
+            sub.index = sub.index.normalize()
+            sub.sort_index(inplace=True)
             sub = sub.dropna(how="all")
-            if not sub.empty:
-                out[ticker] = sub
+            if sub.empty:
+                return ticker, None
+            return ticker, sub
         except Exception as exc:  # noqa: BLE001 -- per-ticker dead-letter
-            logger.warning("_download_ohlcv: no data for %s: %s", ticker, exc)
+            logger.warning("_fetch_fmp_ohlcv_batch: no data for %s: %s", ticker, exc)
+            return ticker, None
+
+    workers = min(16, len(ordered))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        for ticker, sub in executor.map(_fetch_one, ordered):
+            if sub is not None:
+                out[ticker] = sub
     return out
+
+
+def _download_ohlcv(
+    tickers: List[str], start_date: str, end_date: str
+) -> Dict[str, pd.DataFrame]:
+    """Download full OHLCV (not just Close) via FMP, one DataFrame per
+    ticker. Every other adapter in this module only needs Close; Aroon needs
+    High/Low too.
+
+    Thin wrapper over ``_fetch_fmp_ohlcv_batch`` (the fetch path shared with
+    ``_download_closes``) — see that function's docstring for the fetch/
+    reshape/adjustment-convention/threading detail; per-ticker failures are
+    dead-lettered there, never fabricated here.
+    """
+    return _fetch_fmp_ohlcv_batch(tickers, start_date, end_date)
 
 
 def _aroon_up_down(
@@ -3791,36 +3852,35 @@ def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str
 def _download_closes(
     tickers: List[str], start_date: str, end_date: str
 ) -> pd.DataFrame:
-    """Download adjusted closes for ``tickers`` via yfinance.
+    """Download adjusted closes for ``tickers`` via FMP.
+
+    Built on ``_fetch_fmp_ohlcv_batch`` — the SAME per-ticker fetch/reshape/
+    threading path ``_download_ohlcv`` uses — so the adjustment-convention-
+    sensitive logic (variant resolution, the mismatch warning, the adjX/X
+    reshape fallback) exists in exactly one place; this function only
+    extracts the ``Close`` column from each ticker's OHLCV frame.
 
     Returns a DataFrame indexed by date with one column per successfully-fetched
-    ticker (columns follow the requested order; failed tickers are simply
-    absent, never fabricated).  Raises ``RuntimeError`` if nothing downloads.
+    ticker (columns follow the requested order; failed tickers — including
+    ``FMPUnavailable`` when ``FMP_API_KEY`` is unset — are simply absent,
+    never fabricated). Raises ``RuntimeError`` if nothing downloads.
     """
-    import yfinance as yf
-
     ordered = list(dict.fromkeys(tickers))  # dedupe, preserve order
-    try:
-        df = yf.download(
-            ordered, start=start_date, end=end_date, progress=False, auto_adjust=True
-        )
-    except Exception as exc:
-        logger.warning("_download_closes: yf.download failed: %s", exc)
-        df = None
-    if df is None or df.empty:
+    ohlcv = _fetch_fmp_ohlcv_batch(ordered, start_date, end_date)
+
+    series_by_ticker: Dict[str, pd.Series] = {}
+    for ticker, bars in ohlcv.items():
+        close = bars["Close"].dropna()
+        if not close.empty:
+            series_by_ticker[ticker] = close
+
+    if not series_by_ticker:
         raise RuntimeError(
             f"Failed to download price data for {ordered} ({start_date}–{end_date}). "
             "Check your internet connection and try again."
         )
 
-    if isinstance(df.columns, pd.MultiIndex):
-        closes = df["Close"].copy()
-    else:
-        # Single-ticker download → flat OHLCV columns.
-        closes = df[["Close"]].copy()
-        closes.columns = [ordered[0]]
-
-    closes.index = pd.to_datetime(closes.index)
+    closes = pd.DataFrame(series_by_ticker)
     # Keep only requested tickers that actually returned data, in request order.
     present = [t for t in ordered if t in closes.columns]
     return closes[present]
@@ -3832,28 +3892,45 @@ def _download_spy(start_date: str, end_date: str) -> pd.Series:
 
 
 def _download_shares(tickers: List[str]) -> Dict[str, float]:
-    """Fetch CURRENT shares-outstanding snapshot per ticker via yfinance.
+    """Fetch CURRENT shares-outstanding snapshot per ticker via FMP
+    (``data.fmp_client.shares_float`` -> ``outstandingShares``, the same
+    field ``data/fmp_fundamentals.py`` reads from this endpoint).
 
     A CURRENT snapshot applied against historical prices is an approximation
     (share counts drift via buybacks/issuance) — used only for the Size factor
-    and flagged as such.  Per-ticker failures are logged and skipped so one bad
-    symbol never aborts the batch; a missing ticker → absent from the dict (its
-    Size factor degrades to NaN downstream, never a fabricated value).
+    and flagged as such. Fetches run inside a bounded ``ThreadPoolExecutor``
+    to overlap network latency across threads; ``fmp_client``'s own
+    module-level throttle/retry/circuit-breaker still serializes actual
+    request issuance process-wide. Per-ticker failures (including
+    ``FMPUnavailable`` when ``FMP_API_KEY`` is unset) are logged and skipped
+    so one bad symbol never aborts the batch; a missing ticker → absent from
+    the dict (its Size factor degrades to NaN downstream, never a fabricated
+    value).
     """
-    import yfinance as yf
+    from data import fmp_client
+    from data.fmp_fundamentals import _first
 
-    out: Dict[str, float] = {}
-    for ticker in dict.fromkeys(tickers):
+    ordered = list(dict.fromkeys(tickers))
+    if not ordered:
+        return {}
+
+    def _fetch_one(ticker: str) -> Tuple[str, Optional[float]]:
         try:
-            info = yf.Ticker(ticker).fast_info
-            so = info.get("shares") if hasattr(info, "get") else None
-            if not so:
-                so = getattr(info, "shares", None)
+            row = _first(fmp_client.shares_float(ticker))
+            so = (row or {}).get("outstandingShares")
             if so:
-                out[ticker] = float(so)
+                return ticker, float(so)
+            return ticker, None
         except Exception as exc:  # noqa: BLE001 — per-ticker dead-letter
             logger.warning("Shares-outstanding fetch failed for %s: %s", ticker, exc)
-            continue
+            return ticker, None
+
+    out: Dict[str, float] = {}
+    workers = min(16, len(ordered))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        for ticker, so in executor.map(_fetch_one, ordered):
+            if so:
+                out[ticker] = so
     return out
 
 
@@ -3918,7 +3995,10 @@ def _validate_single_strategy(
     logger.info("Validating: %s", name)
     try:
         adapter_fn, turnover, universe = STRATEGY_REGISTRY[name]
-        available = [t for t in universe if t in closes_df.columns]
+        available = [
+            t for t in universe
+            if t in closes_df.columns and closes_df[t].notna().any()
+        ]
         if not available:
             raise RuntimeError(
                 f"No price data downloaded for universe {universe} — "
@@ -4106,10 +4186,13 @@ def run_validations(
     # over-broad condition was cheap to ignore (the shared universe topped
     # out at 30 names); now that the cheap tier is ~500 names, downloading a
     # shares-outstanding snapshot for every multi-name strategy's full
-    # universe would mean ~500 sequential, unthrottled ``yfinance``
-    # ``fast_info`` calls for strategies (cross_sectional_momentum,
-    # relative_strength_xsec, macro_regime_pit, signal_replay_balanced_blend,
-    # sector_quality_rank, lgbm_ranker) that never read the result.
+    # universe would mean ~500 FMP ``/shares-float`` calls (each paced by
+    # ``FMP_MIN_REQUEST_INTERVAL_SECONDS`` with retry/circuit-breaker
+    # protection via ``data/fmp_client.py``, so throttled rather than
+    # unbounded -- but still real request volume) for strategies
+    # (cross_sectional_momentum, relative_strength_xsec, macro_regime_pit,
+    # signal_replay_balanced_blend, sector_quality_rank, lgbm_ranker) that
+    # never read the result.
     known = [s for s in strategies if s in STRATEGY_REGISTRY]
     ticker_union = sorted({
         t for s in known for t in STRATEGY_REGISTRY[s][2]
