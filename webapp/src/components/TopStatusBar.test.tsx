@@ -14,6 +14,7 @@ import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { ToastProvider } from "./ToastProvider";
 import { DensityProvider } from "./DensityContext";
 import { ExecutionModeProvider } from "./ExecutionModeContext";
+import { ThemeProvider } from "../context/ThemeContext";
 import { api } from "../api/client";
 import {
   mockEtfTransmissionDisabled,
@@ -28,13 +29,15 @@ import type { AutomationStatus, ObservabilitySummary } from "../api/types";
 
 function renderBar() {
   return render(
-    <ToastProvider>
-      <DensityProvider>
-        <ExecutionModeProvider>
-          <TopStatusBar />
-        </ExecutionModeProvider>
-      </DensityProvider>
-    </ToastProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <DensityProvider>
+          <ExecutionModeProvider>
+            <TopStatusBar />
+          </ExecutionModeProvider>
+        </DensityProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }
 
@@ -43,15 +46,17 @@ function renderBar() {
 // state -- the master toggle, safetyTelemetryEnabled -- actually takes effect.
 function renderBarWithAutoRefresh() {
   return render(
-    <ToastProvider>
-      <DensityProvider>
-        <AutoRefreshProvider>
-          <ExecutionModeProvider>
-            <TopStatusBar />
-          </ExecutionModeProvider>
-        </AutoRefreshProvider>
-      </DensityProvider>
-    </ToastProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <DensityProvider>
+          <AutoRefreshProvider>
+            <ExecutionModeProvider>
+              <TopStatusBar />
+            </ExecutionModeProvider>
+          </AutoRefreshProvider>
+        </DensityProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }
 

@@ -91,11 +91,9 @@ describe("theme.ts ↔ index.css token parity", () => {
   const cssVars = readRootVars();
 
   it.each(Object.entries(KEY_TO_CSS_VAR))(
-    "theme.%s matches %s in index.css",
+    "theme.%s uses var(%s)",
     (key, cssVar) => {
-      const cssValue = cssVars[cssVar];
-      expect(cssValue, `${cssVar} missing from index.css :root`).toBeDefined();
-      expect(norm(cssValue)).toBe(norm(theme[key as keyof typeof theme]));
+      expect(theme[key as keyof typeof theme]).toBe(`var(${cssVar})`);
     }
   );
 

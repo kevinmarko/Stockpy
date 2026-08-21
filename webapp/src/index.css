@@ -28,6 +28,83 @@
   --caution: #f59e0b;
   --accent: #38bdf8;
 
+  /* Categorical (Sector) */
+  --sector-0: #3987e5;
+  --sector-1: #199e70;
+  --sector-2: #c98500;
+  --sector-3: #9085e9;
+  --sector-4: #e66767;
+  --sector-5: #d55181;
+  --sector-6: #d95926;
+  --sector-7: #5a9bd4;
+
+  /* Categorical (Series) */
+  --series-0: #3987e5;
+  --series-1: #c98500;
+  --series-2: #199e70;
+
+  /* Categorical (Pilot Category) */
+  --cat-momentum: #6366f1;
+  --cat-mean-reversion: #c2410c;
+  --cat-factor: #0d9488;
+  --cat-blend: #e11d48;
+  --cat-macro: #0891b2;
+  --cat-risk: #a16207;
+  --cat-sentiment: #c026d3;
+  --cat-forecast: #65a30d;
+}
+
+:root[data-theme="light"] {
+  /* Surfaces */
+  --base: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --surface-glass: rgba(255, 255, 255, 0.7);
+
+  /* Ink */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  /* Hairlines */
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --chart-grid: rgba(0, 0, 0, 0.06);
+
+  /* Semantic status */
+  --growth: #059669; /* emerald-600 */
+  --decline: #dc2626; /* red-600 */
+  --caution: #d97706; /* amber-600 */
+  --accent: #0284c7; /* sky-600 */
+
+  /* Categorical (Sector) - darker variants for light mode contrast */
+  --sector-0: #2563eb; /* blue-600 */
+  --sector-1: #059669; /* emerald-600 */
+  --sector-2: #b45309; /* amber-700 */
+  --sector-3: #7c3aed; /* violet-600 */
+  --sector-4: #dc2626; /* red-600 */
+  --sector-5: #be185d; /* pink-700 */
+  --sector-6: #c2410c; /* orange-700 */
+  --sector-7: #0284c7; /* sky-600 */
+
+  /* Categorical (Series) */
+  --series-0: #2563eb;
+  --series-1: #b45309;
+  --series-2: #059669;
+
+  /* Categorical (Pilot Category) */
+  --cat-momentum: #4f46e5; /* indigo-600 */
+  --cat-mean-reversion: #9a3412; /* orange-800 */
+  --cat-factor: #0f766e; /* teal-700 */
+  --cat-blend: #e11d48; /* rose-600 */
+  --cat-macro: #0369a1; /* sky-700 */
+  --cat-risk: #b45309; /* amber-700 */
+  --cat-sentiment: #c026d3; /* fuchsia-600 */
+  --cat-forecast: #4d7c0f; /* lime-700 */
+}
+
+:root {
   /* Radii / spacing */
   --r-2xs: 4px;
   --r-xs: 6px;
@@ -106,7 +183,7 @@
   --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
     0 8px 24px rgba(0, 0, 0, 0.35);
 
-  color-scheme: dark;
+  color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;

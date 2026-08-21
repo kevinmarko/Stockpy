@@ -311,7 +311,7 @@ describe("Comparison screen (R2)", () => {
     const worseCell = screen.getByText("19%").closest('[role="cell"]') as HTMLElement;
     const betterCell = screen.getByText("14%").closest('[role="cell"]') as HTMLElement;
 
-    expect(betterCell).toHaveStyle({ color: "rgb(16, 185, 129)" });
-    expect(worseCell).not.toHaveStyle({ color: "rgb(16, 185, 129)" });
+    expect(betterCell).toHaveStyle({ color: "var(--growth)" });
+    expect(worseCell).not.toHaveStyle({ color: "var(--growth)" });
   });
 });
