@@ -1349,8 +1349,17 @@ def get_volatility_surface_data(
         except Exception:
             spot_price = None
 
-    if spot_price is None or spot_price <= 0:
-        spot_price = 500.0 if sym == "SPY" else 150.0
+    # CONSTRAINT #4: never fabricate a metric. A live quote failure must NOT
+    # fall back to a hardcoded placeholder price (e.g. a stale "$500 for SPY,
+    # $150 otherwise" guess) -- calculate_volatility_surface() already has a
+    # correct, honest fallback ladder for a missing spot_price: infer it from
+    # the option chain's median strike (flagging that inference in its own
+    # `warnings` list) when a real chain is available, or return an explicit
+    # `missing_data: True` / `reason` response when it can't. Passing
+    # spot_price=None through here lets that existing logic do its job
+    # instead of silently overwriting reality with a guess. See the sibling
+    # GET /data/options/chain/{symbol} handler (api/data_api.py) for the same
+    # pattern applied at the endpoint level.
 
     chain_data = None
     if options_provider is not None:

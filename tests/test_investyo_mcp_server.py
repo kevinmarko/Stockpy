@@ -72,10 +72,15 @@ Testing approach
 -----------------
 Every dependency this module reaches (``TransactionsStore``,
 ``HistoricalStore``, ``alerting_mcp.notifier``, ``prompt_registry``,
-``simulation_engine``, ``yfinance``, ``subprocess.run``) is imported
-LOCALLY inside each tool's function body (not at module top), so mocks
-are applied at the dependency's OWN module path (e.g.
-``monkeypatch.setattr(transactions_store, "TransactionsStore", ...)``),
+``simulation_engine``, ``data.market_data`` (``get_provider()`` --
+``get_ticker_context``, ``run_backtest``, ``plot_equity_curve``,
+``plot_portfolio_equity``, ``get_portfolio_summary`` all route through the
+platform's own ``CompositeProvider`` instead of a direct yfinance call as
+of 2026-08; see that module's own docstring), ``subprocess.run``) is
+imported LOCALLY inside each tool's function body (not at module top), so
+mocks are applied at the dependency's OWN module path (e.g.
+``monkeypatch.setattr(transactions_store, "TransactionsStore", ...)`` or
+``monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)``),
 not on ``investyo_mcp_server``'s namespace. File-based tools
 (``update_watch_rules``, ``update_universe_tickers``,
 ``get_universe_status``, ``read_platform_logs``) use
@@ -102,8 +107,9 @@ Coverage
   missing file, invalid action, malformed ``DEFAULT_TICKERS`` JSON
   fallback to comma-split.
 * ``get_portfolio_summary``: long/short P&L math for open (unrealized,
-  priced via mocked yfinance) and closed (realized) positions, win-rate
-  calculation, empty-portfolio degradation.
+  priced via a mocked ``data.market_data.get_provider()``) and closed
+  (realized) positions, win-rate calculation, empty-portfolio degradation,
+  per-symbol quote-failure degradation to "N/A".
 * ``read_platform_logs`` / ``get_universe_status``: DB-present and
   file-present branches, all-absent degradation.
 * Subprocess-wrapping tools that REMAIN subprocess-based
@@ -302,36 +308,58 @@ class TestGetDatabaseSchema:
 
 class TestGetTickerContext:
     def test_empty_history_returns_message(self, monkeypatch):
-        fake_ticker = MagicMock()
-        fake_ticker.history.return_value = pd.DataFrame()
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = pd.DataFrame()
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         assert "No pricing data" in srv.get_ticker_context("ZZZZ")
 
     def test_happy_path_renders_markdown(self, monkeypatch):
+        import data.market_data as md_mod
+
         idx = pd.bdate_range("2026-01-01", periods=5)
         hist = pd.DataFrame(
             {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100},
             index=idx,
         )
-        fake_ticker = MagicMock()
-        fake_ticker.history.return_value = hist
-        fake_ticker.info = {"longName": "Test Corp", "sector": "Tech", "trailingPE": 10.0, "priceToBook": 2.0}
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        fake_provider.get_fundamentals.return_value = {
+            "longName": "Test Corp", "sector": "Tech", "trailingPE": 10.0, "priceToBook": 2.0,
+        }
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         result = srv.get_ticker_context("AAPL")
 
         assert "Test Corp" in result
         assert "Tech" in result
+        fake_provider.get_intraday_bars.assert_called_once_with("AAPL", lookback_days=10)
+        fake_provider.get_fundamentals.assert_called_once_with("AAPL")
 
     def test_exception_degrades_to_error_string(self, monkeypatch):
-        def _raise(symbol):
+        import data.market_data as md_mod
+
+        def _raise(*a, **k):
             raise RuntimeError("network down")
 
-        fake_yf = SimpleNamespace(Ticker=_raise)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.side_effect = _raise
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        assert "Error retrieving context" in srv.get_ticker_context("AAPL")
+
+    def test_market_data_error_degrades_to_error_string(self, monkeypatch):
+        # A MarketDataError from get_intraday_bars (the "unrecoverable
+        # provider failure" case) is a real exception, not an empty
+        # result -- it must land in the same "Error retrieving context"
+        # branch as any other exception, not "No pricing data found".
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.side_effect = md_mod.MarketDataError("all providers failed")
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         assert "Error retrieving context" in srv.get_ticker_context("AAPL")
 
@@ -1430,6 +1458,7 @@ class TestGetPortfolioSummary:
 
     def test_open_long_and_short_unrealized_pl(self, monkeypatch):
         import transactions_store
+        import data.market_data as md_mod
 
         fake_store = MagicMock()
         fake_store.open_trades_df.return_value = pd.DataFrame(
@@ -1444,18 +1473,51 @@ class TestGetPortfolioSummary:
         fake_store.closed_trades_df.return_value = pd.DataFrame()
         monkeypatch.setattr(transactions_store, "TransactionsStore", lambda: fake_store)
 
-        fake_ticker = SimpleNamespace(
-            history=lambda period: pd.DataFrame({"Close": [110.0]})
-        )
-        fake_tickers = SimpleNamespace(tickers={"AAPL": fake_ticker, "TSLA": fake_ticker})
-        fake_yf = SimpleNamespace(Tickers=lambda syms: fake_tickers)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        def _fake_quote(sym):
+            return md_mod.Quote(
+                symbol=sym, price=110.0, bid=109.9, ask=110.1,
+                timestamp=datetime(2026, 8, 10), is_stale=False, source="alpaca",
+            )
+
+        fake_provider = MagicMock()
+        fake_provider.get_latest_quote.side_effect = _fake_quote
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         result = srv.get_portfolio_summary()
 
         # AAPL long: (110-100)*10 = +100; TSLA short: (200-110)*5 = +450
         assert "+$100.00" in result or "100.00" in result
         assert "Unrealized" in result
+        assert fake_provider.get_latest_quote.call_count == 2
+
+    def test_per_symbol_quote_failure_degrades_to_none(self, monkeypatch):
+        # Mirrors this file's "Loops over tickers ... wrap each ticker in
+        # try/except" convention -- one bad symbol's quote failure must
+        # not blow up the whole summary, and must render "N/A" exactly
+        # like the pre-existing per-symbol try/except -> None path did.
+        import transactions_store
+        import data.market_data as md_mod
+
+        fake_store = MagicMock()
+        fake_store.open_trades_df.return_value = pd.DataFrame(
+            {
+                "trade_id": [1],
+                "symbol": ["ZZZZ"],
+                "side": ["long"],
+                "entry_price": [100.0],
+                "shares": [10.0],
+            }
+        )
+        fake_store.closed_trades_df.return_value = pd.DataFrame()
+        monkeypatch.setattr(transactions_store, "TransactionsStore", lambda: fake_store)
+
+        fake_provider = MagicMock()
+        fake_provider.get_latest_quote.side_effect = md_mod.MarketDataError("no quote")
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        result = srv.get_portfolio_summary()
+
+        assert "N/A" in result
 
     def test_closed_trades_win_rate_and_realized_pl(self, monkeypatch):
         import transactions_store
@@ -3131,6 +3193,7 @@ class TestSendTestAlert:
 class TestArtifactDirectoryRegression:
     def test_plot_equity_curve_writes_under_settings_output_dir(self, monkeypatch, tmp_path):
         from settings import settings
+        import data.market_data as md_mod
 
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
 
@@ -3145,9 +3208,9 @@ class TestArtifactDirectoryRegression:
             },
             index=idx,
         )
-        fake_ticker = SimpleNamespace(history=lambda period: hist)
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         result = srv.plot_equity_curve("AAPL", "6mo")
 
@@ -3156,17 +3219,30 @@ class TestArtifactDirectoryRegression:
         assert str(expected_dir) in result
         assert expected_dir.exists()
         assert any(expected_dir.glob("equity_curve_aapl.png"))
+        fake_provider.get_intraday_bars.assert_called_once_with("AAPL", lookback_days=180)
 
     def test_empty_history_returns_error(self, monkeypatch):
-        fake_ticker = SimpleNamespace(history=lambda period: pd.DataFrame())
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = pd.DataFrame()
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        assert "No data found" in srv.plot_equity_curve("ZZZZ")
+
+    def test_market_data_error_returns_error(self, monkeypatch):
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.side_effect = md_mod.MarketDataError("all providers failed")
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         assert "No data found" in srv.plot_equity_curve("ZZZZ")
 
     def test_plot_portfolio_equity_writes_under_settings_output_dir(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         from settings import settings
+        import data.market_data as md_mod
 
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
 
@@ -3185,9 +3261,9 @@ class TestArtifactDirectoryRegression:
         # per ticker, and this fixture is also used for the SPY benchmark
         # fetch -- sharing one DataFrame object across calls would leak
         # AAPL's already-lowercased columns into the SPY fetch.
-        fake_ticker = SimpleNamespace(history=lambda period: hist.copy())
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.side_effect = lambda symbol, lookback_days: hist.copy()
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         # No .env -> falls back to the hardcoded default universe (4 tickers).
         result = srv.plot_portfolio_equity("6mo")
@@ -3199,9 +3275,11 @@ class TestArtifactDirectoryRegression:
 
     def test_plot_portfolio_equity_no_tickers_simulated_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
-        fake_ticker = SimpleNamespace(history=lambda period: pd.DataFrame())
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = pd.DataFrame()
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         assert "No tickers could be simulated" in srv.plot_portfolio_equity("6mo")
 
@@ -3213,22 +3291,38 @@ class TestArtifactDirectoryRegression:
 
 class TestRunBacktest:
     def test_empty_history_returns_error(self, monkeypatch):
-        fake_ticker = SimpleNamespace(history=lambda period: pd.DataFrame())
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = pd.DataFrame()
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        assert "No historical data found" in srv.run_backtest("ZZZZ")
+
+    def test_market_data_error_returns_no_historical_data(self, monkeypatch):
+        # A MarketDataError from get_intraday_bars (unrecoverable provider
+        # failure across the whole FMP/Alpaca/yfinance fallback chain) is
+        # the "no data" case here, matching the pre-existing "empty result
+        # from yfinance" -> "No historical data found" contract.
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.side_effect = md_mod.MarketDataError("all providers failed")
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         assert "No historical data found" in srv.run_backtest("ZZZZ")
 
     def test_happy_path_delegates_to_simulation_engine(self, monkeypatch):
         import simulation_engine
+        import data.market_data as md_mod
 
         idx = pd.bdate_range("2024-01-01", periods=10)
         hist = pd.DataFrame(
             {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100}, index=idx
         )
-        fake_ticker = SimpleNamespace(history=lambda period: hist)
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         called = {}
 
@@ -3244,17 +3338,19 @@ class TestRunBacktest:
         assert "Backtrader simulation output" in result
         # Column names lowercased for the Backtrader feed.
         assert called["columns"] == ["open", "high", "low", "close", "volume"]
+        fake_provider.get_intraday_bars.assert_called_once_with("AAPL", lookback_days=365)
 
     def test_engine_exception_degrades_to_error_string(self, monkeypatch):
         import simulation_engine
+        import data.market_data as md_mod
 
         idx = pd.bdate_range("2024-01-01", periods=10)
         hist = pd.DataFrame(
             {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100}, index=idx
         )
-        fake_ticker = SimpleNamespace(history=lambda period: hist)
-        fake_yf = SimpleNamespace(Ticker=lambda symbol: fake_ticker)
-        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake_yf)
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
         def _raise(df):
             raise RuntimeError("cerebro exploded")

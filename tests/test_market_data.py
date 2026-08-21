@@ -2014,3 +2014,219 @@ class TestFMPCapabilityGates:
             cp = CompositeProvider()
             assert isinstance(cp._fundamentals_provider, FMPProvider)
             assert cp.source_name != "fmp"
+
+
+# ---------------------------------------------------------------------------
+# 12. CompositeProvider against the genuinely UNTOUCHED Settings() defaults --
+# closes a real gap in the FMP test coverage above. Every TestFMP*Chain /
+# TestCompositeProviderSelection test above explicitly monkeypatches
+# MARKET_DATA_PROVIDER / FUNDAMENTALS_SOURCE (several even hardcode the
+# PRE-FMP baseline, MARKET_DATA_PROVIDER=None / FUNDAMENTALS_SOURCE="yahoo",
+# as their own "default" fixture -- see TestFMPFundamentalsChain._patched /
+# TestFMPQuoteBarsChain._patched) -- none of them ever construct a
+# CompositeProvider() against whatever settings.settings ACTUALLY holds at
+# that point, which today is MARKET_DATA_PROVIDER="fmp" /
+# FUNDAMENTALS_SOURCE="fmp" (settings.py, changed by explicit operator
+# decision from the pre-FMP baseline every test above still hardcodes as its
+# "default"). A regression that broke the INTERACTION between these
+# individually-correct field defaults (e.g. a typo in the string compared
+# against MARKET_DATA_PROVIDER, or a refactor of the branch that reads it)
+# could pass every test above while the real, unpatched default silently
+# fell back to yfinance -- and nothing in the suite would catch it.
+# ---------------------------------------------------------------------------
+
+class TestCompositeProviderGenuineDefaultRouting:
+    """Constructs ``CompositeProvider()`` against the real, un-monkeypatched
+    ``settings.settings`` singleton (conftest.py's autouse reset fixtures
+    restore it to the true coded defaults before every test -- see
+    ``conftest.py::_clean_settings_between_tests`` / the module-level reset
+    at the top of that file) and proves the platform's actual shipped
+    defaults route quotes, bars, AND fundamentals to FMP -- not merely that
+    a hand-patched ``MARKET_DATA_PROVIDER="fmp"`` would.
+
+    No test here ever monkeypatches ``MARKET_DATA_PROVIDER`` /
+    ``FUNDAMENTALS_SOURCE`` / any ``FMP_*_ENABLED`` flag. The only setting
+    ever touched is ``FMP_API_KEY`` (via the plain ``monkeypatch`` fixture,
+    never ``patch.multiple``, since it is the one field genuinely being
+    varied) -- everything else is whatever the untouched singleton holds.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_serve_counts(self):
+        from data.market_data import reset_provider_serve_counts
+        reset_provider_serve_counts()
+        yield
+        reset_provider_serve_counts()
+
+    @staticmethod
+    def _fmp_response(payload: Any) -> MagicMock:
+        """A minimal stand-in for ``requests.Response`` shaped like
+        ``tests/test_fmp_client.py``'s own ``_resp()`` helper (status 200, no
+        Retry-After header, ``.json()`` returns ``payload``)."""
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+        resp.json.return_value = payload
+        return resp
+
+    # -- 0. Self-check: pin the values every test below assumes against the
+    #    REAL settings.py field declarations, so a future intentional
+    #    default change fails loudly here instead of this class silently
+    #    continuing to test stale assumptions (do not hand-edit these
+    #    literals without first re-reading settings.py). ------------------
+    def test_documented_defaults_match_settings_py_field_declarations(self):
+        from settings import Settings
+
+        assert Settings.model_fields["MARKET_DATA_PROVIDER"].default == "fmp"
+        assert Settings.model_fields["FUNDAMENTALS_SOURCE"].default == "fmp"
+        assert Settings.model_fields["FMP_QUOTES_ENABLED"].default is True
+        assert Settings.model_fields["FMP_BARS_ENABLED"].default is True
+        assert Settings.model_fields["FMP_FUNDAMENTALS_ENABLED"].default is True
+
+    def test_settings_singleton_currently_holds_the_real_untouched_defaults(self):
+        """Guards the premise every other test in this class relies on: the
+        live ``settings.settings`` singleton, at THIS point in the test run
+        (no patch applied by this test), actually holds the same values
+        pinned above -- not a leftover mutation from a prior test, and not a
+        real operator ``.env`` override (this checkout ships none)."""
+        from settings import settings as _settings
+
+        assert _settings.MARKET_DATA_PROVIDER == "fmp"
+        assert _settings.FUNDAMENTALS_SOURCE == "fmp"
+        assert _settings.FMP_QUOTES_ENABLED is True
+        assert _settings.FMP_BARS_ENABLED is True
+        assert _settings.FMP_FUNDAMENTALS_ENABLED is True
+        assert not _settings.FMP_API_KEY  # genuinely absent, not merely falsy-by-luck
+
+    # -- 1. Quotes ---------------------------------------------------------
+    def test_quote_path_routes_to_fmp_at_genuine_defaults(self, monkeypatch):
+        """With FMP_API_KEY set and every other setting left untouched, the
+        quote path must select FMPProvider AND actually invoke the FMP HTTP
+        layer -- asserting the mock was called is the only way to prove FMP
+        was really the path taken, rather than merely that a Quote came back
+        (which the yfinance/Alpaca fallback would also produce)."""
+        from settings import settings as _settings
+        from data.market_data import (
+            CompositeProvider, FMPProvider, get_provider_serve_counts,
+        )
+
+        monkeypatch.setattr(_settings, "FMP_API_KEY", "a-real-looking-key")
+        cp = CompositeProvider()
+        assert isinstance(cp._quote_provider, FMPProvider)
+
+        row = {"symbol": "AAPL", "price": 187.43, "timestamp": 1735689600}
+        with patch(
+            "data.fmp_client.requests.get", return_value=self._fmp_response([row]),
+        ) as mock_get:
+            out = cp.get_latest_quote("AAPL")
+
+        mock_get.assert_called()
+        assert out.source == "fmp"
+        assert out.symbol == "AAPL"
+        assert out.price == 187.43
+        assert get_provider_serve_counts()[("quote", "fmp")] == 1
+
+    # -- 2. Bars -------------------------------------------------------------
+    def test_bars_path_routes_to_fmp_at_genuine_defaults(self, monkeypatch):
+        from settings import settings as _settings
+        from data.market_data import (
+            CompositeProvider, FMPProvider, get_provider_serve_counts,
+        )
+
+        monkeypatch.setattr(_settings, "FMP_API_KEY", "a-real-looking-key")
+        cp = CompositeProvider()
+        assert isinstance(cp._quote_provider, FMPProvider)  # bars share quote selection
+
+        bar_rows = [
+            {
+                "date": f"2026-08-0{d}", "adjOpen": 100.0 + d, "adjHigh": 101.0 + d,
+                "adjLow": 99.0 + d, "adjClose": 100.5 + d, "volume": 1_000_000,
+            }
+            for d in range(1, 6)
+        ]
+        with patch(
+            "data.fmp_client.requests.get", return_value=self._fmp_response(bar_rows),
+        ) as mock_get:
+            out = cp.get_intraday_bars("AAPL")
+
+        mock_get.assert_called()
+        assert list(out.columns) == ["Open", "High", "Low", "Close", "Volume"]
+        assert not out.empty
+        assert get_provider_serve_counts()[("bars", "fmp")] == 1
+
+    # -- 3. Fundamentals -----------------------------------------------------
+    def test_fundamentals_path_routes_to_fmp_at_genuine_defaults(self, monkeypatch):
+        from settings import settings as _settings
+        from data.market_data import (
+            CompositeProvider, FMPProvider, get_provider_serve_counts,
+        )
+
+        monkeypatch.setattr(_settings, "FMP_API_KEY", "a-real-looking-key")
+        cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, FMPProvider)
+
+        # One row reused across every FMP endpoint FMPProvider.get_fundamentals
+        # fans out to (quote/profile/key_metrics_ttm/ratios_ttm/
+        # income_statement_ttm/dividends/shares_float, plus two historical_eod
+        # calls for the beta computation) -- map_fundamentals degrades any
+        # field a given endpoint doesn't actually carry to NaN rather than
+        # raising, so a single shared shape is sufficient here; the exact
+        # per-field mapping math is already covered by
+        # tests/test_fmp_fundamentals.py.
+        row = {
+            "symbol": "AAPL", "price": 187.43, "companyName": "Apple Fake Co",
+            "sector": "Technology", "date": "2026-08-01",
+            "adjOpen": 185.0, "adjHigh": 188.0, "adjLow": 184.5, "adjClose": 187.0,
+            "volume": 50_000_000, "dividend": 0.24,
+        }
+        with patch(
+            "data.fmp_client.requests.get", return_value=self._fmp_response([row]),
+        ) as mock_get:
+            out = cp.get_fundamentals("AAPL")
+
+        mock_get.assert_called()
+        assert out["_source"] == "fmp"
+        assert out["shortName"] == "Apple Fake Co"
+        assert get_provider_serve_counts()[("fundamentals", "fmp")] == 1
+
+    # -- 4. Negative case: operator forgot to set the key --------------------
+    def test_missing_api_key_at_genuine_defaults_falls_back_gracefully(self, caplog):
+        """The documented graceful-degrade path, exercised at the platform's
+        REAL default (MARKET_DATA_PROVIDER=FUNDAMENTALS_SOURCE="fmp") rather
+        than a hand-patched one -- proves the "operator forgot to configure
+        FMP_API_KEY" case degrades to the Alpaca/yfinance/Yahoo default with
+        a WARNING instead of raising, on a completely untouched singleton."""
+        import logging
+        from settings import settings as _settings
+        from data.market_data import (
+            CompositeProvider, FMPProvider, YFinanceProvider, YahooFundamentalsProvider,
+        )
+
+        assert not _settings.FMP_API_KEY  # genuinely absent -- never overridden
+        assert _settings.MARKET_DATA_PROVIDER == "fmp"
+        assert _settings.FUNDAMENTALS_SOURCE == "fmp"
+
+        with caplog.at_level(logging.WARNING, logger="data.market_data"):
+            cp = CompositeProvider()  # zero patches of any kind
+
+        # Quote/bars: falls through to the plain Alpaca-if-keyed-else-yfinance
+        # default (yfinance here, since ALPACA_API_KEY/SECRET are also
+        # genuinely unset) rather than raising.
+        assert not isinstance(cp._quote_provider, FMPProvider)
+        assert isinstance(cp._quote_provider, YFinanceProvider)
+        assert "falling back to the default quote/bars provider" in caplog.text
+
+        # Fundamentals: the same graceful degrade, independently gated.
+        assert not isinstance(cp._fundamentals_provider, FMPProvider)
+        assert isinstance(cp._fundamentals_provider, YahooFundamentalsProvider)
+        assert "falling back to the default fundamentals provider" in caplog.text
+
+        # And it must not have raised at all -- get_latest_quote should still
+        # work end-to-end via the fallback, never a MarketDataError bubbling
+        # up just because the operator forgot FMP_API_KEY.
+        yf_quote = _make_fake_quote("AAPL", "yfinance")
+        with patch.object(YFinanceProvider, "get_latest_quote", return_value=yf_quote), \
+             patch("data.fmp_client.requests.get") as fmp_get_mock:
+            out = cp.get_latest_quote("AAPL")
+        assert out.source == "yfinance"
+        fmp_get_mock.assert_not_called()
