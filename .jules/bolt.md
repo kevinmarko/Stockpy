@@ -9,3 +9,7 @@
 ## 2024-03-20 - Options GEX Profile Test Failure
 **Learning:** `test_get_gex_profile_success` in `tests/test_pilots_paper_broker.py` failed because it expected `gamma_regime` to be in `["POSITIVE_GAMMA", "NEGATIVE_GAMMA", "NEUTRAL_GAMMA"]`, but the actual code returns `PIN_RISK_HIGH` instead of `NEUTRAL_GAMMA` for that condition.
 **Action:** When tests fail on static value assertions, verify the source of truth (in this case `pilots/options_gex.py`) and update the test's expected values to match.
+
+## 2024-03-20 - Time-bomb test fix
+**Learning:** `test_gate_on_broadcasts_upcoming_event` failed because it used hardcoded dates (e.g., 2026-08-20). The production code filters out past events (`ev_date >= today_str`). When the CI test runner advanced past 2026-08-20, the test failed.
+**Action:** When mocking calendar feeds, generate dates relative to `datetime.now()` (e.g. `now + timedelta(days=1)`) rather than hardcoding static future dates to prevent tests from expiring.

@@ -779,24 +779,23 @@ class TestApplyFmpEconCalendar:
         monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
         df = pd.DataFrame({"Symbol": ["AAPL", "MSFT"]})
 
-        # Relative to today (not hardcoded literals) -- `_apply_fmp_econ_calendar`
-        # filters events to `date >= today`, so a fixed-literal fixture date
-        # eventually lands in the past and silently gets filtered out as CI
-        # runs on later and later calendar days. See the file's own
-        # `date.today()`-based fixtures above (e.g. TestApplyFmpSector) for
-        # the established pattern.
-        near_date = (date.today() + timedelta(days=3)).isoformat()
-        far_date = (date.today() + timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("America/New_York"))
+        tomorrow = now + timedelta(days=1)
+        next_week = now + timedelta(days=7)
+
         fake_events = [
             {
                 "event": "FOMC Rate Decision",
-                "date": f"{far_date} 14:00:00",
+                "date": next_week.strftime("%Y-%m-%d 14:00:00"),
                 "country": "US",
                 "impact": "High",
             },
             {
                 "event": "Initial Jobless Claims",
-                "date": f"{near_date} 08:30:00",
+                "date": tomorrow.strftime("%Y-%m-%d 08:30:00"),
                 "country": "US",
                 "impact": "High",
             },
@@ -804,11 +803,13 @@ class TestApplyFmpEconCalendar:
         with patch("data.fmp_feeds_market.fetch_economics_calendar", return_value=fake_events):
             _apply_fmp_econ_calendar(df)
 
-        # Earliest US/High impact event is Initial Jobless Claims (near_date)
+        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+
+        # Earliest US/High impact event is Initial Jobless Claims tomorrow
         assert df["Next_Macro_Event"].iloc[0] == "Initial Jobless Claims"
-        assert df["Next_Macro_Event_Date"].iloc[0] == near_date
+        assert df["Next_Macro_Event_Date"].iloc[0] == tomorrow_str
         assert df["Next_Macro_Event"].iloc[1] == "Initial Jobless Claims"
-        assert df["Next_Macro_Event_Date"].iloc[1] == near_date
+        assert df["Next_Macro_Event_Date"].iloc[1] == tomorrow_str
 
     def test_gate_on_empty_events_leaves_nan(self, monkeypatch):
         monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
