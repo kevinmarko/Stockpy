@@ -21,6 +21,8 @@ import pytest
 import numpy as np
 import pandas as pd
 
+from unittest.mock import MagicMock
+
 from pilots.volatility_surface import (
     calculate_volatility_surface,
     calculate_realized_volatility,
@@ -29,6 +31,7 @@ from pilots.volatility_surface import (
     compute_25delta_skew,
     compute_vrp_cone,
     implied_volatility_black_scholes,
+    get_volatility_surface_data,
     _black_scholes_price,
     _black_scholes_delta,
     parse_expiration_slice,
@@ -328,6 +331,85 @@ def test_calculate_volatility_surface_missing_data_graceful():
     inverted_res = calculate_volatility_surface(ticker="XYZ", chain_data=chain_missing_iv, spot_price=100.0)
     assert inverted_res["missing_data"] is False
     assert "2026-09-18" in inverted_res["smiles"]
+
+
+def test_get_volatility_surface_data_never_fabricates_spot_price_on_quote_failure():
+    """CONSTRAINT #4 regression test.
+
+    Prior bug: when the live market provider's quote failed (returned None/0
+    or raised), get_volatility_surface_data() silently substituted a
+    hardcoded placeholder spot price ($500.0 for SPY, $150.0 for anything
+    else) instead of letting calculate_volatility_surface()'s own honest
+    fallback ladder (infer from chain median strike, or return
+    missing_data=True/reason otherwise) run. That made a fabricated number
+    indistinguishable from a real FMP-sourced quote to every downstream
+    consumer. This test pins that it can never reappear.
+    """
+    failing_market_provider = MagicMock()
+    failing_market_provider.get_latest_quote.side_effect = RuntimeError("quote unavailable")
+
+    # An explicit options provider that also has no chain to offer -> no
+    # chain to infer a spot price from -> must degrade to an honest
+    # missing_data response, never a placeholder. (Passing options_provider=
+    # None here would make the function fall back to constructing the real
+    # global options provider, which would hit the network -- pass an empty
+    # stub instead so this stays a hermetic unit test.)
+    empty_options_provider = MagicMock()
+    empty_options_provider.fetch_options_chain.return_value = None
+
+    result = get_volatility_surface_data(
+        symbol="SPY",
+        market_provider=failing_market_provider,
+        options_provider=empty_options_provider,
+    )
+    assert result.get("spot_price") != 500.0
+    assert result.get("spot_price") in (None, 0)
+    assert result.get("missing_data") is True
+
+    # Same for a non-SPY symbol -- the old bug used a *different* hardcoded
+    # literal ($150.0) for "anything else", so both branches need covering.
+    result_other = get_volatility_surface_data(
+        symbol="AAPL",
+        market_provider=failing_market_provider,
+        options_provider=empty_options_provider,
+    )
+    assert result_other.get("spot_price") != 150.0
+    assert result_other.get("spot_price") in (None, 0)
+    assert result_other.get("missing_data") is True
+
+    # When a real chain IS available, the quote failure should fall through
+    # to calculate_volatility_surface()'s legitimate median-strike inference
+    # (and say so in `warnings`) rather than a hardcoded guess.
+    chain_provider = MagicMock()
+    single_expiration_chain = {
+        "calls": [
+            {"strike": 90.0, "impliedVolatility": 0.25},
+            {"strike": 100.0, "impliedVolatility": 0.22},
+            {"strike": 110.0, "impliedVolatility": 0.20},
+        ],
+        "puts": [
+            {"strike": 90.0, "impliedVolatility": 0.27},
+            {"strike": 100.0, "impliedVolatility": 0.24},
+            {"strike": 110.0, "impliedVolatility": 0.21},
+        ],
+    }
+    # get_volatility_surface_data's contract: fetch_options_chain(sym) with no
+    # expiration returns the list of available expirations; a second call per
+    # expiration returns that expiration's chain.
+    chain_provider.fetch_options_chain.side_effect = (
+        lambda symbol, expiration=None: (
+            ["2026-09-18"] if expiration is None else single_expiration_chain
+        )
+    )
+    result_inferred = get_volatility_surface_data(
+        symbol="AAPL",
+        market_provider=failing_market_provider,
+        options_provider=chain_provider,
+    )
+    assert result_inferred.get("spot_price") != 150.0
+    assert result_inferred.get("spot_price") == 100.0  # inferred median strike
+    assert result_inferred.get("missing_data") is False
+    assert any("inferred" in w.lower() for w in result_inferred.get("warnings", []))
 
 
 def test_volatility_surface_ast_import_safety():
