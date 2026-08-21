@@ -1,7 +1,8 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { PortfolioPositionView } from '../api/types';
-
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#8dd1e1', '#a4de6c', '#d0ed57'];
+import { theme, sectorColor } from '../theme';
+import { fmtUsd } from '../format';
+import { chartTooltipStyle } from './charts';
 
 export function PortfolioPieChart({ positions }: { positions: PortfolioPositionView[] }) {
   if (!positions || positions.length === 0) return null;
@@ -26,15 +27,24 @@ export function PortfolioPieChart({ positions }: { positions: PortfolioPositionV
             cy="50%"
             innerRadius={60}
             outerRadius={80}
-            fill="#8884d8"
             paddingAngle={5}
             dataKey="value"
+            stroke={theme.surface}
+            strokeWidth={2}
           >
+            {/* sectorColor(i) is this app's validated (light+dark,
+                contrast-checked) categorical ramp -- see theme.ts and
+                SectorDonut's use of the same helper -- rather than an
+                unthemed hex list that ignores the app's dark-first default
+                surface and won't adapt if the operator switches themes. */}
             {data.map((_, index) => (
-              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+              <Cell key={`cell-${index}`} fill={sectorColor(index)} />
             ))}
           </Pie>
-          <Tooltip formatter={(value: any) => `$${Number(value).toFixed(2)}`} />
+          <Tooltip
+            contentStyle={chartTooltipStyle}
+            formatter={(value: any) => fmtUsd(Number(value))}
+          />
         </PieChart>
       </ResponsiveContainer>
     </div>

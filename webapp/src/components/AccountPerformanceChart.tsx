@@ -8,6 +8,9 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { CurvePoint } from '../api/types';
+import { theme } from '../theme';
+import { fmtUsd, fmtDate } from '../format';
+import { CustomTooltip, chartAxisTick, chartAxisLine, chartGridProps, chartCursorProps } from './charts';
 
 interface Props {
   data: CurvePoint[];
@@ -32,46 +35,49 @@ export default function AccountPerformanceChart({ data }: Props) {
     );
   }
 
-  // Format dates for display
-  const formattedData = data.map(item => {
-    const dateObj = new Date(item.date);
-    return {
-      ...item,
-      displayDate: dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    };
-  });
-
   return (
-    <div style={{ width: '100%', height: '100%', minHeight: 200 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={formattedData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+    // Fixed pixel height (matching PerfLine's own convention in charts.tsx),
+    // not height:'100%' -- Recharts' ResponsiveContainer measures its own
+    // container via ResizeObserver and needs a DEFINITE (non-percentage)
+    // height somewhere in its immediate ancestry to resolve against. A
+    // percentage height here silently measures 0x0 and never renders
+    // (verified live: this is what PR #846 originally shipped) once the
+    // parent chain includes a flex container, since a flex item's
+    // percentage height doesn't resolve without an explicit flex-basis.
+    <div style={{ width: '100%', height: 200 }}>
+      <ResponsiveContainer>
+        <LineChart data={data} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+          <CartesianGrid {...chartGridProps} />
           <XAxis
-            dataKey="displayDate"
-            axisLine={false}
-            tickLine={false}
-            tick={{ fill: '#888', fontSize: 12 }}
+            dataKey="date"
+            {...chartAxisLine}
+            tick={chartAxisTick}
+            // fmtDate renders the calendar date embedded in the ISO string
+            // (via timeZone: "UTC") rather than the browser's local
+            // calendar date -- a bare `new Date("2026-08-20")` parses as
+            // UTC midnight, so re-rendering it in a US-negative timezone
+            // without this would silently display the day before.
+            tickFormatter={fmtDate}
             minTickGap={30}
           />
           <YAxis
             domain={['auto', 'auto']}
-            axisLine={false}
-            tickLine={false}
-            tick={{ fill: '#888', fontSize: 12 }}
-            tickFormatter={(val) => `$${val.toLocaleString()}`}
+            {...chartAxisLine}
+            tick={chartAxisTick}
+            width={56}
+            tickFormatter={(val: number) => fmtUsd(val, { compact: true })}
           />
           <Tooltip
-            formatter={(value: any) => [`$${Number(value).toFixed(2)}`, 'Equity']}
-            labelStyle={{ color: '#333', fontWeight: 'bold' }}
-            contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+            content={<CustomTooltip valueFormat="currency" valueLabel="Equity" />}
+            cursor={chartCursorProps}
           />
           <Line
             type="monotone"
             dataKey="value"
-            stroke="#10b981"
+            stroke={theme.growth}
             strokeWidth={2.5}
             dot={false}
-            activeDot={{ r: 5, fill: '#10b981', stroke: '#fff', strokeWidth: 2 }}
+            activeDot={{ r: 5, fill: theme.growth, stroke: theme.surface, strokeWidth: 2 }}
           />
         </LineChart>
       </ResponsiveContainer>
