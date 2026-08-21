@@ -57,3 +57,10 @@ FAMILY_WISE_ALPHA: float = 0.05
 across the full family of signal modules (see signals/registry.py) and their
 trials — distinct from any single strategy's own within-strategy DSR/PBO
 gates above, which do not account for testing ~17 modules independently."""
+
+# ---------------------------------------------------------------------------
+# Pairs Trading Thresholds
+# ---------------------------------------------------------------------------
+PAIRS_ENTRY_Z_SCORE: float = 2.0
+PAIRS_STOP_LOSS_Z_SCORE: float = 4.0
+PAIRS_ADF_EXIT_PVALUE: float = 0.10

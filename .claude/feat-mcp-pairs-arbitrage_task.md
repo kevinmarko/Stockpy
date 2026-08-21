@@ -1,0 +1,16 @@
+# Agent 3:- [x] Refactor `pairs/cointegration.py`
+  - Ensure `compute_half_life` handles non-stationary logic (returns `np.nan` instead of `inf` upon failure).
+- [x] Refactor `signals/pairs_trading.py`
+  - Remove hardcoded default parameters and properly ingest them from `validation.thresholds`.
+- [x] Refactor `pairs_ondemand.py`
+  - Import `ENTRY_THRESHOLD`, `STOP_LOSS_THRESHOLD`, and `ADF_EXIT_THRESHOLD` from `validation.thresholds` rather than defining them statically.
+- [x] Expose `analyze_pairs_arbitrage` tool
+  - Add tool wrapper in `investyo_mcp_server.py`.
+- [x] Perform Independent Audit
+  - Re-run `pytest` and verify integrity via AGENTS.md checklist.cit disclaimers.
+- [x] Implement `calculate_margin_kelly_size` tool in `investyo_mcp_server.py`.
+- [ ] Add tool documentation to `docs/architecture/observability-and-apis.md`.
+- [ ] Write unit tests in `tests/test_investyo_mcp_margin_kelly.py`.
+- [ ] Run tests and verify handling of `NaN` and explicit disclaimers.
+- [ ] Complete Section 6 Audit Checklist.
+- [ ] Create walkthrough.

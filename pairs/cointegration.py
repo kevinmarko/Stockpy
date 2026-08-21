@@ -20,7 +20,7 @@ def compute_half_life(spread_series: pd.Series) -> float:
     where half-life HL = -ln(2) / ln(1 + lambda)
     """
     if len(spread_series) < 10:
-        return float('inf')
+        return np.nan
         
     spread_lag = spread_series.shift(1).dropna()
     spread_diff = spread_series.diff().dropna()
@@ -28,7 +28,7 @@ def compute_half_life(spread_series: pd.Series) -> float:
     # Align indices
     common_idx = spread_lag.index.intersection(spread_diff.index)
     if len(common_idx) < 10:
-        return float('inf')
+        return np.nan
         
     x = spread_lag.loc[common_idx].values
     y = spread_diff.loc[common_idx].values
@@ -40,14 +40,14 @@ def compute_half_life(spread_series: pd.Series) -> float:
         # So check the number of parameters returned.
         model = sm.OLS(y, x_const).fit()
         if len(model.params) < 2:
-            return float('inf')
+            return np.nan
         lambda_val = model.params[1]
     except Exception:
-        return float('inf')
+        return np.nan
         
     # Check for mean reversion
     if lambda_val >= 0 or (1 + lambda_val) <= 0:
-        return float('inf')
+        return np.nan
         
     hl = -np.log(2) / np.log(1 + lambda_val)
     return hl
