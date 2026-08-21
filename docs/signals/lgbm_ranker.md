@@ -277,3 +277,40 @@ measured fail — `deployable=False` is the one conclusion that holds regardless
 
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
+
+### 2026-08-21 follow-up: annualization-frequency fix lands — the Sharpe=24.886 number is now understood and being re-measured
+
+The second of the two compounding effects the entry above identified is now fixed.
+`validation/metrics.py` gained `infer_annualization_freq(returns, default=252)`, which
+infers periods/year from a returns Series' own `DatetimeIndex` median consecutive-
+observation gap instead of every `STRATEGY_REGISTRY` adapter silently assuming daily
+observations — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s dedicated 2026-08-21
+annualization-frequency entry for the full mechanism, the 29-strategy cadence survey (28
+daily, only `lgbm_ranker` sparse), and the regression-safety verification. `StrategyValidationHarness.run()` computes this once per call from `y` and threads it through
+every Sharpe/Sortino/Calmar/DSR site — for `lgbm_ranker` specifically, this replaces the
+`sqrt(252)` this file's prior entry showed reproducing the inflated ≈24.9/≈26.3 Sharpe with
+the correct `sqrt(~20)`-scale annualization matching this strategy's real ~21-trading-day
+forward long-short spread cadence.
+
+**A genuine re-run was started to get the real, corrected number** — not estimated, per
+CONSTRAINT #4 — using the identical command/settings as the crash-fix run above:
+```
+python -m scripts.refresh_validations --strategies lgbm_ranker --start 2005-01-01 \
+  --output-dir reports --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json
+```
+This is a genuinely expensive run (1365 CPCV paths, each retraining a real LightGBM model
+— the only adapter in the registry that does, vs. every other adapter replaying a
+precomputed return series) that took roughly 2 hours in the prior identical run
+documented above, and **was still in progress, not yet complete, as of this writing**.
+The real corrected Sharpe/MaxDD/PBO/DSR are **PENDING** — see
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s annualization-frequency entry for exactly how to
+check on / retrieve the completed run's numbers, and update this section once they land.
+What IS confirmed, independent of this specific run's completion: the fix's
+bit-identical-for-daily-cadence claim was verified live against a real, different
+`STRATEGY_REGISTRY` strategy (`rsi2_mean_reversion`) via a controlled A/B test holding
+price data fixed across a pre-fix/post-fix comparison — so the annualization mechanism
+itself is trusted; only `lgbm_ranker`'s own specific corrected number is still outstanding.
+`deployable=False` is expected to remain unchanged (annualization/OOS-gate corrections
+only ever reduce an already-inflated Sharpe/DSR, and DSR was already at 0.696, well under
+the 0.95 gate, before this fix) — but this is stated as an expectation, not yet as a
+measured result, until the run's own JSON summary confirms it.
