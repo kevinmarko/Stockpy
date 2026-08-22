@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from validation.metrics import sharpe_ratio
+from validation.metrics import sharpe_ratio, describe_signal_sparsity
 
 
 class TestDegenerateStdGuard:
@@ -81,3 +81,84 @@ class TestHarnessDegenerateReturnsEndToEnd:
         net_returns = harness._apply_cost_model(zero_returns, turnover=0.03)
         result = sharpe_ratio(net_returns)
         assert np.isnan(result), f"expected NaN, got an absurd value: {result}"
+
+
+class TestDescribeSignalSparsity:
+    """Regression tests for the self-diagnosing "insufficient trading signal"
+    note (validation/metrics.py::describe_signal_sparsity), which explains
+    the exact NaN-Sharpe condition tested above -- causally gated on the SAME
+    degenerate-std guard, so it fires if and only if sharpe_ratio() would
+    itself have returned NaN from this series.
+
+    Real incident this documents: `python -m scripts.refresh_validations
+    --strategies put_credit_spread,call_credit_spread` reported
+    deployable=false, pbo=NaN, dsr=NaN, sharpe=null, max_drawdown=0.24 with no
+    explanation -- the strategy's gate (true_ivr>50 AND VRP>threshold AND
+    VIX<30 AND directional trend_bias) essentially never matched over a
+    20-year SPY backtest, so its raw per-day return series was all exactly
+    0.0; StrategyValidationHarness._apply_cost_model's flat per-day turnover
+    cost then produced a numerically-constant series (see
+    TestHarnessDegenerateReturnsEndToEnd above) whose compounding cost drag
+    over ~4900 zero-trading days independently reproduced the reported
+    max_drawdown≈0.24. See docs/VALIDATION_STRATEGY_FIX_LOG.md's entry for
+    this incident for the full root-cause writeup.
+    """
+
+    def test_all_zero_returns_reports_zero_of_n_nonzero(self):
+        returns = pd.Series([0.0] * 239)
+        note = describe_signal_sparsity(returns)
+        assert note is not None
+        assert "insufficient trading signal" in note
+        assert "0/239" in note
+
+    def test_dense_real_returns_produce_no_note(self):
+        """A real, non-degenerate strategy's returns -- even if the strategy
+        itself turns out to have a poor Sharpe -- must not be flagged."""
+        rng = np.random.default_rng(7)
+        returns = pd.Series(rng.normal(0.0002, 0.0005, size=2000))
+        assert describe_signal_sparsity(returns) is None
+
+    def test_empty_or_none_returns_no_note(self):
+        assert describe_signal_sparsity(None) is None
+        assert describe_signal_sparsity(pd.Series(dtype=float)) is None
+        assert describe_signal_sparsity(pd.Series([0.001])) is None
+
+    def test_constant_after_flat_cost_deduction_reports_zero_nonzero(self):
+        """The exact real-world shape: an all-zero raw book (this function
+        should be called on the RAW pre-cost series, but confirms the guard
+        condition is met the same way sharpe_ratio's is)."""
+        n = 5000
+        daily_cost = 0.05 * (11.0 / 10000.0)
+        returns = pd.Series([0.0] * n) - daily_cost
+        assert returns.std() < 1e-12  # confirm premise, matches sharpe_ratio's own guard
+        note = describe_signal_sparsity(returns)
+        assert note is not None
+        # Every entry is `-daily_cost` (nonzero), not a true 0.0 fill -- this
+        # is why the harness computes the note off the RAW pre-cost series,
+        # not this cost-adjusted one (see validation/harness.py::run()).
+        assert f"{n}/{n}" in note
+
+    def test_sparse_but_nonzero_reports_actual_count(self):
+        """A handful of genuinely nonzero (> the function's own 1e-9 "real
+        signal" floor) observations that still collectively fail the
+        degenerate-std guard -- the rarer "some signal, still not
+        measurable" branch, distinct from the "0 nonzero" branch above.
+
+        Getting BOTH conditions to hold simultaneously (nonzero by the 1e-9
+        floor, yet std < 1e-12) needs a very large n -- std ~ sqrt(k/n)*v, so
+        for v just above 1e-9 to keep std below 1e-12, n/k must exceed
+        roughly 1e6. This branch is therefore not reachable in practice with
+        this codebase's actual backtest sizes (at most tens of thousands of
+        daily observations) -- included as a defensive generalization, not
+        because it fires on real data (see the "0/N" test above for the
+        realistic case)."""
+        n = 5_000_000
+        v = 1.2e-9
+        returns = pd.Series([0.0] * n)
+        returns.iloc[0] = v
+        returns.iloc[1] = -v
+        assert returns.std() < 1e-12
+        note = describe_signal_sparsity(returns)
+        assert note is not None
+        assert "0/" not in note
+        assert f"2/{n}" in note

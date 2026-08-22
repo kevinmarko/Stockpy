@@ -277,6 +277,18 @@
         </section>
         {% endif %}
 
+        {% if signal_sparsity_note %}
+        <!-- Self-diagnosing "insufficient trading signal" note -- explains a
+             NaN Sharpe/PBO/DSR (or a cost-drag-only MaxDD) that stems from the
+             strategy essentially never actually trading over this window,
+             rather than a computation bug. See
+             validation/metrics.py::describe_signal_sparsity. -->
+        <section class="card" style="margin-bottom: 1.5rem; border: 1px solid var(--danger-color);">
+            <div class="card-header" style="color: var(--danger-color);">⚠ Insufficient Trading Signal</div>
+            <div class="card-footer" style="color: var(--text-main);">{{ signal_sparsity_note }}</div>
+        </section>
+        {% endif %}
+
         {% if is_options_selling %}
         <!-- TAIL-SCENARIO STRESS TEST: printed at the TOP for options-selling strategies. -->
         <section class="card" style="margin-bottom: 1.5rem;">

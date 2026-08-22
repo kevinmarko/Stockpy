@@ -146,6 +146,16 @@ def test_full_stress_gate_runs_end_to_end_for_all_options_selling_strategies(str
     """The real stress-gate evaluation run for each options-selling strategy.
     No result is hardcoded -- this test's job is to prove the pipeline produces
     a genuine, well-formed verdict (never a crash, never a fabricated number).
+
+    A strategy this narrowly gated (true_ivr>50 AND VRP>threshold AND VIX<30
+    AND a matching directional trend_bias -- see
+    docs/VALIDATION_STRATEGY_FIX_LOG.md's entry documenting how rarely this
+    combination fires for SPY, even across dated crisis windows) may
+    legitimately never have held a position during a specific short stress
+    window. validation/stress_scenarios.py::run_stress_scenario now reports
+    that honestly via `error` rather than a trivial 0%-drawdown PASS -- any
+    OTHER error (e.g. a genuine data-availability gap) is still a real
+    failure.
     """
     results = run_stress_tests(
         lambda start, end: strat_fn(start, end, ticker="SPY")
@@ -153,7 +163,12 @@ def test_full_stress_gate_runs_end_to_end_for_all_options_selling_strategies(str
     assert set(results.keys()) == set(STRESS_SCENARIOS.keys())
 
     for name, result in results.items():
-        assert result.error is None, f"{name} ({strat_name}): unexpected data-gap error: {result.error}"
+        if result.error is not None:
+            assert "no real trading signal" in result.error, (
+                f"{name} ({strat_name}): unexpected error: {result.error}"
+            )
+            assert result.survived is False
+            continue
         assert np.isfinite(result.max_drawdown)
         assert isinstance(result.survived, bool)
 
