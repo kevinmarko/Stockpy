@@ -586,7 +586,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/order_manager.py:188",
+        "site": "execution/order_manager.py:225",
         "via": []
       }
     ],

@@ -295,6 +295,43 @@ def test_circuit_breaker_error_rate_trip():
     assert "Error rate 50.0% exceeded threshold" in str(cb.trip_reason)
 
 
+def test_circuit_breaker_latency_trip():
+    """A broker that is consistently slow but never errors and never crosses
+    the error-rate threshold must still trip -- the third documented OR
+    condition (see CircuitBreaker's class docstring) that record_success
+    previously only logged a WARNING for and never actually enforced."""
+    cfg = CircuitBreakerConfig(max_consecutive_failures=3, latency_threshold_ms=50.0)
+    cb = CircuitBreaker("test_broker", cfg)
+
+    cb.record_success(latency_ms=60.0)
+    assert cb.state == CircuitState.CLOSED
+    cb.record_success(latency_ms=60.0)
+    assert cb.state == CircuitState.CLOSED
+
+    # 3rd consecutive latency breach reaches threshold -> trips to OPEN
+    cb.record_success(latency_ms=60.0)
+    assert cb.state == CircuitState.OPEN
+    assert "Latency" in str(cb.trip_reason)
+    assert cb.can_execute() is False
+
+
+def test_circuit_breaker_latency_streak_reset_by_fast_response():
+    """A single fast response resets the consecutive-latency-breach streak
+    so the breaker doesn't trip on isolated slow responses interspersed with
+    healthy ones."""
+    cfg = CircuitBreakerConfig(max_consecutive_failures=3, latency_threshold_ms=50.0)
+    cb = CircuitBreaker("test_broker", cfg)
+
+    cb.record_success(latency_ms=60.0)
+    cb.record_success(latency_ms=60.0)
+    cb.record_success(latency_ms=10.0)  # fast -- resets the streak
+    cb.record_success(latency_ms=60.0)
+    cb.record_success(latency_ms=60.0)
+
+    assert cb.state == CircuitState.CLOSED
+    assert cb._consecutive_latency_breaches == 2
+
+
 @pytest.mark.anyio
 async def test_circuit_breaker_cooldown_and_half_open_recovery():
     cfg = CircuitBreakerConfig(

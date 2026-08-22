@@ -247,6 +247,33 @@ def _isolate_validation_runs_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_execution_audit_db_in_tests(monkeypatch):
+    """Point the default execution-audit-records DB resolver at an in-memory
+    db for every test, unless the test passes its own explicit ``db_url``/
+    ``sqlite_path`` to ``ExecutionAuditStore``.
+
+    ``execution/order_manager.py::OrderManager._record_execution_audit`` now
+    lazily constructs ``ExecutionAuditStore()`` (no explicit URL) the first
+    time a real fill reaches it -- an IMPLICIT write, exactly like the
+    ``ValidationHistoryStore`` case just above, deep inside a widely-used
+    function (~15+ pre-existing test files construct ``OrderManager(broker,
+    ...)`` directly with no ``audit_store=`` of their own, and at least one --
+    ``tests/test_fmp_paper_broker.py``'s
+    ``test_order_manager_live_submission_reaches_the_paper_broker`` -- already
+    drives a real FILLED result through it). Left unguarded, running this
+    suite would silently write real order-audit rows into a real operator's
+    shared ``~/.stockpy_local/quant_platform.db`` on every test run. Same
+    fixture shape as ``_isolate_validation_runs_db_in_tests`` above; a test
+    that passes ``sqlite_path=``/``db_url=`` explicitly (e.g.
+    ``tests/test_sec_rule_606_reporter.py``'s fixtures) bypasses
+    ``resolve_database_url()`` entirely and is unaffected by this patch.
+    """
+    import data.execution_audit_store as _eas
+
+    monkeypatch.setattr(_eas, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests():
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""
