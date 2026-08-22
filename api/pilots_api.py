@@ -5965,7 +5965,16 @@ def post_options_backtest(body: OptionsBacktestRequest) -> Dict[str, Any]:
 
 @app.get("/pilots/options/meta-model/status", dependencies=[Depends(require_read_token)])
 def get_options_meta_model_status() -> Dict[str, Any]:
-    """Returns training health, sample size, accuracy, and ROC-AUC of the Stage 4 Options ML Meta-Labeler."""
+    """Returns training health, sample size, accuracy, and ROC-AUC of the Stage 4 Options ML Meta-Labeler.
+
+    ``train_accuracy``/``train_roc_auc`` are IN-SAMPLE metrics -- ``train()``
+    has no purged/held-out evaluation (no CombinatorialPurgedCV, no embargo),
+    so these numbers are computed on the exact same data the model was fit
+    on and are optimistic relative to genuine out-of-sample performance.
+    ``metrics_are_in_sample: True`` is echoed explicitly so no caller mistakes
+    them for a validated metric -- see
+    docs/known_issues/options_meta_labeler_serving_time_gaps.md.
+    """
     from ml.options_meta_labeler import global_options_meta_labeler
     global_options_meta_labeler.load_model()
     return {
@@ -5974,6 +5983,7 @@ def get_options_meta_model_status() -> Dict[str, Any]:
         "train_roc_auc": round(global_options_meta_labeler.train_roc_auc, 3),
         "trained_at": global_options_meta_labeler.trained_at.isoformat() if global_options_meta_labeler.trained_at else None,
         "enabled": getattr(settings, "OPTIONS_META_LABELER_ENABLED", True),
+        "metrics_are_in_sample": True,
     }
 
 @app.post(
@@ -5996,6 +6006,19 @@ def post_options_meta_model_retrain() -> Dict[str, Any]:
     trade missing any one of these real fields (e.g. ``entry_vix`` on a date
     with no real FRED observation) is SKIPPED, never silently defaulted
     (CONSTRAINT #4); the skip count is logged and returned in the response.
+
+    ``trend_bias=1.0 if "put" in t.strategy.lower() else -1.0`` below is
+    still passed to ``OptionsTradeFeatureRow`` for backward-compat construction,
+    but it is NOT actually consumed as a model feature by
+    ``OptionsMetaLabeler._extract_feature_vector`` -- it was dropped entirely
+    (rather than fixed to match live serving's real technical-trend signal)
+    because it meant a different thing at train time (a pure function of
+    strategy name) than at serve time; see
+    docs/known_issues/options_meta_labeler_serving_time_gaps.md.
+
+    ``accuracy``/``roc_auc`` in the response are IN-SAMPLE metrics (no
+    purged/held-out split) -- ``metrics_are_in_sample: True`` is echoed
+    explicitly so no caller mistakes them for a validated metric.
     """
     from ml.options_meta_labeler import global_options_meta_labeler, OptionsTradeFeatureRow
     from validation.options_harness import OptionsValidationHarness
