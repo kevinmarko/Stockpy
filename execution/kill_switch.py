@@ -137,6 +137,12 @@ class GlobalKillSwitch:
             # places an order — see execution/flatten_proposal.py. Guarded so a
             # proposal-emission failure can never prevent the kill switch from
             # activating (the safety-critical action already completed above).
+            # No `macro_dto` passed here — this call site has no pipeline
+            # `RunResult` in scope. `emit_flatten_proposal` self-sources one
+            # via a zero-network cache read (execution.macro_snapshot
+            # .load_cached_macro_dto) when none is given, so the risk gate's
+            # macro checks still get real (if cache-stale) VIX/Sahm/regime
+            # state instead of staying permanently blind.
             try:
                 from execution.flatten_proposal import emit_flatten_proposal
                 emit_flatten_proposal(

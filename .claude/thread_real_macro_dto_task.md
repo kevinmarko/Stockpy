@@ -1,0 +1,26 @@
+# Task: Build Gemini Live API System & Multi-Model AI Chat Architecture
+
+- [x] Phase 1: Gemini Live Audio Configuration & Settings <!-- id: 0 -->
+  - [x] Add Gemini Live settings to `settings.py` (`GEMINI_LIVE_CHAT_ENABLED`, `GEMINI_LIVE_CHAT_MODEL`, `GEMINI_LIVE_VOICE_NAME`, `GEMINI_CHAT_MODEL`) <!-- id: 1 -->
+  - [x] Add settings to `gui/env_io.py` ALLOWED_KEYS <!-- id: 2 -->
+- [x] Phase 2: Backend WebSocket Live Streaming Endpoint <!-- id: 3 -->
+  - [x] Implement `live_chat_router` and `ws_live_chat_endpoint` in `api/ws_api.py` <!-- id: 4 -->
+  - [x] Mount `live_chat_router` in `api/data_api.py` and connect platform grounding tools <!-- id: 5 -->
+  - [x] Add Python unit test suite in `tests/test_gemini_live_chat.py` <!-- id: 6 -->
+- [x] Phase 3: Frontend PWA Audio & WebSockets <!-- id: 7 -->
+  - [x] Add `liveChatWsUrl` and route mapping in `webapp/src/api/client.ts` <!-- id: 8 -->
+  - [x] Create `webapp/src/chat/audioStreamer.ts` (16kHz PCM capture, 24kHz PCM playback) <!-- id: 9 -->
+  - [x] Create `webapp/src/chat/useGeminiLive.ts` (React hook for Live WebSocket) <!-- id: 10 -->
+  - [x] Update `webapp/src/components/AIChatInterface.tsx` with Live Voice controls <!-- id: 11 -->
+  - [x] Create frontend tests `webapp/src/chat/audioStreamer.test.ts` and update `AIChatInterface.test.tsx` <!-- id: 12 -->
+- [x] Phase 4: Multi-Model & Open-Source AI Architecture <!-- id: 13 -->
+  - [x] Add multi-provider settings to `settings.py` (`LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, `LOCAL_LLM_API_KEY`, `AI_CHAT_DEFAULT_PROVIDER`, `AI_CHAT_DEFAULT_MODEL`) <!-- id: 14 -->
+  - [x] Add `GET /data/ai/models` endpoint in `api/data_api.py` <!-- id: 15 -->
+  - [x] Implement multi-provider routing (Gemini, Claude, OpenAI, Local/Ollama/vLLM) in `POST /api/chat` <!-- id: 16 -->
+  - [x] Update frontend types in `webapp/src/api/types.ts` and client/mock in `webapp/src/api/client.ts` / `webapp/src/api/mock.ts` <!-- id: 17 -->
+  - [x] Build Model Selection Bar in `AIChatInterface.tsx` with custom model write-in input <!-- id: 18 -->
+  - [x] Add unit tests in `tests/test_data_api_chat.py` and `AIChatInterface.test.tsx` <!-- id: 19 -->
+- [x] Phase 5: Documentation & Independent Audits <!-- id: 20 -->
+  - [x] Update `CLAUDE.md`, `AGENTS.md`, `docs/architecture/webapp-and-gui.md`, and `scripts/Caddyfile` <!-- id: 21 -->
+  - [x] Run Python pytest suite (76/76 passed) and TypeScript typecheck/vitest suite (1729 passed) <!-- id: 22 -->
+  - [x] Run independent subagent audits (`custom-parity-auditor` and `custom-honesty-auditor`) <!-- id: 23 -->

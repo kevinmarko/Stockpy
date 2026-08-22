@@ -24,10 +24,14 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from unittest import mock
+from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
 
 import execution.flatten_proposal as fp
+import settings as settings_mod
+from dto_models import MacroEconomicDTO
 from execution.flatten_proposal import build_flatten_proposal, emit_flatten_proposal
 from execution.kill_switch import GlobalKillSwitch
 
@@ -199,6 +203,78 @@ def test_activate_survives_proposal_emission_failure(tmp_path, monkeypatch):
     ks.activate(reason="still-activates")  # must not raise
 
     assert ks.is_active()  # the safety-critical action completed
+
+
+# ---------------------------------------------------------------------------
+# Macro context wiring (RiskContext.macro was previously always hardcoded to
+# None here — see execution/macro_snapshot.py's module docstring for the
+# full history). Proves: (1) the pre-fix fail-open default is unchanged when
+# no macro_dto is supplied, (2) an explicit killSwitch=True macro DTO now
+# genuinely annotates even a BUY-to-cover intent (a SHORT position closes via
+# BUY — see test_build_proposal_closes_short_with_buy above), and (3)
+# emit_flatten_proposal self-sources real cached macro context with NO code
+# change needed at kill_switch.py's real call site.
+# ---------------------------------------------------------------------------
+
+def _killswitch_macro() -> MacroEconomicDTO:
+    return MacroEconomicDTO(
+        yield_curve_10y_2y=-0.5, high_yield_oas=7.0, inflation_rate=3.0,
+        sahm_rule_indicator=0.6, vix_value=35.0,
+    )
+
+
+class TestMacroContext:
+    def test_macro_none_still_fails_open_by_default(self):
+        positions = [_pos("TSLA", -5.0)]  # short → BUY-to-cover intent
+        payload = build_flatten_proposal(positions)
+        intent = payload["intents"][0]
+        assert intent["action"] == "BUY"
+        assert not any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+    def test_explicit_killswitch_macro_annotates_buy_to_cover_intent(self):
+        positions = [_pos("TSLA", -5.0)]  # short → BUY-to-cover intent
+        payload = build_flatten_proposal(positions, macro_dto=_killswitch_macro())
+        intent = payload["intents"][0]
+        assert intent["action"] == "BUY"
+        assert any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+        # Still structurally preview-only regardless of the gate outcome —
+        # the annotation informs a human reviewer, it never grants placement.
+        assert intent["allow_place"] is False
+
+    def test_emit_flatten_proposal_self_sources_macro_via_kill_switch_call(
+        self, tmp_path, monkeypatch,
+    ):
+        """Mirrors execution/kill_switch.py's real call shape: no macro_dto
+        kwarg passed at all. Proves that call site needs zero code changes
+        to benefit from a real (if cache-stale) macro veto annotation."""
+        from data.historical_store import HistoricalStore
+
+        db_path = str(tmp_path / "seeded.db")
+        writer = HistoricalStore(db_path=db_path)
+        dates = pd.bdate_range(end=pd.Timestamp.now(tz=None).normalize(), periods=3)
+        macro_df = pd.DataFrame(
+            {
+                "VIXCLS": [15.0, 16.0, 35.0],
+                "SAHMREALTIME": [0.0, 0.0, 0.6],
+                "T10Y2Y": [0.5, 0.4, -0.5],
+                "BAMLH0A0HYM2": [3.0, 3.1, 7.0],
+            },
+            index=dates,
+        )
+        de = MagicMock()
+        de.fetch_macro_history.return_value = macro_df
+        writer.get_macro("VIXCLS", data_engine=de)
+        monkeypatch.setattr(
+            settings_mod.settings, "DATABASE_URL", f"sqlite:///{db_path}", raising=False,
+        )
+
+        path = emit_flatten_proposal(
+            [_pos("TSLA", -5.0)], reason="test", output_dir=tmp_path, flatten_enabled=True,
+        )
+        data = json.loads(path.read_text())
+        intent = data["intents"][0]
+        assert intent["action"] == "BUY"
+        assert any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
 
 
 def test_no_broker_contact_in_module():

@@ -123,12 +123,22 @@ def _position_view(pos: Any) -> Optional[Dict[str, float]]:
         return None
 
 
-def _build_risk_context(views: List[Dict[str, float]], now: datetime) -> RiskContext:
+def _build_risk_context(
+    views: List[Dict[str, float]], now: datetime, *, macro_dto: Optional[Any] = None,
+) -> RiskContext:
     """Best-effort `RiskContext` from the current position views.
 
-    Missing data leaves each check to conservative-pass (the gate's documented
-    behaviour).  This is a PRE-SCREEN only — the closing intents can never be
-    placed by this module regardless of the gate outcome.
+    ``macro_dto``, when supplied, populates ``RiskContext.macro`` so the
+    shared ``PreTradeRiskGate`` macro checks genuinely evaluate real
+    VIX/Sahm/regime state instead of unconditionally passing — this matters
+    here because a SHORT position (``qty < 0``) closes via a BUY-to-cover
+    intent, and the macro kill-switch check only ever vetoes BUY-side
+    intents. A caller that doesn't have one (``None``, the default)
+    reproduces the prior fail-open behaviour exactly. Missing data otherwise
+    leaves each check to conservative-pass (the gate's documented
+    behaviour). This is a PRE-SCREEN only — the closing intents can never be
+    placed by this module regardless of the gate outcome (``allow_place`` is
+    structurally False on every intent this module emits).
     """
     positions: List[PositionSnapshot] = []
     current_prices: Dict[str, float] = {}
@@ -147,7 +157,7 @@ def _build_risk_context(views: List[Dict[str, float]], now: datetime) -> RiskCon
 
     account = BrokerAccountSnapshot(equity=equity, cash=0.0, buying_power=0.0)
     return RiskContext(
-        macro=None,
+        macro=macro_dto,
         open_positions=positions,
         account=account,
         returns_df=None,
@@ -249,6 +259,7 @@ def build_flatten_proposal(
     reason: str = "",
     now: Optional[datetime] = None,
     config: Optional[Dict[str, Any]] = None,
+    macro_dto: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Build the gated, dry-run flatten-proposal payload from held positions.
 
@@ -256,7 +267,8 @@ def build_flatten_proposal(
     each intent but NEVER contacts a broker or the MCP.  ``positions`` is any
     iterable of position-like objects (``PositionSnapshot`` or
     ``PortfolioPosition``); per-position failures are logged and skipped
-    (dead-letter resilient).
+    (dead-letter resilient).  ``macro_dto``, when supplied, is threaded into
+    the risk gate's ``RiskContext.macro`` (see ``_build_risk_context``).
     """
     cfg = {**CONFIG, **(config or {})}
     now = now or datetime.now(timezone.utc)
@@ -268,7 +280,7 @@ def build_flatten_proposal(
             views.append(v)
 
     gate = PreTradeRiskGate()
-    context = _build_risk_context(views, now)
+    context = _build_risk_context(views, now, macro_dto=macro_dto)
 
     intents: List[Dict[str, Any]] = []
     for v in views:
@@ -309,6 +321,7 @@ def emit_flatten_proposal(
     output_dir: Optional[Path] = None,
     now: Optional[datetime] = None,
     flatten_enabled: Optional[bool] = None,
+    macro_dto: Optional[Any] = None,
 ) -> Optional[Path]:
     """Build and atomically write ``output/flatten_proposal.json``.
 
@@ -316,7 +329,12 @@ def emit_flatten_proposal(
     returns ``None`` and writes NOTHING when the flag is off (the default) — so
     there is zero behavioural change for the common case.  When ``positions`` is
     ``None`` the current held positions are loaded DB-first (no network) via
-    ``_load_current_positions()``.
+    ``_load_current_positions()``.  ``execution/kill_switch.py``'s real call
+    site (``GlobalKillSwitch.activate()``) has no pipeline `RunResult` in
+    scope, so when ``macro_dto`` is ``None`` this self-sources one via the
+    same zero-network cache read: ``execution.macro_snapshot
+    .load_cached_macro_dto`` — meaning that real call site benefits from real
+    (if cache-stale) macro context with NO code change of its own required.
 
     Never raises (CONSTRAINT #6): a write failure is logged and swallowed so the
     kill-switch activation path is never destabilised by this bridge.
@@ -327,7 +345,13 @@ def emit_flatten_proposal(
     try:
         if positions is None:
             positions = _load_current_positions()
-        payload = build_flatten_proposal(positions, reason=reason, now=now)
+        if macro_dto is None:
+            try:
+                from execution.macro_snapshot import load_cached_macro_dto
+                macro_dto = load_cached_macro_dto(now=now)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("flatten_proposal: cached-macro fallback unavailable (%s)", exc)
+        payload = build_flatten_proposal(positions, reason=reason, now=now, macro_dto=macro_dto)
         if output_dir is None:
             from settings import settings
             output_dir = Path(settings.OUTPUT_DIR)

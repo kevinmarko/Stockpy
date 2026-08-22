@@ -544,6 +544,60 @@ class TestComposeAndEmitDeadLetter:
         assert payload["intents"][0]["symbol"] == "NVDA"
 
 
+class TestMacroDtoThreading:
+    """Proves compose_and_emit's macro_dto plumbing (_ComposedRunResult →
+    execution.queue_builder._build_risk_context → PreTradeRiskGate) actually
+    reaches the shared risk gate, not just build_execution_queue in
+    isolation — RiskContext.macro was previously always hardcoded to None
+    regardless of what was composed. See execution/macro_snapshot.py's
+    module docstring for the full history."""
+
+    def test_compose_and_emit_threads_macro_dto_to_the_risk_gate(self, tmp_path, monkeypatch):
+        from settings import settings
+        from dto_models import MacroEconomicDTO
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+
+        write_source("advisory", [_advisory_target("NVDA", "BUY")], output_dir=tmp_path, now=_NOW)
+        killswitch_macro = MacroEconomicDTO(
+            yield_curve_10y_2y=-0.5, high_yield_oas=7.0, inflation_rate=3.0,
+            sahm_rule_indicator=0.6, vix_value=35.0,
+        )
+
+        account = _snap(100_000.0, {})
+        result = compose_and_emit(
+            account, output_dir=tmp_path, now=_NOW, macro_dto=killswitch_macro,
+        )
+
+        assert result is not None
+        payload = json.loads(result.read_text(encoding="utf-8"))
+        intent = payload["intents"][0]
+        assert intent["symbol"] == "NVDA"
+        assert intent["gate_allowed"] is False
+        assert any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+    def test_compose_and_emit_falls_open_with_no_macro_dto_and_no_cache(
+        self, tmp_path, monkeypatch,
+    ):
+        """Backward-compat pin: no macro_dto AND no cached macro data
+        anywhere (a fresh DB) reproduces the pre-fix fail-open behaviour
+        exactly, never a spurious veto."""
+        from settings import settings
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+        monkeypatch.setattr(
+            settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'never_written.db'}",
+            raising=False,
+        )
+
+        write_source("advisory", [_advisory_target("NVDA", "BUY")], output_dir=tmp_path, now=_NOW)
+        account = _snap(100_000.0, {})
+        result = compose_and_emit(account, output_dir=tmp_path, now=_NOW)
+
+        assert result is not None
+        payload = json.loads(result.read_text(encoding="utf-8"))
+        intent = payload["intents"][0]
+        assert not any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+
 class TestFollowMinConvictionWiring:
     """Decision D3 (pilots/mirror.py): compose_and_emit's follow-mode
     min_conviction floor must come from the named FOLLOW_MIN_CONVICTION
