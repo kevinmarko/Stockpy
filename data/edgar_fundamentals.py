@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 from typing import Dict, Any, Optional
 import math
 
@@ -31,6 +32,19 @@ _REQUEST_DELAY = 0.15  # 10 req/sec limit, so 150ms delay is safe
 _throttle_lock = threading.Lock()
 _cik_lock = threading.Lock()
 
+# Cross-process state-file path, monkeypatchable so tests never touch the real
+# machine-shared LOCAL_DATA_ROOT (see tests/test_edgar_fundamentals.py's
+# `test_throttle_serializes_request_issuance`, which redirects this to a
+# `tmp_path` location). `None` (the default) means "resolve from settings at
+# call time" -- see `_edgar_throttle_state_path()`.
+_edgar_throttle_state_path_override = None
+
+def _edgar_throttle_state_path() -> Path:
+    if _edgar_throttle_state_path_override is not None:
+        return _edgar_throttle_state_path_override
+    from settings import settings as _settings
+    return _settings.LOCAL_DATA_ROOT / "rate_limits" / "edgar.state"
+
 def _throttle():
     global _last_request_time
     # The lock is held ACROSS the sleep on purpose — that is what serializes
@@ -40,12 +54,22 @@ def _throttle():
     # when concurrency is added). The actual download (urlopen) happens outside
     # this lock, so downloads still overlap. monotonic (not time.time) so an NTP
     # step can't make `elapsed` go negative and skip the delay.
+    #
+    # This is the in-process layer only (threads within THIS process). A
+    # second, cross-process layer follows -- see
+    # data/cross_process_throttle.py's module docstring for why SEC's ~10 req/s
+    # budget is per-account (i.e. per SOURCE IP for an anonymous User-Agent),
+    # not per-process, and why this repo's many concurrent git worktrees need
+    # both layers, not just this one.
     with _throttle_lock:
         now = time.monotonic()
         elapsed = now - _last_request_time
         if elapsed < _REQUEST_DELAY:
             time.sleep(_REQUEST_DELAY - elapsed)
         _last_request_time = time.monotonic()
+
+    from data.cross_process_throttle import wait_turn
+    wait_turn(_edgar_throttle_state_path(), _REQUEST_DELAY)
 
 def _http_get(url: str) -> bytes:
     _throttle()
