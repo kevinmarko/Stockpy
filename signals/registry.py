@@ -94,46 +94,56 @@ class SignalRegistry:
             module.pre_compute(universe_df, context)
 
     def compute_all(self, row: pd.Series, context: SignalContext) -> Dict[str, SignalOutput]:
-        """
-        Executes compute() on all registered signal modules for a given data row.
-        
+        """Executes compute() on all registered signal modules for a given row.
+
+        Per-cycle feature-availability skip (graduated-degrade convention): a
+        module whose required_features aren't present in THIS row this cycle is
+        logged at WARNING and left absent from the returned dict, rather than
+        raising and aborting every OTHER module's computation too. Mirrors the
+        is_active_in_regime / DISABLED_SIGNAL_MODULES skip one layer up in
+        SignalAggregator.aggregate(), which already tolerates absent keys
+        silently. The module STAYS registered and contributes again the moment
+        its feature reappears -- this is NOT the "silently drop/double-register
+        a module" anti-pattern register()'s collision guard exists to prevent.
+
         Args:
             row: pandas Series representing indicator features.
             context: SignalContext containing MarketBar, Fundamentals, and Macro DTOs.
-            
+
         Returns:
             Dict mapping signal names to SignalOutputs.
         """
         outputs = {}
         for name, module in self._modules.items():
-            # Validate required features exist in the row
-            for feature in module.required_features:
-                if feature not in row:
-                    raise ValueError(
-                        f"Required feature '{feature}' for signal '{name}' is missing from row."
-                    )
+            missing = [f for f in module.required_features if f not in row]
+            if missing:
+                logger.warning(
+                    "Signal '%s' skipped this cycle: required feature(s) %s missing from row.",
+                    name, missing,
+                )
+                continue
             outputs[name] = module.compute(row, context)
         return outputs
 
     def compute_all_vectorized(self, df: pd.DataFrame, context: SignalContext) -> Dict[str, pd.DataFrame]:
-        """
-        Executes compute_vectorized() on all registered signal modules for a universe DataFrame.
-        
+        """Same per-cycle skip as compute_all() above, keyed on DataFrame columns.
+
         Args:
             df: pandas DataFrame representing indicator features for all tickers.
             context: SignalContext containing global context data.
-            
+
         Returns:
             Dict mapping signal names to output DataFrames (with columns score, confidence, explanation, meta_label_proba).
         """
         outputs = {}
         for name, module in self._modules.items():
-            # Validate required features exist in the dataframe
-            for feature in module.required_features:
-                if feature not in df.columns:
-                    raise ValueError(
-                        f"Required feature '{feature}' for signal '{name}' is missing from DataFrame columns."
-                    )
+            missing = [f for f in module.required_features if f not in df.columns]
+            if missing:
+                logger.warning(
+                    "Signal '%s' skipped this cycle: required feature(s) %s missing from DataFrame columns.",
+                    name, missing,
+                )
+                continue
             outputs[name] = module.compute_vectorized(df, context)
         return outputs
 

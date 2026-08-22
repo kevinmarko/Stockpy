@@ -568,11 +568,6 @@ def regime_overlay(snapshot: Optional[dict]) -> Dict[str, Any]:
 # 3. Forecast skill — portfolio-wide (all symbols), one horizon.
 # ---------------------------------------------------------------------------
 
-# Mirrors forecasting.forecast_tracker._MIN_RMSE exactly (imported directly
-# below to avoid drift; this constant is only a fallback if that import ever
-# fails independently of the rest of the module).
-_MIN_RMSE_FALLBACK = 0.01
-
 
 def _portfolio_forecast_stats(
     db_path: str, horizon_days: int, window_days: int, min_obs: int
@@ -591,7 +586,7 @@ def _portfolio_forecast_stats(
     from datetime import datetime, timedelta as _timedelta, timezone
 
     from db_config import sqlite_readonly_uri
-    from forecasting.forecast_tracker import _MIN_RMSE
+    from forecasting.forecast_tracker import compute_skill_weights_from_stats
 
     since_iso = (datetime.now(timezone.utc) - _timedelta(days=window_days)).isoformat()
     conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
@@ -622,27 +617,19 @@ def _portfolio_forecast_stats(
     completed = int(completed_row[0]) if completed_row else 0
 
     if not skill_rows:
-        return {"skill_weights": {}, "pending": pending, "completed": completed}
+        return {"skill_weights": {}, "pending": pending, "completed": completed, "n_by_model": {}}
 
     model_stats = {
         r[0]: (int(r[1]), float(r[2]) if r[2] is not None else 0.0) for r in skill_rows
     }
-    if any(n < min_obs for (n, _) in model_stats.values()):
-        n_models = len(model_stats)
-        weights = {name: 1.0 / n_models for name in model_stats}
-    else:
-        inv_rmse: Dict[str, float] = {}
-        for name, (_, mse) in model_stats.items():
-            rmse = math.sqrt(mse) if mse >= 0 else 0.0
-            inv_rmse[name] = 1.0 / max(rmse, _MIN_RMSE)
-        total = sum(inv_rmse.values())
-        if total <= 0:
-            n_models = len(inv_rmse)
-            weights = {name: 1.0 / n_models for name in inv_rmse}
-        else:
-            weights = {name: w / total for name, w in inv_rmse.items()}
+    weights = compute_skill_weights_from_stats(model_stats, min_obs)
 
-    return {"skill_weights": weights, "pending": pending, "completed": completed}
+    return {
+        "skill_weights": weights,
+        "pending": pending,
+        "completed": completed,
+        "n_by_model": {name: n for name, (n, _) in model_stats.items()},
+    }
 
 
 def portfolio_forecast_skill(
@@ -710,7 +697,7 @@ def portfolio_forecast_skill(
         stats = _portfolio_forecast_stats(db_path, horizon, window, min_o)
     except Exception as exc:  # noqa: BLE001 — dead-letter (missing DB file, etc.)
         logger.debug("portfolio_forecast_skill: aggregate stats failed: %s", exc)
-        stats = {"skill_weights": {}, "pending": 0, "completed": 0}
+        stats = {"skill_weights": {}, "pending": 0, "completed": 0, "n_by_model": {}}
 
     skill_weights = {
         str(k): w for k, v in stats.get("skill_weights", {}).items() if (w := _finite_or_none(v)) is not None
@@ -727,6 +714,7 @@ def portfolio_forecast_skill(
         "skill_weights": skill_weights,
         "pending": pending,
         "completed": completed,
+        "n_by_model": {str(k): v for k, v in stats.get("n_by_model", {}).items()},
         "reason": None if has_data else no_history_reason,
     }
 
@@ -752,7 +740,7 @@ def _forecast_stats_by_symbol(
     from datetime import datetime, timedelta as _timedelta, timezone
 
     from db_config import sqlite_readonly_uri
-    from forecasting.forecast_tracker import _MIN_RMSE
+    from forecasting.forecast_tracker import compute_skill_weights_from_stats
 
     if not symbols:
         return {}
@@ -804,30 +792,26 @@ def _forecast_stats_by_symbol(
 
     result: Dict[str, Dict[str, Any]] = {}
     for sym, model_stats in stats_by_symbol.items():
-        if any(n < min_obs for (n, _) in model_stats.values()):
-            n_models = len(model_stats)
-            weights = {name: 1.0 / n_models for name in model_stats}
-        else:
-            inv_rmse: Dict[str, float] = {}
-            for name, (_, mse) in model_stats.items():
-                rmse = math.sqrt(mse) if mse >= 0 else 0.0
-                inv_rmse[name] = 1.0 / max(rmse, _MIN_RMSE)
-            total = sum(inv_rmse.values())
-            if total <= 0:
-                n_models = len(inv_rmse)
-                weights = {name: 1.0 / n_models for name in inv_rmse}
-            else:
-                weights = {name: w / total for name, w in inv_rmse.items()}
+        weights = compute_skill_weights_from_stats(model_stats, min_obs)
         result[sym] = {
             "skill_weights": weights,
             "pending": pending_by_symbol.get(sym, 0),
             "completed": completed_by_symbol.get(sym, 0),
+            "n_by_model": {name: n for name, (n, _) in model_stats.items()},
         }
 
     # A symbol with pending/completed counts but NO model ever cleared
     # min_obs's floor for a weight row still needs its counts surfaced.
     for sym in set(pending_by_symbol) | set(completed_by_symbol):
-        result.setdefault(sym, {"skill_weights": {}, "pending": pending_by_symbol.get(sym, 0), "completed": completed_by_symbol.get(sym, 0)})
+        result.setdefault(
+            sym,
+            {
+                "skill_weights": {},
+                "pending": pending_by_symbol.get(sym, 0),
+                "completed": completed_by_symbol.get(sym, 0),
+                "n_by_model": {},
+            },
+        )
 
     return result
 
@@ -900,7 +884,9 @@ def forecast_skill_by_symbol_summary(
     rows: List[Dict[str, Any]] = []
     any_history = False
     for sym in bounded_symbols:
-        stats = stats_by_symbol.get(sym, {"skill_weights": {}, "pending": 0, "completed": 0})
+        stats = stats_by_symbol.get(
+            sym, {"skill_weights": {}, "pending": 0, "completed": 0, "n_by_model": {}}
+        )
         skill_weights = {
             str(k): w for k, v in stats.get("skill_weights", {}).items() if (w := _finite_or_none(v)) is not None
         }
@@ -909,7 +895,13 @@ def forecast_skill_by_symbol_summary(
         if skill_weights or pending or completed:
             any_history = True
         rows.append(
-            {"symbol": sym, "pending": pending, "completed": completed, "skill_weights": skill_weights}
+            {
+                "symbol": sym,
+                "pending": pending,
+                "completed": completed,
+                "skill_weights": skill_weights,
+                "n_by_model": stats.get("n_by_model", {}),
+            }
         )
 
     if not any_history:

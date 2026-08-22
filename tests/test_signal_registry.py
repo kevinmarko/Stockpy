@@ -55,10 +55,14 @@ def test_signal_registry_roundtrip():
 
 
 def test_signal_registry_missing_features():
+    """Graduated-degrade convention (CLAUDE.md): a module whose
+    required_features aren't present in this cycle's row is skipped (absent
+    from outputs, logged at WARNING) rather than raising and aborting every
+    other module's computation."""
     registry = SignalRegistry()
     module = MockFeatureSignal()
     registry.register(module)
-    
+
     # Missing test_feature_2
     row = pd.Series({"test_feature_1": 0.5})
     bar = MarketBarDTO(datetime.now(), "MOCK", 10.0, 10.0, 10.0, 10.0, 100)
@@ -69,9 +73,47 @@ def test_signal_registry_missing_features():
     )
     macro = MacroEconomicDTO(0.1, 2.0, 1.0, 4.0)
     context = SignalContext(bar=bar, fundamentals=fundamentals, macro=macro)
-    
-    with pytest.raises(ValueError, match="Required feature 'test_feature_2' for signal 'mock_feature' is missing"):
-        registry.compute_all(row, context)
+
+    outputs = registry.compute_all(row, context)
+    assert "mock_feature" not in outputs
+    assert outputs == {}
+
+
+class OtherFeatureSignal(SignalModule):
+    name = "other_feature"
+    required_features = ["other_feature_1"]
+
+    def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
+        return SignalOutput(score=row["other_feature_1"], confidence=0.9, explanation="Other computed")
+
+
+def test_signal_registry_missing_features_skip_is_per_module_not_global():
+    """Two registered modules, only one has all required features present in
+    this cycle's row -- the fully-satisfied module's output must still be
+    present and correct; the incomplete module is skipped alone, proving the
+    skip does not abort the whole registry's computation."""
+    registry = SignalRegistry()
+    mock_module = MockFeatureSignal()
+    other_module = OtherFeatureSignal()
+    registry.register(mock_module)
+    registry.register(other_module)
+
+    # test_feature_2 is missing (mock_feature incomplete); other_feature_1 is present.
+    row = pd.Series({"test_feature_1": 0.5, "other_feature_1": 1.25})
+    bar = MarketBarDTO(datetime.now(), "MOCK", 10.0, 10.0, 10.0, 10.0, 100)
+    fundamentals = FundamentalDataDTO(
+        ticker="MOCK", company_name="Mock Corp", sector="Technology",
+        pe_ratio=15.0, pb_ratio=1.5, book_value=100.0, eps_trailing=5.0,
+        dividend_yield=0.02, dividend_growth_rate=0.05, payout_ratio=0.30
+    )
+    macro = MacroEconomicDTO(0.1, 2.0, 1.0, 4.0)
+    context = SignalContext(bar=bar, fundamentals=fundamentals, macro=macro)
+
+    outputs = registry.compute_all(row, context)
+    assert "mock_feature" not in outputs
+    assert "other_feature" in outputs
+    assert outputs["other_feature"].score == 1.25
+    assert outputs["other_feature"].confidence == 0.9
 
 
 def test_signal_registry_invalid_registration():

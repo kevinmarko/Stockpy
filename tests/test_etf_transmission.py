@@ -227,6 +227,52 @@ class TestBuildETFReturnComposite:
         assert build_etf_return_composite(None, None) == {}
         assert build_etf_return_composite({"XLK": [object()]}, {"XLK": pd.DataFrame()}) == {}
 
+    def test_majority_coverage_wins_shares_held_beats_minority_nav_weight(self):
+        """Graduated-degrade convention (CLAUDE.md): 4 wrappers, 2 report a
+        usable shares_held, only 1 reports a usable NAV weight (not a tie) --
+        the majority basis (shares_held) wins outright, computed over its 2
+        survivors only, renormalized; the minority-basis-only and
+        neither-basis wrappers are dropped rather than vetoing the whole
+        constituent."""
+        rng = np.random.RandomState(23)
+        a = rng.normal(0, 0.01, 120)  # XLK: usable shares_held
+        b = rng.normal(0, 0.01, 120)  # QQQ: usable shares_held
+        c = rng.normal(0, 0.01, 120)  # XLF: usable weight only (would-be minority basis)
+        d = rng.normal(0, 0.01, 120)  # IWM: neither basis usable
+        holdings = {
+            "XLK": [StubHolding("XLK", "AAPL", shares_held=300.0)],
+            "QQQ": [StubHolding("QQQ", "AAPL", shares_held=700.0)],
+            "XLF": [StubHolding("XLF", "AAPL", weight=0.5)],
+            "IWM": [StubHolding("IWM", "AAPL")],
+        }
+        out = build_etf_return_composite(
+            holdings,
+            {"XLK": _bars(a), "QQQ": _bars(b), "XLF": _bars(c), "IWM": _bars(d)},
+        )
+        # shares_held basis (2 survivors) beats NAV-weight basis (1 survivor)
+        # outright -- composite is exactly the shares-weighted blend of a, b.
+        assert np.allclose(out["AAPL"].to_numpy(), 0.3 * a + 0.7 * b)
+
+    def test_tie_between_bases_breaks_to_shares_held(self):
+        """3 wrappers: A has usable shares_held only, B has usable NAV weight
+        only, C has neither -- a 1-vs-1 tie between the two bases (excluding
+        C, which offers nothing to either). The tie-break favors shares_held
+        (true relative ownership), so the composite is A alone, not B and
+        not a dropped constituent."""
+        rng = np.random.RandomState(29)
+        a = rng.normal(0, 0.01, 120)  # A: usable shares_held only
+        b = rng.normal(0, 0.01, 120)  # B: usable weight only
+        c = rng.normal(0, 0.01, 120)  # C: neither basis usable
+        holdings = {
+            "A": [StubHolding("A", "AAPL", shares_held=500.0)],
+            "B": [StubHolding("B", "AAPL", weight=0.4)],
+            "C": [StubHolding("C", "AAPL")],
+        }
+        out = build_etf_return_composite(
+            holdings, {"A": _bars(a), "B": _bars(b), "C": _bars(c)},
+        )
+        assert np.allclose(out["AAPL"].to_numpy(), a)
+
 
 # ── compute_market_residual_r2 -- the crux ───────────────────────────────────
 
