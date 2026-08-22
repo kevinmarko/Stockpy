@@ -314,3 +314,43 @@ itself is trusted; only `lgbm_ranker`'s own specific corrected number is still o
 only ever reduce an already-inflated Sharpe/DSR, and DSR was already at 0.696, well under
 the 0.95 gate, before this fix) — but this is stated as an expectation, not yet as a
 measured result, until the run's own JSON summary confirms it.
+
+### 2026-08-22 follow-up: training non-determinism fixed (missing random_state) — resolves the outstanding PENDING measurement
+
+**The bug**: `ml/lgbm_ranker.py::_DEFAULT_PARAMS` had `feature_fraction=0.8`/`bagging_fraction=0.8`
+(refreshed every iteration via `bagging_freq=1`) with no `random_state`/seed anywhere in the
+module — every `lgb.LGBMRanker` fit was non-deterministic. Direct evidence: two CPCV runs
+recorded in the durable `validation_runs` table over the IDENTICAL date window
+(`2005-01-01` → `2026-08-21`) differed at the 6th significant digit of Sharpe
+(`0.6752608019782934` vs `0.6752606339208121`) — small but real and non-zero, consistent with
+unseeded subsampling averaged across many CPCV paths. Most of the LARGER Sharpe swings visible
+in that table's full history for this strategy are a separate confound (different concurrent
+worktree sessions invoking the validation CLI with different `--start`/`--end` windows into the
+same shared DB table, not same-window non-determinism) — stated honestly: the seed bug's own
+proven magnitude is smaller than the DB's raw scatter alone would suggest; this is not being
+overclaimed as the explanation for every swing on record.
+
+**The fix**: `ml/lgbm_ranker.py` gained `LGBM_RANDOM_SEED = 42` (matching the
+`CNN_LSTM_RANDOM_SEED` convention already used elsewhere in this repo) plus
+`"random_state": LGBM_RANDOM_SEED`, `"deterministic": True`, `"force_row_wise": True` in
+`_DEFAULT_PARAMS` — inherited by every `LGBMRanker` construction site in the codebase
+(production training in `scripts/train_lgbm.py`, the validation adapter in
+`scripts/refresh_validations.py`, and `ml/lgbm_ranker.py` itself), so this fixes BOTH the live
+`ml-cross-sectional-rank` Pilot's production training path AND this backtest.
+
+**Empirical proof**: `scripts/train_lgbm.py::run_training(offline=True)` called twice in-process
+produced bit-identical `dsr=0.9812207805846127`, `pbo=0.14285714285714285`,
+`mean_oos_sharpe=2.857031446734973`, `deployable=True` across both runs, plus a new permanent
+regression test (`tests/test_lgbm_ranker_native_cv.py::TestReproducibility`) asserting
+bit-identical `.predict()` output from two independently-trained rankers on identical input.
+
+**Full canonical re-run status**: a real re-run of the exact command this file's existing
+PENDING section already specifies was started (log at
+`/tmp/validation_runs/lgbm_ranker_seedfix.log`, PID 16419) to finally resolve the outstanding
+PENDING number from the entry above. **Still PENDING as of this entry** — confirmed running
+(`ps -p 16419` shows the process alive, ~3 minutes elapsed and still on its first handful of the
+1365 CPCV paths' per-fold `LGBMCrossSectionalRanker` fits as of the last log check) — see
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s matching entry (dated 2026-08-22) once it completes for
+the real, corrected Sharpe/PBO/DSR/MaxDD numbers. No Sharpe/DSR/PBO/MaxDD/`deployable` value for
+this specific re-run is stated here — per CONSTRAINT #4, nothing is fabricated, rounded, or
+estimated ahead of the run's own completed JSON summary.

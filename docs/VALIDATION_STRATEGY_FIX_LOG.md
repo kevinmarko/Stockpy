@@ -1822,6 +1822,174 @@ spot-check on `rsi2_mean_reversion` (bit-identical pre-fix vs. post-fix on froze
 market data, see above) — no genuine regression found in any of the three verification
 layers.
 
+## 2026-08-22: `lgbm_ranker` training non-determinism fixed (missing LightGBM `random_state`) — resolves the outstanding PENDING numbers
+
+Continues the "2026-08-21 (cont.): Annualization-frequency fix" entry immediately above,
+whose `lgbm_ranker`'s real, measured post-fix numbers` section was left marked **PENDING**
+pending that entry's own detached re-run (PID 29534) completing. That run did complete, but
+before the numbers it produced could be trusted, this entry's own investigation surfaced a
+second, independent bug in `lgbm_ranker`'s training path — not the annualization one, and not
+yet documented anywhere in this file.
+
+### The bug
+
+`ml/lgbm_ranker.py::_DEFAULT_PARAMS` set `feature_fraction=0.8`/`bagging_fraction=0.8`
+(re-drawn every boosting iteration, since `bagging_freq=1`) with **no `random_state`/`seed`
+anywhere** in the params dict, in `LGBMCrossSectionalRanker.__init__`, or in
+`scripts/train_lgbm.py` — confirmed by grep, zero hits for `random_state`/`seed=`/
+`np.random.seed` in either file before this fix. Every `lgb.LGBMRanker(**params)`
+construction in the codebase was therefore genuinely non-deterministic run-to-run: LightGBM's
+own row/feature subsampling drew a fresh random split each fit, with no way to reproduce a
+prior result.
+
+### Direct evidence this was real
+
+Querying the durable `validation_runs` table (shared read-write across every git worktree on
+this machine) turns up two rows recorded 15 seconds apart:
+
+```
+2026-08-21 18:48:20.087593|2005-01-01|2026-08-21|0.67526080197829341|0.99911103452188943|0.0
+2026-08-21 18:48:05.657176|2005-01-01|2026-08-21|0.67526063392081215|0.99911103175488314|0.0
+```
+
+Same `strategy_id`, same `start_date`/`end_date` (`2005-01-01` → `2026-08-21`) — yet Sharpe
+differs at the 6th significant digit (`0.6752608019782934` vs. `0.6752606339208121`), and DSR
+likewise. That is a small but real, non-zero, non-reproducible residual, consistent with
+unseeded bagging/feature-fraction subsampling averaged across many CPCV paths (large-N
+averaging mostly cancels per-fold randomness, but does not zero it out).
+
+**Important honesty caveat — do not overclaim what this explains.** Most of the *dramatic*
+Sharpe swings visible across the full `lgbm_ranker` row history in that same table (roughly
+-0.57 to +24.9, DSR ranging ~0.16 to ~0.999) are **not** same-window reruns: `start_date`/
+`end_date` differ substantially between rows for this same strategy (some rows span
+`2005-01-01→2026-08-21`, others `2020-08-24→2026-07-17`, others `2025-08-28→2026-07-16`),
+because this table is a shared pool written by many concurrent, independent worktree sessions
+on this machine each invoking `scripts/refresh_validations.py`/`scripts/train_lgbm.py` with
+different `--start`/`--end` CLI args (or hitting a different subset of tickers due to FMP's
+shared per-host rate limiter). So: the seed bug is real and directly proven by the
+same-window pair above, but it is a **smaller-magnitude contributor** than the DB's raw
+scatter alone would suggest — the dominant driver of the dramatic swings is the
+differing-validation-window confound described above, not the seed bug by itself.
+
+### The fix
+
+Added a module constant `LGBM_RANDOM_SEED = 42` to `ml/lgbm_ranker.py` (same convention as
+`CNN_LSTM_RANDOM_SEED = 42` in `cnn_lstm_worker.py`) and three new keys to `_DEFAULT_PARAMS`:
+`"random_state": LGBM_RANDOM_SEED`, `"deterministic": True`, `"force_row_wise": True` — the
+latter two per LightGBM's own "Reproducing results" FAQ (note `deterministic=True` forces
+LightGBM's reproducible-but-slower code path, a documented training-speed cost). This single
+base dict is merged (`{**_DEFAULT_PARAMS, **(params or {})}` in `__init__`) into **every**
+`LGBMRanker` construction site in the codebase: `ml/lgbm_ranker.py`'s own per-fold CV fits and
+final fit, `scripts/train_lgbm.py`'s `_CANDIDATE_PARAMS` CPCV trials, and
+`scripts/refresh_validations.py::_build_lgbm_ranker_adapter`'s per-CPCV-fold retrains — so
+this also fixes the real production training path (`scripts/train_lgbm.py`, the
+`ml-cross-sectional-rank` Pilot), not just the validation harness.
+
+### Empirical proof
+
+`scripts/train_lgbm.py::run_training(_DEFAULT_TICKERS, offline=True)` called twice in-process
+(using the deterministic `_SyntheticDataEngine`, isolating LightGBM's own determinism from
+network/data variability) produced **bit-identical** results both times: `dsr=0.9812207805846127`,
+`pbo=0.14285714285714285`, `n_train=250`, `n_dates=25`, `deployable=True`,
+`mean_oos_sharpe=2.857031446734973` — every field identical to full float precision across
+both runs.
+
+### New regression test
+
+A `TestReproducibility` class was added to `tests/test_lgbm_ranker_native_cv.py` asserting two
+independently-trained `LGBMCrossSectionalRanker` instances on identical synthetic input
+produce bit-identical `.predict()` output (`np.testing.assert_array_equal`).
+
+### `lgbm_ranker`'s real, measured post-seed-fix numbers — **PENDING**
+
+A genuine, canonical re-run was started to finally resolve the prior entry's outstanding
+PENDING marker with real post-seed-fix numbers:
+
+```
+python -m scripts.refresh_validations --strategies lgbm_ranker --start 2005-01-01 \
+  --output-dir reports --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json
+```
+
+(log at `/tmp/validation_runs/lgbm_ranker_seedfix.log`, PID 16419) — the same exact settings
+as the entry above's own re-run. **As of this entry being written, the run was still in
+progress, not yet complete** (`ps -p 16419` showed it alive, elapsed ~00:03:13, `STAT RN`;
+the log's last line was mid-CPCV-fold training, `LGBMRanker CV NDCG@1 mean=0.3826` at
+`2026-08-22 10:18:25`; `reports/lgbm_ranker_validation_summary.json` did not yet exist). This
+mirrors the prior entry's own experience — a real per-fold LightGBM retrain across 1365 CPCV
+paths is CPU-bound and has consistently taken roughly 2 hours wall-clock in this codebase, so
+it is not expected to complete within a single session turn.
+
+**No number is fabricated or estimated here.** Per this repo's CONSTRAINT #4, `lgbm_ranker`'s
+real post-seed-fix Sharpe/DSR/PBO/MaxDD are left **PENDING** in this entry rather than guessed
+from the in-progress log. To get the real numbers once the run completes:
+
+```
+# Check whether it's still running:
+ps -p 16419
+
+# Once it's finished, the result is both printed at the end of the log and written to
+# the standard JSON/HTML report locations:
+tail -40 /tmp/validation_runs/lgbm_ranker_seedfix.log
+cat reports/lgbm_ranker_validation_summary.json
+tail -1 reports/history/lgbm_ranker_validation_history.jsonl
+```
+
+**Follow-up needed**: once `reports/lgbm_ranker_validation_summary.json` exists for this run,
+append the real numbers to this entry and to `docs/signals/lgbm_ranker.md`'s corresponding
+follow-up section (both currently marked PENDING) — do not let this PENDING marker go stale,
+same instruction the entry above already gave for its own now-resolved PENDING marker.
+
+### Separate, still-open finding — flagged, not fixed here
+
+`cross_sectional_momentum` and `sector_quality_rank` (both **not** LightGBM-based, so
+unaffected by the seed fix above) also show real Sharpe/DSR instability across the same
+`validation_runs` table. Investigated in parallel (read-only, no code changes) with the
+following findings, confirmed with file:line citations:
+
+- **Concurrency is directly evidenced, not just plausible**: querying `validation_runs` for
+  rows recorded near the same wall-clock minute shows the same strategies, in the same
+  alphabetical `STRATEGY_REGISTRY` order, recorded 2-4× within minutes of each other (e.g.
+  `sector_quality_rank` id=89 at `15:08:13` and id=94 at `15:10:22`; a full second sweep
+  overlapping the first starting at `20:36:44`) — the signature of two or more independent
+  `refresh_validations.py` invocations from different worktrees running concurrently against
+  the same shared DB.
+- **The `sector_quality_rank` adapter's own math is deterministic** given identical inputs —
+  `_build_sector_quality_rank_adapter` (`scripts/refresh_validations.py:2622-2822`) has no
+  `random`/`np.random` calls, no unordered-iteration-fed computation, and no wall-clock
+  dependency. The instability must come from upstream INPUT differences.
+- **Both silent per-ticker dead-letter paths are exactly where concurrency bites**: universe
+  membership is gated on price-fetch success (`_fetch_fmp_ohlcv_batch` drops a ticker silently
+  on any failure, `scripts/refresh_validations.py:1939-1955`), and the quality-factor input is
+  gated on EDGAR fetch success (`data/edgar_fundamentals.py::fetch_companyfacts` catches all
+  exceptions and returns `{}`, degrading that ticker to all-NaN facts — excluded from ranking
+  at every date, per the adapter's own docstring at `scripts/refresh_validations.py:2706-2709`).
+  A ticker dropped from ranking shifts `percentile_df`/`selected`/`weights`
+  (`scripts/refresh_validations.py:2803-2810`) for every date it would have participated in —
+  a real book-composition change.
+- **The root enabler**: both rate limiters that are supposed to protect the shared FMP/EDGAR
+  endpoints are **process-local, not cross-process** — `data/edgar_fundamentals.py:31-48`'s
+  `_throttle_lock`/`_last_request_time` and `data/fmp_client.py:116-135`'s
+  `_fmp_throttle_lock`/`_fmp_last_request_time`/`_fmp_cooldown_until` are plain in-memory
+  module globals, safe across threads within ONE process but not across the multiple
+  concurrent OS processes this machine's many git worktrees routinely run. Two concurrent
+  `refresh_validations.py` invocations each believe they own the full request budget, jointly
+  exceeding the real shared limit and producing a non-deterministic, timing-dependent subset
+  of 429/5xx/timeout failures that differs run-to-run — landing on different tickers each time
+  via the dead-letter paths above.
+- `cross_sectional_momentum`'s swings are dominated by the same differing-`--start`/`--end`-
+  window confound documented for `lgbm_ranker` above, not this same-window mechanism.
+- **Not yet confirmed further** — distinguishing this from e.g. an EDGAR filing-availability
+  race or `ticker_sectors.csv` drift would need live instrumentation (per-run "tickers
+  dropped: FMP=[…] EDGAR=[…]" counts), not static code reading. Flagged here for future
+  investigation; no code changes were made or proposed for either strategy as part of this
+  entry.
+
+Tests: `tests/test_lgbm_ranker_native_cv.py::TestReproducibility` (bit-identical `.predict()`
+output across two independently-trained instances on identical synthetic input); full targeted
+suite re-run clean (`test_lgbm_ranker_native_cv.py` 19/19, `test_train_lgbm.py` 19/19,
+`test_lgbm_no_leakage.py` 2/2, `test_lgbm_purged_integration.py` 3/3,
+`test_lgbm_feature_pit.py` 6/6 — 49 passed, 0 failed).
+
 ## 2026-08-21 (cont.): "Adapter returned an empty feature/return frame" — diagnostic-only fix, root cause closed by follow-up re-run (see below)
 
 An operator-reported `scripts/refresh_validations.py` run showed 19 of 29 registered
