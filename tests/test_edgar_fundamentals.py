@@ -230,15 +230,35 @@ class TestThreadSafety:
     """The backfill script now drives this module from a ThreadPoolExecutor, so
     the throttle and the lazy CIK cache must be thread-safe."""
 
-    def test_throttle_serializes_request_issuance(self, monkeypatch, reset_edgar_state):
+    def test_throttle_serializes_request_issuance(self, monkeypatch, reset_edgar_state, tmp_path):
         """Under N concurrent _http_get calls, consecutive requests are still
         issued >= _REQUEST_DELAY apart. An unlocked throttle would let a burst
         through with near-zero gaps and blow SEC's ≤10 req/s limit. Verified at
-        W > 10 (per the plan)."""
+        W > 10 (per the plan).
+
+        `_throttle()` now also calls `cross_process_throttle.wait_turn` -- redirect
+        its state file to an isolated `tmp_path` location so this test never
+        touches the real machine-shared `LOCAL_DATA_ROOT/rate_limits/edgar.state`.
+
+        The two locks (the pre-existing in-process `threading.Lock` and the new
+        `flock`-based one) are two SEPARATE critical sections, not one atomic
+        block spanning both -- a thread can be descheduled between releasing the
+        first and acquiring the second, so the real syscall overhead of the
+        second lock (file open/flock/read/write/close, each of which can release
+        the GIL) adds a small amount of extra scheduling jitter on top of the
+        original single-lock implementation. At the original 0.02s interval /
+        0.8x tolerance this occasionally clipped below the floor by ~1ms under
+        12-thread contention (measured, not theoretical) -- bumped to 0.04s /
+        0.6x here to keep comfortable margin above that overhead while still
+        failing hard on a genuinely unlocked/broken throttle (near-zero gaps).
+        """
         import threading
         import time
 
-        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.02)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.04)
+        monkeypatch.setattr(
+            edgar_fundamentals, "_edgar_throttle_state_path_override", tmp_path / "edgar.state"
+        )
 
         issued: list[float] = []
         issued_lock = threading.Lock()
@@ -273,8 +293,10 @@ class TestThreadSafety:
         assert len(issued) == n
         issued.sort()
         gaps = [b - a for a, b in zip(issued, issued[1:])]
-        # 0.8x tolerance for scheduler jitter; a broken throttle produces ~0 gaps.
-        assert all(g >= 0.02 * 0.8 for g in gaps), gaps
+        # 0.6x tolerance for scheduler jitter (see the docstring above for why
+        # this is looser than a single-lock throttle would need); a broken
+        # throttle produces ~0 gaps, an order of magnitude below this floor.
+        assert all(g >= 0.04 * 0.6 for g in gaps), gaps
 
     def test_cik_cache_fetched_once_under_concurrency(self, monkeypatch, reset_edgar_state):
         """W threads racing into get_cik with an empty cache trigger exactly ONE

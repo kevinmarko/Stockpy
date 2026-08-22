@@ -97,15 +97,26 @@ def api_key(monkeypatch):
 
 
 @pytest.fixture
-def client_settings(monkeypatch, api_key):
+def client_settings(monkeypatch, api_key, tmp_path):
     """Explicit, non-default throttle knobs. The root conftest zeroes the
     interval for the suite at large; this module's own tests must opt back in
-    or they would assert nothing."""
+    or they would assert nothing.
+
+    A nonzero interval means `_fmp_throttle` now also calls
+    `cross_process_throttle.wait_turn` (see data/fmp_client.py) -- redirect its
+    state file to an isolated `tmp_path` location so these tests never touch
+    the real machine-shared `LOCAL_DATA_ROOT/rate_limits/fmp.state` (which a
+    real concurrent process elsewhere on this machine may be reading/writing).
+    """
     monkeypatch.setattr(settings, "FMP_MIN_REQUEST_INTERVAL_SECONDS", 0.25)
     monkeypatch.setattr(settings, "FMP_MAX_RETRIES", 2)
     monkeypatch.setattr(settings, "FMP_RETRY_BACKOFF_SECONDS", 2.0)
     monkeypatch.setattr(settings, "FMP_COOLDOWN_THRESHOLD", 5)
     monkeypatch.setattr(settings, "FMP_COOLDOWN_SECONDS", 300.0)
+    monkeypatch.setattr(
+        "data.fmp_client._fmp_throttle_state_path_override",
+        tmp_path / "fmp.state",
+    )
     return settings
 
 

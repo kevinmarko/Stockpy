@@ -2360,6 +2360,85 @@ Full JSON summaries: `reports/cross_sectional_momentum_validation_summary.json`,
 `docs/signals/cross_sectional_momentum.md` and `docs/signals/sector_quality_rank.md`
 addenda record the same numbers with per-strategy context.
 
+## 2026-08-22 (cont.): Cross-process rate limiting — the root cause behind both entries above, now fixed
+
+Both the `lgbm_ranker` non-determinism entry earlier today and the universe-coverage
+gate entry immediately above independently arrived at the same underlying mechanism:
+this machine runs many simultaneous git worktrees, each an independent OS process, and
+`data/fmp_client.py`'s / `data/edgar_fundamentals.py`'s request-spacing throttles were
+plain module-level globals guarded by a `threading.Lock` — safe across threads within
+ONE process, blind to every other process. Several concurrent
+`refresh_validations.py`/backfill invocations each believed they owned the FULL
+per-account FMP/SEC request budget, jointly exceeding the real shared limit and causing
+a different, randomly-incomplete ticker subset to succeed per run. The universe-coverage
+gate entry above explicitly disclosed a fix for this as out-of-scope follow-up work
+("a cross-worktree coordination mechanism (e.g. a shared lock file...)") — this entry
+closes that disclosed gap.
+
+**The fix**: new `data/cross_process_throttle.py::wait_turn(state_path, min_interval)`
+— a small, stdlib-only, dependency-free primitive enforcing "at least `min_interval`
+seconds since the last call against `state_path`, across every process on the machine"
+via a POSIX advisory file lock (`fcntl.flock`, held across the sleep, same rationale as
+the existing in-process throttles' own "hold the lock across the sleep" rule) on a tiny
+state file recording the last request's `time.monotonic()` timestamp. Safe because
+`CLOCK_MONOTONIC` on POSIX (this repo's only supported platforms, macOS/Linux) is a
+single clock instance shared by the whole KERNEL since boot, not per-process — a
+timestamp written by one process is directly and safely comparable by another. `flock`
+locks release automatically if the holding process dies (crash/`SIGKILL`), so there is
+no stale-lock cleanup concern. Both `data/fmp_client.py::_fmp_throttle` and
+`data/edgar_fundamentals.py::_throttle` call this as an ADDITIONAL outer layer, right
+after their existing in-process logic (kept byte-for-byte unchanged, preserving every
+existing fake-clock-based arithmetic test), before issuing the request. State files live
+at `settings.LOCAL_DATA_ROOT / "rate_limits" / "{fmp,edgar}.state"` — the established
+shared location for exactly this kind of cross-worktree state — resolved through a
+monkeypatchable path resolver so tests redirect it to an isolated `tmp_path` and never
+touch real machine-shared state. `min_interval <= 0` is a no-op with zero file I/O,
+matching every existing `_MIN_REQUEST_INTERVAL_SECONDS=0` "disable" convention, so the
+session-wide `conftest.py::_no_fmp_throttle_in_tests` autouse fixture needed no changes.
+
+**Deliberately scoped to the spacing throttle only** — each process's own
+consecutive-failure/cooldown circuit breaker stays process-local (a shared atomic
+counter and cross-process "logged once" semantics would be real added complexity for a
+secondary concern; the spacing throttle is the mechanism identified above as causing the
+joint budget overrun). **No new settings flag** — a bug fix to existing rate-limiting
+behavior, not a new feature, same precedent as this repo's "Shared GDELT rate limiter"
+fix, which shipped unconditionally.
+
+**This does not replace the universe-coverage gate** from the entry immediately above —
+that gate remains the correct fail-closed backstop for whatever residual variance a rate
+limiter alone cannot eliminate (a single-process run with a flaky network connection, a
+genuinely down FMP/SEC endpoint, etc.); this fix simply reduces how often it should need
+to trip going forward.
+
+**Verification**: `tests/test_cross_process_throttle.py` (new, 11 tests) covers the
+primitive directly — no-op on `min_interval<=0`, correct spacing arithmetic, graceful
+degradation on a corrupt state file / missing `fcntl` / an unwritable state directory,
+and thread-level serialization within one process. The load-bearing test is
+`TestRealMultiProcessSerialization::test_two_processes_jointly_respect_the_interval`,
+which spawns two REAL separate `python -c` child processes (via `subprocess.Popen`, not
+threads) issuing repeated calls against the same shared state file, and asserts their
+COMBINED issuance timestamps respect the interval — proving the actual property this
+fix exists to guarantee (two processes do not each reach the full per-process
+throughput a single-process throttle would allow), which a thread-based test cannot
+prove on its own. Full existing `tests/test_fmp_client.py` (43 tests) and
+`tests/test_edgar_fundamentals.py` (11 tests) suites: zero regressions — the one
+real-timing EDGAR throttle test (`test_throttle_serializes_request_issuance`) needed its
+interval/tolerance loosened slightly (0.02s/0.8x → 0.04s/0.6x) to give comfortable
+margin above the small, expected extra syscall overhead the second lock layer adds under
+12-thread contention (measured directly: the original tolerance occasionally clipped by
+~1ms, not a correctness bug in the new throttle itself). Broader regression sweep across
+every test file touching `fmp_client`/`edgar_fundamentals` (`test_backfill_edgar_fundamentals.py`,
+`test_dead_letter_resilience.py`, `test_etf_holdings.py`, `test_fmp_*.py`,
+`test_market_data.py`, `test_news_catalyst.py`, `test_sentiment_sources.py`,
+`test_validation_edgar_pit_strategies.py`, `test_validation_multifactor.py`, etc.): 849
+passed, 0 failed. Full repo-wide offline suite (`pytest -q -m 'not network'`): 2867
+passed, 0 failed attributable to this change — one unrelated pre-existing test
+(`tests/test_forecast_backfill.py::test_kill_mid_step_5_leaves_partial_export_with_completed_combos`,
+a real-subprocess test with a 30s wall-clock deadline in a module this change never
+touches) failed on this run under this machine's current heavy concurrent-worktree load,
+consistent with a timing-sensitive test being CPU-starved rather than a regression this
+change introduced.
+
 Introducing PR: [#858](https://github.com/kevinmarko/Stockpy/pull/858).
 
 ## 2026-08-22: `put_credit_spread`/`call_credit_spread` NaN Sharpe/PBO/DSR and the stress-gate's trivial 0%-drawdown PASS made self-diagnosing
@@ -2533,3 +2612,68 @@ letting this be re-confirmed against genuine, freshly-fetched FMP data rather th
 
 No code changes resulted from this follow-up — it is a confirmation pass only, closing the one
 disclosed verification gap from the original entry.
+
+## 2026-08-22 (cont.): `run_training()` shared-state guard — a real incident from this file's own investigation, now closed
+
+While investigating `lgbm_ranker`'s non-determinism (this file's earlier 2026-08-22 entries),
+a quick offline `scripts.train_lgbm.run_training(_DEFAULT_TICKERS, offline=True)` call —
+issued directly, with no `save_path`/`registry_path` override, as an ad hoc verification
+step, not a real training run — silently wrote its synthetic-run metrics into the
+MACHINE-GLOBAL `ml/registry.yaml` (`update_model_metrics(path=None)`'s dual-persistence
+writes to BOTH `settings.LOCAL_DATA_ROOT/ml_models/registry.yaml` AND the repo-tracked
+`ml/registry.yaml`, shared by every git worktree on this machine) and left a bogus
+`lgbm_20260822.pkl` in the shared `ml_models/` directory that `LGBMCrossSectionalRanker
+.load_latest()` (a plain glob-sort of dated filenames) would have picked up over the real
+production model. Caught and reverted by hand in the same session before it was ever
+committed — but the underlying mechanism (any ad hoc script/notebook cell calling
+`run_training()` this way reproduces the exact same pollution) was left unfixed at the time,
+flagged as a known risk.
+
+**The fix**: `scripts/train_lgbm.py::run_training()` gained a required, explicit
+`confirm_shared_write: bool = False` keyword. Whenever `save_path` and/or `registry_path`
+are left at their default `None`, the function now raises `ValueError` immediately — before
+any network/training work starts — unless the caller passes `confirm_shared_write=True`.
+The two genuine, deliberate production callers were updated to pass it explicitly:
+`scripts/train_lgbm.py`'s own CLI `main()` (its entire purpose is a real training run) and
+`scripts/retrain_models.py`'s scheduled retraining job. No existing test needed this flag —
+every test in `tests/test_train_lgbm.py` already passed explicit, isolated `save_path`/
+`registry_path` (one exception, `test_default_save_path_is_dated_not_mutable_latest`, which
+deliberately leaves `save_path=None` to test that specific parameter-passing contract while
+mocking `.save()` entirely, was updated to pass `confirm_shared_write=True` alongside its
+already-isolated `registry_path`).
+
+**A second, smaller incident happened writing THIS fix's own regression test** — worth
+recording honestly rather than glossing over, since it's a direct illustration of exactly
+how easy this class of mistake is to make even while actively trying to avoid it. The first
+draft of `TestSharedStateGuard::test_confirm_shared_write_true_bypasses_the_guard_even_with_no_paths`
+tried to prove the escape hatch works by monkeypatching `settings.LOCAL_DATA_ROOT` (plus
+`ml.lgbm_ranker._MODELS_DIR`, a module-level constant frozen at import time) to an isolated
+`tmp_path`, then calling `run_training(..., confirm_shared_write=True)` with no path
+overrides — expecting every write to land under the redirected fake root. The model pickle
+write WAS correctly isolated (confirmed via the returned `model_path`), but the test still
+leaked a write into the REAL machine-global `ml/registry.yaml` (confirmed via a distinctive
+`n_train: 150` matching the test's own 6-ticker/25-date synthetic panel). Root cause:
+`ml/registry_io.py::update_model_metrics(path=None)` writes to `[get_local_registry_path(),
+_DEFAULT_REGISTRY_PATH]` — the FIRST target is settings-driven and was correctly redirected
+by the monkeypatch, but `_DEFAULT_REGISTRY_PATH = Path(__file__).parent / "registry.yaml"`
+is a hardcoded constant, entirely independent of `settings.LOCAL_DATA_ROOT`, and is written
+to unconditionally whenever `path=None` — this is genuinely the same mechanism behind the
+ORIGINAL incident this fix exists to prevent, now caught a second time by direct
+verification (checking the real files after each test run) rather than by trusting the
+monkeypatch's own reasoning. Fixed by abandoning the path-redirection approach entirely:
+the corrected test mocks `LGBMCrossSectionalRanker.save` and `update_model_metrics` directly
+(asserting they were called with `path=None`, proving the guard didn't block), which cannot
+touch real shared state regardless of how `ml/registry_io.py`'s internal path resolution
+works — sidestepping the need to fully enumerate every internal branch rather than risking
+missing another one. **Lesson for future guard/isolation tests in this codebase**: mocking
+the actual I/O call is more robust than trying to redirect every path a function might
+resolve internally — prefer it whenever the function under test has more than one
+settings-independent write target.
+
+Tests: `tests/test_train_lgbm.py::TestSharedStateGuard` (5 tests — both-None raises before
+any work starts, either-alone raises, both-explicit never requires the flag, and the
+escape-hatch proof described above). Full `tests/test_train_lgbm.py` suite (24 tests) and
+`tests/test_retrain_models.py` (11 tests, `run_training` fully mocked there already) both
+pass; the real machine-global `ml/registry.yaml` and repo-tracked `ml/registry.yaml` were
+directly diffed/inspected after each test run in this session to confirm zero pollution,
+not merely assumed clean from the tests passing.

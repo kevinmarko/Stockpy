@@ -321,6 +321,128 @@ class TestEstimateGjrGarchVolatility:
 
 
 # ============================================================================
+# estimate_gjr_garch_volatility_term_structure
+#
+# The bug fix: estimate_gjr_garch_volatility() always forecast exactly 1 day
+# ahead, and every multi-day caller (forecasting_engine.py's Monte Carlo
+# horizons) scaled that single number by sqrt(T) -- ignoring GARCH's actual
+# value, conditional-variance mean-reversion toward the long-run level over
+# the forecast window. This term-structure method fits ONCE and derives a
+# genuine, mean-reversion-aware annualized vol PER horizon instead.
+# ============================================================================
+
+
+class TestGarchTermStructure:
+    def _shocked_series(self, n: int = 1000, seed: int = 42, shock_days: int = 15) -> pd.DataFrame:
+        """A calm baseline series with a recent volatility shock in the last
+        `shock_days` -- the regime where naive sigma_1*sqrt(T) scaling most
+        overstates the true multi-day vol (current conditional variance is
+        elevated above the long-run level, so it must mean-revert DOWN over
+        the forecast horizon)."""
+        rng = np.random.RandomState(seed)
+        returns = rng.normal(0, 0.01, n)
+        returns[-shock_days:] = rng.normal(0, 0.05, shock_days)
+        close = 100.0 * np.exp(np.cumsum(returns))
+        dates = pd.date_range("2020-01-01", periods=n, freq="B")
+        return pd.DataFrame(
+            {
+                "Open": close, "High": close * 1.01, "Low": close * 0.99,
+                "Close": close, "Volume": np.full(n, 1_000_000.0),
+            },
+            index=dates,
+        )
+
+    def test_horizon_one_is_byte_identical_to_scalar_method(self):
+        """estimate_gjr_garch_volatility() is now a thin horizon=1 wrapper
+        around the term-structure method -- must be numerically identical,
+        not merely close, on the same df (verifies the refactor is truly
+        behavior-preserving for every existing horizon=1 caller: the
+        GARCH_Vol dashboard column, the VRP gate, True IVR, position
+        sizing)."""
+        engine = TechnicalOptionsEngine()
+        df = self._shocked_series(seed=1)
+        scalar = engine.estimate_gjr_garch_volatility(df)
+        term_structure = engine.estimate_gjr_garch_volatility_term_structure(df, horizons=(1,))
+        assert term_structure[1] == scalar
+
+        # Also true when horizon=1 is requested alongside longer horizons --
+        # a single fit+forecast(horizon=max) call must still reproduce the
+        # SAME h.1 value regardless of how far the forecast is extended
+        # (verified against the arch library: the analytic recursion's first
+        # step does not depend on how many further steps are requested).
+        multi = engine.estimate_gjr_garch_volatility_term_structure(df, horizons=(1, 10, 30, 60, 90))
+        assert multi[1] == scalar
+
+    def test_mean_reversion_is_reflected_after_a_vol_shock(self):
+        """The actual regression check for the bug: after a recent vol
+        shock, the per-horizon annualized vol must (a) strictly decrease as
+        the horizon grows (mean-reverting toward the long-run level) and
+        (b) be strictly less than the naive sigma_1 broadcast to every
+        horizon -- proving the fix reflects mean-reversion instead of the
+        old sigma_1*sqrt(T)-style flat extrapolation."""
+        engine = TechnicalOptionsEngine()
+        df = self._shocked_series(seed=2)
+        horizons = (1, 10, 30, 60, 90)
+        term_structure = engine.estimate_gjr_garch_volatility_term_structure(df, horizons=horizons)
+
+        sigma_1 = term_structure[1]
+        values = [term_structure[h] for h in horizons]
+        # (a) strictly decreasing -- genuine mean-reversion, not noise.
+        assert all(values[i] > values[i + 1] for i in range(len(values) - 1)), (
+            f"expected monotonically decreasing annualized vol as horizon "
+            f"grows after a vol shock, got {term_structure}"
+        )
+        # (b) every horizon > 1 sits strictly below the flat sigma_1 value
+        # the OLD naive sqrt(T) scaling would have (mis)used for every
+        # horizon.
+        for h in horizons[1:]:
+            assert term_structure[h] < sigma_1, (
+                f"horizon {h}'s vol ({term_structure[h]}) must be below the "
+                f"naive flat sigma_1 ({sigma_1}) after a recent vol shock"
+            )
+
+    def test_arch_unavailable_fallback_is_flat_across_every_horizon(self, monkeypatch):
+        """No fitted model -> no term structure to compute -- every
+        requested horizon must degrade to the SAME 20-day historical
+        fallback value (never fabricated per-horizon variation)."""
+        monkeypatch.setattr(toe_module, "ARCH_AVAILABLE", False)
+        engine = TechnicalOptionsEngine()
+        df = _ohlcv(150, seed=17)
+        term_structure = engine.estimate_gjr_garch_volatility_term_structure(
+            df, horizons=(1, 10, 30, 60, 90)
+        )
+        returns = df["Close"].pct_change().dropna()
+        expected = float(max(0.02, min(3.0, returns.tail(20).std() * np.sqrt(252))))
+        for h, vol in term_structure.items():
+            assert vol == pytest.approx(expected, rel=1e-6), f"horizon {h} must match the flat fallback"
+
+    def test_insufficient_history_fallback_is_flat_neutral_default(self):
+        engine = TechnicalOptionsEngine()
+        term_structure = engine.estimate_gjr_garch_volatility_term_structure(
+            _ohlcv(10, seed=18), horizons=(1, 10, 30, 60, 90)
+        )
+        assert term_structure == {1: 0.20, 10: 0.20, 30: 0.20, 60: 0.20, 90: 0.20}
+
+    def test_single_fit_covers_every_horizon(self, monkeypatch):
+        """Efficiency contract: ONE arch_model.fit() call must produce every
+        requested horizon's value -- not one fit per horizon."""
+        engine = TechnicalOptionsEngine()
+        df = self._shocked_series(seed=3)
+
+        import arch as arch_lib
+        real_fit = arch_lib.univariate.base.ARCHModel.fit
+        call_count = {"n": 0}
+
+        def counting_fit(self, *args, **kwargs):
+            call_count["n"] += 1
+            return real_fit(self, *args, **kwargs)
+
+        monkeypatch.setattr(arch_lib.univariate.base.ARCHModel, "fit", counting_fit)
+        engine.estimate_gjr_garch_volatility_term_structure(df, horizons=(1, 10, 30, 60, 90))
+        assert call_count["n"] == 1, "must fit GJR-GARCH exactly once regardless of horizon count"
+
+
+# ============================================================================
 # calculate_realized_vol_rank
 # ============================================================================
 

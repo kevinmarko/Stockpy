@@ -453,6 +453,7 @@ class TestEndToEndIntegration:
             toe_inst = MockTOE.return_value
             toe_inst.estimate_gjr_garch_volatility.return_value = 0.20
 
+            toe_inst.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.20 for h in (1, 10, 30, 60, 90)}
             se_inst = MockSE.return_value
             se_inst.evaluate_security.return_value = {
                 "Action Signal": "BUY",

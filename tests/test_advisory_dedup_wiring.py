@@ -116,6 +116,7 @@ class TestEvaluateRejectsNonPositivePrecomputedValues:
 
             toe_instance = MagicMock()
             toe_instance.estimate_gjr_garch_volatility.return_value = 0.19
+            toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.19 for h in (1, 10, 30, 60, 90)}
             MockTOE.return_value = toe_instance
 
             se_instance = MagicMock()
@@ -131,7 +132,7 @@ class TestEvaluateRejectsNonPositivePrecomputedValues:
             )
 
             # The zero placeholders were rejected -- both engines still fit fresh.
-            assert toe_instance.estimate_gjr_garch_volatility.called
+            assert toe_instance.estimate_gjr_garch_volatility_term_structure.called
             assert fe_instance.generate_forecast.called
         assert rec.key_indicators["garch_vol"] == pytest.approx(0.19)
         assert rec.forecast == pytest.approx(108.0)

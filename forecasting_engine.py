@@ -1221,11 +1221,77 @@ class ForecastingEngine:
             logger.debug("GJR-GARCH daily sigma estimation failed; using historical stdev: %s", _exc)
             return fallback_daily_sigma
 
+    def _estimate_daily_sigma_multi_horizon(self, history_df, fallback_daily_sigma: float,
+                                             horizons, precomputed_garch_term_structure: Optional[Dict[int, float]] = None
+                                             ) -> Dict[int, float]:
+        """Per-horizon counterpart to _estimate_daily_sigma: returns a DAILY
+        volatility for Monte Carlo for EACH requested horizon, sourced from
+        the GJR-GARCH(1,1) term structure (technical_options_engine.py's
+        estimate_gjr_garch_volatility_term_structure -- forward-looking,
+        mean-reversion-aware) when available, else the caller's historical
+        daily stdev broadcast flatly to every horizon.
+
+        THIS is the fix for the bug where every forecast horizon (10/30/60/90
+        days) shared ONE daily sigma derived from a 1-day-ahead GARCH forecast,
+        scaled up via run_monte_carlo's naive sigma*sqrt(T) -- which ignores
+        GARCH's conditional-variance mean-reversion over the forecast window.
+        Each horizon here gets its own sigma reflecting where that horizon's
+        cumulative variance forecast actually lands.
+
+        precomputed_garch_term_structure lets a caller that already fit
+        GJR-GARCH this cycle (e.g. pipeline/production_steps.py's options
+        step, engine/advisory.py's Step 5) supply {horizon: annualized_vol}
+        and avoid a redundant second fit -- used only when it's a dict
+        covering EVERY requested horizon with finite, positive values; a
+        partial/invalid supplied structure falls through to a fresh fit
+        rather than silently mixing precomputed and freshly-fit horizons.
+
+        Degrades to {h: fallback_daily_sigma for h in horizons} (never
+        raises) when the GARCH flag is off, history_df is None/insufficient,
+        or the estimator fails -- same dead-letter contract as
+        _estimate_daily_sigma.
+        """
+        horizons = sorted({int(h) for h in horizons})
+        from settings import settings as _settings
+        if not _settings.FORECAST_USE_GARCH_SIGMA:
+            return {h: fallback_daily_sigma for h in horizons}
+        if history_df is None or len(history_df) < 22:
+            return {h: fallback_daily_sigma for h in horizons}
+
+        def _annual_to_daily(annual_vol) -> Optional[float]:
+            if annual_vol is None or not np.isfinite(annual_vol) or annual_vol <= 0:
+                return None
+            daily = float(annual_vol) / np.sqrt(252.0)
+            if not np.isfinite(daily) or daily <= 0:
+                return None
+            return max(daily, 1e-6)
+
+        # Reuse a caller-supplied term structure when it covers every
+        # requested horizon with a valid value -- same input DataFrame ->
+        # same estimator output, so this is byte-identical to refitting.
+        if precomputed_garch_term_structure:
+            daily_by_horizon = {h: _annual_to_daily(precomputed_garch_term_structure.get(h)) for h in horizons}
+            if all(v is not None for v in daily_by_horizon.values()):
+                return daily_by_horizon
+
+        try:
+            from technical_options_engine import TechnicalOptionsEngine
+            term_structure = TechnicalOptionsEngine().estimate_gjr_garch_volatility_term_structure(
+                history_df, horizons=horizons
+            )
+            daily_by_horizon = {h: _annual_to_daily(term_structure.get(h)) for h in horizons}
+            if all(v is not None for v in daily_by_horizon.values()):
+                return daily_by_horizon
+        except Exception as _exc:
+            logger.debug("GJR-GARCH term-structure sigma estimation failed; using historical stdev: %s", _exc)
+
+        return {h: fallback_daily_sigma for h in horizons}
+
     # =========================================================================
     # ORCHESTRATOR
     # =========================================================================
 
-    def generate_forecast(self, row: Union[pd.Series, Mapping[str, Any]], current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None) -> Dict[str, Any]:
+    def generate_forecast(self, row: Union[pd.Series, Mapping[str, Any]], current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None, precomputed_garch_term_structure: Optional[Dict[int, float]] = None) -> Dict[str, Any]:
         """
         Generates forecasts and maps them to SCHEMA KEYS:
         Forecast_10, Forecast_30, Forecast_60, Forecast_90.
@@ -1237,6 +1303,15 @@ class ForecastingEngine:
         than ``iterrows()``); ``engine/advisory.py``'s call site still passes
         a real ``pd.Series``. Do not add ``.name``/``.index``/attribute-style
         access here -- that would silently break the dict call path.
+
+        ``precomputed_garch_term_structure`` (``{horizon: annualized_vol}``)
+        is the per-horizon Monte Carlo sigma source -- see
+        ``_estimate_daily_sigma_multi_horizon``'s docstring. ``precomputed_garch_annual_vol``
+        (a single 1-day-ahead scalar) is kept for source compatibility but no
+        longer short-circuits the multi-horizon estimator: a single point
+        estimate cannot supply a genuine per-horizon answer, so when no term
+        structure is supplied the engine fits one fresh from ``history_df``
+        instead of naively broadcasting the scalar via ``sigma*sqrt(T)``.
         """
         results = {
             'Target_Days': 60,
@@ -1285,12 +1360,25 @@ class ForecastingEngine:
                 sigma = 0.015
                 close_prices = np.array([])
 
-            # GJR-GARCH(1,1) daily sigma for Monte Carlo (forward-looking, fat-tailed);
-            # falls back to the historical log-return stdev above. Defined once here so
-            # both run_monte_carlo call sites below use it on every code path.
-            # precomputed_garch_annual_vol (when supplied by a caller that already fit
-            # GJR-GARCH on this same DataFrame) avoids a redundant refit inside the engine.
-            mc_sigma = self._estimate_daily_sigma(history_df, sigma, precomputed_garch_annual_vol)
+            # 2. Multi-Horizon Forecasts (horizons defined up front so the
+            # per-horizon GARCH sigma below can be computed for every horizon
+            # -- including target_days -- in a single pass).
+            horizons = [10, 30, 60, 90]
+
+            # GJR-GARCH(1,1) daily sigma for Monte Carlo (forward-looking, fat-tailed,
+            # mean-reversion-aware), ONE PER HORIZON -- falls back to the historical
+            # log-return stdev above (flat across horizons) when GARCH is unavailable.
+            # Computed once here so both run_monte_carlo call sites below (the
+            # target_days primary forecast, and each horizon in the loop) look up
+            # THEIR OWN horizon's sigma instead of sharing a single 1-day-ahead
+            # value naively scaled by sqrt(T) -- see _estimate_daily_sigma_multi_horizon's
+            # docstring for why that naive scaling is wrong. precomputed_garch_term_structure
+            # (when supplied by a caller that already fit GJR-GARCH on this same
+            # DataFrame) avoids a redundant refit inside the engine.
+            needed_horizons = sorted(set(horizons) | {target_days})
+            mc_sigma_by_horizon = self._estimate_daily_sigma_multi_horizon(
+                history_df, sigma, needed_horizons, precomputed_garch_term_structure
+            )
 
             # Fit ARIMA and Holt-Winters ONCE (both fits are horizon-independent) and
             # reuse them across the target-days forecast and every horizon below,
@@ -1306,13 +1394,12 @@ class ForecastingEngine:
             if len(close_prices) > 30:
                 results['ARIMA'] = self.forecast_from_arima_fit(arima_fit, target_days)
 
-            mc_mean, mc_low, mc_high = self.run_monte_carlo(current_price, mu, mc_sigma, target_days)
+            mc_mean, mc_low, mc_high = self.run_monte_carlo(
+                current_price, mu, mc_sigma_by_horizon[target_days], target_days
+            )
             results['MC_Target'] = mc_mean
             results['MC_Lower'] = mc_low
             results['MC_Upper'] = mc_high
-            
-            # 2. Multi-Horizon Forecasts
-            horizons = [10, 30, 60, 90]
 
             # Symbol and timestamp for skill tracker integration (Tier 2.2)
             symbol = str(row.get('Symbol', row.get('Ticker', 'UNKNOWN'))).upper()
@@ -1387,7 +1474,7 @@ class ForecastingEngine:
                     a_res = self.forecast_from_arima_fit(arima_fit, h)
                     h_res = self.forecast_from_hw_fit(hw_fit, h, close_prices)
 
-                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma, days_forward=h)
+                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma_by_horizon[h], days_forward=h)
 
                 # Collect per-model prices for skill tracking and skill-weighted blend.
                 # Only include models that produced a positive price (CONSTRAINT #4).

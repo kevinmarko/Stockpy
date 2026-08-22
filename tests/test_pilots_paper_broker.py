@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
-from pilots.paper_broker import get_account, get_positions, get_orders
+from pilots.paper_broker import get_account, get_positions, get_orders, get_portfolio_greeks
 from settings import settings
 import api.pilots_api as pilots_api
 
@@ -42,6 +42,42 @@ def test_get_orders(mock_store):
     mock_store.assert_called_with(readonly=True)
     mock_instance.get_full_orders.assert_called_with(status="FILLED", limit=10)
     assert result == [{"order_id": "123"}]
+
+
+# ---------------------------------------------------------------------------
+# get_portfolio_greeks() -- must thread a real, pre-resolved SPY quote into
+# calculate_portfolio_greeks rather than omitting spy_spot (regression for
+# the fabricated-$500-SPY-spot bug; see docs/known_issues/
+# options_risk_fabricated_spy_spot.md).
+# ---------------------------------------------------------------------------
+
+@patch("pilots.paper_broker.PaperAccountStore")
+@patch("pilots.options_risk.calculate_portfolio_greeks")
+@patch("pilots.price_provider.get_current_price")
+def test_get_portfolio_greeks_threads_resolved_spy_spot(mock_get_price, mock_calc_greeks, mock_store):
+    mock_get_price.return_value = 642.17
+    mock_calc_greeks.return_value = {"beta_weighted_delta_spy": 0.0}
+
+    get_portfolio_greeks()
+
+    mock_get_price.assert_called_once_with("SPY")
+    _, kwargs = mock_calc_greeks.call_args
+    assert kwargs.get("spy_spot") == 642.17
+
+
+@patch("pilots.paper_broker.PaperAccountStore")
+@patch("pilots.options_risk.calculate_portfolio_greeks")
+@patch("pilots.price_provider.get_current_price")
+def test_get_portfolio_greeks_passes_none_not_fabricated_price_when_spy_unresolvable(
+    mock_get_price, mock_calc_greeks, mock_store
+):
+    mock_get_price.return_value = 0.0  # get_current_price's own honest "unavailable" sentinel
+    mock_calc_greeks.return_value = {"beta_weighted_delta_spy": 0.0}
+
+    get_portfolio_greeks()
+
+    _, kwargs = mock_calc_greeks.call_args
+    assert kwargs.get("spy_spot") is None
 
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,7 @@ def test_advisory_evaluate_uses_cached_bars_and_fundamentals():
 
         toe_instance = MagicMock()
         toe_instance.estimate_gjr_garch_volatility.return_value = 0.20
+        toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.20 for h in (1, 10, 30, 60, 90)}
         MockTOE.return_value = toe_instance
 
         se_instance = MagicMock()

@@ -104,6 +104,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -240,12 +241,32 @@ def _bump(path: str, field: str) -> None:
         entry[field] = entry.get(field, 0) + 1
 
 
+# Cross-process state-file path, monkeypatchable so tests never touch the real
+# machine-shared LOCAL_DATA_ROOT (see tests/test_fmp_client.py's `client_settings`
+# fixture, which redirects this to a `tmp_path` location before re-enabling a
+# nonzero interval). `None` (the default) means "resolve from settings at call
+# time" -- see `_fmp_throttle_state_path()`.
+_fmp_throttle_state_path_override: Optional[Path] = None
+
+
+def _fmp_throttle_state_path() -> Path:
+    if _fmp_throttle_state_path_override is not None:
+        return _fmp_throttle_state_path_override
+    from settings import settings as _settings
+    return _settings.LOCAL_DATA_ROOT / "rate_limits" / "fmp.state"
+
+
 def _fmp_throttle(min_interval: float) -> None:
     """Space request ISSUANCE by at least ``min_interval`` seconds.
 
     The lock is deliberately held across the sleep (see the module docstring).
     ``time.monotonic`` — not ``time.time`` — so an NTP step cannot make the
     elapsed gap go negative and skip the delay.
+
+    This is the in-process layer only (threads within THIS process). A second,
+    cross-process layer follows it below -- see `data/cross_process_throttle.py`'s
+    module docstring for why the budget is per-account, not per-process, and why
+    this repo's many concurrent git worktrees need both.
     """
     global _fmp_last_request_time
     if min_interval <= 0:
@@ -256,6 +277,9 @@ def _fmp_throttle(min_interval: float) -> None:
         if elapsed < min_interval:
             time.sleep(min_interval - elapsed)
         _fmp_last_request_time = time.monotonic()
+
+    from data.cross_process_throttle import wait_turn
+    wait_turn(_fmp_throttle_state_path(), min_interval)
 
 
 def _fmp_in_cooldown() -> bool:

@@ -170,6 +170,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
             }
@@ -188,6 +189,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
             MockPE.return_value.calculate_technical_metrics.side_effect = Exception("tech_calc_error")
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
             }
@@ -204,7 +206,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
-            MockTOE.return_value.estimate_gjr_garch_volatility.side_effect = Exception("garch_fit_error")
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.side_effect = Exception("garch_fit_error")
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
             }
@@ -223,6 +225,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.side_effect = Exception("forecast_model_error")
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
             }
@@ -244,6 +247,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.side_effect = Exception("strategy_engine_error")
             rec = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=_ts())
 
@@ -265,6 +269,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
             MockPE.return_value.calculate_technical_metrics.side_effect = Exception("tech_calc_error")
             MockFE.return_value.generate_forecast.side_effect = Exception("forecast_model_error")
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
             }

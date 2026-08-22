@@ -13,7 +13,7 @@ import math
 import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Sequence
 from scipy.stats import norm
 from scipy.optimize import brentq
 
@@ -520,45 +520,109 @@ class TechnicalOptionsEngine:
         Deploys a GJR-GARCH(1,1) model to extract day-ahead annualized volatility.
         Uses the arch library to deploy a GJR-GARCH(1,1) model via arch_model(returns, vol='GARCH', p=1, o=1, q=1).
         If optimization fails or arch library is missing, falls back to standard 20-day historical annualized volatility.
+
+        This is the 1-day-ahead point estimate only -- naively scaling it by
+        sqrt(T) to approximate a T-day-ahead volatility throws away GARCH's
+        actual value (conditional-variance mean-reversion toward the long-run
+        unconditional level over the forecast window). Multi-day callers
+        (forecasting_engine.py's Monte Carlo horizons) should use
+        estimate_gjr_garch_volatility_term_structure() instead, which computes
+        a genuine per-horizon effective vol from the model's own multi-step
+        variance forecast. This method is now a thin horizon=1 wrapper around
+        that one -- numerically identical to the pre-refactor implementation
+        (verified: cumulative variance over a single step == the 1-step
+        variance, same formula), so every existing horizon=1 caller (the
+        GARCH_Vol dashboard column, the VRP gate, True IVR, position sizing)
+        is unaffected by this refactor.
         """
+        return self.estimate_gjr_garch_volatility_term_structure(df, horizons=(1,))[1]
+
+    def estimate_gjr_garch_volatility_term_structure(
+        self, df: pd.DataFrame, horizons: Sequence[int] = (1,)
+    ) -> Dict[int, float]:
+        """
+        Fits a GJR-GARCH(1,1) model ONCE and derives a genuine, mean-reversion
+        -aware annualized volatility for EACH requested horizon, instead of
+        forecasting only 1 day ahead and letting a caller naively scale that
+        single number by sqrt(T).
+
+        For horizon T, the returned value is the annualized vol that
+        reproduces the model's own cumulative T-day-ahead variance forecast
+        when fed back through the standard sigma_daily = sigma_annual/sqrt(252)
+        conversion and iid sqrt(T) Monte Carlo scaling:
+
+            var_T_cumulative = sum(res.forecast(horizon=max(horizons))
+                                       .variance.iloc[-1].values[:T])
+            annualized_vol_T = sqrt(var_T_cumulative / T) * sqrt(252) / 100
+
+        (the /100 undoes the *100 return scaling applied before fitting).
+        This differs from sigma_1 * sqrt(T) whenever current conditional
+        variance is away from its long-run unconditional level -- exactly the
+        case (elevated post-shock vol, or an unusually calm regime) where an
+        accurate multi-day confidence band matters most.
+
+        A single `res.forecast(horizon=max(horizons))` call produces the
+        entire variance path needed for every requested horizon, so this
+        costs the same ONE fit + ONE forecast as the original horizon=1-only
+        implementation, regardless of how many horizons are requested.
+
+        horizons=(1,) reproduces estimate_gjr_garch_volatility()'s existing
+        output exactly. Degrades (same as before) to the 20-day historical
+        annualized stdev -- or the neutral 0.20 default -- applied FLATLY to
+        every requested horizon when arch is unavailable, the fit fails, or
+        there isn't enough history: with no fitted model there is no term
+        structure to compute, so every horizon gets the same fallback value
+        (never fabricated per-horizon variation).
+        """
+        horizons = sorted({int(h) for h in horizons}) or [1]
+        max_h = horizons[-1]
+
         df_clean = self.sanitize_ohlcv(df)
         if len(df_clean) < 22:
-            return 0.20  # Neutral 20% default fallback
+            return {h: 0.20 for h in horizons}  # Neutral 20% default fallback
 
         returns = df_clean['Close'].pct_change().dropna()
         if len(returns) < 10:
-            return 0.20
+            return {h: 0.20 for h in horizons}
 
         # Try GJR-GARCH fitting if arch library is available
         if ARCH_AVAILABLE:
             try:
                 # Scale returns by 100 to prevent poor data scaling issues
                 scaled_returns = returns * 100
-                
+
                 # GJR-GARCH(1,1): p=1, o=1, q=1. Use Student's t-distribution for fat tails
                 model = arch_model(scaled_returns, vol='GARCH', p=1, o=1, q=1, dist='t')
                 # arch ≥ 8.0 removed the `method` kwarg; default optimizer (SLSQP) works correctly
                 res = model.fit(update_freq=0, disp='off')
-                
-                # Forecast the next day ahead variance
-                forecast = res.forecast(horizon=1)
-                next_day_variance = forecast.variance.iloc[-1].values[0]
-                
-                # Annualize the standard deviation (volatility) and scale back down by 100
-                annualized_vol = (np.sqrt(next_day_variance) * np.sqrt(252)) / 100.0
-                
-                # Sanity bound the forecast to realistic levels (e.g. between 2% and 300%)
-                return float(max(0.02, min(3.0, annualized_vol)))
-                
+
+                # ONE multi-step forecast covers every requested horizon --
+                # h.1 of this call is identical to res.forecast(horizon=1)'s
+                # h.1 (the analytic recursion is invariant to how many further
+                # steps are requested), so horizon=1 stays byte-identical.
+                forecast = res.forecast(horizon=max_h)
+                variance_path = forecast.variance.iloc[-1].values  # scaled units, length max_h
+
+                term_structure: Dict[int, float] = {}
+                for h in horizons:
+                    cumulative_variance = float(np.sum(variance_path[:h]))
+                    effective_daily_variance = cumulative_variance / h
+                    annualized_vol = (np.sqrt(effective_daily_variance) * np.sqrt(252)) / 100.0
+                    # Sanity bound the forecast to realistic levels (e.g. between 2% and 300%)
+                    term_structure[h] = float(max(0.02, min(3.0, annualized_vol)))
+                return term_structure
+
             except Exception as e:
                 logger.warning(f"GJR-GARCH failed to converge: {e}. Falling back to 20-day historical standard deviation.")
         else:
             logger.warning("arch library is not installed/available. Using 20-day historical standard deviation fallback.")
-            
-        # Fallback to standard 20-day historical annualized volatility
+
+        # Fallback to standard 20-day historical annualized volatility, applied
+        # flatly to every horizon (no fitted model -> no term structure).
         daily_vol = returns.tail(20).std()
         annualized_vol = daily_vol * np.sqrt(252)
-        return float(max(0.02, min(3.0, annualized_vol)))
+        bounded = float(max(0.02, min(3.0, annualized_vol)))
+        return {h: bounded for h in horizons}
 
     def calculate_realized_vol_rank(self, df: pd.DataFrame, current_vol: float) -> float:
         """

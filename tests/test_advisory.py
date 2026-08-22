@@ -164,6 +164,7 @@ def _patch_heavy_engines(
 
     toe_mock = MagicMock()
     toe_mock.estimate_gjr_garch_volatility.return_value = garch_vol
+    toe_mock.estimate_gjr_garch_volatility_term_structure.return_value = {h: garch_vol for h in (1, 10, 30, 60, 90)}
 
     fe_mock = MagicMock()
     fe_mock.generate_forecast.return_value = {
@@ -426,6 +427,7 @@ class TestAcceptanceCriteria:
 
             toe_instance = MagicMock()
             toe_instance.estimate_gjr_garch_volatility.return_value = 0.18
+            toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockTOE.return_value = toe_instance
 
             se_instance = MagicMock()
@@ -501,6 +503,7 @@ class TestAcceptanceCriteria:
 
             toe_instance = MagicMock()
             toe_instance.estimate_gjr_garch_volatility.return_value = 0.18
+            toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockTOE.return_value = toe_instance
 
             se_instance = MagicMock()
@@ -578,6 +581,7 @@ class TestAcceptanceCriteria:
 
             toe_instance = MagicMock()
             toe_instance.estimate_gjr_garch_volatility.return_value = 0.25
+            toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.25 for h in (1, 10, 30, 60, 90)}
             MockTOE.return_value = toe_instance
 
             se_instance = MagicMock()
@@ -631,6 +635,7 @@ class TestAcceptanceCriteria:
 
             toe_instance = MagicMock()
             toe_instance.estimate_gjr_garch_volatility.return_value = 0.18
+            toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockTOE.return_value = toe_instance
 
             se_instance = MagicMock()
@@ -683,6 +688,7 @@ class TestDataQuality:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD",
                 "Score": 50,
@@ -744,6 +750,7 @@ class TestDataQuality:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD",
                 "Score": 50,
@@ -780,6 +787,7 @@ class TestDataQuality:
                 MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
                 MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 100.5}
                 MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+                MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
                 MockSE.return_value.evaluate_security.return_value = {
                     "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
                 }
@@ -833,6 +841,7 @@ class TestContextExtrasThreading:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -869,6 +878,7 @@ class TestContextExtrasThreading:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -912,6 +922,7 @@ class TestContextExtrasThreading:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -950,6 +961,7 @@ class TestContextExtrasThreading:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -1005,6 +1017,7 @@ class TestContextExtrasThreading:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -1045,6 +1058,7 @@ class TestContextExtrasThreading:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -1082,6 +1096,7 @@ class TestCurrentRatioKeyIndicator:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -1111,6 +1126,7 @@ class TestCurrentRatioKeyIndicator:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             se_instance = MagicMock()
             se_instance.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
@@ -1146,6 +1162,7 @@ class TestPositionSizing:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 90.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.35
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.35 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "RISK REDUCE",
                 "Score": 20,
@@ -1178,6 +1195,7 @@ class TestPositionSizing:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 115.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "STRONG BUY",
                 "Score": 85,
@@ -1216,6 +1234,7 @@ class TestPositionSizing:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 108.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "BUY",
                 "Score": 58,
@@ -1271,6 +1290,7 @@ class TestDividendHoldBiasRule:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 101.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "BUY",    # weak BUY (score < buy_score_threshold)
                 "Score": 50,
@@ -1323,6 +1343,7 @@ class TestDividendHoldBiasRule:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 110.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "STRONG BUY",
                 "Score": 78,  # above strong_buy_score_threshold (75)
@@ -1368,6 +1389,7 @@ class TestSyntheticInputs:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 101.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.0,
             }
@@ -1396,6 +1418,7 @@ class TestSyntheticInputs:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 101.0}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.0,
             }
@@ -1433,6 +1456,7 @@ class TestForecastSymmetry:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": forecast_30}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = {
                 "Action Signal": "BUY", "Score": 60, "Kelly Target": 0.03,
             }
@@ -1480,6 +1504,7 @@ class TestTacticalRangesAndExitSizing:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": forecast_30}
             MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockTOE.return_value.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.18 for h in (1, 10, 30, 60, 90)}
             MockSE.return_value.evaluate_security.return_value = strategy_out
             return evaluate(
                 "TEST", position=position, market=market,
@@ -1586,7 +1611,14 @@ class TestPrecomputedGarchAndForecast:
             MockFE.return_value = fe_instance
 
             toe_instance = MagicMock()
-            toe_instance.estimate_gjr_garch_volatility.return_value = garch_fit_value
+            # advisory.py now fits the full {horizon: annualized_vol} term
+            # structure in one call (see estimate_gjr_garch_volatility_term_structure)
+            # rather than the single-horizon estimate_gjr_garch_volatility --
+            # a flat stub across every horizon reproduces the old "fresh-fit
+            # stub value" semantics these tests assert on.
+            toe_instance.estimate_gjr_garch_volatility_term_structure.return_value = {
+                h: garch_fit_value for h in (1, 10, 30, 60, 90)
+            }
             MockTOE.return_value = toe_instance
 
             se_instance = MagicMock()
@@ -1610,13 +1642,13 @@ class TestPrecomputedGarchAndForecast:
         """Byte-identical to pre-PR-D behavior: no precomputed values ->
         both engines are still invoked exactly as before."""
         rec, toe, fe, se = self._run()
-        assert toe.estimate_gjr_garch_volatility.called
+        assert toe.estimate_gjr_garch_volatility_term_structure.called
         assert fe.generate_forecast.called
         assert se.evaluate_security.called  # scoring is never skipped
 
     def test_valid_precomputed_garch_skips_fresh_fit(self):
         rec, toe, fe, se = self._run(precomputed_garch=0.31)
-        assert not toe.estimate_gjr_garch_volatility.called
+        assert not toe.estimate_gjr_garch_volatility_term_structure.called
         assert rec.key_indicators["garch_vol"] == pytest.approx(0.31)
         # StrategyEngine received the precomputed value, not the fresh-fit stub.
         _, kwargs = se.evaluate_security.call_args
@@ -1631,7 +1663,7 @@ class TestPrecomputedGarchAndForecast:
 
     def test_both_precomputed_skips_both_fresh_fits_but_not_strategy(self):
         rec, toe, fe, se = self._run(precomputed_garch=0.4, precomputed_forecast=120.0)
-        assert not toe.estimate_gjr_garch_volatility.called
+        assert not toe.estimate_gjr_garch_volatility_term_structure.called
         assert not fe.generate_forecast.called
         assert se.evaluate_security.called  # scoring is always fresh
         assert rec.key_indicators["garch_vol"] == pytest.approx(0.4)
@@ -1641,7 +1673,7 @@ class TestPrecomputedGarchAndForecast:
         """A zero/failed upstream value is never trusted -- must never
         silently substitute a bad value for a real fit (CONSTRAINT #6)."""
         rec, toe, fe, se = self._run(precomputed_garch=0.0)
-        assert toe.estimate_gjr_garch_volatility.called
+        assert toe.estimate_gjr_garch_volatility_term_structure.called
         assert rec.key_indicators["garch_vol"] == pytest.approx(0.22)  # the fresh-fit stub value
 
     def test_negative_precomputed_forecast_falls_through_to_fresh_fit(self):
@@ -1662,15 +1694,19 @@ class TestPrecomputedGarchAndForecast:
     def test_fresh_garch_fit_is_threaded_into_forecast_sigma(self):
         """Regression pin for the redundant-fit fix: when GARCH vol is
         freshly fit against THIS call's bars_df (no precomputed_garch
-        supplied), that same value must be passed into generate_forecast()
-        as precomputed_garch_annual_vol so ForecastingEngine doesn't re-fit
-        arch_model a second time this call. A future refactor that silently
-        drops this kwarg again would still leave every other assertion in
-        this class green -- only this test would catch it."""
+        supplied), that same {horizon: annualized_vol} term structure must be
+        passed into generate_forecast() as precomputed_garch_term_structure
+        so ForecastingEngine doesn't re-fit arch_model a second time this
+        call. A future refactor that silently drops this kwarg again would
+        still leave every other assertion in this class green -- only this
+        test would catch it."""
         rec, toe, fe, se = self._run()
         assert fe.generate_forecast.called
         _, kwargs = fe.generate_forecast.call_args
-        assert kwargs.get("precomputed_garch_annual_vol") == pytest.approx(0.22)
+        term_structure = kwargs.get("precomputed_garch_term_structure")
+        assert term_structure is not None
+        assert term_structure[1] == pytest.approx(0.22)
+        assert term_structure[30] == pytest.approx(0.22)
 
     def test_reused_precomputed_garch_is_not_threaded_into_forecast_sigma(self):
         """A precomputed_garch value came from the caller (potentially fit
@@ -1679,13 +1715,13 @@ class TestPrecomputedGarchAndForecast:
         verbatim as this specific forecast's Monte Carlo sigma -- that would
         silently widen a same-cycle-but-different-window vol figure into a
         second, unrelated consumer. generate_forecast() must fall through
-        to its own internal fresh fit (precomputed_garch_annual_vol=None)
+        to its own internal fresh fit (precomputed_garch_term_structure=None)
         whenever garch_vol didn't come from THIS call's bars_df."""
         rec, toe, fe, se = self._run(precomputed_garch=0.31)
-        assert not toe.estimate_gjr_garch_volatility.called  # sizing reuse still applies
+        assert not toe.estimate_gjr_garch_volatility_term_structure.called  # sizing reuse still applies
         assert fe.generate_forecast.called  # forecast itself still runs fresh (no precomputed_forecast)
         _, kwargs = fe.generate_forecast.call_args
-        assert kwargs.get("precomputed_garch_annual_vol") is None
+        assert kwargs.get("precomputed_garch_term_structure") is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

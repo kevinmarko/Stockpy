@@ -220,7 +220,7 @@ def test_calculate_portfolio_greeks_per_symbol_beta():
     mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=100.0) if sym == "NVDA" else (MagicMock(price=500.0) if sym == "SPY" else None)
 
     from unittest.mock import patch
-    with patch("pilots.options_risk._resolve_symbol_beta", side_effect=lambda sym: 1.8 if sym == "NVDA" else 1.0):
+    with patch("pilots.options_risk._resolve_symbol_beta", side_effect=lambda sym: (1.8, True) if sym == "NVDA" else (1.0, True)):
         g = calculate_portfolio_greeks(positions=[pos_nvda], market_provider=mock_provider, spy_spot=500.0)
         assert g["net_dollar_delta"] == 10000.0
         # Beta-weighted delta SPY shares = 18000 / 500 = 36.0 shares
@@ -233,7 +233,7 @@ def test_beta_weighted_delta_spy_calculation(monkeypatch):
 
     # Mock beta lookup
     betas = {"AAPL": 1.20, "TSLA": 2.00, "SPY": 1.00}
-    monkeypatch.setattr("pilots.options_risk._resolve_symbol_beta", lambda sym: betas.get(sym, 1.0))
+    monkeypatch.setattr("pilots.options_risk._resolve_symbol_beta", lambda sym: (betas.get(sym, 1.0), True))
 
     pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)  # Dollar Delta = 15,000 * 1.2 = 18,000
     pos_tsla = PaperPosition(symbol="TSLA", qty=50.0, avg_entry_price=200.0)   # Dollar Delta = 10,000 * 2.0 = 20,000
@@ -253,6 +253,121 @@ def test_beta_weighted_delta_spy_calculation(monkeypatch):
     assert greeks["positions"][1]["symbol_beta"] == 2.00
     assert greeks["positions"][1]["beta_dollar_delta"] == 20000.0
 
+
+
+def test_resolve_symbol_beta_returns_estimated_flag_and_logs_warning(caplog, monkeypatch):
+    """No cached history -> (1.0, False), logged at WARNING -- distinguishable
+    from a genuinely-measured beta of 1.0 (regression for Bug A)."""
+    import logging as _logging
+    from pilots.options_risk import _resolve_symbol_beta
+
+    monkeypatch.setattr(
+        "pilots.rolling_beta.rolling_beta_view",
+        lambda symbol, window=60: {"symbol": symbol, "window": window, "series": [], "reason": "no data"},
+    )
+    with caplog.at_level(_logging.WARNING, logger="pilots.options_risk"):
+        beta, is_measured = _resolve_symbol_beta("UNKNOWNCO")
+
+    assert beta == 1.0
+    assert is_measured is False
+    assert any("UNKNOWNCO" in rec.message and "estimate" in rec.message for rec in caplog.records)
+
+
+def test_resolve_symbol_beta_measured_case_not_flagged():
+    """A real rolling_beta_view hit is measured -- not the estimated default."""
+    from unittest.mock import patch
+    from pilots.options_risk import _resolve_symbol_beta
+
+    with patch(
+        "pilots.rolling_beta.rolling_beta_view",
+        return_value={"symbol": "AAPL", "window": 60, "series": [{"date": "2026-08-01", "beta": 1.35}], "reason": None},
+    ):
+        beta, is_measured = _resolve_symbol_beta("AAPL")
+
+    assert beta == 1.35
+    assert is_measured is True
+
+
+def test_resolve_symbol_beta_never_calls_fmp_fundamentals_compute_beta():
+    """The dead, wrongly-called compute_beta(clean) fallback tier was removed
+    entirely -- it must never be imported/called anymore (Bug A)."""
+    from unittest.mock import patch
+    from pilots.options_risk import _resolve_symbol_beta
+
+    with patch("pilots.rolling_beta.rolling_beta_view", return_value={"series": [], "reason": "no data"}):
+        with patch("data.fmp_fundamentals.compute_beta") as mock_compute_beta:
+            beta, is_measured = _resolve_symbol_beta("UNKNOWNCO")
+            mock_compute_beta.assert_not_called()
+
+    assert beta == 1.0
+    assert is_measured is False
+
+
+def test_calculate_portfolio_greeks_resolves_real_spy_quote_when_not_held():
+    """A book with NO SPY position must still price beta_weighted_delta_spy
+    off a REAL SPY quote resolved via market_provider -- never a fabricated
+    $500.0 (regression for Bug B)."""
+    pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)
+    mock_provider = MagicMock()
+    # Deliberately a real, non-$500 SPY price so a lingering $500.0
+    # fabrication anywhere in the calc would be caught.
+    mock_provider.get_latest_quote.side_effect = lambda sym: (
+        MagicMock(price=150.0) if sym == "AAPL" else (MagicMock(price=642.17) if sym == "SPY" else None)
+    )
+
+    from unittest.mock import patch
+    with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)):
+        g = calculate_portfolio_greeks(positions=[pos_aapl], market_provider=mock_provider)
+
+    assert g["spy_spot"] == 642.17
+    assert g["spy_spot_resolved"] is True
+    # net_dollar_delta = 100 * 150 = 15,000; beta=1.0 -> beta_weighted_delta_spy = 15000 / 642.17
+    assert pytest.approx(g["beta_weighted_delta_spy"], abs=0.01) == 15000.0 / 642.17
+    # The old fabricated fallback would have produced 15000/500 = 30.0 -- assert we are NOT that.
+    assert pytest.approx(g["beta_weighted_delta_spy"], abs=0.01) != 30.0
+
+
+def test_calculate_portfolio_greeks_refuses_to_fabricate_spy_spot_when_unresolvable():
+    """When SPY's quote is genuinely unresolvable, beta_weighted_delta_spy
+    must be 0.0 (never a fabricated-price computation) and the caller must
+    be able to detect this via spy_spot_resolved=False (regression for Bug B)."""
+    pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)
+    mock_provider = MagicMock()
+    # AAPL resolves; SPY does not (simulates a total market-data outage for SPY).
+    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=150.0) if sym == "AAPL" else None
+
+    from unittest.mock import patch
+    with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)):
+        g = calculate_portfolio_greeks(positions=[pos_aapl], market_provider=mock_provider)
+
+    assert g["spy_spot"] is None
+    assert g["spy_spot_resolved"] is False
+    assert g["beta_weighted_delta_spy"] == 0.0
+
+
+def test_calculate_portfolio_greeks_surfaces_estimated_beta_symbols():
+    """A position whose beta could not be measured is listed in
+    symbols_with_estimated_beta and flagged per-position; a measured one
+    is not."""
+    pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)
+    pos_unknown = PaperPosition(symbol="UNKNOWNCO", qty=10.0, avg_entry_price=50.0)
+    mock_provider = MagicMock()
+    mock_provider.get_latest_quote.side_effect = lambda sym: (
+        MagicMock(price=150.0) if sym == "AAPL"
+        else (MagicMock(price=50.0) if sym == "UNKNOWNCO" else MagicMock(price=500.0))
+    )
+
+    from unittest.mock import patch
+    with patch(
+        "pilots.options_risk._resolve_symbol_beta",
+        side_effect=lambda sym: (1.2, True) if sym == "AAPL" else (1.0, False),
+    ):
+        g = calculate_portfolio_greeks(positions=[pos_aapl, pos_unknown], market_provider=mock_provider, spy_spot=500.0)
+
+    assert g["symbols_with_estimated_beta"] == ["UNKNOWNCO"]
+    by_symbol = {p["symbol"]: p for p in g["positions"]}
+    assert by_symbol["AAPL"]["beta_is_estimated"] is False
+    assert by_symbol["UNKNOWNCO"]["beta_is_estimated"] is True
 
 
 def test_black_scholes_greeks_exact_analytical_reference():

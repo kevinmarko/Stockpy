@@ -918,6 +918,66 @@ def _log_summary(result: RunResult) -> None:
         )
 
 
+def _run_automated_delta_hedge_cycle(executor: Any) -> Optional[Dict[str, Any]]:
+    """Resolves ONE real SPY quote and, only if available, sizes and
+    executes the automated dynamic SPY delta hedge off that single value.
+
+    Extracted from run_once()'s inline "3. Dynamic SPY Delta Hedging" step
+    so it's unit-testable without mocking the whole pipeline, and to close
+    two real bugs found while doing so (see
+    docs/known_issues/options_risk_fabricated_spy_spot.md):
+
+    - The hedge used to be SIZED via calculate_portfolio_greeks(store=...)
+      with no spy_spot at all -- which silently fabricated a $500.0 SPY
+      price internally whenever no SPY position happened to be held
+      (CONSTRAINT #4 violation) -- while execute_delta_hedge separately
+      resolved and FILLED at the real SPY price a few lines later. That
+      meant a live (paper) hedge order's share quantity could be sized off
+      a fabricated price while it filled at a different, real one. This
+      function resolves spy_spot exactly once and threads the identical
+      value into both calls, so sizing and fill are always consistent.
+    - The post-hedge success log read `_hedge_res.get("executed")` /
+      `_hedge_res.get("spot_price")`, but execute_delta_hedge's real return
+      contract uses `"hedged"` (not `"executed"`) and nests the fill price
+      at `fill["fill_price"]` (not a top-level `"spot_price"`) -- so this
+      INFO line never once printed. Fixed to read the real keys.
+
+    Returns the execute_delta_hedge() result dict, or None when the cycle
+    was skipped outright because no live SPY quote was available (fail
+    closed -- no cycle at all, rather than one sized off a guess). Never
+    raises; the caller in run_once() already wraps this in a broad
+    try/except shared with the other automated-options steps, but errors
+    are also caught here so this function is independently safe to call
+    from tests or other callers.
+    """
+    try:
+        from pilots.options_hedging import execute_delta_hedge
+        from pilots.options_risk import calculate_portfolio_greeks
+        from pilots.price_provider import get_current_price
+
+        spy_spot = get_current_price("SPY")
+        if not spy_spot or spy_spot <= 0:
+            logger.warning(
+                "Automated SPY delta hedge skipped this cycle: no live SPY "
+                "quote available (refusing to size a hedge off a fabricated price)."
+            )
+            return None
+
+        greeks = calculate_portfolio_greeks(store=executor.store, spy_spot=spy_spot)
+        hedge_res = execute_delta_hedge(store=executor.store, portfolio_greeks=greeks, spy_spot=spy_spot)
+        if hedge_res.get("hedged"):
+            logger.info(
+                "Automated SPY delta hedging executed: %s %d SPY @ ~$%.2f",
+                hedge_res.get("order", {}).get("side"),
+                hedge_res.get("order", {}).get("qty"),
+                hedge_res.get("fill", {}).get("fill_price", 0.0),
+            )
+        return hedge_res
+    except Exception as exc:
+        logger.warning("Automated SPY delta hedge cycle failed (non-critical): %s", exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Core pipeline
 # ---------------------------------------------------------------------------
@@ -1484,17 +1544,7 @@ def main() -> None:
 
                 # 3. Dynamic SPY Delta Hedging
                 if getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False):
-                    from pilots.options_hedging import execute_delta_hedge
-                    from pilots.options_risk import calculate_portfolio_greeks
-                    _greeks = calculate_portfolio_greeks(store=_executor.store)
-                    _hedge_res = execute_delta_hedge(store=_executor.store, portfolio_greeks=_greeks)
-                    if _hedge_res.get("executed"):
-                        logger.info(
-                            "Automated SPY delta hedging executed: %s %d SPY @ ~$%.2f",
-                            _hedge_res.get("order", {}).get("side"),
-                            _hedge_res.get("order", {}).get("qty"),
-                            _hedge_res.get("spot_price", 0.0),
-                        )
+                    _run_automated_delta_hedge_cycle(_executor)
             except Exception as _auto_opt_exc:
                 logger.warning(
                     "Automated strategy options paper execution/lifecycle failed (non-critical): %s",

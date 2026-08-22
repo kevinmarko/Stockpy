@@ -787,10 +787,12 @@ def evaluate(
     # fetched at a different point in the cycle, which is fine for sizing
     # (garch_vol's pre-existing use) but must not silently become this
     # specific bars_df/current_price forecast's confidence band too.
-    # fresh_garch_vol carries that provenance directly: it stays None unless
-    # set by a successful local fit just below, and is passed to
-    # generate_forecast() as-is (no separate flag to keep in sync with it).
+    # fresh_garch_vol/fresh_garch_term_structure carry that provenance
+    # directly: they stay None unless set by a successful local fit just
+    # below, and are passed to generate_forecast() as-is (no separate flag
+    # to keep in sync with them).
     fresh_garch_vol: Optional[float] = None
+    fresh_garch_term_structure: Optional[Dict[int, float]] = None
     if precomputed_garch is not None and precomputed_garch > 0:
         garch_vol = float(precomputed_garch)
     elif has_sufficient_history:
@@ -800,8 +802,17 @@ def evaluate(
                 if technical_options_engine is not None
                 else _get_technical_options_engine()
             )
-            garch_vol = toe.estimate_gjr_garch_volatility(bars_df.copy())
+            # ONE fit covers both this step's horizon=1 sizing use (garch_vol,
+            # unchanged) and Step 6's per-horizon (10/30/60/90) forecast sigma
+            # below -- see estimate_gjr_garch_volatility_term_structure's
+            # docstring for why a single horizon=1 point can't supply a
+            # genuine multi-day answer on its own.
+            garch_term_structure = toe.estimate_gjr_garch_volatility_term_structure(
+                bars_df.copy(), horizons=(1, 10, 30, 60, 90)
+            )
+            garch_vol = garch_term_structure[1]
             fresh_garch_vol = garch_vol
+            fresh_garch_term_structure = garch_term_structure
         except Exception as exc:
             logger.warning("advisory[%s]: GARCH vol failed — %s", symbol, exc)
             partial_flags.append("garch_vol_failed")
@@ -832,6 +843,7 @@ def evaluate(
                 history_series=bars_df["Close"],
                 history_df=bars_df,
                 precomputed_garch_annual_vol=fresh_garch_vol,
+                precomputed_garch_term_structure=fresh_garch_term_structure,
             )
             raw_f30 = fc_results.get("Forecast_30", 0.0)
             forecast_price = float(raw_f30) if raw_f30 and raw_f30 > 0 else None

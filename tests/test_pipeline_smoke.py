@@ -370,6 +370,14 @@ class TestAdvisoryTailoringRules:
 
         toe_mock = MagicMock()
         toe_mock.estimate_gjr_garch_volatility.return_value = garch_vol
+        # advisory.py now fits the full {horizon: annualized_vol} term
+        # structure in one call (see
+        # estimate_gjr_garch_volatility_term_structure) rather than the
+        # single-horizon estimate_gjr_garch_volatility -- a flat stub across
+        # every horizon reproduces this fixture's single garch_vol value.
+        toe_mock.estimate_gjr_garch_volatility_term_structure.return_value = {
+            h: garch_vol for h in (1, 10, 30, 60, 90)
+        }
 
         fe_mock = MagicMock()
         fe_mock.generate_forecast.return_value = {
