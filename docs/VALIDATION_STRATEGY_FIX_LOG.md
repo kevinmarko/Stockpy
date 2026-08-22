@@ -2373,9 +2373,12 @@ a real strategy essentially never shows exactly 0% in every historical crisis wi
 
 ### Root cause, confirmed by direct reproduction, not guessed
 
-Reproduced against this machine's real, locally cached FMP-sourced SPY/macro history
-(`~/.stockpy_local/quant_platform.db`, 2015-2026) and independently cross-checked over the full
-2005-2026 window via `yfinance` (both fully reproducible, no live FMP account needed):
+Reproduced against this machine's real, locally cached SPY/macro history
+(`~/.stockpy_local/quant_platform.db`, 2015-2026 — confirmed by its own `source` column to be
+predominantly `yfinance`/`yfinance_backfill`, not FMP-sourced; this sandbox has no `FMP_API_KEY`
+configured, so the operator's original live FMP-backed run above could not be reproduced against
+FMP itself here) and independently cross-checked over the full 2005-2026 window via a fresh
+`yfinance` fetch (both fully reproducible without a live FMP account):
 
 - `technical_options_engine.py::generate_strategy_pricing_matrix()` only emits `"Put Credit
   Spread"`/`"Call Credit Spread"`/`"Iron Condor"` when **five** conditions hold simultaneously:

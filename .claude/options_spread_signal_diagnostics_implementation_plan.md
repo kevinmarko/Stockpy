@@ -1,5 +1,14 @@
 # Self-diagnosing insufficient-signal reporting for put_credit_spread / call_credit_spread
 
+> **Post-implementation correction**: this plan (approved before implementation) describes the
+> local cache used for reproduction as "FMP-sourced." That was inaccurate — this sandbox has no
+> `FMP_API_KEY` configured, and the local `~/.stockpy_local/quant_platform.db` cache is confirmed
+> (via its own `source` column) to be predominantly `yfinance`/`yfinance_backfill`, not FMP. The
+> reproduction itself and its conclusions are unaffected (also independently cross-checked via a
+> fresh live `yfinance` fetch over the full 2005-2026 window), but this file's wording below is
+> left as the historical record of what was approved, not corrected in place — see
+> `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-22 entry for the corrected, accurate wording.
+
 ## Context
 
 `python -m scripts.refresh_validations --strategies put_credit_spread,call_credit_spread`
