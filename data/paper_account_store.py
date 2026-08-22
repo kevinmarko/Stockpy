@@ -536,7 +536,7 @@ class PaperAccountStore:
                         self._insert_order(
                             session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
                             l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
-                            strategy_id, pilot_id, experiment_arm, None, "leg"
+                            strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
                         )
                     return False
 
@@ -556,7 +556,7 @@ class PaperAccountStore:
                     self._insert_order(
                         session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
                         l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
-                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                        strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
                     )
                 return False
 
@@ -575,7 +575,7 @@ class PaperAccountStore:
                     self._insert_order(
                         session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
                         l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
-                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                        strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
                     )
                 return False
 
@@ -746,7 +746,7 @@ class PaperAccountStore:
                         self._insert_order(
                             session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
                             l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
-                            strategy_id, pilot_id, experiment_arm, None, "leg"
+                            strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
                         )
                     return False
 
@@ -766,7 +766,7 @@ class PaperAccountStore:
                     self._insert_order(
                         session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
                         l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
-                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                        strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
                     )
                 return False
 
@@ -785,7 +785,7 @@ class PaperAccountStore:
                     self._insert_order(
                         session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
                         l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
-                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                        strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
                     )
                 return False
 
