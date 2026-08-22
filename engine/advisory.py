@@ -958,6 +958,18 @@ def evaluate(
     elif (
         macro_dto.vix > CONFIG["macro_vix_gate_threshold"]
         or macro_dto.sahm_rule_indicator >= CONFIG["macro_sahm_gate_threshold"]
+        # Defense-in-depth (CONSTRAINT #4/#6), mirroring the same pattern
+        # execution/risk_gate.py::stress_scenario_check applies independently
+        # of killSwitch: this branch is currently UNREACHABLE whenever
+        # data_unavailable=True, because the hard gate above (checking
+        # market_regime, which dto_models.py::_rules_based_regime forces to
+        # "RECESSION" the instant data_unavailable is set) always fires
+        # first in that state. Kept as an explicit, independent check anyway
+        # so a future change to the if/elif coupling above can't silently
+        # let a fabricated VIX/Sahm reading (e.g. from
+        # data_engine.py::DataEngine's hardcoded emergency fallback) read as
+        # real "not stressed" data for this softer gate.
+        or macro_dto.data_unavailable
     ):
         # Soft gate: elevated systemic stress → penalty on composite score.
         adjusted_score = max(0, adjusted_score - CONFIG["macro_score_penalty"])
@@ -967,6 +979,11 @@ def evaluate(
             if macro_dto.sahm_rule_indicator else ""
         )
         _stress_desc = ", ".join(x for x in [_vix_part, _sahm_part] if x)
+        if macro_dto.data_unavailable:
+            _stress_desc = (
+                f"{_stress_desc}, macro data unavailable" if _stress_desc
+                else "macro data unavailable"
+            )
         macro_gate_reason = (
             f"Systemic stress indicators elevated ({_stress_desc}) — "
             f"-{CONFIG['macro_score_penalty']}pt score penalty applied."

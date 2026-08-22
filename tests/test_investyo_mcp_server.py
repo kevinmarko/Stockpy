@@ -2251,6 +2251,91 @@ class TestTriggerMacroEngineInProcess:
         assert "error" in low or "fail" in low or "boom" in result
 
 
+class _StubDataEngineForMacroTrigger:
+    """A precise DataEngine stand-in -- unlike _fake_macro_engine()'s
+    MagicMock (whose .get(...)/.fetch_macro_raw() calls don't behave like a
+    real dict/DataEngine), this actually exercises trigger_macro_engine's
+    real kill_switch_active/data_unavailable computation."""
+
+    def __init__(self, macro_raw, fabricated_keys=frozenset()):
+        self._macro_raw = macro_raw
+        self.last_macro_raw_fabricated_keys = fabricated_keys
+
+    def fetch_macro_raw(self):
+        return self._macro_raw
+
+
+class _StubMacroEngineForMacroTrigger:
+    def __init__(self, sahm_val=0.1, sahm_used_fallback=False):
+        self._sahm_val = sahm_val
+        self._sahm_used_fallback = sahm_used_fallback
+
+    def _calculate_sahm_rule_detailed(self):
+        return (self._sahm_val, self._sahm_used_fallback)
+
+
+class TestTriggerMacroEngineKillSwitchActive:
+    """Regression coverage for the fix to trigger_macro_engine's previously
+    hardcoded ``"kill_switch_active": False`` -- the existing
+    TestTriggerMacroEngineInProcess class above uses fixtures too loose
+    (a bare MagicMock DataEngine, whose .fetch_macro_raw() doesn't behave
+    like a real dict) to exercise this meaningfully."""
+
+    def _run(self, monkeypatch, macro_raw, fabricated_keys=frozenset(), sahm_val=0.1, sahm_used_fallback=False):
+        import macro_engine as me_mod
+        import data_engine as de_mod
+
+        stub_de = _StubDataEngineForMacroTrigger(macro_raw, fabricated_keys)
+        monkeypatch.setattr(de_mod, "DataEngine", lambda *a, **k: stub_de, raising=False)
+        monkeypatch.setattr(
+            me_mod, "MacroEngine",
+            lambda *a, **k: _StubMacroEngineForMacroTrigger(sahm_val, sahm_used_fallback),
+        )
+        result = srv.trigger_macro_engine()
+        return json.loads(result.split("```json")[1].split("```")[0])
+
+    def test_healthy_reading_reports_kill_switch_inactive(self, monkeypatch):
+        payload = self._run(
+            monkeypatch,
+            macro_raw={"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "UNRATE": 3.8, "VIXCLS": 16.0},
+        )
+        assert payload["kill_switch_active"] is False
+        assert payload["data_unavailable"] is False
+        assert payload["market_regime"] == "RISK ON"
+        assert payload["high_yield_oas"] == pytest.approx(3.0)
+        assert payload["yield_curve"] == pytest.approx(0.5)
+
+    def test_fabricated_but_populated_macro_raw_reports_kill_switch_active(self, monkeypatch):
+        """The exact regression this fix closes: a FULLY POPULATED macro_raw
+        (as DataEngine's hardcoded emergency fallback would leave it) must
+        still report kill_switch_active=True when flagged as fabricated --
+        previously this hardcoded False unconditionally, regardless of any
+        real computation."""
+        payload = self._run(
+            monkeypatch,
+            macro_raw={"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.5, "UNRATE": 3.8, "VIXCLS": 15.0},
+            fabricated_keys=frozenset({"T10Y2Y", "BAMLH0A0HYM2", "UNRATE", "VIXCLS"}),
+        )
+        assert payload["kill_switch_active"] is True
+        assert payload["data_unavailable"] is True
+        assert payload["market_regime"] == "RECESSION"
+
+    def test_sahm_fallback_alone_reports_kill_switch_active(self, monkeypatch):
+        payload = self._run(
+            monkeypatch,
+            macro_raw={"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "UNRATE": 3.8, "VIXCLS": 16.0},
+            sahm_used_fallback=True,
+        )
+        assert payload["kill_switch_active"] is True
+        assert payload["data_unavailable"] is True
+
+    def test_missing_macro_key_reports_kill_switch_active(self, monkeypatch):
+        payload = self._run(monkeypatch, macro_raw={})
+        assert payload["kill_switch_active"] is True
+        assert payload["data_unavailable"] is True
+        assert payload["market_regime"] == "RECESSION"
+
+
 class TestTriggerFullPipelineInProcess:
     """``trigger_full_pipeline``: Step 1 (price bars) and Step 3 (macro) are now
     in-process; Step 2 (EDGAR fundamentals) is STILL a subprocess but now

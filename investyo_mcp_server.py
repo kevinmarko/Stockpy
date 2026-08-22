@@ -2185,29 +2185,60 @@ def trigger_macro_engine() -> str:
     try:
         from settings import settings
         from data_engine import DataEngine
-        from macro_engine import MacroEngine
+        from macro_engine import MacroEngine, macro_killswitch_data_unavailable
+        from dto_models import MacroEconomicDTO
 
         de = DataEngine(fred_api_key=settings.FRED_API_KEY)
         engine = MacroEngine(de)
         macro_raw = de.fetch_macro_raw()
-        sahm_val = engine.calculate_sahm_rule()
-        macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
-        regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
+        # Populated-but-fabricated blind spot: de.fetch_macro_raw()'s hardcoded
+        # emergency fallback populates EVERY key with a benign literal, so a
+        # plain key-presence check alone would report "available" even during
+        # a total FRED outage. See data_engine.py::fetch_macro_raw_detailed().
+        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
+        sahm_val, sahm_used_fallback = engine._calculate_sahm_rule_detailed()
+        data_unavailable = (
+            macro_killswitch_data_unavailable(macro_raw, fabricated_keys=macro_raw_fabricated_keys)
+            or sahm_used_fallback
+        )
+
+        # A real MacroEconomicDTO instead of hand-assembling the payload --
+        # killSwitch/market_regime are the DTO's own fail-closed logic
+        # (dto_models.py), not a separately-maintained duplicate. No HMM
+        # probability is computed here (needs a SPY bars fetch, out of scope
+        # for this lightweight diagnostic tool), so market_regime's HMM
+        # downgrade branch never fires -- this DTO honestly reduces to the
+        # same rules-based classification run_macro_killswitch()'s DataFrame
+        # would give.
+        macro_dto = MacroEconomicDTO(
+            yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
+            high_yield_oas=float(macro_raw.get("BAMLH0A0HYM2", 3.5)),
+            inflation_rate=2.0,  # not read by killSwitch/market_regime; neutral seed
+            nominal_10y=4.0,     # same
+            vix_value=float(macro_raw.get("VIXCLS", 15.0)),
+            sahm_rule_indicator=sahm_val,
+            data_unavailable=data_unavailable,
+        )
         vix_val = macro_raw.get("VIXCLS")
-        
+        oas_val = macro_raw.get("BAMLH0A0HYM2")
+        curve_val = macro_raw.get("T10Y2Y")
+
         payload = {
-            "market_regime": regime,
+            "market_regime": macro_dto.market_regime,
             "vix": float(vix_val) if vix_val is not None else None,
             "sahm_rule": float(sahm_val) if sahm_val is not None else None,
-            "high_yield_oas": None,
-            "yield_curve": None,
+            "high_yield_oas": float(oas_val) if oas_val is not None else None,
+            "yield_curve": float(curve_val) if curve_val is not None else None,
             "hmm_risk_on_probability": None,
-            "kill_switch_active": False,
+            # Was hardcoded False regardless of real state -- now the DTO's
+            # own fail-closed killSwitch property (CONSTRAINT #4/#6).
+            "kill_switch_active": bool(macro_dto.killSwitch),
+            "data_unavailable": bool(data_unavailable),
         }
-        
+
         lines = [
             "Macro engine run successful:\n",
-            f"VIX={vix_val}, Sahm={sahm_val}, regime={regime}",
+            f"VIX={vix_val}, Sahm={sahm_val}, regime={macro_dto.market_regime}",
             "\n```json",
             json.dumps(payload, indent=2),
             "```"
@@ -2335,8 +2366,14 @@ def trigger_full_pipeline(tickers: str = "") -> str:
         de = DataEngine(fred_api_key=settings.FRED_API_KEY)
         engine = MacroEngine(de)
         macro_raw = de.fetch_macro_raw()
+        # See trigger_macro_engine's identical comment above: fetch_macro_raw()'s
+        # hardcoded fallback populates every key, so plain presence checking
+        # can't see a fabricated-but-populated snapshot on its own.
+        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
         sahm_val = engine.calculate_sahm_rule()
-        macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
+        macro_df = engine.run_macro_killswitch(
+            macro_raw, sahm_val, fabricated_keys=macro_raw_fabricated_keys,
+        )
         regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
         steps.append(
             f"✅ macro_engine: OK (VIX={macro_raw.get('VIXCLS')}, "
