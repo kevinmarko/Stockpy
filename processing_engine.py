@@ -91,10 +91,21 @@ class ProcessingEngine:
         try:
             if isinstance(macro_dto, dict):
                 from dto_models import MacroEconomicDTO
+                from macro_engine import macro_killswitch_data_unavailable
+                # CONSTRAINT #4/#6: this defensive branch previously never
+                # set vix_value/sahm_rule_indicator at all (silently keeping
+                # the DTO class defaults 15.0/0.0), and never flagged missing
+                # T10Y2Y/BAMLH0A0HYM2/VIXCLS either -- both are the exact
+                # fabricated-benign-default pattern the rest of this fix
+                # closes at the live construction sites. data_unavailable
+                # forces market_regime/killSwitch to fail closed here too.
                 macro_dto = MacroEconomicDTO(
                     yield_curve_10y_2y=macro_dto.get('T10Y2Y', 0.5),
                     high_yield_oas=macro_dto.get('BAMLH0A0HYM2', 3.5),
-                    inflation_rate=macro_dto.get('CPIAUCSL_YoY', 2.0)
+                    inflation_rate=macro_dto.get('CPIAUCSL_YoY', 2.0),
+                    vix_value=macro_dto.get('VIXCLS', 15.0),
+                    sahm_rule_indicator=macro_dto.get('SAHMREALTIME', 0.0),
+                    data_unavailable=macro_killswitch_data_unavailable(macro_dto),
                 )
             self.research_engine.real_yield = macro_dto.real_yield
             return {

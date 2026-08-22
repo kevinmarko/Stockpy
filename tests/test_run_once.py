@@ -769,15 +769,34 @@ class TestMacroEngineReuse:
             fake_me = MagicMock()
             fake_me.data_engine = fake_de
             fake_me.compute_hmm_risk_on_probability.return_value = None
+            # Without this, an unconfigured MagicMock()._calculate_sahm_rule_detailed()
+            # call unpacks as an empty iterator (ValueError), silently caught by
+            # _build_macro_dto()'s outer except and falling through to the
+            # neutral-fallback branch -- masking whether the intended live-fetch
+            # success path (and its two engine-reuse assertions below) actually ran.
+            # 0.37/False is a distinctive, non-fallback value that the
+            # exception-fallback branch (which always hardcodes
+            # sahm_rule_indicator=0.0) could never produce, so asserting it
+            # below proves the live-fetch path actually executed both times.
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.37, False)
             MockME.return_value = fake_me
 
-            m._build_macro_dto()
-            m._build_macro_dto()
+            dto_1 = m._build_macro_dto()
+            dto_2 = m._build_macro_dto()
 
             # MacroEngine constructed once even though _build_macro_dto() was
             # called twice (simulating two --interval cycles).
             MockME.assert_called_once()
             assert fake_me.compute_hmm_risk_on_probability.call_count == 2
+            # Confirms the live-fetch success path actually ran both times
+            # (not silently swallowed into the neutral-fallback except branch).
+            assert dto_1.sahm_rule_indicator == 0.37
+            assert dto_2.sahm_rule_indicator == 0.37
+            # fetch_macro_raw() returns {} in this fixture (T10Y2Y/BAMLH0A0HYM2/
+            # VIXCLS all missing) -- data_unavailable must still be True even
+            # though the Sahm read itself succeeded (sahm_used_fallback=False).
+            assert dto_1.data_unavailable is True
+            assert dto_2.data_unavailable is True
 
 
 class TestBuildMacroDtoHistoricalStoreRouting:
@@ -817,6 +836,11 @@ class TestBuildMacroDtoHistoricalStoreRouting:
             fake_me = MagicMock()
             fake_me.data_engine = fake_de
             fake_me.compute_hmm_risk_on_probability.return_value = None
+            # Unconfigured, this unpacks as an empty iterator (ValueError),
+            # silently caught by _build_macro_dto()'s outer except -- masking
+            # whether the assertions below actually ran against the intended
+            # live-fetch path or a swallowed exception's fallback DTO.
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.0, False)
             MockME.return_value = fake_me
 
             fake_market = MagicMock()
@@ -854,6 +878,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
             fake_me = MagicMock()
             fake_me.data_engine = fake_de
             fake_me.compute_hmm_risk_on_probability.return_value = None
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.0, False)
             MockME.return_value = fake_me
 
             MockHS.side_effect = RuntimeError("simulated HistoricalStore construction failure")
@@ -883,6 +908,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
             fake_me = MagicMock()
             fake_me.data_engine = fake_de
             fake_me.compute_hmm_risk_on_probability.return_value = None
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.0, False)
             MockME.return_value = fake_me
 
             m._build_macro_dto()
@@ -890,6 +916,120 @@ class TestBuildMacroDtoHistoricalStoreRouting:
             MockHS.assert_not_called()
             fake_de.fetch_technical_raw.assert_called_once_with(["SPY"])
             fake_me.compute_hmm_risk_on_probability.assert_called_once()
+
+
+class TestBuildMacroDtoDataUnavailable:
+    """_build_macro_dto() must fail closed (CONSTRAINT #4/#6) rather than
+    silently substitute a benign default for a missing FRED reading. Also
+    regression-guards the fix to a second, independent bug found while
+    building this: main.py used to read macro_raw.get("SAHMREALTIME", 0.0)
+    -- a key DataEngine.fetch_macro_raw() never populates at all -- so this
+    DTO's Sahm-driven kill-switch input was structurally dead (always 0.0)
+    regardless of FRED health, in every version of main.py before this fix."""
+
+    def setup_method(self) -> None:
+        m._reset_macro_engine_cache()
+
+    def teardown_method(self) -> None:
+        m._reset_macro_engine_cache()
+
+    def test_healthy_cycle_reports_data_available(
+        self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
+    ) -> None:
+        """The byte-identical-when-healthy regression guard: a fully
+        populated fetch_macro_raw() return (matching what
+        DataEngine.fetch_macro_raw() actually returns on a real FRED success
+        -- T10Y2Y/BAMLH0A0HYM2/UNRATE/VIXCLS, deliberately no SAHMREALTIME
+        key) plus a real (non-fallback) Sahm reading must NOT set
+        data_unavailable. This is the specific case an earlier draft of this
+        fix would have gotten wrong (a formula that checked for the
+        never-populated SAHMREALTIME key would have reported unavailable on
+        every single healthy cycle)."""
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
+
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {
+                "T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "UNRATE": 3.8, "VIXCLS": 16.0,
+            }
+            fake_de.fetch_technical_raw.return_value = {}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.12, False)
+            MockME.return_value = fake_me
+
+            dto = m._build_macro_dto()
+
+            assert dto.data_unavailable is False
+            assert dto.sahm_rule_indicator == 0.12
+            assert dto.killSwitch is False
+
+    def test_empty_macro_raw_sets_data_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
+    ) -> None:
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
+
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {}
+            fake_de.fetch_technical_raw.return_value = {}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.12, False)
+            MockME.return_value = fake_me
+
+            dto = m._build_macro_dto()
+
+            assert dto.data_unavailable is True
+            assert dto.killSwitch is True
+            assert dto.market_regime == "RECESSION"
+
+    def test_sahm_fallback_alone_sets_data_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
+    ) -> None:
+        """calculate_sahm_rule's own fallback firing (sahm_used_fallback=True)
+        must set data_unavailable even when macro_raw itself is complete."""
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
+
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {
+                "T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "UNRATE": 3.8, "VIXCLS": 16.0,
+            }
+            fake_de.fetch_technical_raw.return_value = {}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.0, True)  # fallback fired
+            MockME.return_value = fake_me
+
+            dto = m._build_macro_dto()
+
+            assert dto.data_unavailable is True
+            assert dto.killSwitch is True
+
+    def test_no_fred_key_branch_sets_data_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "")
+        dto = m._build_macro_dto()
+        assert dto.data_unavailable is True
+        assert dto.killSwitch is True
+
+    def test_exception_fallback_branch_sets_data_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
+        with patch("main._get_macro_engine", side_effect=RuntimeError("boom")):
+            dto = m._build_macro_dto()
+        assert dto.data_unavailable is True
+        assert dto.killSwitch is True
 
 
 # ---------------------------------------------------------------------------

@@ -179,6 +179,7 @@ class OptionsAnalysisStep(PipelineStep):
     def run(self, ctx: RunContext) -> None:
         """Compute per-ticker options metrics and GJR-GARCH volatility."""
         from main_orchestrator import MacroEngine, TechnicalOptionsEngine, IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp, MacroEconomicDTO
+        from macro_engine import macro_killswitch_data_unavailable
         from concurrent.futures import ThreadPoolExecutor
 
         if ctx.progress is not None:
@@ -190,13 +191,22 @@ class OptionsAnalysisStep(PipelineStep):
         telemetry.info("Routing data through Macro Engine...")
         me = (engines.macro_engine if engines is not None and engines.macro_engine is not None
               else MacroEngine(data_engine=ctx.market))
-        sahm_val = me.calculate_sahm_rule()
+        sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
         macro_data = me.run_macro_killswitch(ctx.macro_raw, sahm_val)
-        
+
         hmm_result = me.compute_hmm_risk_on_probability(ctx.tech_raw.get('SPY'))
         hmm_risk_on_probability = hmm_result["risk_on_probability"] if hmm_result else None
         hmm_regime_state = hmm_result["regime_state_label"] if hmm_result else None
-        
+
+        # CONSTRAINT #4/#6: a caller substituting a benign literal default
+        # (e.g. VIXCLS=15.0) for a genuinely missing FRED key must not let
+        # the kill switch read that as a real "risk on" measurement. Forces
+        # MacroEconomicDTO.killSwitch/_rules_based_regime to fail closed --
+        # see dto_models.py and macro_engine.py::macro_killswitch_data_unavailable.
+        data_unavailable = (
+            macro_killswitch_data_unavailable(ctx.macro_raw) or sahm_used_fallback
+        )
+
         ctx.macro_dto = MacroEconomicDTO(
             yield_curve_10y_2y=float(ctx.macro_raw.get('T10Y2Y', 0.5)),
             high_yield_oas=float(ctx.macro_raw.get('BAMLH0A0HYM2', 3.5)),
@@ -206,6 +216,7 @@ class OptionsAnalysisStep(PipelineStep):
             sahm_rule_indicator=sahm_val,
             hmm_risk_on_probability=hmm_risk_on_probability,
             hmm_regime_state=hmm_regime_state,
+            data_unavailable=data_unavailable,
         )
 
         # Technical Options Analysis

@@ -303,7 +303,8 @@ class MacroEconomicDTO(BaseDTO):
                  inflation_rate: float, nominal_10y: float = 4.0,
                  date: Optional[datetime] = None, sahm_rule_indicator: float = 0.0,
                  vix_value: float = 15.0, hmm_risk_on_probability: Optional[float] = None,
-                 hmm_regime_state: Optional[str] = None):
+                 hmm_regime_state: Optional[str] = None,
+                 data_unavailable: bool = False):
         self.date = date if date is not None else datetime.now()
         self.sahm_rule_indicator = sahm_rule_indicator
         self.yield_curve: float = self._to_float(yield_curve_10y_2y) # Yield spread (Negative = Inverted)
@@ -321,6 +322,18 @@ class MacroEconomicDTO(BaseDTO):
             self._to_float(hmm_risk_on_probability, None) if hmm_risk_on_probability is not None else None
         )
         self.hmm_regime_state: Optional[str] = hmm_regime_state
+        # True when the caller could not obtain one or more of the FRED
+        # series feeding this DTO (T10Y2Y / BAMLH0A0HYM2 / VIXCLS, or the
+        # Sahm reading fell back to MacroEngine.calculate_sahm_rule's
+        # fallback_val) and substituted a benign literal default in its
+        # place. Defaults to False, which reproduces every pre-existing
+        # construction site's behavior exactly (byte-identical when this
+        # kwarg is never passed). See killSwitch / _rules_based_regime below
+        # for what this forces -- CONSTRAINT #4 (never let a fabricated
+        # default read as a real measurement) / CONSTRAINT #6 (a failed
+        # regime detector must degrade to risk-off, never silently pass as
+        # risk-on).
+        self.data_unavailable: bool = bool(data_unavailable)
 
     @property
     def _rules_based_regime(self) -> str:
@@ -329,7 +342,19 @@ class MacroEconomicDTO(BaseDTO):
         on top of this; killSwitch's agreement check also reads this directly
         so the downgrade (RISK ON -> NEUTRAL) never masks the RECESSION
         agreement check below.
+
+        Fails closed to "RECESSION" -- the most conservative of the four
+        enum values -- when data_unavailable is set, rather than letting the
+        caller's substituted benign literal defaults resolve to whatever the
+        ordinary rules would otherwise compute (CONSTRAINT #4/#6). This
+        means market_regime (which calls through here) and every consumer
+        that reads it (engine/advisory.py's regime gate,
+        signals/macro_regime.py, signals/rsi2_mean_reversion.py,
+        signals/news_catalyst.py's is_active_in_regime) inherit the
+        fail-closed posture automatically.
         """
+        if self.data_unavailable:
+            return "RECESSION"
         if (self.yield_curve < -0.25 and self.credit_spread > 6.0) or self.sahm_rule_indicator >= 0.6:
             return "RECESSION"
         elif self.credit_spread > 6.0:
@@ -354,7 +379,20 @@ class MacroEconomicDTO(BaseDTO):
         sahm_rule_indicator >= KILLSWITCH_SAHM_THRESHOLD_AGREED (0.3, vs. 0.5).
         This never makes the kill switch LESS sensitive -- it is a strict
         OR with the base condition.
+
+        FAIL CLOSED ON MISSING DATA: if data_unavailable is True (one or
+        more of the FRED series behind this DTO -- T10Y2Y, BAMLH0A0HYM2,
+        VIXCLS, or the Sahm reading -- could not be obtained this cycle, so
+        the caller substituted a benign literal default in its place), this
+        returns True unconditionally, before computing anything else. A
+        substituted default (e.g. VIX=15.0, sahm=0.0) must never be treated
+        as a real "not stressed" reading for a safety-critical gate
+        (CONSTRAINT #4: never fabricate; CONSTRAINT #6: a failed regime
+        detector must degrade to risk-off, never silently pass as risk-on).
         """
+        if self.data_unavailable:
+            return True
+
         base_kill = self.sahm_rule_indicator >= 0.5 or self.vix > 30.0
 
         if self.hmm_risk_on_probability is None or self._rules_based_regime != "RECESSION":

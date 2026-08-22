@@ -141,6 +141,51 @@ def test_killswitch_base_condition_unaffected_by_hmm():
 
 
 # =============================================================================
+# 2b. data_unavailable -- fail closed on missing FRED data (CONSTRAINT #4/#6)
+# =============================================================================
+def test_data_unavailable_forces_killswitch_true_regardless_of_benign_fields():
+    """Every field here is individually benign (would read RISK ON /
+    killSwitch=False on its own) -- data_unavailable=True must still force
+    killSwitch to True. This is the core regression guard for the bug this
+    was written to fix: a FRED outage substituting benign literal defaults
+    must never silently compute a "risk on" verdict."""
+    dto = MacroEconomicDTO(
+        yield_curve_10y_2y=0.5, high_yield_oas=3.5, inflation_rate=2.0,
+        vix_value=15.0, sahm_rule_indicator=0.0,
+        data_unavailable=True,
+    )
+    assert dto.killSwitch is True
+    assert dto.market_regime == "RECESSION"
+
+
+def test_data_unavailable_forces_recession_even_with_high_hmm_risk_on():
+    """A high HMM risk_on_probability must not pull the regime back from the
+    data_unavailable override -- the HMM's own downgrade logic only ever
+    moves RISK ON -> NEUTRAL, never the other direction, and data_unavailable
+    is checked before any of that logic runs."""
+    dto = MacroEconomicDTO(
+        yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0,
+        vix_value=15.0, hmm_risk_on_probability=0.95,
+        data_unavailable=True,
+    )
+    assert dto.market_regime == "RECESSION"
+    assert dto.killSwitch is True
+
+
+def test_data_unavailable_default_false_is_byte_identical_to_pre_fix_behavior():
+    """Omitting data_unavailable entirely (every pre-existing construction
+    site) must reproduce the exact pre-fix behavior -- this is the
+    regression guarantee for every untouched caller."""
+    dto = MacroEconomicDTO(
+        yield_curve_10y_2y=0.5, high_yield_oas=3.5, inflation_rate=2.0,
+        vix_value=15.0, sahm_rule_indicator=0.0,
+    )
+    assert dto.data_unavailable is False
+    assert dto.killSwitch is False
+    assert dto.market_regime == "RISK ON"
+
+
+# =============================================================================
 # 3. MacroEngine.compute_hmm_risk_on_probability graceful degradation
 # =============================================================================
 def test_compute_hmm_risk_on_probability_none_data_engine():

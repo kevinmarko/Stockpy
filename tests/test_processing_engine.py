@@ -180,6 +180,24 @@ class TestProcessMacroRegime:
         assert "Regime" in result
         assert isinstance(result["Real_Yield"], float)
 
+    def test_dict_input_missing_vixcls_fails_closed(self, engine):
+        """CONSTRAINT #4/#6 regression guard: this defensive dict->DTO branch
+        used to silently keep vix_value/sahm_rule_indicator at the DTO class
+        defaults (15.0/0.0) and never flag the gap. A dict missing VIXCLS
+        (present here) now forces Regime to RECESSION regardless of what the
+        T10Y2Y/BAMLH0A0HYM2 values alone would imply."""
+        raw = {"T10Y2Y": 1.0, "BAMLH0A0HYM2": 2.0, "CPIAUCSL_YoY": 3.0}  # no VIXCLS
+        result = engine.process_macro_regime(raw)
+        assert result["Regime"] == "RECESSION"
+
+    def test_dict_input_with_all_keys_present_is_not_forced(self, engine):
+        raw = {
+            "T10Y2Y": 1.0, "BAMLH0A0HYM2": 2.0, "CPIAUCSL_YoY": 3.0,
+            "VIXCLS": 15.0, "SAHMREALTIME": 0.0,
+        }
+        result = engine.process_macro_regime(raw)
+        assert result["Regime"] == "RISK ON"
+
     def test_malformed_input_degrades_to_neutral_fallback(self, engine):
         """An object missing the expected attributes must hit the except
         branch and return the documented neutral fallback dict, never raise."""

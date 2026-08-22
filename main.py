@@ -404,6 +404,14 @@ def _build_macro_dto() -> MacroEconomicDTO:
 
     Degrades gracefully to neutral defaults when FRED_API_KEY is absent or
     FRED is unreachable.  Never raises.
+
+    data_unavailable is set True on every branch that returns a fully or
+    partially fabricated DTO (no FRED_API_KEY, an exception mid-construction,
+    or a live macro_raw missing T10Y2Y/BAMLH0A0HYM2/VIXCLS, or a Sahm value
+    that came from calculate_sahm_rule's fallback) -- see
+    dto_models.py::MacroEconomicDTO.killSwitch/_rules_based_regime for what
+    this forces (CONSTRAINT #4/#6: a substituted benign default must never
+    read as a real "risk on" measurement for this safety-critical gate).
     """
     # Read via the `settings` singleton, not os.environ — pydantic-settings
     # loads .env into Settings only, never into the real process environment.
@@ -417,9 +425,12 @@ def _build_macro_dto() -> MacroEconomicDTO:
             nominal_10y=4.5,
             vix_value=18.0,
             sahm_rule_indicator=0.0,
+            data_unavailable=True,
         )
 
     try:
+        from macro_engine import macro_killswitch_data_unavailable
+
         # Reuse ONE MacroEngine (and therefore one HMMRegimeDetector) across
         # every run_once() cycle within this process -- see _get_macro_engine()
         # docstring / Task A4. This makes the HMM's retrain_freq_days gate
@@ -467,21 +478,38 @@ def _build_macro_dto() -> MacroEconomicDTO:
         hmm_prob = hmm_result["risk_on_probability"] if hmm_result else None
         hmm_state = hmm_result["regime_state_label"] if hmm_result else None
 
+        # NOTE: SAHMREALTIME is never a key in macro_raw -- de.fetch_macro_raw()
+        # only ever populates T10Y2Y/BAMLH0A0HYM2/UNRATE/VIXCLS (see
+        # data_engine.py::fetch_macro_raw / _MACRO_HARDCODED_FALLBACK). Reading
+        # macro_raw.get("SAHMREALTIME", 0.0) here was therefore dead code --
+        # it silently returned 0.0 every cycle regardless of FRED health,
+        # meaning this DTO's Sahm-driven kill-switch input never reflected a
+        # real reading. Fixed by actually computing it via
+        # MacroEngine._calculate_sahm_rule_detailed(), the same primitive
+        # pipeline/production_steps.py's OptionsAnalysisStep already uses.
+        sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
+
+        data_unavailable = (
+            macro_killswitch_data_unavailable(macro_raw) or sahm_used_fallback
+        )
+
         dto = MacroEconomicDTO(
             yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
             high_yield_oas=float(macro_raw.get("BAMLH0A0HYM2", 3.5)),
             inflation_rate=float(macro_raw.get("CPIAUCSL_YoY", 2.0)),
             nominal_10y=float(macro_raw.get("DGS10", 4.0)),
             vix_value=float(macro_raw.get("VIXCLS", 18.0)),
-            sahm_rule_indicator=float(macro_raw.get("SAHMREALTIME", 0.0)),
+            sahm_rule_indicator=sahm_val,
             hmm_risk_on_probability=hmm_prob,
             hmm_regime_state=hmm_state,
+            data_unavailable=data_unavailable,
         )
         logger.info(
-            "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f.",
+            "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f  data_unavailable=%s.",
             dto.market_regime,
             dto.vix,
             hmm_prob if hmm_prob is not None else float("nan"),
+            data_unavailable,
         )
         return dto
 
@@ -494,6 +522,7 @@ def _build_macro_dto() -> MacroEconomicDTO:
             nominal_10y=4.5,
             vix_value=18.0,
             sahm_rule_indicator=0.0,
+            data_unavailable=True,
         )
 
 

@@ -25,7 +25,13 @@ import pandas as pd
 import pytest
 
 from data_engine import MockDataEngine
-from macro_engine import MacroDataSchema, MacroEngine
+from macro_engine import (
+    MacroDataSchema,
+    MacroEngine,
+    macro_killswitch_data_unavailable,
+    KILLSWITCH_CRITICAL_MACRO_KEYS,
+    REGIME_CRITICAL_MACRO_KEYS,
+)
 
 
 # ============================================================================
@@ -103,6 +109,114 @@ class TestCalculateSahmRule:
 
 
 # ============================================================================
+# _calculate_sahm_rule_detailed — same paths, plus the used_fallback flag
+# (pipeline/production_steps.py and main.py use this to set
+# MacroEconomicDTO.data_unavailable; calculate_sahm_rule() itself is now a
+# one-line delegate over this, verified byte-identical above).
+# ============================================================================
+
+class TestCalculateSahmRuleDetailed:
+    def test_no_data_engine_reports_fallback_used(self):
+        me = MacroEngine(data_engine=None)
+        value, used_fallback = me._calculate_sahm_rule_detailed(fallback_val=0.42)
+        assert value == 0.42
+        assert used_fallback is True
+
+    def test_data_engine_without_fred_attribute_reports_fallback_used(self):
+        me = MacroEngine(data_engine=MockDataEngine())
+        value, used_fallback = me._calculate_sahm_rule_detailed(fallback_val=0.0)
+        assert value == 0.0
+        assert used_fallback is True
+
+    def test_direct_sahmrealtime_series_reports_fallback_not_used(self):
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.35])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        value, used_fallback = me._calculate_sahm_rule_detailed()
+        assert value == 0.35
+        assert used_fallback is False
+
+    def test_unrate_computation_reports_fallback_not_used(self):
+        unrate_values = [4.0] * 12 + [4.5, 5.0, 5.5]
+        idx = pd.date_range("2024-01-01", periods=len(unrate_values), freq="MS")
+        unrate = pd.Series(unrate_values, index=idx)
+        fred = _FakeFred(series_map={"UNRATE": unrate}, raise_on={"SAHMREALTIME"})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        value, used_fallback = me._calculate_sahm_rule_detailed()
+        assert value > 0.0
+        assert used_fallback is False
+
+    def test_empty_unrate_series_reports_fallback_used(self):
+        fred = _FakeFred(series_map={"UNRATE": pd.Series(dtype=float)}, raise_on={"SAHMREALTIME"})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        value, used_fallback = me._calculate_sahm_rule_detailed(fallback_val=-1.0)
+        assert value == -1.0
+        assert used_fallback is True
+
+    def test_total_fred_failure_reports_fallback_used(self):
+        class _BrokenFred:
+            fred_active = True
+
+            def get_series(self, *a, **k):
+                raise ConnectionError("network down")
+
+        me = MacroEngine(data_engine=_FakeEngineWithFred(_BrokenFred()))
+        value, used_fallback = me._calculate_sahm_rule_detailed(fallback_val=0.0)
+        assert value == 0.0
+        assert used_fallback is True
+
+    def test_calculate_sahm_rule_is_a_byte_identical_delegate(self):
+        """calculate_sahm_rule() must return exactly the float half of
+        _calculate_sahm_rule_detailed()'s tuple across every path above --
+        the refactor must not change any existing caller's observed value."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.44])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        detailed_value, _ = me._calculate_sahm_rule_detailed()
+        assert me.calculate_sahm_rule() == detailed_value == 0.44
+
+
+# ============================================================================
+# macro_killswitch_data_unavailable — the shared missing-key detector
+# ============================================================================
+
+class TestMacroKillswitchDataUnavailable:
+    def test_all_keys_present_is_available(self):
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 18.0}
+        assert macro_killswitch_data_unavailable(macro_raw) is False
+
+    def test_empty_dict_is_unavailable(self):
+        assert macro_killswitch_data_unavailable({}) is True
+
+    def test_missing_vixcls_alone_is_unavailable(self):
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0}
+        assert macro_killswitch_data_unavailable(macro_raw) is True
+
+    def test_missing_t10y2y_alone_is_unavailable(self):
+        macro_raw = {"BAMLH0A0HYM2": 3.0, "VIXCLS": 18.0}
+        assert macro_killswitch_data_unavailable(macro_raw) is True
+
+    def test_none_value_for_a_present_key_counts_as_missing(self):
+        """A key literally present but holding None (e.g. a provider that
+        returns {key: None} rather than omitting the key) must still count
+        as unavailable -- CONSTRAINT #4 cares about a real reading, not
+        merely key presence."""
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": None, "VIXCLS": 18.0}
+        assert macro_killswitch_data_unavailable(macro_raw) is True
+
+    def test_restricted_keys_param_ignores_vixcls(self):
+        """run_macro_killswitch() never receives VIXCLS -- passing the
+        restricted REGIME_CRITICAL_MACRO_KEYS must not report unavailable
+        merely because VIXCLS (outside that function's contract) is absent."""
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0}  # no VIXCLS at all
+        assert macro_killswitch_data_unavailable(macro_raw, keys=REGIME_CRITICAL_MACRO_KEYS) is False
+        # But the full (default) key set correctly flags VIXCLS's absence.
+        assert macro_killswitch_data_unavailable(macro_raw) is True
+
+    def test_key_sets_are_consistent(self):
+        assert set(REGIME_CRITICAL_MACRO_KEYS) == {"T10Y2Y", "BAMLH0A0HYM2"}
+        assert set(KILLSWITCH_CRITICAL_MACRO_KEYS) == {"T10Y2Y", "BAMLH0A0HYM2", "VIXCLS"}
+
+
+# ============================================================================
 # run_macro_killswitch — regime classification truth table + schema
 # ============================================================================
 
@@ -127,12 +241,43 @@ class TestRunMacroKillswitch:
         df = engine.run_macro_killswitch({"T10Y2Y": 1.0, "BAMLH0A0HYM2": 2.0}, sahm_rule_val=0.0)
         assert df["market_regime"].iloc[0] == "RISK ON"
 
-    def test_missing_macro_keys_use_documented_defaults(self, engine):
-        """An empty raw dict must not raise -- defaults (T10Y2Y=0.5,
-        BAMLH0A0HYM2=3.5) apply. credit_spread=3.5 is below the 4.5 NEUTRAL
-        floor, so the regime resolves to RISK ON, not RECESSION/NEUTRAL."""
+    def test_missing_macro_keys_fail_closed_to_recession(self, engine):
+        """An empty raw dict must not raise, and must NOT silently resolve to
+        "RISK ON" via the substituted benign defaults (T10Y2Y=0.5,
+        BAMLH0A0HYM2=3.5 -- credit_spread=3.5 is below the 4.5 NEUTRAL floor).
+        CONSTRAINT #4/#6: a missing FRED reading must fail closed, not read
+        as a real "not stressed" measurement -- market_regime is forced to
+        RECESSION and data_unavailable is reported True."""
         df = engine.run_macro_killswitch({}, sahm_rule_val=0.0)
+        assert df["market_regime"].iloc[0] == "RECESSION"
+        assert df["data_unavailable"].iloc[0] == True  # noqa: E712
+
+    def test_present_macro_keys_report_data_available(self, engine):
+        """When both T10Y2Y and BAMLH0A0HYM2 are present, data_unavailable
+        must be False regardless of the resulting regime -- this is the
+        byte-identical-when-healthy regression guard."""
+        df = engine.run_macro_killswitch({"T10Y2Y": 1.0, "BAMLH0A0HYM2": 2.0}, sahm_rule_val=0.0)
         assert df["market_regime"].iloc[0] == "RISK ON"
+        assert df["data_unavailable"].iloc[0] == False  # noqa: E712
+
+    def test_only_t10y2y_missing_fails_closed(self, engine):
+        df = engine.run_macro_killswitch({"BAMLH0A0HYM2": 2.0}, sahm_rule_val=0.0)
+        assert df["market_regime"].iloc[0] == "RECESSION"
+        assert df["data_unavailable"].iloc[0] == True  # noqa: E712
+
+    def test_only_baml_missing_fails_closed(self, engine):
+        df = engine.run_macro_killswitch({"T10Y2Y": 1.0}, sahm_rule_val=0.0)
+        assert df["market_regime"].iloc[0] == "RECESSION"
+        assert df["data_unavailable"].iloc[0] == True  # noqa: E712
+
+    def test_data_unavailable_never_downgrades_an_independently_worse_regime(self, engine):
+        """If the (present) data already implies RECESSION/CREDIT EVENT via
+        the ordinary rules, a missing key elsewhere must not soften that --
+        this only forces the fallthrough "RISK ON" case, never overrides a
+        worse classification already reached on real data."""
+        df = engine.run_macro_killswitch({"BAMLH0A0HYM2": 7.0}, sahm_rule_val=0.0)
+        assert df["market_regime"].iloc[0] == "CREDIT EVENT"
+        assert df["data_unavailable"].iloc[0] == True  # noqa: E712
 
     def test_output_conforms_to_macro_data_schema(self, engine):
         df = engine.run_macro_killswitch({"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0}, sahm_rule_val=0.1)
