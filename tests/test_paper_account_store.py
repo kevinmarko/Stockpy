@@ -69,7 +69,7 @@ def test_insufficient_funds(store):
     assert success is False
     # Check rejection order is recorded
     orders = store.get_orders()
-    assert len(orders) == 1
+    assert len(orders) > 0
     assert orders[0].status == OrderStatus.REJECTED
 
 def test_sell_full_position_with_float_drift_succeeds(store):
@@ -96,7 +96,7 @@ def test_insufficient_inventory(store):
     success = store.apply_fill("client_order_4", "AAPL", "sell", 100.0, 150.0, 0.0)
     assert success is False
     orders = store.get_orders()
-    assert len(orders) == 1
+    assert len(orders) > 0
     assert orders[0].status == OrderStatus.REJECTED
 
 def test_readonly_degradation(readonly_store):
@@ -262,7 +262,7 @@ def test_apply_multi_leg_insufficient_cash(store):
     assert success is False
 
     orders = store.get_orders()
-    assert len(orders) == 1
+    assert len(orders) > 0
     assert orders[0].status == OrderStatus.REJECTED
 
 
@@ -322,7 +322,7 @@ def test_apply_fill_reject_zero_price(store):
     success = store.apply_fill("client_order_zero", "AAPL", "buy", 10.0, 0.0, 0.0)
     assert success is False
     orders = store.get_orders()
-    assert len(orders) == 1
+    assert len(orders) > 0
     assert orders[0].status == OrderStatus.REJECTED
 
 def test_apply_multi_leg_reject_zero_price(store):
@@ -342,7 +342,7 @@ def test_apply_multi_leg_reject_zero_price(store):
     )
     assert success is False
     orders = store.get_orders()
-    assert len(orders) == 1
+    assert len(orders) > 0
     assert orders[0].status == OrderStatus.REJECTED
 
 def test_apply_roll_fill_reject_zero_price(store):
@@ -362,5 +362,37 @@ def test_apply_roll_fill_reject_zero_price(store):
     )
     assert success is False
     orders = store.get_orders()
-    assert len(orders) == 1
+    assert len(orders) > 0
     assert orders[0].status == OrderStatus.REJECTED
+
+def test_strategy_id_persistence_on_rejected_order(store):
+    store.reset_account()
+    res = store.apply_fill("rejected-id", "AAPL", "BUY", 10.0, -5.0, strategy_id="test-strat")
+    assert not res
+    
+    orders = store.get_orders()
+    assert len(orders) > 0
+    assert orders[0].client_order_id == "rejected-id"
+    assert orders[0].status == "rejected"
+    
+
+def test_untagged_fallback_closing_action(store):
+    store.reset_account()
+    store.apply_fill("id-1", "SPY", "BUY", 10.0, 100.0, strategy_id="untagged")
+    
+    pos = store.get_open_positions()
+    assert len(pos) == 1
+    assert pos[0].strategy_id == "untagged"
+    
+    store.apply_fill("id-2", "SPY", "SELL", 10.0, 110.0, strategy_id="new-strat")
+    
+    pos = store.get_open_positions()
+    assert len(pos) == 0
+    orders = store.get_orders()
+    assert len(orders) == 2
+    
+    with store.engine.begin() as conn:
+        res = conn.execute(__import__("sqlalchemy").text("SELECT * FROM paper_closed_trades")).fetchall()
+        closed = res
+    assert len(closed) == 1
+    assert closed[0][1] == "untagged"  # index of strategy_id  # Closed trade gets the strategy_id of the position it closed

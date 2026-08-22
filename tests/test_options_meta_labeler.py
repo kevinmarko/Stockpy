@@ -73,7 +73,7 @@ def test_train_and_predict():
 
         res = labeler.train(samples)
         assert res["samples"] == 100
-        assert res["accuracy"] >= 0.70
+        assert res["in_sample_accuracy"] >= 0.70
 
         # Predict on a high-quality candidate
         good_cand = {

@@ -143,6 +143,7 @@ class OptionsMetaLabeler:
         X = np.array(X_list)
         y = np.array(y_list)
 
+
         if len(np.unique(y)) < 2:
             # Degenerate case (single class)
             logger.warning("Single-class target provided to OptionsMetaLabeler. Using baseline predictor.")
@@ -151,10 +152,11 @@ class OptionsMetaLabeler:
             self.n_samples = len(y)
             return {"accuracy": 1.0, "roc_auc": 0.50, "samples": len(y)}
 
-        try:
-            from sklearn.ensemble import HistGradientBoostingClassifier
-            from sklearn.metrics import accuracy_score, roc_auc_score
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        from sklearn.metrics import accuracy_score, roc_auc_score
+        from sklearn.model_selection import TimeSeriesSplit
 
+        try:
             clf = HistGradientBoostingClassifier(
                 max_iter=100,
                 learning_rate=0.05,
@@ -162,36 +164,71 @@ class OptionsMetaLabeler:
                 min_samples_leaf=5,
                 random_state=42,
             )
+            
+            # Purged Walk-Forward Split (OOS metrics)
+            tscv = TimeSeriesSplit(n_splits=5)
+            oos_preds = np.zeros_like(y, dtype=float)
+            oos_probas = np.zeros_like(y, dtype=float) + 0.5
+            
+            for train_idx, test_idx in tscv.split(X):
+                # Embargo: drop last 5 samples of train to avoid overlap leak
+                if len(train_idx) > 5:
+                    train_idx = train_idx[:-5]
+                X_tr, y_tr = X[train_idx], y[train_idx]
+                X_te, y_te = X[test_idx], y[test_idx]
+                if len(np.unique(y_tr)) > 1:
+                    clf.fit(X_tr, y_tr)
+                    oos_preds[test_idx] = clf.predict(X_te)
+                    oos_probas[test_idx] = clf.predict_proba(X_te)[:, 1]
+                else:
+                    oos_preds[test_idx] = y_tr[0]
+                    oos_probas[test_idx] = 0.5
+
+            # OOS Metrics
+            test_mask = np.concatenate([test_idx for _, test_idx in tscv.split(X)])
+            oos_acc = float(accuracy_score(y[test_mask], oos_preds[test_mask]))
+            oos_auc = float(roc_auc_score(y[test_mask], oos_probas[test_mask]))
+
+            # In-Sample fit on full data
             clf.fit(X, y)
             self.model = clf
 
-            y_pred = clf.predict(X)
-            y_proba = clf.predict_proba(X)[:, 1]
+            y_pred_is = clf.predict(X)
+            y_proba_is = clf.predict_proba(X)[:, 1]
+            is_acc = float(accuracy_score(y, y_pred_is))
+            is_auc = float(roc_auc_score(y, y_proba_is))
 
-            acc = float(accuracy_score(y, y_pred))
-            auc = float(roc_auc_score(y, y_proba))
         except Exception as exc:
             logger.warning("sklearn fit failed (%s); using logistic fallback", exc)
             # Fallback simple logistic regression with numpy
             weights = np.linalg.lstsq(X, y, rcond=None)[0]
             self.model = ("linear_fallback", weights)
-            acc = 0.60
-            auc = 0.60
+            is_acc = 0.60
+            is_auc = 0.60
+            oos_acc = 0.60
+            oos_auc = 0.60
 
         self.trained_at = datetime.now(timezone.utc)
         self.n_samples = len(y)
-        self.train_accuracy = acc
-        self.train_roc_auc = auc
+        self.train_accuracy = is_acc
+        self.train_roc_auc = is_auc
 
         logger.info(
-            "OptionsMetaLabeler trained on %d samples. Accuracy: %.2f%%, ROC-AUC: %.3f",
-            len(y), acc * 100.0, auc,
+            "OptionsMetaLabeler trained on %d samples. IS Acc: %.2f%%, IS AUC: %.3f, OOS Acc: %.2f%%, OOS AUC: %.3f",
+            len(y), is_acc * 100.0, is_auc, oos_acc * 100.0, oos_auc
         )
 
         # Automatically persist
         self.save_model()
 
-        return {"accuracy": acc, "roc_auc": auc, "samples": len(y)}
+        return {
+            "in_sample_accuracy": is_acc, 
+            "in_sample_roc_auc": is_auc, 
+            "oos_accuracy": oos_acc,
+            "oos_roc_auc": oos_auc,
+            "samples": len(y)
+        }
+
 
     def predict_probability(self, row: Dict[str, Any] | OptionsTradeFeatureRow) -> float:
         """

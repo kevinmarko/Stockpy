@@ -1,3 +1,5 @@
+from unittest.mock import patch
+import yaml
 """Tests for execution/options_paper_executor.py."""
 
 from pathlib import Path
@@ -234,8 +236,11 @@ def test_executor_construction_loads_real_trained_model(reset_meta_labeler_singl
     singleton.model_path = model_path
     singleton.n_samples = 0
 
-    store = PaperAccountStore(db_url="sqlite:///:memory:")
-    OptionsPaperExecutor(store=store)
+
+    # Mock registry to be deployable
+    with patch("yaml.safe_load", return_value={"models": {"options_meta_labeler": {"deployable": True}}}):
+        store = PaperAccountStore(db_url="sqlite:///:memory:")
+        OptionsPaperExecutor(store=store)
 
     # The real file's contents were loaded (not merely a non-None sentinel).
     assert singleton.model is not None
@@ -264,9 +269,12 @@ def test_execute_strategy_directives_uses_real_model_for_gating_and_sizing(
     singleton.model_path = model_path
     singleton.n_samples = 0
 
-    store = PaperAccountStore(db_url="sqlite:///:memory:")
-    executor = OptionsPaperExecutor(store=store)
-    assert singleton.model is not None  # warmed up by construction
+
+    # Mock registry to be deployable
+    with patch("yaml.safe_load", return_value={"models": {"options_meta_labeler": {"deployable": True}}}):
+        store = PaperAccountStore(db_url="sqlite:///:memory:")
+        executor = OptionsPaperExecutor(store=store)
+        assert singleton.model is not None  # warmed up by construction
 
     legs = [
         {"strike": 150.0, "side": "sell", "type": "put", "ratio_qty": 1.0, "price": 2.20},
@@ -329,8 +337,11 @@ def test_executor_construction_no_model_file_is_honest_and_non_crashing(
     singleton.model = None
     singleton.model_path = tmp_path / "does_not_exist.pkl"
 
-    store = PaperAccountStore(db_url="sqlite:///:memory:")
-    OptionsPaperExecutor(store=store)  # must not raise
+
+    # Mock registry to be deployable
+    with patch("yaml.safe_load", return_value={"models": {"options_meta_labeler": {"deployable": True}}}):
+        store = PaperAccountStore(db_url="sqlite:///:memory:")
+        OptionsPaperExecutor(store=store)  # must not raise
 
     assert singleton.model is None
     assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.65

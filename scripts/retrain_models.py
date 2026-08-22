@@ -190,6 +190,21 @@ def retrain_all(
                          signal_id, exc, exc_info=True)
             report.results.append(ModelResult(model_key, ok=False, error=str(exc)))
 
+    # ---- 3. Options Meta Labeler --------------------------------------------
+    logger.info("Retraining Options Meta-Labeler ...")
+    options_key = "options_meta_labeler"
+    try:
+        from api.pilots_api import post_options_meta_model_retrain
+        res = post_options_meta_model_retrain()
+        logger.info(
+            "Options Meta-Labeler retrained: source=%s n_real=%s in_sample_acc=%s oos_acc=%s",
+            res.get("data_source"), res.get("n_real_trades"), res.get("in_sample_accuracy"), res.get("oos_accuracy")
+        )
+        report.results.append(ModelResult(options_key, ok=True))
+    except Exception as exc:
+        logger.error("Options Meta-Labeler retraining CRASHED (%s) — continuing.", exc, exc_info=True)
+        report.results.append(ModelResult(options_key, ok=False, error=str(exc)))
+
     return report
 
 

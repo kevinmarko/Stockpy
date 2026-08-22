@@ -545,13 +545,13 @@ class OptionsValidationHarness:
         sr = sharpe_ratio(daily_ret)
         # Sortino
         downside_ret = daily_ret[daily_ret < 0]
-        downside_std = downside_ret.std() * math.sqrt(252) if len(downside_ret) > 1 else 1e-4
-        sortino = (daily_ret.mean() * 252 - 0.045) / max(1e-4, downside_std)
+        downside_std = downside_ret.std() * math.sqrt(252) if len(downside_ret) > 1 else float('nan')
+        sortino = (daily_ret.mean() * 252 - 0.045) / max(1e-12, downside_std) if not np.isnan(downside_std) else float('nan')
 
         # Max drawdown
         cum_max = equity_df.cummax()
         drawdowns = (equity_df - cum_max) / cum_max
-        max_dd = abs(float(drawdowns.min())) if len(drawdowns) > 0 else 0.0
+        max_dd = abs(float(drawdowns.min())) if len(drawdowns) > 0 else float('nan')
 
         # Trade metrics
         total_trades = len(trades)
@@ -563,19 +563,22 @@ class OptionsValidationHarness:
         losses = [abs(t.pnl_dollar) for t in trades if t.pnl_dollar < 0]
         avg_win = float(np.mean(wins)) if wins else 0.0
         avg_loss = float(np.mean(losses)) if losses else 0.0
-        profit_factor = (sum(wins) / sum(losses)) if losses and sum(losses) > 0 else (99.0 if wins else 1.0)
+        profit_factor = (sum(wins) / sum(losses)) if losses and sum(losses) > 0 else (float('inf') if wins else float('nan'))
 
         # Statistical overfitting & DSR
         skew = float(daily_ret.skew()) if len(daily_ret) > 2 and not np.isnan(daily_ret.skew()) else 0.0
-        kurt = float(daily_ret.kurtosis()) if len(daily_ret) > 3 and not np.isnan(daily_ret.kurtosis()) else 3.0
-        dsr_val = deflated_sharpe_ratio(
-            sr_observed=sr if not np.isnan(sr) else 0.0,
-            n_trials=max(1, total_trades),
-            sr_variance=0.01,
-            skew=skew,
-            kurtosis=kurt,
-            n_observations=len(daily_ret),
-        )
+        kurt = float(daily_ret.kurtosis()) if len(daily_ret) > 3 and not np.isnan(daily_ret.kurtosis()) else 0.0
+        if total_trades < 30:
+            dsr_val = float("nan")
+        else:
+            dsr_val = deflated_sharpe_ratio(
+                sr_observed=sr if not np.isnan(sr) else 0.0,
+                n_trials=max(1, total_trades),
+                sr_variance=0.01,
+                skew=skew,
+                kurtosis=kurt,
+                n_observations=len(daily_ret),
+            )
 
         n_splits = 4
         split_size = len(daily_ret) // n_splits
@@ -591,7 +594,7 @@ class OptionsValidationHarness:
                 oos_s.append([oos_sr if not np.isnan(oos_sr) else 0.0])
             pbo_val = probability_of_backtest_overfitting(np.array(is_s), np.array(oos_s))
         else:
-            pbo_val = 0.0
+            pbo_val = float("nan")
 
 
         # Stress testing across shock windows

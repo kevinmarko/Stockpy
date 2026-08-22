@@ -2677,3 +2677,15 @@ escape-hatch proof described above). Full `tests/test_train_lgbm.py` suite (24 t
 pass; the real machine-global `ml/registry.yaml` and repo-tracked `ml/registry.yaml` were
 directly diffed/inspected after each test run in this session to confirm zero pollution,
 not merely assumed clean from the tests passing.
+
+## 2026-08-22: Option Pilots STRATEGY_REGISTRY Entries & Deployability Gates
+
+During Phase 4 of the PR 872 audit, four options strategies (`earnings_crush`, `dispersion_trading`, `zero_dte_engine`, `gamma_scalper`) were found to lack `STRATEGY_REGISTRY` entries. These entries intentionally do not exist in the validation harness and instead are surfaced directly as deployability gates in `OPTIONS_DESK_DEPLOYABILITY_GATES` (`api/pilots_api.py`) with `"gate_status": "UNGATEABLE_DATA_GAP"`.
+
+Why they lack `STRATEGY_REGISTRY` entries:
+- **`earnings_crush`**: No historical single-name IV exists in the data layer to perform walk-forward validation (not gateable).
+- **`dispersion_trading`**: Index IV (VIX) is historical, but constituent single-name IVs are substituted, creating a substitution bias (not gateable).
+- **`zero_dte_engine`**: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention (not gateable).
+- **`gamma_scalper`**: Requires intraday delta hedging simulation not supported by daily-bar harness (not gateable).
+
+These missing entries are a documented constraint of our validation infrastructure, not a bug, and their gates have been properly updated in the backend.

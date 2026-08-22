@@ -1,35 +1,3 @@
-# InvestYo ML Model Registry
-# ===========================
-# Lists production models with their paths, training metadata, and CPCV validation metrics.
-# Updated automatically by the monthly retraining job scripts/retrain_models.py
-# (scheduled via the launchd plist scripts/com.investyo.monthly-retrain.plist).
-#
-# Fields
-# ------
-# role:            what the model does in the pipeline
-# path:            conventional model location, informational only — the runtime loader
-#                  (<Class>.load_latest()) never reads this field; it discovers the model
-#                  by glob-sorting dated ml/models/<prefix>_<YYYYMMDD>.pkl files. See
-#                  artifact_file below for the exact binary behind a given run's metrics.
-# trained_date:    ISO date of most recent training run
-# cpcv_dsr:        Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
-# pbo:             Probability of Backtest Overfitting from CPCV (target < 0.50)
-# n_train:         number of training samples in the most recent run
-# notes:           any caveats, data limitations, or scope restrictions
-# deployable:      true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
-#
-# Provenance fields (optional; captured for reproducibility — never affect `deployable`)
-# ----------------------------------------------------------------------------------------
-# artifact_file:   exact dated pickle filename actually written this run (e.g. lgbm_20260706.pkl)
-# hyperparameters: the model's training hyperparameters (dict)
-# train_window:    the data-split window {start, end, n_dates} (dates as YYYY-MM-DD strings)
-# features:        the ordered feature-column list the model trained with (list)
-# cpcv_mean_oos_sharpe:  mean out-of-sample Sharpe across CPCV held-out paths for the
-#                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
-#                  deployable gate)
-# cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
-#                  SAME DSR-selected strategy (never read by the deployable gate)
-
 models:
   lgbm_ranker:
     role: cross_sectional_ranker
@@ -39,10 +7,10 @@ models:
     pbo: 0.26666666666666666
     n_train: 460
     deployable: true
-    notes: LightGBM LambdaRank model for cross-sectional return rank prediction. Trained monthly on an
-      expanding window of dashboard_df snapshots via PITFeatureStore. NDCG@1 monitored in CV logs. Weight
-      in settings.SIGNAL_WEIGHTS["lgbm_ranker"] = 0.10 (modest until validated at > 200 out-of-sample
-      dates).
+    notes: LightGBM LambdaRank model for cross-sectional return rank prediction. Trained
+      monthly on an expanding window of dashboard_df snapshots via PITFeatureStore.
+      NDCG@1 monitored in CV logs. Weight in settings.SIGNAL_WEIGHTS["lgbm_ranker"]
+      = 0.10 (modest until validated at > 200 out-of-sample dates).
     artifact_file: lgbm_20260814.pkl
     hyperparameters:
       objective: lambdarank
@@ -100,9 +68,10 @@ models:
     pbo: 0.0
     n_train: 16469
     deployable: false
-    notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct). Trained on triple-barrier
-      labels from ml/triple_barrier.py. If predict_proba < settings.META_LABEL_MIN_CONFIDENCE (0.4), the
-      position size for that cycle is zeroed by SignalAggregator.
+    notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct).
+      Trained on triple-barrier labels from ml/triple_barrier.py. If predict_proba
+      < settings.META_LABEL_MIN_CONFIDENCE (0.4), the position size for that cycle
+      is zeroed by SignalAggregator.
     artifact_file: meta_timeseries_momentum_20260814.pkl
     hyperparameters:
       objective: binary
@@ -137,9 +106,9 @@ models:
     pbo: 0.0
     n_train: 16454
     deployable: false
-    notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct). Shares the
-      same triple-barrier label construction and feature set as the timeseries momentum meta-labeler;
-      trained and persisted independently.
+    notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal
+      correct). Shares the same triple-barrier label construction and feature set
+      as the timeseries momentum meta-labeler; trained and persisted independently.
     artifact_file: meta_cross_sectional_momentum_20260814.pkl
     hyperparameters:
       objective: binary
@@ -166,3 +135,13 @@ models:
     - primary_score
     cpcv_mean_oos_sharpe: 0.337563938674809
     cpcv_mean_oos_max_dd: 1.0
+  options_meta_labeler:
+    role: options_meta_labeler
+    path: ml/models/options_meta_labeler_latest.pkl
+    trained_date: '2026-08-22'
+    cpcv_dsr: 0.0
+    pbo: 1.0
+    n_train: 0
+    deployable: false
+    notes: Options meta labeler for dynamic position sizing and entry filtering based
+      on paper closed trades.

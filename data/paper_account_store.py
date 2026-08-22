@@ -1,3 +1,4 @@
+import math
 """
 InvestYo Quant Platform - Paper Account Store
 =============================================
@@ -120,9 +121,21 @@ class PaperAccountStore:
             
             try:
                 conn.execute(text("ALTER TABLE paper_orders ADD COLUMN strategy_id VARCHAR(100)"))
+            except Exception:
+                pass
+            try:
                 conn.execute(text("ALTER TABLE paper_orders ADD COLUMN pilot_id VARCHAR(100)"))
+            except Exception:
+                pass
+            try:
                 conn.execute(text("ALTER TABLE paper_orders ADD COLUMN experiment_arm VARCHAR(100)"))
+            except Exception:
+                pass
+            try:
                 conn.execute(text("ALTER TABLE paper_orders ADD COLUMN leg_group_id VARCHAR(100)"))
+            except Exception:
+                pass
+            try:
                 conn.execute(text("ALTER TABLE paper_orders ADD COLUMN order_kind VARCHAR(20)"))
             except Exception:
                 pass
@@ -348,6 +361,7 @@ class PaperAccountStore:
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
+        pending_bridges = []
             
         side = side.lower().strip()
         cost_basis_impact = qty * fill_price
@@ -355,7 +369,7 @@ class PaperAccountStore:
         
         try:
             fill_price_val = float(fill_price)
-            if fill_price_val <= 0.0:
+            if not math.isfinite(fill_price_val) or fill_price_val <= 0.0:
                 raise ValueError("Price must be positive")
         except (ValueError, TypeError):
             logger.warning(f"Rejecting single-leg order {client_order_id}: invalid fill_price {fill_price}")
@@ -390,7 +404,7 @@ class PaperAccountStore:
                     
                     closed_qty = min(abs(pos.qty), qty)
                     prorated_comm = commission_and_fees * (closed_qty / qty) if qty > 0 else 0.0
-                    self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm)
+                    self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm, pending_bridges)
                     
                     new_qty = pos.qty + qty
                     if abs(new_qty) < _QTY_EPSILON:
@@ -440,7 +454,7 @@ class PaperAccountStore:
 
                     closed_qty = min(pos.qty, qty)
                     prorated_comm = commission_and_fees * (closed_qty / qty) if qty > 0 else 0.0
-                    self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm)
+                    self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm, pending_bridges)
 
                     pos.qty -= qty
                     if abs(pos.qty) < _QTY_EPSILON:
@@ -497,6 +511,7 @@ class PaperAccountStore:
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
+        pending_bridges = []
 
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
@@ -507,15 +522,22 @@ class PaperAccountStore:
             for leg in legs:
                 try:
                     price = float(leg.get("fill_price", 0.0))
-                    if price <= 0.0:
+                    if not math.isfinite(price) or price <= 0.0:
                         raise ValueError("Price must be positive")
                 except (ValueError, TypeError):
                     logger.warning(f"Rejecting multi-leg order {client_order_id}: missing or invalid fill_price in leg")
                     self._insert_order(
-                        session, client_order_id, f"{strategy_name} {symbol}", "BUY" if net_cash_impact < 0 else "SELL",
+                        session, client_order_id, symbol, "BUY" if net_cash_impact < 0 else "SELL",
                         float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                         strategy_id, pilot_id, experiment_arm, None, "parent"
                     )
+                    for i, l in enumerate(legs if "legs" in locals() else all_legs):
+                        l_qty = float(l.get("qty", contracts))
+                        self._insert_order(
+                            session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
+                            l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
+                            strategy_id, pilot_id, experiment_arm, None, "leg"
+                        )
                     return False
 
             # Check cash sufficiency
@@ -529,6 +551,13 @@ class PaperAccountStore:
                     float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                     strategy_id, pilot_id, experiment_arm, None, "parent"
                 )
+                for i, l in enumerate(legs if "legs" in locals() else all_legs):
+                    l_qty = float(l.get("qty", contracts))
+                    self._insert_order(
+                        session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
+                        l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
+                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                    )
                 return False
 
             if collateral_required and collateral_required > 0 and acc.cash_balance < collateral_required:
@@ -541,6 +570,13 @@ class PaperAccountStore:
                     float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                     strategy_id, pilot_id, experiment_arm, None, "parent"
                 )
+                for i, l in enumerate(legs if "legs" in locals() else all_legs):
+                    l_qty = float(l.get("qty", contracts))
+                    self._insert_order(
+                        session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
+                        l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
+                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                    )
                 return False
 
             # Update account cash
@@ -568,7 +604,7 @@ class PaperAccountStore:
                         # Buying to close short
                         closed_qty = min(abs(pos.qty), leg_qty)
                         prorated_comm = commission_and_fees * (closed_qty / leg_qty) / len(legs) if leg_qty > 0 else 0.0
-                        self._record_closed_trade(session, pos, closed_qty, leg_fill_price, "flatten", prorated_comm)
+                        self._record_closed_trade(session, pos, closed_qty, leg_fill_price, "flatten", prorated_comm, pending_bridges)
 
                         new_qty = pos.qty + leg_qty
                         if abs(new_qty) < _QTY_EPSILON:
@@ -589,7 +625,7 @@ class PaperAccountStore:
                     if pos and pos.qty > _QTY_EPSILON:
                         closed_qty = min(pos.qty, leg_qty)
                         prorated_comm = commission_and_fees * (closed_qty / leg_qty) / len(legs) if leg_qty > 0 else 0.0
-                        self._record_closed_trade(session, pos, closed_qty, leg_fill_price, "flatten", prorated_comm)
+                        self._record_closed_trade(session, pos, closed_qty, leg_fill_price, "flatten", prorated_comm, pending_bridges)
 
                         pos.qty -= leg_qty
                         if abs(pos.qty) < _QTY_EPSILON:
@@ -620,7 +656,8 @@ class PaperAccountStore:
                 strategy_id, pilot_id, experiment_arm, None, "parent"
             )
 
-            return True
+            self._execute_bridges(pending_bridges)
+        return True
 
     def apply_roll_fill(
         self,
@@ -643,6 +680,7 @@ class PaperAccountStore:
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
+        pending_bridges = []
 
         # Combine close and open legs
         all_legs = []
@@ -694,15 +732,22 @@ class PaperAccountStore:
                     if price_val is None:
                         price_val = leg.get("raw_price")
                     price = float(price_val if price_val is not None else 0.0)
-                    if price <= 0.0:
+                    if not math.isfinite(price) or price <= 0.0:
                         raise ValueError("Price must be positive")
                 except (ValueError, TypeError):
                     logger.warning(f"Rejecting roll order {client_order_id}: missing or invalid fill_price/raw_price in leg")
                     self._insert_order(
-                        session, client_order_id, f"ROLL {symbol}", "BUY" if net_cash_impact < 0 else "SELL",
+                        session, client_order_id, symbol, "BUY" if net_cash_impact < 0 else "SELL",
                         float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                         strategy_id, pilot_id, experiment_arm, None, "parent"
                     )
+                    for i, l in enumerate(legs if "legs" in locals() else all_legs):
+                        l_qty = float(l.get("qty", contracts))
+                        self._insert_order(
+                            session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
+                            l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
+                            strategy_id, pilot_id, experiment_arm, None, "leg"
+                        )
                     return False
 
             # Check cash sufficiency
@@ -716,6 +761,13 @@ class PaperAccountStore:
                     float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                     strategy_id, pilot_id, experiment_arm, None, "parent"
                 )
+                for i, l in enumerate(legs if "legs" in locals() else all_legs):
+                    l_qty = float(l.get("qty", contracts))
+                    self._insert_order(
+                        session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
+                        l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
+                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                    )
                 return False
 
             if collateral_required and collateral_required > 0 and acc.cash_balance < collateral_required:
@@ -728,6 +780,13 @@ class PaperAccountStore:
                     float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                     strategy_id, pilot_id, experiment_arm, None, "parent"
                 )
+                for i, l in enumerate(legs if "legs" in locals() else all_legs):
+                    l_qty = float(l.get("qty", contracts))
+                    self._insert_order(
+                        session, f"{client_order_id}_L{i+1}", str(l.get("symbol", symbol)), str(l.get("side", "buy")).upper(),
+                        l_qty, 0.0, None, OrderStatus.REJECTED, l_qty,
+                        strategy_id, pilot_id, experiment_arm, None, "leg"
+                    )
                 return False
 
             # Update account cash
@@ -846,7 +905,24 @@ class PaperAccountStore:
             if leg_group_id: po.leg_group_id = leg_group_id
             if order_kind: po.order_kind = order_kind
 
-    def _record_closed_trade(self, session, pos: PaperPosition, closed_qty: float, exit_price: float, close_reason: str, commission: float = 0.0):
+
+    def _execute_bridges(self, bridges: list):
+        if not bridges:
+            return
+        try:
+            import transactions_store
+            store = transactions_store.TransactionsStore()
+            for b in bridges:
+                trade_id = store.record_trade(
+                    symbol=b["symbol"], side=b["side"], entry_ts=b["entry_ts"],
+                    entry_price=b["entry_price"], shares=b["shares"],
+                    strategy=b["strategy"], notes=b["notes"]
+                )
+                store.close_trade(trade_id, b["exit_ts"], b["exit_price"])
+        except Exception as e:
+            logger.error(f"Failed to bridge paper closed trade to transactions store: {e}")
+
+    def _record_closed_trade(self, session, pos: PaperPosition, closed_qty: float, exit_price: float, close_reason: str, commission: float = 0.0, pending_bridges: list = None):
         closed_qty_abs = abs(closed_qty)
         is_long = pos.qty > 0
         if is_long:

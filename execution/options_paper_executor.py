@@ -74,47 +74,31 @@ def _price_option_contract(
 
 
 def _ensure_meta_labeler_loaded() -> None:
-    """Warm up the process-wide Stage 4 ML meta-labeler singleton.
-
-    ``global_options_meta_labeler`` (``ml/options_meta_labeler.py``) starts every
-    process with ``self.model = None`` until something calls ``load_model()`` --
-    previously the ONLY production call site for that was the
-    ``GET /pilots/options/meta-model/status`` endpoint handler
-    (``api/pilots_api.py``). A fresh daemon/API process that never happened to hit
-    that endpoint scored every real options directive through
-    ``predict_probability()``'s hardcoded 0.65 fallback forever, and
-    ``get_sizing_multiplier(0.65)`` always resolves to exactly 1.0x (edge=0.15
-    exactly cancels the function's -0.15 offset) -- silently turning the
-    "Stage 4 ML gate" into an always-approve, always-full-size no-op even when a
-    genuinely trained model existed on disk at ``model_path``.
-
-    Guarded on ``self.model is None`` so every call after the first successful
-    (or attempted) load in this process is a cheap no-op -- called once per
-    ``OptionsPaperExecutor`` construction, but the underlying singleton is
-    loaded at most once per process regardless of how many executors get
-    constructed, mirroring this codebase's load-once/cache convention for
-    per-signal meta-labelers (``ml/meta_bootstrap.py``).
-
-    Never raises into the caller (CONSTRAINT #6): a missing trained-model file
-    is an honest, expected state on a fresh install, and
-    ``predict_probability()``'s existing fallback already handles that
-    correctly. The bug this fixes is the fallback firing even when a real
-    model file DOES exist and was simply never loaded -- not the fallback
-    itself, which stays correct behavior for a genuinely untrained install.
-    """
     if not getattr(settings, "OPTIONS_META_LABELER_ENABLED", True):
         return
     try:
         from ml.options_meta_labeler import global_options_meta_labeler
+        import yaml
+        
+        # Check deployability
+        is_deployable = False
+        try:
+            with open("ml/registry.yaml", "r") as f:
+                registry = yaml.safe_load(f)
+                if "options_meta_labeler" in registry.get("models", {}):
+                    is_deployable = registry["models"]["options_meta_labeler"].get("deployable", False)
+        except Exception:
+            pass
+
+        if not is_deployable:
+            logger.info("OptionsPaperExecutor: Stage 4 ML meta-labeler is missing or deployable=false in registry. Failing closed (multiplier 1.0, no hard-reject).")
+            global_options_meta_labeler.model = None  # Ensure it uses fallback
+            return
+
         if global_options_meta_labeler.model is None:
             loaded = global_options_meta_labeler.load_model()
             if not loaded:
-                logger.info(
-                    "OptionsPaperExecutor: no trained Stage 4 ML meta-labeler found at %s -- "
-                    "predict_probability() will use its honest fallback (0.65 / 1.0x) until "
-                    "one is trained.",
-                    global_options_meta_labeler.model_path,
-                )
+                logger.info("OptionsPaperExecutor: no trained Stage 4 ML meta-labeler found...")
     except Exception as exc:
         logger.warning("OptionsPaperExecutor: failed to warm up Stage 4 ML meta-labeler: %s", exc)
 
