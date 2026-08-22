@@ -245,6 +245,38 @@
             </div>
         </header>
 
+        {% if universe_coverage %}
+        <!-- UNIVERSE COVERAGE: printed near the TOP -- a strategy's whole
+             verdict depends on which subset of its declared universe was
+             actually fetched this run (see MIN_UNIVERSE_COVERAGE_PCT). -->
+        <section class="card" style="margin-bottom: 1.5rem;">
+            <div class="card-header">
+                Universe Coverage
+                <span class="badge {% if universe_coverage_ok %}badge-success{% else %}badge-danger{% endif %}">
+                    {% if universe_coverage_ok %}COVERAGE GATE: PASS{% else %}COVERAGE GATE: FAIL{% endif %}
+                </span>
+            </div>
+            <div class="card-footer">
+                {{ universe_coverage.fetched }} of {{ universe_coverage.requested }} declared tickers
+                fetched this run ({{ "%.1f"|format(universe_coverage.coverage_pct * 100) }}%). Required:
+                &gt;= {{ "%.0f"|format(min_universe_coverage_pct * 100) }}%.
+                {% if not universe_coverage_ok %}
+                This alone forces <strong>REJECTED (FAIL)</strong> above, regardless of the DSR/PBO/Sharpe/MaxDD
+                numbers below -- a verdict computed off a partial, run-dependent ticker subset is not trustworthy.
+                {% endif %}
+            </div>
+            {% if universe_coverage.missing %}
+            <div class="card-footer" style="margin-top: 0.5rem;">
+                Missing tickers ({{ universe_coverage.missing|length }}):
+                {{ universe_coverage.missing[:15]|join(", ") }}
+                {% if universe_coverage.missing|length > 15 %}
+                (+{{ universe_coverage.missing|length - 15 }} more)
+                {% endif %}
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         {% if is_options_selling %}
         <!-- TAIL-SCENARIO STRESS TEST: printed at the TOP for options-selling strategies. -->
         <section class="card" style="margin-bottom: 1.5rem;">

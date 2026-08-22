@@ -143,6 +143,7 @@ from validation.thresholds import (
     DSR_MIN,
     NET_SHARPE_MIN,
     MAX_DRAWDOWN_MAX,
+    MIN_UNIVERSE_COVERAGE_PCT,
 )
 
 logger = logging.getLogger(__name__)
@@ -4043,6 +4044,28 @@ def _validate_single_strategy(
                 "cannot validate this strategy."
             )
 
+        # Universe-fetch coverage for THIS run -- reuses `available`/`universe`
+        # (already computed above), no new fetch/network logic. A cross-
+        # sectional strategy's whole PBO/DSR/Sharpe/MaxDD verdict depends on
+        # its entire declared universe; below MIN_UNIVERSE_COVERAGE_PCT (e.g.
+        # concurrent FMP rate-limit throttling under multiple simultaneous
+        # validation runs sharing this machine silently dropped a chunk of
+        # tickers), ValidationReport.deployable fails closed on this alone —
+        # see validation.thresholds.MIN_UNIVERSE_COVERAGE_PCT's docstring and
+        # docs/known_issues/xsec_universe_coverage_concurrency_variance.md.
+        # For single-ticker adapters this is always 1/1 = 100% (a missing
+        # sole ticker already raised above), so this is a no-op for them.
+        universe_requested = len(universe)
+        universe_fetched = len(available)
+        universe_coverage = {
+            "requested": universe_requested,
+            "fetched": universe_fetched,
+            "coverage_pct": (
+                universe_fetched / universe_requested if universe_requested else 1.0
+            ),
+            "missing": [t for t in universe if t not in available],
+        }
+
         if len(universe) == 1:
             # SPY-style single-name adapter: invoked with a pd.Series.
             X, y, precomputed = adapter_fn(closes_df[universe[0]])
@@ -4115,6 +4138,7 @@ def _validate_single_strategy(
             y=y,
             strategy_name=name,
             t1=t1,
+            universe_coverage=universe_coverage,
         )
 
         summary = report.to_summary_dict()
@@ -4319,6 +4343,21 @@ def _fail_reason(s: dict) -> str:
     """
     reasons: List[str] = []
 
+    # Universe coverage first -- when this alone forces `deployable=False`,
+    # it can otherwise SHADOW every other gate: a strategy computed off a
+    # random subset of its declared universe can show a genuinely-passing
+    # PBO/DSR/Sharpe/MaxDD by chance, and burying the real cause behind those
+    # readouts would defeat the whole point of this gate. See
+    # validation.thresholds.MIN_UNIVERSE_COVERAGE_PCT.
+    cov = s.get("universe_coverage")
+    if cov and s.get("universe_coverage_ok") is False:
+        pct = cov.get("coverage_pct")
+        pct_str = f"{float(pct) * 100:.0f}%" if pct is not None else "?"
+        reasons.append(
+            f"universe coverage {pct_str}<{MIN_UNIVERSE_COVERAGE_PCT * 100:.0f}% "
+            f"({cov.get('fetched', '?')}/{cov.get('requested', '?')} tickers)"
+        )
+
     md = s.get("max_drawdown")
     if md is None:
         reasons.append("MaxDD n/a")
@@ -4351,7 +4390,7 @@ def _print_summary_table(results: Dict[str, dict]) -> None:
     """Print a compact ASCII pass/fail table to stdout."""
     hdr = (
         f"  {'Strategy':<32} {'Status':<10} {'Sharpe':>7} {'PBO':>7} "
-        f"{'DSR':>7} {'MaxDD':>8}  {'Reason'}"
+        f"{'DSR':>7} {'MaxDD':>8} {'Coverage':>9}  {'Reason'}"
     )
     print()
     print(hdr)
@@ -4380,12 +4419,21 @@ def _print_summary_table(results: Dict[str, dict]) -> None:
                 return "   —  "
             return f"{float(v) * 100:.1f}%"
 
+        def _fmt_coverage(cov: Any) -> str:
+            if not cov:
+                return "   —  "
+            fetched, requested = cov.get("fetched"), cov.get("requested")
+            if fetched is None or requested is None:
+                return "   —  "
+            return f"{fetched}/{requested}"
+
         print(
             f"  {name:<32} {status:<10} "
             f"{_fmt(s.get('sharpe')):>7} "
             f"{_fmt(s.get('pbo')):>7} "
             f"{_fmt(s.get('dsr')):>7} "
-            f"{_fmt_pct(s.get('max_drawdown')):>8}  "
+            f"{_fmt_pct(s.get('max_drawdown')):>8} "
+            f"{_fmt_coverage(s.get('universe_coverage')):>9}  "
             f"{reason}"
         )
 
@@ -4446,7 +4494,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--json", dest="as_json", action="store_true",
         help=(
             "Also print ONE machine-readable JSON line (the LAST line of stdout) "
-            "mapping strategy_id → {deployable, pbo, dsr, sharpe, max_drawdown"
+            "mapping strategy_id → {deployable, pbo, dsr, sharpe, max_drawdown, "
+            "universe_coverage_pct, universe_coverage_ok"
             "[, error]}. The human pass/fail table is still printed above it."
         ),
     )
@@ -4485,6 +4534,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "dsr": s.get("dsr"),
                 "sharpe": s.get("sharpe"),
                 "max_drawdown": s.get("max_drawdown"),
+                "universe_coverage_pct": (s.get("universe_coverage") or {}).get("coverage_pct"),
+                "universe_coverage_ok": s.get("universe_coverage_ok"),
                 **({"error": s["error"]} if "error" in s else {}),
             }
             for sid, s in results.items()

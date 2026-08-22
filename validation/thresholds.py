@@ -59,6 +59,27 @@ trials — distinct from any single strategy's own within-strategy DSR/PBO
 gates above, which do not account for testing ~17 modules independently."""
 
 # ---------------------------------------------------------------------------
+# Universe coverage gate (cross-sectional strategies)
+# ---------------------------------------------------------------------------
+MIN_UNIVERSE_COVERAGE_PCT: float = 0.90
+"""Fraction of a strategy's declared universe (``STRATEGY_REGISTRY[name][2]``)
+that must have actually been fetched this run for the run's deployability
+verdict to be trusted. A cross-sectional strategy's PBO/DSR/Sharpe/MaxDD
+depend on ITS ENTIRE UNIVERSE — dropping tickers that failed to download
+(never fabricated — CONSTRAINT #4, see ``scripts/refresh_validations.py``'s
+``_download_closes``) is correct, but a strategy whose universe was only
+partially fetched (e.g. concurrent FMP rate-limit throttling under multiple
+simultaneous validation runs sharing one machine) computes a confident-
+looking verdict off a random subset that can flip run-to-run with zero code
+changes. Below this threshold, ``ValidationReport.deployable``
+(validation/harness.py) fails closed regardless of how the other four gates
+read — see ``ValidationReport.universe_coverage_ok`` and
+``docs/known_issues/xsec_universe_coverage_concurrency_variance.md``.
+Applies uniformly to every adapter; single-ticker adapters are always
+1/1 = 100% coverage by construction, so this is a structural no-op for
+them."""
+
+# ---------------------------------------------------------------------------
 # Pairs Trading Thresholds
 # ---------------------------------------------------------------------------
 PAIRS_ENTRY_Z_SCORE: float = 2.0

@@ -38,6 +38,7 @@ from validation.thresholds import (
     NET_SHARPE_MIN,
     MAX_DRAWDOWN_MAX,
     FAMILY_WISE_ALPHA,
+    MIN_UNIVERSE_COVERAGE_PCT,
 )
 from validation.multiple_testing import (
     benjamini_hochberg,
@@ -200,6 +201,7 @@ class ValidationReport:
         equity_curve: Optional[List[Dict[str, Any]]] = None,
         benchmark_curve: Optional[List[Dict[str, Any]]] = None,
         macro_benchmark_curve: Optional[List[Dict[str, Any]]] = None,
+        universe_coverage: Optional[Dict[str, Any]] = None,
     ):
         self.name = name
         self.start_date = start_date
@@ -254,6 +256,42 @@ class ValidationReport:
         # strategy's underlying already IS SPY (redundant); surfaces downstream as
         # macro_benchmark: None. See run() / _build_macro_benchmark_curve().
         self.macro_benchmark_curve = macro_benchmark_curve or []
+        # Universe-fetch coverage for this run — {"requested": int, "fetched":
+        # int, "coverage_pct": float, "missing": [tickers]} — or None when the
+        # caller doesn't track a declared universe (e.g. this class's own
+        # built-in single-ticker SPY fallback in run() when no X/y is passed).
+        # None is treated as "not applicable" (matches is_options_selling=False
+        # skipping the stress gate below), NOT as coverage failure — see
+        # universe_coverage_ok. Populated by scripts/refresh_validations.py's
+        # _validate_single_strategy from data it already computes (available
+        # vs. universe) -- no new fetch/network logic. See
+        # validation.thresholds.MIN_UNIVERSE_COVERAGE_PCT's docstring and
+        # docs/known_issues/xsec_universe_coverage_concurrency_variance.md for
+        # the motivating bug (a cross-sectional strategy's whole verdict
+        # silently depending on which random ticker subset happened to
+        # download that run, under concurrent FMP rate-limit throttling).
+        self.universe_coverage = universe_coverage
+
+    @property
+    def universe_coverage_ok(self) -> bool:
+        """Whether this run's universe coverage is trustworthy enough to
+        certify a deployability verdict.
+
+        True when coverage wasn't tracked by the caller (``universe_coverage
+        is None``) OR the fraction of the declared universe actually fetched
+        this run is >= ``MIN_UNIVERSE_COVERAGE_PCT``. False when a strategy's
+        declared universe was only partially fetched below that bar — e.g.
+        FMP rate-limit throttling under concurrent load silently dropped 40%
+        of a cross-sectional strategy's ~500-name universe, producing a
+        confident-looking but coverage-dependent PBO/DSR/Sharpe/MaxDD verdict
+        that would flip on a re-run against a different random subset.
+        """
+        if self.universe_coverage is None:
+            return True
+        pct = self.universe_coverage.get("coverage_pct")
+        if pct is None:
+            return True
+        return bool(pct >= MIN_UNIVERSE_COVERAGE_PCT)
 
     @property
     def stress_gate_passed(self) -> bool:
@@ -277,6 +315,13 @@ class ValidationReport:
            < 50% AND account survives in EVERY dated shock window
            (validation/stress_scenarios.py). Fails closed if an
            options-selling strategy was never stress-tested.
+        6. Universe coverage: >= MIN_UNIVERSE_COVERAGE_PCT of the strategy's
+           declared universe must have actually been fetched this run (see
+           universe_coverage_ok). Fails closed if coverage was tracked and
+           came in below the bar -- a strategy's whole verdict can otherwise
+           silently depend on which random subset of tickers happened to
+           download that run (see validation.thresholds.MIN_UNIVERSE_COVERAGE_PCT).
+           Always True when coverage wasn't tracked by the caller.
 
         Thresholds are imported from :mod:`validation.thresholds` so the GUI
         and harness always share the same values.
@@ -285,7 +330,10 @@ class ValidationReport:
         dsr_pass = self.dsr > DSR_MIN
         sharpe_pass = (not np.isnan(self.sharpe)) and (self.sharpe > NET_SHARPE_MIN)
         max_dd_pass = (not np.isnan(self.max_dd)) and (self.max_dd < MAX_DRAWDOWN_MAX)
-        return bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass and self.stress_gate_passed)
+        return bool(
+            pbo_pass and dsr_pass and sharpe_pass and max_dd_pass
+            and self.stress_gate_passed and self.universe_coverage_ok
+        )
 
     @property
     def family_bh_significant(self) -> Optional[bool]:
@@ -367,6 +415,15 @@ class ValidationReport:
             "max_drawdown": float(self.max_dd) if not np.isnan(self.max_dd) else None,
             "is_options_selling": self.is_options_selling,
             "stress_gate_passed": self.stress_gate_passed,
+            # Universe-fetch coverage for this run (None when not tracked by
+            # the caller) and the derived pass/fail against
+            # MIN_UNIVERSE_COVERAGE_PCT -- see universe_coverage_ok's
+            # docstring. Below-threshold coverage already forces `deployable`
+            # False above; these two fields exist so a reader can see WHY,
+            # rather than a bare False with no distinguishing signal from a
+            # genuine PBO/DSR/Sharpe/MaxDD failure.
+            "universe_coverage": self.universe_coverage,
+            "universe_coverage_ok": self.universe_coverage_ok,
             "start_date": self.start_date,
             "end_date": self.end_date,
             "report_date": datetime.now(timezone.utc).date().isoformat(),
@@ -652,6 +709,7 @@ class StrategyValidationHarness:
         y: Optional[pd.Series] = None,
         strategy_name: str = "Strategy",
         t1: Optional[pd.Series] = None,
+        universe_coverage: Optional[Dict[str, Any]] = None,
     ) -> ValidationReport:
         """
         Runs the full validation suite. If X/y are not provided, downloads data.
@@ -666,6 +724,12 @@ class StrategyValidationHarness:
                 before this parameter existed. REQUIRED (raises inside
                 ``CombinatorialPurgedCV.split()`` otherwise) when ``X.index``
                 is a ``pd.MultiIndex`` — see that method's own docstring.
+            universe_coverage: Optional ``{"requested": int, "fetched": int,
+                "coverage_pct": float, "missing": [tickers]}`` describing how
+                much of the caller's declared universe was actually fetched
+                this run. ``None`` (the default) reproduces the pre-existing
+                behavior exactly — see ``ValidationReport.universe_coverage_ok``.
+                Forwarded verbatim into the constructed ``ValidationReport``.
         """
         logger.info(f"Starting validation harness for {strategy_name}...")
         
@@ -952,6 +1016,7 @@ class StrategyValidationHarness:
             equity_curve=equity_curve,
             benchmark_curve=benchmark_curve,
             macro_benchmark_curve=macro_benchmark_curve,
+            universe_coverage=universe_coverage,
         )
 
         # Print the stress summary at the TOP of every options-selling report so
@@ -1185,8 +1250,11 @@ class StrategyValidationHarness:
                 for r in (report.stress_test_results or {}).values()
             ],
             family_multiple_testing=report.family_multiple_testing,
+            universe_coverage=report.universe_coverage,
+            universe_coverage_ok=report.universe_coverage_ok,
+            min_universe_coverage_pct=MIN_UNIVERSE_COVERAGE_PCT,
         )
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_filename = f"{self.reports_dir}/validation_{report.name.lower()}_{timestamp}.html"
 
