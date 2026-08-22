@@ -317,3 +317,50 @@ def test_settle_expired_options(store):
     assert len(store.get_open_positions()) == 0
 
 
+def test_apply_fill_reject_zero_price(store):
+    """Fills with zero or negative price must be rejected."""
+    success = store.apply_fill("client_order_zero", "AAPL", "buy", 10.0, 0.0, 0.0)
+    assert success is False
+    orders = store.get_orders()
+    assert len(orders) == 1
+    assert orders[0].status == OrderStatus.REJECTED
+
+def test_apply_multi_leg_reject_zero_price(store):
+    """Multi-leg orders with any zero price leg must be rejected entirely."""
+    legs = [
+        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 500.0},
+        {"symbol": "AAPL 2026-09-18 $155.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 0.0},
+    ]
+    success = store.apply_multi_leg_fill(
+        client_order_id="multi_zero",
+        symbol="AAPL",
+        strategy_name="Bull Call Spread",
+        contracts=1,
+        legs=legs,
+        net_cash_impact=-500.0,
+        commission_and_fees=1.30,
+    )
+    assert success is False
+    orders = store.get_orders()
+    assert len(orders) == 1
+    assert orders[0].status == OrderStatus.REJECTED
+
+def test_apply_roll_fill_reject_zero_price(store):
+    """Roll orders with any zero price leg must be rejected entirely."""
+    close_legs = [
+        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 0.0},
+    ]
+    open_legs = [
+        {"symbol": "AAPL 2026-10-16 $150.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 600.0},
+    ]
+    success = store.apply_roll_fill(
+        client_order_id="roll_zero",
+        symbol="AAPL",
+        close_legs=close_legs,
+        open_legs=open_legs,
+        contracts=1,
+    )
+    assert success is False
+    orders = store.get_orders()
+    assert len(orders) == 1
+    assert orders[0].status == OrderStatus.REJECTED

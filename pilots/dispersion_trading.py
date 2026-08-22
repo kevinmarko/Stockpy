@@ -1027,9 +1027,43 @@ def execute_dispersion_trade(
     elif isinstance(basket, dict):
         try:
             idx_sym = basket.get("index_symbol", idx_sym)
-            basket = DispersionBasket(**basket)
+            constituents = basket.get("constituent_symbols", [])
+            if not constituents and idx_sym in INDEX_CONSTITUENTS_MAP:
+                constituents = INDEX_CONSTITUENTS_MAP[idx_sym]
+                
+            spot_map, _, _ = _source_real_dispersion_inputs(idx_sym, constituents, {})
+            
+            valid = True
+            all_legs = []
+            all_legs.extend(basket.get("index_leg_requests", []))
+            for legs in basket.get("constituent_leg_requests", {}).values():
+                all_legs.extend(legs)
+                
+            for leg in all_legs:
+                price = float(leg.get("fill_price", 0.0))
+                if price <= 0.0:
+                    valid = False
+                    break
+                    
+                sym = leg.get("symbol", "")
+                parts = sym.split()
+                if len(parts) >= 4 and "$" in parts[2]:
+                    underlying = parts[0]
+                    try:
+                        strike = float(parts[2].replace("$", ""))
+                        real_spot = float(spot_map.get(underlying, 0.0))
+                        if real_spot <= 0.0 or strike < 0.2 * real_spot or strike > 5.0 * real_spot:
+                            valid = False
+                            break
+                    except ValueError:
+                        pass
+                        
+            if valid:
+                basket = DispersionBasket(**basket)
+            else:
+                basket = None
         except Exception:
-            basket = build_dispersion_basket(index_symbol=idx_sym)
+            basket = None
 
     if basket is None:
         # build_dispersion_basket refused (no real spot/IV data for the index or a

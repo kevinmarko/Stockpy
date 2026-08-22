@@ -280,6 +280,16 @@ class PaperAccountStore:
         cost_basis_impact = qty * fill_price
         is_option_contract = (" " in symbol and "$" in symbol) or allow_short
         
+        try:
+            fill_price_val = float(fill_price)
+            if fill_price_val <= 0.0:
+                raise ValueError("Price must be positive")
+        except (ValueError, TypeError):
+            logger.warning(f"Rejecting single-leg order {client_order_id}: invalid fill_price {fill_price}")
+            with session_scope(self.Session) as session:
+                self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
+            return False
+
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
             if not acc:
@@ -401,6 +411,20 @@ class PaperAccountStore:
             if not acc:
                 return False
 
+            # Validate all legs have a positive fill_price before processing
+            for leg in legs:
+                try:
+                    price = float(leg.get("fill_price", 0.0))
+                    if price <= 0.0:
+                        raise ValueError("Price must be positive")
+                except (ValueError, TypeError):
+                    logger.warning(f"Rejecting multi-leg order {client_order_id}: missing or invalid fill_price in leg")
+                    self._insert_order(
+                        session, client_order_id, f"{strategy_name} {symbol}", "BUY" if net_cash_impact < 0 else "SELL",
+                        float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts)
+                    )
+                    return False
+
             # Check cash sufficiency
             if net_cash_impact < 0 and acc.cash_balance < abs(net_cash_impact):
                 logger.warning(
@@ -432,7 +456,7 @@ class PaperAccountStore:
                 leg_symbol = str(leg["symbol"]).upper().strip()
                 leg_side = str(leg.get("side", "buy")).lower().strip()
                 leg_qty = float(leg.get("qty", contracts))
-                leg_fill_price = float(leg.get("fill_price", 0.0))
+                leg_fill_price = float(leg["fill_price"])  # Already validated above
                 leg_cost = leg_qty * leg_fill_price
 
                 pos = session.query(PaperPosition).filter_by(symbol=leg_symbol).with_for_update().first()
@@ -548,6 +572,23 @@ class PaperAccountStore:
             if not acc:
                 return False
 
+            # Validate all legs have a positive price before processing
+            for leg in all_legs:
+                try:
+                    price_val = leg.get("fill_price")
+                    if price_val is None:
+                        price_val = leg.get("raw_price")
+                    price = float(price_val if price_val is not None else 0.0)
+                    if price <= 0.0:
+                        raise ValueError("Price must be positive")
+                except (ValueError, TypeError):
+                    logger.warning(f"Rejecting roll order {client_order_id}: missing or invalid fill_price/raw_price in leg")
+                    self._insert_order(
+                        session, client_order_id, f"ROLL {symbol}", "BUY" if net_cash_impact < 0 else "SELL",
+                        float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts)
+                    )
+                    return False
+
             # Check cash sufficiency
             if net_cash_impact < 0 and acc.cash_balance < abs(net_cash_impact):
                 logger.warning(
@@ -579,7 +620,10 @@ class PaperAccountStore:
                 leg_symbol = str(leg["symbol"]).upper().strip()
                 leg_side = str(leg.get("side", "buy")).lower().strip()
                 leg_qty = float(leg.get("qty", contracts))
-                leg_fill_price = float(leg.get("fill_price", 0.0) or leg.get("raw_price", 0.0))
+                price_val = leg.get("fill_price")
+                if price_val is None:
+                    price_val = leg.get("raw_price")
+                leg_fill_price = float(price_val)  # Already validated above
                 leg_cost = leg_qty * leg_fill_price
 
                 pos = session.query(PaperPosition).filter_by(symbol=leg_symbol).with_for_update().first()
