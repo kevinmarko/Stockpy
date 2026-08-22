@@ -2487,7 +2487,7 @@
           "default_arg",
           "module_level"
         ],
-        "site": "pilots/copula_stat_arb.py:1047",
+        "site": "pilots/copula_stat_arb.py:1060",
         "via": []
       },
       {
@@ -2497,7 +2497,7 @@
           "default_arg",
           "module_level"
         ],
-        "site": "pilots/copula_stat_arb.py:1132",
+        "site": "pilots/copula_stat_arb.py:1145",
         "via": []
       }
     ],

@@ -6236,6 +6236,10 @@ class TestHrpCvarOptimize:
         assert data["portfolio_beta"] >= 0.0
         assert "Tech" in data["sector_exposures"]
         assert data["diversification_ratio"] >= 1.0
+        # Honesty fix (audit finding): status/hrp_fallback must be surfaced on the
+        # happy path too, not just on a forced-fallback request.
+        assert data["status"] == "optimal"
+        assert data["hrp_fallback"] is False
 
     def test_max_asset_weight_constrains_endpoint_output(self):
         # Phase 35 remediation item 13: max_asset_weight was previously a UI-only
@@ -6279,6 +6283,42 @@ class TestHrpCvarOptimize:
         # The cap is genuinely enforced end-to-end through the real endpoint.
         for w in constrained_weights.values():
             assert w <= 0.4 + 1e-6
+
+    def test_infeasible_constraints_surface_fallback_status_honestly(self):
+        """
+        Math-audit finding: sizing.hrp_cvar_optimizer.optimize_turnover_regularized_hrp_cvar
+        already computes `status`/`hrp_fallback`, but the API handler previously dropped
+        both from its JSON response -- so a genuinely non-convergent SLSQP solve was
+        indistinguishable over the wire from a clean optimum. Force an infeasible
+        constraint combination (mirrors test_hrp_cvar_optimizer.py's own
+        test_graceful_degradation_infeasible: all symbols in one sector, cap far below
+        100%) through the REAL HTTP endpoint and confirm the response honestly reflects
+        status != "optimal", not just at the sizing-module layer.
+        """
+        series = {
+            "AAPL": self._synthetic_closes(20, start=150.0),
+            "MSFT": self._synthetic_closes(21, start=300.0),
+            "GOOGL": self._synthetic_closes(22, start=140.0),
+        }
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
+                resp = client.post(
+                    "/pilots/portfolio/optimize/hrp-cvar",
+                    json={
+                        "symbols": ["AAPL", "MSFT", "GOOGL"],
+                        "sector_map": {"AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech"},
+                        # Impossible: all three assets are Tech but the cap is 20% while
+                        # weights must sum to 100% -- no feasible point exists.
+                        "sector_caps": {"Tech": 0.20},
+                    },
+                )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "status" in data
+        assert data["status"] == "fallback"
+        assert isinstance(data["hrp_fallback"], bool)
+        # Weights must still sum to ~1.0 -- graceful degradation, not a broken response.
+        assert np.isclose(sum(a["weight"] for a in data["allocations"]), 1.0, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------

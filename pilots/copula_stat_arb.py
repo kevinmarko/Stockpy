@@ -751,10 +751,22 @@ def estimate_kalman_dynamic_hedge_ratio(
     init_beta = float(y[0] / x[0]) if abs(x[0]) > 1e-8 else 1.0
     init_alpha = 0.0
 
-    mean_x2 = max(1.0, float(np.mean(x[:20]) ** 2))
+    def _causal_mean_x2(t_idx: int) -> float:
+        # Causal (expanding, capped-at-20) P0/Q scale factor. Uses only x[0 .. min(t_idx, 19)]
+        # -- never an observation with index > t_idx. Previously this was a single fixed
+        # `np.mean(x[:20])` computed ONCE from the whole input array and applied identically
+        # to every timestep, including t < 19 -- strictly earlier than some of the data
+        # (x[t_idx+1:20]) baked into that constant, violating this module's own docstring
+        # claim of "100% lookahead-free online updating" (see module docstring above). For
+        # t_idx >= 19 this is bit-identical to that old fixed x[:20] scale, so today's common
+        # production case (input series longer than ~20 bars) is unaffected; for t_idx < 19 it
+        # uses only observations seen up to and including t_idx, closing the leak. Regression
+        # test: tests/test_copula_stat_arb.py::test_kalman_hedge_ratio_mean_x2_causal_no_lookahead.
+        window_end = min(t_idx + 1, 20)
+        return max(1.0, float(np.mean(x[:window_end]) ** 2))
+
     state = np.array([init_alpha, init_beta], dtype=float)
-    p = np.diag([initial_p * mean_x2, initial_p])
-    q = np.diag([delta * mean_x2, delta])
+    p = np.diag([initial_p * _causal_mean_x2(0), initial_p])
     r = float(max(1e-6, R))
 
     alpha_arr = np.zeros(n, dtype=float)
@@ -776,6 +788,7 @@ def estimate_kalman_dynamic_hedge_ratio(
             continue
 
         # 1. State Prediction: theta_{t|t-1} = theta_{t-1|t-1}, P_{t|t-1} = P + Q
+        q = np.diag([delta * _causal_mean_x2(t), delta])
         p_pred = p + q
 
         # 2. Measurement Vector H = [1.0, xt]

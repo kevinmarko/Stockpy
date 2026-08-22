@@ -564,6 +564,55 @@ def test_estimate_kalman_dynamic_hedge_ratio_structure():
         estimate_kalman_dynamic_hedge_ratio([1.0, 2.0], [1.0])
 
 
+def test_kalman_hedge_ratio_mean_x2_causal_no_lookahead():
+    """
+    Regression test for a real lookahead leak: estimate_kalman_dynamic_hedge_ratio's
+    `mean_x2` scale factor (used to calibrate the prior covariance P0 and process
+    noise Q applied at EVERY timestep) used to be computed ONCE from a fixed slice
+    `x[:20]` of the whole input array -- so a decision at t < 19 depended on
+    observations x[t+1 .. 19], which are strictly in the future relative to that
+    decision. This violates the module's own docstring claim of "100%
+    lookahead-free online updating" (module docstring).
+
+    Perturbation test: mutating x[19] (a future observation relative to any
+    decision at t < 19) must NOT change the Kalman state estimate, spread, or
+    z-score for any t < 19. Against the pre-fix code this assertion would have
+    failed, since x[19] fed `mean_x2` -- and therefore P0/Q -- for every t < 19.
+    """
+    np.random.seed(123)
+    n = 40
+    x_base = 100.0 + np.cumsum(np.random.normal(0, 1.0, n))
+    y_base = 1.5 * x_base + 5.0 + np.random.normal(0, 0.5, n)
+
+    res_base = estimate_kalman_dynamic_hedge_ratio(y_base, x_base)
+
+    x_perturbed = x_base.copy()
+    x_perturbed[19] += 500.0  # dramatic future perturbation, strictly beyond t < 19
+    res_perturbed = estimate_kalman_dynamic_hedge_ratio(y_base, x_perturbed)
+
+    cutoff = 19  # indices 0..18 must be strictly unaffected by x[19]
+    np.testing.assert_allclose(
+        res_base.alpha[:cutoff], res_perturbed.alpha[:cutoff], rtol=1e-10, atol=1e-10
+    )
+    np.testing.assert_allclose(
+        res_base.beta[:cutoff], res_perturbed.beta[:cutoff], rtol=1e-10, atol=1e-10
+    )
+    np.testing.assert_allclose(
+        res_base.spread[:cutoff], res_perturbed.spread[:cutoff], rtol=1e-10, atol=1e-10
+    )
+    np.testing.assert_allclose(
+        res_base.spread_std[:cutoff], res_perturbed.spread_std[:cutoff], rtol=1e-10, atol=1e-10
+    )
+    np.testing.assert_allclose(
+        res_base.z_score[:cutoff], res_perturbed.z_score[:cutoff], rtol=1e-10, atol=1e-10
+    )
+
+    # Sanity check: the perturbation is genuinely exercised -- outputs legitimately
+    # diverge from index 19 onward (the perturbed observation itself), so the test
+    # above isn't vacuously passing on an inert perturbation.
+    assert not np.isclose(res_base.beta[19], res_perturbed.beta[19], rtol=1e-6)
+
+
 def test_calculate_copula_mispricing_bounds_and_symmetry():
     """Verifies calculate_copula_mispricing returns conditional CDF in [0, 1]."""
     fit_clayton = CopulaFitResult(
