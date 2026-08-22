@@ -132,18 +132,36 @@ two modules can land independently.
 
 ### Composite weighting basis
 
-Per constituent, exactly **one** basis is used — never mixed:
+**2026-08 quant-integrity fix — majority coverage wins, not all-or-nothing.**
+The basis selection used to require EVERY contributing wrapper to report a
+usable `shares_held` before that basis could be used at all (else require
+EVERY wrapper to report a usable NAV `weight`, else drop the constituent
+entirely) — one wrapper with an unreported `shares_held` vetoed the whole
+shares-held basis for every OTHER wrapper that DID report one, forcing an
+unnecessary fallback to the weaker NAV-weight proxy (or an unnecessary drop
+of the constituent altogether). This was the same all-or-nothing bug class as
+the forecast-skill-weighting fix documented in
+`docs/known_issues/graduated_degrade_all_or_nothing_blends.md` and CLAUDE.md's
+"Graduated-degrade convention for N-way blends" bullet.
 
-1. one contributing wrapper → weight is trivially 1.0;
-2. every contributing wrapper reports a finite positive `shares_held` →
-   weight by `shares_held` (true relative ownership);
-3. else, every contributing wrapper reports a finite positive `weight` →
-   weight by NAV `weight`. This is a **disclosed proxy**: it mixes by how
-   important the name is to each basket rather than by how much of the name
-   each basket owns. It is only ever a relative mixing weight between wrappers
-   — it is never reported as, or converted into, an ownership quantity (that
-   is `compute_etf_ownership`'s job, which has no such fallback);
-4. else → no composite, so the constituent reads `NaN`.
+Per constituent, each basis is now filtered **independently** to its own
+usable (finite, positive) survivor entries, and whichever basis has MORE
+survivors wins — computed over those survivors only, with an unusable entry
+in the losing basis simply dropped rather than granted veto power over the
+whole constituent:
+
+1. one contributing wrapper → weight is trivially 1.0 (unchanged);
+2. 2+ contributing wrappers → filter `shares_held` to its finite-positive
+   survivors and `weight` to its own finite-positive survivors independently;
+   whichever list is LONGER is used, weighted by its own survivor values only.
+   A **tie breaks to `shares_held`** (true relative ownership) over NAV
+   `weight` (a **disclosed proxy**: it mixes by how important the name is to
+   each basket rather than by how much of the name each basket owns — only
+   ever a relative mixing weight between wrappers, never reported as or
+   converted into an ownership quantity, that is `compute_etf_ownership`'s
+   job, which has no such fallback);
+3. else (NEITHER basis has any usable entry at all) → no composite, so the
+   constituent reads `NaN`.
 
 ### `ETF_Ownership_Pct` and shares outstanding
 

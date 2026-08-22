@@ -519,17 +519,19 @@ class TestPortfolioForecastSkill:
         assert out["reason"] is None
         assert out["skill_weights"] == {"arima": pytest.approx(1.0)}
 
-    def test_cold_start_within_window_uses_equal_weights(self, tmp_path):
-        """Fewer than min_obs completed rows for one model -> equal weighting
-        across all models seen in the window (never a fabricated skill edge)."""
+    def test_graduated_degrade_excludes_immature_model(self, tmp_path):
+        """One mature model + one immature model (below min_obs) -> the
+        graduated-degrade convention (CLAUDE.md) excludes the immature model
+        and gives the mature model its full weight, instead of collapsing
+        the whole blend to a uniform 50/50 split across both."""
         db_path = tmp_path / "forecasts.db"
         now = datetime.now(timezone.utc)
         rows = []
-        # arima: plenty of history.
+        # arima: plenty of history -> mature.
         for j in range(20):
             ts = _iso(now - timedelta(days=5 + j))
             rows.append(("AAPL", "arima", 30, ts, 100.0, 101.0, 1.0, ts))
-        # monte_carlo: too few rows to be confident.
+        # monte_carlo: too few rows to be confident -> immature, excluded.
         for j in range(3):
             ts = _iso(now - timedelta(days=5 + j))
             rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 102.0, 4.0, ts))
@@ -541,7 +543,8 @@ class TestPortfolioForecastSkill:
         ):
             out = obs.portfolio_forecast_skill(horizon_days=30, window_days=90, min_obs=10)
 
-        assert out["skill_weights"] == {"arima": pytest.approx(0.5), "monte_carlo": pytest.approx(0.5)}
+        assert out["skill_weights"] == {"arima": pytest.approx(1.0)}
+        assert out["n_by_model"] == {"arima": 20, "monte_carlo": 3}
 
     def test_pending_rows_counted_separately_from_completed(self, tmp_path):
         db_path = tmp_path / "forecasts.db"
@@ -632,9 +635,18 @@ class TestForecastSkillBySymbol:
         assert by_symbol["MSFT"]["skill_weights"]["arima"] > by_symbol["MSFT"]["skill_weights"]["monte_carlo"]
         assert sum(by_symbol["MSFT"]["skill_weights"].values()) == pytest.approx(1.0)
 
-        assert by_symbol["NVDA"] == {"symbol": "NVDA", "pending": 0, "completed": 0, "skill_weights": {}}
+        assert by_symbol["NVDA"] == {
+            "symbol": "NVDA",
+            "pending": 0,
+            "completed": 0,
+            "skill_weights": {},
+            "n_by_model": {},
+        }
 
-    def test_cold_start_within_window_uses_equal_weights_per_symbol(self, tmp_path):
+    def test_graduated_degrade_excludes_immature_model_per_symbol(self, tmp_path):
+        """Same graduated-degrade convention as
+        TestPortfolioForecastSkill.test_graduated_degrade_excludes_immature_model,
+        one dimension further (per-symbol)."""
         db_path = tmp_path / "forecasts.db"
         now = datetime.now(timezone.utc)
         rows = []
@@ -658,7 +670,8 @@ class TestForecastSkillBySymbol:
             )
 
         row = out["rows"][0]
-        assert row["skill_weights"] == {"arima": pytest.approx(0.5), "monte_carlo": pytest.approx(0.5)}
+        assert row["skill_weights"] == {"arima": pytest.approx(1.0)}
+        assert row["n_by_model"] == {"arima": 20, "monte_carlo": 3}
 
     def test_pending_counted_separately_and_per_symbol(self, tmp_path):
         db_path = tmp_path / "forecasts.db"

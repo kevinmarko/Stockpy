@@ -42,7 +42,7 @@ import math
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -70,6 +70,51 @@ ALL_MODEL_NAMES = (
 # Minimum positive RMSE to prevent division-by-zero when a model is extremely
 # accurate over a stretch (a $0.01 RMSE cap avoids assigning infinite weight).
 _MIN_RMSE = 0.01
+
+
+def compute_skill_weights_from_stats(
+    model_stats: Dict[str, Tuple[int, float]],
+    min_obs: int,
+) -> Dict[str, float]:
+    """Pure function: normalized inverse-RMSE weights from per-model (n, mse).
+
+    Single source of truth for the cold-start / inverse-RMSE / graduated-
+    degrade formula, shared by ForecastTracker.get_skill_weights and
+    pilots/observability.py's two bulk-SQL siblings (_portfolio_forecast_stats,
+    _forecast_stats_by_symbol) -- eliminating the "three copies must stay in
+    sync" risk that let this bug exist in triplicate undetected.
+
+    1. If NO model has n >= min_obs (nobody is mature yet): equal weights
+       across EVERY model in model_stats -- the genuine full-cold-start case,
+       UNCHANGED from prior behavior.
+    2. If ANY model is mature: inverse-RMSE weights computed over the MATURE
+       SUBSET ONLY, normalized to sum to 1.0. Immature models are ABSENT
+       from the returned dict (not weight 0.0) -- one cold model no longer
+       drags N-1 warm models back to uniform.
+
+    Returns {} when model_stats is empty. Never raises -- callers own their
+    own try/except (this function is pure math over already-fetched stats).
+    """
+    if not model_stats:
+        return {}
+
+    mature = {name: stats for name, stats in model_stats.items() if stats[0] >= min_obs}
+
+    if not mature:
+        n_models = len(model_stats)
+        return {name: 1.0 / n_models for name in model_stats}
+
+    inv_rmse: Dict[str, float] = {}
+    for name, (_, mse) in mature.items():
+        rmse = math.sqrt(mse) if mse >= 0 else 0.0
+        inv_rmse[name] = 1.0 / max(rmse, _MIN_RMSE)
+
+    total = sum(inv_rmse.values())
+    if total <= 0:
+        n_mature = len(inv_rmse)
+        return {name: 1.0 / n_mature for name in inv_rmse}
+
+    return {name: w / total for name, w in inv_rmse.items()}
 
 
 class ForecastTracker:
@@ -352,15 +397,19 @@ class ForecastTracker:
     ) -> Dict[str, float]:
         """Return normalized inverse-RMSE weights for ensemble blending.
 
-        Algorithm
-        ---------
+        Algorithm (graduated degrade -- see ``compute_skill_weights_from_stats``)
+        ---------------------------------------------------------------------
         1. Query completed (``actual_price IS NOT NULL``) rows in the rolling
            ``window_days`` window.
         2. Compute per-model ``n`` (count) and ``mse`` (mean squared error).
-        3. **Cold-start**: if any model has ``n < min_obs``, return equal weights
-           for all models seen in the window (symmetric treatment).
-        4. **Warm path**: ``weight ∝ 1 / max(RMSE, _MIN_RMSE)`` — inverse-RMSE
-           weighting normalized to sum to 1.0.
+        3. **Full cold-start**: if NO model has ``n >= min_obs``, return equal
+           weights for all models seen in the window (symmetric treatment,
+           unchanged from prior behavior).
+        4. **Graduated degrade**: if ANY model is mature (``n >= min_obs``),
+           compute inverse-RMSE weights over the MATURE SUBSET ONLY, normalized
+           to sum to 1.0 -- an immature model is simply absent from the
+           returned dict rather than dragging every mature model back to
+           uniform weighting.
 
         Returns an empty dict ``{}`` when no completed rows exist in the window.
         Callers interpret ``{}`` as "use equal weights" or "fall back to hardcoded
@@ -409,24 +458,7 @@ class ForecastTracker:
                 for r in rows
             }
 
-            # Cold-start: equal weights when any model has fewer than min_obs samples
-            if any(n < min_obs for (n, _) in model_stats.values()):
-                n_models = len(model_stats)
-                return {name: 1.0 / n_models for name in model_stats}
-
-            # Warm path: inverse-RMSE weighting
-            inv_rmse: Dict[str, float] = {}
-            for name, (_, mse) in model_stats.items():
-                rmse = math.sqrt(mse) if mse >= 0 else 0.0
-                inv_rmse[name] = 1.0 / max(rmse, _MIN_RMSE)
-
-            total = sum(inv_rmse.values())
-            if total <= 0:
-                # Degenerate case: all RMSEs clamped to _MIN_RMSE → equal weights
-                n_models = len(inv_rmse)
-                return {name: 1.0 / n_models for name in inv_rmse}
-
-            return {name: w / total for name, w in inv_rmse.items()}
+            return compute_skill_weights_from_stats(model_stats, min_obs)
 
         except Exception as exc:
             logger.warning(

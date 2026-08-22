@@ -243,20 +243,25 @@ def build_etf_return_composite(
             is what makes a market-proxy-only name's residual identically zero,
             and therefore its R² ``NaN`` rather than fabricated.
 
-    Weighting basis (per constituent, one basis only -- never mixed):
+    Weighting basis (per constituent, graduated-degrade convention -- see
+    CLAUDE.md's "Graduated-degrade convention for N-way blends"; majority
+    coverage wins rather than all-or-nothing):
 
     * exactly one contributing wrapper -> weight is trivially 1.0;
-    * every contributing wrapper reports a finite positive ``shares_held``
-      -> weight by ``shares_held`` (true relative ownership);
-    * else, every contributing wrapper reports a finite positive ``weight``
-      -> weight by NAV ``weight``. This is a **disclosed proxy**: it mixes by
-      how important the name is to each basket rather than by how much of the
-      name each basket owns. It is only ever a relative mixing weight between
-      wrappers -- it is never reported as, or converted into, an ownership
-      quantity (that is ``compute_etf_ownership``'s job, which has no such
-      fallback);
-    * else -> no composite is produced for that constituent (it is absent from
-      the returned dict, so the caller reads ``NaN``).
+    * 2+ contributing wrappers -> each basis (``shares_held``, NAV ``weight``)
+      is filtered independently to its own usable (finite, positive) survivor
+      entries; whichever basis has MORE usable survivors is used, computed
+      over those survivors only (an unusable entry in the losing basis is
+      simply dropped, not allowed to veto the whole constituent). A tie is
+      broken in favor of ``shares_held`` (true relative ownership) over NAV
+      ``weight`` (a **disclosed proxy**: it mixes by how important the name is
+      to each basket rather than by how much of the name each basket owns --
+      only ever a relative mixing weight between wrappers, never reported as
+      or converted into an ownership quantity, that is ``compute_etf_ownership``'s
+      job, which has no such fallback);
+    * else (neither basis has ANY usable entry) -> no composite is produced
+      for that constituent (it is absent from the returned dict, so the
+      caller reads ``NaN``).
 
     Returns:
         ``{symbol: pd.Series}`` of composite daily returns indexed by date.
@@ -306,21 +311,24 @@ def build_etf_return_composite(
                 composites[symbol] = etf_returns[entries[0][0]].copy()
                 continue
 
-            shares = [s for _e, s, _w in entries]
-            navw = [w for _e, _s, w in entries]
-            if all(_finite(s) and s > 0.0 for s in shares):
-                weights = shares
-            elif all(_finite(w) and w > 0.0 for w in navw):
-                weights = navw
+            shares_survivors = [(e, s) for e, s, _w in entries if _finite(s) and s > 0.0]
+            navw_survivors = [(e, w) for e, _s, w in entries if _finite(w) and w > 0.0]
+
+            if shares_survivors and len(shares_survivors) >= len(navw_survivors):
+                survivor_symbols = [e for e, _ in shares_survivors]
+                weights = [v for _, v in shares_survivors]
+            elif navw_survivors:
+                survivor_symbols = [e for e, _ in navw_survivors]
+                weights = [v for _, v in navw_survivors]
             else:
-                continue
+                continue  # no entry has a usable value in either basis
 
             total = float(sum(weights))
             if not _finite(total) or total <= 0.0:
                 continue
 
             frame = pd.concat(
-                [etf_returns[e].rename(e) for e, _s, _w in entries],
+                [etf_returns[e].rename(e) for e in survivor_symbols],
                 axis=1,
                 join="inner",
             ).sort_index()

@@ -34,6 +34,7 @@ from forecasting.forecast_tracker import (
     MODEL_CNN_LSTM,
     ALL_MODEL_NAMES,
     _MIN_RMSE,
+    compute_skill_weights_from_stats,
 )
 
 
@@ -268,6 +269,57 @@ class TestGetSkillWeights:
             conn.commit()
         weights = tracker.get_skill_weights("AAPL", 30, window_days=60, min_obs=1)
         assert weights == {}  # row is outside the window
+
+
+# ---------------------------------------------------------------------------
+# compute_skill_weights_from_stats -- the shared pure function (graduated-
+# degrade convention, CLAUDE.md) backing get_skill_weights above AND
+# pilots/observability.py's two bulk-SQL siblings.
+# ---------------------------------------------------------------------------
+
+class TestComputeSkillWeightsFromStats:
+    def test_empty_stats_returns_empty(self):
+        assert compute_skill_weights_from_stats({}, min_obs=30) == {}
+
+    def test_full_cold_start_no_model_mature_equal_weights(self):
+        """Nobody has cleared min_obs -> equal weights across every model
+        present, unchanged from prior behavior."""
+        stats = {MODEL_ARIMA: (5, 1.0), MODEL_MONTE_CARLO: (3, 4.0)}
+        weights = compute_skill_weights_from_stats(stats, min_obs=30)
+        assert weights == {MODEL_ARIMA: pytest.approx(0.5), MODEL_MONTE_CARLO: pytest.approx(0.5)}
+
+    def test_graduated_degrade_excludes_immature_model(self):
+        """One model mature, one not -> the immature model is ABSENT from
+        the result (not weight 0.0), and the mature model gets full weight
+        -- the bug fix this function exists to centralize."""
+        stats = {MODEL_ARIMA: (30, 1.0), MODEL_MONTE_CARLO: (3, 4.0)}
+        weights = compute_skill_weights_from_stats(stats, min_obs=10)
+        assert weights == {MODEL_ARIMA: pytest.approx(1.0)}
+        assert MODEL_MONTE_CARLO not in weights
+
+    def test_multiple_mature_models_inverse_rmse_weighted(self):
+        """Two mature models, one immature -> the immature model is
+        excluded and the two mature models split inverse-RMSE weight
+        between themselves (not diluted by the immature model)."""
+        stats = {
+            MODEL_ARIMA: (30, 1.0),          # RMSE = 1.0
+            MODEL_HOLT_WINTERS: (40, 4.0),   # RMSE = 2.0
+            MODEL_MONTE_CARLO: (2, 100.0),   # immature -> excluded
+        }
+        weights = compute_skill_weights_from_stats(stats, min_obs=10)
+        assert MODEL_MONTE_CARLO not in weights
+        assert set(weights) == {MODEL_ARIMA, MODEL_HOLT_WINTERS}
+        # arima has the lower RMSE -> should get the larger weight.
+        assert weights[MODEL_ARIMA] > weights[MODEL_HOLT_WINTERS]
+        assert sum(weights.values()) == pytest.approx(1.0)
+
+    def test_min_rmse_guard_applied_over_mature_subset(self):
+        """A perfect (RMSE=0) mature model is clamped to _MIN_RMSE rather
+        than assigned infinite weight."""
+        stats = {MODEL_ARIMA: (30, 0.0), MODEL_HOLT_WINTERS: (30, 25.0)}
+        weights = compute_skill_weights_from_stats(stats, min_obs=10)
+        assert all(0.0 < w <= 1.0 for w in weights.values())
+        assert sum(weights.values()) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
