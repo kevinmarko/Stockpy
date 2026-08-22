@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 318,
+    "live_safe": 319,
     "no_op": 3,
     "restart_required": 104,
-    "total": 425
+    "total": 426
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 428,
+  "files_scanned": 430,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -363,6 +363,7 @@
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
     "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+    "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
     "PAPER_TRADING_START_DATE",
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
@@ -469,13 +470,13 @@
   "read_forms": {
     "attr": 843,
     "factory_param": 4,
-    "getattr_const": 367,
+    "getattr_const": 368,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 248,
     "factory_param": 4,
-    "getattr_const": 205,
+    "getattr_const": 206,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -931,7 +932,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:70",
+        "site": "data/paper_account_store.py:101",
         "via": []
       },
       {
@@ -1095,7 +1096,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:74",
+        "site": "data/paper_account_store.py:105",
         "via": []
       },
       {
@@ -1104,7 +1105,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:76",
+        "site": "data/paper_account_store.py:107",
         "via": []
       },
       {
@@ -1331,7 +1332,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:74",
+        "site": "data/paper_account_store.py:105",
         "via": []
       },
       {
@@ -1340,7 +1341,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:76",
+        "site": "data/paper_account_store.py:107",
         "via": []
       },
       {
@@ -1672,9 +1673,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:93",
+        "site": "data/paper_account_store.py:157",
         "via": [
-          81
+          112
         ]
       }
     ],
@@ -2310,7 +2311,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:74",
+        "site": "data/paper_account_store.py:105",
         "via": []
       },
       {

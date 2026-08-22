@@ -81,6 +81,7 @@ def execute_paper_order(
             qty=qty,
             fill_price=fill_price,
             commission_and_fees=commission,
+            strategy_id="Manual Trade",
         )
 
         if not success:
@@ -337,6 +338,7 @@ def execute_paper_order(
                 commission_and_fees=commission,
                 allow_short=True,
                 collateral_required=collateral_required,
+                strategy_id="Manual Trade",
             )
 
             if not success:

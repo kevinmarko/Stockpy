@@ -410,4 +410,5 @@ def test_settle_post_earnings_trades(store, executor):
 
     # Verify orders recorded in store
     orders = store.get_full_orders()
-    assert any(o["symbol"] == "CLOSE EARNINGS CRUSH NVDA" for o in orders)
+    nvda_ec_orders = [o for o in orders if o["symbol"] == "NVDA" and o.get("strategy_id") == "Earnings Crush" and o.get("order_kind") == "parent"]
+    assert len(nvda_ec_orders) == 2, f"Expected 2 parent orders for NVDA EC, found {len(nvda_ec_orders)}"

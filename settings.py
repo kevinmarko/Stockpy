@@ -243,6 +243,10 @@ class Settings(BaseSettings):
         default=False,
         description="Automatically execute valid options strategy directives into the paper broker every cycle.",
     )
+    PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED: bool = Field(
+        default=True,
+        description="Enable syncing paper closed trades into the real transactions_store trades table.",
+    )
     MAX_OPTION_NOTIONAL_PER_TRADE: float = Field(
         default=2500.0,
         description="Max risk notional collateral per automated options paper trade.",

@@ -1292,6 +1292,7 @@ def execute_0dte_trade(
         net_cash_impact=net_cash_impact,
         commission_and_fees=commission,
         collateral_required=collateral_required,
+        strategy_id=strategy_name,
     )
 
     if not success:
@@ -1389,6 +1390,7 @@ def execute_0dte_exits(
             legs=[leg],
             net_cash_impact=net_cash_impact,
             commission_and_fees=commission,
+            strategy_id="0DTE Momentum Breakout",
         )
 
         if success:
