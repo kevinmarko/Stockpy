@@ -5165,6 +5165,16 @@ export interface HrpCvarOptimizeResponse {
   portfolio_beta: number;
   sector_exposures: Record<string, number>;
   diversification_ratio: number;
+  /** Whether the SLSQP solve actually converged ("optimal") or fell back to the
+   * clipped/normalized initial HRP guess ("fallback", e.g. an infeasible sector-cap
+   * or beta-range combination). See sizing/hrp_cvar_optimizer.py's
+   * optimize_turnover_regularized_hrp_cvar -- this was previously computed but never
+   * returned by the API, making a non-convergent solve indistinguishable from a
+   * clean optimum (2026-08 math-audit finding). */
+  status: "optimal" | "fallback";
+  /** Whether HRP quasi-diagonalization itself (the clustering step, independent of
+   * the SLSQP solve above) fell back to equal-weight. */
+  hrp_fallback?: boolean;
   as_of?: string;
 }
 

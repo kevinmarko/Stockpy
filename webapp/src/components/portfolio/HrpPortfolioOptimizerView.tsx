@@ -242,6 +242,36 @@ export function HrpPortfolioOptimizerView({
         </div>
       )}
 
+      {/* Non-convergent / fallback result: don't let the KPI cards below silently
+          present a degraded result as a clean optimum (2026-08 math-audit finding --
+          the API previously computed but never surfaced this). */}
+      {data && (data.status !== "optimal" || data.hrp_fallback) && (
+        <div
+          role="alert"
+          data-testid="hrp-fallback-banner"
+          style={{
+            background: "rgba(245, 158, 11, 0.12)",
+            border: `1px solid rgba(245, 158, 11, 0.35)`,
+            borderRadius: 6,
+            padding: "10px 14px",
+            color: theme.caution,
+            fontSize: 13,
+          }}
+        >
+          <strong>Non-Optimal Result:</strong>{" "}
+          {data.status !== "optimal" && (
+            <>The SLSQP solver did not converge (likely an infeasible combination of sector
+            caps / beta range / max weight) — weights shown are the clipped initial HRP
+            guess, not a genuine optimum. </>
+          )}
+          {data.hrp_fallback && (
+            <>HRP hierarchical clustering itself fell back to equal-weight before
+            optimization even began. </>
+          )}
+          Relax the constraints and re-run before acting on this allocation.
+        </div>
+      )}
+
       {/* Control Console */}
       <div
         style={{
