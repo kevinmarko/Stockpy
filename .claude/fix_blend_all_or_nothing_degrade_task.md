@@ -48,9 +48,14 @@ Branch: `fix-blend-all-or-nothing-degrade`
 
 ## Verification
 - [x] `pytest tests/test_forecast_tracker.py tests/test_pilots_observability.py tests/test_etf_transmission.py tests/test_signal_registry.py -v`
-      → 193 passed
-- [ ] `pytest -m "not network and not slow" -q` (broader offline gate) —
-      running in background, results to be recorded in walkthrough
+      → 193 passed (re-confirmed post-rebase)
+- [x] `pytest -m "not network and not slow" -q` (broader offline gate) →
+      11,870 passed, 13 skipped, 92 deselected, 2 failed — both failures
+      confirmed pre-existing/unrelated (see walkthrough)
+- [x] `python -m ruff check . --select=F821,F822,F823,E9` on all changed
+      files → clean
+- [x] Rebased onto latest `origin/main` (picked up unrelated PR #852);
+      confirmed final diff covers exactly the intended 18 files
 
 ## PR mechanics
 - [x] Copy plan/task/walkthrough into `.claude/`
