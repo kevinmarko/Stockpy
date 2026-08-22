@@ -189,3 +189,43 @@ was removed in 2026-08 and the FMP fallback needs an unconfigured API key in thi
 environment). See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry for the full
 before/after table across all 7 affected strategies and the complete scope statement.
 
+### 2026-08-22 addendum: universe-coverage fail-closed gate — this strategy's own prior "after" numbers were unverified-coverage
+
+The 2026-08-21 "after" row above (Sharpe 0.995, PBO 0.492, DSR 1.000, MaxDD 25.0%,
+`deployable=True`) was recorded with **no measurement of how much of the 504-name
+declared universe was actually fetched that run**. A follow-up audit found this
+strategy's `deployable` verdict swinging wildly (PBO 0.11→0.69, Sharpe 0.68→1.01) across
+dozens of runs recorded in the durable `validation_runs` DB table with no code changes in
+between — empirically root-caused to *other* concurrent validation runs on this shared
+machine hitting FMP's rate-limit cooldown at different points, each ending up with a
+differently-incomplete universe (see `docs/known_issues/xsec_universe_coverage_concurrency_variance.md`
+for the full investigation, including the 3x bit-identical reruns that proved the
+strategy logic itself is deterministic). `validation/harness.py` now tracks
+`universe_coverage`/`universe_coverage_ok` and forces `deployable=False` below 90%
+coverage regardless of the other four gates — see
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-22 entry for the fix and the
+fail-closed-by-design decision.
+
+**Coverage-verified re-run** (`--strategies cross_sectional_momentum,sector_quality_rank
+--start 2005-01-01 --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json`, this
+worktree's fixed code):
+
+| Metric | 2026-08-21 (unverified coverage) | 2026-08-22 (coverage-verified) | Gate |
+|---|---|---|---|
+| Sharpe | 0.995 | 1.005 | > 0.50 ✅ |
+| PBO | 0.492 | **0.592** | < 0.50 ❌ **FAIL** |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 25.0% | 18.8% | < 30% ✅ |
+| Universe coverage | not tracked | **504/504 (100%)** | >= 90% ✅ |
+| `deployable` | True | **False** | |
+
+**A real, measured reversal, not noise.** The 2026-08-21 entry already flagged PBO=0.492
+as "close to the gate... worth watching on a future re-run" — that watch condition
+resolved to a genuine failure: this coverage-verified re-run's PBO is 0.592, over the
+`< 0.50` threshold. Sharpe/DSR/MaxDD are all similar to the prior run; PBO alone moved
+enough to flip `deployable` to `False`. No root cause is asserted for the exact PBO delta
+beyond the observation itself. **This strategy's current, correct status is
+`deployable=False`** — the 2026-08-21 "after" row above should be read as unverified-
+coverage (real, not fabricated, but with no coverage measurement backing it), superseded
+by this addendum. Full write-up: `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-22 entry.
+

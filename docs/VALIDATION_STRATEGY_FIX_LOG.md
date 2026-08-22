@@ -2224,3 +2224,140 @@ sibling endpoints' existing convention rather than left as a live, if dormant, g
 `tests/test_data_api.py::test_bars_lookback_days_is_bounded`.
 
 Introducing PR: [#851](https://github.com/kevinmarko/Stockpy/pull/851).
+
+## 2026-08-22: Universe-coverage fail-closed gate — swinging `cross_sectional_momentum`/`sector_quality_rank` verdicts root-caused to concurrent FMP throttling, not code changes
+
+**What was reported**: an audit of `scripts/refresh_validations.py`'s full 29-strategy
+validation run found that `cross_sectional_momentum` and `sector_quality_rank`'s
+`deployable` verdicts had swung wildly across dozens of real runs recorded in the
+platform's durable `validation_runs` DB table (`validation/validation_history_store.py`)
+over roughly 36 hours — e.g. `cross_sectional_momentum`: PBO ranging 0.11→0.69, Sharpe
+0.68→1.01, `deployable` flipping True/False repeatedly, with **no code changes in
+between**.
+
+**Root cause, empirically confirmed, not theorized**: `cross_sectional_momentum` was run
+three times — once inside a `--workers 6` full-registry run under heavy concurrent FMP
+load (that run's own log showed `FMP cooldown active for another 299s/300s after 12/15
+consecutive failed requests` and dozens of `Shares-outstanding fetch failed ... FMP
+returned HTTP 429` lines), then twice more in complete isolation — and got
+**bit-identical output** all three times: `sharpe=0.9570882384457532,
+pbo=0.6888888888888889, dsr=0.999988566583595, max_drawdown=0.2498381690107834`. The
+strategy logic is fully deterministic; the swings come from *other* concurrent runs
+(other worktrees/sessions sharing this machine's one FMP rate-limit budget) hitting
+FMP's cooldown circuit breaker at different points, each ending up with a
+differently-incomplete universe. `_download_closes`/`_download_ohlcv` correctly and
+intentionally drop a ticker that failed to fetch that run rather than fabricate data
+(CONSTRAINT #4) — but the consequence, before this fix, was that a cross-sectional
+strategy's whole ranking, and hence its whole Sharpe/PBO/DSR/`deployable` verdict,
+silently depended on exactly which subset of the ~500-ticker universe happened to
+succeed that particular run, with zero indication of this anywhere in the report. Full
+write-up: `docs/known_issues/xsec_universe_coverage_concurrency_variance.md`.
+
+### What was fixed
+
+Universe coverage is now a first-class, visible, and (below a threshold) **gating** part
+of every validation report — the strategy math itself was already correct and is
+unchanged:
+
+- `validation/thresholds.py`: new `MIN_UNIVERSE_COVERAGE_PCT = 0.90`.
+- `validation/harness.py`: `ValidationReport` gained `universe_coverage` (optional
+  `{"requested", "fetched", "coverage_pct", "missing"}`) and a derived
+  `universe_coverage_ok` property, ANDed into `deployable` alongside the existing
+  PBO/DSR/Sharpe/MaxDD/stress gates. `to_summary_dict()` surfaces both fields;
+  `_render_html_report` threads them into a new "Universe Coverage" card in
+  `reports/validation_report_template.html.j2`.
+- `scripts/refresh_validations.py`: `_validate_single_strategy` computes the coverage
+  dict from data it already derives (`available` vs. `universe`, no new fetch logic) and
+  passes it to `harness.run(universe_coverage=...)`. `_fail_reason` reports a
+  coverage-shortfall reason FIRST (it can otherwise shadow every other gate's readout).
+  `_print_summary_table` gained a `Coverage` column. The `--json` CLI line gained
+  `universe_coverage_pct`/`universe_coverage_ok` per strategy.
+- `ValidationHistoryStore.record_run()` persists both new fields automatically via its
+  existing full-summary JSON blob — no DB migration needed.
+
+**Decision — fail-closed, unconditional, 90% threshold, no settings flag.** Per this
+repo's CONSTRAINT #6 convention (the options-selling stress gate fails closed when never
+stress-tested; the VRP regime gate fails closed on NaN), a run whose declared universe
+was only partially fetched now forces `deployable=False`, regardless of how good the
+other four numbers look. This gate is deliberately unconditional — unlike
+`settings.VALIDATION_HARNESS_OOS_GATE_ENABLED` (which changed the computation
+methodology for every run and needed an opt-in flag to avoid silently invalidating the
+whole registry's recorded numbers before re-verification), this gate only changes the
+verdict on a new, narrow failure mode; a fully-covered run is bit-identical, so there is
+no registry-wide re-verification risk to gate behind a flag.
+
+### All 7 tiered-universe strategies' PRIOR recorded numbers: unverified-coverage
+
+Every number in the 2026-08-21 "Tiered universe widening" entry above, for all 7
+strategies sharing `_XSEC_UNIVERSE_WIDE`/`_XSEC_UNIVERSE_CAPPED`
+(`cross_sectional_momentum`, `relative_strength_xsec`, `multifactor_lowvol_size`,
+`macro_regime_pit`, `signal_replay_balanced_blend`, `lgbm_ranker`,
+`sector_quality_rank`), predates this fix and carried **no coverage measurement at
+all** — treat all of them as unverified-coverage until re-run under this fix.
+`cross_sectional_momentum` and `sector_quality_rank` were re-run in isolation as part of
+this fix; the other 5 were **not** re-run here — out of scope, flagged as a follow-up
+rather than silently left unstated.
+
+### Real, measured re-run numbers (`cross_sectional_momentum`, `sector_quality_rank`)
+
+`python -m scripts.refresh_validations --strategies cross_sectional_momentum,
+sector_quality_rank --start 2005-01-01 --n-cpcv-splits 15 --n-test-splits 4 --workers 1
+--json` (matching the CPCV config used in the 2026-08-21 entry for a like-for-like
+comparison), run against this worktree's fixed code.
+
+**Coverage honesty note**: this environment runs many simultaneous worktrees/sessions;
+a separate, independently-running `lgbm_ranker` validation job (not started by this
+session) was observed already in progress on this machine at the time this re-run was
+launched, sharing the same FMP rate-limit budget — so this run was not perfectly
+isolated in practice. Whatever `universe_coverage_pct` this run actually measured is
+reported below verbatim, not assumed to be 100% — which is itself a live demonstration
+of the fix: the coverage shortfall, if any, is now visible in the report rather than
+silently producing an undistinguished verdict.
+
+**Coverage came in at 100% for both strategies** (`504/504` and `100/100` respectively)
+despite the concurrent `lgbm_ranker` job noted above — no FMP throttling was observed in
+this run's log. These are genuinely coverage-verified numbers, not merely re-run ones:
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Coverage | `deployable` |
+|---|---|---|---|---|---|---|
+| `cross_sectional_momentum` | 1.005 | **0.592** | 1.000 | 18.8% | 504/504 (100%) | ❌ **FAIL** (PBO 0.592 > 0.50) |
+| `sector_quality_rank` | 0.969 | 0.000 | 1.000 | 21.9% | 100/100 (100%) | ✅ **PASS** |
+
+**Two real, measured reversals from the 2026-08-21 unverified-coverage numbers:**
+
+1. **`cross_sectional_momentum` flips `deployable=True → False`.** The 2026-08-21 entry
+   recorded PBO=0.492 — "still under the `< 0.50` gate, but only just," explicitly flagged
+   at the time as worth watching. The coverage-verified re-run measures **PBO=0.592**, over
+   the gate. Sharpe/DSR/MaxDD are all similar to the 2026-08-21 numbers (1.005 vs 0.995,
+   1.000 vs 1.000, 18.8% vs 25.0%) — PBO alone is what moved, and moved enough to flip the
+   verdict. No root cause is asserted for the exact PBO delta beyond the observation itself
+   (this run's `end_date` is one day later than the 2026-08-21 run's, and CPCV's
+   combinatorial path selection is sensitive to exactly which trading days are in the
+   sample) — but the practical conclusion is unambiguous: `cross_sectional_momentum` is
+   `deployable=False` under a genuinely coverage-verified measurement, not `True`.
+2. **`sector_quality_rank` flips `deployable=False → True`.** The 2026-08-21 entry recorded
+   MaxDD=34.2%, over the 30% gate, and flagged this as "real, measured, counterintuitive —
+   not asserted as understood." The coverage-verified re-run measures **MaxDD=21.9%** —
+   comfortably under the gate, restoring the `deployable=True` verdict this strategy held
+   before the universe-widening change. This is consistent with (though not proof of) the
+   34.2% figure having been a partial-universe artifact — see the honesty caveat below.
+
+**Honesty caveat on `sector_quality_rank`'s EDGAR-fundamentals coverage — a GAP this fix
+does NOT close, disclosed rather than glossed over**: this run's own log shows a real
+per-ticker EDGAR fetch failure — `Failed to fetch facts for CIK 0000764478: The read
+operation timed out` / `no us-gaap facts for BBY` — even though `universe_coverage_pct`
+reports 100%. **This is expected, not a bug in this fix**: `universe_coverage` (this PR's
+new field) tracks PRICE-data fetch coverage only (`_download_closes`'s `available` vs.
+`universe`), which for BBY genuinely succeeded — BBY's quality-factor SCORE degrades to
+NaN via `_build_sector_quality_rank_adapter`'s existing, separate, already-tested
+degrade-to-NaN handling (`test_missing_edgar_data_degrades_to_nan_not_fabricated`), not
+via the new coverage gate. A future extension tracking EDGAR-fundamentals coverage
+alongside price coverage for this specific adapter is a disclosed, out-of-scope follow-up
+— not attempted here (see `docs/known_issues/xsec_universe_coverage_concurrency_variance.md`).
+
+Full JSON summaries: `reports/cross_sectional_momentum_validation_summary.json`,
+`reports/sector_quality_rank_validation_summary.json`. Corresponding
+`docs/signals/cross_sectional_momentum.md` and `docs/signals/sector_quality_rank.md`
+addenda record the same numbers with per-strategy context.
+
+Introducing PR: [#858](https://github.com/kevinmarko/Stockpy/pull/858).

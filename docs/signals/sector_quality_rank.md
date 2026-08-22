@@ -338,5 +338,51 @@ live status is unaffected either way — the module remains dormant in productio
 writeup and the honest survivorship-bias scope caveat (this widening is BREADTH only,
 not point-in-time constituent-membership correction).
 
+### 2026-08-22 addendum: universe-coverage fail-closed gate — this strategy's own prior "after" numbers were unverified-coverage, and a real MaxDD reversal
+
+The 2026-08-21 "after" row above (Sharpe 0.919, PBO 0.000, DSR 1.000, MaxDD 34.2%,
+`deployable=False`) was recorded with **no measurement of how much of the 100-name
+declared universe's PRICE HISTORY was actually fetched that run**. A follow-up audit
+(triggered by `cross_sectional_momentum`'s wildly swinging verdicts — same shared
+universe machinery) found the same risk applies here; see
+`docs/known_issues/xsec_universe_coverage_concurrency_variance.md` for the full
+investigation and `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-22 entry for the fix.
+`validation/harness.py` now tracks `universe_coverage`/`universe_coverage_ok` (price-data
+fetch coverage — `available` vs. `universe` in `_download_closes`) and forces
+`deployable=False` below 90% coverage regardless of the other four gates.
+
+**Coverage-verified re-run** (`--strategies cross_sectional_momentum,sector_quality_rank
+--start 2005-01-01 --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json`, this
+worktree's fixed code):
+
+| Metric | 2026-08-21 (unverified coverage) | 2026-08-22 (coverage-verified) | Gate |
+|---|---|---|---|
+| Sharpe | 0.919 | 0.969 | > 0.50 ✅ |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 34.2% | **21.9%** | < 30% ✅ |
+| Universe coverage (price data) | not tracked | **100/100 (100%)** | >= 90% ✅ |
+| `deployable` | False | **True** | |
+
+**A real, measured reversal.** MaxDD moved from 34.2% (over the 30% gate) to 21.9%
+(comfortably under it), flipping this strategy back to `deployable=True` — the status it
+held before the 2026-08-21 universe-widening change. This is consistent with (though not
+proof of) the 34.2% figure having been an artifact of a partial price-data universe in
+that unverified-coverage run, though no root cause is asserted beyond the observation.
+
+**Honesty caveat — a gap this fix does NOT close, disclosed rather than glossed over**:
+this coverage-verified re-run's own log recorded a genuine SEC EDGAR fetch failure for
+one ticker — `Failed to fetch facts for CIK 0000764478: The read operation timed out` /
+`no us-gaap facts for BBY` — even though `universe_coverage_pct` reported 100%. This is
+**expected, not a bug**: `universe_coverage` (this PR's new field) tracks PRICE-data fetch
+coverage only; BBY's price history genuinely did fetch. Its EDGAR-sourced quality-factor
+SCORE degrades to NaN via this adapter's own existing, separately-tested handling
+(`test_missing_edgar_data_degrades_to_nan_not_fabricated`), which was already correct
+before this PR and is unaffected by it — but it means this strategy has a SECOND,
+independent source of per-run data variability (SEC EDGAR per-ticker fetch reliability)
+that this fix does not track or gate on. A future extension tracking EDGAR-fundamentals
+coverage alongside price coverage for this specific adapter is a disclosed, out-of-scope
+follow-up, not attempted here.
+
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*

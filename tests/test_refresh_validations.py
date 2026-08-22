@@ -28,6 +28,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from validation.thresholds import MIN_UNIVERSE_COVERAGE_PCT
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,16 +62,31 @@ def _noop_harness_run(
     y: pd.Series,
     strategy_name: str,
     t1=None,
+    universe_coverage=None,
 ) -> MagicMock:
-    """Fake ``StrategyValidationHarness.run()`` returning a deployable report."""
+    """Fake ``StrategyValidationHarness.run()`` returning a deployable report.
+
+    Echoes ``universe_coverage`` (and a realistically-derived
+    ``universe_coverage_ok``) into the returned summary, mirroring
+    ``ValidationReport.to_summary_dict()``'s real contract, so callers can
+    assert on end-to-end coverage propagation through ``_validate_single_
+    strategy`` without needing a real ``StrategyValidationHarness``.
+    """
+    coverage_ok = True
+    if universe_coverage is not None:
+        pct = universe_coverage.get("coverage_pct")
+        if pct is not None:
+            coverage_ok = bool(pct >= MIN_UNIVERSE_COVERAGE_PCT)
     report = MagicMock()
     report.to_summary_dict.return_value = {
         "strategy_id": strategy_name,
-        "deployable": True,
+        "deployable": True and coverage_ok,
         "pbo": 0.35,
         "dsr": 0.98,
         "sharpe": 0.85,
         "max_drawdown": 0.15,
+        "universe_coverage": universe_coverage,
+        "universe_coverage_ok": coverage_ok,
         "report_date": "2024-12-31",
     }
     return report
@@ -1967,6 +1984,220 @@ class TestRunValidations:
 
 
 # ---------------------------------------------------------------------------
+# TestUniverseCoverageDispatch
+# ---------------------------------------------------------------------------
+
+class TestUniverseCoverageDispatch:
+    """``_validate_single_strategy`` (exercised via ``run_validations()``)
+    must correctly compute a ``{"requested", "fetched", "coverage_pct",
+    "missing"}`` dict from ``universe``/``available`` -- data it already
+    computes, no new fetch logic -- and thread it into ``harness.run()``. See
+    docs/known_issues/xsec_universe_coverage_concurrency_variance.md for the
+    motivating bug (a cross-sectional strategy's whole verdict silently
+    depending on which random ticker subset happened to download that run).
+    """
+
+    _TICKERS = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+
+    @staticmethod
+    def _stub_adapter(*_args: Any) -> Any:
+        idx = pd.bdate_range(end="2024-12-31", periods=30)
+        X = pd.DataFrame({"feature": np.arange(30, dtype=float)}, index=idx)
+        y = pd.Series(np.full(30, 0.001), index=idx)
+        precomputed = {"stub": pd.Series(np.full(30, 0.001), index=idx)}
+        return X, y, precomputed
+
+    def _run_with_capture(self, tmp_path: Path, closes: pd.DataFrame) -> dict:
+        """Runs ``run_validations`` for one stub multi-ticker strategy against
+        ``closes`` and returns the ``universe_coverage`` kwarg the (mocked)
+        harness's ``run()`` was actually called with."""
+        import scripts.refresh_validations as rv
+
+        captured: Dict[str, Any] = {}
+
+        def _capture_run(**kwargs: Any) -> MagicMock:
+            captured["universe_coverage"] = kwargs.get("universe_coverage")
+            report = MagicMock()
+            report.to_summary_dict.return_value = {
+                "strategy_id": kwargs["strategy_name"],
+                "deployable": True,
+                "pbo": 0.2,
+                "dsr": 0.98,
+                "sharpe": 0.9,
+                "max_drawdown": 0.1,
+                "universe_coverage": kwargs.get("universe_coverage"),
+                "universe_coverage_ok": True,
+                "report_date": "2024-12-31",
+            }
+            return report
+
+        mock_cls = MagicMock()
+        instance = MagicMock()
+        instance.run.side_effect = _capture_run
+        mock_cls.return_value = instance
+
+        stub_registry = {"stub_strategy": (self._stub_adapter, 0.02, self._TICKERS)}
+
+        with (
+            patch("scripts.refresh_validations.STRATEGY_REGISTRY", stub_registry),
+            patch("scripts.refresh_validations._download_closes", return_value=closes),
+            patch("validation.harness.StrategyValidationHarness", mock_cls),
+            patch("execution.cost_model.TieredCostModel", return_value=MagicMock()),
+        ):
+            rv.run_validations(strategies=["stub_strategy"], output_dir=tmp_path)
+
+        return captured["universe_coverage"]
+
+    def test_full_coverage_computed_correctly(self, tmp_path: Path) -> None:
+        closes = _synthetic_closes(self._TICKERS)
+        cov = self._run_with_capture(tmp_path, closes)
+        assert cov == {
+            "requested": 5,
+            "fetched": 5,
+            "coverage_pct": 1.0,
+            "missing": [],
+        }
+
+    def test_partial_coverage_computed_correctly(self, tmp_path: Path) -> None:
+        """Two of the five declared tickers ('DDD', 'EEE') never made it into
+        ``closes_df`` -- the exact shape a dead-lettered per-ticker fetch
+        failure produces (see ``_download_closes``'s docstring)."""
+        closes = _synthetic_closes(["AAA", "BBB", "CCC"])
+        cov = self._run_with_capture(tmp_path, closes)
+        assert cov == {
+            "requested": 5,
+            "fetched": 3,
+            "coverage_pct": pytest.approx(0.6),
+            "missing": ["DDD", "EEE"],
+        }
+
+    def test_all_nan_column_counts_as_missing(self, tmp_path: Path) -> None:
+        """A ticker present as a DataFrame column but with zero valid (all-NaN)
+        rows must count as NOT fetched -- mirrors the existing `available`
+        computation's `closes_df[t].notna().any()` check."""
+        closes = _synthetic_closes(self._TICKERS)
+        closes["EEE"] = float("nan")
+        cov = self._run_with_capture(tmp_path, closes)
+        assert cov["fetched"] == 4
+        assert cov["missing"] == ["EEE"]
+
+    def test_end_to_end_summary_carries_coverage(self, tmp_path: Path) -> None:
+        from scripts.refresh_validations import run_validations
+
+        closes = _synthetic_closes(["AAA", "BBB"])  # 3 of 5 missing
+        import scripts.refresh_validations as rv
+
+        mock_cls = MagicMock()
+        instance = MagicMock()
+        instance.run.side_effect = _noop_harness_run
+        mock_cls.return_value = instance
+
+        stub_registry = {"stub_strategy": (self._stub_adapter, 0.02, self._TICKERS)}
+
+        with (
+            patch("scripts.refresh_validations.STRATEGY_REGISTRY", stub_registry),
+            patch("scripts.refresh_validations._download_closes", return_value=closes),
+            patch("validation.harness.StrategyValidationHarness", mock_cls),
+            patch("execution.cost_model.TieredCostModel", return_value=MagicMock()),
+        ):
+            results = run_validations(strategies=["stub_strategy"], output_dir=tmp_path)
+
+        summary = results["stub_strategy"]
+        assert summary["universe_coverage"]["coverage_pct"] == pytest.approx(0.4)
+        # 40% < MIN_UNIVERSE_COVERAGE_PCT (90%) -> _noop_harness_run's own
+        # realistic coverage_ok derivation forces deployable False.
+        assert summary["universe_coverage_ok"] is False
+        assert summary["deployable"] is False
+
+
+class TestFailReasonUniverseCoverage:
+    """``_fail_reason``'s new coverage-shortfall branch (inserted first, since
+    low coverage can shadow -- or coincidentally not affect -- every other
+    gate)."""
+
+    def test_low_coverage_reason_reported_first(self) -> None:
+        from scripts.refresh_validations import _fail_reason
+
+        s = {
+            "deployable": False,
+            "universe_coverage": {"requested": 500, "fetched": 300, "coverage_pct": 0.6, "missing": []},
+            "universe_coverage_ok": False,
+            "max_drawdown": 0.1,
+            "pbo": 0.1,
+            "dsr": 0.99,
+            "sharpe": 1.0,
+        }
+        reason = _fail_reason(s)
+        assert reason.startswith("universe coverage 60%<90%")
+        assert "300/500" in reason
+
+    def test_full_coverage_produces_no_coverage_reason(self) -> None:
+        from scripts.refresh_validations import _fail_reason
+
+        s = {
+            "deployable": False,
+            "universe_coverage": {"requested": 500, "fetched": 500, "coverage_pct": 1.0, "missing": []},
+            "universe_coverage_ok": True,
+            "max_drawdown": 0.5,  # genuine MaxDD failure
+            "pbo": 0.1,
+            "dsr": 0.99,
+            "sharpe": 1.0,
+        }
+        reason = _fail_reason(s)
+        assert "coverage" not in reason
+        assert "MaxDD" in reason
+
+    def test_missing_universe_coverage_key_is_a_no_op(self) -> None:
+        """Legacy/pre-fix summaries with no `universe_coverage` key at all
+        must not raise or fabricate a coverage reason."""
+        from scripts.refresh_validations import _fail_reason
+
+        s = {"deployable": False, "max_drawdown": 0.5, "pbo": 0.1, "dsr": 0.99, "sharpe": 1.0}
+        reason = _fail_reason(s)
+        assert "coverage" not in reason
+
+
+class TestPrintSummaryTableCoverageColumn:
+    def test_coverage_column_rendered(self, capsys: pytest.CaptureFixture) -> None:
+        from scripts.refresh_validations import _print_summary_table
+
+        results = {
+            "stub_strategy": {
+                "deployable": False,
+                "universe_coverage": {"requested": 500, "fetched": 300, "coverage_pct": 0.6, "missing": []},
+                "universe_coverage_ok": False,
+                "max_drawdown": 0.1,
+                "pbo": 0.1,
+                "dsr": 0.99,
+                "sharpe": 1.0,
+            }
+        }
+        _print_summary_table(results)
+        out = capsys.readouterr().out
+        assert "Coverage" in out  # header
+        assert "300/500" in out
+        assert "universe coverage 60%<90%" in out
+
+    def test_missing_coverage_renders_placeholder_not_crash(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        from scripts.refresh_validations import _print_summary_table
+
+        results = {
+            "legacy_strategy": {
+                "deployable": True,
+                "max_drawdown": 0.1,
+                "pbo": 0.1,
+                "dsr": 0.99,
+                "sharpe": 1.0,
+            }
+        }
+        _print_summary_table(results)  # must not raise
+        out = capsys.readouterr().out
+        assert "legacy_strategy" in out
+
+
+# ---------------------------------------------------------------------------
 # TestMainCLI
 # ---------------------------------------------------------------------------
 
@@ -2008,6 +2239,30 @@ class TestMainCLI:
         }
         code = self._run_main([], results, tmp_path)
         assert code == 1
+
+    def test_json_flag_includes_universe_coverage_fields(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        results = {
+            "cross_sectional_momentum": {
+                "deployable": False,
+                "universe_coverage": {
+                    "requested": 500, "fetched": 300, "coverage_pct": 0.6, "missing": [],
+                },
+                "universe_coverage_ok": False,
+                "pbo": 0.1, "dsr": 0.99, "sharpe": 1.0, "max_drawdown": 0.1,
+            },
+            "rsi2_mean_reversion": {"deployable": True},  # no coverage tracked
+        }
+        self._run_main(["--json"], results, tmp_path)
+        out = capsys.readouterr().out
+        last_line = out.strip().splitlines()[-1]
+        payload = json.loads(last_line)
+
+        assert payload["cross_sectional_momentum"]["universe_coverage_pct"] == pytest.approx(0.6)
+        assert payload["cross_sectional_momentum"]["universe_coverage_ok"] is False
+        assert payload["rsi2_mean_reversion"]["universe_coverage_pct"] is None
+        assert payload["rsi2_mean_reversion"]["universe_coverage_ok"] is None
 
     def test_strategies_flag_forwarded(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import main
