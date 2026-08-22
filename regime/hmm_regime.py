@@ -323,13 +323,72 @@ class HMMRegimeDetector:
             len(features_df), last_date.date(), self.covariance_type, self.n_iter, self.state_labels,
         )
 
+    def _tied_covariance_risk_proxy(self) -> "tuple[np.ndarray, bool]":
+        """Ranking proxy for `covariance_type == 'tied'`.
+
+        Tied covariance is identical across all states by construction, so
+        there is no per-state variance to extract. This ranks states by the
+        fitted mean of a directional risk feature instead (higher mean =
+        riskier), which is what identify_states_by_vol()'s ascending sort
+        already assumes.
+
+        Priority order: realized_vol_20d -> vix_level -> credit_spread
+        (all "higher = riskier" by construction) -> spy_return, negated
+        ("higher return = safer", so the sign is flipped so higher-proxy
+        still means riskier). yield_curve_spread is deliberately excluded:
+        unlike the others its risk direction is ambiguous on the raw level
+        alone (an inverted curve signals risk; the level by itself does
+        not), so it would not be a safe drop-in for this ascending-sort
+        contract.
+
+        Because fit() z-scores every column via (X - mean) / std (a
+        monotonic, sign-preserving per-column map; std > 0 is enforced by
+        the degenerate-std guard in fit()) before fitting the HMM, "higher
+        scaled-mean" implies "higher raw-mean" regardless of that rescale.
+        If the caller additionally used
+        build_feature_matrix(standardize_features=True), the proxy becomes
+        relative to trailing history rather than an absolute level -- a
+        documented nuance, not a correctness problem for the ascending sort.
+
+        Returns
+        -------
+        tuple[np.ndarray, bool]
+            (per-state proxy values, is_directional). is_directional is
+            True when a genuine directional feature was found (the proxy is
+            signed and must NOT be floored by min_covar -- see caller);
+            False only for the undirected norm-of-means fallback below
+            (which is non-negative and safe to floor like every other
+            branch).
+        """
+        means = np.asarray(self.model.means_, dtype=float)
+        feature_names = self.feature_names_ or []
+        for risk_feature in ("realized_vol_20d", "vix_level", "credit_spread"):
+            if risk_feature in feature_names:
+                idx = feature_names.index(risk_feature)
+                return means[:, idx], True
+        if "spy_return" in feature_names:
+            idx = feature_names.index("spy_return")
+            return -means[:, idx], True
+        logger.error(
+            "HMMRegimeDetector._tied_covariance_risk_proxy: none of "
+            "realized_vol_20d/vix_level/credit_spread/spy_return present in "
+            "feature_names_=%s; falling back to undirected mean-vector norm, "
+            "which is NOT guaranteed monotonic with risk and may mislabel "
+            "states.", feature_names,
+        )
+        return np.linalg.norm(means, axis=1), False
+
     def identify_states_by_vol(self) -> Dict[int, str]:
         """Post-fit: sorts hidden states by total fitted variance,
         ascending, and labels them semantically.
 
         For n_states == 3: ["bull", "sideways", "bear"] (lowest variance ->
-        "bull", highest -> "bear"). For other n_states, states beyond the
-        available labels are named "state_<index>".
+        "bull", highest -> "bear"). For n_states == 2: ["bull", "sideways"]
+        (matches n_states == 3's naming for the lower state; there is no
+        third bucket to be "bear"). For n_states >= 4: lowest-variance state
+        is "bull", highest-variance state is "bear", and any states between
+        them get generic "state_<rank>" labels (there is no canonical name
+        for a 4th+ regime bucket).
 
         Returns
         -------
@@ -341,31 +400,68 @@ class HMMRegimeDetector:
             raise RuntimeError("HMMRegimeDetector.identify_states_by_vol: model not fit yet.")
 
         # Variance calculation depending on covariance structure:
+        is_directional = False
         if self.covariance_type == "full":
-            # Trace of covariance matrix per state
+            # Trace of covariance matrix per state. hmmlearn's public
+            # covars_ getter for 'full' already returns the natural
+            # (n_states, n_features, n_features) shape (no compact-form
+            # expansion happens for 'full', unlike diag/spherical/tied), so
+            # this is safe to read directly.
             variances = np.array([float(np.trace(c)) for c in self.model.covars_])
         elif self.covariance_type == "spherical":
-            variances = np.asarray(self.model.covars_, dtype=float).flatten()
+            # hmmlearn's public covars_ getter for 'spherical' does NOT
+            # reliably return an (n_states, ...) shaped array (empirically
+            # verified against hmmlearn==0.3.3: for n_components=3,
+            # n_features=4 it returns shape (12, 4, 4), whose flattened
+            # length never equals n_states -- silently tripping the
+            # len(variances) != self.n_states fallback below on every
+            # single spherical fit). Use the compact internal _covars_
+            # array instead, matching this file's own warm-start precedent
+            # in fit() ("hmmlearn's covars_ getter expands to full
+            # matrices, but the setter expects the compact shape. Use
+            # _covars_ directly to bypass."). Verified shape: (n_states,
+            # n_features), each row a single scalar variance broadcast
+            # across all features -- summing is a constant, order-
+            # preserving multiple of the true per-state variance.
+            variances = np.asarray(self.model._covars_, dtype=float).reshape(self.n_states, -1).sum(axis=1)
         elif self.covariance_type == "tied":
-            # Tied covariance has a single shared matrix (n_features, n_features) across all states.
-            # Differentiate states by their mean volatility/feature magnitude:
-            variances = np.linalg.norm(self.model.means_, axis=1)
+            variances, is_directional = self._tied_covariance_risk_proxy()
         else:  # diag: covars_ shape is (n_states, n_features)
             variances = np.asarray(self.model.covars_, dtype=float).reshape(self.n_states, -1).sum(axis=1)
-            
-        # Enforce min_covar regularization / conditioning on extracted variances
-        variances = np.maximum(variances, self.min_covar)
+
+        # Enforce min_covar regularization / conditioning on extracted
+        # variances -- but ONLY for genuine non-negative variance-like
+        # quantities. The tied-covariance directional proxy is a signed,
+        # near-zero-centered z-scored mean; flooring it to >= min_covar
+        # would collapse every below-floor state (roughly half, in a
+        # z-scored feature) to an identical value and silently reintroduce
+        # index-order-dependent ties -- the exact failure mode this
+        # function exists to eliminate.
+        if not is_directional:
+            variances = np.maximum(variances, self.min_covar)
 
         if len(variances) != self.n_states:
+            logger.error(
+                "HMMRegimeDetector.identify_states_by_vol: extracted variance "
+                "array length %d != n_states %d (covariance_type=%s); falling "
+                "back to arbitrary index-based ordering, which is NOT based on "
+                "volatility and will likely mislabel states.",
+                len(variances), self.n_states, self.covariance_type,
+            )
             variances = np.arange(self.n_states, dtype=float)
 
         order = np.argsort(variances)  # ascending: lowest variance first
 
         if self.n_states == 3:
             labels = DEFAULT_STATE_LABELS_3
-        else:
-            labels = [DEFAULT_STATE_LABELS_3[i] if i < len(DEFAULT_STATE_LABELS_3) else f"state_{i}"
-                      for i in range(self.n_states)]
+        elif self.n_states == 2:
+            labels = DEFAULT_STATE_LABELS_3[:2]  # ["bull", "sideways"]
+        else:  # n_states >= 4: lowest -> "bull", highest -> "bear", rest generic
+            labels = (
+                ["bull"]
+                + [f"state_{i}" for i in range(1, self.n_states - 1)]
+                + ["bear"]
+            )
 
         state_labels: Dict[int, str] = {}
         for rank, state_idx in enumerate(order):
