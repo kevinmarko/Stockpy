@@ -14,7 +14,17 @@ import logging
 import os
 import re
 import shutil
+import sys
 from datetime import datetime
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from scripts._bootstrap import bootstrap  # noqa: E402
+bootstrap()
+
 
 from data.paper_account_store import PaperAccountStore, PaperPosition, PaperAccount
 from db_config import resolve_database_url, session_scope
