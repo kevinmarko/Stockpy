@@ -2440,3 +2440,149 @@ consistent with a timing-sensitive test being CPU-starved rather than a regressi
 change introduced.
 
 Introducing PR: [#858](https://github.com/kevinmarko/Stockpy/pull/858).
+
+## 2026-08-22: `put_credit_spread`/`call_credit_spread` NaN Sharpe/PBO/DSR and the stress-gate's trivial 0%-drawdown PASS made self-diagnosing
+
+`python -m scripts.refresh_validations --strategies put_credit_spread,call_credit_spread`
+(real FMP data, default `--start 2005-01-01` window) reproducibly returned
+`deployable=false, pbo=NaN, dsr=NaN, sharpe=null, max_drawdown=0.24` for both strategies, with
+no explanation, plus a trivially-passing tail-scenario stress gate (`GATE: PASS` at exactly
+0.0% drawdown across all 4 dated crisis windows — a red flag masquerading as a green one, since
+a real strategy essentially never shows exactly 0% in every historical crisis window).
+
+### Root cause, confirmed by direct reproduction, not guessed
+
+Reproduced against this machine's real, locally cached SPY/macro history
+(`~/.stockpy_local/quant_platform.db`, 2015-2026 — confirmed by its own `source` column to be
+predominantly `yfinance`/`yfinance_backfill`, not FMP-sourced; this sandbox has no `FMP_API_KEY`
+configured, so the operator's original live FMP-backed run above could not be reproduced against
+FMP itself here) and independently cross-checked over the full 2005-2026 window via a fresh
+`yfinance` fetch (both fully reproducible without a live FMP account):
+
+- `technical_options_engine.py::generate_strategy_pricing_matrix()` only emits `"Put Credit
+  Spread"`/`"Call Credit Spread"`/`"Iron Condor"` when **five** conditions hold simultaneously:
+  `true_ivr > 50`, `VRP_proxy > OPTIONS_VRP_THRESHOLD` (0.02), `VIX < 30`, not
+  `CREDIT EVENT`, and a matching `trend_bias` (`Bullish` for Put Credit Spread, `Bearish` for
+  Call Credit Spread, `Neutral` for Iron Condor).
+- Measured directly (`validation/options_selling_backtest.py::_compute_cycle_plan`, real data):
+  - Over 127 monthly cycles (2015-2026, real cached SPY/macro), `true_ivr` (a min-max
+    realized-vol-rank proxy over GARCH-forecast vol) crosses 50 on 24 cycles (18.9%) — it
+    **correctly spikes to 100 on real crisis dates** (2018-02-13 Volmageddon, 2020-03-17 COVID).
+    The proxy itself is not chronically biased low.
+  - **Of those 24 high-`true_ivr` cycles, only 1 also had `VRP_proxy > 0.02`.** Measured
+    `corr(true_ivr_proxy, VRP_proxy) = -0.216` across the full window; VRP was negative in 23/24
+    high-IVR cycles.
+  - This anti-correlation is structural, not incidental: `VRP_proxy = trailing_60d_realized_vol
+    − garch_vol`, while `true_ivr` ranks that SAME `garch_vol` against its own trailing 252-day
+    range. A real vol spike pushes `garch_vol` up sharply — simultaneously driving `true_ivr` UP
+    (near its own trailing high) and `VRP_proxy` DOWN (the fast-reacting GARCH forecast now
+    exceeds the slower 60-day trailing realized-vol average VRP subtracts it from). The two
+    gates are built from the same underlying quantity in opposing directions, so they rarely
+    clear together.
+  - Extending the check to the FULL 2005-2026 window (`yfinance`, 253 cycles) reproduces the
+    same near-total scarcity: **0 Put Credit Spread, 0 Call Credit Spread, 2 Iron Condor** fired
+    across 21+ years — closely matching the live FMP-based run's own count (1 Put Credit Spread,
+    2 Call Credit Spread, 0 Iron Condor over a slightly different exact date range/price
+    source). Across both independent checks, the total pool of cycles that ever clear the
+    5-condition premium-selling gate at all is **~2-3 cycles out of ~250, spread across 21+
+    years** — and which of the three directional buckets (Bullish/Bearish/Neutral trend_bias)
+    those 2-3 rare cycles land in is highly sensitive to the exact price-data source/timing,
+    given how few there are.
+- **Consequence for `put_credit_spread`/`call_credit_spread`'s specific numbers**: with zero (or
+  in the FMP run, 1-2, but see below) real trading days across a ~20-year window, the raw
+  per-day return series is (effectively) all exactly `0.0`.
+  `StrategyValidationHarness._apply_cost_model` then subtracts a **constant** per-day turnover
+  cost from every day regardless of whether a trade occurred, producing a numerically-constant
+  series whose `std()` lands near (not exactly) `0.0` from float noise —
+  `validation/metrics.py::sharpe_ratio`'s existing `< 1e-12` degenerate-std guard correctly
+  fires → NaN Sharpe. PBO independently returns NaN via its own `measurable_paths == 0` guard
+  (every CPCV path's in-sample Sharpe is NaN, so `nanargmax` never selects a "best" trial). DSR
+  in this operator's environment (`settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED=True`
+  in the live `.env`) is NaN because it computes the real DSR test statistic from a NaN
+  `sr_observed` rather than short-circuiting via the `n_trials<=1` legacy shortcut (which, with
+  the setting at its code default of `False`, would instead have returned a fabricated-looking
+  `1.0` regardless of the NaN Sharpe — the harness respects whichever behavior the operator has
+  configured, this entry is not proposing to change that setting). Compounding the same constant
+  per-day cost drag over ~20 years of zero-trading days independently reproduces the reported
+  `max_drawdown≈0.24` almost exactly (`(1 - 0.05*0.0011)^5040 - 1 ≈ -0.24`) — a pure cost-drag
+  artifact of a strategy that never actually opened a position, not a real loss.
+
+### Why `iron_condor`/`vrp_premium_selling` is NOT equally starved once the full window is
+### considered (correcting an initial over-broad hypothesis during this investigation)
+
+An earlier pass of this investigation, based only on the 2015-2026 locally cached window (the
+only range this sandbox had cached without a live network call), concluded that
+`iron_condor`/`vrp_premium_selling` was "equally starved" and that this repo's own
+characterization of it as "validates fine" was contradicted. **That conclusion does not survive
+checking the full 2005-2026 window and is retracted here.** This repo's own record above (this
+same log, 2026-08-21 entries) shows `vrp_premium_selling` genuinely validating over
+`--start 2005-01-01` with a real, finite, non-degenerate Sharpe (0.217, DSR 0.999,
+`deployable=False` only because Sharpe is under the 0.5 gate, not because it's NaN) — and the
+full-window cycle-plan check above confirms why: Iron Condor fired 2 real cycles (yfinance,
+2005-2026) / 1 real cycle (local DB, 2015-2026), each contributing ~21 days of genuine,
+non-degenerate mark-to-market P&L — comfortably enough real variance to clear the 1e-12
+degenerate-std guard (back-of-envelope: 2 cycles × ~21 days of realistic ~1% daily P&L moves out
+of ~5,440 total days gives `std ≈ sqrt(42/5440) × 0.01 ≈ 8.8e-4`, roughly 9 orders of magnitude
+above the 1e-12 floor) — while `put_credit_spread`/`call_credit_spread` landed at 0 (or, in the
+one live FMP run, a small number whose own simulated P&L still nets to functionally zero,
+unconfirmed without re-running against the exact same FMP data).
+
+**Revised, better-supported explanation for item 2 (still a flagged finding for human review,
+not something this change resolves unilaterally)**: the total pool of SPY cycles that ever clear
+the true_ivr/VRP tension described above is extremely small (~2-3 across 21+ years) — this part
+is real, measured, and consistent across two independent data sources. Whether any specific one
+of {Put Credit Spread, Call Credit Spread, Iron Condor} gets 0, 1, or 2 of those rare qualifying
+cycles is then a matter of which `trend_bias` (Bullish/Bearish/Neutral) that handful of cycles
+happened to land in — inherently unstable at this sample size and sensitive to the exact
+price-data source/timing (FMP vs. yfinance shifted the split between the two runs measured
+here). This is NOT evidence of an asymmetric bug between the credit-spread and Iron Condor
+branches of `generate_strategy_pricing_matrix()` — it is a symptom of the premium-selling gate
+being narrow enough that its rare hits are effectively small-sample noise once split three ways
+by direction. **Open question for a human decision, not resolved here**: whether
+`ivr_sell_threshold=50` / `OPTIONS_VRP_THRESHOLD=0.02` / `VIX<30` are miscalibrated for SPY
+specifically, or whether SPY genuinely offers this few "clean" premium-selling entries in 21
+years, is unverified either way — this entry documents the measurement, not a recommended
+threshold change.
+
+### What was fixed (item 1 from the request)
+
+1. **`validation/metrics.py::describe_signal_sparsity(returns)`** (new) — explains a NaN
+   Sharpe/PBO/DSR by reporting the actual non-zero-observation count/fraction of the RAW
+   (pre-cost-model) return series, gated on the EXACT SAME degenerate-std condition
+   `sharpe_ratio` itself checks (`< 1e-12`), so it can never false-positive on a genuinely
+   low-frequency-but-real strategy (e.g. `pairs_trading`). Threaded onto
+   `ValidationReport.signal_sparsity_note` (`validation/harness.py`), surfaced in
+   `to_summary_dict()`'s JSON, the CLI log
+   (`scripts/refresh_validations.py::_validate_single_strategy`), and the rendered HTML report
+   (`reports/validation_report_template.html.j2`, a new note block right after the header).
+2. **`validation/stress_scenarios.py::run_stress_scenario`** — a non-empty but entirely-zero
+   returns series for a dated stress window (i.e. the strategy never actually held a position
+   during that window) now fails closed via the SAME `error`-set mechanism the pre-existing
+   "no data in window" case already used, instead of computing a trivial
+   `max_drawdown=0.0, survived=True` PASS. `StressResult.passed`/`passes_stress_gate` needed no
+   changes — both already treat any `error` as a fail-closed result.
+
+**Verified against real data, both offline (local DB) and live (yfinance)**:
+`describe_signal_sparsity` on `put_credit_spread`'s real 2015-2026 raw returns reports
+`"insufficient trading signal: 0/2929 observations were non-zero..."`; the stress gate now
+reports `GATE: FAIL` with each of the 4 dated windows showing
+`(no real trading signal in window (strategy never entered a position))` instead of a trivial
+PASS — re-run live against real yfinance data for all 4 dated windows.
+
+Tests: `tests/test_metrics_sharpe_ratio.py::TestDescribeSignalSparsity` (5 tests),
+`tests/test_harness_signal_sparsity.py` (4 tests, mirrors
+`tests/test_harness_calmar_degenerate_guard.py`'s offline-harness pattern),
+`tests/test_stress_runner.py::test_runner_records_error_when_returns_fn_yields_all_zero_signal`
+(1 new test; existing tests in this file confirmed unaffected — the constant-but-genuinely-
+nonzero `flat_small_gains` fixture and the genuinely-empty-series fixture both fall outside the
+new check's trigger condition), and
+`tests/test_options_selling_backtest_stress.py::test_full_stress_gate_runs_end_to_end_for_all_options_selling_strategies`
+(network-marked, updated to accept the new "no real trading signal" error as a legitimate
+outcome rather than a failure — re-run live in this environment, 9/9 passed). Full offline suite
+re-run (`pytest -k "metrics or harness or stress or options_selling" -m "not network"`): 396
+passed, zero regressions.
+
+No `docs/signals/put_credit_spread.md` / `call_credit_spread.md` exist — these are
+validation-only `STRATEGY_REGISTRY` adapters (`scripts/refresh_validations.py`), not
+`SignalModule`s with their own `docs/signals/` writeup, consistent with every other entry for
+this strategy family in this log.

@@ -87,6 +87,38 @@ def test_runner_records_error_when_returns_fn_yields_no_data():
     assert res.passed is False
 
 
+def test_runner_records_error_when_returns_fn_yields_all_zero_signal():
+    """A non-empty but entirely-zero returns series means the strategy never
+    actually held a position at any point during this window -- e.g. its
+    rec_strategy gate (true_ivr/VRP/VIX/trend_bias, see
+    technical_options_engine.py::generate_strategy_pricing_matrix) never
+    matched, so every day degraded to a 0.0 fill. Before this fix, that
+    computed a trivial max_drawdown=0.0 / survived=True PASS, which reads as
+    certified survival for a scenario the strategy was never actually
+    exposed to -- a false-green result (a real strategy essentially never
+    shows exactly 0% drawdown in every historical crisis window). Must fail
+    closed via `error`, exactly like the "no data" case above.
+
+    Real incident this documents:
+    `python -m scripts.refresh_validations --strategies
+    put_credit_spread,call_credit_spread` reported a trivial "GATE: PASS" at
+    exactly 0.0% drawdown across all 4 dated stress windows -- see
+    docs/VALIDATION_STRATEGY_FIX_LOG.md's entry for this incident.
+    """
+    def never_traded_fn(start, end):
+        idx = pd.bdate_range(start=start, end=end)
+        return pd.Series(0.0, index=idx)
+
+    sc = StressScenario("TEST", "2020-01-01", "2020-01-31", 0.5, "synthetic")
+    res = run_stress_scenario(never_traded_fn, sc)
+    assert res.error is not None
+    assert "no real trading signal" in res.error
+    assert res.survived is False
+    assert res.passed is False
+    assert np.isnan(res.max_drawdown)
+    assert res.n_days > 0  # real day count, not the "no data" case's 0
+
+
 def test_runner_catches_returns_fn_exception():
     def boom_fn(start, end):
         raise RuntimeError("data vendor down")

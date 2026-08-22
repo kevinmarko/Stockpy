@@ -622,7 +622,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "zero_dte_engine":
         allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "re", "uuid", "zoneinfo"}
     if module_name == "options_vpin":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "pandas", "scipy"}
+        # fetch_real_underlying_bar_trades() (2026-08-22 fix for the fabricated-live-data bug --
+        # see docs/known_issues/options_vpin_fabricated_live_data.md) added a lazy,
+        # function-scoped `from data.market_data import get_provider` to fetch real hourly bars
+        # for the live VPIN endpoint instead of always synthesizing trades -- same shared
+        # market-data import already allowed for dispersion_trading/zero_dte_engine/
+        # earnings_crush/har_volatility above.
+        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "scipy"}
     if module_name == "options_sor":
         allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
     if module_name == "paper_broker_options_order":

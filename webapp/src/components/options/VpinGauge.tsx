@@ -24,21 +24,29 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
   );
 
   const data = query.data;
-  const vpinVal = data?.vpin ?? 0.25;
+  // `data_available === false` (or an outright null `vpin`, e.g. from an older cached response)
+  // means the backend could not fetch real underlying bars -- render that honestly instead of
+  // falling back to a fabricated-looking default gauge reading.
+  const dataAvailable = data != null && data.data_available !== false && data.vpin != null;
+  const vpinVal = dataAvailable ? (data!.vpin as number) : 0;
   const vpinPct = Number((vpinVal * 100).toFixed(1));
-  const regime = data?.regime ?? "MODERATE";
+  const regime = dataAvailable ? data!.regime ?? "MODERATE" : null;
 
   const isLow = regime === "LOW";
   const isModerate = regime === "MODERATE";
   const isHigh = regime === "HIGH_TOXICITY";
 
-  const regimeColor = isLow
+  const regimeColor = !dataAvailable
+    ? theme.textSecondary
+    : isLow
     ? theme.growth
     : isModerate
     ? theme.caution
     : theme.decline;
 
-  const regimeBg = isLow
+  const regimeBg = !dataAvailable
+    ? alpha(theme.textSecondary, "20")
+    : isLow
     ? alpha(theme.growth, "20")
     : isModerate
     ? alpha(theme.caution, "20")
@@ -281,7 +289,7 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
                   fontWeight: 700,
                 }}
               >
-                {regime.replace("_", " ")}
+                {regime ? regime.replace("_", " ") : "UNAVAILABLE"}
               </span>
             </div>
 
@@ -356,7 +364,7 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
                   color: regimeColor,
                 }}
               >
-                {vpinPct}%
+                {dataAvailable ? `${vpinPct}%` : "—"}
               </div>
               <div
                 style={{
@@ -366,6 +374,27 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
               >
                 Probability of Informed Trading ({selectedSymbol})
               </div>
+              {dataAvailable ? (
+                <div
+                  style={{
+                    fontSize: "0.7rem",
+                    color: theme.textMuted,
+                    fontStyle: "italic",
+                  }}
+                >
+                  Bar-level BVC approximation from real hourly bars -- not tick-level options order flow.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    fontSize: "0.7rem",
+                    color: theme.textMuted,
+                    fontStyle: "italic",
+                  }}
+                >
+                  No real market data available for {selectedSymbol} -- no toxicity measurement shown.
+                </div>
+              )}
             </div>
 
             {/* Threshold Bands Legend */}
@@ -470,7 +499,9 @@ export const VpinGauge: React.FC<VpinGaugeProps> = ({
                     color: isHigh ? theme.decline : theme.textPrimary,
                   }}
                 >
-                  +{Number(data.defensive_spread_concession ?? 0).toFixed(2)} $
+                  {data.defensive_spread_concession != null
+                    ? `+${Number(data.defensive_spread_concession).toFixed(2)} $`
+                    : "—"}
                 </div>
               </div>
             </div>

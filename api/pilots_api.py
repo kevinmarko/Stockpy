@@ -6513,11 +6513,16 @@ def get_options_vpin_metrics_endpoint(
 ) -> Dict[str, Any]:
     """Returns volume-synchronized probability of toxicity (VPIN), regime, and bucket history."""
     from pilots.options_vpin import get_options_vpin_metrics_for_frontend
-    return get_options_vpin_metrics_for_frontend(
-        symbol=symbol,
-        num_buckets=num_buckets or 50,
-        bucket_size=bucket_size,
-    )
+    try:
+        return get_options_vpin_metrics_for_frontend(
+            symbol=symbol,
+            num_buckets=num_buckets or 50,
+            bucket_size=bucket_size,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("pilots_api: options vpin metrics failed", exc_info=True)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="Internal error while fetching VPIN metrics; see server logs for detail.") from exc
 
 
 class OptionsSorAnalyzeRequest(BaseModel):

@@ -13845,6 +13845,11 @@ export const mockApi = {
         ? `High Microstructure Toxicity (VPIN ${(info.vpin * 100).toFixed(1)}% > 35.0%). Institutional informed flow detected. Defensive concession applied: +$${info.concession.toFixed(2)}/contract.`
         : null,
       as_of: new Date().toISOString(),
+      // Mock always represents the happy path -- matches the live endpoint's shape when
+      // `data_available: true` (a real bar-level BVC approximation, see pilots/options_vpin.py).
+      data_available: true,
+      data_source: "bar_level_bvc_approximation",
+      reason: null,
     });
   },
   async analyzeOptionsRouting(request: SorAnalysisRequest) {

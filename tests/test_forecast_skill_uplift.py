@@ -88,7 +88,7 @@ def _warm_tracker(tracker: ForecastTracker, symbol: str,
                 MODEL_HOLT_WINTERS: base_price + 1.0,
             }, ts)
             tracker.update_actuals(symbol, h, base_price,
-                                   datetime.now(timezone.utc), tolerance_days=5)
+                                   datetime.now(timezone.utc))
 
 
 def _finite(v) -> bool:

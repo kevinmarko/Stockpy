@@ -1597,8 +1597,39 @@ class TestOptionsZeroDteEndpoints:
 
 
 class TestOptionsVpinEndpoint:
+    """`GET /pilots/options/vpin/metrics` now computes VPIN from REAL hourly bars fetched via
+    `data.market_data.get_provider()` (a bar-level BVC approximation -- see
+    `pilots/options_vpin.py`'s module docstring and
+    `docs/known_issues/options_vpin_fabricated_live_data.md`), never from
+    `generate_synthetic_option_trades()`'s fabricated random-walk data. Every test here mocks
+    `data.market_data.get_provider` so the suite stays offline/deterministic, matching
+    `tests/test_daemon_runtime.py::TestMaybeUpdateCircuitBreaker`'s established pattern for the
+    identical real-bars-for-VPIN call shape.
+    """
+
+    @staticmethod
+    def _fake_hourly_bars(n: int = 40, seed: int = 7):
+        rng = np.random.default_rng(seed)
+        prices = 500.0 + np.cumsum(rng.normal(0, 0.5, n))
+        return pd.DataFrame(
+            {
+                "Open": prices,
+                "High": prices + 0.1,
+                "Low": prices - 0.1,
+                "Close": prices,
+                "Volume": rng.integers(1_000, 50_000, n).astype(float),
+            },
+            index=pd.date_range("2026-08-01 09:30", periods=n, freq="h"),
+        )
+
     def test_get_vpin_metrics_success(self):
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=10, interval="1h"):
+                return TestOptionsVpinEndpoint._fake_hourly_bars()
+
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN), patch(
+            "data.market_data.get_provider", lambda: _FakeProvider()
+        ):
             resp = _client.get(
                 "/pilots/options/vpin/metrics?symbol=SPY&num_buckets=20",
                 headers={"Authorization": f"Bearer {_READ_TOKEN}"},
@@ -1608,6 +1639,10 @@ class TestOptionsVpinEndpoint:
         assert body["symbol"] == "SPY"
         assert "vpin" in body
         assert 0.0 <= body["vpin"] <= 1.0
+        # Real bar-level data, never the retired synthetic-trades fallback.
+        assert body["data_available"] is True
+        assert body["data_source"] == "bar_level_bvc_approximation"
+        assert body["reason"] is None
         # Field names from `get_options_vpin_metrics_for_frontend()` -- matches
         # webapp/src/api/types.ts::VpinMetricsResponse, NOT
         # get_options_vpin_metrics()'s own internal `toxicity_regime`/`is_toxic`/
@@ -1632,7 +1667,13 @@ class TestOptionsVpinEndpoint:
         assert resp.status_code == 422
 
     def test_get_vpin_metrics_fail_open_without_token(self):
-        with mock_patch_settings(STATE_API_TOKEN=""):
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=10, interval="1h"):
+                return TestOptionsVpinEndpoint._fake_hourly_bars()
+
+        with mock_patch_settings(STATE_API_TOKEN=""), patch(
+            "data.market_data.get_provider", lambda: _FakeProvider()
+        ):
             resp = _client.get("/pilots/options/vpin/metrics?symbol=NVDA")
         assert resp.status_code == 200
         assert resp.json()["symbol"] == "NVDA"
@@ -1644,6 +1685,34 @@ class TestOptionsVpinEndpoint:
                 headers={"Authorization": "Bearer WRONG_TOKEN"},
             )
         assert resp.status_code == 401
+
+    def test_get_vpin_metrics_honestly_unavailable_when_no_real_data(self):
+        """CONSTRAINT #4 regression: when the market-data provider cannot supply real bars
+        (e.g. a bad symbol, or every provider in the fallback chain failing), the endpoint must
+        return an explicit `data_available: False` / `vpin: None` response -- never silently
+        substitute `generate_synthetic_option_trades()`'s fabricated data, which is what this
+        endpoint did before this fix."""
+        class _ExplodingProvider:
+            def get_intraday_bars(self, symbol, lookback_days=10, interval="1h"):
+                raise RuntimeError("simulated market data outage")
+
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN), patch(
+            "data.market_data.get_provider", lambda: _ExplodingProvider()
+        ):
+            resp = _client.get(
+                "/pilots/options/vpin/metrics?symbol=SPY",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert body["vpin"] is None
+        assert body["regime"] is None
+        assert body["data_available"] is False
+        assert body["data_source"] is None
+        assert body["reason"] is not None
+        assert body["buckets"] == []
+        assert "unavailable" in body["warning_message"].lower()
 
 
 # ---------------------------------------------------------------------------
