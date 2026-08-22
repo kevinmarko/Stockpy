@@ -409,6 +409,7 @@ def run_training(
     registry_path: Optional[Path] = None,
     data_engine=None,
     historical_store=None,
+    confirm_shared_write: bool = False,
 ) -> dict:
     """End-to-end: build panel, train, CPCV-validate, persist, update registry.
 
@@ -430,7 +431,39 @@ def run_training(
     rather than a mutable ``*_latest.pkl`` pointer — so the registry's
     ``artifact_file`` provenance field always names the exact, unique binary
     that produced a given run's metrics.
+
+    ``confirm_shared_write`` (default ``False``) is a required, explicit
+    opt-in whenever ``save_path`` and/or ``registry_path`` are left at their
+    default ``None`` — that default writes to the MACHINE-GLOBAL model/
+    registry locations under ``settings.LOCAL_DATA_ROOT``
+    (``ml/registry_io.py``'s "bidirectional smart-merge" also propagates the
+    write into the repo-tracked ``ml/registry.yaml``), shared by every git
+    worktree/session on this machine. A quick ad hoc script or interactive
+    investigation that calls ``run_training()`` without thinking about this
+    can silently overwrite the REAL production model's registry entry with a
+    throwaway/synthetic-data artifact — this happened once for real in this
+    codebase (see ``docs/VALIDATION_STRATEGY_FIX_LOG.md``'s 2026-08-22
+    ``lgbm_ranker`` entry, caught and reverted by hand). The two genuine,
+    deliberate production callers (``scripts/train_lgbm.py``'s own CLI
+    ``main()``, ``scripts/retrain_models.py``'s scheduled retraining job)
+    pass ``confirm_shared_write=True`` explicitly. Every test in this
+    codebase's suite already passes explicit ``save_path``/``registry_path``
+    (isolated ``tmp_path`` locations) and is unaffected by this guard.
+    Raises ``ValueError`` — before any network/training work starts — when
+    the guard trips, rather than silently proceeding.
     """
+    if (save_path is None or registry_path is None) and not confirm_shared_write:
+        raise ValueError(
+            "run_training() called with save_path and/or registry_path left "
+            "as None, and confirm_shared_write is not True. This combination "
+            "would write to the MACHINE-GLOBAL model registry/artifact "
+            "directory under settings.LOCAL_DATA_ROOT, shared by every git "
+            "worktree on this machine. For an isolated run (a test, an ad "
+            "hoc investigation, a quick check), pass explicit "
+            "save_path=.../registry_path=... instead. For a genuine, "
+            "intentional production/scheduled training run that should "
+            "update the real shared registry, pass confirm_shared_write=True."
+        )
     save_path = Path(save_path) if save_path is not None else None
 
     # 1. Data engine
@@ -553,6 +586,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         offline=args.offline,
         save_path=Path(args.save_path) if args.save_path else None,
         registry_path=Path(args.registry_path) if args.registry_path else None,
+        # This CLI's entire purpose is a genuine, intentional training run --
+        # confirm_shared_write=True is the deliberate opt-in run_training()
+        # requires whenever --save-path/--registry-path are left unset (see
+        # run_training()'s own docstring for why this guard exists).
+        confirm_shared_write=True,
     )
 
     print("\n=== LGBM Ranker Training Summary ===")

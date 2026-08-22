@@ -2507,3 +2507,68 @@ No `docs/signals/put_credit_spread.md` / `call_credit_spread.md` exist — these
 validation-only `STRATEGY_REGISTRY` adapters (`scripts/refresh_validations.py`), not
 `SignalModule`s with their own `docs/signals/` writeup, consistent with every other entry for
 this strategy family in this log.
+
+## 2026-08-22 (cont.): `run_training()` shared-state guard — a real incident from this file's own investigation, now closed
+
+While investigating `lgbm_ranker`'s non-determinism (this file's earlier 2026-08-22 entries),
+a quick offline `scripts.train_lgbm.run_training(_DEFAULT_TICKERS, offline=True)` call —
+issued directly, with no `save_path`/`registry_path` override, as an ad hoc verification
+step, not a real training run — silently wrote its synthetic-run metrics into the
+MACHINE-GLOBAL `ml/registry.yaml` (`update_model_metrics(path=None)`'s dual-persistence
+writes to BOTH `settings.LOCAL_DATA_ROOT/ml_models/registry.yaml` AND the repo-tracked
+`ml/registry.yaml`, shared by every git worktree on this machine) and left a bogus
+`lgbm_20260822.pkl` in the shared `ml_models/` directory that `LGBMCrossSectionalRanker
+.load_latest()` (a plain glob-sort of dated filenames) would have picked up over the real
+production model. Caught and reverted by hand in the same session before it was ever
+committed — but the underlying mechanism (any ad hoc script/notebook cell calling
+`run_training()` this way reproduces the exact same pollution) was left unfixed at the time,
+flagged as a known risk.
+
+**The fix**: `scripts/train_lgbm.py::run_training()` gained a required, explicit
+`confirm_shared_write: bool = False` keyword. Whenever `save_path` and/or `registry_path`
+are left at their default `None`, the function now raises `ValueError` immediately — before
+any network/training work starts — unless the caller passes `confirm_shared_write=True`.
+The two genuine, deliberate production callers were updated to pass it explicitly:
+`scripts/train_lgbm.py`'s own CLI `main()` (its entire purpose is a real training run) and
+`scripts/retrain_models.py`'s scheduled retraining job. No existing test needed this flag —
+every test in `tests/test_train_lgbm.py` already passed explicit, isolated `save_path`/
+`registry_path` (one exception, `test_default_save_path_is_dated_not_mutable_latest`, which
+deliberately leaves `save_path=None` to test that specific parameter-passing contract while
+mocking `.save()` entirely, was updated to pass `confirm_shared_write=True` alongside its
+already-isolated `registry_path`).
+
+**A second, smaller incident happened writing THIS fix's own regression test** — worth
+recording honestly rather than glossing over, since it's a direct illustration of exactly
+how easy this class of mistake is to make even while actively trying to avoid it. The first
+draft of `TestSharedStateGuard::test_confirm_shared_write_true_bypasses_the_guard_even_with_no_paths`
+tried to prove the escape hatch works by monkeypatching `settings.LOCAL_DATA_ROOT` (plus
+`ml.lgbm_ranker._MODELS_DIR`, a module-level constant frozen at import time) to an isolated
+`tmp_path`, then calling `run_training(..., confirm_shared_write=True)` with no path
+overrides — expecting every write to land under the redirected fake root. The model pickle
+write WAS correctly isolated (confirmed via the returned `model_path`), but the test still
+leaked a write into the REAL machine-global `ml/registry.yaml` (confirmed via a distinctive
+`n_train: 150` matching the test's own 6-ticker/25-date synthetic panel). Root cause:
+`ml/registry_io.py::update_model_metrics(path=None)` writes to `[get_local_registry_path(),
+_DEFAULT_REGISTRY_PATH]` — the FIRST target is settings-driven and was correctly redirected
+by the monkeypatch, but `_DEFAULT_REGISTRY_PATH = Path(__file__).parent / "registry.yaml"`
+is a hardcoded constant, entirely independent of `settings.LOCAL_DATA_ROOT`, and is written
+to unconditionally whenever `path=None` — this is genuinely the same mechanism behind the
+ORIGINAL incident this fix exists to prevent, now caught a second time by direct
+verification (checking the real files after each test run) rather than by trusting the
+monkeypatch's own reasoning. Fixed by abandoning the path-redirection approach entirely:
+the corrected test mocks `LGBMCrossSectionalRanker.save` and `update_model_metrics` directly
+(asserting they were called with `path=None`, proving the guard didn't block), which cannot
+touch real shared state regardless of how `ml/registry_io.py`'s internal path resolution
+works — sidestepping the need to fully enumerate every internal branch rather than risking
+missing another one. **Lesson for future guard/isolation tests in this codebase**: mocking
+the actual I/O call is more robust than trying to redirect every path a function might
+resolve internally — prefer it whenever the function under test has more than one
+settings-independent write target.
+
+Tests: `tests/test_train_lgbm.py::TestSharedStateGuard` (5 tests — both-None raises before
+any work starts, either-alone raises, both-explicit never requires the flag, and the
+escape-hatch proof described above). Full `tests/test_train_lgbm.py` suite (24 tests) and
+`tests/test_retrain_models.py` (11 tests, `run_training` fully mocked there already) both
+pass; the real machine-global `ml/registry.yaml` and repo-tracked `ml/registry.yaml` were
+directly diffed/inspected after each test run in this session to confirm zero pollution,
+not merely assumed clean from the tests passing.
