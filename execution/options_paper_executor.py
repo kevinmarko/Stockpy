@@ -73,6 +73,58 @@ def _price_option_contract(
     return max(0.01, round(bs_price, 4)) * 100.0
 
 
+def _resolve_short_delta(directive: Dict[str, Any]) -> Optional[float]:
+    """Resolves abs(Black-Scholes delta) of the directive's short leg for the
+    Stage 4 ML Meta-Labeler's ``short_delta`` feature, mirroring
+    ``validation/options_harness.py``'s ``entry_short_delta`` semantics
+    (``abs(...)`` of the first short leg) so live inference features are
+    measured the same way the model's training features were. Returns
+    ``None`` (never a fabricated delta) when the directive has no short leg
+    (``Short_Delta`` stays at its ``nan`` default -- see
+    ``technical_options_engine.py::build_premium_directive``) or the value
+    is otherwise unresolvable.
+    """
+    raw = directive.get("Short_Delta")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return abs(val) if math.isfinite(val) else None
+
+
+def _resolve_credit_to_width_ratio(directive: Dict[str, Any]) -> Optional[float]:
+    """Computes abs(net entry premium) / strike width for the Stage 4 ML
+    Meta-Labeler's ``credit_to_width_ratio`` feature, mirroring
+    ``validation/options_harness.py::OptionsValidationHarness.run_backtest``'s
+    ``entry_credit_to_width_ratio`` formula so live inference features match
+    what the model was trained on. ``Net_Premium``/``Short_Strike``/
+    ``Long_Strike`` are all per-share scale here (unlike the harness's
+    *100-scaled internal quantities) -- the *100 contract multiplier cancels
+    in the ratio either way. Returns ``None`` (never a fabricated ratio) when
+    a strike or the net premium is unresolvable, or the strike width isn't
+    meaningfully positive.
+    """
+    short_k = directive.get("Short_Strike")
+    long_k = directive.get("Long_Strike")
+    net_prem = directive.get("Net_Premium")
+    if short_k is None or long_k is None or net_prem is None:
+        return None
+    try:
+        short_k = float(short_k)
+        long_k = float(long_k)
+        net_prem = float(net_prem)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(short_k) and math.isfinite(long_k) and math.isfinite(net_prem)):
+        return None
+    width = abs(short_k - long_k)
+    if width <= 1e-9:
+        return None
+    return abs(net_prem) / width
+
+
 def _ensure_meta_labeler_loaded() -> None:
     """Warm up the process-wide Stage 4 ML meta-labeler singleton.
 
@@ -155,6 +207,24 @@ class OptionsPaperExecutor:
                 logger.warning("OptionsPaperExecutor: failed to get market provider: %s", exc)
                 market = None
 
+        vrp_val: Optional[float] = None
+        if vrp is not None:
+            try:
+                vrp_f = float(vrp)
+                if math.isfinite(vrp_f):
+                    vrp_val = vrp_f
+            except (TypeError, ValueError):
+                vrp_val = None
+
+        vix_val: Optional[float] = None
+        if macro_dto is not None:
+            try:
+                vix_f = float(getattr(macro_dto, "vix", float("nan")))
+                if math.isfinite(vix_f):
+                    vix_val = vix_f
+            except (TypeError, ValueError):
+                vix_val = None
+
         actionable = []
         for sym in symbols:
             try:
@@ -196,6 +266,18 @@ class OptionsPaperExecutor:
                     "ivr": directive.get("True_IVR") if math.isfinite(directive.get("True_IVR", float("nan"))) else directive.get("IVR_Proxy"),
                     "trend_bias": directive.get("Trend_Bias", "Neutral"),
                     "target_dte": target_dte,
+                    # Real Stage 4 ML Meta-Labeler inference features (audit
+                    # fix -- see docs/known_issues/options_meta_labeler_serving_time_gaps.md).
+                    # Previously omitted entirely, silently triggering
+                    # OptionsMetaLabeler._extract_feature_vector's hardcoded
+                    # constant defaults on every live prediction. Always set
+                    # explicitly (None when unresolvable) rather than
+                    # omitted, so the meta-labeler's finiteness gate can
+                    # decline to score instead of silently defaulting.
+                    "vrp": vrp_val,
+                    "vix": vix_val,
+                    "short_delta": _resolve_short_delta(directive),
+                    "credit_to_width_ratio": _resolve_credit_to_width_ratio(directive),
                 })
             except Exception as exc:
                 logger.warning("OptionsPaperExecutor: directive scan failed for %s: %s", sym, exc)
@@ -357,7 +439,25 @@ class OptionsPaperExecutor:
                         continue
                     contracts = ml_contracts
                 except Exception as exc:
-                    logger.debug("ML Meta-labeler evaluation skipped: %s", exc)
+                    # CONSTRAINT #6: a scoring failure must never silently
+                    # relax this risk gate to full, un-derated size -- fail
+                    # closed by skipping the trade entirely for this cycle
+                    # (matching how a genuine ML rejection a few lines above
+                    # is already handled) rather than falling through with
+                    # `contracts` still at its full pre-ML-gate value.
+                    # Logged at WARNING (not DEBUG): this is a risk-gate
+                    # failure, not a routine, expected skip.
+                    logger.warning(
+                        "OptionsPaperExecutor: Stage 4 ML Meta-Labeler evaluation "
+                        "raised an exception for %s -- skipping this trade "
+                        "rather than proceeding at full un-derated size: %s",
+                        sym, exc,
+                    )
+                    skipped.append({
+                        "symbol": sym,
+                        "reason": f"Stage 4 ML Meta-Labeler evaluation raised an exception ({exc}); skipping trade to fail closed",
+                    })
+                    continue
 
             # 6. Commission & Cash Impact
 

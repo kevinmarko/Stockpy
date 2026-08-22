@@ -1,5 +1,6 @@
 """Tests for execution/options_paper_executor.py."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import numpy as np
@@ -34,6 +35,15 @@ def test_get_actionable_directives_filters_cash_and_wait():
         "True_IVR": 65.0,
         "Net_Premium": 1.50,
         "Trend_Bias": "Bullish",
+        # Top-level Short_Strike/Long_Strike/Short_Delta -- always set by the
+        # real technical_options_engine.py::build_premium_directive whenever
+        # short/long legs exist (see lines ~1172-1177). A prior version of
+        # this fixture omitted these, which is exactly why the Bug 1
+        # serving-time feature gap (vrp/vix/short_delta/credit_to_width_ratio
+        # never copied into the actionable item dict) shipped undetected.
+        "Short_Strike": 150.0,
+        "Long_Strike": 145.0,
+        "Short_Delta": -0.30,
         "Legs": [
             {"Strike": 150.0, "Side": "Short", "Delta": -0.30},
             {"Strike": 145.0, "Side": "Long", "Delta": -0.15},
@@ -42,12 +52,94 @@ def test_get_actionable_directives_filters_cash_and_wait():
 
     with patch("execution.options_paper_executor._directive_for_symbol") as mock_fetch:
         mock_fetch.side_effect = lambda sym, **kwargs: mock_directive_pcs if sym == "AAPL" else mock_directive_cash
-        directives = executor.get_actionable_directives(symbols=["AAPL", "SPY"])
+        directives = executor.get_actionable_directives(
+            symbols=["AAPL", "SPY"],
+            vrp=0.035,
+            macro_dto=MagicMock(vix=22.5, market_regime="NORMAL"),
+        )
 
     assert len(directives) == 1
     assert directives[0]["symbol"] == "AAPL"
     assert directives[0]["strategy"] == "Put Credit Spread"
     assert directives[0]["net_premium"] == 1.50
+
+    # Bug 1 fix: the four real Stage 4 ML Meta-Labeler inference features must
+    # actually be populated from the live vrp/macro_dto/directive data, not
+    # silently left absent (which would trigger the model's hardcoded
+    # constant defaults on every live prediction).
+    assert directives[0]["vrp"] == 0.035
+    assert directives[0]["vix"] == 22.5
+    assert directives[0]["short_delta"] == pytest.approx(0.30)
+    assert directives[0]["credit_to_width_ratio"] == pytest.approx(1.50 / 5.0)
+
+
+def test_get_actionable_directives_no_short_leg_never_fabricates_derived_features():
+    """A directive with no short leg (Short_Strike/Long_Strike/Short_Delta all
+    absent -- e.g. a pure long debit structure) must yield short_delta=None
+    and credit_to_width_ratio=None, never a fabricated value."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    mock_directive_debit = {
+        "Strategy": "Bull Call Spread",
+        "Action": "Open",
+        "Integrity_OK": True,
+        "IVR_Proxy": 65.0,
+        "True_IVR": 65.0,
+        "Net_Premium": -1.20,
+        "Trend_Bias": "Bullish",
+        "Legs": [
+            {"Strike": 150.0, "Side": "Long", "Type": "Call", "Delta": 0.40},
+            {"Strike": 155.0, "Side": "Long", "Type": "Call", "Delta": 0.25},
+        ],
+        # No Short_Strike / Long_Strike / Short_Delta top-level keys at all.
+    }
+
+    with patch("execution.options_paper_executor._directive_for_symbol") as mock_fetch:
+        mock_fetch.return_value = mock_directive_debit
+        directives = executor.get_actionable_directives(
+            symbols=["AAPL"],
+            vrp=0.03,
+            macro_dto=MagicMock(vix=20.0, market_regime="NORMAL"),
+        )
+
+    assert len(directives) == 1
+    assert directives[0]["short_delta"] is None
+    assert directives[0]["credit_to_width_ratio"] is None
+
+
+def test_get_actionable_directives_vrp_and_vix_present_but_none_when_unresolvable():
+    """Calling with vrp=None/macro_dto=None must yield vrp/vix keys explicitly
+    present with value None -- never omitted from the item dict."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    mock_directive_pcs = {
+        "Strategy": "Put Credit Spread",
+        "Action": "Open",
+        "Integrity_OK": True,
+        "IVR_Proxy": 65.0,
+        "True_IVR": 65.0,
+        "Net_Premium": 1.50,
+        "Trend_Bias": "Bullish",
+        "Short_Strike": 150.0,
+        "Long_Strike": 145.0,
+        "Short_Delta": -0.30,
+        "Legs": [
+            {"Strike": 150.0, "Side": "Short", "Delta": -0.30},
+            {"Strike": 145.0, "Side": "Long", "Delta": -0.15},
+        ],
+    }
+
+    with patch("execution.options_paper_executor._directive_for_symbol") as mock_fetch:
+        mock_fetch.return_value = mock_directive_pcs
+        directives = executor.get_actionable_directives(symbols=["AAPL"], vrp=None, macro_dto=None)
+
+    assert len(directives) == 1
+    assert "vrp" in directives[0]
+    assert "vix" in directives[0]
+    assert directives[0]["vrp"] is None
+    assert directives[0]["vix"] is None
 
 
 def test_execute_strategy_directives_dry_run():
@@ -335,6 +427,187 @@ def test_executor_construction_no_model_file_is_honest_and_non_crashing(
     assert singleton.model is None
     assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.65
     assert singleton.get_sizing_multiplier(0.65) == 1.0
+
+
+def test_execute_strategy_directives_fails_closed_on_ml_scoring_exception(caplog):
+    """Bug 2 fix: an exception raised while scoring a directive through the
+    Stage 4 ML Meta-Labeler must skip the trade entirely (fail closed) rather
+    than silently falling through to full, un-derated size. Logged at
+    WARNING, not DEBUG (CONSTRAINT #6)."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    directives = [
+        {
+            "symbol": "AAPL",
+            "strategy": "Put Credit Spread",
+            "action": "Open",
+            "net_premium": 1.50,
+            "target_dte": 30,
+            "legs": [
+                {"strike": 150.0, "side": "sell", "type": "put", "ratio_qty": 1.0, "price": 2.20},
+                {"strike": 145.0, "side": "buy", "type": "put", "ratio_qty": 1.0, "price": 0.70},
+            ],
+        }
+    ]
+
+    with patch(
+        "ml.options_meta_labeler.global_options_meta_labeler.score_option_directive",
+        side_effect=RuntimeError("boom"),
+    ), patch("execution.options_paper_executor.settings.OPTIONS_META_LABELER_ENABLED", True), caplog.at_level(
+        logging.WARNING, logger="execution.options_paper_executor"
+    ):
+        result = executor.execute_strategy_directives(directives=directives, dry_run=True)
+
+    assert result["executed_count"] == 0
+    assert result["skipped_count"] == 1
+    reason = result["skipped"][0]["reason"]
+    assert "exception" in reason.lower()
+    assert "fail closed" in reason.lower()
+
+    warning_messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("meta-labeler" in m.lower() and "exception" in m.lower() for m in warning_messages)
+
+
+def _train_meta_labeler_dependent_on_derived_features(model_path: Path) -> OptionsMetaLabeler:
+    """Trains a real OptionsMetaLabeler whose win probability depends
+    meaningfully on ``short_delta``/``credit_to_width_ratio`` -- the two
+    features the Bug 1 fix derives from a production directive's
+    Short_Strike/Long_Strike/Net_Premium/Short_Delta -- holding
+    ivr/vrp/vix/strategy/target_dte constant across both classes so only the
+    derived features can be driving any difference in the model's verdict.
+    """
+    np.random.seed(7)
+    labeler = OptionsMetaLabeler(model_path=model_path)
+    samples = []
+    for _ in range(60):
+        # "Good" profile: low short delta (safely OTM short strike), high
+        # credit-to-width ratio (well-compensated spread) -> wins.
+        samples.append(
+            OptionsTradeFeatureRow(
+                strategy="Put Credit Spread",
+                ivr=65.0,
+                vrp=0.03,
+                vix=20.0,
+                trend_bias=0.0,
+                target_dte=30,
+                credit_to_width_ratio=0.40 + np.random.uniform(-0.01, 0.01),
+                short_delta=0.15 + np.random.uniform(-0.01, 0.01),
+                outcome_win=1,
+            )
+        )
+        # "Bad" profile: high short delta (close to the money), low
+        # credit-to-width ratio (poorly compensated) -> loses.
+        samples.append(
+            OptionsTradeFeatureRow(
+                strategy="Put Credit Spread",
+                ivr=65.0,
+                vrp=0.03,
+                vix=20.0,
+                trend_bias=0.0,
+                target_dte=30,
+                credit_to_width_ratio=0.15 + np.random.uniform(-0.01, 0.01),
+                short_delta=0.45 + np.random.uniform(-0.01, 0.01),
+                outcome_win=0,
+            )
+        )
+    res = labeler.train(samples)
+    assert res["samples"] == 120
+    return labeler
+
+
+def test_get_actionable_directives_end_to_end_derived_features_drive_ml_decision(
+    reset_meta_labeler_singleton, tmp_path
+):
+    """End-to-end proof (sibling fix already landed -- full version, not the
+    fallback substitute): the Bug 1 fix's derived ``short_delta``/
+    ``credit_to_width_ratio`` -- sourced from a REAL production-shaped
+    directive's Short_Strike/Long_Strike/Net_Premium/Short_Delta via
+    get_actionable_directives, not hand-set candidate dict keys -- actually
+    drives the Stage 4 ML Meta-Labeler's live approval/sizing decision inside
+    execute_strategy_directives."""
+    model_path = tmp_path / "options_meta_labeler.pkl"
+    _train_meta_labeler_dependent_on_derived_features(model_path)
+
+    singleton = reset_meta_labeler_singleton
+    singleton.model = None
+    singleton.model_path = model_path
+    singleton.n_samples = 0
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    assert singleton.model is not None  # warmed up by construction
+
+    macro_stub = MagicMock(vix=20.0, market_regime="NORMAL")
+
+    def _make_directive(short_delta: float, short_price: float, long_price: float) -> dict:
+        net_premium = round(short_price - long_price, 2)
+        return {
+            "Strategy": "Put Credit Spread",
+            "Action": "Open",
+            "Integrity_OK": True,
+            "IVR_Proxy": 65.0,
+            "True_IVR": 65.0,
+            "Net_Premium": net_premium,
+            "Trend_Bias": "Neutral",
+            "Short_Strike": 150.0,
+            "Long_Strike": 145.0,
+            "Short_Delta": short_delta,
+            "Legs": [
+                {"Side": "Short", "Type": "Put", "Strike": 150.0, "Price": short_price, "Delta": short_delta},
+                {"Side": "Long", "Type": "Put", "Strike": 145.0, "Price": long_price, "Delta": short_delta / 2.0},
+            ],
+        }
+
+    # Good profile: short_delta=0.15, width=5, net_premium=2.00 -> credit_to_width_ratio=0.40
+    good_directive = _make_directive(short_delta=-0.15, short_price=2.50, long_price=0.50)
+    # Bad profile: short_delta=0.45, width=5, net_premium=0.75 -> credit_to_width_ratio=0.15
+    bad_directive = _make_directive(short_delta=-0.45, short_price=1.00, long_price=0.25)
+
+    with patch("execution.options_paper_executor._directive_for_symbol") as mock_fetch:
+        mock_fetch.side_effect = lambda sym, **kwargs: good_directive if sym == "GOOD" else bad_directive
+        actionable = executor.get_actionable_directives(
+            symbols=["GOOD", "BAD"], vrp=0.03, macro_dto=macro_stub, target_dte=30,
+        )
+
+    assert len(actionable) == 2
+    good_item = next(i for i in actionable if i["symbol"] == "GOOD")
+    bad_item = next(i for i in actionable if i["symbol"] == "BAD")
+
+    # The derived features came from the real production directive shape
+    # (Short_Strike/Long_Strike/Net_Premium/Short_Delta), not a hardcoded
+    # default or a hand-set candidate key.
+    assert good_item["short_delta"] == pytest.approx(0.15)
+    assert good_item["credit_to_width_ratio"] == pytest.approx(2.00 / 5.0)
+    assert bad_item["short_delta"] == pytest.approx(0.45)
+    assert bad_item["credit_to_width_ratio"] == pytest.approx(0.75 / 5.0)
+
+    good_score = singleton.score_option_directive(good_item)
+    bad_score = singleton.score_option_directive(bad_item)
+    assert good_score["features_resolved"] is True
+    assert bad_score["features_resolved"] is True
+    assert good_score["prob_win"] > bad_score["prob_win"]
+    assert good_score["approved"] is True
+    assert bad_score["approved"] is False
+
+    good_result = executor.execute_strategy_directives(directives=[good_item], dry_run=True)
+    assert good_result["executed_count"] == 1
+    contracts_good = good_result["executed"][0]["contracts"]
+
+    bad_result = executor.execute_strategy_directives(directives=[bad_item], dry_run=True)
+    assert bad_result["executed_count"] == 0
+    assert bad_result["skipped_count"] == 1
+    assert "rejected" in bad_result["skipped"][0]["reason"].lower()
+
+    # Prove the real derived values -- not a hardcoded default -- drove this:
+    # with the ML gate disabled, the same good directive must size
+    # differently than it did with the gate's real (>1.0x) multiplier applied.
+    with patch("execution.options_paper_executor.settings.OPTIONS_META_LABELER_ENABLED", False):
+        baseline_result = executor.execute_strategy_directives(directives=[good_item], dry_run=True)
+    assert baseline_result["executed_count"] == 1
+    contracts_baseline = baseline_result["executed"][0]["contracts"]
+
+    assert contracts_good != contracts_baseline
 
 
 # ---------------------------------------------------------------------------

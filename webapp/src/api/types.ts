@@ -3998,6 +3998,13 @@ export interface StrategyOptionCandidate {
   trend_bias: string;
   target_dte: number;
   legs: any[];
+  // Stage 4 ML Meta-Labeler inference features -- null when unresolvable
+  // (e.g. no macro/vrp context passed, or no short leg on this directive).
+  // Not rendered anywhere today; present for mock/live parity.
+  vrp?: number | null;
+  vix?: number | null;
+  short_delta?: number | null;
+  credit_to_width_ratio?: number | null;
 }
 
 export interface StrategyOptionsCandidatesResponse {
@@ -4218,6 +4225,9 @@ export interface OptionsMetaModelStatus {
   train_roc_auc: number;
   trained_at: string | null;
   enabled: boolean;
+  // In-sample only -- train() has no purged/held-out evaluation. See
+  // docs/known_issues/options_meta_labeler_serving_time_gaps.md.
+  metrics_are_in_sample?: boolean;
 }
 
 export interface OptionsMetaModelRetrainResult {
@@ -4226,6 +4236,7 @@ export interface OptionsMetaModelRetrainResult {
   accuracy: number;
   roc_auc: number;
   trained_at: string;
+  metrics_are_in_sample?: boolean;
 }
 
 export interface PaperBrokerSettleExpiredResult {
