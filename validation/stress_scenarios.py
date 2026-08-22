@@ -171,7 +171,17 @@ def compute_max_drawdown(returns: pd.Series) -> float:
         return float("nan")
     equity = (1.0 + returns.astype(float)).cumprod()
     running_max = equity.cummax()
-    drawdown = (equity - running_max) / running_max
+    # A zero running_max means the account was already wiped out (equity hit
+    # exactly 0) as of the very first observation and has stayed there ever
+    # since -- cummax of an all-zero-so-far series is 0, so the
+    # (equity - running_max) / running_max division below is 0/0 and would
+    # silently yield NaN instead of the correct 1.0 (total) drawdown. Guard
+    # explicitly (CONSTRAINT #4: a real 100% loss must never read as
+    # "unmeasurable").
+    zero_peak = running_max == 0.0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        drawdown = (equity - running_max) / running_max
+    drawdown = drawdown.where(~zero_peak, -1.0)
     return float(abs(drawdown.min()))
 
 
