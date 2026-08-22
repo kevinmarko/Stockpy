@@ -1371,7 +1371,7 @@ def main() -> None:
             from execution.compose import compose_and_emit, write_advisory_source  # noqa: PLC0415
 
             write_advisory_source(result.recommendations)
-            _queue_path = compose_and_emit(result.snapshot)
+            _queue_path = compose_and_emit(result.snapshot, macro_dto=result.macro_dto)
             if _queue_path is not None:
                 logger.info("Robinhood execution queue emitted → %s", _queue_path)
         except Exception as _queue_exc:
@@ -1391,7 +1391,7 @@ def main() -> None:
                 emit_options_execution_queue,
             )
 
-            _opt_queue_path = emit_options_execution_queue(result)
+            _opt_queue_path = emit_options_execution_queue(result, macro_dto=result.macro_dto)
             if _opt_queue_path is not None:
                 logger.info(
                     "Robinhood options execution queue emitted → %s", _opt_queue_path,

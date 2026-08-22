@@ -26,6 +26,7 @@ from typing import Dict, List, Optional
 
 import pytest
 
+from dto_models import MacroEconomicDTO
 from execution import queue_builder as qb
 from execution.broker_base import OrderIntent, OrderSide
 from execution.risk_gate import RiskContext
@@ -504,3 +505,51 @@ class TestGateIntent:
         allowed, reasons = qb.gate_intent(intent, RiskContext(), gate=_BoomGate())
         assert allowed is False
         assert any("gate_error" in r for r in reasons)
+
+
+# ---------------------------------------------------------------------------
+# Macro context wiring (RiskContext.macro was previously always hardcoded to
+# None here — see execution/macro_snapshot.py's module docstring for the
+# full history). These pin: (1) the pre-fix fail-open default is unchanged
+# when no macro_dto is supplied, (2) a real killSwitch=True macro DTO now
+# genuinely vetoes a BUY intent, and (3) the veto is side-sensitive (SELL is
+# never blocked by the macro kill switch), matching
+# PreTradeRiskGate.macro_kill_switch_check's own documented contract.
+# ---------------------------------------------------------------------------
+
+def _killswitch_macro() -> MacroEconomicDTO:
+    """A real MacroEconomicDTO with killSwitch=True (RECESSION regime, high
+    VIX, elevated Sahm indicator — sahm alone already trips killSwitch)."""
+    return MacroEconomicDTO(
+        yield_curve_10y_2y=-0.5,
+        high_yield_oas=7.0,
+        inflation_rate=3.0,
+        sahm_rule_indicator=0.6,
+        vix_value=35.0,
+    )
+
+
+class TestMacroContext:
+    def test_macro_none_by_default_still_fails_open(self, cap5k):
+        """Backward-compat pin: a caller that doesn't pass macro_dto keeps
+        today's fail-open behaviour ("no macro context — skipping"), not a
+        new default veto."""
+        rr = _rr([_Rec("NVDA", "BUY", 0.9, suggested_position_pct=0.1)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        intent = p["intents"][0]
+        assert not any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+    def test_real_killswitch_blocks_buy_intent(self, cap5k):
+        rr = _rr([_Rec("NVDA", "BUY", 0.9, suggested_position_pct=0.1)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH, macro_dto=_killswitch_macro())
+        intent = p["intents"][0]
+        assert intent["gate_allowed"] is False
+        assert any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+    def test_killswitch_does_not_block_sell(self, cap5k):
+        # SELL of a held name must be unaffected by the macro kill switch —
+        # macro_kill_switch_check skips non-BUY intents by design.
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH, macro_dto=_killswitch_macro())
+        intent = p["intents"][0]
+        assert not any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])

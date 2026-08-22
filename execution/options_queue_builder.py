@@ -121,14 +121,19 @@ def _max_notional() -> float:
         return 0.0
 
 
-def _build_risk_context(snapshot: Any, now: datetime) -> RiskContext:
+def _build_risk_context(snapshot: Any, now: datetime, *, macro_dto: Optional[Any] = None) -> RiskContext:
     """Construct a best-effort `RiskContext` from the Robinhood account snapshot.
 
-    Missing data leaves the corresponding checks to conservative-pass (the gate's
-    own documented behaviour) — this is a PRE-SCREEN.  Robinhood's own option
-    order review plus per-trade human confirmation are the authoritative checks
-    downstream.  ``is_premium_sell_strategy=True`` so the gate's
-    minimum-validation / stress-aware checks treat these as short-vol intents.
+    ``macro_dto``, when supplied, populates ``RiskContext.macro`` so the
+    shared ``PreTradeRiskGate`` macro checks (``macro_kill_switch_check``,
+    ``stress_scenario_check``, ``hmm_regime_check``) genuinely evaluate
+    real VIX/Sahm/regime state instead of unconditionally passing. A caller
+    that doesn't have one yet (``None``, the default) reproduces the prior
+    fail-open behaviour exactly — this is a PRE-SCREEN either way. Robinhood's
+    own option order review plus per-trade human confirmation are the
+    authoritative checks downstream.  ``is_premium_sell_strategy=True`` so the
+    gate's minimum-validation / stress-aware checks treat these as short-vol
+    intents.
     """
     positions: List[PositionSnapshot] = []
     current_prices: Dict[str, float] = {}
@@ -161,7 +166,7 @@ def _build_risk_context(snapshot: Any, now: datetime) -> RiskContext:
 
     account = BrokerAccountSnapshot(equity=equity, cash=buying_power, buying_power=buying_power)
     return RiskContext(
-        macro=None,
+        macro=macro_dto,
         open_positions=positions,
         account=account,
         returns_df=None,
@@ -505,7 +510,7 @@ def build_options_execution_queue(
 
     max_notional = _max_notional()
     gate = PreTradeRiskGate()
-    context = _build_risk_context(snapshot, now)
+    context = _build_risk_context(snapshot, now, macro_dto=macro_dto)
 
     # Resolve the directive source: explicit map (tests) or live per-symbol fetch.
     resolved_directives: Dict[str, Dict[str, Any]] = {}

@@ -744,6 +744,12 @@ def plan_follow(
                 prior_mirrored=prior_mirrored, output_dir=output_dir,
                 sizing_tag=path_tag, kelly_weight=kelly_weight,
             )
+            # No `macro_dto` here — this follow path has no pipeline
+            # `RunResult` in scope. `compose_and_emit` self-sources a
+            # zero-network, cached macro DTO via
+            # `execution.macro_snapshot.load_cached_macro_dto` when none is
+            # passed, so the risk gate's macro checks still get real (if
+            # cache-stale) VIX/Sahm/regime state instead of staying blind.
             written_path = compose_and_emit(
                 account_snapshot, output_dir=output_dir,
                 extra_follow_pilot_ids=[pilot_id],

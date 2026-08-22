@@ -159,13 +159,17 @@ def _limit_buffer_bps() -> int:
         return 0
 
 
-def _build_risk_context(snapshot: Any, now: datetime) -> RiskContext:
+def _build_risk_context(snapshot: Any, now: datetime, *, macro_dto: Optional[Any] = None) -> RiskContext:
     """Construct a best-effort `RiskContext` from the Robinhood account snapshot.
 
-    Missing data leaves the corresponding checks to conservative-pass (the gate's
-    own documented behaviour) — this is a PRE-SCREEN.  Robinhood's own
-    `review_equity_order` pre-trade warnings plus per-trade human confirmation
-    are the authoritative checks downstream.
+    ``macro_dto``, when supplied, populates ``RiskContext.macro`` so the
+    shared ``PreTradeRiskGate`` macro checks (``macro_kill_switch_check``,
+    ``stress_scenario_check``, ``hmm_regime_check``) genuinely evaluate real
+    VIX/Sahm/regime state instead of unconditionally passing. A caller that
+    doesn't have one yet (``None``, the default) reproduces the prior
+    fail-open behaviour exactly — this is a PRE-SCREEN either way.
+    Robinhood's own `review_equity_order` pre-trade warnings plus per-trade
+    human confirmation are the authoritative checks downstream.
     """
     positions: List[PositionSnapshot] = []
     current_prices: Dict[str, float] = {}
@@ -198,7 +202,7 @@ def _build_risk_context(snapshot: Any, now: datetime) -> RiskContext:
 
     account = BrokerAccountSnapshot(equity=equity, cash=buying_power, buying_power=buying_power)
     return RiskContext(
-        macro=None,
+        macro=macro_dto,
         open_positions=positions,
         account=account,
         returns_df=None,
@@ -441,6 +445,7 @@ def build_execution_queue(
     mode: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    macro_dto: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Build the gated execution-queue payload from a `RunResult`.
 
@@ -448,12 +453,20 @@ def build_execution_queue(
     NEVER contacts a broker or the MCP.  Returns the full payload dict (callers
     that only want the file should use `emit_execution_queue`).  Per-symbol
     failures are logged and skipped (dead-letter resilient).
+
+    ``macro_dto``, when supplied, is threaded into the risk gate's
+    ``RiskContext.macro``. When not passed explicitly, falls back to
+    ``getattr(run_result, "macro_dto", None)`` — so a real `RunResult` with a
+    `.macro_dto` attribute is picked up automatically even if a caller forgets
+    the kwarg, matching this function's existing `getattr(run_result,
+    "snapshot", None)` idiom above.
     """
     cfg = {**CONFIG, **(config or {})}
     resolved_mode = _resolve_mode(mode)
     now = now or datetime.now(timezone.utc)
     snapshot = getattr(run_result, "snapshot", None)
     recommendations = getattr(run_result, "recommendations", []) or []
+    resolved_macro = macro_dto if macro_dto is not None else getattr(run_result, "macro_dto", None)
 
     kill_switch_active = False
     try:
@@ -465,7 +478,7 @@ def build_execution_queue(
     max_notional = _max_notional()
     limit_buffer_bps = _limit_buffer_bps()
     gate = PreTradeRiskGate()
-    context = _build_risk_context(snapshot, now)
+    context = _build_risk_context(snapshot, now, macro_dto=resolved_macro)
 
     intents: List[Dict[str, Any]] = []
     for rec in recommendations:
@@ -612,6 +625,7 @@ def emit_execution_queue(
     output_dir: Optional[Path] = None,
     config: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    macro_dto: Optional[Any] = None,
 ) -> Optional[Path]:
     """Build and atomically write `output/execution_queue.json`.
 
@@ -619,14 +633,17 @@ def emit_execution_queue(
     (the default) — in which case NOTHING is written and there is zero
     behavioural change.  Never raises: a write failure is logged and swallowed
     (CONSTRAINT #6) so a best-effort caller in the advisory loop is never
-    destabilised by this bridge.
+    destabilised by this bridge.  ``macro_dto`` is forwarded to
+    ``build_execution_queue`` (see its docstring for the resolution order).
     """
     resolved_mode = _resolve_mode(mode)
     if resolved_mode == "off":
         return None
 
     try:
-        payload = build_execution_queue(run_result, mode=resolved_mode, config=config, now=now)
+        payload = build_execution_queue(
+            run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
+        )
         if output_dir is None:
             from settings import settings
             output_dir = Path(settings.OUTPUT_DIR)

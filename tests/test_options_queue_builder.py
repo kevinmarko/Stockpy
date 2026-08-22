@@ -29,6 +29,7 @@ from typing import Dict, List, Optional
 
 import pytest
 
+from dto_models import MacroEconomicDTO
 from execution import options_queue_builder as oqb
 
 
@@ -68,11 +69,33 @@ class _RR:
 
 
 class _Macro:
-    """Minimal macro DTO stand-in exposing vix + market_regime."""
+    """Minimal macro DTO stand-in exposing vix + market_regime for
+    ``passes_premium_gate``'s duck-typed check.
 
-    def __init__(self, vix: float = 18.0, market_regime: str = "RISK ON"):
+    Since ``_build_risk_context`` now threads ``macro_dto`` into the real
+    ``RiskContext.macro`` (see the "no macro context" wiring fix), this fake
+    also flows through ``PreTradeRiskGate``'s own macro checks
+    (``macro_kill_switch_check``, ``stress_scenario_check``,
+    ``hmm_regime_check``) — so it needs to expose the attributes those checks
+    read directly (not via ``getattr``): ``killSwitch`` and
+    ``hmm_risk_on_probability``. Both default to values that leave the real
+    gate's macro checks benignly passing, so every existing test in this file
+    (which only ever exercised ``passes_premium_gate``'s vix/market_regime
+    behaviour) is unaffected.
+    """
+
+    def __init__(
+        self,
+        vix: float = 18.0,
+        market_regime: str = "RISK ON",
+        *,
+        kill_switch: bool = False,
+        hmm_risk_on_probability: Optional[float] = None,
+    ):
         self.vix = vix
         self.market_regime = market_regime
+        self.killSwitch = kill_switch
+        self.hmm_risk_on_probability = hmm_risk_on_probability
 
 
 _RTH = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)  # Tue ~1pm ET
@@ -386,3 +409,84 @@ class TestPayloadSchema:
             [_Rec("MSFT"), _Rec("AAPL")],
         )
         assert oqb._resolve_symbols(rr) == ["AAPL", "MSFT"]
+
+
+# ===========================================================================
+# Macro risk-gate wiring (RiskContext.macro was previously always hardcoded
+# to None in _build_risk_context, even though macro_dto was already threaded
+# into passes_premium_gate — see execution/macro_snapshot.py's module
+# docstring for the full history). These prove PreTradeRiskGate's own macro
+# checks (distinct from passes_premium_gate's informal VIX/regime check
+# above) now genuinely evaluate real macro state.
+# ===========================================================================
+
+
+def _high_vix_macro(vix: float) -> MacroEconomicDTO:
+    """A real MacroEconomicDTO with the given VIX, Sahm/yield-curve/credit-
+    spread all benign (killSwitch stays False, regime stays "RISK ON") — so
+    the ONLY thing this DTO can trip is a VIX-based check."""
+    return MacroEconomicDTO(
+        yield_curve_10y_2y=0.5, high_yield_oas=3.5, inflation_rate=3.0,
+        sahm_rule_indicator=0.0, vix_value=vix,
+    )
+
+
+class TestMacroRiskGateWiring:
+    """Proves ``PreTradeRiskGate``'s own macro checks (distinct from
+    ``passes_premium_gate``'s informal VIX/regime check above) now genuinely
+    evaluate real macro state instead of unconditionally passing.
+
+    Note on ``macro_kill_switch_check`` specifically: it only ever vetoes a
+    BUY-side intent, and this module's proxy intent for a premium-selling
+    directive is ALWAYS constructed with ``side=OrderSide.SELL``
+    (``_intent_dict``) — so that particular check is structurally
+    unreachable through this queue builder regardless of this fix (a
+    pre-existing property of ``macro_kill_switch_check`` itself, out of
+    scope to change here). ``stress_scenario_check`` (VIX-based,
+    side-independent) is the check this file can actually exercise.
+    """
+
+    def test_stress_scenario_check_now_fires_on_high_vix(self, cap5k):
+        # is_premium_sell_strategy=True in this module's RiskContext, so
+        # stress_scenario_check (VIX > 30, hardcoded in risk_gate.py) is the
+        # check this test targets — the exact check the investigation called
+        # "currently fully defeated by macro=None". passes_premium_gate's
+        # OWN vix >= max_vix filter would otherwise drop this directive
+        # before an intent is even built (both checks use ~30 by default),
+        # so max_vix is loosened here via the public `config` override —
+        # isolating the assertion to the SHARED risk gate's own check.
+        payload = oqb.build_options_execution_queue(
+            _rr(), mode="review", macro_dto=_high_vix_macro(35.0), now=_RTH,
+            directives={"NVDA": _put_credit_spread()},
+            config={"max_vix": 100.0},
+        )
+        assert payload["n_intents"] == 1
+        intent = payload["intents"][0]
+        assert intent["gate_allowed"] is False
+        assert any(r.startswith("stress_scenario:") for r in intent["gate_reasons"])
+
+    def test_moderate_vix_leaves_stress_scenario_check_passing(self, cap5k):
+        # Sanity counterpart: a benign VIX must NOT trip stress_scenario_check
+        # (pins the threshold direction so a future edit can't invert it).
+        payload = oqb.build_options_execution_queue(
+            _rr(), mode="review", macro_dto=_high_vix_macro(18.0), now=_RTH,
+            directives={"NVDA": _put_credit_spread()},
+        )
+        intent = payload["intents"][0]
+        assert not any(r.startswith("stress_scenario:") for r in intent["gate_reasons"])
+
+    def test_macro_dto_not_passed_to_emit_falls_open_as_before(self, tmp_path, no_cap):
+        # Backward-compat pin: a caller that forgets macro_dto (the exact
+        # main.py:1394 bug this fix closes) still writes a queue with the
+        # gate reading "no macro context — skipping" — never a silent
+        # regression to a different failure mode.
+        path = oqb.emit_options_execution_queue(
+            _rr(), mode="review", output_dir=tmp_path,
+            directives={"NVDA": _put_credit_spread()},
+        )
+        payload = json.loads(path.read_text())
+        intent = payload["intents"][0]
+        assert not any(
+            r.startswith("macro_kill_switch:") or r.startswith("stress_scenario:")
+            for r in intent["gate_reasons"]
+        )

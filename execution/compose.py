@@ -477,11 +477,12 @@ class ComposedIntent:
 
 @dataclass
 class _ComposedRunResult:
-    """``RunResult``-shaped shim -- ``execution.queue_builder`` reads only
-    ``.recommendations`` and ``.snapshot`` via ``getattr``."""
+    """``RunResult``-shaped shim -- ``execution.queue_builder`` reads
+    ``.recommendations``, ``.snapshot``, and ``.macro_dto`` via ``getattr``."""
 
     recommendations: List[ComposedIntent] = field(default_factory=list)
     snapshot: Any = None
+    macro_dto: Any = None
 
 
 def _advisory_min_conviction() -> float:
@@ -752,11 +753,23 @@ def compose_and_emit(
     now: Optional[datetime] = None,
     max_age_seconds: Optional[float] = None,
     extra_follow_pilot_ids: Optional[List[str]] = None,
+    macro_dto: Optional[Any] = None,
 ) -> Optional[Path]:
     """Read every current source, compose, gate, and emit ONE
     ``execution_queue.json`` — the single entry point every writer
     (``main.py``, ``pilots.mirror.plan_follow``) should call after writing
     its own source file.
+
+    ``macro_dto``, when supplied (``main.py`` passes its own cycle's
+    ``result.macro_dto``), is threaded through to the risk gate so
+    ``PreTradeRiskGate``'s macro checks (macro kill switch, stress scenario,
+    HMM regime) genuinely evaluate real VIX/Sahm/regime state instead of
+    unconditionally passing. When not supplied (e.g. ``pilots.mirror
+    .plan_follow``, which has no pipeline `RunResult` in scope), falls back
+    to a zero-network cache read via
+    ``execution.macro_snapshot.load_cached_macro_dto`` rather than leaving
+    the gate permanently blind — see that module's docstring for the
+    fail-open-but-audible contract when nothing is cached yet.
 
     ``extra_follow_pilot_ids`` FORCES those pilot ids' source files to be
     considered even if ``FollowsStore.list_active()`` doesn't (yet) list
@@ -784,6 +797,14 @@ def compose_and_emit(
         from settings import settings
         output_dir = settings.OUTPUT_DIR
     output_dir = Path(output_dir)
+
+    resolved_macro = macro_dto
+    if resolved_macro is None:
+        try:
+            from execution.macro_snapshot import load_cached_macro_dto
+            resolved_macro = load_cached_macro_dto(now=now)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("compose: cached-macro fallback unavailable (%s)", exc)
 
     if max_age_seconds is None:
         try:
@@ -852,7 +873,9 @@ def compose_and_emit(
             # proceed normally below.
             return None
 
-        run_result = _ComposedRunResult(recommendations=composed, snapshot=account_snapshot)
+        run_result = _ComposedRunResult(
+            recommendations=composed, snapshot=account_snapshot, macro_dto=resolved_macro,
+        )
         from execution.queue_builder import emit_execution_queue
         # Decision D3 (pilots/mirror.py): follows use a deliberately low
         # min_conviction floor so a Pilot's own conviction-independent
@@ -863,6 +886,7 @@ def compose_and_emit(
         return emit_execution_queue(
             run_result, mode=mode, output_dir=output_dir,
             config={"strategy_id": "composed", "min_conviction": FOLLOW_MIN_CONVICTION}, now=now,
+            macro_dto=resolved_macro,
         )
     except Exception as exc:  # pragma: no cover - belt-and-suspenders dead-letter
         logger.warning("compose: compose_and_emit failed (%s); execution_queue.json untouched", exc)
