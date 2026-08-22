@@ -245,3 +245,65 @@ class TestPerDateQueryGroups:
         assert sum(group_full) == len(X)
         assert group_full == [6] * 20  # 20 dates x 6 tickers each, none purged
         assert group_full != [len(X)]  # the pre-fix single-giant-group shape
+
+
+class TestReproducibility:
+    """Regression coverage for the fixed-seed determinism fix in
+    ``ml.lgbm_ranker._DEFAULT_PARAMS`` (``LGBM_RANDOM_SEED = 42`` plus
+    ``random_state``/``deterministic``/``force_row_wise``). Before this fix,
+    ``feature_fraction``/``bagging_fraction`` (refreshed every iteration since
+    ``bagging_freq=1``) drew a genuinely random row/feature subsample each
+    run, making every ``lgb.LGBMRanker(**params)`` fit non-deterministic --
+    confirmed live via two ``lgbm_ranker`` CPCV runs over the identical date
+    window differing at the 6th significant digit of Sharpe. See the module's
+    own ``LGBM_RANDOM_SEED`` docstring comment for the full writeup.
+    """
+
+    def test_default_params_include_fixed_seed(self):
+        import ml.lgbm_ranker as lgbm_ranker_module
+
+        assert (
+            lgbm_ranker_module._DEFAULT_PARAMS["random_state"]
+            == lgbm_ranker_module.LGBM_RANDOM_SEED
+        )
+        assert lgbm_ranker_module._DEFAULT_PARAMS["deterministic"] is True
+
+    def test_two_identical_trainings_produce_bitidentical_predictions(self):
+        """Two independently-constructed rankers, trained on the identical
+        panel via the native MultiIndex CV path (the path production/
+        validation actually exercises), must produce bit-identical
+        predictions -- not merely close ones."""
+        X, y, t1 = _make_multiindex_panel(n_dates=40, n_tickers=10, seed=0)
+
+        ranker_a = LGBMCrossSectionalRanker(purged_kfold_splits=3)
+        ranker_a.train(X, y, t1=t1, use_native_multiindex_cv=True)
+
+        ranker_b = LGBMCrossSectionalRanker(purged_kfold_splits=3)
+        ranker_b.train(X, y, t1=t1, use_native_multiindex_cv=True)
+
+        assert ranker_a._model is not None
+        assert ranker_b._model is not None
+
+        preds_a = ranker_a.predict(X)
+        preds_b = ranker_b.predict(X)
+
+        np.testing.assert_array_equal(preds_a, preds_b)
+
+    def test_two_identical_trainings_produce_bitidentical_predictions_flatten_path(self):
+        """Symmetry check for the default (non-native, flatten) path used by
+        every existing caller that never sets ``use_native_multiindex_cv``."""
+        X, y = _make_flat_panel(60, seed=0)
+
+        ranker_a = LGBMCrossSectionalRanker(purged_kfold_splits=3)
+        ranker_a.train(X, y)
+
+        ranker_b = LGBMCrossSectionalRanker(purged_kfold_splits=3)
+        ranker_b.train(X, y)
+
+        assert ranker_a._model is not None
+        assert ranker_b._model is not None
+
+        preds_a = ranker_a.predict(X)
+        preds_b = ranker_b.predict(X)
+
+        np.testing.assert_array_equal(preds_a, preds_b)

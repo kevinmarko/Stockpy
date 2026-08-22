@@ -38,6 +38,19 @@ _MODELS_DIR.mkdir(parents=True, exist_ok=True)
 # ──────────────────────────────────────────────────────────────────────────────
 # Hyper-parameters (Prompt 4.1 spec)
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Fixed seed for reproducible LightGBM training -- same convention as
+# CNN_LSTM_RANDOM_SEED in cnn_lstm_worker.py. Without this, `feature_fraction`/
+# `bagging_fraction` (refreshed every iteration since `bagging_freq=1`) draw a
+# genuinely random row/feature subsample each run, making every
+# `lgb.LGBMRanker(**params)` fit non-deterministic. Confirmed as a real, live
+# problem (not theoretical): the durable `validation_runs` table shows two
+# `lgbm_ranker` CPCV runs over the IDENTICAL date window differing at the 6th
+# significant digit of Sharpe (0.6752608... vs 0.6752606...) -- see
+# docs/VALIDATION_STRATEGY_FIX_LOG.md's lgbm_ranker thread for the full
+# writeup and the (larger, separate) confound this does NOT explain by itself.
+LGBM_RANDOM_SEED = 42
+
 _DEFAULT_PARAMS: dict = {
     "objective": "lambdarank",
     "metric": "ndcg",
@@ -50,6 +63,17 @@ _DEFAULT_PARAMS: dict = {
     "bagging_fraction": 0.8,
     "bagging_freq": 1,
     "verbose": -1,
+    # random_state seeds LightGBM's bagging/feature_fraction/drop/data seeds
+    # internally (LightGBM's `seed` config aliases). `deterministic=True` +
+    # `force_row_wise=True` close LightGBM's own documented second
+    # non-determinism source (histogram-parallelism reduction order / the
+    # row-vs-col-wise auto-selection) per its "Reproducing results" FAQ --
+    # `deterministic=True` alone has a documented training-speed cost, which
+    # is accepted here because a validation deployability gate (PBO/DSR/
+    # Sharpe) that isn't reproducible run-to-run isn't trustworthy at all.
+    "random_state": LGBM_RANDOM_SEED,
+    "deterministic": True,
+    "force_row_wise": True,
 }
 
 
