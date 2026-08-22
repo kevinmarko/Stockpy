@@ -170,6 +170,26 @@ def test_bars_empty_returns_empty_list(monkeypatch):
     assert resp.json() == []
 
 
+def test_bars_lookback_days_is_bounded(monkeypatch):
+    """``lookback_days`` must be rejected (422) outside [1, 3650] — matching
+    the ``/data/macro/{series_id}`` and ``/data/sentiment/history/{symbol}``
+    siblings' existing ``Query(..., ge=1, le=3650)`` bound. An unbounded
+    value here would eventually reach a multi-decade FMP fetch, silently
+    truncated by the undocumented ~5,000-row-per-request cap (see
+    ``docs/FMP_INTEGRATION.md``'s Known Risks section) rather than erroring —
+    this bound closes that gap defensively before it ever reaches the fetch
+    layer."""
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=_make_bars(3)))
+    monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        too_large = client.get("/data/bars/AAPL?lookback_days=7300")
+        too_small = client.get("/data/bars/AAPL?lookback_days=0")
+        in_bounds = client.get("/data/bars/AAPL?lookback_days=3650")
+    assert too_large.status_code == 422
+    assert too_small.status_code == 422
+    assert in_bounds.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # GET /data/fundamentals/{symbol}
 # ---------------------------------------------------------------------------

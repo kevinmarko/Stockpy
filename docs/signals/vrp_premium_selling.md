@@ -181,3 +181,9 @@ silently returns the most recent 5,000 trading days rather than paginating back 
 `--start 2005-01-01`, so this run's actual window began 2006-10-05, not 2005-01-01 — not
 believed to change the conclusion here (Sharpe is far below the gate either way), but
 disclosed for completeness. See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry.
+
+**Follow-up (same day)**: the caveat above is now closed — `data/fmp_client.py::historical_eod_full_range`
+fixes the FMP 5,000-row truncation. Re-run against the full 2005-present window:
+Sharpe=0.217, PBO=0.000, DSR=0.999, MaxDD=17.9%, `deployable=False` (unchanged conclusion —
+Sharpe remains well under the 0.50 gate). See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "FMP
+`historical_eod` 5,000-row cap fixed" entry.

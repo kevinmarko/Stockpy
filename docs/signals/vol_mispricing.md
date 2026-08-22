@@ -174,3 +174,12 @@ crisis window — not a fluke of any one run's data window or environment. Confi
 "insufficient history" RuntimeError encountered in the network-isolated sandbox was
 environmental (no/invalid FMP credentials there), not a defect in this adapter. See
 `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry.
+
+**Follow-up (same day) — 5th independent confirmation, now on the correct full data window**:
+`data/fmp_client.py::historical_eod_full_range` fixes the FMP 5,000-row truncation this run was
+unknowingly subject to. Re-run against the full 2005-present window: Sharpe=-0.033, PBO=0.000,
+DSR=0.504, MaxDD=100.0%, `deployable=False` (unchanged conclusion). The per-window stress figures
+are again **bit-identical** to every prior run — OCT_2008 203.8%/-75.5%/NO blow-up — now the 5th
+independent confirmation, and the first one measured on the genuinely correct full historical
+window. See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "FMP `historical_eod` 5,000-row cap fixed"
+entry.

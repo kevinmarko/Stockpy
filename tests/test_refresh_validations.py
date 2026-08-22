@@ -2188,6 +2188,56 @@ class TestFmpBackedDownloadFunctions:
             with pytest.raises(RuntimeError, match="Failed to download price data"):
                 _download_closes(["AAPL", "MSFT"], "2024-01-01", "2024-01-05")
 
+    def test_fetch_fmp_ohlcv_batch_pages_past_the_five_thousand_row_cap(self) -> None:
+        """End-to-end proof that ``_fetch_one``'s call-site switch to
+        ``historical_eod_full_range`` actually pages past a truncated FMP
+        response, through the REAL ``_download_closes`` -> ``_fetch_fmp_ohlcv_batch``
+        -> ``historical_eod_full_range`` -> ``historical_eod`` call chain --
+        not a direct call to ``historical_eod_full_range`` itself, since the
+        point is proving the two layers compose correctly.
+
+        Simulates FMP silently truncating a long window to its most recent
+        rows: the first ``historical_eod`` call (for the full requested
+        [2024-01-01, 2024-01-10] window) returns only the recent sub-window
+        (2024-01-08..10); ``historical_eod_full_range`` detects the earliest
+        returned date (2024-01-08) is still later than the requested
+        ``from_date`` (2024-01-01) and issues a follow-up call bounded to
+        [2024-01-01, 2024-01-07], which returns the older missing window
+        (2024-01-01..05). The merged result must span the FULL requested
+        range.
+        """
+        from scripts.refresh_validations import _download_closes
+
+        older_payload = self._fmp_eod_payload([100.0, 101.0, 102.0, 103.0, 104.0], start="2024-01-01")
+        recent_payload = self._fmp_eod_payload([110.0, 111.0, 112.0], start="2024-01-08")
+
+        def fake_historical_eod(symbol, *, variant, from_date=None, to_date=None):
+            assert symbol == "SPY"
+            if to_date == "2024-01-10":
+                # First call: the full requested window -- FMP "truncates"
+                # to only the recent sub-window.
+                return recent_payload
+            if to_date == "2024-01-07":
+                # Follow-up call: bounded to the still-missing older window.
+                return older_payload
+            raise AssertionError(f"unexpected to_date={to_date!r} in fake_historical_eod")
+
+        with patch("data.fmp_client.historical_eod", side_effect=fake_historical_eod) as mock_eod:
+            closes = _download_closes(["SPY"], "2024-01-01", "2024-01-10")
+
+        assert mock_eod.call_count == 2, "pagination must have engaged (exactly one first call + one follow-up)"
+
+        assert list(closes.columns) == ["SPY"]
+        dates = {d.strftime("%Y-%m-%d") for d in closes.index}
+        # Both the recent sub-window and the older sub-window's dates must
+        # be present -- not just whichever page happened to be fetched last.
+        assert {"2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"} <= dates
+        assert {"2024-01-08", "2024-01-09", "2024-01-10"} <= dates
+        assert closes.index.is_monotonic_increasing
+        assert closes["SPY"].tolist() == pytest.approx(
+            [100.0, 101.0, 102.0, 103.0, 104.0, 110.0, 111.0, 112.0], abs=1e-5
+        )
+
     # -- _download_ohlcv --------------------------------------------------
 
     def test_download_ohlcv_happy_path_column_shape(self) -> None:

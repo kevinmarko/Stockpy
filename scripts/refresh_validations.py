@@ -1897,9 +1897,13 @@ def _fetch_fmp_ohlcv_batch(
     this repo's own documentation calls an adjustment-convention mismatch the
     single highest-risk class of bug in any FMP integration.
 
-    Each ticker is fetched independently via ``data.fmp_client.historical_eod``
-    (variant = ``settings.FMP_BARS_ADJUSTMENT``, default ``"dividend-adjusted"``)
-    and reshaped through ``data.market_data._fmp_bars_payload_to_df`` — the
+    Each ticker is fetched independently via ``data.fmp_client.historical_eod_full_range``
+    (variant = ``settings.FMP_BARS_ADJUSTMENT``, default ``"dividend-adjusted"``) —
+    which transparently pages past FMP's silent ~5,000-row-per-request cap on
+    this endpoint (see that function's own docstring) so a long ``--start``
+    window (this module's default is 2005-01-01) is actually honored instead
+    of silently truncated to the most recent ~19.8 years — and reshaped
+    through ``data.market_data._fmp_bars_payload_to_df`` — the
     SAME adjustment-aware reshape helper ``FMPProvider.get_intraday_bars``
     uses, reused rather than reimplemented so the adjX/X field-name fallback
     (and thus the yfinance-equivalent adjustment convention) stays correct.
@@ -1934,7 +1938,7 @@ def _fetch_fmp_ohlcv_batch(
 
     def _fetch_one(ticker: str) -> Tuple[str, Optional[pd.DataFrame]]:
         try:
-            payload = fmp_client.historical_eod(
+            payload = fmp_client.historical_eod_full_range(
                 ticker, variant=variant, from_date=start_date, to_date=end_date,
             )
             sub = _fmp_bars_payload_to_df(payload)

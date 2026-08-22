@@ -103,7 +103,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -573,6 +573,158 @@ def historical_eod(
     if to_date:
         params["to"] = to_date
     return _fmp_get(f"historical-price-eod/{variant}", params)
+
+
+def historical_eod_full_range(
+    symbol: str,
+    *,
+    variant: str,
+    from_date: str,
+    to_date: str,
+    max_requests: int = 10,
+) -> List[Dict[str, Any]]:
+    """Full-range daily OHLCV bars, transparently paginating past FMP's
+    undocumented, silent 5,000-row-per-request cap on
+    ``/historical-price-eod/{variant}`` (see :func:`historical_eod`'s own
+    docstring for the adjustment-convention contract, which applies here
+    unchanged).
+
+    FMP does not paginate this endpoint via ``page``/``limit`` (verified live
+    2026-08: passing them is silently ignored). Instead, when the requested
+    ``[from_date, to_date]`` window would return more than ~5,000 rows, FMP
+    silently serves only the most RECENT ~5,000 rows and drops the OLDER
+    portion — no error, no truncation flag, nothing in the response shape
+    that distinguishes "this is everything" from "this is capped". A single
+    :func:`historical_eod` call for a ~20+-year window is therefore silently
+    incomplete; this function detects that and re-fetches the missing older
+    window(s) explicitly.
+
+    Algorithm: call :func:`historical_eod` once for ``[from_date, to_date]``.
+    If the EARLIEST date in that response is still later than ``from_date``,
+    truncation is presumed — issue a follow-up call bounded to
+    ``[from_date, earliest_date - 1 day]``, merge the two payloads
+    (de-duplicated by ``date``), and repeat against the new earliest date.
+    Stops on whichever of these is met first:
+
+    1. The earliest merged date reaches (``<=``) ``from_date`` — the window
+       is complete. The only "clean" termination; no warning is logged.
+    2. A follow-up call raises, returns nothing, or introduces no date
+       earlier than what's already merged — the symbol's own history is
+       exhausted (e.g. the window reached back past its IPO date) or FMP
+       returned something anomalous. Logged at WARNING either way: the
+       caller must not treat a clean loop-stop as proof of completeness.
+    3. ``max_requests`` requests have been issued without reaching
+       ``from_date``. Logged at WARNING. Default ``10`` is a safety valve,
+       not an expected budget — at ~5,000 rows/request (~19.8 trading
+       years), 10 requests would cover ~198 years; hitting this in practice
+       signals something is wrong, not a genuinely long window.
+
+    In every case this function returns whatever was gathered — it NEVER
+    raises due to truncation and NEVER silently claims completeness it
+    doesn't have. A caller that must know for certain can check
+    ``result[0]["date"] <= from_date`` itself. The one exception is the
+    FIRST call: if it raises, that propagates unchanged (matching
+    :func:`historical_eod`'s own no-swallow contract), so a totally-
+    unreachable symbol still fails loudly rather than returning ``[]``
+    indistinguishably from "no data in range."
+
+    Termination is guaranteed independent of ``max_requests``: every
+    iteration issues exactly one request and then requires the merged
+    earliest date to have strictly decreased, or it stops — this can never
+    spin indefinitely even under a pathological/looping API response.
+
+    Returns the SAME raw list-of-dicts shape as :func:`historical_eod`
+    (rows un-normalised beyond what FMP itself returns), sorted by ``date``
+    ASCENDING — a guarantee :func:`historical_eod` itself does not make, but
+    this function must impose since it may merge multiple pages. An
+    entirely-empty first-call result (nothing in range at all, not
+    truncation) returns ``[]`` immediately, no follow-up call issued.
+    """
+    first_page = historical_eod(
+        symbol, variant=variant, from_date=from_date, to_date=to_date
+    )
+    if not first_page:
+        return []
+
+    # ISO "YYYY-MM-DD" strings compare lexicographically in chronological
+    # order -- load-bearing throughout this function.
+    collected: Dict[str, Dict[str, Any]] = {}
+    for row in first_page:
+        d = row.get("date")
+        if d is None:
+            logger.warning(
+                "historical_eod_full_range: row missing 'date' for %s (%s), dropped",
+                symbol, variant,
+            )
+            continue
+        collected[d] = row
+
+    if not collected:
+        return []
+
+    requests_made = 1
+    earliest = min(collected)
+
+    while earliest > from_date and requests_made < max_requests:
+        next_to = (
+            datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        try:
+            follow_up = historical_eod(
+                symbol, variant=variant, from_date=from_date, to_date=next_to
+            )
+        except Exception as exc:  # noqa: BLE001 -- partial result beats discarding it
+            logger.warning(
+                "historical_eod_full_range: follow-up request failed for %s "
+                "(%s) after %d request(s); returning %d partial rows "
+                "spanning %s..%s (requested from %s): %s",
+                symbol, variant, requests_made, len(collected), earliest,
+                to_date, from_date, exc,
+            )
+            break
+        requests_made += 1
+
+        if not follow_up:
+            logger.warning(
+                "historical_eod_full_range: exhausted history for %s (%s) "
+                "-- no data before %s; returning %d rows spanning %s..%s "
+                "(requested from %s)",
+                symbol, variant, earliest, len(collected), earliest,
+                to_date, from_date,
+            )
+            break
+
+        new_earliest = earliest
+        for row in follow_up:
+            d = row.get("date")
+            if d is None:
+                continue
+            collected.setdefault(d, row)
+            new_earliest = min(new_earliest, d)
+
+        if new_earliest == earliest:
+            logger.warning(
+                "historical_eod_full_range: follow-up for %s (%s) returned "
+                "no new earlier dates (possible exhausted history or API "
+                "anomaly) after %d request(s); returning %d rows spanning "
+                "%s..%s (requested from %s)",
+                symbol, variant, requests_made, len(collected), earliest,
+                to_date, from_date,
+            )
+            break
+
+        earliest = new_earliest
+
+    if earliest > from_date and requests_made >= max_requests:
+        logger.warning(
+            "historical_eod_full_range: max_requests=%d exhausted for %s "
+            "(%s); returning %d rows spanning %s..%s -- INCOMPLETE, still "
+            "missing %s..%s",
+            max_requests, symbol, variant, len(collected), earliest,
+            to_date, from_date, earliest,
+        )
+
+    return sorted(collected.values(), key=lambda r: r["date"])
 
 
 def intraday(
