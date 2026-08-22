@@ -336,6 +336,14 @@ def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, m
     ml/models/ directory) and asserts (a) it is invoked with path=None when the
     caller supplies no save_path, and (b) run_training's returned model_path /
     registry artifact_file reflect whatever path .save() actually returns.
+
+    ``confirm_shared_write=True`` here is required by run_training()'s static,
+    argument-based shared-state guard (save_path=None trips it regardless of
+    whether .save() happens to be mocked at runtime) -- this test's mocked
+    .save() means no real shared directory is ever touched despite the flag,
+    so this is a deliberate, safe opt-in specifically to exercise the
+    save_path=None parameter-passing contract, not evidence the guard should
+    be weakened for this case.
     """
     fake_dated_path = tmp_path / "lgbm_20260706.pkl"
     received_args = {}
@@ -353,6 +361,7 @@ def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, m
         save_path=None,
         registry_path=tmp_registry,
         historical_store=False,
+        confirm_shared_write=True,
     )
 
     assert received_args["path"] is None, (
@@ -365,6 +374,105 @@ def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, m
     row = data["models"]["lgbm_ranker"]
     assert row["artifact_file"] == "lgbm_20260706.pkl"
     assert "latest" not in row["artifact_file"]
+
+
+class TestSharedStateGuard:
+    """Regression coverage for the `confirm_shared_write` guard added after a
+    real incident: an ad hoc `run_training()` call with no path overrides
+    silently wrote synthetic-run metrics into the MACHINE-GLOBAL
+    `ml/registry.yaml` (shared by every git worktree on this machine) and left
+    a bogus model pickle shadowing the real production artifact -- caught and
+    reverted by hand (see docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-22
+    lgbm_ranker entry). The guard must raise BEFORE any network/training work
+    starts, and must never fire when the caller has supplied both explicit
+    paths.
+    """
+
+    def test_both_paths_none_raises_before_any_work(self, monkeypatch):
+        # A canary on the data engine construction path: if it's ever
+        # reached, the guard fired too late (after starting real work) or
+        # not at all.
+        def _boom(*a, **k):
+            raise AssertionError("run_training must raise before touching a data engine")
+
+        monkeypatch.setattr(train_lgbm, "_SyntheticDataEngine", _boom)
+        with pytest.raises(ValueError, match="confirm_shared_write"):
+            train_lgbm.run_training(_TICKERS, offline=True)
+
+    def test_save_path_none_alone_raises(self, tmp_registry):
+        with pytest.raises(ValueError, match="confirm_shared_write"):
+            train_lgbm.run_training(
+                _TICKERS,
+                data_engine=_DistinctEngine(),
+                save_path=None,
+                registry_path=tmp_registry,
+                historical_store=False,
+            )
+
+    def test_registry_path_none_alone_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="confirm_shared_write"):
+            train_lgbm.run_training(
+                _TICKERS,
+                data_engine=_DistinctEngine(),
+                save_path=tmp_path / "lgbm_latest.pkl",
+                registry_path=None,
+                historical_store=False,
+            )
+
+    def test_both_paths_explicit_never_requires_the_flag(self, tmp_path, tmp_registry):
+        # No confirm_shared_write passed at all -- must not raise, since both
+        # paths are explicit and isolated (tmp_path-based).
+        summary = train_lgbm.run_training(
+            _TICKERS,
+            data_engine=_DistinctEngine(),
+            save_path=tmp_path / "lgbm_latest.pkl",
+            registry_path=tmp_registry,
+            historical_store=False,
+        )
+        assert summary["deployable"] in (True, False)  # ran to completion
+
+    def test_confirm_shared_write_true_bypasses_the_guard_even_with_no_paths(
+        self, monkeypatch
+    ):
+        """Proves the escape hatch itself genuinely lets a caller through
+        (exercised for real by scripts/train_lgbm.py's own main() /
+        scripts/retrain_models.py) -- with the real save/registry-write calls
+        MOCKED OUT ENTIRELY, so this test cannot touch real shared state
+        regardless of how settings.LOCAL_DATA_ROOT / ml/registry_io.py's own
+        path-resolution internals behave (an earlier version of this test
+        tried to redirect every path via monkeypatching instead of mocking
+        the calls, and genuinely leaked a write into the real machine-global
+        registry anyway via a resolution path this test didn't fully trace --
+        see git history / the incident this whole guard exists to prevent.
+        Mocking the calls sidesteps that risk entirely rather than trying to
+        out-guess every internal path-resolution branch).
+        """
+        calls: dict = {}
+
+        def _fake_save(self, path=None):
+            calls["save_path"] = path
+            return Path("/fake/lgbm_fake.pkl")
+
+        def _fake_update_model_metrics(*args, **kwargs):
+            calls["registry_path"] = kwargs.get("path")
+            return {"deployable": False}
+
+        monkeypatch.setattr(train_lgbm.LGBMCrossSectionalRanker, "save", _fake_save)
+        monkeypatch.setattr(train_lgbm, "update_model_metrics", _fake_update_model_metrics)
+
+        summary = train_lgbm.run_training(
+            _TICKERS,
+            data_engine=_DistinctEngine(),
+            historical_store=False,
+            confirm_shared_write=True,
+        )
+        assert isinstance(summary, dict)
+        assert "deployable" in summary
+        # Confirms the guard did NOT block: the (mocked) save/registry calls
+        # actually ran, with path=None -- exactly what a real, unmocked
+        # caller's save_path=None/registry_path=None would resolve against.
+        assert "save_path" in calls and calls["save_path"] is None
+        assert "registry_path" in calls and calls["registry_path"] is None
 
 
 def test_deployable_flag_matches_gate_exactly(trained_model_fixture):

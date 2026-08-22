@@ -146,6 +146,12 @@ def retrain_all(
             lgbm_tickers,
             offline=offline,
             registry_path=registry_path,
+            # This scheduled retraining job's entire purpose is a genuine,
+            # intentional production training run -- confirm_shared_write=True
+            # is the deliberate opt-in run_training() requires whenever
+            # save_path/registry_path are left unset (registry_path defaults
+            # to None here, and save_path is never passed at all).
+            confirm_shared_write=True,
         )
         logger.info(
             "LGBM ranker retrained: dsr=%s pbo=%s n_train=%s deployable=%s",
