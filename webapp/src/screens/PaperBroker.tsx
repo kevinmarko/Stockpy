@@ -328,7 +328,7 @@ export function PaperBroker() {
   const handleRetrainMeta = async () => {
     const res = await retrainMutation.run();
     if (res) {
-      setExecStatus(`Stage 4 ML Meta-Labeler retrained on ${res.trained_samples} trades (Accuracy: ${res.accuracy}%, ROC-AUC: ${res.roc_auc}).`);
+      setExecStatus(`Stage 4 ML Meta-Labeler retrained on ${res.trained_samples} trades (in-sample Accuracy: ${res.accuracy}%, in-sample ROC-AUC: ${res.roc_auc}).`);
       metaStatus.reload();
     }
   };
@@ -1570,13 +1570,13 @@ export function PaperBroker() {
                 </div>
               </div>
               <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
-                <div style={{ fontSize: 12, color: theme.textSecondary }}>Model Accuracy</div>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>Model Accuracy (in-sample)</div>
                 <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4, color: theme.growth }}>
                   {metaStatus.data?.train_accuracy != null ? `${metaStatus.data.train_accuracy}%` : "—"}
                 </div>
               </div>
               <div style={{ padding: 12, background: theme.base, borderRadius: 6, border: `1px solid ${theme.border}` }}>
-                <div style={{ fontSize: 12, color: theme.textSecondary }}>ROC-AUC Score</div>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>ROC-AUC Score (in-sample)</div>
                 <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
                   {metaStatus.data?.train_roc_auc != null ? metaStatus.data.train_roc_auc.toFixed(3) : "—"}
                 </div>
