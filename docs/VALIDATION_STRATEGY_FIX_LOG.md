@@ -1900,44 +1900,54 @@ A `TestReproducibility` class was added to `tests/test_lgbm_ranker_native_cv.py`
 independently-trained `LGBMCrossSectionalRanker` instances on identical synthetic input
 produce bit-identical `.predict()` output (`np.testing.assert_array_equal`).
 
-### `lgbm_ranker`'s real, measured post-seed-fix numbers — **PENDING**
+### `lgbm_ranker`'s real, measured post-seed-fix numbers — **RESOLVED**
 
-A genuine, canonical re-run was started to finally resolve the prior entry's outstanding
-PENDING marker with real post-seed-fix numbers:
-
-```
-python -m scripts.refresh_validations --strategies lgbm_ranker --start 2005-01-01 \
-  --output-dir reports --n-cpcv-splits 15 --n-test-splits 4 --workers 1 --json
-```
-
-(log at `/tmp/validation_runs/lgbm_ranker_seedfix.log`, PID 16419) — the same exact settings
-as the entry above's own re-run. **As of this entry being written, the run was still in
-progress, not yet complete** (`ps -p 16419` showed it alive, elapsed ~00:03:13, `STAT RN`;
-the log's last line was mid-CPCV-fold training, `LGBMRanker CV NDCG@1 mean=0.3826` at
-`2026-08-22 10:18:25`; `reports/lgbm_ranker_validation_summary.json` did not yet exist). This
-mirrors the prior entry's own experience — a real per-fold LightGBM retrain across 1365 CPCV
-paths is CPU-bound and has consistently taken roughly 2 hours wall-clock in this codebase, so
-it is not expected to complete within a single session turn.
-
-**No number is fabricated or estimated here.** Per this repo's CONSTRAINT #4, `lgbm_ranker`'s
-real post-seed-fix Sharpe/DSR/PBO/MaxDD are left **PENDING** in this entry rather than guessed
-from the in-progress log. To get the real numbers once the run completes:
+The canonical re-run (`python -m scripts.refresh_validations --strategies lgbm_ranker
+--start 2005-01-01 --output-dir reports --n-cpcv-splits 15 --n-test-splits 4 --workers 1
+--json`, PID 16419) completed at `2026-08-22 12:40:02` (started `10:15:14`, ~2h25m
+wall-clock, consistent with every prior estimate in this thread). Real, measured result
+from `reports/lgbm_ranker_validation_summary.json`:
 
 ```
-# Check whether it's still running:
-ps -p 16419
-
-# Once it's finished, the result is both printed at the end of the log and written to
-# the standard JSON/HTML report locations:
-tail -40 /tmp/validation_runs/lgbm_ranker_seedfix.log
-cat reports/lgbm_ranker_validation_summary.json
-tail -1 reports/history/lgbm_ranker_validation_history.jsonl
+sharpe:        0.41962450878656576
+dsr:           0.8404066793562799
+pbo:           0.0
+max_drawdown:  0.024846641363470222   (2.48%)
+n_trials:      1
+deployable:    False   -- "DSR 0.84<0.95, Sharpe 0.42<0.50"
 ```
 
-**Follow-up needed**: once `reports/lgbm_ranker_validation_summary.json` exists for this run,
-append the real numbers to this entry and to `docs/signals/lgbm_ranker.md`'s corresponding
-follow-up section (both currently marked PENDING) — do not let this PENDING marker go stale,
-same instruction the entry above already gave for its own now-resolved PENDING marker.
+**`deployable=False` is confirmed, as expected** — both independent gate conditions fail
+(DSR 0.840 < 0.95; net-of-cost Sharpe 0.420 < 0.50), consistent with every prior entry in
+this thread's expectation that annualization/OOS-gate/determinism corrections only ever
+*reduce* an inflated Sharpe/DSR, never increase one past the gate. This is a real,
+substantial improvement in TRUSTWORTHINESS over the pre-fix numbers on record for this
+strategy (Sharpe swinging anywhere from -0.57 to +24.9 across non-reproducible runs, DSR
+0.16-0.999) — the gate now rests on a number that doesn't change if you run the exact same
+command twice, which none of the prior numbers could honestly claim.
+
+**One honest correction to this thread's own working theory, surfaced by this run**: the
+persisted `start_date`/`end_date` (`2020-08-24` → `2026-07-17`) do **not** match the
+`--start 2005-01-01` CLI argument that was passed. This is expected, not a bug —
+`_build_lgbm_ranker_adapter`'s own documented design bounds the feature panel window to the
+last ~6 years of `closes`'s own date range (`scripts/refresh_validations.py`'s
+`BOUND_YEARS = 6`), so the persisted window reflects that internal bound, not the CLI
+request. This also REFINES (rather than contradicts) this thread's differing-window
+explanation for the DB's wider historical scatter: since the window's start is
+`max(earliest available date across the successfully-fetched universe, 6 years back from
+the latest date)`, a run that loses more tickers to the process-local-rate-limiter
+contention documented below would see its `full_index[0]` shift later, changing the
+effective window even for two runs issued with the identical CLI `--start` value — the same
+underlying mechanism, not a separate one.
+
+Also worth noting for context, not part of the deployability gate itself: this run's
+family-wise multiple-testing correction (`VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED`)
+reports a second, lower `dsr_family_corrected = 0.6622888638378448` for the single-strategy
+family — moving further below the 0.95 gate, not closer, so it does not change the
+`deployable=False` conclusion.
+
+HTML reports: `reports/validation_lgbm_ranker_20260822_124002.html`,
+`reports/cpcv_lgbm_ranker_20260822_124002.html`.
 
 ### Separate, still-open finding — flagged, not fixed here
 

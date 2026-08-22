@@ -344,13 +344,20 @@ produced bit-identical `dsr=0.9812207805846127`, `pbo=0.14285714285714285`,
 regression test (`tests/test_lgbm_ranker_native_cv.py::TestReproducibility`) asserting
 bit-identical `.predict()` output from two independently-trained rankers on identical input.
 
-**Full canonical re-run status**: a real re-run of the exact command this file's existing
-PENDING section already specifies was started (log at
-`/tmp/validation_runs/lgbm_ranker_seedfix.log`, PID 16419) to finally resolve the outstanding
-PENDING number from the entry above. **Still PENDING as of this entry** — confirmed running
-(`ps -p 16419` shows the process alive, ~3 minutes elapsed and still on its first handful of the
-1365 CPCV paths' per-fold `LGBMCrossSectionalRanker` fits as of the last log check) — see
-`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s matching entry (dated 2026-08-22) once it completes for
-the real, corrected Sharpe/PBO/DSR/MaxDD numbers. No Sharpe/DSR/PBO/MaxDD/`deployable` value for
-this specific re-run is stated here — per CONSTRAINT #4, nothing is fabricated, rounded, or
-estimated ahead of the run's own completed JSON summary.
+**Full canonical re-run — real, measured result**: the re-run completed
+(`reports/lgbm_ranker_validation_summary.json`, 2026-08-22 12:40:02, ~2h25m wall-clock):
+
+| Sharpe | DSR | PBO | MaxDD | n_trials | Deployable |
+|---|---|---|---|---|---|
+| 0.420 | 0.840 | 0.000 | 2.48% | 1 | ❌ **False** — `DSR 0.84<0.95, Sharpe 0.42<0.50` |
+
+Both gate conditions independently fail. This is **not** the same failure mode as either
+prior number on record for this strategy: it supersedes the pre-determinism-fix Sharpe of
+24.886 (an in-sample, wrong-annualization, non-reproducible artifact — see the entries
+above) with a real, run-to-run-reproducible measurement. `deployable=False` remains the
+honest conclusion, now on trustworthy footing rather than an inflated or non-reproducible
+number. The persisted effective window (`2020-08-24`→`2026-07-17`) reflects
+`_build_lgbm_ranker_adapter`'s own documented ~6-year bounding, not the `--start 2005-01-01`
+CLI argument — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s matching 2026-08-22 entry for the
+full detail, including a family-wise-corrected `dsr_family_corrected=0.662` (lower still,
+doesn't change the conclusion) and the HTML report paths.
