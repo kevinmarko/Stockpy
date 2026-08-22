@@ -56,11 +56,29 @@ const mockToxicVpinResponse: VpinMetricsResponse = {
   as_of: new Date().toISOString(),
 };
 
+const mockUnavailableVpinResponse: VpinMetricsResponse = {
+  symbol: "NVDA",
+  vpin: null,
+  regime: null,
+  toxicity_percentile: null,
+  bucket_size: 0,
+  num_buckets: 20,
+  buckets: [],
+  defensive_spread_concession: null,
+  warning_message:
+    "VPIN is unavailable for NVDA -- market data fetch failed for NVDA: MarketDataError: simulated failure. No toxicity measurement is being shown.",
+  as_of: new Date().toISOString(),
+  data_available: false,
+  data_source: null,
+  reason: "market data fetch failed for NVDA: MarketDataError: simulated failure",
+};
+
 describe("VpinGauge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getVpinMetrics).mockImplementation(async (sym) => {
       if (sym.toUpperCase() === "TSLA") return mockToxicVpinResponse;
+      if (sym.toUpperCase() === "NVDA") return mockUnavailableVpinResponse;
       return mockLowVpinResponse;
     });
   });
@@ -119,6 +137,24 @@ describe("VpinGauge", () => {
     expect(
       screen.getByText(/Hover over any volume bucket bar to inspect detailed price progression/i)
     ).toBeInTheDocument();
+  });
+
+  it("renders an honest unavailable state instead of a fabricated reading when data_available is false", async () => {
+    render(<VpinGauge initialSymbol="NVDA" />);
+
+    expect(
+      await screen.findByText(/VPIN is unavailable for NVDA/i)
+    ).toBeInTheDocument();
+    // Never falls back to a plausible-looking fake percentage, regime label, or gate value --
+    // the toxicity %ile, VPIN readout, and defensive gate all render the same "no data" glyph.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByText("UNAVAILABLE")).toBeInTheDocument();
+    expect(
+      screen.getByText(/No real market data available for NVDA/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText("LOW")).not.toBeInTheDocument();
+    expect(screen.queryByText("MODERATE")).not.toBeInTheDocument();
+    expect(screen.queryByText("HIGH TOXICITY")).not.toBeInTheDocument();
   });
 
   it("calls onClose when close button is clicked", async () => {
