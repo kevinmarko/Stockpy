@@ -2055,4 +2055,4 @@ sibling endpoints' existing convention rather than left as a live, if dormant, g
 `lookback_days: int = Query(252, ge=1, le=3650)`. New test:
 `tests/test_data_api.py::test_bars_lookback_days_is_bounded`.
 
-Introducing PR: `fmp-historical-eod-pagination-fix` (link filled in once opened).
+Introducing PR: [#851](https://github.com/kevinmarko/Stockpy/pull/851).
