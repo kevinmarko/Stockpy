@@ -4153,6 +4153,8 @@ def _validate_single_strategy(
             f"{summary.get('max_drawdown'):.3f}"
             if summary.get("max_drawdown") is not None else "  —  ",
         )
+        if summary.get("signal_sparsity_note"):
+            logger.info("    ⚠ %s", summary["signal_sparsity_note"])
         return name, summary
 
     except Exception as exc:  # CONSTRAINT #6 — per-strategy dead-letter

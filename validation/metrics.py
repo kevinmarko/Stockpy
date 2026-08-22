@@ -131,6 +131,16 @@ def infer_annualization_freq(returns: pd.Series, default: int = 252) -> float:
         return float(default)
 
 
+# Degenerate-std guard threshold shared by sharpe_ratio and
+# describe_signal_sparsity below -- both must agree on exactly what "the
+# std is functionally zero" means, or the diagnostic could describe a
+# condition sharpe_ratio didn't actually hit (or vice versa). Same value as
+# the (independently-declared, per this repo's own documented convention --
+# see risk/etf_transmission.py) 1e-12 floor used across every other
+# degenerate-value guard in this codebase.
+_DEGENERATE_STD = 1e-12
+
+
 def sharpe_ratio(returns: pd.Series, freq: int = 252) -> float:
     """
     Calculates the standard annualized Sharpe Ratio.
@@ -140,7 +150,7 @@ def sharpe_ratio(returns: pd.Series, freq: int = 252) -> float:
         returns = returns.squeeze()
     if not isinstance(returns, pd.Series):
         returns = pd.Series(returns)
-        
+
     if len(returns) < 2:
         return np.nan
     mean_ret = returns.mean()
@@ -155,9 +165,72 @@ def sharpe_ratio(returns: pd.Series, freq: int = 252) -> float:
     # degenerate-std threshold already used by risk/etf_transmission.py --
     # far above float noise (~1e-16 to 1e-20) and far below any real
     # strategy's daily-return std.
-    if np.isnan(std_ret) or std_ret < 1e-12:
+    if np.isnan(std_ret) or std_ret < _DEGENERATE_STD:
         return np.nan
     return (mean_ret / std_ret) * np.sqrt(freq)
+
+
+def describe_signal_sparsity(returns: Optional[pd.Series]) -> Optional[str]:
+    """Explains a NaN Sharpe/PBO/DSR that stems from ``returns`` carrying too
+    little real (non-degenerate) signal for sharpe_ratio's own degenerate-std
+    guard (above) to clear -- i.e. this is gated on the EXACT SAME condition
+    that produces the NaN in the first place, so the note is causally tied to
+    what actually happened rather than a separately-invented sparsity
+    threshold. Returns ``None`` whenever that guard would NOT have fired
+    (including on ``None``/too-short input) -- a real, non-degenerate series
+    is not "insufficient signal" merely because it trades rarely (e.g.
+    ``pairs_trading`` genuinely only round-trips a handful of times a year;
+    that is a legitimately low-frequency strategy, not this failure mode).
+
+    ``returns`` should be the RAW, pre-cost-model return series (e.g.
+    ``StrategyValidationHarness``'s ``best_trial["test_returns"]`` before
+    ``_apply_cost_model``) -- subtracting a flat per-day cost doesn't change
+    std() (a constant shift never changes variance), so the degenerate-std
+    gate below still fires correctly either way, but it WOULD make every
+    true "never traded" 0.0 day read as "nonzero" for the count in the
+    message text, defeating the diagnostic's own numbers.
+
+    Never raises (diagnostic-only, mirrors
+    scripts/refresh_validations.py::_describe_universe_coverage's own
+    never-raises convention).
+    """
+    try:
+        if returns is None:
+            return None
+        r = pd.Series(returns).astype(float)
+        if len(r) < 2:
+            return None
+        std_ret = r.std()
+        if not (np.isnan(std_ret) or std_ret < _DEGENERATE_STD):
+            return None  # a real, non-degenerate series -- nothing to explain
+
+        # "nonzero" = meaningfully different from exact zero -- 1e-9 is far
+        # above float noise and far below any real 1-day strategy P&L, and
+        # NaN entries are excluded from both numerator and the "real" count
+        # (dropna) rather than silently counted as zero.
+        valid = r.dropna()
+        n_total = int(len(r))
+        n_nonzero = int((valid.abs() > 1e-9).sum())
+
+        if n_nonzero == 0:
+            return (
+                f"insufficient trading signal: 0/{n_total} observations were "
+                "non-zero over this backtest window -- the underlying "
+                "strategy never actually produced a priced trade (every day "
+                "degraded to a 0.0 fill), so Sharpe/PBO/DSR/MaxDD are not a "
+                "genuine measurement of strategy skill or risk."
+            )
+        return (
+            f"insufficient trading signal: only {n_nonzero}/{n_total} "
+            f"observations ({n_nonzero / n_total:.3%}) were non-zero over "
+            "this backtest window, and their combined variance was too "
+            "small to produce a measurable Sharpe/PBO/DSR (a near-constant "
+            "return series) -- these are not a genuine measurement of "
+            "strategy skill."
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic-only, must not raise
+        return f"error computing signal density ({exc})"
+
 
 def deflated_sharpe_ratio(
     sr_observed: float,

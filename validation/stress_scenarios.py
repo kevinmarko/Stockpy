@@ -221,6 +221,32 @@ def run_stress_scenario(returns_fn: ReturnsFn, scenario: StressScenario) -> Stre
         )
 
     r = returns.astype(float)
+
+    # A non-empty but entirely-zero (or near-zero) returns series means the
+    # strategy never actually held a position at any point during this
+    # window -- e.g. its rec_strategy gate (true_ivr/VRP/VIX/trend_bias)
+    # never matched, so every day degraded to a 0.0 fill. Left unguarded,
+    # this computes a trivial max_drawdown=0.0 / survived=True PASS, which
+    # reads as "certified survival" for a scenario the strategy was never
+    # actually exposed to -- a false-green result (a real strategy essentially
+    # never shows exactly 0% drawdown in every historical crisis window).
+    # Treated the same as the "no data" case above: fail closed via `error`
+    # (StressResult.passed / passes_stress_gate already return False whenever
+    # `error` is set -- no changes needed there). 1e-9 is far above float
+    # noise and far below any real 1-day position P&L.
+    if not (r.abs() > 1e-9).any():
+        logger.warning(
+            "Stress scenario %s: returns_fn produced %d day(s) for %s..%s but "
+            "ALL were exactly zero -- the strategy never held a position "
+            "during this window, so survival cannot be certified from it.",
+            scenario.name, len(r), scenario.start, scenario.end,
+        )
+        return StressResult(
+            scenario=scenario.name, start=scenario.start, end=scenario.end,
+            max_drawdown=float("nan"), final_return=float("nan"), survived=False,
+            n_days=int(len(r)), expected_max_dd_for_short_vol=scenario.expected_max_dd_for_short_vol,
+            error="no real trading signal in window (strategy never entered a position)",
+        )
     max_dd = compute_max_drawdown(r)
     survived = account_survived(r)
     final_return = float((1.0 + r).prod() - 1.0)

@@ -24,6 +24,7 @@ from execution.cost_model import TieredCostModel
 from validation.metrics import (
     run_cpcv_evaluation, sharpe_ratio, deflated_sharpe_ratio,
     probability_of_backtest_overfitting, infer_annualization_freq,
+    describe_signal_sparsity,
 )
 from validation.stress_scenarios import (
     StressResult,
@@ -202,6 +203,7 @@ class ValidationReport:
         benchmark_curve: Optional[List[Dict[str, Any]]] = None,
         macro_benchmark_curve: Optional[List[Dict[str, Any]]] = None,
         universe_coverage: Optional[Dict[str, Any]] = None,
+        signal_sparsity_note: Optional[str] = None,
     ):
         self.name = name
         self.start_date = start_date
@@ -271,6 +273,11 @@ class ValidationReport:
         # silently depending on which random ticker subset happened to
         # download that run, under concurrent FMP rate-limit throttling).
         self.universe_coverage = universe_coverage
+        # Self-diagnosing "insufficient trading signal" note (see
+        # validation/metrics.py::describe_signal_sparsity). None when the
+        # underlying return series carried genuine signal for its own
+        # Sharpe/PBO/DSR/MaxDD to be a real measurement, even a poor one.
+        self.signal_sparsity_note = signal_sparsity_note
 
     @property
     def universe_coverage_ok(self) -> bool:
@@ -424,6 +431,9 @@ class ValidationReport:
             # genuine PBO/DSR/Sharpe/MaxDD failure.
             "universe_coverage": self.universe_coverage,
             "universe_coverage_ok": self.universe_coverage_ok,
+            # Self-diagnosing "insufficient trading signal" note (None when
+            # not applicable) -- see validation/metrics.py::describe_signal_sparsity.
+            "signal_sparsity_note": self.signal_sparsity_note,
             "start_date": self.start_date,
             "end_date": self.end_date,
             "report_date": datetime.now(timezone.utc).date().isoformat(),
@@ -861,12 +871,28 @@ class StrategyValidationHarness:
             best_trial = full_trials[best_idx]
             # Net returns over full sample
             turnover = best_trial.get("turnover", 0.05)
-            full_returns = self._apply_cost_model(best_trial["test_returns"], turnover=turnover)
+            # Kept RAW (pre-cost-model) for describe_signal_sparsity below --
+            # _apply_cost_model subtracts a flat per-day cost from every day,
+            # which doesn't change std() (a constant shift never changes
+            # variance) but WOULD make every true "never traded" 0.0 day read
+            # as "nonzero", defeating that diagnostic's own observation count.
+            raw_test_returns = best_trial["test_returns"]
+            full_returns = self._apply_cost_model(raw_test_returns, turnover=turnover)
             n_trials = len(full_trials)
         else:
+            raw_test_returns = None
             full_returns = pd.Series(0.0, index=X.index)
             turnover = 0.0
             n_trials = 1
+
+        # Self-diagnosing "insufficient trading signal" note -- explains a
+        # NaN Sharpe/PBO/DSR (and a same-magnitude cost-drag-only MaxDD) that
+        # stems from the adapter's underlying strategy essentially never
+        # actually trading over this window, rather than a computation bug.
+        # See validation/metrics.py::describe_signal_sparsity for the exact
+        # (causally-gated) trigger condition. None when the series carries
+        # genuine signal, even if that signal is sparse or poor.
+        signal_sparsity_note = describe_signal_sparsity(raw_test_returns)
 
         # Standard Performance calculations
         sharpe = sharpe_ratio(full_returns, freq=inferred_freq)
@@ -1017,6 +1043,7 @@ class StrategyValidationHarness:
             benchmark_curve=benchmark_curve,
             macro_benchmark_curve=macro_benchmark_curve,
             universe_coverage=universe_coverage,
+            signal_sparsity_note=signal_sparsity_note,
         )
 
         # Print the stress summary at the TOP of every options-selling report so
@@ -1235,6 +1262,7 @@ class StrategyValidationHarness:
             is_options_selling=report.is_options_selling,
             stress_gate_passed=report.stress_gate_passed,
             stress_summary=format_stress_summary(report.stress_test_results) if report.is_options_selling else "",
+            signal_sparsity_note=report.signal_sparsity_note,
             stress_results=[
                 {
                     "scenario": r.scenario,
