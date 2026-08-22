@@ -92,10 +92,27 @@ def execute_strategy_options(
     )
 
 def get_portfolio_greeks() -> Dict[str, Any]:
-    """Computes aggregate net portfolio Greeks across all open paper positions."""
+    """Computes aggregate net portfolio Greeks across all open paper positions.
+
+    Resolves a real SPY quote up front via ``pilots.price_provider`` (the
+    same helper ``pilots.options_hedging.get_delta_hedge_preview`` already
+    uses) and threads it into ``calculate_portfolio_greeks`` explicitly --
+    that function used to silently fabricate a $500.0 SPY price whenever no
+    SPY position happened to be held (CONSTRAINT #4 violation; see
+    docs/known_issues/options_risk_fabricated_spy_spot.md). Passing ``None``
+    on a failed resolution here is intentional: calculate_portfolio_greeks
+    still attempts its own real quote resolution via the market data
+    provider as a second, independent chance, and never fabricates a price
+    either way.
+    """
     from pilots.options_risk import calculate_portfolio_greeks
+    from pilots.price_provider import get_current_price
     store = PaperAccountStore(readonly=True)
-    return calculate_portfolio_greeks(store=store)
+    spy_spot = get_current_price("SPY")
+    return calculate_portfolio_greeks(
+        store=store,
+        spy_spot=spy_spot if spy_spot and spy_spot > 0 else None,
+    )
 
 
 def manage_position_exits(

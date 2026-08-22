@@ -10,15 +10,18 @@ Calculates position-level and portfolio-wide net Greeks:
 """
 
 from datetime import datetime, timezone
+import logging
 import math
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.stats import norm
 
 from data.paper_account_store import PaperAccountStore, PaperPosition
 from settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 # Regex matching option symbol format: AAPL 2026-09-18 $150.00 CALL
@@ -292,11 +295,41 @@ def calculate_position_greeks(
     }
 
 
-def _resolve_symbol_beta(ticker: str) -> float:
-    """Resolves regression beta vs SPY for ticker, defaulting to 1.0 if unavailable or for SPY."""
+def _resolve_symbol_beta(ticker: str) -> Tuple[float, bool]:
+    """Resolves regression beta vs SPY for ticker.
+
+    Returns ``(beta, is_measured)``:
+      - ``(1.0, True)`` for SPY/VOO/IVV -- a deliberate identity default, not
+        a fallback (these ARE the market proxy, beta=1.0 by construction).
+      - ``(beta, True)`` when ``pilots.rolling_beta.rolling_beta_view``
+        resolves a real regression beta from >= 60 days of cached local
+        price history for both this ticker and SPY.
+      - ``(1.0, False)`` when no real beta could be resolved. This is NOT
+        silently indistinguishable from a genuinely-measured beta of 1.0:
+        it is logged at WARNING and callers can inspect the second element
+        (surfaced by ``calculate_portfolio_greeks`` as
+        ``position["beta_is_estimated"]`` / the top-level
+        ``symbols_with_estimated_beta`` list).
+
+    A second-tier live-fetch fallback via ``data.fmp_fundamentals.compute_beta``
+    used to live here but was removed (2026-08): it was called with the wrong
+    signature (a bare ticker string against a function requiring two
+    ``pd.Series`` arguments), so it always raised and was silently swallowed,
+    collapsing straight to the ``1.0`` default. A correctly-fixed version,
+    mirroring the one real working caller (``api/ws_api.py``'s
+    ``_compute_betas_sync``: ``HistoricalStore.get_bars(..., lookback_days=400)``
+    + ``compute_beta(stock_returns, spy_returns, min_obs=60)``), would source
+    the SAME ``HistoricalStore`` bars for the SAME two tickers as
+    ``rolling_beta_view`` above, but with LESS lookback (400 days vs
+    ``rolling_beta_view``'s ``max(504, window*3)`` = 504 days) for the SAME
+    minimum-observation floor (60). It could not succeed in any case where
+    the primary tier above already failed for lack of cached history --
+    fixing its call signature would not add real coverage, only the
+    appearance of a working fallback. Removed rather than repaired.
+    """
     clean = str(ticker or "").strip().upper()
     if clean in ("SPY", "VOO", "IVV"):
-        return 1.0
+        return 1.0, True
     try:
         from pilots.rolling_beta import rolling_beta_view
         view = rolling_beta_view(clean, window=60)
@@ -306,19 +339,17 @@ def _resolve_symbol_beta(ticker: str) -> float:
             if isinstance(latest, dict) and latest.get("beta") is not None:
                 b = float(latest["beta"])
                 if b == b and b not in (float("inf"), float("-inf")):
-                    return b
-    except Exception:
-        pass
-    try:
-        from data.fmp_fundamentals import compute_beta
-        b = compute_beta(clean)
-        if b is not None:
-            f_b = float(b)
-            if f_b == f_b and f_b not in (float("inf"), float("-inf")):
-                return f_b
-    except Exception:
-        pass
-    return 1.0
+                    return b, True
+    except Exception as exc:  # noqa: BLE001 — dead-letter (CONSTRAINT #6)
+        logger.debug("_resolve_symbol_beta(%s): rolling_beta_view failed: %s", clean, exc)
+
+    logger.warning(
+        "_resolve_symbol_beta(%s): no measured beta available (insufficient "
+        "cached local price history for a %s-day rolling regression) -- "
+        "defaulting to beta=1.0. This is an estimate, not a measurement.",
+        clean, 60,
+    )
+    return 1.0, False
 
 
 def calculate_portfolio_greeks(
@@ -350,15 +381,30 @@ def calculate_portfolio_greeks(
             "beta_weighted_delta_spy": 0.0,
             "positions_with_missing_data": [],
             "beta_excluded_symbols": [],
+            "symbols_with_estimated_beta": [],
+            "spy_spot": None,
+            # Vacuously True: an empty book has no delta to beta-weight, so
+            # there is nothing an unresolved SPY quote could have distorted
+            # (contrast with the False-on-genuine-failure case below).
+            "spy_spot_resolved": True,
             "positions": [],
         }
 
-    # Resolve spot quotes for distinct tickers
+    # Resolve spot quotes for distinct tickers. SPY is included here too
+    # (when the caller didn't already supply spy_spot) so it goes through the
+    # exact same market_provider.get_latest_quote() mechanism -- and the same
+    # test seam -- as every other symbol, rather than a separate code path.
+    # This function used to fall back to a hardcoded $500.0 whenever SPY
+    # wasn't already among the held positions (CONSTRAINT #4 violation --
+    # see docs/known_issues/options_risk_fabricated_spy_spot.md); it now
+    # never fabricates a price.
     distinct_tickers = set()
     for p in positions:
         opt_info = parse_option_symbol(p.symbol)
         ticker = opt_info["ticker"] if opt_info else p.symbol.strip().upper()
         distinct_tickers.add(ticker)
+    if spy_spot is None:
+        distinct_tickers.add("SPY")
 
     spot_map: Dict[str, Optional[float]] = {}
     if market_provider is None:
@@ -379,14 +425,23 @@ def calculate_portfolio_greeks(
             except Exception:
                 spot_map[t] = None
 
-    # Resolve SPY spot
-    if spy_spot is None:
-        spy_spot = spot_map.get("SPY") or 500.0
+    # Resolve SPY spot -- a caller-supplied value always wins; otherwise use
+    # the real quote just resolved above. When neither is available (a
+    # genuine market-data outage), beta_weighted_delta_spy is reported via
+    # spy_spot_resolved=False rather than silently computed off a fabricated
+    # price.
+    spy_spot_resolved = True
+    if spy_spot is None or spy_spot <= 0:
+        spy_spot = spot_map.get("SPY")
+        if spy_spot is None or spy_spot <= 0:
+            spy_spot_resolved = False
+            spy_spot = None
 
     # Position calculations & aggregates
     pos_breakdowns: List[Dict[str, Any]] = []
     positions_with_missing_data: List[str] = []
     beta_excluded_symbols: List[str] = []
+    symbols_with_estimated_beta: List[str] = []
     net_delta_shares = 0.0
     net_dollar_delta = 0.0
     net_beta_dollar_delta = 0.0
@@ -402,13 +457,16 @@ def calculate_portfolio_greeks(
         opt_info = parse_option_symbol(pos.symbol)
         ticker = opt_info["ticker"] if opt_info else pos.symbol.strip().upper()
         spot = spot_map.get(ticker)
-        beta_val = _resolve_symbol_beta(ticker)
+        beta_val, beta_is_measured = _resolve_symbol_beta(ticker)
+        if not beta_is_measured:
+            symbols_with_estimated_beta.append(pos.symbol)
 
         if spot is None:
             positions_with_missing_data.append(pos.symbol)
 
         g = calculate_position_greeks(pos, spot_price=spot, now=now)
         g["symbol_beta"] = beta_val
+        g["beta_is_estimated"] = not beta_is_measured
 
         if not g.get("missing_data", False) and g.get("position_dollar_delta") is not None:
             dollar_delta = float(g["position_dollar_delta"])
@@ -432,8 +490,12 @@ def calculate_portfolio_greeks(
             pos_breakdowns.append(g)
             beta_excluded_symbols.append(pos.symbol)
 
-    # Beta-weighted SPY Delta in SPY share equivalents: (sum_i DollarDelta_i * Beta_i) / SPY_Spot
-    beta_weighted_delta_spy = (net_beta_dollar_delta / spy_spot) if spy_spot > 0 else 0.0
+    # Beta-weighted SPY Delta in SPY share equivalents: (sum_i DollarDelta_i * Beta_i) / SPY_Spot.
+    # Never fabricated: 0.0 (not a divide against a fake price) whenever
+    # spy_spot could not be honestly resolved.
+    beta_weighted_delta_spy = (
+        (net_beta_dollar_delta / spy_spot) if (spy_spot_resolved and spy_spot) else 0.0
+    )
 
     return {
         "total_positions": len(positions),
@@ -447,6 +509,9 @@ def calculate_portfolio_greeks(
         "beta_weighted_delta_spy": round(beta_weighted_delta_spy, 2),
         "positions_with_missing_data": positions_with_missing_data,
         "beta_excluded_symbols": beta_excluded_symbols,
+        "symbols_with_estimated_beta": symbols_with_estimated_beta,
+        "spy_spot": spy_spot,
+        "spy_spot_resolved": spy_spot_resolved,
         "positions": pos_breakdowns,
     }
 
