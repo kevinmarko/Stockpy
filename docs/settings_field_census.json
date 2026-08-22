@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "59d665c7ee7a2ee4a9d2152b664a4035808156e5",
+    "git_commit": "d63f9472522f99cd4e9cdf5718434377d18ca511",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4073,7 +4073,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 366,
+      "total_reads": 367,
       "distinct_fields": 205,
       "counts": {
         "FMP_API_KEY": 11,
@@ -4086,6 +4086,7 @@
         "LLM_COMMENTARY_ENABLED": 6,
         "OPAL_RESEARCH_ENABLED": 6,
         "PROMPT_REGISTRY_ENABLED": 6,
+        "OPTIONS_0DTE_ENABLED": 5,
         "OPTIONS_ALERT_WEBHOOK_URL": 5,
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 5,
         "ANTHROPIC_API_KEY": 4,
@@ -4094,7 +4095,6 @@
         "FMP_SCREENER_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
-        "OPTIONS_0DTE_ENABLED": 4,
         "OPTIONS_0DTE_HARD_EXIT_TIME": 4,
         "OPTIONS_AUTO_EXIT_ENABLED": 4,
         "ROBINHOOD_EXECUTION_MODE": 4,
