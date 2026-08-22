@@ -140,3 +140,37 @@ above — but the point estimates for Sharpe/DSR are not stable run-to-run. This
 meaningfully; it has not been separately investigated further here. The `MEASURED_FAIL` gate
 status and the enforced-override design in "Live Paper-Execution Status" below do not depend on
 the exact point estimate and are unaffected by this variance.
+
+### 2026-08-21 re-verification — 4th independent confirmation of the OCT_2008 blow-up
+
+A `scripts.refresh_validations` run in a network-isolated sandbox hit `RuntimeError:
+Adapter returned an empty feature/return frame — insufficient history for this start/end
+range` for this strategy. Investigated and given a self-diagnosing error message in
+[#850](https://github.com/kevinmarko/Stockpy/pull/850) (diagnostics-only, no adapter-logic
+change), then re-run with a real `FMP_API_KEY` on 2026-08-21 (`--start 2005-01-01`,
+default end = today):
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | -0.140 |
+| **PBO** | 0.000 |
+| **DSR** | 0.302 |
+| **Max Drawdown** | 100.0% |
+| **Deployable** | ❌ False |
+
+| Window | Max DD | Final Return | Survived |
+|---|---|---|---|
+| OCT_2008 | 203.8% | -75.5% | ❌ NO (blow-up) |
+| FEB_2018 | 66.5% | -56.1% | ✅ yes, but DD > 50% |
+| MAR_2020 | 29.8% | +8.5% | ✅ yes |
+| AUG_2024 | 32.0% | +11.5% | ✅ yes |
+
+The per-window stress figures are **bit-identical** to the "Backtest Validation" section's
+2015-2026 walk-forward run above — the same OCT_2008 203.8%/-75.5%/NO blow-up, the same
+FEB_2018 66.5%/-56.1% survive-but-breach, the same MAR_2020/AUG_2024 pass numbers. This is
+the 4th independently-run confirmation (alongside the 2026-08-15, 2026-08-17, and 2026-08-18
+runs above) that this strategy's RICH-branch iron condor genuinely blows up in the 2008
+crisis window — not a fluke of any one run's data window or environment. Confirms the
+"insufficient history" RuntimeError encountered in the network-isolated sandbox was
+environmental (no/invalid FMP credentials there), not a defect in this adapter. See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry.

@@ -153,3 +153,31 @@ See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) f
 
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
+
+### 2026-08-21 re-verification (closes `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s disclosed gap)
+
+A `scripts.refresh_validations` run in a network-isolated sandbox hit `RuntimeError:
+Adapter returned an empty feature/return frame — insufficient history for this start/end
+range` for this strategy. Investigated and given a self-diagnosing error message in
+[#850](https://github.com/kevinmarko/Stockpy/pull/850) (diagnostics-only, no adapter-logic
+change), then re-run with a real `FMP_API_KEY` on 2026-08-21 (`--start 2005-01-01`,
+default end = today) to confirm the adapter itself is sound:
+
+| Metric | Result |
+|---|---|
+| **Sharpe Ratio (net)** | 0.189 |
+| **PBO** | 0.000 |
+| **DSR** | 1.000 |
+| **Max Drawdown** | 12.1% |
+| **Deployable** | ❌ False (`Sharpe 0.19<0.50`) |
+
+Confirms the earlier "insufficient history" failure was environmental (no/invalid FMP
+credentials or a transient fetch issue in that specific run), not a defect in this
+adapter — it produced a healthy 5,000-row feature/return frame. `deployable=False` is
+unchanged from the 2026-08-18 run above; same causal reason (Sharpe well under the
+0.50 gate). Same caveat as `docs/signals/timeseries_momentum.md`'s 2026-08-21 entry
+applies: FMP's `/historical-price-eod` endpoint caps a single request at 5,000 rows and
+silently returns the most recent 5,000 trading days rather than paginating back to
+`--start 2005-01-01`, so this run's actual window began 2006-10-05, not 2005-01-01 — not
+believed to change the conclusion here (Sharpe is far below the gate either way), but
+disclosed for completeness. See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry.

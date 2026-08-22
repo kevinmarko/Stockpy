@@ -146,6 +146,42 @@ still clears with meaningful margin. A forward check through 2026-08-01
 [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s
 2026-08-17 entry for the full 5-strategy re-validation and methodology.
 
+### 2026-08-21 re-verification: `deployable` flips to False — honest regression, not a fix
+
+A `scripts.refresh_validations` run in a network-isolated sandbox hit `RuntimeError:
+Adapter returned an empty feature/return frame — insufficient history for this start/end
+range` for this strategy. Investigated and given a self-diagnosing error message in
+[#850](https://github.com/kevinmarko/Stockpy/pull/850) (diagnostics-only, no adapter-logic
+change), then re-run with a real `FMP_API_KEY` on 2026-08-21 (`--start 2005-01-01`,
+default end = today) to confirm the adapter itself is sound:
+
+| Metric | 2026-08 addendum above | 2026-08-21 | Gate |
+|---|---|---|---|
+| Sharpe | 0.523 | **0.477** | > 0.50 — **now FAILS** |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ |
+| DSR | 0.990 (real) | 0.983 | > 0.95 ✅ |
+| MaxDD | 26.0% | 26.0% | < 30% ✅ |
+| `deployable` | True | **False** | |
+
+**Honest, disclosed regression** — the adapter itself produced a healthy 4,747-row
+feature/return frame (confirming the RuntimeError above was environmental, not a code
+defect), but the walk-forward Sharpe on the CURRENT data window now lands just under the
+0.50 gate. **This is not directly comparable to the prior 0.523 measurement**: FMP's
+`/historical-price-eod` endpoint caps a single request at 5,000 rows and silently returns
+the most RECENT 5,000 trading days rather than paginating back to the requested
+`--start 2005-01-01` — so this run's actual SPY window began 2006-10-05, not 2005-01-01,
+and also extends ~19-21 months further forward (through 2026-08-21) than the prior 2024-
+12-31/2026-08-01 checkpoints. Per this repo's rule that gates are never loosened and a
+result that fails is reported honestly, `deployable=False` stands as the CURRENT
+`STRATEGY_REGISTRY` state pending operator review — **not silently reverted or
+re-measured with a shorter window to force a pass.** Two disclosed, un-investigated
+questions for a follow-up: (1) whether the Sharpe decline is genuine momentum-factor
+decay in the most recent ~20 months of data, or an artifact of the 5,000-row window
+silently excluding 2005-2006; (2) whether `_download_closes`/`_fetch_fmp_ohlcv_batch`
+should paginate past FMP's 5,000-row cap so `--start` is actually honored for any strategy
+requesting more than ~19.8 years of history. See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry.
+
 ---
 
 ## Regime Interaction

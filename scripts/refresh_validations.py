@@ -3959,6 +3959,40 @@ def _load_ticker_sectors() -> Dict[str, str]:
 # Validation runner
 # =============================================================================
 
+def _describe_universe_coverage(universe: List[str], closes_df: pd.DataFrame) -> str:
+    """Human-readable per-ticker row-count/date-range summary for ``universe``
+    against the shared ``closes_df`` — used ONLY to make the "empty
+    feature/return frame" ``RuntimeError`` below self-diagnosing.
+
+    Before this, that error's fixed text ("insufficient history for this
+    start/end range") couldn't distinguish "this ticker downloaded zero rows"
+    from "it downloaded 5000 rows but they don't overlap another required
+    series (e.g. VIX) on any date" from "it downloaded rows, but fewer than
+    the adapter's own rolling-window requirement" — three materially
+    different root causes an operator would otherwise have to re-derive by
+    hand from the same investigation this docstring is standing in for. Never
+    raises: a lookup failure for one ticker degrades to an honest "error
+    reading coverage" fragment rather than aborting the diagnostic itself.
+    """
+    bits = []
+    for t in universe:
+        try:
+            if t not in closes_df.columns:
+                bits.append(f"{t}: missing from closes_df")
+                continue
+            valid = closes_df[t].dropna()
+            if valid.empty:
+                bits.append(f"{t}: 0 valid rows")
+            else:
+                bits.append(
+                    f"{t}: {len(valid)} rows "
+                    f"({valid.index.min().date()}→{valid.index.max().date()})"
+                )
+        except Exception as exc:  # noqa: BLE001 — diagnostic-only, must not raise
+            bits.append(f"{t}: error reading coverage ({exc})")
+    return "; ".join(bits)
+
+
 def _validate_single_strategy(
     name: str,
     closes_df: pd.DataFrame,
@@ -4015,7 +4049,9 @@ def _validate_single_strategy(
         if X.empty or y.empty or not precomputed:
             raise RuntimeError(
                 "Adapter returned an empty feature/return frame — "
-                "insufficient history for this start/end range."
+                "insufficient history for this start/end range. "
+                f"Downloaded coverage for {name}'s required universe: "
+                f"{_describe_universe_coverage(universe, closes_df)}."
             )
 
         # Structural (not name-based) adapter-shape dispatch — see the
