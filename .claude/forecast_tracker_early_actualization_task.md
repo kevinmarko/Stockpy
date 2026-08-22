@@ -32,4 +32,4 @@
 - [x] Branch `fix-forecast-tracker-early-actualization` created off the synced
       worktree branch; PR artifacts copied to `.claude/` with task-scoped
       names.
-- [ ] Open PR.
+- [x] Open PR: https://github.com/kevinmarko/Stockpy/pull/859
