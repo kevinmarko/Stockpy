@@ -49,6 +49,19 @@ def compute_trading_trajectory(
 
     tau = total_time / n_intervals
 
+    # AC(2001) well-posedness condition: the "effective" temporary-impact coefficient
+    # eta_tilde = eta - 0.5*gamma*tau must be strictly positive for the quadratic cost
+    # function to be convex. A degenerate parameterization (temp_impact too small
+    # relative to perm_impact*tau) would otherwise silently produce a nonsensical
+    # (possibly negative) expected_shortfall with no validation catching it.
+    effective_temp_impact = temp_impact - 0.5 * perm_impact * tau
+    if effective_temp_impact <= 0:
+        raise ValueError(
+            "temp_impact must exceed 0.5 * perm_impact * (total_time / n_intervals) "
+            "for a well-posed Almgren-Chriss cost function "
+            "(eta_tilde = eta - 0.5*gamma*tau must be > 0)"
+        )
+
     trajectory = [total_shares]
     trade_list = []
 
