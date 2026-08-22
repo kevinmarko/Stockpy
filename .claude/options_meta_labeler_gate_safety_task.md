@@ -47,4 +47,4 @@ Stage 4 Options ML Meta-Labeler, all more permissive than intended on unclean in
       via `git stash`). `ruff check . --select=F821,F822,F823,E9` → clean.
       `npm run --prefix webapp typecheck` → clean. `vitest run
       src/screens/PaperBroker.test.tsx` → 22 passed.
-- [ ] Open PR against `main`.
+- [x] Open PR against `main`: https://github.com/kevinmarko/Stockpy/pull/873
