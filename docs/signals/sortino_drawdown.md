@@ -112,3 +112,10 @@ credentials or a transient fetch issue in that specific run), not a defect in th
 adapter — `_build_sortino_drawdown_adapter` produces a healthy 4,496-row feature/return
 frame from a real 5,000-row SPY fetch. See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s
 2026-08-21 entry for the full investigation.
+
+**Follow-up (same day)**: this run itself was under the FMP 5,000-row truncated window (see
+`docs/signals/timeseries_momentum.md`'s 2026-08-21 entry for the mechanism). Re-run again after
+`data/fmp_client.py::historical_eod_full_range` fixed the fetch — Sharpe=0.706, PBO=0.067,
+DSR=0.985, MaxDD=25.3%, `deployable=True` (unchanged conclusion; the ~10 additional months of
+2005-2006 data moved the point estimate slightly but not the gate outcome). See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "FMP `historical_eod` 5,000-row cap fixed" entry.

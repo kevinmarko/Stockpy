@@ -213,11 +213,26 @@ def health_check() -> Dict[str, str]:
 
 
 @app.get("/data/bars/{symbol}", dependencies=[Depends(require_token)])
-def get_bars(symbol: str, lookback_days: int = 252) -> List[Dict[str, Any]]:
+def get_bars(
+    symbol: str, lookback_days: int = Query(252, ge=1, le=3650)
+) -> List[Dict[str, Any]]:
     """Daily OHLCV bars for ``symbol`` — ``[]`` when none are available.
 
     Routes through ``HistoricalStore`` (incremental DB cache) with the live
     provider as the top-up source, matching the rest of the pipeline.
+
+    ``lookback_days`` is bounded (matching the ``/data/macro/{series_id}``
+    and ``/data/sentiment/history/{symbol}`` siblings below, which already
+    use this exact ``Query(..., ge=1, le=3650)`` pattern) — an unbounded
+    value here would eventually reach ``data.fmp_client.historical_eod``
+    (via ``HistoricalStore``'s live-provider top-up →
+    ``FMPProvider.get_intraday_bars``) with a multi-decade window, silently
+    truncated by FMP's undocumented ~5,000-row-per-request cap rather than
+    erroring (see ``docs/FMP_INTEGRATION.md``'s "Known risks" section). This
+    endpoint isn't currently a call site of that cap in practice — the
+    shipped webapp caller only ever sends 21/63/120/126/252 — but the bound
+    closes the gap defensively rather than relying on every future caller
+    behaving.
     """
     symbol = symbol.upper()
     store = HistoricalStore(readonly=True)

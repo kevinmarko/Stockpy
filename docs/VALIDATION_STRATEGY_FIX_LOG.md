@@ -1965,3 +1965,94 @@ Per-strategy `docs/signals/<name>.md` updates: `sortino_drawdown.md`, `timeserie
 the numbers above and the same caveats. No test changes in this follow-up (no code changed —
 this was a real-data verification run only); the diagnostic fix itself is tested as described
 in the entry above.
+
+## 2026-08-21 (cont.): FMP `historical_eod` 5,000-row cap fixed — `--start 2005-01-01` now actually honored
+
+Closes the gap disclosed in the "2026-08-21 (cont.): Follow-up re-run..." entry above. Added
+`data/fmp_client.py::historical_eod_full_range(symbol, *, variant, from_date, to_date,
+max_requests=10)` — detects truncation via the earliest-returned-date check (does the earliest
+date in the response still come after the requested `from_date`?), issues bounded follow-up
+calls for the missing older window, merges+dedupes by date, and stops on reaching `from_date`,
+exhausted symbol history, or `max_requests`, logging a WARNING on any non-clean stop. Migrated
+`scripts/refresh_validations.py::_fetch_fmp_ohlcv_batch`'s `_fetch_one` to call it instead of
+plain `historical_eod` — the only call site affected; every other `historical_eod` caller in the
+codebase (`data/market_data.py`'s intraday/beta paths, `scripts/verify_fmp_bars.py`,
+`ml/forecast_backfill.py`'s default lookback) was independently re-confirmed to already use a
+bounded window well under the cap and was left unchanged.
+
+**Verification (live, real FMP data)**:
+
+```
+fmp_client.historical_eod_full_range('SPY', variant='dividend-adjusted',
+                                      from_date='2005-01-01', to_date='2026-08-21')
+-> 5,443 rows spanning 2005-01-03 -> 2026-08-21
+   (previously: 5,000 rows spanning 2006-10-05 -> 2026-08-21, via plain historical_eod)
+```
+
+The 443-row gap closed exactly matches the 443 rows independently confirmed to exist in the
+2005-01-01->2006-10-04 window during the original investigation. `_download_closes(["SPY"],
+"2005-01-01", "2026-08-21")` (the actual `refresh_validations.py` caller) reproduces the same
+5,443-row, 2005-01-03-start result end-to-end.
+
+**All 4 originally-affected strategies re-run with the fixed fetch**, resolving open question
+(1) from the prior entry (truncation artifact vs. genuine decay):
+
+| Strategy | Metric | Truncated window (2026-08-21, ~2006-10 start) | Full window (2026-08-21, 2005-01 start) | Verdict |
+|---|---|---|---|---|
+| `sortino_drawdown` | Sharpe / PBO / DSR / MaxDD | 0.801 / 0.022 / 0.985 / 20.6% | 0.801 / 0.022 / 0.985 / 20.6%* | Unchanged — was already `deployable=True` |
+| `timeseries_momentum` | Sharpe / PBO / DSR / MaxDD | 0.477 / 0.000 / 0.983 / 26.0% | **0.524** / 0.000 / **0.993** / 26.0% | **Recovers to `deployable=True`** — confirms **truncation artifact, not genuine decay** |
+| `vrp_premium_selling` | Sharpe / PBO / DSR / MaxDD | 0.189 / 0.000 / 1.000 / 12.1% | 0.217 / 0.000 / 0.999 / 17.9% | Unchanged conclusion — still `deployable=False` (Sharpe well under 0.50) |
+| `vol_mispricing` | Sharpe / PBO / DSR / MaxDD | -0.140 / 0.000 / 0.302 / 100.0% | -0.033 / 0.000 / 0.504 / 100.0% | Unchanged conclusion — still `deployable=False`; OCT_2008 stress-gate blow-up is **bit-identical** (203.8% MaxDD, -75.5% final, did not survive) to every prior run of this strategy — 5th independent confirmation |
+
+*`sortino_drawdown`'s two runs used slightly different exact re-run timestamps but produced
+identical rounded figures; MaxDD in the table above is this run's 20.6%, matching the value
+already on record in `docs/signals/sortino_drawdown.md`.
+
+**`timeseries_momentum`'s regression is resolved, not merely revised**: per this repo's rule
+that gates are never loosened to force a pass, this recovery is legitimate precisely BECAUSE
+nothing about the gate or the adapter changed — only the INPUT DATA did (443 more real trading
+days the fetch was silently dropping before). The strategy's real, honest Sharpe over the full
+2005-present window is ~0.524, matching (and very slightly exceeding) the previously-recorded
+0.523 figure — the 0.477 measurement was an artifact of validating over a ~10-month-shorter
+window than the CLI's `--start 2005-01-01` implied, not evidence of decay.
+
+**`vrp_premium_selling`/`vol_mispricing` conclusions are unaffected** by the fix — both were
+already failing on Sharpe/MaxDD by a wide enough margin (well under 0.50, or a 100% MaxDD
+stress-gate blow-up) that ~10 additional months of 2005-2006 data could not plausibly change the
+verdict, and the live re-run confirms this directly rather than assuming it.
+
+**Scope of what remains open**: every OTHER `STRATEGY_REGISTRY` entry validated with
+`--start 2005-01-01` before this fix was silently validated over the same truncated ~19.8-year
+window, not literally 2005-present — this fix changes the input data for every strategy's NEXT
+validation run, not just these four. A full `python -m scripts.refresh_validations --json`
+re-run across all ~29 registered strategies is the correct follow-up to fully close this out —
+explicitly out of scope for this PR (flagged here, same as the prior entry flagged this fix, so
+it isn't lost).
+
+Tests: `tests/test_fmp_client.py::TestHistoricalEodFullRange` (11 tests — single-request-suffices,
+truncation with one/multiple follow-up rounds, exhausted-history stop, no-new-earlier-dates stop,
+`max_requests` hard cap, dedup with first-seen-wins, first-call-exception propagation, follow-up-
+exception partial-result-with-warning, sorted-output invariant); full `tests/test_fmp_client.py`
+suite re-confirmed green (63 passed) with zero regressions from the `timedelta` import addition
+and new function insertion. `tests/test_refresh_validations.py::TestFmpBackedDownloadFunctions`
+— all 16 pre-existing tests pass unmodified (their fixtures' `from_date` already matches each
+payload's earliest date, so the pagination loop never engages, degrading to the exact prior
+single-call behavior), plus one new integration test,
+`test_fetch_fmp_ohlcv_batch_pages_past_the_five_thousand_row_cap`, driving a simulated
+truncation+follow-up through the real `_fetch_fmp_ohlcv_batch`/`_download_closes` path (140
+passed, 1 deselected, full file).
+
+**Related, secondary finding closed in the same PR**: while re-confirming that every
+`historical_eod` call site besides `refresh_validations.py` is genuinely bounded, a
+re-verification pass found `GET /data/bars/{symbol}` (`api/data_api.py`) had no upper bound on
+its `lookback_days` query parameter — unlike its two siblings (`/data/macro/{series_id}`,
+`/data/sentiment/history/{symbol}`), which already use `Query(180, ge=1, le=3650)`. Left
+unbounded, a large `lookback_days` would eventually reach `HistoricalStore`'s live-provider
+top-up → `FMPProvider.get_intraday_bars` → plain `historical_eod` with a multi-decade window,
+silently truncated by the same cap this entry fixes elsewhere. Not currently exercised (the
+shipped webapp caller only ever sends 21/63/120/126/252), but closed defensively to match the
+sibling endpoints' existing convention rather than left as a live, if dormant, gap:
+`lookback_days: int = Query(252, ge=1, le=3650)`. New test:
+`tests/test_data_api.py::test_bars_lookback_days_is_bounded`.
+
+Introducing PR: `fmp-historical-eod-pagination-fix` (link filled in once opened).

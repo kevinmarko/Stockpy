@@ -42,6 +42,7 @@ from data.fmp_client import (
     batch_quote,
     get_fmp_call_stats,
     historical_eod,
+    historical_eod_full_range,
     intraday,
     profile,
     quote,
@@ -683,3 +684,191 @@ class TestEndpointWrappers:
         raw = [{"symbol": "AAPL", "debtToEquityRatioTTM": 1.5, "beta": 1.2}]
         with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=raw)):
             assert profile("AAPL") == raw
+
+
+def _bars(dates: list, **extra) -> list:
+    """A minimal ``historical_eod``-shaped payload — only ``date`` matters
+    for these tests unless ``extra`` is used to make rows distinguishable
+    (e.g. for the dedup/first-seen-wins test)."""
+    return [{"symbol": "SPY", "date": d, **extra} for d in dates]
+
+
+class TestHistoricalEodFullRange:
+    """``historical_eod_full_range`` — pagination past FMP's undocumented,
+    silent ~5,000-row-per-request cap on ``/historical-price-eod/{variant}``.
+
+    Mocks at the ``historical_eod`` boundary (module-level function patch),
+    not ``requests.get`` — this is testing the pagination/merge algorithm,
+    not the HTTP layer, which ``TestEndpointWrappers`` above already covers.
+    Mirrors ``tests/test_fmp_news.py::TestFMPNewsSource``'s pagination-test
+    convention. None of these need the ``clock``/``client_settings``
+    fixtures since ``historical_eod`` itself never runs.
+    """
+
+    def test_single_request_suffices_when_first_page_reaches_from_date(self):
+        payload = _bars(["2010-01-01", "2010-01-02", "2010-01-03"])
+        with patch("data.fmp_client.historical_eod", return_value=payload) as mock:
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2010-01-01", to_date="2010-01-03",
+            )
+        assert mock.call_count == 1
+        assert [r["date"] for r in result] == ["2010-01-01", "2010-01-02", "2010-01-03"]
+
+    def test_truncation_triggers_one_follow_up_call_with_corrected_to_date(self):
+        first_page = _bars(["2006-10-05", "2006-10-06"])
+        follow_up = _bars(["2005-01-01", "2005-01-02"])
+        with patch(
+            "data.fmp_client.historical_eod", side_effect=[first_page, follow_up]
+        ) as mock:
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2005-01-01", to_date="2026-08-21",
+            )
+        assert mock.call_count == 2
+        second_call_kwargs = mock.call_args_list[1].kwargs
+        assert second_call_kwargs["from_date"] == "2005-01-01"
+        assert second_call_kwargs["to_date"] == "2006-10-04"  # earliest - 1 day
+        assert [r["date"] for r in result] == [
+            "2005-01-01", "2005-01-02", "2006-10-05", "2006-10-06",
+        ]
+
+    def test_multiple_rounds_of_truncation_keep_paging_until_from_date_is_reached(self):
+        page1 = _bars(["2015-01-01", "2015-01-02"])
+        page2 = _bars(["2010-01-01", "2010-01-02"])
+        page3 = _bars(["2000-01-01", "2000-01-02"])
+        with patch(
+            "data.fmp_client.historical_eod", side_effect=[page1, page2, page3]
+        ) as mock:
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2000-01-01", to_date="2020-01-01",
+            )
+        assert mock.call_count == 3
+        # Each follow-up's `to_date` derives from the PRIOR round's new
+        # earliest date, not the original request's `to_date`.
+        assert mock.call_args_list[1].kwargs["to_date"] == "2014-12-31"
+        assert mock.call_args_list[2].kwargs["to_date"] == "2009-12-31"
+        assert [r["date"] for r in result] == [
+            "2000-01-01", "2000-01-02", "2010-01-01", "2010-01-02",
+            "2015-01-01", "2015-01-02",
+        ]
+
+    def test_exhausted_history_stops_cleanly_on_empty_follow_up(self, caplog):
+        """A follow-up bounded before the symbol's real IPO returns nothing —
+        the loop must stop cleanly (not raise) and disclose via WARNING that
+        the result is short of the requested ``from_date``."""
+        page1 = _bars(["2015-01-01"])
+        with patch(
+            "data.fmp_client.historical_eod", side_effect=[page1, []]
+        ) as mock, caplog.at_level(logging.WARNING, logger="data.fmp_client"):
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="1990-01-01", to_date="2020-01-01",
+            )
+        assert mock.call_count == 2
+        assert [r["date"] for r in result] == ["2015-01-01"]
+        assert any("exhausted history" in rec.message for rec in caplog.records)
+
+    def test_no_new_earlier_dates_in_follow_up_stops_the_loop(self, caplog):
+        """An anomalous follow-up that returns rows but none earlier than
+        what's already collected must not spin forever — one more call, then
+        stop, with a WARNING distinguishing this from clean completion."""
+        page1 = _bars(["2015-01-01"])
+        follow_up_no_progress = _bars(["2015-01-01"])  # same date, no progress
+        with patch(
+            "data.fmp_client.historical_eod",
+            side_effect=[page1, follow_up_no_progress],
+        ) as mock, caplog.at_level(logging.WARNING, logger="data.fmp_client"):
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="1990-01-01", to_date="2020-01-01",
+            )
+        assert mock.call_count == 2
+        assert len(result) == 1  # deduped, not doubled
+        assert any("no new earlier dates" in rec.message for rec in caplog.records)
+
+    def test_max_requests_safety_stop_logs_warning_and_returns_partial(self, caplog):
+        """A pathological response that keeps making SOME progress every
+        round, but never reaches ``from_date``, must still be bounded by
+        ``max_requests`` — never an unbounded call budget."""
+        pages = [
+            _bars(["2010-01-05"]),
+            _bars(["2010-01-04"]),
+            _bars(["2010-01-03"]),
+            _bars(["2010-01-02"]),  # would be requested if the cap didn't hold
+        ]
+        with patch(
+            "data.fmp_client.historical_eod", side_effect=pages
+        ) as mock, caplog.at_level(logging.WARNING, logger="data.fmp_client"):
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="1900-01-01", to_date="2020-01-01",
+                max_requests=3,
+            )
+        assert mock.call_count == 3  # never 4 — the 4th page is never consumed
+        assert [r["date"] for r in result] == ["2010-01-03", "2010-01-04", "2010-01-05"]
+        assert any("max_requests" in rec.message for rec in caplog.records)
+
+    def test_dedup_correctness_on_overlapping_dates_between_pages(self):
+        """Overlapping dates between the two pages must collapse to one row
+        each, and the FIRST-seen row (from the earlier/original call) wins on
+        conflict — not silently overwritten by the follow-up's version."""
+        page1 = _bars(["2006-01-01", "2006-01-02"], source="page1")
+        page2 = _bars(["2005-01-01", "2005-12-31", "2006-01-01"], source="page2")
+        with patch(
+            "data.fmp_client.historical_eod", side_effect=[page1, page2]
+        ) as mock:
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2005-01-01", to_date="2006-01-02",
+            )
+        assert mock.call_count == 2
+        dates = [r["date"] for r in result]
+        assert dates == ["2005-01-01", "2005-12-31", "2006-01-01", "2006-01-02"]
+        overlapping_row = next(r for r in result if r["date"] == "2006-01-01")
+        assert overlapping_row["source"] == "page1"  # first-seen wins
+
+    def test_first_call_empty_returns_empty_no_follow_up(self):
+        with patch("data.fmp_client.historical_eod", return_value=[]) as mock:
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2010-01-01", to_date="2010-01-05",
+            )
+        assert result == []
+        assert mock.call_count == 1
+
+    def test_first_call_exception_propagates_unchanged(self):
+        with patch(
+            "data.fmp_client.historical_eod", side_effect=RuntimeError("boom")
+        ) as mock, pytest.raises(RuntimeError, match="boom"):
+            historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2010-01-01", to_date="2010-01-05",
+            )
+        assert mock.call_count == 1
+
+    def test_follow_up_exception_returns_partial_result_with_warning(self, caplog):
+        page1 = _bars(["2010-01-01"])
+        with patch(
+            "data.fmp_client.historical_eod",
+            side_effect=[page1, RuntimeError("network blip")],
+        ) as mock, caplog.at_level(logging.WARNING, logger="data.fmp_client"):
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2000-01-01", to_date="2020-01-01",
+            )
+        assert mock.call_count == 2
+        assert [r["date"] for r in result] == ["2010-01-01"]
+        assert any("follow-up request failed" in rec.message for rec in caplog.records)
+
+    def test_result_is_sorted_ascending_by_date_regardless_of_input_order(self):
+        scrambled = _bars(["2010-01-03", "2010-01-01", "2010-01-02"])
+        with patch("data.fmp_client.historical_eod", return_value=scrambled):
+            result = historical_eod_full_range(
+                "SPY", variant="dividend-adjusted",
+                from_date="2010-01-01", to_date="2010-01-03",
+            )
+        dates = [r["date"] for r in result]
+        assert dates == sorted(dates)
+        assert dates == ["2010-01-01", "2010-01-02", "2010-01-03"]

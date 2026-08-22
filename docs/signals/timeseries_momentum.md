@@ -182,6 +182,40 @@ should paginate past FMP's 5,000-row cap so `--start` is actually honored for an
 requesting more than ~19.8 years of history. See
 `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-21 entry.
 
+### 2026-08-21 re-verification: FMP pagination fix applied — both open questions resolved
+
+`data/fmp_client.py::historical_eod_full_range` (added in the `fmp-historical-eod-pagination-fix`
+PR) fixes the 5,000-row silent-truncation bug the section above disclosed. Re-run with the SAME
+command (`--strategies timeseries_momentum --start 2005-01-01`), now against the actual full
+2005-present window — live-verified: `historical_eod_full_range('SPY', ..., from_date='2005-01-01',
+to_date='2026-08-21')` returns 5,443 rows spanning `2005-01-03`→`2026-08-21` (vs. the prior
+5,000 rows spanning `2006-10-05`→`2026-08-21`):
+
+| Metric | 2026-08-21 (truncated, ~2006-10 start) | 2026-08-21 (full range, 2005-01 start) | Gate |
+|---|---|---|---|
+| Sharpe | 0.477 | **0.524** | > 0.50 ✅ (was FAIL) |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ |
+| DSR | 0.983 | **0.993** | > 0.95 ✅ |
+| MaxDD | 26.0% | 26.0% | < 30% ✅ (unchanged) |
+| `deployable` | False | **True** | |
+
+**Verdict — question (1) resolved**: the Sharpe recovers to 0.524 once the missing ~10 months of
+2005-2006 data are included, **confirming this was a truncation artifact, not genuine momentum-
+factor decay**. The recovered figure (0.524) closely matches — and very slightly exceeds — the
+originally-recorded 0.523 from the "2026-08 addendum" section above, which is the expected
+outcome of restoring the correct data window rather than a coincidence. Per this repo's rule that
+gates are never loosened to force a pass: this recovery is legitimate specifically because
+nothing about the gate or the adapter's logic changed between the two runs above — only the
+INPUT DATA did (the fetch layer, not the strategy). **Question (2) resolved**: yes,
+`_fetch_fmp_ohlcv_batch` now transparently pages past the cap for this and every other
+`STRATEGY_REGISTRY` strategy going forward.
+
+`deployable=True` is restored on the actual `STRATEGY_REGISTRY` state as of this fix. See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "FMP `historical_eod` 5,000-row cap fixed" entry for the
+fix itself, the full 4-strategy re-verification, and the disclosed follow-up (every other
+registered strategy was silently validated on the same truncated window until now — a full-
+registry re-validation remains a separate, explicitly out-of-scope task).
+
 ---
 
 ## Regime Interaction
