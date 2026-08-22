@@ -2507,3 +2507,29 @@ No `docs/signals/put_credit_spread.md` / `call_credit_spread.md` exist — these
 validation-only `STRATEGY_REGISTRY` adapters (`scripts/refresh_validations.py`), not
 `SignalModule`s with their own `docs/signals/` writeup, consistent with every other entry for
 this strategy family in this log.
+
+### Same-day follow-up: re-verified against a real, live `FMP_API_KEY` (operator-supplied)
+
+The reproduction above (yfinance + a predominantly-yfinance local cache) was the best available
+in the original sandbox — no `FMP_API_KEY` was configured there. The operator subsequently
+pointed at a real key (`/Users/kevinlee/Stockpy-live/.env`, not committed, value never printed),
+letting this be re-confirmed against genuine, freshly-fetched FMP data rather than a proxy source:
+
+- `data/fmp_client.py::historical_eod_full_range("SPY", variant="dividend-adjusted",
+  from_date="2019-01-01", to_date="2020-04-15")` — a live call against the real FMP API —
+  returned 324 real daily bars (2019-01-02 → 2020-04-15, `adjClose` column), covering the COVID
+  crash window with enough trailing history for a valid warmup.
+- `_compute_cycle_plan` against this real FMP series produced exactly **3** priced cycles in this
+  ~15-month window (`2020-02-12: Call Debit Spread`, `2020-03-13: Cash` — the strategy went to
+  Cash right at the crash peak, `2020-04-14: Put Debit Spread`) — **none** were Put/Call Credit
+  Spread or Iron Condor, matching the pattern already measured via yfinance and the local cache.
+- `put_credit_spread`'s raw return series over this real FMP window: **0/324** non-zero
+  observations. `describe_signal_sparsity` correctly reports
+  `"insufficient trading signal: 0/324 observations were non-zero..."`.
+- `run_stress_scenario` against the real FMP-sourced MAR_2020 window (2020-02-15..2020-04-15,
+  41 real trading days): `error="no real trading signal in window (strategy never entered a
+  position)"`, `survived=False`, `passed=False` — the fix correctly fails closed instead of the
+  old trivial 0%-drawdown PASS, now confirmed against genuine live FMP data, not just yfinance.
+
+No code changes resulted from this follow-up — it is a confirmation pass only, closing the one
+disclosed verification gap from the original entry.
