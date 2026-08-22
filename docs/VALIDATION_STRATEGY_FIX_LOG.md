@@ -2360,4 +2360,83 @@ Full JSON summaries: `reports/cross_sectional_momentum_validation_summary.json`,
 `docs/signals/cross_sectional_momentum.md` and `docs/signals/sector_quality_rank.md`
 addenda record the same numbers with per-strategy context.
 
+## 2026-08-22 (cont.): Cross-process rate limiting — the root cause behind both entries above, now fixed
+
+Both the `lgbm_ranker` non-determinism entry earlier today and the universe-coverage
+gate entry immediately above independently arrived at the same underlying mechanism:
+this machine runs many simultaneous git worktrees, each an independent OS process, and
+`data/fmp_client.py`'s / `data/edgar_fundamentals.py`'s request-spacing throttles were
+plain module-level globals guarded by a `threading.Lock` — safe across threads within
+ONE process, blind to every other process. Several concurrent
+`refresh_validations.py`/backfill invocations each believed they owned the FULL
+per-account FMP/SEC request budget, jointly exceeding the real shared limit and causing
+a different, randomly-incomplete ticker subset to succeed per run. The universe-coverage
+gate entry above explicitly disclosed a fix for this as out-of-scope follow-up work
+("a cross-worktree coordination mechanism (e.g. a shared lock file...)") — this entry
+closes that disclosed gap.
+
+**The fix**: new `data/cross_process_throttle.py::wait_turn(state_path, min_interval)`
+— a small, stdlib-only, dependency-free primitive enforcing "at least `min_interval`
+seconds since the last call against `state_path`, across every process on the machine"
+via a POSIX advisory file lock (`fcntl.flock`, held across the sleep, same rationale as
+the existing in-process throttles' own "hold the lock across the sleep" rule) on a tiny
+state file recording the last request's `time.monotonic()` timestamp. Safe because
+`CLOCK_MONOTONIC` on POSIX (this repo's only supported platforms, macOS/Linux) is a
+single clock instance shared by the whole KERNEL since boot, not per-process — a
+timestamp written by one process is directly and safely comparable by another. `flock`
+locks release automatically if the holding process dies (crash/`SIGKILL`), so there is
+no stale-lock cleanup concern. Both `data/fmp_client.py::_fmp_throttle` and
+`data/edgar_fundamentals.py::_throttle` call this as an ADDITIONAL outer layer, right
+after their existing in-process logic (kept byte-for-byte unchanged, preserving every
+existing fake-clock-based arithmetic test), before issuing the request. State files live
+at `settings.LOCAL_DATA_ROOT / "rate_limits" / "{fmp,edgar}.state"` — the established
+shared location for exactly this kind of cross-worktree state — resolved through a
+monkeypatchable path resolver so tests redirect it to an isolated `tmp_path` and never
+touch real machine-shared state. `min_interval <= 0` is a no-op with zero file I/O,
+matching every existing `_MIN_REQUEST_INTERVAL_SECONDS=0` "disable" convention, so the
+session-wide `conftest.py::_no_fmp_throttle_in_tests` autouse fixture needed no changes.
+
+**Deliberately scoped to the spacing throttle only** — each process's own
+consecutive-failure/cooldown circuit breaker stays process-local (a shared atomic
+counter and cross-process "logged once" semantics would be real added complexity for a
+secondary concern; the spacing throttle is the mechanism identified above as causing the
+joint budget overrun). **No new settings flag** — a bug fix to existing rate-limiting
+behavior, not a new feature, same precedent as this repo's "Shared GDELT rate limiter"
+fix, which shipped unconditionally.
+
+**This does not replace the universe-coverage gate** from the entry immediately above —
+that gate remains the correct fail-closed backstop for whatever residual variance a rate
+limiter alone cannot eliminate (a single-process run with a flaky network connection, a
+genuinely down FMP/SEC endpoint, etc.); this fix simply reduces how often it should need
+to trip going forward.
+
+**Verification**: `tests/test_cross_process_throttle.py` (new, 11 tests) covers the
+primitive directly — no-op on `min_interval<=0`, correct spacing arithmetic, graceful
+degradation on a corrupt state file / missing `fcntl` / an unwritable state directory,
+and thread-level serialization within one process. The load-bearing test is
+`TestRealMultiProcessSerialization::test_two_processes_jointly_respect_the_interval`,
+which spawns two REAL separate `python -c` child processes (via `subprocess.Popen`, not
+threads) issuing repeated calls against the same shared state file, and asserts their
+COMBINED issuance timestamps respect the interval — proving the actual property this
+fix exists to guarantee (two processes do not each reach the full per-process
+throughput a single-process throttle would allow), which a thread-based test cannot
+prove on its own. Full existing `tests/test_fmp_client.py` (43 tests) and
+`tests/test_edgar_fundamentals.py` (11 tests) suites: zero regressions — the one
+real-timing EDGAR throttle test (`test_throttle_serializes_request_issuance`) needed its
+interval/tolerance loosened slightly (0.02s/0.8x → 0.04s/0.6x) to give comfortable
+margin above the small, expected extra syscall overhead the second lock layer adds under
+12-thread contention (measured directly: the original tolerance occasionally clipped by
+~1ms, not a correctness bug in the new throttle itself). Broader regression sweep across
+every test file touching `fmp_client`/`edgar_fundamentals` (`test_backfill_edgar_fundamentals.py`,
+`test_dead_letter_resilience.py`, `test_etf_holdings.py`, `test_fmp_*.py`,
+`test_market_data.py`, `test_news_catalyst.py`, `test_sentiment_sources.py`,
+`test_validation_edgar_pit_strategies.py`, `test_validation_multifactor.py`, etc.): 849
+passed, 0 failed. Full repo-wide offline suite (`pytest -q -m 'not network'`): 2867
+passed, 0 failed attributable to this change — one unrelated pre-existing test
+(`tests/test_forecast_backfill.py::test_kill_mid_step_5_leaves_partial_export_with_completed_combos`,
+a real-subprocess test with a 30s wall-clock deadline in a module this change never
+touches) failed on this run under this machine's current heavy concurrent-worktree load,
+consistent with a timing-sensitive test being CPU-starved rather than a regression this
+change introduced.
+
 Introducing PR: [#858](https://github.com/kevinmarko/Stockpy/pull/858).
