@@ -1083,6 +1083,125 @@ class TestCompositeSentimentSource:
         assert captured["remaining_seconds"] is None
 
 
+class TestCrossSourceDedup:
+    """Sentiment/news-scoring audit finding #1: ``_dedup_key`` alone only
+    catches a duplicate WITHIN one source (its hash includes ``source_name``).
+    ``fetch_all()`` must also catch the same underlying story reported by two
+    DIFFERENT sources (e.g. Yahoo RSS and Google News both carrying an
+    identical wire headline), or it double-counts in the credibility-weighted
+    sentiment aggregate."""
+
+    def test_identical_story_from_two_sources_is_deduped(self):
+        source_a = MagicMock()
+        source_a.fetch.return_value = [
+            _doc(source_name="yahoo_rss", text_content="Apple beats Q3 earnings expectations")
+        ]
+        source_b = MagicMock()
+        source_b.fetch.return_value = [
+            _doc(source_name="google_news", text_content="Apple beats Q3 earnings expectations")
+        ]
+        composite = CompositeSentimentSource(
+            sources={"yahoo_rss": source_a, "google_news": source_b}
+        )
+        docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 1
+        # yahoo_rss precedes google_news in _SOURCE_PRIORITY -- its copy wins.
+        assert docs[0].source_name == "yahoo_rss"
+
+    def test_near_identical_story_from_two_sources_is_deduped_via_jaccard(self):
+        """Different outlets often re-title/re-case the same wire story --
+        the fuzzy-title pass (normalize + Jaccard) must catch this even
+        though the raw text differs and the exact-hash check would not."""
+        source_a = MagicMock()
+        source_a.fetch.return_value = [
+            _doc(source_name="yahoo_rss", text_content="Apple Beats Q3 Earnings Expectations")
+        ]
+        source_b = MagicMock()
+        source_b.fetch.return_value = [
+            _doc(source_name="google_news", text_content="apple   beats q3 earnings expectations")
+        ]
+        composite = CompositeSentimentSource(
+            sources={"yahoo_rss": source_a, "google_news": source_b}
+        )
+        docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 1
+
+    def test_distinct_stories_from_two_sources_are_not_deduped(self):
+        source_a = MagicMock()
+        source_a.fetch.return_value = [
+            _doc(source_name="yahoo_rss", text_content="Apple beats Q3 earnings expectations")
+        ]
+        source_b = MagicMock()
+        source_b.fetch.return_value = [
+            _doc(
+                source_name="google_news",
+                text_content="Apple announces new product lineup at fall event",
+            )
+        ]
+        composite = CompositeSentimentSource(
+            sources={"yahoo_rss": source_a, "google_news": source_b}
+        )
+        docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 2
+
+    def test_same_story_different_trading_day_is_not_deduped(self):
+        """Coverage of the same story on two different days is real,
+        distinct coverage -- the cross-source pass must be scoped per
+        trading_day, not applied globally."""
+        source_a = MagicMock()
+        source_a.fetch.return_value = [
+            _doc(
+                source_name="yahoo_rss",
+                text_content="Apple beats Q3 earnings expectations",
+                as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc),
+            )
+        ]
+        source_b = MagicMock()
+        source_b.fetch.return_value = [
+            _doc(
+                source_name="google_news",
+                text_content="Apple beats Q3 earnings expectations",
+                as_of=datetime(2026, 7, 31, 14, 0, tzinfo=timezone.utc),
+            )
+        ]
+        composite = CompositeSentimentSource(
+            sources={"yahoo_rss": source_a, "google_news": source_b}
+        )
+        docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 2
+
+    def test_cross_source_duplicate_does_not_consume_document_budget(self):
+        """A detected cross-source duplicate must not count against the
+        per-cycle document budget -- otherwise it could wrongly crowd out a
+        genuinely distinct document from a later, lower-priority source."""
+        finnhub_mock = MagicMock()
+        finnhub_mock.fetch.return_value = [
+            _doc(source_name="finnhub", text_content="Apple beats Q3 earnings expectations")
+        ]
+        edgar_mock = MagicMock()
+        edgar_mock.fetch.return_value = [
+            # Same story as finnhub's, different source -- a cross-source dup.
+            _doc(source_name="edgar", text_content="Apple beats Q3 earnings expectations")
+        ]
+        yahoo_mock = MagicMock()
+        yahoo_mock.fetch.return_value = [
+            _doc(
+                source_name="yahoo_rss",
+                text_content="Apple announces new product lineup at fall event",
+            )
+        ]
+        composite = CompositeSentimentSource(
+            sources={"finnhub": finnhub_mock, "edgar": edgar_mock, "yahoo_rss": yahoo_mock}
+        )
+        with patch("settings.settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", 2):
+            docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        texts = {d.text_content for d in docs}
+        assert texts == {
+            "Apple beats Q3 earnings expectations",
+            "Apple announces new product lineup at fall event",
+        }
+
+
 class TestBackpressureHardening:
     """Wall-clock ceiling + per-source circuit breaker -- closes the gap a
     per-request timeout alone leaves open (one slow/unreachable source could

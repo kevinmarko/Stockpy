@@ -1165,15 +1165,38 @@ class NewsCatalystSignal(SignalModule):
         """
         symbol = str(row.get("Symbol", row.get("Ticker", ""))).upper()
         headline_score = self._news_scores.get(symbol, 0.0)
-        confidence = 0.75 if symbol in self._news_scores else 0.5
+        # confidence reflects whether this symbol had a genuinely
+        # non-fabricated headline score this cycle, not merely whether a
+        # provider was configured. _news_scores[symbol] is always populated
+        # (with a deliberate 0.0 fallback -- see __init__'s comment) whenever
+        # a provider is configured, even on a real zero-headline day, so
+        # `symbol in self._news_scores` alone can't distinguish "scored real
+        # headlines" from "no headlines, fell back to neutral". _news_archive_scores
+        # is the honest counterpart: it stays NaN exactly on that zero-headline/
+        # fetch-error day (see _score_via_provider), so it's the correct signal here.
+        archive_raw = self._news_archive_scores.get(symbol, float("nan"))
+        had_real_headlines = not math.isnan(archive_raw)
+        confidence = 0.75 if had_real_headlines else 0.5
 
         social_entry = self._sentiment_credibility.get(symbol)
         blend_suffix = ""
         if social_entry is not None:
             social_score = social_entry.get("credibility_weighted_sentiment", 0.0)
-            headline_weight, social_weight = _resolve_social_blend_weights()
-            score = headline_weight * headline_score + social_weight * social_score
-            blend_suffix = f" [social blend w={social_weight:.2f}]"
+            # Defensive NaN guard, mirroring _build_archive_scores' identical
+            # read of this same field: credibility_weighted_sentiment can be
+            # NaN when HistoricalStore.get_sentiment_aggregate_by_symbol's
+            # weight_sum underflows (<= 1e-12) with a document still present.
+            # Not currently reachable (credibility_weight floors at 0.1), but
+            # an unguarded NaN here would corrupt final_score for every other
+            # signal module this cycle via the aggregator's unguarded
+            # score * weight multiply -- degrade to headline-only instead of
+            # ever returning a NaN score (CONSTRAINT #4/#6).
+            if isinstance(social_score, float) and math.isnan(social_score):
+                score = headline_score
+            else:
+                headline_weight, social_weight = _resolve_social_blend_weights()
+                score = headline_weight * headline_score + social_weight * social_score
+                blend_suffix = f" [social blend w={social_weight:.2f}]"
         else:
             score = headline_score
 
