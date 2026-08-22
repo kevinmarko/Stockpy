@@ -292,6 +292,7 @@ def execute_delta_hedge(
         fill_price=fill_price,
         commission_and_fees=commission,
         allow_short=True,
+        strategy_id="Delta Hedge",
     )
 
     if not success:

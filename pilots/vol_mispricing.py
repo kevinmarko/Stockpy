@@ -1352,7 +1352,7 @@ def get_volatility_mispricing_data(
             spot_price = None
 
     if spot_price is None or spot_price <= 0:
-        spot_price = 500.0 if sym == "SPY" else (130.0 if sym == "NVDA" else 150.0)
+        spot_price = None
 
     har_forecast = get_har_volatility_forecast(sym, horizon_days=horizon_days, market_provider=market_provider)
     fair_iv = har_forecast.get("forecast_annualized_vol") or 0.20

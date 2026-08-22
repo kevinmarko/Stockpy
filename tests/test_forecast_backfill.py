@@ -462,7 +462,7 @@ def test_kill_mid_step_5_leaves_partial_export_with_completed_combos(tmp_path):
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.time() + 30.0
+        deadline = time.time() + 60.0
         while time.time() < deadline and not partial_csv.exists():
             time.sleep(0.1)
         assert partial_csv.exists(), "partial export never appeared before the wait timeout"

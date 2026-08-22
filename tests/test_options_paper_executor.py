@@ -647,8 +647,7 @@ def test_execute_earnings_crush_trade_default_strategy_name_is_unchanged():
 def test_execute_earnings_crush_trade_explicit_strategy_name_overrides_label():
     """A caller passing strategy_name= gets that label instead of the hardcoded
     "Earnings Crush" -- both in the returned dict and in the parent order's
-    symbol label (via apply_multi_leg_fill's strategy_name kwarg, recorded as
-    f"{strategy_name} {symbol}")."""
+    strategy_id field (no longer baked into the symbol label)."""
     store = PaperAccountStore(db_url="sqlite:///:memory:")
     executor = OptionsPaperExecutor(store=store)
 
@@ -664,8 +663,8 @@ def test_execute_earnings_crush_trade_explicit_strategy_name_overrides_label():
 
     orders = store.get_full_orders()
     parent_order = next(o for o in orders if o["order_id"] == res["order_id"])
-    assert parent_order["symbol"] == "VOL MISPRICING AAPL"
-
+    assert parent_order["symbol"] == "AAPL"
+    assert parent_order["strategy_id"] == "Vol Mispricing"
 
 def test_execute_earnings_crush_trade_never_fabricates_price():
     """A leg with no resolvable fill_price/raw_price must NOT be filled with the

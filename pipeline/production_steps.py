@@ -1998,6 +1998,14 @@ class StrategyEvalStep(PipelineStep):
                     pit_df = pit_df.set_index('Symbol')
                 pit_vix = getattr(ctx.macro_dto, 'vix_value', None)
                 pit_as_of = pd.Timestamp(datetime.now(timezone.utc)).normalize()
+                
+                # Populate paper features to prevent train/serve skew (CONSTRAINT #4)
+                try:
+                    from ml.training_data import populate_live_paper_features
+                    populate_live_paper_features(ctx.dashboard_df, pit_as_of)
+                except Exception as exc:
+                    telemetry.warning(f"Failed to populate live paper features: {exc}")
+                
                 pit_feat = build_pit_feature_matrix(
                     pit_df, as_of_date=pit_as_of, macro_vix=pit_vix,
                 )

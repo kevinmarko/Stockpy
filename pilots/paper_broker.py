@@ -159,6 +159,7 @@ def execute_roll(
         open_legs=open_legs,
         contracts=contracts,
         limit_price=limit_price,
+        strategy_id="Manual Trade",
     )
 
     if success:

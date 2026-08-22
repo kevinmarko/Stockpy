@@ -8,7 +8,7 @@ manually.
 """
 import sys
 import os
-from typing import Optional
+from typing import Optional, Any
 
 import pytest
 
@@ -17,7 +17,7 @@ import pytest
 # resolve correctly regardless of where pytest is invoked from.
 sys.path.insert(0, os.path.dirname(__file__))
 
-def _field_default(model_cls, name):
+def _field_default(model_cls: type, name: str) -> Any:
     """The TRUE coded default for a Settings field, independent of .env, real
     shell env, and output/runtime_flags.json.
 
@@ -151,7 +151,7 @@ except Exception:
 
 
 @pytest.fixture(autouse=True)
-def _no_gdelt_throttle_in_tests(monkeypatch):
+def _no_gdelt_throttle_in_tests(monkeypatch: pytest.MonkeyPatch) -> Any:
     """Disable the shared GDELT request throttle and reset its limiter state
     for every test.
 
@@ -177,7 +177,7 @@ def _no_gdelt_throttle_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_fmp_throttle_in_tests(monkeypatch):
+def _no_fmp_throttle_in_tests(monkeypatch: pytest.MonkeyPatch) -> Any:
     """Disable the shared FMP request throttle and reset its client state for
     every test — the sibling of ``_no_gdelt_throttle_in_tests`` above, for the
     same two reasons.
@@ -215,7 +215,7 @@ def _no_fmp_throttle_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_validation_runs_db_in_tests(monkeypatch):
+def _isolate_validation_runs_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the default ``validation_runs`` DB resolver at an in-memory db
     for every test, unless the test passes its own explicit ``db_url``.
 
@@ -274,7 +274,7 @@ def _isolate_execution_audit_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _clean_meta_registry_between_tests():
+def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""
     try:
@@ -287,7 +287,7 @@ def _clean_meta_registry_between_tests():
 
 
 @pytest.fixture(autouse=True)
-def _clean_settings_between_tests(monkeypatch):
+def _clean_settings_between_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset mutable settings attributes between tests so tests that mutate
     settings (e.g. weights, disabled modules) don't leak state.
 
@@ -354,7 +354,7 @@ def _clean_settings_between_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _clean_signal_registry_between_tests():
+def _clean_signal_registry_between_tests() -> Any:
     """Reset global_registry._modules so dynamically registered mock/synthesized
     signal modules (e.g. from research copilot tests) do not leak into other tests."""
     standard_names = {

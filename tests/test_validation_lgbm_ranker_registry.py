@@ -67,7 +67,9 @@ def _closes_frame(price_history: dict) -> pd.DataFrame:
     return pd.DataFrame({t: s.reindex(common_index) for t, s in closes.items()})
 
 
-def test_lgbm_ranker_adapter_returns_callable_strategy_fn(price_history):
+def test_lgbm_ranker_adapter_returns_callable_strategy_fn(price_history, monkeypatch):
+    import scripts.refresh_validations
+    monkeypatch.setattr(scripts.refresh_validations, "_XSEC_UNIVERSE_CAPPED", TICKERS)
     closes = _closes_frame(price_history)
     X, y, strategy_fn = _build_lgbm_ranker_adapter(closes)
 
@@ -81,9 +83,11 @@ def test_lgbm_ranker_adapter_returns_callable_strategy_fn(price_history):
     assert y.index.is_unique
 
 
-def test_lgbm_ranker_strategy_fn_produces_real_trades(price_history):
+def test_lgbm_ranker_strategy_fn_produces_real_trades(price_history, monkeypatch):
     """A single fold call must genuinely train a ranker and produce
     non-empty train/test long-short return series."""
+    import scripts.refresh_validations
+    monkeypatch.setattr(scripts.refresh_validations, "_XSEC_UNIVERSE_CAPPED", TICKERS)
     closes = _closes_frame(price_history)
     X, y, strategy_fn = _build_lgbm_ranker_adapter(closes)
     assert not X.empty
@@ -102,15 +106,13 @@ def test_lgbm_ranker_strategy_fn_produces_real_trades(price_history):
     assert np.isfinite(trial["test_returns"]).all()
 
 
-def test_lgbm_ranker_validation_harness_runs(price_history, tmp_path):
-    """Smoke-tests the StrategyValidationHarness end-to-end on the
-    production lgbm_ranker adapter. Asserts a well-formed report (not NaN,
-    deployable is a bool) rather than deployability itself — a 10-name,
-    reduced-split test configuration is not expected to clear the Sharpe/DSR
-    bar on its own, and that is not what this test is verifying (the
-    production registry entry's own real numbers are recorded in
-    docs/signals/lgbm_ranker.md instead).
-    """
+def test_lgbm_ranker_validation_harness_runs(price_history, monkeypatch, tmp_path):
+    """Validates the full harness runs without crashing and produces the
+    expected metrics dict shape. Does not assert profitability (test data
+    is arbitrary/small)."""
+    import scripts.refresh_validations
+    monkeypatch.setattr(scripts.refresh_validations, "_XSEC_UNIVERSE_CAPPED", TICKERS)
+    
     closes = _closes_frame(price_history)
     X, y, strategy_fn = _build_lgbm_ranker_adapter(closes)
     assert not X.empty and not y.empty and callable(strategy_fn)

@@ -575,11 +575,11 @@ def test_execute_vol_mispricing_trade_leg_price_translation_dollar_per_share_to_
 
     assert store.get_account().cash == pytest.approx(initial_cash + 297.40)
 
-    # Trade must be labeled "Vol Mispricing" in the paper-broker blotter, not
-    # "Earnings Crush" (the shared executor's own hardcoded default).
+    # Trade must be properly attributed to "Vol Mispricing" in the paper-broker blotter
     orders = store.get_full_orders()
     parent_order = next(o for o in orders if o["order_id"] == details["order_id"])
-    assert parent_order["symbol"] == "VOL MISPRICING AAPL"
+    assert parent_order["symbol"] == "AAPL"
+    assert parent_order["strategy_id"] == "Vol Mispricing"
 
 
 def test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly():
