@@ -78,6 +78,7 @@ def _macro(
     vix: float = 15.0,
     market_regime: str = "RISK ON",
     hmm_risk_on_probability: float | None = None,
+    data_unavailable: bool = False,
 ) -> MagicMock:
     # spec=MacroEconomicDTO so attribute access this mock was never told
     # about (e.g. hmm_risk_off_block_threshold, which the real DTO never
@@ -89,6 +90,7 @@ def _macro(
     m.vix = vix
     m.market_regime = market_regime
     m.hmm_risk_on_probability = hmm_risk_on_probability
+    m.data_unavailable = data_unavailable
     return m
 
 
@@ -652,6 +654,19 @@ class TestMacroKillSwitchCheck:
         result = gate.macro_kill_switch_check(_buy(), RiskContext())
         assert result.passed
 
+    def test_fails_when_data_unavailable_even_with_otherwise_benign_macro(self):
+        """End-to-end regression guard: a MacroEconomicDTO whose
+        data_unavailable=True forces killSwitch=True by construction (see
+        dto_models.py) -- this proves that alone is sufficient to block a
+        BUY order through this existing, UNMODIFIED check, with zero code
+        changes needed here. kill_switch=True below only mirrors what the
+        real DTO's killSwitch property would compute; this check reads
+        killSwitch directly, not data_unavailable itself."""
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(macro=_macro(kill_switch=True, vix=15.0, data_unavailable=True))
+        result = gate.macro_kill_switch_check(_buy(), ctx)
+        assert not result.passed
+
 
 # ---------------------------------------------------------------------------
 # 6. hmm_regime_check
@@ -723,6 +738,43 @@ class TestStressScenarioCheck:
     def test_conservative_pass_premium_no_macro(self):
         gate = PreTradeRiskGate()
         ctx = RiskContext(is_premium_sell_strategy=True)
+        result = gate.stress_scenario_check(_buy(), ctx)
+        assert result.passed
+
+    def test_fails_premium_strategy_when_data_unavailable_despite_benign_vix(self):
+        """CONSTRAINT #4/#6 regression guard: this check reads context.macro.vix
+        directly and bypasses killSwitch entirely, so it must independently
+        check data_unavailable -- a FRED outage substituting a benign VIX
+        default (e.g. 15.0) must not wave through the highest tail-risk
+        strategy class (premium selling)."""
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(
+            macro=_macro(vix=15.0, data_unavailable=True),
+            is_premium_sell_strategy=True,
+        )
+        result = gate.stress_scenario_check(_buy(), ctx)
+        assert not result.passed
+
+    def test_passes_premium_strategy_when_data_available_and_vix_benign(self):
+        """data_unavailable=False (the default) must not change today's
+        exact behavior -- byte-identical regression guard."""
+        gate = PreTradeRiskGate()
+        ctx = RiskContext(
+            macro=_macro(vix=15.0, data_unavailable=False),
+            is_premium_sell_strategy=True,
+        )
+        result = gate.stress_scenario_check(_buy(), ctx)
+        assert result.passed
+
+    def test_passes_premium_strategy_when_macro_object_lacks_data_unavailable_attr(self):
+        """A context.macro built by older code (or test code) without the
+        data_unavailable attribute at all must degrade to False via getattr,
+        not raise -- confirms the defensive-getattr style matches
+        hmm_regime_check's existing convention in this same file."""
+        gate = PreTradeRiskGate()
+        bare_macro = MagicMock(spec=["vix"])  # deliberately no data_unavailable attr
+        bare_macro.vix = 15.0
+        ctx = RiskContext(macro=bare_macro, is_premium_sell_strategy=True)
         result = gate.stress_scenario_check(_buy(), ctx)
         assert result.passed
 

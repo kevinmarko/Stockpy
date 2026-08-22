@@ -543,12 +543,28 @@ class PreTradeRiskGate:
     def stress_scenario_check(
         self, intent: OrderIntent, context: RiskContext
     ) -> RiskCheckResult:
-        """Block premium-selling orders during elevated-vol regimes (VIX > 30)."""
+        """Block premium-selling orders during elevated-vol regimes (VIX > 30).
+
+        Reads context.macro.vix directly and therefore does NOT go through
+        MacroEconomicDTO.killSwitch -- so it also independently checks
+        context.macro.data_unavailable (CONSTRAINT #4/#6): when the macro
+        snapshot behind the DTO was missing critical FRED series this cycle,
+        the raw VIX reading is a substituted benign default, not a real
+        measurement, and must not be trusted to wave through the highest
+        tail-risk strategy class (premium selling). getattr with a False
+        default keeps this safe against a context.macro built by older test
+        code without the attribute.
+        """
         name = "stress_scenario"
         if not context.is_premium_sell_strategy:
             return RiskCheckResult(name, True, "not a premium-sell strategy — skipped")
         if context.macro is None:
             return RiskCheckResult(name, True, "no macro context — skipping")
+        if getattr(context.macro, "data_unavailable", False):
+            return RiskCheckResult(
+                name, False,
+                "macro data unavailable — blocking premium-sell orders (fail closed)",
+            )
         if context.macro.vix > 30.0:
             return RiskCheckResult(
                 name, False,

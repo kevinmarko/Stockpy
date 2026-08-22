@@ -46,10 +46,57 @@ class MacroDataSchema(pa.DataFrameModel):
     high_yield_oas: Series[float] = pa.Field(ge=0.0, nullable=False)
     sahm_rule_indicator: Series[float] = pa.Field(ge=0.0, nullable=False)
     market_regime: Series[str] = pa.Field(isin=["RISK ON", "NEUTRAL", "RECESSION", "CREDIT EVENT"])
+    # True when one or more of the FRED series this classification depends on
+    # (T10Y2Y / BAMLH0A0HYM2) was absent from the input macro_raw dict for this
+    # call -- see macro_killswitch_data_unavailable() below. CONSTRAINT #4/#6:
+    # a caller must never let a substituted benign default read as a real
+    # "risk on" measurement, so market_regime is forced to "RECESSION" (see
+    # run_macro_killswitch) whenever this is True, and that fact is surfaced
+    # here rather than silently absorbed into the regime string alone.
+    data_unavailable: Series[bool] = pa.Field(nullable=False)
 
     class Config:
         coerce = True
         strict = True
+
+
+# Full set of FRED series MacroEconomicDTO.killSwitch's base condition and
+# regime classification depend on across every construction site (see
+# dto_models.py::MacroEconomicDTO.killSwitch / ::_rules_based_regime).
+# CPIAUCSL_YoY / DGS10 feed inflation/real_yield only and are deliberately
+# excluded -- this constant answers "is the killswitch safe-gate data
+# trustworthy," not "is macro_raw complete." DTO-construction call sites
+# (main.py, pipeline/production_steps.py) check the full set below; the two
+# regime-classification-only keys (T10Y2Y, BAMLH0A0HYM2) are exposed
+# separately since run_macro_killswitch never receives VIXCLS as an argument
+# and must not be told data is unavailable purely because a key outside its
+# own contract wasn't passed in.
+REGIME_CRITICAL_MACRO_KEYS = ("T10Y2Y", "BAMLH0A0HYM2")
+KILLSWITCH_CRITICAL_MACRO_KEYS = REGIME_CRITICAL_MACRO_KEYS + ("VIXCLS",)
+
+
+def macro_killswitch_data_unavailable(
+    macro_raw: Dict[str, Any],
+    keys: Tuple[str, ...] = KILLSWITCH_CRITICAL_MACRO_KEYS,
+) -> bool:
+    """True if any FRED series in *keys* is absent from macro_raw for this
+    cycle (default: the full killSwitch-critical set -- T10Y2Y,
+    BAMLH0A0HYM2, VIXCLS).
+
+    A caller substituting a benign literal default (e.g. ``.get('VIXCLS',
+    15.0)``) in place of a genuinely missing key must not let that read as a
+    real "risk on" measurement for a safety-critical gate (CONSTRAINT #4:
+    never fabricate; CONSTRAINT #6: fail closed). Callers pass this into
+    ``MacroEconomicDTO(..., data_unavailable=...)`` (see dto_models.py), which
+    forces ``killSwitch`` and ``market_regime`` to the conservative branch
+    when True. ``run_macro_killswitch`` passes ``keys=REGIME_CRITICAL_MACRO_KEYS``
+    (T10Y2Y/BAMLH0A0HYM2 only) since it never receives ``VIXCLS`` as an
+    argument at all (only ``macro_raw`` plus a separately computed
+    ``sahm_rule_val``) -- checking for a key outside that function's own
+    contract would make it report "unavailable" unconditionally regardless of
+    whether the data it actually uses is present.
+    """
+    return any(k not in macro_raw or macro_raw.get(k) is None for k in keys)
 
 
 # ==============================================================================
@@ -210,27 +257,45 @@ class MacroEngine:
         """
         Fetches historical monthly Unemployment Rate (UNRATE) from FRED and computes
         the Sahm Rule Recession Indicator dynamically.
-        Formula: 3-Month Moving Average minus the minimum 3-Month Moving Average 
+        Formula: 3-Month Moving Average minus the minimum 3-Month Moving Average
                  in the prior 12 months.
+
+        Thin, byte-identical delegate over _calculate_sahm_rule_detailed --
+        kept for every existing caller/test that only wants the float value.
+        """
+        return self._calculate_sahm_rule_detailed(fallback_val)[0]
+
+    def _calculate_sahm_rule_detailed(self, fallback_val: float = 0.0) -> Tuple[float, bool]:
+        """Same computation as calculate_sahm_rule, but also reports whether
+        *fallback_val* was actually used (True) or a real FRED-derived
+        reading was returned (False).
+
+        Callers that construct a MacroEconomicDTO (e.g.
+        pipeline/production_steps.py, main.py) need this second value to set
+        data_unavailable=True when the Sahm input behind the kill switch was
+        never a real reading -- calculate_sahm_rule()'s plain float return
+        can't distinguish "FRED said 0.0" from "FRED was unreachable, so we
+        used the 0.0 fallback," and CONSTRAINT #4 requires that distinction
+        be preserved rather than silently discarded.
         """
         # Attempt to fetch directly if initialized
         if not self.data_engine or not getattr(self.data_engine, 'fred', None):
             logger.warning("FRED API is not active. Using default Sahm Rule fallback.")
-            return fallback_val
+            return fallback_val, True
 
         try:
             # Dual-path verification: First try to fetch the pre-computed FRED Sahm indicator
             try:
                 sahm_series = self.data_engine.fred.get_series('SAHMREALTIME', limit=5)
                 if sahm_series is not None and not sahm_series.empty:
-                    return float(sahm_series.iloc[-1])
+                    return float(sahm_series.iloc[-1]), False
             except Exception as e:
                 logger.debug(f"Direct SAHMREALTIME fetch omitted: {e}. Computing manually.")
 
             # Fallback to computing from UNRATE series history
             unrate_series = self.data_engine.fred.get_series('UNRATE')
             if unrate_series is None or unrate_series.empty:
-                return fallback_val
+                return fallback_val, True
 
             # Sort index just in case of order issues
             unrate_series = unrate_series.sort_index()
@@ -241,23 +306,38 @@ class MacroEngine:
             min_ma3 = ma3.rolling(window=12).min()
 
             if ma3.empty or min_ma3.empty:
-                return fallback_val
+                return fallback_val, True
 
             sahm_indicator = ma3.iloc[-1] - min_ma3.iloc[-1]
-            return float(sahm_indicator)
+            return float(sahm_indicator), False
 
         except Exception as e:
             logger.error(f"Failed to calculate Sahm Rule from FRED: {e}. Using fallback: {fallback_val}")
-            return fallback_val
+            return fallback_val, True
 
     def run_macro_killswitch(self, macro_raw: Dict[str, Any], sahm_rule_val: float) -> pd.DataFrame:
         """
         Executes the systemic "MACRO FREEZE" / "killSwitch" logic.
         Outputs a pandas DataFrame that conforms to the MacroDataSchema constraints.
+
+        Fails closed (CONSTRAINT #4/#6) when T10Y2Y or BAMLH0A0HYM2 is absent
+        from macro_raw: rather than silently letting the substituted benign
+        literal defaults (0.5 / 3.5) resolve to the fallthrough "RISK ON"
+        classification, market_regime is forced to "RECESSION" and
+        data_unavailable=True is reported in the output. The
+        sahm_rule_val >= 0.6 / high-credit-spread branches still take
+        priority when the data IS present and independently produces a worse
+        classification -- this only overrides the fallthrough "RISK ON" case
+        that would otherwise result from fabricated inputs.
         """
+        # Only T10Y2Y/BAMLH0A0HYM2 -- this function never receives VIXCLS.
+        data_unavailable = macro_killswitch_data_unavailable(
+            macro_raw, keys=REGIME_CRITICAL_MACRO_KEYS
+        )
+
         yield_curve = float(macro_raw.get('T10Y2Y', 0.5))
         credit_spread = float(macro_raw.get('BAMLH0A0HYM2', 3.5))
-        
+
         # Determine Market Regime with relaxed thresholds and compound logic
         if (yield_curve < -0.25 and credit_spread > 6.0) or sahm_rule_val >= 0.6:
             regime = "RECESSION"
@@ -265,6 +345,10 @@ class MacroEngine:
             regime = "CREDIT EVENT"
         elif credit_spread > 4.5:
             regime = "NEUTRAL"
+        elif data_unavailable:
+            # Fallthrough "RISK ON" would be computed entirely off fabricated
+            # placeholder inputs -- fail closed instead.
+            regime = "RECESSION"
         else:
             regime = "RISK ON"
 
@@ -273,7 +357,8 @@ class MacroEngine:
             "yield_curve_10y_2y": [yield_curve],
             "high_yield_oas": [credit_spread],
             "sahm_rule_indicator": [sahm_rule_val],
-            "market_regime": [regime]
+            "market_regime": [regime],
+            "data_unavailable": [data_unavailable],
         })
 
         # Validate DataFrame to ensure it strictly conforms to schema constraints
