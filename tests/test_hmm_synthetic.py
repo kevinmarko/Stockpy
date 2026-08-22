@@ -8,6 +8,9 @@ label-permutation ambiguity inherent to unsupervised HMM fitting (a freshly
 fit model's internal state indices 0/1 need not match the generator's).
 """
 
+import logging
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -211,6 +214,164 @@ def test_hmm_covariance_types_fit_and_predict():
         proba = detector.predict_proba(features_df)
         assert "risk_on_probability" in proba
         assert 0.0 <= proba["risk_on_probability"] <= 1.0
+
+
+@pytest.mark.parametrize("cov_type", ["diag", "full", "spherical", "tied"])
+def test_identify_states_by_vol_semantic_correctness_across_covariance_types(cov_type):
+    """Regression test for the spherical/tied state-mislabeling bug
+    (2026-08): for every supported covariance_type, the state labeled
+    'bull' must have a lower fitted mean realized_vol_20d than the other
+    state. Pre-fix this failed for 'spherical' (hmmlearn's public covars_
+    getter returns a malformed shape for spherical covariance, so
+    identify_states_by_vol() always hit its length-mismatch fallback to an
+    arbitrary np.arange() ordering, unrelated to volatility) and could fail
+    for 'tied' (ranked states by an undirected 4-feature mean-vector norm
+    instead of a directional risk proxy). This is a deterministic,
+    fitted-parameter check -- not a classification-accuracy threshold -- so
+    it needs no flakiness calibration."""
+    features_df, _ = _generate_known_2state_hmm_data(n_samples=600)
+
+    detector = HMMRegimeDetector(
+        n_states=2, covariance_type=cov_type, retrain_freq_days=10_000, random_state=7
+    )
+    detector.fit(features_df)
+
+    labels = detector.state_labels
+    bull_idx = next(idx for idx, label in labels.items() if label == "bull")
+    other_idx = next(idx for idx in labels if idx != bull_idx)
+
+    vol_idx = detector.feature_names_.index("realized_vol_20d")
+    bull_mean_vol = detector.model.means_[bull_idx, vol_idx]
+    other_mean_vol = detector.model.means_[other_idx, vol_idx]
+
+    assert bull_mean_vol < other_mean_vol, (
+        f"covariance_type={cov_type}: state labeled 'bull' has mean (scaled) "
+        f"realized_vol_20d={bull_mean_vol:.4f}, NOT lower than the other "
+        f"state's {other_mean_vol:.4f} -- state mislabeling."
+    )
+
+
+@pytest.mark.parametrize("cov_type", ["diag", "full", "spherical"])
+def test_risk_on_probability_higher_in_calm_regime_across_covariance_types(cov_type):
+    """Integration-level counterpart to the semantic-correctness test above
+    -- closes the gap between identify_states_by_vol()'s label correctness
+    and predict_proba()'s actual risk_on_probability output. For every
+    covariance_type, a window drawn entirely from the calm generating state
+    must produce a higher average risk_on_probability than a window drawn
+    entirely from the turbulent state. This directly reproduces (on fixed
+    code) the "crash regime correctly reports low risk-on probability"
+    property that a mislabeled 'bull' state would silently violate and that
+    feeds MacroEconomicDTO.killSwitch/market_regime in dto_models.py.
+
+    'tied' is deliberately excluded from this parametrization -- NOT because
+    its labeling is still wrong (test_identify_states_by_vol_semantic_
+    correctness_across_covariance_types above confirms it's correctly
+    fixed), but because of a separate, structural limitation verified
+    empirically: forcing a single shared covariance matrix across states
+    fundamentally conflicts with discriminating regimes whose defining
+    characteristic IS different variance (calm: variances ~1e-5-4e-4;
+    turbulent: ~3e-4-25, a >1000x spread) -- on this synthetic scenario the
+    tied-covariance EM fit collapses to one dominant state for both windows
+    (risk_on_probability == 1.0 for BOTH calm and turbulent), reproducibly
+    across every random_state/n_inits combination tried. This is a
+    documented, pre-existing property of 'tied' covariance for volatility-
+    regime data, not a regression this PR introduces or could fix within
+    identify_states_by_vol() -- see docs/regime_model_tuning_guide.md's
+    Covariance Structures section."""
+    means_array = np.array([
+        [0.0008, 0.10, 13.0, 0.5],
+        [-0.0010, 0.35, 28.0, 0.3],
+    ])
+    covars_array = np.array([
+        [1e-5, 0.0004, 4.0, 0.04],
+        [3e-4, 0.0025, 25.0, 0.04],
+    ])
+    n = 300
+    dates = pd.bdate_range(end=pd.Timestamp("2024-01-01"), periods=n)
+    columns = ["spy_return", "realized_vol_20d", "vix_level", "yield_curve_spread"]
+
+    calm_model = GaussianHMM(n_components=2, covariance_type="diag", random_state=99)
+    calm_model.startprob_ = np.array([1.0, 0.0])
+    calm_model.transmat_ = np.array([[0.995, 0.005], [0.005, 0.995]])
+    calm_model.means_ = means_array
+    calm_model.covars_ = covars_array
+    calm_X, _ = calm_model.sample(n, random_state=1)
+    calm_df = pd.DataFrame(calm_X, index=dates, columns=columns)
+
+    turbulent_model = GaussianHMM(n_components=2, covariance_type="diag", random_state=99)
+    turbulent_model.startprob_ = np.array([0.0, 1.0])
+    turbulent_model.transmat_ = np.array([[0.995, 0.005], [0.005, 0.995]])
+    turbulent_model.means_ = means_array
+    turbulent_model.covars_ = covars_array
+    turbulent_X, _ = turbulent_model.sample(n, random_state=2)
+    turbulent_df = pd.DataFrame(turbulent_X, index=dates, columns=columns)
+
+    detector = HMMRegimeDetector(
+        n_states=2, covariance_type=cov_type, retrain_freq_days=10_000, random_state=7
+    )
+    detector.fit(pd.concat([calm_df, turbulent_df]))
+
+    calm_risk_on = detector.predict_proba(calm_df)["risk_on_probability"]
+    turbulent_risk_on = detector.predict_proba(turbulent_df)["risk_on_probability"]
+
+    assert calm_risk_on > turbulent_risk_on, (
+        f"covariance_type={cov_type}: calm-window risk_on_probability "
+        f"({calm_risk_on:.3f}) was not higher than turbulent-window "
+        f"({turbulent_risk_on:.3f})."
+    )
+
+
+def test_identify_states_by_vol_n4_highest_variance_labeled_bear():
+    """Regression test: for n_states >= 4, the highest-variance state must
+    be labeled 'bear' (not a generic 'state_<n-1>') and the lowest 'bull'.
+    Pre-fix, the labels list was built by loop position rather than by
+    sorted rank, so the last rank indexed past DEFAULT_STATE_LABELS_3's
+    length-3 list and fell through to a generic label -- reachable today
+    via validation/regime_diagnostics.py's default state_counts=[2,3,4]
+    sweep (scripts/audit_regime_model.py --compare calls it with no
+    override). Uses a stubbed model (no real EM fit needed) to isolate
+    identify_states_by_vol()'s label-assignment logic deterministically."""
+    detector = HMMRegimeDetector(n_states=4, covariance_type="diag", random_state=1)
+    # Ascending per-state variance sums: state 0 lowest, state 3 highest.
+    detector.model = SimpleNamespace(
+        covars_=np.array([
+            [1.0, 1.0, 1.0, 1.0],   # sum = 4
+            [2.0, 2.0, 2.0, 2.0],   # sum = 8
+            [3.0, 3.0, 3.0, 3.0],   # sum = 12
+            [4.0, 4.0, 4.0, 4.0],   # sum = 16
+        ]),
+    )
+
+    labels = detector.identify_states_by_vol()
+
+    assert labels[0] == "bull"
+    assert labels[1] == "state_1"
+    assert labels[2] == "state_2"
+    assert labels[3] == "bear"
+
+
+def test_identify_states_by_vol_logs_error_on_variance_length_mismatch(caplog):
+    """If the extracted per-state variance array's length doesn't match
+    n_states, identify_states_by_vol() must log an error (CONSTRAINT #6:
+    never silent) before falling back to the arbitrary np.arange()
+    ordering -- this is what let the spherical mislabeling bug ship
+    undetected pre-fix. Uses a stubbed model whose covars_ deliberately has
+    the wrong number of per-state matrices to trip the fallback
+    deterministically, without needing to reproduce a real hmmlearn
+    malformed shape."""
+    detector = HMMRegimeDetector(n_states=4, covariance_type="full", random_state=1)
+    detector.model = SimpleNamespace(
+        covars_=[np.eye(4) * v for v in (1.0, 2.0, 3.0, 4.0, 5.0)],  # 5 matrices, n_states=4
+    )
+
+    with caplog.at_level(logging.ERROR):
+        labels = detector.identify_states_by_vol()
+
+    assert len(labels) == 4
+    assert any(
+        "length" in record.message and "full" in record.message
+        for record in caplog.records
+    ), f"Expected an ERROR log naming the length mismatch and covariance_type; got: {[r.message for r in caplog.records]}"
 
 
 def test_hmm_compute_diagnostics():
