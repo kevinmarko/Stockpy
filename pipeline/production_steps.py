@@ -192,7 +192,17 @@ class OptionsAnalysisStep(PipelineStep):
         me = (engines.macro_engine if engines is not None and engines.macro_engine is not None
               else MacroEngine(data_engine=ctx.market))
         sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
-        macro_data = me.run_macro_killswitch(ctx.macro_raw, sahm_val)
+        # ctx.macro_raw originates from main_orchestrator.fetch_all_data_async(de, ...)
+        # calling de.fetch_macro_raw() on this SAME ctx.market instance, earlier
+        # in this cycle -- so de.last_macro_raw_fabricated_keys is already set
+        # by the time this step runs. Closes the populated-but-fabricated blind
+        # spot: DataEngine.fetch_macro_raw()'s hardcoded emergency fallback
+        # populates EVERY key with a benign literal, so a plain presence check
+        # alone would report "available" even during a total FRED outage.
+        macro_raw_fabricated_keys = getattr(ctx.market, "last_macro_raw_fabricated_keys", frozenset())
+        macro_data = me.run_macro_killswitch(
+            ctx.macro_raw, sahm_val, fabricated_keys=macro_raw_fabricated_keys,
+        )
 
         hmm_result = me.compute_hmm_risk_on_probability(ctx.tech_raw.get('SPY'))
         hmm_risk_on_probability = hmm_result["risk_on_probability"] if hmm_result else None
@@ -204,7 +214,8 @@ class OptionsAnalysisStep(PipelineStep):
         # MacroEconomicDTO.killSwitch/_rules_based_regime to fail closed --
         # see dto_models.py and macro_engine.py::macro_killswitch_data_unavailable.
         data_unavailable = (
-            macro_killswitch_data_unavailable(ctx.macro_raw) or sahm_used_fallback
+            macro_killswitch_data_unavailable(ctx.macro_raw, fabricated_keys=macro_raw_fabricated_keys)
+            or sahm_used_fallback
         )
 
         ctx.macro_dto = MacroEconomicDTO(

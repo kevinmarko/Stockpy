@@ -467,7 +467,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 843,
+    "attr": 842,
     "factory_param": 4,
     "getattr_const": 366,
     "os_environ": 25
@@ -1968,7 +1968,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:134",
+        "site": "macro_engine.py:147",
         "via": []
       }
     ],
@@ -1979,7 +1979,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:137",
+        "site": "macro_engine.py:150",
         "via": []
       }
     ],
@@ -1990,7 +1990,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:135",
+        "site": "macro_engine.py:148",
         "via": []
       }
     ],
@@ -2001,7 +2001,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:132",
+        "site": "macro_engine.py:145",
         "via": []
       }
     ],
@@ -2012,7 +2012,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:133",
+        "site": "macro_engine.py:146",
         "via": []
       }
     ],
@@ -2034,7 +2034,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:136",
+        "site": "macro_engine.py:149",
         "via": []
       }
     ],
@@ -2393,7 +2393,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5853",
+        "site": "investyo_mcp_server.py:5890",
         "via": []
       }
     ],
@@ -2413,7 +2413,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5805",
+        "site": "investyo_mcp_server.py:5842",
         "via": []
       }
     ],
@@ -2453,7 +2453,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5813",
+        "site": "investyo_mcp_server.py:5850",
         "via": []
       }
     ],
@@ -3043,7 +3043,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:597",
+        "site": "pipeline/production_steps.py:586",
         "via": []
       }
     ],

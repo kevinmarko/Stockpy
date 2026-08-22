@@ -215,6 +215,34 @@ class TestMacroKillswitchDataUnavailable:
         assert set(REGIME_CRITICAL_MACRO_KEYS) == {"T10Y2Y", "BAMLH0A0HYM2"}
         assert set(KILLSWITCH_CRITICAL_MACRO_KEYS) == {"T10Y2Y", "BAMLH0A0HYM2", "VIXCLS"}
 
+    def test_fabricated_key_reports_unavailable_even_though_present_and_non_none(self):
+        """The populated-but-fabricated blind spot: data_engine.DataEngine's
+        hardcoded emergency fallback populates EVERY killswitch-critical key
+        with a benign literal, so plain presence/None checking alone reports
+        "available" even when the whole snapshot is fabricated. A caller
+        that knows which keys came from that fallback must be able to force
+        the correct answer via fabricated_keys."""
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 18.0}
+        assert macro_killswitch_data_unavailable(macro_raw) is False
+        assert macro_killswitch_data_unavailable(
+            macro_raw, fabricated_keys=frozenset({"VIXCLS"})
+        ) is True
+
+    def test_fabricated_keys_outside_the_checked_key_set_are_ignored(self):
+        """UNRATE can be fabricated (it's in _MACRO_HARDCODED_FALLBACK) but
+        is not killswitch-critical -- its fabrication must not trip this
+        check when only the killswitch-critical keys are real."""
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 18.0}
+        assert macro_killswitch_data_unavailable(
+            macro_raw, fabricated_keys=frozenset({"UNRATE"})
+        ) is False
+
+    def test_default_fabricated_keys_is_empty_reproduces_prior_behavior(self):
+        """Every pre-existing call site that doesn't pass fabricated_keys at
+        all must see byte-identical behavior."""
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 18.0}
+        assert macro_killswitch_data_unavailable(macro_raw) is False
+
 
 # ============================================================================
 # run_macro_killswitch — regime classification truth table + schema
@@ -291,6 +319,23 @@ class TestRunMacroKillswitch:
         negative value must fail schema validation, not silently pass."""
         with pytest.raises(Exception):
             engine.run_macro_killswitch({"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0}, sahm_rule_val=-0.1)
+
+    def test_fabricated_keys_forces_recession_despite_fully_populated_input(self, engine):
+        """The populated-but-fabricated blind spot, at the run_macro_killswitch
+        level: benign inputs that would otherwise classify RISK ON must fail
+        closed to RECESSION when the caller flags T10Y2Y/BAMLH0A0HYM2 as
+        fabricated, even though both keys are present and non-None."""
+        df = engine.run_macro_killswitch(
+            {"T10Y2Y": 1.0, "BAMLH0A0HYM2": 2.0}, sahm_rule_val=0.0,
+            fabricated_keys=frozenset({"T10Y2Y"}),
+        )
+        assert df["market_regime"].iloc[0] == "RECESSION"
+        assert df["data_unavailable"].iloc[0] == True  # noqa: E712
+
+    def test_fabricated_keys_default_reproduces_prior_behavior(self, engine):
+        df = engine.run_macro_killswitch({"T10Y2Y": 1.0, "BAMLH0A0HYM2": 2.0}, sahm_rule_val=0.0)
+        assert df["market_regime"].iloc[0] == "RISK ON"
+        assert df["data_unavailable"].iloc[0] == False  # noqa: E712
 
 
 # ============================================================================

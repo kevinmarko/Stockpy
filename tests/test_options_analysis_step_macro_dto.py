@@ -52,7 +52,7 @@ class _FakeEngineWithFred:
         self.fred = fred
 
 
-def _make_ctx(macro_raw, macro_engine) -> RunContext:
+def _make_ctx(macro_raw, macro_engine, market=None) -> RunContext:
     """Minimal RunContext exercising only OptionsAnalysisStep.run()'s macro
     DTO construction -- symbols=[] keeps every downstream engine untouched."""
     return RunContext(
@@ -67,7 +67,7 @@ def _make_ctx(macro_raw, macro_engine) -> RunContext:
         build_context_extras_fn=lambda *a, **k: {},
         advisory_evaluate_fn=lambda *a, **k: None,
         symbols=[],
-        market=None,
+        market=market,
         tech_raw={},
         macro_raw=macro_raw,
         engine_context=EngineContext(macro_engine=macro_engine),
@@ -125,6 +125,45 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
 
         assert ctx.macro_dto.data_unavailable is True
         assert ctx.macro_dto.killSwitch is True
+
+    def test_fabricated_but_populated_macro_raw_sets_data_unavailable(self):
+        """The populated-but-fabricated blind spot: ctx.macro_raw is FULLY
+        POPULATED (as DataEngine's hardcoded emergency fallback would leave
+        it -- every key present, non-None) but ctx.market reports those keys
+        as fabricated via last_macro_raw_fabricated_keys. Plain key-presence
+        checking alone (the pre-existing PR #854 fix) can't see this."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.5, "UNRATE": 3.8, "VIXCLS": 15.0}
+
+        class _FakeMarket:
+            last_macro_raw_fabricated_keys = frozenset(
+                {"T10Y2Y", "BAMLH0A0HYM2", "UNRATE", "VIXCLS"}
+            )
+
+        ctx = _make_ctx(macro_raw, me, market=_FakeMarket())
+        OptionsAnalysisStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is True
+        assert ctx.macro_dto.killSwitch is True
+        assert ctx.macro_dto.market_regime == "RECESSION"
+
+    def test_market_with_no_fabricated_keys_attribute_is_unaffected(self):
+        """ctx.market lacking last_macro_raw_fabricated_keys entirely (an
+        older/duck-typed provider) must degrade to frozenset() via getattr's
+        default, not raise -- byte-identical to today's behavior."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
+
+        class _BareMarket:
+            pass
+
+        ctx = _make_ctx(macro_raw, me, market=_BareMarket())
+        OptionsAnalysisStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is False
+        assert ctx.macro_dto.killSwitch is False
 
     def test_sahm_rule_indicator_reflects_real_fred_value_not_fallback(self):
         """ctx.macro_dto.sahm_rule_indicator must carry the actual FRED-derived

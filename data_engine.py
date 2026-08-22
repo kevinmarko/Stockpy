@@ -16,7 +16,7 @@ import yfinance as yf
 from fredapi import Fred
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, FrozenSet, List, Any, Optional, Tuple
 
 from settings import settings
 
@@ -87,6 +87,19 @@ class DataEngine(IDataProvider):
         else:
             self.fred = None
 
+        # Which keys of the most recent fetch_macro_raw() return value are
+        # fabricated placeholders rather than real FRED/FMP readings -- see
+        # fetch_macro_raw_detailed()'s docstring. Read by callers building a
+        # MacroEconomicDTO (main.py, pipeline/production_steps.py,
+        # investyo_mcp_server.py) via
+        # getattr(de, "last_macro_raw_fabricated_keys", frozenset()) right
+        # after calling fetch_macro_raw(), so they can feed
+        # macro_engine.macro_killswitch_data_unavailable(...,
+        # fabricated_keys=...) instead of trusting key-presence alone
+        # (CONSTRAINT #4/#6: a populated-but-fabricated key must never read
+        # as real data for a safety-critical gate).
+        self.last_macro_raw_fabricated_keys: FrozenSet[str] = frozenset()
+
     # The hardcoded emergency snapshot -- a known CONSTRAINT #4 violation kept
     # only as the LAST resort when neither FRED nor (if enabled) FMP can serve
     # real data, so a total macro-data outage never crashes the pipeline. Do
@@ -101,6 +114,32 @@ class DataEngine(IDataProvider):
         Pulls macroeconomic indices from FRED (unchanged, still the primary,
         higher-quality unrevised-vintage source where it works).
 
+        Thin, byte-identical delegate over fetch_macro_raw_detailed() -- kept
+        for every existing caller/test that only wants the plain dict. See
+        fetch_macro_raw_detailed()'s docstring for the fabrication-tracking
+        this method's callers may want (self.last_macro_raw_fabricated_keys
+        is set as a side effect of this call too).
+        """
+        return self.fetch_macro_raw_detailed()[0]
+
+    def fetch_macro_raw_detailed(self) -> Tuple[Dict[str, Any], FrozenSet[str]]:
+        """Same computation as fetch_macro_raw, but also reports which of the
+        returned dict's keys hold a fabricated placeholder value rather than
+        a real FRED/FMP reading.
+
+        Callers that construct a MacroEconomicDTO (main.py,
+        pipeline/production_steps.py, investyo_mcp_server.py) need this
+        second value because macro_engine.macro_killswitch_data_unavailable's
+        plain key-presence check can't distinguish "a real reading" from "a
+        substituted benign default" once that default is written into the
+        same dict key -- CONSTRAINT #4 requires that distinction survive to
+        the kill switch, not be silently discarded. Also sets
+        self.last_macro_raw_fabricated_keys as a side effect, so a caller
+        that only ever calls the plain fetch_macro_raw() (e.g. via
+        asyncio.to_thread in a different function than the one that reads
+        the result) can still recover this signal afterward via
+        getattr(de, "last_macro_raw_fabricated_keys", frozenset()).
+
         When settings.FMP_MACRO_ENABLED is True (default False -- a complete
         no-op) AND the FRED snapshot above could not be produced at all, this
         falls back to data/fmp_macro.py's fetch_treasury_curve /
@@ -112,6 +151,7 @@ class DataEngine(IDataProvider):
         WARNING (CONSTRAINT #4 known exception, last resort).
         """
         fred_result: Optional[Dict[str, Any]] = None
+        vix_fabricated = False
         if not self.fred:
             logger.warning("FRED API not initialized. Returning baseline defaults.")
         else:
@@ -123,7 +163,15 @@ class DataEngine(IDataProvider):
                 try:
                     vix = self.fred.get_series('VIXCLS', limit=5).dropna().iloc[-1]
                 except Exception:
+                    # A narrower, silent VIX-only sub-fallback INSIDE an
+                    # otherwise-successful FRED read: T10Y2Y/OAS/UNRATE are
+                    # real, but VIX -- the single most load-bearing field for
+                    # MacroEconomicDTO.killSwitch (vix > 30.0 fires it
+                    # directly, no HMM agreement needed) -- is fabricated.
+                    # Tracked below via vix_fabricated so this doesn't read
+                    # as a fully-healthy fetch.
                     vix = 15.0
+                    vix_fabricated = True
                 fred_result = {
                     'T10Y2Y': float(t10y2y),
                     'BAMLH0A0HYM2': float(oas),
@@ -134,16 +182,22 @@ class DataEngine(IDataProvider):
                 logger.error(f"Error fetching economic data from FRED: {e}")
 
         if fred_result is not None:
-            return fred_result
+            fabricated: FrozenSet[str] = frozenset({'VIXCLS'}) if vix_fabricated else frozenset()
+            self.last_macro_raw_fabricated_keys = fabricated
+            return fred_result, fabricated
 
         # FRED could not serve a full snapshot. Flag-off (the default) is a
         # byte-identical no-op: return the EXACT hardcoded dict FRED-failure
         # has always produced here, with ZERO data/fmp_macro.py import and
         # ZERO FMP network activity.
         if not getattr(settings, "FMP_MACRO_ENABLED", False):
-            return dict(self._MACRO_HARDCODED_FALLBACK)
+            fallback = dict(self._MACRO_HARDCODED_FALLBACK)
+            fabricated = frozenset(self._MACRO_HARDCODED_FALLBACK.keys())
+            self.last_macro_raw_fabricated_keys = fabricated
+            return fallback, fabricated
 
         result = dict(self._MACRO_HARDCODED_FALLBACK)
+        fabricated_keys = set(self._MACRO_HARDCODED_FALLBACK.keys())
         fmp_error: Optional[Exception] = None
         try:
             from data.fmp_macro import fetch_treasury_curve, fetch_unemployment_rate
@@ -159,10 +213,12 @@ class DataEngine(IDataProvider):
             curve_rows = fetch_treasury_curve(from_str, to_str)
             if curve_rows:
                 result['T10Y2Y'] = float(curve_rows[-1]['value'])
+                fabricated_keys.discard('T10Y2Y')
 
             unrate_rows = fetch_unemployment_rate(from_str, to_str)
             if unrate_rows:
                 result['UNRATE'] = float(unrate_rows[-1]['value'])
+                fabricated_keys.discard('UNRATE')
         except Exception as e:
             # fetch_treasury_curve / fetch_unemployment_rate never raise
             # (CONSTRAINT #6) -- this guards the import itself and any other
@@ -179,7 +235,9 @@ class DataEngine(IDataProvider):
                 "placeholder macro values (known CONSTRAINT #4 exception, "
                 "last resort)." + suffix
             )
-        return result
+        fabricated = frozenset(fabricated_keys)
+        self.last_macro_raw_fabricated_keys = fabricated
+        return result, fabricated
 
     def fetch_macro_history(self) -> pd.DataFrame:
         """
@@ -409,6 +467,11 @@ class MockDataEngine(IDataProvider):
                 }
             }
         }
+        # Mirrors DataEngine's interface (getattr(de, "last_macro_raw_fabricated_keys",
+        # frozenset()) is used defensively by callers) -- always empty since
+        # preset_macro is an explicit test fixture, never a live-data outage
+        # fallback, so it's never "fabricated" in the CONSTRAINT #4 sense.
+        self.last_macro_raw_fabricated_keys: FrozenSet[str] = frozenset()
 
     def fetch_macro_raw(self) -> Dict[str, Any]:
         return self.preset_macro
