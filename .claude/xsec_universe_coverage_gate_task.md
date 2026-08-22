@@ -35,4 +35,4 @@
       EDGAR timeout occurred in this very run despite 100% price coverage).
 - [x] Fill in real numbers in `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-22 entry.
 - [x] `docs/known_issues/README.md` row added.
-- [ ] PR opened against `main`.
+- [x] PR opened against `main`: https://github.com/kevinmarko/Stockpy/pull/858

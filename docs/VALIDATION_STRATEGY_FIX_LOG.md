@@ -2192,4 +2192,4 @@ Full JSON summaries: `reports/cross_sectional_momentum_validation_summary.json`,
 `docs/signals/cross_sectional_momentum.md` and `docs/signals/sector_quality_rank.md`
 addenda record the same numbers with per-strategy context.
 
-Introducing PR: TBD.
+Introducing PR: [#858](https://github.com/kevinmarko/Stockpy/pull/858).
