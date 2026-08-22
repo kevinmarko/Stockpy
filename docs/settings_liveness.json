@@ -1968,7 +1968,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:87",
+        "site": "macro_engine.py:134",
         "via": []
       }
     ],
@@ -1979,7 +1979,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:90",
+        "site": "macro_engine.py:137",
         "via": []
       }
     ],
@@ -1990,7 +1990,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:88",
+        "site": "macro_engine.py:135",
         "via": []
       }
     ],
@@ -2001,7 +2001,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:85",
+        "site": "macro_engine.py:132",
         "via": []
       }
     ],
@@ -2012,7 +2012,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:86",
+        "site": "macro_engine.py:133",
         "via": []
       }
     ],
@@ -2034,7 +2034,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:89",
+        "site": "macro_engine.py:136",
         "via": []
       }
     ],
@@ -3043,7 +3043,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:564",
+        "site": "pipeline/production_steps.py:575",
         "via": []
       }
     ],
