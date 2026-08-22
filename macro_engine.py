@@ -9,7 +9,7 @@
 
 import logging
 import datetime
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, FrozenSet, Optional, List, Tuple
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
@@ -78,10 +78,11 @@ KILLSWITCH_CRITICAL_MACRO_KEYS = REGIME_CRITICAL_MACRO_KEYS + ("VIXCLS",)
 def macro_killswitch_data_unavailable(
     macro_raw: Dict[str, Any],
     keys: Tuple[str, ...] = KILLSWITCH_CRITICAL_MACRO_KEYS,
+    fabricated_keys: FrozenSet[str] = frozenset(),
 ) -> bool:
     """True if any FRED series in *keys* is absent from macro_raw for this
     cycle (default: the full killSwitch-critical set -- T10Y2Y,
-    BAMLH0A0HYM2, VIXCLS).
+    BAMLH0A0HYM2, VIXCLS), OR is present but known-fabricated.
 
     A caller substituting a benign literal default (e.g. ``.get('VIXCLS',
     15.0)``) in place of a genuinely missing key must not let that read as a
@@ -95,7 +96,19 @@ def macro_killswitch_data_unavailable(
     ``sahm_rule_val``) -- checking for a key outside that function's own
     contract would make it report "unavailable" unconditionally regardless of
     whether the data it actually uses is present.
+
+    ``fabricated_keys`` closes a gap plain key-presence checking can't see:
+    ``data_engine.DataEngine.fetch_macro_raw()``'s hardcoded emergency
+    fallback populates EVERY key it's asked for with a benign literal
+    constant, so a plain presence check reports "available" even when the
+    whole snapshot is fabricated. Callers get this from
+    ``DataEngine.fetch_macro_raw_detailed()``'s second return value (or
+    ``getattr(de, "last_macro_raw_fabricated_keys", frozenset())`` after a
+    plain ``fetch_macro_raw()`` call). Default ``frozenset()`` reproduces
+    every pre-existing call site's behavior exactly.
     """
+    if any(k in fabricated_keys for k in keys):
+        return True
     return any(k not in macro_raw or macro_raw.get(k) is None for k in keys)
 
 
@@ -315,13 +328,21 @@ class MacroEngine:
             logger.error(f"Failed to calculate Sahm Rule from FRED: {e}. Using fallback: {fallback_val}")
             return fallback_val, True
 
-    def run_macro_killswitch(self, macro_raw: Dict[str, Any], sahm_rule_val: float) -> pd.DataFrame:
+    def run_macro_killswitch(
+        self,
+        macro_raw: Dict[str, Any],
+        sahm_rule_val: float,
+        *,
+        fabricated_keys: FrozenSet[str] = frozenset(),
+    ) -> pd.DataFrame:
         """
         Executes the systemic "MACRO FREEZE" / "killSwitch" logic.
         Outputs a pandas DataFrame that conforms to the MacroDataSchema constraints.
 
         Fails closed (CONSTRAINT #4/#6) when T10Y2Y or BAMLH0A0HYM2 is absent
-        from macro_raw: rather than silently letting the substituted benign
+        from macro_raw, OR is present but known-fabricated (see
+        ``fabricated_keys``, and ``macro_killswitch_data_unavailable``'s own
+        docstring): rather than silently letting the substituted benign
         literal defaults (0.5 / 3.5) resolve to the fallthrough "RISK ON"
         classification, market_regime is forced to "RECESSION" and
         data_unavailable=True is reported in the output. The
@@ -329,10 +350,15 @@ class MacroEngine:
         priority when the data IS present and independently produces a worse
         classification -- this only overrides the fallthrough "RISK ON" case
         that would otherwise result from fabricated inputs.
+
+        ``fabricated_keys``: the set of keys in *macro_raw* known to hold a
+        fabricated placeholder rather than a real reading (e.g. from
+        ``DataEngine.fetch_macro_raw_detailed()``). Default ``frozenset()``
+        reproduces every pre-existing caller's behavior exactly.
         """
         # Only T10Y2Y/BAMLH0A0HYM2 -- this function never receives VIXCLS.
         data_unavailable = macro_killswitch_data_unavailable(
-            macro_raw, keys=REGIME_CRITICAL_MACRO_KEYS
+            macro_raw, keys=REGIME_CRITICAL_MACRO_KEYS, fabricated_keys=fabricated_keys,
         )
 
         yield_curve = float(macro_raw.get('T10Y2Y', 0.5))

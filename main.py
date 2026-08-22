@@ -439,6 +439,12 @@ def _build_macro_dto() -> MacroEconomicDTO:
         me = _get_macro_engine(fred_key)
         de = me.data_engine
         macro_raw = de.fetch_macro_raw()
+        # Populated-but-fabricated blind spot: de.fetch_macro_raw()'s hardcoded
+        # emergency fallback populates EVERY key with a benign literal, so
+        # macro_killswitch_data_unavailable()'s plain presence check alone
+        # would report "available" even during a total FRED outage. See
+        # data_engine.py::fetch_macro_raw_detailed()'s docstring.
+        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
 
         # SPY history for the HMM regime detector now routes through
         # HistoricalStore.get_bars() (mirroring _fetch_bars_for_universe's
@@ -490,7 +496,8 @@ def _build_macro_dto() -> MacroEconomicDTO:
         sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
 
         data_unavailable = (
-            macro_killswitch_data_unavailable(macro_raw) or sahm_used_fallback
+            macro_killswitch_data_unavailable(macro_raw, fabricated_keys=macro_raw_fabricated_keys)
+            or sahm_used_fallback
         )
 
         dto = MacroEconomicDTO(

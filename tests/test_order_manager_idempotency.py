@@ -152,6 +152,16 @@ def test_client_order_id_different_symbols():
     assert coid_aapl != coid_msft
 
 
+def test_client_order_id_no_delimiter_collision():
+    """A literal '|' inside strategy_id/symbol must not let two genuinely
+    different order tuples collide on the same client_order_id (the old
+    raw '|'-joined canonicalization made ('X', 'A|B', ...) and ('X|A', 'B',
+    ...) produce byte-identical ids)."""
+    coid_a = make_client_order_id("X", "A|B", "buy", 1.0, timestamp=_FIXED_TS)
+    coid_b = make_client_order_id("X|A", "B", "buy", 1.0, timestamp=_FIXED_TS)
+    assert coid_a != coid_b
+
+
 def test_concurrent_submissions_of_same_intent_reach_broker_once():
     """Two concurrent asyncio calls for the SAME client_order_id must not
     both reach the broker -- the check-then-act dedup race (Finding 19)."""

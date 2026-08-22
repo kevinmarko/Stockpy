@@ -135,30 +135,74 @@ confirming the fix is behavior-neutral when data is actually available, and
 that the `SAHMREALTIME` dead-key fix now surfaces a real, non-zero Sahm
 reading in `main.py`'s DTO instead of the previous structurally-dead `0.0`.
 
+## Follow-up fix (2026-08): the populated-but-fabricated blind spot
+
+The three items below were disclosed as out of scope by the original fix.
+A follow-up pass (branch `fix-macro-fallback-fabrication-visibility`) found
+that the first of them was not cosmetic — it was the actual remaining live
+gap, and arguably worse than the original bug: `macro_killswitch_data_unavailable()`
+checks **key presence** (`k not in macro_raw or macro_raw.get(k) is None`).
+`data_engine.py::DataEngine.fetch_macro_raw()`'s `_MACRO_HARDCODED_FALLBACK`
+always populates *every* killswitch-critical key (`T10Y2Y`, `BAMLH0A0HYM2`,
+`VIXCLS`) with a fabricated literal — so a caller falling back to it silently
+(no exception raised outward) made `macro_killswitch_data_unavailable()`
+report `False` (every key "present") at all three of its real call sites
+(`main.py::_build_macro_dto()`, `main_orchestrator.py::fetch_all_data_async()`
+→ `pipeline/production_steps.py::OptionsAnalysisStep`, and
+`investyo_mcp_server.py`'s two `trigger_macro_engine`/`trigger_full_pipeline`
+call sites). The original fix's own key-presence check only ever covered a
+`macro_raw = {}` total-absence case (e.g. the async dead-letter path), not
+this dict-populated-with-fabricated-values case.
+
+A closer read of `fetch_macro_raw()` also found a narrower, independent
+fabrication path *inside* its "success" branch: the VIXCLS read is wrapped
+in its own inner `try/except` that silently substitutes `vix = 15.0` on
+failure while `T10Y2Y`/`BAMLH0A0HYM2`/`UNRATE` succeed — the function
+returns as a fully-successful FRED read, never reaching the
+fallback-tracking/warning-log code at all. VIX is the single most
+load-bearing field for `killSwitch` (`vix > 30.0` fires it directly, no HMM
+agreement needed), so this could silently fabricate the kill switch's most
+sensitive input even when every other series was real.
+
+**Fixed via**: `DataEngine.fetch_macro_raw_detailed() -> Tuple[Dict[str, Any],
+FrozenSet[str]]` (mirroring `_calculate_sahm_rule_detailed()`'s tuple-return
+pattern) reports which returned keys are fabricated placeholders, stashed on
+`self.last_macro_raw_fabricated_keys` as a side effect so a caller of the
+plain `fetch_macro_raw()` can recover it too (`getattr(de,
+"last_macro_raw_fabricated_keys", frozenset())`). `fetch_macro_raw()` itself
+becomes a byte-identical one-line delegate. `macro_killswitch_data_unavailable(macro_raw,
+keys=..., fabricated_keys=frozenset())` gained the new `fabricated_keys`
+parameter (default reproduces every pre-existing call site exactly);
+`run_macro_killswitch(..., fabricated_keys=frozenset())` threads the same
+signal into its own internal check. All three real DTO-construction call
+sites now pass `fabricated_keys` through. `investyo_mcp_server.py::trigger_macro_engine`
+was additionally rewritten to build a real `MacroEconomicDTO` and report
+`kill_switch_active=bool(macro_dto.killSwitch)` instead of a hardcoded
+`False` literal, plus a new `data_unavailable` field in its payload and
+honestly-populated `high_yield_oas`/`yield_curve` (previously always `None`).
+`engine/advisory.py`'s soft score-penalty branch gained an `or
+macro_dto.data_unavailable` clause alongside its VIX/Sahm threshold checks —
+traced to be currently unreachable in practice (the hard gate immediately
+above always fires first whenever `data_unavailable=True`, since that forces
+`market_regime` to `"RECESSION"`), but added anyway as the same
+defense-in-depth precedent this fix's own original pass set for
+`execution/risk_gate.py::stress_scenario_check`.
+
+Tests: `tests/test_fmp_macro.py::TestFetchMacroRawFabricatedKeys`,
+`tests/test_macro_engine.py` (new cases in `TestMacroKillswitchDataUnavailable`/
+`TestRunMacroKillswitch`), `tests/test_run_once.py::TestBuildMacroDtoDataUnavailable`,
+`tests/test_options_analysis_step_macro_dto.py`,
+`tests/test_investyo_mcp_server.py::TestTriggerMacroEngineKillSwitchActive`,
+`tests/test_advisory_pause_gate.py::TestMacroTriggeredGating::test_soft_gate_data_unavailable_defense_in_depth`.
+
 ## What is still open
 
-- `data_engine.py::fetch_macro_raw()`'s own `_MACRO_HARDCODED_FALLBACK` (a
-  separate, pre-existing, already-disclosed-and-logged CONSTRAINT #4
-  exception with its own code comment pointing at
-  `settings.FMP_MACRO_ENABLED` as the real replacement path) was
-  deliberately not touched by this fix.
-- `investyo_mcp_server.py::trigger_macro_engine` hardcodes
-  `"kill_switch_active": False` in its payload unconditionally, regardless
-  of any real computation — a separate, adjacent fabrication bug in an
-  MCP diagnostic tool, not the live trading gate. Not fixed here.
-- `engine/advisory.py`'s *soft* score-penalty branch on raw
-  `macro_dto.vix`/`sahm_rule_indicator` (distinct from its hard
-  `market_regime` gate, which this fix does cover transitively) still reads
-  the raw fields directly rather than checking `data_unavailable`. The hard
-  BUY→HOLD override already happens upstream via `strategy_engine.py`'s
-  `killSwitch` check, so this residual gap is a scoring-cosmetics issue
-  during an outage, not a trade-blocking one.
 - `dto_models.py`'s existing, separately-pinned gap
   (`tests/test_gravity_mirrored_invariants.py::test_sahm_rule_indicator_none_is_not_coerced_and_crashes_downstream`)
   — `sahm_rule_indicator=None` is not coerced through `_to_float()` like its
   sibling fields and crashes on first `killSwitch`/`market_regime` access —
-  is unrelated to and untouched by this fix (this fix never passes `None`
-  for that field).
+  is unrelated to and untouched by either fix (neither pass ever passes
+  `None` for that field).
 
 ## Related
 

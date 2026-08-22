@@ -1016,6 +1016,40 @@ class TestBuildMacroDtoDataUnavailable:
             assert dto.data_unavailable is True
             assert dto.killSwitch is True
 
+    def test_fabricated_but_populated_macro_raw_sets_data_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
+    ) -> None:
+        """The populated-but-fabricated blind spot: a fetch_macro_raw()
+        return that is FULLY POPULATED (every key present, non-None -- e.g.
+        DataEngine's hardcoded emergency fallback dict) but flagged via
+        last_macro_raw_fabricated_keys must still fail closed. Plain
+        key-presence checking alone (the pre-existing PR #854 fix) cannot
+        see this -- it only catches a genuinely-missing key."""
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
+
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {
+                "T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.5, "UNRATE": 3.8, "VIXCLS": 15.0,
+            }
+            fake_de.last_macro_raw_fabricated_keys = frozenset(
+                {"T10Y2Y", "BAMLH0A0HYM2", "UNRATE", "VIXCLS"}
+            )
+            fake_de.fetch_technical_raw.return_value = {}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            fake_me._calculate_sahm_rule_detailed.return_value = (0.0, False)
+            MockME.return_value = fake_me
+
+            dto = m._build_macro_dto()
+
+            assert dto.data_unavailable is True
+            assert dto.killSwitch is True
+            assert dto.market_regime == "RECESSION"
+
     def test_no_fred_key_branch_sets_data_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(m.settings, "FRED_API_KEY", "")
         dto = m._build_macro_dto()
