@@ -160,6 +160,7 @@ def _patched_evaluate(symbol: str, macro_dto: Any, sector: str = "Technology") -
 
         _toe_inst = mock.MagicMock()
         _toe_inst.estimate_gjr_garch_volatility.return_value = 0.20
+        _toe_inst.estimate_gjr_garch_volatility_term_structure.return_value = {h: 0.20 for h in (1, 10, 30, 60, 90)}
         _toe_cls.return_value = _toe_inst
 
         _fe_inst = mock.MagicMock()

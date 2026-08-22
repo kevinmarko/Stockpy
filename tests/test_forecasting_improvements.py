@@ -91,10 +91,15 @@ def _no_tensorflow(monkeypatch):
 
 class TestGarchSigma:
     def test_annualized_garch_vol_is_converted_to_daily_for_monte_carlo(self, engine):
-        """CORE CORRECTNESS: estimate_gjr_garch_volatility returns ANNUALIZED vol;
-        _estimate_daily_sigma must divide by sqrt(252) before it reaches
-        run_monte_carlo. A recorded sigma of ~0.40 (annualized) instead of
-        ~0.0252 (daily) would be the bug this test guards against."""
+        """CORE CORRECTNESS: estimate_gjr_garch_volatility_term_structure
+        returns ANNUALIZED vol per horizon; _estimate_daily_sigma_multi_horizon
+        must divide by sqrt(252) before it reaches run_monte_carlo. A recorded
+        sigma of ~0.40 (annualized) instead of ~0.0252 (daily) would be the
+        bug this test guards against. (generate_forecast()'s multi-horizon
+        loop sources sigma from the TERM STRUCTURE method, not the
+        single-horizon estimate_gjr_garch_volatility -- see
+        TestGarchHorizonScaling in test_forecasting_engine.py for the
+        per-horizon mean-reversion regression coverage.)"""
         annual_vol = 0.40
         expected_daily = annual_vol / np.sqrt(252.0)
 
@@ -111,8 +116,8 @@ class TestGarchSigma:
         with mock.patch.object(
             forecasting_engine.ForecastingEngine, "run_monte_carlo", side_effect=_spy_monte_carlo
         ), mock.patch(
-            "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility",
-            return_value=annual_vol,
+            "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility_term_structure",
+            return_value={h: annual_vol for h in (10, 30, 60, 90)},
         ):
             engine.generate_forecast(
                 row,

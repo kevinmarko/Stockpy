@@ -480,11 +480,15 @@ class TestForecastConeBands:
         np.random.seed(1234)
         row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
         history = _price_series(120, seed=41)
+        # A flat term structure (same annualized vol at every horizon) short
+        # -circuits the GARCH estimator while keeping run_monte_carlo's own
+        # sigma*sqrt(T) scaling (still applied within a single horizon's MC
+        # draw) as the only source of cone-widening this test asserts on.
         result = engine.generate_forecast(
             row,
             current_price=float(history.iloc[-1]),
             history_series=history,
-            precomputed_garch_annual_vol=0.30,
+            precomputed_garch_term_structure={h: 0.30 for h in (10, 30, 60, 90)},
         )
 
         widths = {}
@@ -515,7 +519,7 @@ class TestForecastConeBands:
             row,
             current_price=float(history.iloc[-1]),
             history_series=history,
-            precomputed_garch_annual_vol=0.30,
+            precomputed_garch_term_structure={h: 0.30 for h in (10, 30, 60, 90)},
         )
         for h in (10, 30, 60, 90):
             mean = result[f"Forecast_{h}"]
@@ -570,13 +574,15 @@ class TestFitOnceRefactor:
 
         history = _price_series(120, seed=11)
         row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
-        # precomputed_garch_annual_vol short-circuits the GARCH estimator so the
-        # only ARIMA/ES constructions come from the fit-once path we are counting.
+        # precomputed_garch_term_structure short-circuits the GARCH estimator
+        # (a single scalar precomputed_garch_annual_vol no longer does -- see
+        # TestGarchHorizonScaling below) so the only ARIMA/ES constructions
+        # come from the fit-once path we are counting.
         result = engine.generate_forecast(
             row,
             current_price=float(history.iloc[-1]),
             history_series=history,
-            precomputed_garch_annual_vol=0.30,
+            precomputed_garch_term_structure={h: 0.30 for h in (10, 30, 60, 90)},
         )
 
         assert counts["arima"] == 1, "ARIMA must be fit exactly once, not per-horizon"
@@ -610,45 +616,61 @@ class TestBackCompatShims:
 
 
 class TestPrecomputedGarchSigma:
-    """_estimate_daily_sigma's precomputed-annual-vol branch: a finite >0
-    precomputed GARCH annual vol is divided by sqrt(252) and fed to Monte
-    Carlo, WITHOUT refitting GJR-GARCH; None routes to the estimator."""
+    """_estimate_daily_sigma_multi_horizon's precomputed-term-structure
+    branch: a {horizon: annualized_vol} dict covering every horizon
+    generate_forecast() needs is converted to daily (/sqrt(252)) PER HORIZON
+    and fed to Monte Carlo, WITHOUT refitting GJR-GARCH. None (or a
+    structure missing a horizon) routes to a fresh multi-horizon fit -- and,
+    per the fix this class was rewritten for, so does a bare legacy
+    ``precomputed_garch_annual_vol`` scalar: a single 1-day-ahead point
+    estimate cannot answer for horizons > 1, so it no longer short-circuits
+    the estimator the way it used to before this fix."""
 
-    def _capture_mc_sigma(self, engine, monkeypatch):
+    def _capture_mc_sigma_by_horizon(self, engine, monkeypatch):
         captured = {}
 
         def fake_mc(start_price, mu, sigma, days_forward=None, simulations=1000, **k):
-            captured.setdefault("sigma", sigma)
+            captured[days_forward] = sigma
             return (start_price, start_price, start_price)
 
         monkeypatch.setattr(engine, "run_monte_carlo", fake_mc)
         return captured
 
-    def test_precomputed_vol_folds_in_and_skips_estimator(self, engine, monkeypatch):
-        captured = self._capture_mc_sigma(engine, monkeypatch)
+    def test_precomputed_term_structure_folds_in_and_skips_estimator(self, engine, monkeypatch):
+        captured = self._capture_mc_sigma_by_horizon(engine, monkeypatch)
         from technical_options_engine import TechnicalOptionsEngine
-        spy = mock.MagicMock(return_value=0.99)
+        spy = mock.MagicMock()
         monkeypatch.setattr(
-            TechnicalOptionsEngine, "estimate_gjr_garch_volatility", spy
+            TechnicalOptionsEngine, "estimate_gjr_garch_volatility_term_structure", spy
         )
 
+        # A genuine mean-reverting term structure (annualized vol shrinking
+        # with horizon), not a flat value -- proves each horizon's sigma is
+        # sourced independently rather than one shared value.
+        term_structure = {10: 0.60, 30: 0.45, 60: 0.38, 90: 0.34}
         history = _price_series(60, seed=31)
         engine.generate_forecast(
             pd.Series({"sector": "Technology", "Symbol": "AAPL"}),
             current_price=float(history.iloc[-1]),
             history_series=history,
-            precomputed_garch_annual_vol=0.40,
+            precomputed_garch_term_structure=term_structure,
         )
 
-        assert captured["sigma"] == pytest.approx(0.40 / np.sqrt(252.0), rel=1e-6)
-        assert spy.call_count == 0, "estimator must NOT be refit when a precomputed vol is supplied"
+        assert spy.call_count == 0, "estimator must NOT be refit when a precomputed term structure is supplied"
+        for h, annual_vol in term_structure.items():
+            assert captured[h] == pytest.approx(annual_vol / np.sqrt(252.0), rel=1e-6), (
+                f"horizon {h} must use ITS OWN precomputed sigma"
+            )
+        # The old bug shared ONE sigma across every horizon; proof it's gone:
+        # each horizon's captured sigma is distinct.
+        assert len({captured[h] for h in term_structure}) == len(term_structure)
 
     def test_none_precomputed_routes_to_estimator(self, engine, monkeypatch):
-        captured = self._capture_mc_sigma(engine, monkeypatch)
+        captured = self._capture_mc_sigma_by_horizon(engine, monkeypatch)
         from technical_options_engine import TechnicalOptionsEngine
-        spy = mock.MagicMock(return_value=0.50)  # annualized vol
+        spy = mock.MagicMock(return_value={10: 0.50, 30: 0.50, 60: 0.50, 90: 0.50})
         monkeypatch.setattr(
-            TechnicalOptionsEngine, "estimate_gjr_garch_volatility", spy
+            TechnicalOptionsEngine, "estimate_gjr_garch_volatility_term_structure", spy
         )
 
         history = _price_series(60, seed=32)
@@ -656,8 +678,94 @@ class TestPrecomputedGarchSigma:
             pd.Series({"sector": "Technology", "Symbol": "AAPL"}),
             current_price=float(history.iloc[-1]),
             history_series=history,
-            precomputed_garch_annual_vol=None,
+            precomputed_garch_term_structure=None,
         )
 
-        assert spy.call_count >= 1, "estimator must be called when no precomputed vol is supplied"
-        assert captured["sigma"] == pytest.approx(0.50 / np.sqrt(252.0), rel=1e-6)
+        assert spy.call_count >= 1, "estimator must be called when no precomputed term structure is supplied"
+        for h in (10, 30, 60, 90):
+            assert captured[h] == pytest.approx(0.50 / np.sqrt(252.0), rel=1e-6)
+
+    def test_scalar_only_precompute_no_longer_short_circuits(self, engine, monkeypatch):
+        """The bug fix: precomputed_garch_annual_vol alone (the legacy
+        single-horizon scalar) is insufficient to answer for horizons > 1,
+        so it must NOT silently skip the estimator the way it used to --
+        a fresh term-structure fit must still run so every horizon gets a
+        genuine, mean-reversion-aware value instead of the scalar naively
+        broadcast via sigma*sqrt(T)."""
+        self._capture_mc_sigma_by_horizon(engine, monkeypatch)
+        from technical_options_engine import TechnicalOptionsEngine
+        spy = mock.MagicMock(return_value={10: 0.50, 30: 0.50, 60: 0.50, 90: 0.50})
+        monkeypatch.setattr(
+            TechnicalOptionsEngine, "estimate_gjr_garch_volatility_term_structure", spy
+        )
+
+        history = _price_series(60, seed=33)
+        engine.generate_forecast(
+            pd.Series({"sector": "Technology", "Symbol": "AAPL"}),
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_annual_vol=0.40,
+        )
+
+        assert spy.call_count >= 1, "a bare scalar can't supply per-horizon data -- estimator must still run"
+
+
+# ============================================================================
+# The bug fix itself: mean-reversion-aware per-horizon GARCH sigma
+#
+# Before this fix, generate_forecast() fit GJR-GARCH's 1-day-ahead variance
+# ONCE and reused the resulting daily sigma, unscaled, for every one of the
+# four forecast horizons (10/30/60/90 days) -- i.e. run_monte_carlo's own
+# sigma*sqrt(T) scaling was the ONLY horizon-dependence in the confidence
+# bands, throwing away GARCH's actual value: conditional-variance
+# mean-reversion toward the long-run unconditional level over the horizon.
+# ============================================================================
+
+
+class TestGarchHorizonScaling:
+    def test_each_horizon_gets_its_own_mean_reverting_sigma_not_a_shared_value(self, engine, monkeypatch):
+        """End-to-end proof the bug is fixed: with a hand-picked mean
+        -reverting term structure, each horizon's captured Monte Carlo sigma
+        (a) differs from every other horizon's (the old bug shared ONE value
+        across all horizons) and (b) matches term_structure[h]/sqrt(252)
+        exactly -- the genuine per-horizon value, not a sigma_1*sqrt(T)
+        -style approximation of it."""
+        captured = {}
+
+        def fake_mc(start_price, mu, sigma, days_forward=None, simulations=1000, **k):
+            captured[days_forward] = sigma
+            return (start_price, start_price, start_price)
+
+        monkeypatch.setattr(engine, "run_monte_carlo", fake_mc)
+
+        # Monotonically decreasing annualized vol -- the shape GARCH actually
+        # produces after a recent vol shock, mean-reverting toward the
+        # long-run level as the horizon grows (verified against the real
+        # `arch` library during design of this fix).
+        term_structure = {10: 0.5973, 30: 0.4624, 60: 0.3616, 90: 0.3119}
+        history = _price_series(60, seed=51)
+        engine.generate_forecast(
+            pd.Series({"sector": "Technology", "Symbol": "AAPL"}),
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_term_structure=term_structure,
+        )
+
+        for h, annual_vol in term_structure.items():
+            assert captured[h] == pytest.approx(annual_vol / np.sqrt(252.0), rel=1e-9)
+
+        # (a) proves the old bug (one shared sigma for all horizons) is gone.
+        sigmas = [captured[h] for h in (10, 30, 60, 90)]
+        assert len(set(sigmas)) == 4, "every horizon must get a DISTINCT sigma"
+
+        # The naive pre-fix formula would have been sigma_10 * sqrt(T/10) for
+        # every other horizon -- assert the genuine value is materially
+        # smaller than that naive extrapolation for every horizon > 10,
+        # exactly reproducing the reported bug's overstatement direction.
+        naive_sigma_10 = term_structure[10] / np.sqrt(252.0)
+        for h in (30, 60, 90):
+            naive_extrapolated = naive_sigma_10 * np.sqrt(h / 10.0)
+            assert captured[h] < naive_extrapolated, (
+                f"horizon {h}: genuine sigma must be below the naive "
+                f"sigma_10*sqrt(T/10) extrapolation the old bug effectively used"
+            )

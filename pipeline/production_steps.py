@@ -235,10 +235,19 @@ class OptionsAnalysisStep(PipelineStep):
             if df_hist is None or df_hist.empty:
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Options: {ticker} (no data)")
-                return ticker, None, None
+                return ticker, None, None, None
             try:
                 indicators = toe.calculate_indicators(df_hist)
-                vol = toe.estimate_gjr_garch_volatility(df_hist)
+                # ONE GJR-GARCH fit covers both this step's horizon=1 uses
+                # (GARCH_Vol column / VRP / True IVR, unchanged from before)
+                # AND the forecasting step's per-horizon Monte Carlo sigma
+                # (10/30/60/90) -- see estimate_gjr_garch_volatility_term_structure's
+                # docstring. Threaded through via garch_term_structure below
+                # so ForecastingStep never has to refit.
+                garch_term_structure = toe.estimate_gjr_garch_volatility_term_structure(
+                    df_hist, horizons=(1, 10, 30, 60, 90)
+                )
+                vol = garch_term_structure[1]
                 realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
 
                 as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
@@ -276,7 +285,7 @@ class OptionsAnalysisStep(PipelineStep):
                 }
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Options: {ticker}")
-                return ticker, result, iv_record
+                return ticker, result, iv_record, garch_term_structure
             except Exception as opt_exc:
                 telemetry.warning(
                     f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
@@ -284,7 +293,7 @@ class OptionsAnalysisStep(PipelineStep):
                 )
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Options: {ticker} (failed)")
-                return ticker, None, None
+                return ticker, None, None, None
 
         opt_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(ctx.symbols)))
         if opt_workers <= 1 or len(ctx.symbols) <= 1:
@@ -293,13 +302,20 @@ class OptionsAnalysisStep(PipelineStep):
             with ThreadPoolExecutor(max_workers=opt_workers) as opt_pool:
                 opt_results = list(opt_pool.map(_options_one, ctx.symbols))
 
-        for tk, res, iv_rec in opt_results:
+        garch_term_structures: dict[str, dict[int, float]] = {}
+        for tk, res, iv_rec, term_structure in opt_results:
             if iv_rec is not None:
                 iv_store.record_iv(iv_rec[0], iv_rec[1], iv_rec[2])
             if res is not None:
                 tech_opt_indicators[tk] = res
-        
+            if term_structure is not None:
+                garch_term_structures[tk] = term_structure
+
         ctx.context_extras["tech_opt_indicators"] = tech_opt_indicators
+        # Per-ticker {horizon: annualized_vol} GARCH term structure, consumed
+        # by ForecastingStep below to avoid refitting GJR-GARCH a second time
+        # this cycle for the SAME per-horizon Monte Carlo sigma computation.
+        ctx.context_extras["garch_term_structures"] = garch_term_structures
 
 
 class ProcessingStep(PipelineStep):
@@ -380,10 +396,16 @@ class ForecastingStep(PipelineStep):
             history_series = history_df['Close'] if history_df is not None else None
 
             try:
-                precomputed_garch = float(row.get('GARCH_Vol', 0.0))
+                # {horizon: annualized_vol}, fit ONCE by OptionsAnalysisStep above
+                # (against this same history_df) -- lets generate_forecast give
+                # each of the 10/30/60/90-day horizons its OWN mean-reversion
+                # -aware sigma without a redundant second GJR-GARCH fit here.
+                precomputed_term_structure = ctx.context_extras.get(
+                    "garch_term_structures", {}
+                ).get(ticker)
                 forecasts = fe.generate_forecast(
                     row, price, history_series, history_df=history_df,
-                    precomputed_garch_annual_vol=precomputed_garch,
+                    precomputed_garch_term_structure=precomputed_term_structure,
                 )
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Forecasting: {ticker}")
