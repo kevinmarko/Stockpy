@@ -3406,10 +3406,12 @@ class Settings(BaseSettings):
             "for faster adaptation. Cold-start equal weighting applies when fewer "
             "than FORECAST_SKILL_MIN_OBS completed observations exist. MUST exceed "
             "the max forecast horizon (90d): a 'completed' row for horizon 90 needs "
-            "forecast_ts ≤ now-85d, while the window only counts forecast_ts ≥ "
-            "now-WINDOW; with WINDOW=60 those two bands are mutually exclusive so "
-            "h=60/h=90 could never warm up. 180 gives every horizon a real "
-            "eligibility band."
+            "forecast_ts ≤ now-90d (the full horizon must elapse before "
+            "ForecastTracker.update_actuals actualizes it — see "
+            "docs/known_issues/forecast_tracker_early_actualization.md), while the "
+            "window only counts forecast_ts ≥ now-WINDOW; with WINDOW=60 those two "
+            "bands are mutually exclusive so h=60/h=90 could never warm up. 180 "
+            "gives every horizon a real eligibility band."
         ),
     )
     FORECAST_SKILL_MIN_OBS: int = Field(

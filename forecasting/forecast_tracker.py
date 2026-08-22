@@ -328,17 +328,24 @@ class ForecastTracker:
         horizon_days: int,
         actual_price: float,
         as_of: datetime,
-        tolerance_days: int = 5,
     ) -> int:
         """Match past forecasts with actual realized prices.
 
         Finds all unactualized rows for ``symbol`` and ``horizon_days`` whose
-        ``forecast_ts`` is at least ``horizon_days - tolerance_days`` days before
-        ``as_of``, and writes ``actual_price`` + ``squared_error`` into them.
+        ``forecast_ts`` is at least ``horizon_days`` days before ``as_of`` (i.e.
+        the full nominal horizon has genuinely elapsed), and writes
+        ``actual_price`` + ``squared_error`` into them.
 
-        The tolerance window (+5 days) absorbs weekends, holidays, and the fact
-        that runs may be skipped — so a 30-day forecast made on Monday will still
-        be actualized if we first run again on the following Thursday.
+        No separate lateness tolerance is needed: a forecast that becomes due
+        while this cycle is skipped (a weekend, a holiday, a missed run) simply
+        stays pending until the next call, at which point ``forecast_ts <=
+        cutoff_dt`` is still true and it gets actualized then — the existing
+        ``<=`` comparison already absorbs arbitrary lateness for free. (Prior to
+        2026-08 this method also accepted a ``tolerance_days`` kwarg that
+        *subtracted* days from the cutoff, actualizing forecasts up to
+        ``tolerance_days`` early instead of late — e.g. a 30-day forecast was
+        scored against a day-25 price. That was a bug, not a grace window; see
+        ``docs/known_issues/forecast_tracker_early_actualization.md``.)
 
         Parameters
         ----------
@@ -350,8 +357,6 @@ class ForecastTracker:
             Current close price (the ground truth for past forecasts).
         as_of : datetime
             The UTC datetime of the current run.
-        tolerance_days : int
-            Grace window (days) to handle run-skipping and calendar gaps.
 
         Returns
         -------
@@ -359,9 +364,9 @@ class ForecastTracker:
             Number of rows updated (0 when nothing was due).
         """
         try:
-            # A forecast made on day T is "due" when: now >= T + horizon - tolerance
-            # Equivalently: T <= now - horizon + tolerance
-            cutoff_dt = as_of - timedelta(days=max(0, horizon_days - tolerance_days))
+            # A forecast made on day T is "due" when the full horizon has
+            # elapsed: now >= T + horizon. Equivalently: T <= now - horizon.
+            cutoff_dt = as_of - timedelta(days=max(0, horizon_days))
             cutoff_iso = cutoff_dt.isoformat()
 
             with self._lock:
