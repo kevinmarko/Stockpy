@@ -11182,6 +11182,12 @@ export const mockApi = {
       portfolio_beta: portBeta,
       sector_exposures: sectorExposures,
       diversification_ratio: divRatio,
+      // The mock doesn't run a real SLSQP solve, so it can never genuinely fail to
+      // converge -- these are here for type/contract parity with the live endpoint,
+      // not to simulate non-convergence. See HrpPortfolioOptimizerView.test.tsx for
+      // the fallback-banner UI test, which supplies its own "fallback" fixture.
+      status: "optimal" as const,
+      hrp_fallback: false,
       as_of: new Date().toISOString(),
     }, 400);
   },

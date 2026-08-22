@@ -154,7 +154,6 @@ class CircuitBreakerConfig:
     min_requests_for_error_rate: int = 5
     half_open_probe_successes: int = 2
     cooldown_seconds: float = 30.0
-    auto_reset_on_heartbeat: bool = True
 
 
 @dataclass
@@ -388,6 +387,13 @@ class CircuitBreaker:
         self.tripped_at: Optional[datetime] = None
         self.trip_reason: Optional[str] = None
         self.half_open_successes: int = 0
+        # Consecutive CLOSED-state successes whose latency exceeded
+        # config.latency_threshold_ms. Tracked here (not on BrokerMetrics) so
+        # the latency trip condition is fully self-contained in
+        # record_success/record_failure -- every existing call site already
+        # passes latency_ms and needs no change. Reset by any success within
+        # threshold, any failure, or an explicit reset().
+        self._consecutive_latency_breaches: int = 0
 
     def can_execute(self) -> bool:
         """Check if traffic is allowed to execute through this circuit breaker."""
@@ -425,10 +431,29 @@ class CircuitBreaker:
                 self.reset(reason="half_open_probes_passed")
         elif self.state == CircuitState.CLOSED:
             if latency_ms > self.config.latency_threshold_ms:
+                self._consecutive_latency_breaches += 1
                 logger.warning(
-                    "Broker '%s' latency %.1fms exceeds threshold %.1fms",
-                    self.broker_id, latency_ms, self.config.latency_threshold_ms
+                    "Broker '%s' latency %.1fms exceeds threshold %.1fms (%d consecutive)",
+                    self.broker_id, latency_ms, self.config.latency_threshold_ms,
+                    self._consecutive_latency_breaches,
                 )
+                # Latency is one of the three documented OR conditions for
+                # tripping (see class docstring) -- a broker that is
+                # consistently slow but never errors and never crosses the
+                # error-rate threshold must still trip. Reuses
+                # max_consecutive_failures as the count (the established "N
+                # consecutive bad signals of any kind" threshold) rather than
+                # a fresh config field with an arbitrary default.
+                if self._consecutive_latency_breaches >= self.config.max_consecutive_failures:
+                    self.trip(
+                        reason=(
+                            f"Latency {latency_ms:.1f}ms exceeded threshold "
+                            f"{self.config.latency_threshold_ms:.1f}ms for "
+                            f"{self._consecutive_latency_breaches} consecutive requests"
+                        )
+                    )
+            else:
+                self._consecutive_latency_breaches = 0
 
     def record_failure(
         self,
@@ -439,6 +464,11 @@ class CircuitBreaker:
         total_requests: int = 0,
     ) -> None:
         """Record failure and check trip conditions."""
+        # A failure breaks the "consecutive slow-but-healthy" streak; errors
+        # already trip via their own consecutive-failure/error-rate path
+        # below, so a mixed slow/erroring broker doesn't double-count.
+        self._consecutive_latency_breaches = 0
+
         if self.state == CircuitState.HALF_OPEN:
             self.trip(
                 reason=f"Probe failure in HALF_OPEN state: {error_msg}"
@@ -481,6 +511,7 @@ class CircuitBreaker:
         self.tripped_at = None
         self.trip_reason = None
         self.half_open_successes = 0
+        self._consecutive_latency_breaches = 0
         logger.info("Circuit breaker RESET for '%s' (reason: %s)", self.broker_id, reason)
 
 

@@ -7387,6 +7387,14 @@ def post_portfolio_optimize_hrp_cvar(req: HrpCvarOptimizeRequest) -> Dict[str, A
         "portfolio_beta": float(opt_res["portfolio_beta"]),
         "sector_exposures": {k: float(v) for k, v in opt_res["sector_exposures"].items()},
         "diversification_ratio": float(opt_res["diversification_ratio"]),
+        # Honesty fix (2026-08 math-audit finding): optimize_turnover_regularized_hrp_cvar
+        # already computes these -- whether SLSQP actually converged, and whether HRP
+        # quasi-diagonalization itself fell back to equal-weight -- but they were previously
+        # dropped here, making a genuinely non-convergent solve (e.g. an infeasible
+        # sector-cap/beta-range combination) indistinguishable over the wire from a clean
+        # optimum. See tests/test_pilots_api.py::TestHrpCvarOptimize for the regression test.
+        "status": opt_res["status"],
+        "hrp_fallback": bool(opt_res.get("hrp_fallback", False)),
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
 

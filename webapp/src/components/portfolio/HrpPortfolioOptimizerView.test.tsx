@@ -36,6 +36,8 @@ const mockHrpResponse: HrpCvarOptimizeResponse = {
     Financials: 0.30,
   },
   diversification_ratio: 1.45,
+  status: "optimal",
+  hrp_fallback: false,
   as_of: "2026-08-17T12:00:00Z",
 };
 
@@ -139,5 +141,50 @@ describe("HrpPortfolioOptimizerView", () => {
         screen.getByText(/Overlapping data insufficient for covariance matrix/)
       ).toBeInTheDocument();
     });
+  });
+
+  it("does not show a fallback banner for a genuinely optimal result", async () => {
+    vi.mocked(api.optimizeHrpCvar).mockResolvedValueOnce(mockHrpResponse);
+
+    render(<HrpPortfolioOptimizerView symbols={["AAPL", "MSFT", "NVDA", "JPM", "V"]} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hrp-kpis")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("hrp-fallback-banner")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a fallback banner when the solver did not converge (2026-08 math-audit finding)", async () => {
+    vi.mocked(api.optimizeHrpCvar).mockResolvedValueOnce({
+      ...mockHrpResponse,
+      status: "fallback",
+      hrp_fallback: false,
+    });
+
+    render(<HrpPortfolioOptimizerView symbols={["AAPL", "MSFT", "NVDA", "JPM", "V"]} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hrp-fallback-banner")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("hrp-fallback-banner")).toHaveTextContent(
+      /SLSQP solver did not converge/
+    );
+  });
+
+  it("surfaces a fallback banner when HRP clustering itself degraded to equal-weight", async () => {
+    vi.mocked(api.optimizeHrpCvar).mockResolvedValueOnce({
+      ...mockHrpResponse,
+      status: "optimal",
+      hrp_fallback: true,
+    });
+
+    render(<HrpPortfolioOptimizerView symbols={["AAPL", "MSFT", "NVDA", "JPM", "V"]} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hrp-fallback-banner")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("hrp-fallback-banner")).toHaveTextContent(
+      /HRP hierarchical clustering itself fell back/
+    );
   });
 });

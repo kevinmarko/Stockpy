@@ -610,6 +610,40 @@ class TestMacroTriggeredGating:
         assert "halts fresh equity" not in rec.rationale.lower()
         assert "score penalty" not in rec.rationale.lower()
 
+    def test_soft_gate_data_unavailable_defense_in_depth(self):
+        """The soft gate's independent `data_unavailable` check (defense-in-
+        depth, mirroring execution/risk_gate.py::stress_scenario_check's own
+        independent data_unavailable check alongside killSwitch).
+
+        With a REAL MacroEconomicDTO, data_unavailable=True always forces
+        market_regime to "RECESSION" (dto_models.py::_rules_based_regime),
+        so the HARD gate above always fires first and this soft-gate branch
+        is provably unreachable in practice today -- that's exactly why this
+        test uses a duck-typed fake DTO (evaluate() never isinstance-checks
+        macro_dto) with an impossible-for-the-real-DTO combination
+        (market_regime="RISK ON" + data_unavailable=True, both VIX and Sahm
+        below their own thresholds) to prove the ELIF's own condition is
+        independently correct, not merely coincidentally covered by the hard
+        gate. If a future refactor ever decouples market_regime from
+        data_unavailable, this guards against the soft gate silently
+        treating a fabricated reading as real "not stressed" data."""
+        from types import SimpleNamespace
+
+        fake_macro = SimpleNamespace(
+            market_regime="RISK ON",
+            vix=10.0,                  # below macro_vix_gate_threshold (30.0)
+            sahm_rule_indicator=0.0,   # below macro_sahm_gate_threshold (0.5)
+            yield_curve=0.5,
+            credit_spread=3.5,
+            hmm_risk_on_probability=None,
+            data_unavailable=True,
+        )
+        rec = _patched_evaluate("NVDA", fake_macro, sector="Technology")
+        assert (
+            "macro data unavailable" in rec.rationale.lower()
+            or "score penalty" in rec.rationale.lower()
+        ), f"data_unavailable should trip the soft gate; got rationale: {rec.rationale!r}"
+
 
 # ===========================================================================
 # Tests — CONFIG completeness and type contracts

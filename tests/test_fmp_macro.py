@@ -304,3 +304,107 @@ class TestFetchMacroRawFmpWiring:
         get.assert_not_called()
         assert result["T10Y2Y"] == pytest.approx(4.5)
         assert result["VIXCLS"] == pytest.approx(15.5)
+
+
+# ---------------------------------------------------------------------------
+# fetch_macro_raw_detailed() / last_macro_raw_fabricated_keys -- the
+# populated-but-fabricated blind spot in macro_killswitch_data_unavailable()
+# that PR #854's key-presence-only check couldn't see (every key is present
+# in _MACRO_HARDCODED_FALLBACK, just with fabricated values).
+# ---------------------------------------------------------------------------
+class TestFetchMacroRawFabricatedKeys:
+    def _engine(self):
+        return DataEngine(fred_api_key=None)
+
+    def test_full_outage_reports_all_four_keys_fabricated(self, monkeypatch, api_key):
+        monkeypatch.setattr(settings, "FMP_MACRO_ENABLED", False)
+        engine = self._engine()
+
+        result, fabricated = engine.fetch_macro_raw_detailed()
+
+        assert result == _HARDCODED_FALLBACK
+        assert fabricated == frozenset({"T10Y2Y", "BAMLH0A0HYM2", "UNRATE", "VIXCLS"})
+        # Side effect: last_macro_raw_fabricated_keys mirrors the return value.
+        assert engine.last_macro_raw_fabricated_keys == fabricated
+
+    def test_fetch_macro_raw_stays_byte_identical_to_detailed_first_element(
+        self, monkeypatch, api_key,
+    ):
+        monkeypatch.setattr(settings, "FMP_MACRO_ENABLED", False)
+        engine = self._engine()
+        assert engine.fetch_macro_raw() == engine.fetch_macro_raw_detailed()[0]
+
+    def test_fmp_partial_success_leaves_vix_and_oas_fabricated_only(
+        self, monkeypatch, api_key,
+    ):
+        # T10Y2Y/UNRATE served by FMP (real); VIXCLS/BAMLH0A0HYM2 have no FMP
+        # equivalent and stay on the hardcoded constant -- both must still be
+        # reported fabricated even though FMP "succeeded" overall.
+        monkeypatch.setattr(settings, "FMP_MACRO_ENABLED", True)
+        treasury_payload = [{"date": "2026-07-15", "year2": 4.0, "year10": 4.55}]
+        unrate_payload = [{"name": "unemploymentRate", "date": "2026-06-01", "value": 4.2}]
+        engine = self._engine()
+
+        with patch(
+            "data.fmp_client.requests.get",
+            side_effect=[_resp(200, treasury_payload), _resp(200, unrate_payload)],
+        ):
+            result, fabricated = engine.fetch_macro_raw_detailed()
+
+        assert result["T10Y2Y"] == pytest.approx(0.55)
+        assert fabricated == frozenset({"VIXCLS", "BAMLH0A0HYM2"})
+
+    def test_healthy_fred_fetch_reports_nothing_fabricated(self, monkeypatch, api_key):
+        engine = self._engine()
+        fake_fred = MagicMock()
+        result_series = MagicMock()
+        result_series.iloc.__getitem__.return_value = 4.5
+        dropna_series = MagicMock()
+        dropna_series.iloc.__getitem__.return_value = 15.5
+        result_series.dropna.return_value = dropna_series
+        fake_fred.get_series.return_value = result_series
+        engine.fred = fake_fred
+
+        result, fabricated = engine.fetch_macro_raw_detailed()
+
+        assert result["VIXCLS"] == pytest.approx(15.5)
+        assert fabricated == frozenset()
+
+    def test_vix_only_silent_sub_fallback_is_reported_fabricated(self, monkeypatch, api_key):
+        """T10Y2Y/BAMLH0A0HYM2/UNRATE succeed, but the VIXCLS-specific
+        get_series(...).dropna() call raises -- fred_result is still built
+        and returned as a "successful" fetch (the outer try/except never
+        fires), so only fabricated={'VIXCLS'} distinguishes this from a
+        fully-healthy read. This is the narrow gap the investigation found:
+        VIX -- the single most load-bearing field for killSwitch (vix > 30.0
+        fires it directly) -- could be silently fabricated even when every
+        other series is real, invisible to a plain fetch_macro_raw() caller.
+        """
+        engine = self._engine()
+        fake_fred = MagicMock()
+
+        good_series = MagicMock()
+        good_series.iloc.__getitem__.return_value = 4.5
+
+        def _get_series(series_id, limit=None):
+            if series_id == "VIXCLS":
+                raise ConnectionError("VIXCLS endpoint down")
+            return good_series
+
+        fake_fred.get_series.side_effect = _get_series
+        engine.fred = fake_fred
+
+        result, fabricated = engine.fetch_macro_raw_detailed()
+
+        assert result["T10Y2Y"] == pytest.approx(4.5)
+        assert result["BAMLH0A0HYM2"] == pytest.approx(4.5)
+        assert result["UNRATE"] == pytest.approx(4.5)
+        assert result["VIXCLS"] == 15.0  # the silent placeholder
+        assert fabricated == frozenset({"VIXCLS"})
+        assert engine.last_macro_raw_fabricated_keys == frozenset({"VIXCLS"})
+
+    def test_mock_data_engine_always_reports_nothing_fabricated(self):
+        from data_engine import MockDataEngine
+
+        engine = MockDataEngine()
+        assert engine.last_macro_raw_fabricated_keys == frozenset()

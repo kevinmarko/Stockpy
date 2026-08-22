@@ -439,6 +439,12 @@ def _build_macro_dto() -> MacroEconomicDTO:
         me = _get_macro_engine(fred_key)
         de = me.data_engine
         macro_raw = de.fetch_macro_raw()
+        # Populated-but-fabricated blind spot: de.fetch_macro_raw()'s hardcoded
+        # emergency fallback populates EVERY key with a benign literal, so
+        # macro_killswitch_data_unavailable()'s plain presence check alone
+        # would report "available" even during a total FRED outage. See
+        # data_engine.py::fetch_macro_raw_detailed()'s docstring.
+        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
 
         # SPY history for the HMM regime detector now routes through
         # HistoricalStore.get_bars() (mirroring _fetch_bars_for_universe's
@@ -490,7 +496,8 @@ def _build_macro_dto() -> MacroEconomicDTO:
         sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
 
         data_unavailable = (
-            macro_killswitch_data_unavailable(macro_raw) or sahm_used_fallback
+            macro_killswitch_data_unavailable(macro_raw, fabricated_keys=macro_raw_fabricated_keys)
+            or sahm_used_fallback
         )
 
         dto = MacroEconomicDTO(
@@ -976,6 +983,96 @@ def _run_automated_delta_hedge_cycle(executor: Any) -> Optional[Dict[str, Any]]:
     except Exception as exc:
         logger.warning("Automated SPY delta hedge cycle failed (non-critical): %s", exc)
         return None
+
+
+def _run_automated_options_lifecycle(macro_dto: Optional[MacroEconomicDTO] = None) -> None:
+    """Runs the automated options paper-trading lifecycle: exit management,
+    0DTE fast exits, new-position auto-execution, and dynamic SPY delta
+    hedging.
+
+    Extracted from _run_cycle()'s inline "Automated Strategy Options Paper
+    Execution & Lifecycle" block for the same reason
+    _run_automated_delta_hedge_cycle was extracted above: independent
+    testability without mocking the whole CLI/pipeline, and to fix a real bug
+    found during a 2026-08-22 audit -- see
+    docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md.
+
+    The bug: this function's outer gate previously OR'd together only
+    PAPER_OPTIONS_AUTO_EXECUTE_ENABLED / OPTIONS_AUTO_EXIT_ENABLED /
+    OPTIONS_DELTA_HEDGE_ENABLED. OPTIONS_0DTE_ENABLED was checked correctly on
+    step 1b's *inner* condition but was missing from this *outer* one --
+    settings.OPTIONS_0DTE_ENABLED's own docstring describes it as a
+    self-contained feature ("automated 0DTE options momentum breakout trading
+    and lifecycle management") an operator would reasonably enable on its
+    own, without also wanting any of the other three. In that entirely
+    plausible configuration (0DTE on, the other three off) the outer gate
+    was False, this whole function's body never ran, and manage_0dte_exits()
+    -- the +75% profit target / -30% stop loss / 15:45 ET hard exit -- never
+    fired for open 0DTE positions. Fixed by adding OPTIONS_0DTE_ENABLED to
+    the outer OR.
+
+    Never raises -- every step is independently non-fatal to the pipeline
+    (matches the try/except this block already had inline).
+    """
+    if not (
+        getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
+        or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
+        or getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False)
+        or getattr(settings, "OPTIONS_0DTE_ENABLED", False)
+    ):
+        return
+    try:
+        from execution.options_paper_executor import OptionsPaperExecutor
+        _executor = OptionsPaperExecutor()
+
+        # 1. Manage Exits (50% profit target, 2.0x stop loss, 21-DTE gamma)
+        if getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+            _exit_res = _executor.execute_auto_exits()
+            logger.info(
+                "Automated options exit lifecycle management: %d evaluated, %d closed, %d failed",
+                _exit_res.get("evaluated_count", 0),
+                _exit_res.get("closed_count", 0),
+                _exit_res.get("failed_count", 0),
+            )
+
+        # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
+        if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+            try:
+                from pilots.zero_dte_engine import manage_0dte_exits
+                _0dte_res = manage_0dte_exits(store=_executor.store)
+                if _0dte_res.get("executed_count", 0) > 0:
+                    logger.info(
+                        "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
+                        _0dte_res.get("evaluated_count", 0),
+                        _0dte_res.get("executed_count", 0),
+                        _0dte_res.get("failed_count", 0),
+                    )
+            except Exception as _0dte_exc:
+                logger.debug("0DTE exit lifecycle evaluation: %s", _0dte_exc)
+
+        # 2. Open New Strategy Option Positions
+        if getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False):
+            # Pass the cycle's real macro_dto (threaded through by the caller)
+            # so the VIX/CREDIT-EVENT premium-selling regime gate is actually
+            # evaluated instead of silently no-op'ing on a default-None macro
+            # context.
+            _exec_res = _executor.execute_strategy_directives(macro_dto=macro_dto)
+            logger.info(
+                "Automated strategy options paper execution completed: "
+                "%d executed, %d skipped, %d failed",
+                _exec_res.get("executed_count", 0),
+                _exec_res.get("skipped_count", 0),
+                _exec_res.get("failed_count", 0),
+            )
+
+        # 3. Dynamic SPY Delta Hedging
+        if getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False):
+            _run_automated_delta_hedge_cycle(_executor)
+    except Exception as _auto_opt_exc:
+        logger.warning(
+            "Automated strategy options paper execution/lifecycle failed (non-critical): %s",
+            _auto_opt_exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1492,64 +1589,9 @@ def main() -> None:
             )
 
         # ── Automated Strategy Options Paper Execution & Lifecycle ────────────
-        if (
-            getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
-            or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
-            or getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False)
-        ):
-            try:
-                from execution.options_paper_executor import OptionsPaperExecutor
-                _executor = OptionsPaperExecutor()
-
-                # 1. Manage Exits (50% profit target, 2.0x stop loss, 21-DTE gamma)
-                if getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
-                    _exit_res = _executor.execute_auto_exits()
-                    logger.info(
-                        "Automated options exit lifecycle management: %d evaluated, %d closed, %d failed",
-                        _exit_res.get("evaluated_count", 0),
-                        _exit_res.get("closed_count", 0),
-                        _exit_res.get("failed_count", 0),
-                    )
-
-                # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
-                if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
-                    try:
-                        from pilots.zero_dte_engine import manage_0dte_exits
-                        _0dte_res = manage_0dte_exits(store=_executor.store)
-                        if _0dte_res.get("executed_count", 0) > 0:
-                            logger.info(
-                                "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
-                                _0dte_res.get("evaluated_count", 0),
-                                _0dte_res.get("executed_count", 0),
-                                _0dte_res.get("failed_count", 0),
-                            )
-                    except Exception as _0dte_exc:
-                        logger.debug("0DTE exit lifecycle evaluation: %s", _0dte_exc)
-
-                # 2. Open New Strategy Option Positions
-
-                if getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False):
-                    # Pass the cycle's real macro_dto (threaded through
-                    # RunResult by run_once()) so the VIX/CREDIT-EVENT
-                    # premium-selling regime gate is actually evaluated instead
-                    # of silently no-op'ing on a default-None macro context.
-                    _exec_res = _executor.execute_strategy_directives(macro_dto=result.macro_dto)
-                    logger.info(
-                        "Automated strategy options paper execution completed: "
-                        "%d executed, %d skipped, %d failed",
-                        _exec_res.get("executed_count", 0),
-                        _exec_res.get("skipped_count", 0),
-                        _exec_res.get("failed_count", 0),
-                    )
-
-                # 3. Dynamic SPY Delta Hedging
-                if getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False):
-                    _run_automated_delta_hedge_cycle(_executor)
-            except Exception as _auto_opt_exc:
-                logger.warning(
-                    "Automated strategy options paper execution/lifecycle failed (non-critical): %s",
-                    _auto_opt_exc,
-                )
+        # See _run_automated_options_lifecycle()'s own docstring for the gate
+        # (including the fixed OPTIONS_0DTE_ENABLED outer-gate omission bug).
+        _run_automated_options_lifecycle(macro_dto=result.macro_dto)
         # ─────────────────────────────────────────────────────────────────────
 
 
