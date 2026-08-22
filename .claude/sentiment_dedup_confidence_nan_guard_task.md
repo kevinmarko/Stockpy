@@ -9,4 +9,4 @@
 - [x] `ruff check . --select=F821,F822,F823,E9` — clean
 - [x] `pytest tests/test_sentiment_sources.py tests/test_news_catalyst.py tests/test_pilots_news_catalyst.py -q` — 249 passed
 - [x] Full offline suite run + pre-existing-failure verification via `git stash` against clean `main`
-- [ ] Open PR against `main`
+- [x] Open PR against `main` — https://github.com/kevinmarko/Stockpy/pull/874
