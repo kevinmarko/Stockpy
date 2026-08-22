@@ -4819,17 +4819,26 @@ export interface VpinBucket {
 
 export interface VpinMetricsResponse {
   symbol: string;
-  vpin: number;
-  regime: "LOW" | "MODERATE" | "HIGH_TOXICITY";
+  // `null` when `data_available` is false -- the backend fetches real underlying bars to
+  // compute this (a bar-level BVC approximation, not a fabricated/synthetic value) and is
+  // honest about it when that fetch fails rather than substituting a plausible-looking number.
+  vpin: number | null;
+  regime: "LOW" | "MODERATE" | "HIGH_TOXICITY" | null;
   // Not computed by the backend (no historical VPIN distribution to rank against) -- always
   // null/omitted on a real response.
   toxicity_percentile?: number | null;
   bucket_size: number;
   num_buckets: number;
   buckets: VpinBucket[];
-  defensive_spread_concession?: number;
+  defensive_spread_concession?: number | null;
   warning_message?: string | null;
   as_of?: string;
+  // Whether `vpin` reflects a real bar-level BVC approximation computed from live market data
+  // (see `data_source`) or is honestly unavailable (see `reason`) -- added so the UI can never
+  // mistake a missing measurement for a real one.
+  data_available?: boolean;
+  data_source?: "bar_level_bvc_approximation" | null;
+  reason?: string | null;
 }
 
 export interface SorLeg {

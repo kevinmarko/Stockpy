@@ -34,11 +34,34 @@ Design Invariants:
 ------------------
 * **AST-Safe (CONSTRAINT #1 & #3)** — Pure computation module. Never imports heavy engines
   (`processing_engine`, `technical_options_engine`, `strategy_engine`, `macro_engine`, etc.).
-  Only standard library, `numpy`, `scipy` (with pure math fallback), and `pandas`.
+  Only standard library, `numpy`, `scipy` (with pure math fallback), and `pandas`. `data.market_data`
+  (a data-layer module, not a heavy engine) is imported lazily, inside
+  `fetch_real_underlying_bar_trades()` only, to fetch real bars for the live endpoint.
 * **Honesty (CONSTRAINT #4)** — No fabricated prices or volume. Missing or empty trades return
   clean sentinel 0.0 values without fabricating data.
 * **Never Raises (CONSTRAINT #6)** — Degrades gracefully on empty DataFrames, zero volume, zero variance,
   or malformed records.
+
+Live-endpoint data source (fixed 2026-08-22 — see `docs/known_issues/options_vpin_fabricated_live_data.md`):
+--------------------------------------------------------------------------------------------------------------
+`get_options_vpin_metrics()` (the function backing `GET /pilots/options/vpin/metrics`) used to call
+`generate_synthetic_option_trades()` UNCONDITIONALLY — a random-walk generator whose own docstring says
+"for testing and simulation" — so the live, non-mock VPIN endpoint always returned a number computed from
+fabricated data, deterministic per-symbol, with no indication anywhere that it wasn't real. There is no
+real per-trade options tick stream anywhere in this codebase today (`pilots/unusual_options_flow.py` only
+has point-in-time chain snapshots, and no configured market-data provider exposes one — confirmed against
+`docs/FMP_INTEGRATION.md` and `data/fmp_client.py`), so a genuinely tick-resolution VPIN is not available.
+
+Per CONSTRAINT #4, `get_options_vpin_metrics()` now fetches REAL hourly OHLCV bars for the underlying via
+`fetch_real_underlying_bar_trades()` and computes a coarse, BAR-LEVEL Bulk Volume Classification
+approximation from them — the same honest pattern already used by
+`desktop/daemon_runtime.py::OrchestratorDaemon.maybe_update_circuit_breaker` (see that method's own
+docstring for the identical honest-scope writeup this mirrors). When real bars cannot be fetched (provider
+failure, empty/malformed payload, or too little history), the function degrades to an explicit
+`data_available: False` / `vpin: None` response instead of silently substituting synthetic data — a
+missing measurement, not a fabricated one. `generate_synthetic_option_trades()` itself is unchanged and
+remains legitimately used by `tests/test_options_vpin.py` for pure-math unit tests of the BVC/bucketing
+logic; the fix is that the LIVE endpoint no longer reaches it.
 """
 
 from __future__ import annotations
@@ -640,25 +663,118 @@ def generate_synthetic_option_trades(
     return df
 
 
+def fetch_real_underlying_bar_trades(
+    symbol: str,
+    lookback_days: int = 10,
+) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """Fetches real hourly OHLCV bars for `symbol` via the configured market-data provider
+    (`data.market_data.get_provider()`) and reshapes them into a `['price', 'volume', 'time']`
+    trade-stream proxy DataFrame -- the SAME coarse, bar-level Bulk Volume Classification (BVC)
+    approximation already used by `desktop/daemon_runtime.py::maybe_update_circuit_breaker`
+    (see that method's docstring for the full honest-scope writeup this mirrors).
+
+    This is NOT a real per-trade options tick stream -- no configured provider (Alpaca/FMP/
+    yfinance) exposes one anywhere in this codebase (CONSTRAINT #4: there is genuinely no better
+    real signal available today). It IS real, non-fabricated market data, just at bar resolution
+    rather than tick resolution.
+
+    Returns `(df, None)` on success, where `df` has >= 2 rows and columns
+    `['price', 'volume', 'time']`. Returns `(None, reason)` on any failure -- a provider
+    import/construction error, a `MarketDataError`, an empty/malformed frame, a frame missing
+    `Close`/`Volume`, or fewer than 2 usable rows after dropping NaNs. Never raises
+    (CONSTRAINT #6) -- every failure mode is caught and reported via the `reason` string instead.
+    """
+    try:
+        from data.market_data import get_provider
+
+        provider = get_provider()
+        bars = provider.get_intraday_bars(symbol, lookback_days=lookback_days, interval="1h")
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, dead-letter to the caller
+        reason = f"market data fetch failed for {symbol}: {type(exc).__name__}: {exc}"
+        logger.warning("fetch_real_underlying_bar_trades: %s", reason)
+        return None, reason
+
+    if bars is None or bars.empty:
+        return None, f"no intraday bars returned for {symbol}"
+    if "Close" not in bars.columns or "Volume" not in bars.columns:
+        return None, f"intraday bars for {symbol} are missing Close/Volume columns"
+
+    bars = bars.dropna(subset=["Close", "Volume"])
+    if len(bars) < 2:
+        return None, (
+            f"insufficient intraday bar history for {symbol} "
+            f"({len(bars)} usable rows, need >= 2)"
+        )
+
+    trades_df = pd.DataFrame(
+        {
+            "price": bars["Close"].to_numpy(dtype=np.float64),
+            "volume": bars["Volume"].to_numpy(dtype=np.float64),
+            "time": bars.index.astype(str),
+        }
+    )
+    return trades_df, None
+
+
+def _unavailable_vpin_metrics(symbol: str, num_buckets: int, reason: str) -> Dict[str, Any]:
+    """Honest 'no measurement' response (CONSTRAINT #4) for `get_options_vpin_metrics()` when
+    real underlying bars could not be fetched. `vpin`/`toxicity_regime`/`is_toxic`/
+    `mean_imbalance`/`recommended_spread_concession` are all `None` -- never a fabricated
+    plausible-looking value -- and `data_available=False`/`reason` explain why.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "vpin": None,
+        "rolling_vpin": [],
+        "total_trade_count": 0,
+        "total_volume": 0.0,
+        "bucket_size": 0.0,
+        "num_buckets": num_buckets,
+        "total_buckets": 0,
+        "mean_imbalance": None,
+        "toxicity_regime": None,
+        "is_toxic": None,
+        "symbol": symbol,
+        "timestamp": now,
+        "buckets": [],
+        "bucket_history": [],
+        "sample_time": now,
+        "recommended_spread_concession": None,
+        "data_available": False,
+        "data_source": None,
+        "reason": reason,
+    }
+
+
 def get_options_vpin_metrics(
     symbol: str,
     num_buckets: int = DEFAULT_NUM_BUCKETS,
     bucket_size: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Top-level helper for GET /pilots/options/vpin/metrics?symbol=...
-    Computes VPIN, toxicity regime, and volume bucket history.
+    Computes VPIN, toxicity regime, and volume bucket history from REAL market data -- a
+    bar-level Bulk Volume Classification approximation (see
+    `fetch_real_underlying_bar_trades()`'s docstring for the honest scope). Degrades to an
+    explicit `data_available: False` / `vpin: None` response (never fabricated synthetic data)
+    when real bars cannot be fetched -- see this module's docstring for the full history of why
+    this changed.
     """
     clean_sym = str(symbol or "SPY").strip().upper()
-    trades_df = generate_synthetic_option_trades(
-        num_trades=1000,
-        initial_price=5.0,
-        volatility=0.02,
-        seed=hash(clean_sym) % (2**31 - 1),
-    )
+    trades_df, fetch_error = fetch_real_underlying_bar_trades(clean_sym)
+
+    if trades_df is None:
+        return _unavailable_vpin_metrics(clean_sym, num_buckets, fetch_error or "unknown error")
+
+    # Real bars are far sparser than a genuine tick stream -- DEFAULT_NUM_BUCKETS (50) assumes a
+    # real trade stream, so the effective bucket count is sized down to fit the actual row count,
+    # mirroring maybe_update_circuit_breaker's own `max(2, min(10, len(reactive_bars) // 2))`
+    # precedent (floored at 2 so the rolling-VPIN window is never degenerate).
+    effective_num_buckets = max(2, min(int(num_buckets), len(trades_df) // 2))
+
     result = calculate_vpin(
         trades_df=trades_df,
         bucket_size=bucket_size,
-        num_buckets=num_buckets,
+        num_buckets=effective_num_buckets,
         symbol=clean_sym,
     )
     res_dict = result.to_dict()
@@ -666,6 +782,9 @@ def get_options_vpin_metrics(
     res_dict["sample_time"] = res_dict.get("timestamp", datetime.now(timezone.utc).isoformat())
     concession = apply_defensive_spread_concession(0.05, result.vpin)
     res_dict["recommended_spread_concession"] = concession
+    res_dict["data_available"] = True
+    res_dict["data_source"] = "bar_level_bvc_approximation"
+    res_dict["reason"] = None
     return res_dict
 
 
@@ -686,15 +805,30 @@ def get_options_vpin_metrics_for_frontend(
     distribution to rank against) and is honestly `None` (CONSTRAINT #4) rather than a
     fabricated median. `warning_message` is synthesized here from the real `toxicity_regime`
     the backend computed, since the frontend banner needs a message string, not a boolean.
+
+    `data_available`/`data_source`/`reason` (CONSTRAINT #4, added 2026-08-22 -- see
+    `docs/known_issues/options_vpin_fabricated_live_data.md`) surface whether `vpin` reflects a
+    real bar-level BVC approximation (`data_available=True`, `data_source=
+    "bar_level_bvc_approximation"`) or is honestly unavailable (`data_available=False`,
+    `vpin=None`, `reason` explaining why real bars couldn't be fetched) -- never a fabricated
+    number presented as a measurement either way. When unavailable, `warning_message` is
+    overridden to state that plainly rather than describing a toxicity regime that was never
+    actually computed.
     """
     result = get_options_vpin_metrics(symbol=symbol, num_buckets=num_buckets, bucket_size=bucket_size)
 
     sym = result.get("symbol") or symbol
-    regime = result.get("toxicity_regime", "MODERATE")
+    regime = result.get("toxicity_regime")
     vpin = result.get("vpin")
+    data_available = bool(result.get("data_available"))
 
     warning_message = None
-    if regime == "HIGH_TOXICITY" and vpin is not None:
+    if not data_available:
+        warning_message = (
+            f"VPIN is unavailable for {sym} -- {result.get('reason') or 'no real market data could be fetched'}. "
+            "No toxicity measurement is being shown."
+        )
+    elif regime == "HIGH_TOXICITY" and vpin is not None:
         warning_message = (
             f"Elevated order-flow toxicity detected for {sym} (VPIN={vpin:.2f}) -- "
             "adverse selection risk is high; defensive spread widening is recommended."
@@ -726,5 +860,8 @@ def get_options_vpin_metrics_for_frontend(
         "defensive_spread_concession": result.get("recommended_spread_concession"),
         "warning_message": warning_message,
         "as_of": result.get("timestamp"),
+        "data_available": data_available,
+        "data_source": result.get("data_source"),
+        "reason": result.get("reason"),
     }
 

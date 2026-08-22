@@ -8,6 +8,8 @@ import pytest
 import numpy as np
 import pandas as pd
 
+from unittest.mock import patch
+
 from pilots.options_vpin import (
     DEFAULT_NUM_BUCKETS,
     DEFAULT_TOXICITY_THRESHOLD,
@@ -20,7 +22,10 @@ from pilots.options_vpin import (
     calculate_vpin,
     compute_vpin_buckets,
     evaluate_toxicity_regime,
+    fetch_real_underlying_bar_trades,
     generate_synthetic_option_trades,
+    get_options_vpin_metrics,
+    get_options_vpin_metrics_for_frontend,
     is_toxic_flow,
 )
 
@@ -306,3 +311,166 @@ def test_options_vpin_ast_import_safety():
             mod_name = node.module or ""
             for forbidden in forbidden_modules:
                 assert forbidden not in mod_name, f"Forbidden from-import found: {mod_name}"
+
+
+# ---------------------------------------------------------------------------
+# 8. Live-endpoint honesty (CONSTRAINT #4) -- get_options_vpin_metrics() must never fall back
+# to generate_synthetic_option_trades() for the live /pilots/options/vpin/metrics endpoint.
+# See docs/known_issues/options_vpin_fabricated_live_data.md.
+# ---------------------------------------------------------------------------
+
+def _fake_hourly_bars(n: int = 40, seed: int = 11) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    prices = 100.0 + np.cumsum(rng.normal(0, 0.3, n))
+    return pd.DataFrame(
+        {
+            "Open": prices,
+            "High": prices + 0.05,
+            "Low": prices - 0.05,
+            "Close": prices,
+            "Volume": rng.integers(500, 20_000, n).astype(float),
+        },
+        index=pd.date_range("2026-08-01 09:30", periods=n, freq="h"),
+    )
+
+
+class TestFetchRealUnderlyingBarTrades:
+    def test_success_reshapes_real_bars_into_trades_df(self):
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=10, interval="1h"):
+                assert interval == "1h"
+                return _fake_hourly_bars()
+
+        with patch("data.market_data.get_provider", lambda: _FakeProvider()):
+            df, reason = fetch_real_underlying_bar_trades("SPY")
+
+        assert reason is None
+        assert df is not None
+        assert list(df.columns) == ["price", "volume", "time"]
+        assert len(df) == 40
+        assert (df["price"] > 0).all()
+        assert (df["volume"] > 0).all()
+
+    def test_never_raises_on_provider_exception(self):
+        class _ExplodingProvider:
+            def get_intraday_bars(self, *a, **k):
+                raise RuntimeError("simulated network failure")
+
+        with patch("data.market_data.get_provider", lambda: _ExplodingProvider()):
+            df, reason = fetch_real_underlying_bar_trades("SPY")
+
+        assert df is None
+        assert reason is not None
+        assert "SPY" in reason
+
+    def test_never_raises_on_empty_bars(self):
+        class _EmptyProvider:
+            def get_intraday_bars(self, *a, **k):
+                return pd.DataFrame()
+
+        with patch("data.market_data.get_provider", lambda: _EmptyProvider()):
+            df, reason = fetch_real_underlying_bar_trades("SPY")
+
+        assert df is None
+        assert "no intraday bars" in reason
+
+    def test_never_raises_on_missing_columns(self):
+        class _MalformedProvider:
+            def get_intraday_bars(self, *a, **k):
+                return pd.DataFrame({"Open": [1.0, 2.0]})
+
+        with patch("data.market_data.get_provider", lambda: _MalformedProvider()):
+            df, reason = fetch_real_underlying_bar_trades("SPY")
+
+        assert df is None
+        assert "Close/Volume" in reason
+
+    def test_never_raises_on_insufficient_rows(self):
+        class _OneRowProvider:
+            def get_intraday_bars(self, *a, **k):
+                return pd.DataFrame(
+                    {"Close": [100.0], "Volume": [1000.0]},
+                    index=pd.date_range("2026-08-01", periods=1, freq="h"),
+                )
+
+        with patch("data.market_data.get_provider", lambda: _OneRowProvider()):
+            df, reason = fetch_real_underlying_bar_trades("SPY")
+
+        assert df is None
+        assert "insufficient intraday bar history" in reason
+
+
+class TestGetOptionsVpinMetricsHonesty:
+    """CONSTRAINT #4 regression: the live endpoint must compute VPIN from real market data and
+    degrade to an honest `data_available: False` / `vpin: None` response on failure -- never
+    fabricate a plausible-looking number via `generate_synthetic_option_trades()`."""
+
+    def test_uses_real_bars_not_synthetic_trades(self):
+        """A real (mocked-provider) run must never call the synthetic generator."""
+        with patch("data.market_data.get_provider", lambda: _RealBarsProvider()), patch(
+            "pilots.options_vpin.generate_synthetic_option_trades"
+        ) as mock_synthetic:
+            result = get_options_vpin_metrics("SPY", num_buckets=20)
+
+        mock_synthetic.assert_not_called()
+        assert result["data_available"] is True
+        assert result["data_source"] == "bar_level_bvc_approximation"
+        assert result["reason"] is None
+        assert 0.0 <= result["vpin"] <= 1.0
+        assert result["total_buckets"] > 0
+
+    def test_degrades_honestly_when_real_data_unavailable(self):
+        """No real bars available -> explicit unavailable response, not a fabricated fallback."""
+        class _ExplodingProvider:
+            def get_intraday_bars(self, *a, **k):
+                raise RuntimeError("simulated outage")
+
+        with patch("data.market_data.get_provider", lambda: _ExplodingProvider()), patch(
+            "pilots.options_vpin.generate_synthetic_option_trades"
+        ) as mock_synthetic:
+            result = get_options_vpin_metrics("BADSYMBOL", num_buckets=20)
+
+        mock_synthetic.assert_not_called()
+        assert result["data_available"] is False
+        assert result["data_source"] is None
+        assert result["vpin"] is None
+        assert result["toxicity_regime"] is None
+        assert result["is_toxic"] is None
+        assert result["mean_imbalance"] is None
+        assert result["recommended_spread_concession"] is None
+        assert result["buckets"] == []
+        assert result["bucket_history"] == []
+        assert result["total_buckets"] == 0
+        assert "simulated outage" in result["reason"]
+
+    def test_frontend_adapter_surfaces_unavailability_honestly(self):
+        """get_options_vpin_metrics_for_frontend() must not paper over an unavailable
+        measurement with a default regime/warning message describing a toxicity level that was
+        never computed."""
+        class _ExplodingProvider:
+            def get_intraday_bars(self, *a, **k):
+                raise RuntimeError("simulated outage")
+
+        with patch("data.market_data.get_provider", lambda: _ExplodingProvider()):
+            result = get_options_vpin_metrics_for_frontend("BADSYMBOL")
+
+        assert result["data_available"] is False
+        assert result["vpin"] is None
+        assert result["regime"] is None
+        assert result["defensive_spread_concession"] is None
+        assert result["warning_message"] is not None
+        assert "unavailable" in result["warning_message"].lower()
+
+    def test_frontend_adapter_success_labels_bar_level_source(self):
+        with patch("data.market_data.get_provider", lambda: _RealBarsProvider()):
+            result = get_options_vpin_metrics_for_frontend("SPY", num_buckets=20)
+
+        assert result["data_available"] is True
+        assert result["data_source"] == "bar_level_bvc_approximation"
+        assert result["vpin"] is not None
+        assert result["regime"] in ["LOW", "MODERATE", "HIGH_TOXICITY"]
+
+
+class _RealBarsProvider:
+    def get_intraday_bars(self, symbol, lookback_days=10, interval="1h"):
+        return _fake_hourly_bars()
