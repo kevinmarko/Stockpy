@@ -63,4 +63,4 @@ Branch: `fix-macro-killswitch-fail-open`
       suite post-rebase, still 308/308 green.
 - [x] Copy PR artifacts into `.claude/` with unique, feature-scoped names (this
       file + the implementation plan + the walkthrough).
-- [ ] Open PR against `main`.
+- [x] Open PR against `main`: https://github.com/kevinmarko/Stockpy/pull/854
