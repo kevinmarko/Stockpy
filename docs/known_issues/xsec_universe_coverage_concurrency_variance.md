@@ -105,17 +105,23 @@ as part of this fix and their clean, coverage-verified numbers are recorded in
 `docs/signals/<name>.md` files. The other 5 were **not** re-run as part of this change —
 out of scope, flagged here as a follow-up rather than silently left unstated.
 
-## Disclosed follow-up, not implemented here
+## Disclosed follow-up — now implemented (2026-08-22, `data/cross_process_throttle.py`)
 
-The immediate, in-scope fix is making the existing behavior *visible* (and gating on
-it), not eliminating the underlying concurrency. This machine runs many simultaneous
-git worktrees/sessions sharing one FMP API key's rate-limit budget (see
-`data/fmp_client.py`'s module-level throttle/retry/circuit-breaker) — a cross-worktree
-coordination mechanism (e.g. a shared lock file, a serialized request queue, or simply
-documenting "don't run `refresh_validations.py` concurrently across worktrees") would
-reduce how often the coverage gate actually trips, but was judged out of scope for this
-fix and is not attempted here. A future validation run that trips the coverage gate
-frequently is the signal that this follow-up is worth doing.
+The immediate, in-scope fix above made the existing behavior *visible* (and gated on
+it), without eliminating the underlying concurrency. The cross-worktree coordination
+mechanism disclosed here as out-of-scope — "a shared lock file" was the example named —
+has since been implemented: `data/cross_process_throttle.py::wait_turn` adds a
+`fcntl.flock`-based cross-process spacing throttle on top of (not instead of)
+`data/fmp_client.py`'s and `data/edgar_fundamentals.py`'s existing in-process throttles,
+so concurrent worktree sessions on this machine now jointly respect the real shared
+FMP/SEC request budget instead of each independently believing it owns the full budget.
+See `docs/architecture/data-layer.md`'s "Cross-process rate limiting" entry for the
+full mechanism and `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s matching 2026-08-22 entry
+for the verification. This reduces how often the coverage gate above actually needs to
+trip going forward — it does NOT replace the gate, which stays the correct fail-closed
+backstop for whatever residual variance a rate limiter alone cannot eliminate (a
+single-process run that itself has a flaky network connection, a genuinely down FMP/SEC
+endpoint, etc.).
 
 **Second, separate follow-up: EDGAR-fundamentals coverage tracking.** `sector_quality_rank`
 hits SEC EDGAR directly per ticker in addition to the shared FMP price fetch this fix
