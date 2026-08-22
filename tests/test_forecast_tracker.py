@@ -10,7 +10,8 @@ Covers:
 * Warm path: inverse-RMSE weighting (better model gets higher weight).
 * ``_MIN_RMSE`` guard prevents division-by-zero on perfect predictions.
 * Missing file / corrupt DB → graceful degradation (returns {}, 0, never raises).
-* Tolerance window boundary: forecast due 5 days early still actualized.
+* Full-horizon boundary: forecast is actualized exactly when its full nominal
+  horizon has elapsed, never early (see ``test_not_actualized_before_full_horizon_elapses``).
 * ``update_actuals`` only touches unactualized rows (idempotency).
 * ``pending_count`` and ``completed_count`` return correct values.
 * ``ForecastingEngine.__init__`` accepts a ``tracker`` keyword argument.
@@ -64,7 +65,7 @@ def _fill_window(tracker: ForecastTracker, symbol: str, horizon: int, n: int,
             MODEL_ARIMA: base_price + arima_delta,
             MODEL_MONTE_CARLO: base_price + mc_delta,
         }, ts)
-        tracker.update_actuals(symbol, horizon, base_price, datetime.now(timezone.utc), tolerance_days=5)
+        tracker.update_actuals(symbol, horizon, base_price, datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------
@@ -148,25 +149,40 @@ class TestUpdateActuals:
         tracker = _make_tracker(tmp_path)
         ts = datetime.now(timezone.utc) - timedelta(days=35)  # 35 days ago, horizon 30
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc), tolerance_days=5)
+        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert n == 1
 
     def test_does_not_actualize_recent_forecasts(self, tmp_path):
         tracker = _make_tracker(tmp_path)
         ts = datetime.now(timezone.utc) - timedelta(days=10)  # only 10 days ago, horizon 30
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc), tolerance_days=5)
+        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert n == 0
 
-    def test_tolerance_window_boundary(self, tmp_path):
-        """A forecast at horizon-tolerance_days should be actualized."""
+    def test_full_horizon_required_for_actualization(self, tmp_path):
+        """A forecast is due exactly when the full nominal horizon has elapsed —
+        not early (the pre-2026-08 ``tolerance_days`` bug) and not late."""
         tracker = _make_tracker(tmp_path)
-        horizon, tol = 30, 5
-        # Made exactly (horizon - tolerance) days ago → on the boundary, should actualize
-        ts = datetime.now(timezone.utc) - timedelta(days=horizon - tol)
-        tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts)
-        n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc), tolerance_days=tol)
+        horizon = 30
+        # Made exactly `horizon` days ago -> full horizon elapsed, should actualize.
+        ts_due = datetime.now(timezone.utc) - timedelta(days=horizon)
+        tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts_due)
+        n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
         assert n == 1
+
+    def test_not_actualized_before_full_horizon_elapses(self, tmp_path):
+        """Regression test for the early-actualization bug: a forecast must
+        NOT be actualized before its full nominal horizon has elapsed, even
+        by the old default 5-day 'tolerance' window. A 30-day forecast made
+        25 days ago (the exact scenario that used to falsely actualize under
+        the removed ``tolerance_days=5`` default) must stay pending."""
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        ts_too_early = datetime.now(timezone.utc) - timedelta(days=horizon - 5)  # 25 days ago
+        tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts_too_early)
+        n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
+        assert n == 0
+        assert tracker.pending_count("AAPL", horizon) == 1
 
     def test_idempotent_already_actualized(self, tmp_path):
         tracker = _make_tracker(tmp_path)
