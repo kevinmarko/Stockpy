@@ -9,6 +9,7 @@
 # ==============================================================================
 
 import logging
+import math
 import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
@@ -261,8 +262,18 @@ class OptionsPricingRecommender:
         ATM_DELTA_TARGET = 0.50
 
         # Enforce VRP regime gate: only sell premium if true_ivr > 50, vrp > OPTIONS_VRP_THRESHOLD, vix < 30, not CREDIT EVENT
+        # `vrp is None` deliberately still SKIPS this gate (callers with no options
+        # chain to derive VRP from pass None explicitly to opt out of this one
+        # condition -- see the 3-of-4-gate callers in gui/panels/options_matrix.py,
+        # reporting/options_snapshot.py, investyo_mcp_server.py, options_ondemand.py,
+        # api/metrics_api.py). But a *computed* VRP that came back NaN (get_vrp()
+        # couldn't resolve an options-chain-derived IV) must fail closed (CONSTRAINT
+        # #6) rather than silently pass: `nan <= threshold` is always False in
+        # Python, so without this isfinite check an unmeasurable VRP looked
+        # identical to "comfortably above threshold". Matches the pattern already
+        # used correctly in execution/options_queue_builder.py::passes_premium_gate.
         sell_premium_allowed = True
-        if vrp is not None and vrp <= settings.OPTIONS_VRP_THRESHOLD:
+        if vrp is not None and (not math.isfinite(vrp) or vrp <= settings.OPTIONS_VRP_THRESHOLD):
             sell_premium_allowed = False
         if macro_dto is not None:
             vix = getattr(macro_dto, 'vix', 15.0)

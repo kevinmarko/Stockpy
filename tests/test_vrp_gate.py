@@ -80,3 +80,35 @@ def test_vrp_gate_scenarios():
     )
     assert res4["Strategy"] == "Cash"
     assert res4["Action"] == "Wait"
+
+    # Scenario 5: VRP is NaN (get_vrp() couldn't resolve an options-chain-
+    # derived IV -- common, not rare) -> fail closed, DO NOT sell premium.
+    # Regression test for the bug where `vrp is not None and vrp <= threshold`
+    # let a NaN VRP through: `nan <= threshold` is always False in Python, so
+    # the old gate treated "unmeasurable" as "comfortably above threshold".
+    res5 = recommender.generate_strategy_pricing_matrix(
+        true_ivr=80.0,
+        current_iv=0.35,
+        trend_bias=trend_bullish,
+        vrp=float("nan"),
+        macro_dto=macro_ok,
+    )
+    assert res5["Strategy"] == "Cash"
+    assert res5["Action"] == "Wait"
+
+    # Scenario 6: VRP is None (no options chain available to derive VRP from
+    # at all -- distinct from Scenario 5's "we tried and it came back NaN")
+    # deliberately still SKIPS the VRP leg of the gate, unchanged from before
+    # the Scenario 5 fix. This is the documented contract several callers
+    # (gui/panels/options_matrix.py, reporting/options_snapshot.py,
+    # investyo_mcp_server.py, options_ondemand.py, api/metrics_api.py) rely on
+    # when they have no options chain to compute a real VRP from.
+    res6 = recommender.generate_strategy_pricing_matrix(
+        true_ivr=80.0,
+        current_iv=0.35,
+        trend_bias=trend_bullish,
+        vrp=None,
+        macro_dto=macro_ok,
+    )
+    assert res6["Strategy"] == "Put Credit Spread"
+    assert res6["Action"] == "Sell to Open"
