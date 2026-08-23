@@ -1203,16 +1203,39 @@ async def get_experiment(exp_id: str):
         raise HTTPException(status_code=404, detail="Not found")
     return exp
 
+
+from pydantic import BaseModel, Field
+class ArmRequest(BaseModel):
+    name: str
+    overrides: Dict[str, float]
+
+class CreateExperimentRequest(BaseModel):
+    id: str
+    name: str
+    unit: str
+    arms: List[ArmRequest]
+    allocation: List[float]
+    min_samples_per_arm: Optional[int] = None
+
 @app.post("/pilots/experiments", dependencies=[Depends(require_command_token)])
-async def create_experiment():
+async def create_experiment(req: CreateExperimentRequest):
     if not settings.EXPERIMENTS_WRITES_ENABLED:
         raise HTTPException(status_code=403, detail="Experiments writes disabled")
-    return {"status": "created"}
+    from pilots.experiments import create_experiment as create_exp
+    min_samples = req.min_samples_per_arm or settings.EXPERIMENT_DEFAULT_MIN_SAMPLES
+    try:
+        exp = create_exp(req.id, req.name, req.unit, req.arms, req.allocation, min_samples)
+        return {"status": "created", "experiment": exp}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.post("/pilots/experiments/{exp_id}/stop", dependencies=[Depends(require_command_token)])
 async def stop_experiment(exp_id: str):
     if not settings.EXPERIMENTS_WRITES_ENABLED:
         raise HTTPException(status_code=403, detail="Experiments writes disabled")
+    from pilots.experiments import stop_experiment as stop_exp
+    stop_exp(exp_id)
     return {"status": "stopped"}
 
 

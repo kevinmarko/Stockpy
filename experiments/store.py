@@ -1,12 +1,26 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, JSON
+from sqlalchemy import Column, UniqueConstraint, Integer, String, Float, DateTime, JSON
 from sqlalchemy.orm import declarative_base, sessionmaker
 from db_config import resolve_database_url, create_db_engine, create_readonly_db_engine
 
 Base = declarative_base()
 
+
+class ExperimentConfig(Base):
+    __tablename__ = 'experiments'
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    unit = Column(String, nullable=False)
+    arms = Column(JSON, nullable=False)
+    allocation = Column(JSON, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    min_samples_per_arm = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="running")
+
 class ExperimentRun(Base):
     __tablename__ = "experiment_runs"
+    __table_args__ = (UniqueConstraint('experiment_id', 'cycle_date', 'symbol', name='uq_experiment_run'),)
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     experiment_id = Column(String, nullable=False, index=True)
     cycle_date = Column(String, nullable=False)
@@ -16,6 +30,8 @@ class ExperimentRun(Base):
 
 class ExperimentObservation(Base):
     __tablename__ = "experiment_observations"
+    __table_args__ = (UniqueConstraint('experiment_id', 'cycle_date', 'symbol', 'arm', name='uq_experiment_obs'),)
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     experiment_id = Column(String, nullable=False, index=True)
     cycle_date = Column(String, nullable=False)
