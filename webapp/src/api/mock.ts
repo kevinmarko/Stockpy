@@ -7,7 +7,9 @@
  *  - `value-quality` has curve:null ("no backtest series yet"), never a fake line.
  */
 
-import { ApiError, ForecastBackfillConflictError } from "./types";
+import { ApiError, ForecastBackfillConflictError,
+  ExperimentsResponse,
+} from "./types";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -8338,6 +8340,58 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
+  getExperiments: async (): Promise<ExperimentsResponse> => {
+    return {
+      experiments: [
+        {
+          id: "exp-1",
+          name: "Momentum Threshold Tuning",
+          description: "Testing a higher momentum threshold for entry.",
+          state: "running",
+          created_at: "2026-08-20T10:00:00Z",
+          updated_at: "2026-08-21T10:00:00Z",
+          reason: null,
+          arms: [
+            { id: "control", name: "Control (Current)", weight: 50 },
+            { id: "treatment", name: "High Threshold", weight: 50 },
+          ],
+          comparisons: [
+            {
+              metric_name: "Sharpe Ratio",
+              control_value: 1.2,
+              treatment_value: 1.5,
+              relative_delta_pct: 25.0,
+              p_value: 0.04,
+              significant: true,
+            },
+            {
+              metric_name: "Max Drawdown",
+              control_value: -0.15,
+              treatment_value: -0.18,
+              relative_delta_pct: -20.0,
+              p_value: 0.12,
+              significant: false,
+            },
+          ],
+        },
+        {
+          id: "exp-2",
+          name: "New Factor: Value Z-Score",
+          description: "Adding Value Z-Score to the multi-factor model.",
+          state: "insufficient_data",
+          created_at: "2026-08-22T10:00:00Z",
+          updated_at: null,
+          reason: "Not enough trades observed to achieve statistical significance.",
+          arms: [
+            { id: "control", name: "Control (Multi-factor)", weight: 50 },
+            { id: "treatment", name: "Multi-factor + Value Z", weight: 50 },
+          ],
+          comparisons: null, // honest null when insufficient_data
+        }
+      ]
+    };
+  },
+
   async health() {
     return delay({ status: "ok", mock: true }, 60);
   },

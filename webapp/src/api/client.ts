@@ -213,6 +213,7 @@ import type {
   BrokerFailoverResponse,
   SecRule606ReportResponse,
   CircuitBreakerStatusResponse,
+  ExperimentsResponse
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -429,6 +430,7 @@ async function http<T>(
 
 // ---- Live client (shape-identical to mockApi) ----
 const liveApi = {
+  getExperiments: () => http<ExperimentsResponse>("/settings/experiments"),
   health: () => http<{ status: string }>("/health"),
   listPilots: () => http<PilotSummary[]>("/pilots"),
   getPilot: (id: string) =>

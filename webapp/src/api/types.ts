@@ -5651,3 +5651,40 @@ export interface CircuitBreakerStatusResponse {
 
 
 
+
+// ============================================================================
+// Experiment Framework Types
+// ============================================================================
+
+export interface ExperimentArm {
+  id: string;
+  name: string;
+  weight: number; // percentage allocation
+}
+
+export interface ExperimentComparison {
+  metric_name: string;
+  control_value: number | null;
+  treatment_value: number | null;
+  relative_delta_pct: number | null;
+  p_value: number | null;
+  significant: boolean | null;
+}
+
+export type ExperimentState = "running" | "paused" | "completed" | "insufficient_data";
+
+export interface Experiment {
+  id: string;
+  name: string;
+  description: string;
+  state: ExperimentState;
+  arms: ExperimentArm[];
+  comparisons: ExperimentComparison[] | null;
+  reason: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface ExperimentsResponse {
+  experiments: Experiment[];
+}

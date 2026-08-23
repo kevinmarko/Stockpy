@@ -8039,3 +8039,25 @@ def get_pilots_execution_sec_606_report(
     reporter = SecRule606Reporter()
     return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
 
+
+@app.get("/pilots/experiments")
+async def get_experiments():
+    from pilots.experiments import list_experiments
+    return {"experiments": list_experiments()}
+
+@app.get("/pilots/experiments/{exp_id}")
+async def get_experiment(exp_id: str):
+    from pilots.experiments import get_experiment_by_id
+    return get_experiment_by_id(exp_id)
+
+@app.post("/pilots/experiments")
+async def create_experiment():
+    if not settings.EXPERIMENTS_WRITES_ENABLED:
+        raise HTTPException(status_code=403, detail="Experiments writes disabled")
+    return {"status": "created"}
+
+@app.post("/pilots/experiments/{exp_id}/stop")
+async def stop_experiment(exp_id: str):
+    if not settings.EXPERIMENTS_WRITES_ENABLED:
+        raise HTTPException(status_code=403, detail="Experiments writes disabled")
+    return {"status": "stopped"}

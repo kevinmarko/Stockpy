@@ -125,6 +125,11 @@ def validate_daemon_shutdown_timeout(v: float) -> float:
 
 
 class Settings(BaseSettings):
+    EXPERIMENTS_ENABLED: bool = Field(default=False, description="Enable A/B testing framework")
+    EXPERIMENTS_WRITES_ENABLED: bool = Field(default=True, description="Enable writes to experiments via API")
+    EXPERIMENT_DEFAULT_MIN_SAMPLES: int = Field(default=30, description="Default minimum samples per arm for experiments")
+    EXPERIMENT_MAX_CONCURRENT: int = Field(default=3, description="Maximum concurrent experiments")
+
     """Single source of truth for runtime configuration.
 
     Values are resolved (in precedence order) from: explicit init kwargs,
