@@ -147,7 +147,7 @@ def test_execute_strategy_directives_deduplication():
 # that mutate its ``.model``/``.model_path``/``.n_samples`` MUST restore the
 # original state afterward so they don't leak into unrelated tests (including
 # the ones above, which rely on the singleton staying at its untouched,
-# ``self.model is None`` default so the honest 0.65/1.0x fallback keeps their
+# ``self.model is None`` default so the honest 0.50/1.0x fallback keeps their
 # assertions order-independent).
 
 @pytest.fixture
@@ -178,8 +178,6 @@ def _train_synthetic_meta_labeler(model_path: Path):
                 ivr=60.0 + np.random.uniform(0, 30),
                 vrp=0.03 + np.random.uniform(0, 0.03),
                 vix=18.0 + np.random.uniform(0, 5),
-                trend_bias=1.0,
-                target_dte=35,
                 credit_to_width_ratio=0.30,
                 short_delta=0.25,
                 outcome_win=1,
@@ -191,8 +189,6 @@ def _train_synthetic_meta_labeler(model_path: Path):
                 ivr=10.0 + np.random.uniform(0, 15),
                 vrp=-0.02 + np.random.uniform(0, 0.01),
                 vix=35.0 + np.random.uniform(0, 10),
-                trend_bias=-1.0,
-                target_dte=35,
                 credit_to_width_ratio=0.15,
                 short_delta=0.45,
                 outcome_win=0,
@@ -332,7 +328,7 @@ def test_executor_construction_no_model_file_is_honest_and_non_crashing(
     reset_meta_labeler_singleton, tmp_path
 ):
     """A fresh install with no trained model on disk must not crash construction,
-    and must keep the honest 0.65/1.0x fallback (CONSTRAINT #6)."""
+    and must keep the honest 0.50/1.0x fallback (CONSTRAINT #6)."""
     singleton = reset_meta_labeler_singleton
     singleton.model = None
     singleton.model_path = tmp_path / "does_not_exist.pkl"
@@ -344,7 +340,7 @@ def test_executor_construction_no_model_file_is_honest_and_non_crashing(
         OptionsPaperExecutor(store=store)  # must not raise
 
     assert singleton.model is None
-    assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.65
+    assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.50
     assert singleton.get_sizing_multiplier(0.65) == 1.0
 
 

@@ -275,6 +275,17 @@ class OptionsMetaLabeler:
         """
         Evaluates an actionable options directive and returns ML score metadata.
         """
+        if self.model is None:
+            # Fallback for missing/undeployable model: fail closed (1.0x, approved)
+            return {
+                "strategy": directive.get("strategy", ""),
+                "symbol": directive.get("symbol", ""),
+                "prob_win": 0.50,
+                "sizing_multiplier": 1.0,
+                "approved": True,
+                "trained_samples": 0,
+            }
+
         prob = self.predict_probability(directive)
         sizing_mult = self.get_sizing_multiplier(prob, min_confidence=min_confidence)
         approved = sizing_mult > 0.0

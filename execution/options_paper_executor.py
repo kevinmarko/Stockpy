@@ -936,8 +936,9 @@ class OptionsPaperExecutor:
                     .all()
                 )
                 leg_symbols = [cl.symbol.upper() for cl in child_legs]
-                parts = eco.symbol.split()
-                ticker = parts[-1].upper() if len(parts) > 1 else (leg_symbols[0].split()[0] if leg_symbols else "UNKNOWN")
+                # DEPRECATED: extracting ticker from f"{strategy_name} {symbol}" is deprecated.
+                # Use the clean symbol column now that strategy_id exists.
+                ticker = eco.symbol.split()[-1].upper() if " " in eco.symbol else eco.symbol.upper()
 
                 if not leg_symbols:
                     continue
