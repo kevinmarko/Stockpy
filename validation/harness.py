@@ -919,6 +919,20 @@ class StrategyValidationHarness:
         # (but not exactly zero) max_dd is floating-point noise from a
         # constant/near-constant compounded equity curve, not a real drawdown;
         # dividing by it would explode into an absurd ratio.
+        #
+        # NOTE ON CONVENTION: this is an ARITHMETIC-MEAN-annualized Calmar
+        # (mean(returns) * freq / max_dd), matching this function's own
+        # Sharpe/Sortino annualization convention above (mean * freq /
+        # (std * sqrt(freq))-style scaling) for internal consistency within
+        # this file. It is NOT directly comparable to
+        # evaluation_engine.py::calculate_equity_curve_metrics's Calmar, which
+        # uses compounded CAGR / abs(max_drawdown) -- the textbook definition.
+        # Arithmetic-mean annualization and CAGR annualization diverge for any
+        # non-trivial return series (arithmetic mean overstates the true
+        # compounded growth rate for a volatile series, a Jensen's-inequality-
+        # style effect), so a "Calmar" reported here and one reported by
+        # evaluation_engine.py for the SAME underlying returns are not
+        # cross-comparable numbers, even though both are internally correct.
         calmar = (full_returns.mean() * inferred_freq / max_dd) if max_dd >= 1e-12 else np.nan
         
         # Turnover & Trade metrics
@@ -953,6 +967,11 @@ class StrategyValidationHarness:
             # mean_oos_return is validation/metrics.py::run_cpcv_evaluation's
             # unconditional per-path-mean-return aggregate, purpose-built to
             # mirror full_returns.mean() for exactly this calculation.
+            #
+            # Same arithmetic-mean-annualized Calmar convention as the
+            # full-sample calculation above (see that comment) -- still NOT
+            # directly comparable to evaluation_engine.py's CAGR-based Calmar
+            # for the same underlying returns.
             calmar = (
                 (cpcv_results["mean_oos_return"] * inferred_freq / max_dd)
                 if (not np.isnan(max_dd) and max_dd >= 1e-12) else np.nan
