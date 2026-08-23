@@ -1,61 +1,34 @@
-# Pilots / Paper-Trading Data Integrity, Learning Loop, and A/B Framework
+# PR 1 — fix-paper-fill-price-guard (safety, land first)
 
-## Context
-The paper-trading learning loop does not exist because `PaperAccountStore` has no closed-trade record and no strategy column. This prevents Kelly warm-up, A/B testing, and proper evaluation.
+## Goal
+Implement strict guardrails to prevent zero or missing option leg prices from booking free positions in the `PaperAccountStore`. Add validations to dispersion basket parsing, purge existing corrupt positions, and remove fabricated spot prices from volatility mispricing.
 
 ## Proposed Changes
-This plan consists of 5 PRs, strictly sequenced.
 
-### PR 1 — fix-paper-fill-price-guard (safety, land first)
-- [MODIFY] data/paper_account_store.py: Replace `float(leg.get("fill_price", 0.0))` with a required, validated read. Reject atomic order on zero price.
-- [MODIFY] pilots/dispersion_trading.py: Validate client-supplied basket dict.
-- [NEW] scripts/purge_corrupt_paper_options.py: Script to purge zero-price options.
-- [MODIFY] pilots/vol_mispricing.py: Remove hardcoded spot price fabrications.
-- [MODIFY] tests/test_paper_account_store.py: Add reject-on-zero-price tests.
-- [NEW] tests/test_purge_corrupt_paper_options.py: Test for purge script.
-- [MODIFY] tests/test_dispersion_trading.py: Test for basket validation.
-- [MODIFY] tests/test_vol_mispricing.py: Add test for degraded spot.
-- [MODIFY] docs/architecture/execution.md, docs/known_issues/paper_options_zero_fill_price.md, CLAUDE.md: Docs updates.
+### `data/paper_account_store.py`
+- **[MODIFY]** `apply_fill`, `apply_multi_leg_fill`, and `apply_roll_fill`: Add pre-validation blocks to enforce `fill_price > 0`. A missing, non-numeric, or `<= 0` `fill_price` will reject the entire atomic order (Constraint #6), returning `False` and logging a `REJECTED` order row with the appropriate metadata (strategy_id, pilot_id, etc.). Replace the current `leg.get("fill_price", 0.0)` in the actual execution loops with a strict read (since it's pre-validated).
 
-### PR 2 — paper-trade-strategy-attribution
-- [MODIFY] data/paper_account_store.py: Add columns `strategy_id`, `pilot_id`, `experiment_arm`, `leg_group_id`, `order_kind`.
-- [MODIFY] pilots/*.py & execution/*.py: Thread real `strategy_id` through all writers.
-- [MODIFY] execution/options_paper_executor.py: Migrate from symbol string hack to column.
-- [MODIFY] tests/*: Add attribution assertions.
+### `pilots/dispersion_trading.py`
+- **[MODIFY]** `execute_dispersion_basket` (lines 1026-1031): Intercept client-supplied `basket` dicts before passing to `DispersionBasket(**basket)`. Validate that every leg carries a positive `fill_price` and a strike consistent with a real resolved spot. On failure, refuse execution and return `{"ok": False, "error": ...}` instead of falling back to a fabricated empty basket.
 
-### PR 3 — paper-closed-trades-and-transactions-bridge
-- [MODIFY] data/paper_account_store.py: Add `paper_closed_trades` table. Write to it on flatten.
-- [MODIFY] transactions_store.py: Bridge closed trades to existing `trades` table.
-- [MODIFY] config.py: Add `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED=True`.
-- [MODIFY] ml/training_data.py, pipeline/production_steps.py: Read from closed trades, close train/serve skew.
-- [NEW] tests/test_paper_closed_trades.py and other tests.
-- [MODIFY] docs/*: Documentation updates.
+### `pilots/vol_mispricing.py`
+- **[MODIFY]** `evaluate_vol_mispricing` (line 1355): Remove the fallback `spot_price = 500.0 if sym == "SPY" else (130.0 if sym == "NVDA" else 150.0)`. Allow `spot_price` to remain `None` so the honest failure path runs, matching the `options_gex.py` standard.
 
-### PR 4 — options-meta-labeler-honest-gate
-- [MODIFY] api/pilots_api.py: Rewrite `/pilots/options/meta-model/retrain` to use real paper closes.
-- [MODIFY] ml/options_meta_labeler.py: Purged walk-forward split.
-- [MODIFY] ml/registry.yaml: Add real CPCV DSR/PBO.
-- [MODIFY] execution/options_paper_executor.py: Fail closed when model absent.
-- [MODIFY] scripts/retrain_models.py: Add OptionsMetaLabeler.
-- [MODIFY] validation/options_harness.py: Fix fail-open gates.
-- [MODIFY] OPTIONS_DESK_DEPLOYABILITY_GATES: Register missing strategies.
-- [NEW] tests/test_options_harness_gate_honesty.py and others.
-- [MODIFY] docs/*: Documentation updates.
+### `tests/` (Test Additions)
+- **[MODIFY]** `tests/test_paper_account_store.py`: Add tests asserting that a zero/missing price rejects the atomic order without partial leg writes.
+- **[MODIFY]** `tests/test_dispersion_trading.py`: Add tests for client-supplied basket validation.
+- **[MODIFY]** `tests/test_vol_mispricing.py`: Add coverage for the removed spot price fabrication.
+- **[NEW]** `tests/test_purge_corrupt_paper_options.py`: Test the purge script's logic.
 
-### PR 5 — experiment-framework (A/B testing)
-- [NEW] experiments/*: `registry.py`, `assignment.py`, `store.py`, `compare.py`.
-- [MODIFY] validation/multiple_testing.py: Integrate for DSR.
-- [MODIFY] config.py: Add `EXPERIMENTS_ENABLED=False` and others.
-- [MODIFY] api/pilots_api.py: Add experiment endpoints.
-- [NEW] webapp/src/screens/Experiments.tsx and related files.
-- [NEW] tests/test_experiments_registry.py and others.
-- [NEW] docs/architecture/experiments.md and others.
+### `scripts/purge_corrupt_paper_options.py`
+- **[EXECUTE]** The script will be run with `--apply` (with a prior backup of `quant_platform.db`) to delete corrupt option rows (`avg_entry_price <= 0`) from `paper_positions`, reverse the corresponding cash impact, and leave valid positions untouched.
+
+### Docs
+- **[MODIFY]** `CLAUDE.md` and `docs/architecture/execution.md` to note the paper-broker fill-price validation behavior.
+- **[NEW]** `docs/known_issues/paper_options_zero_fill_price.md`: Write up the known issue and its resolution.
+
+## Open Questions
+- None. This plan adheres strictly to the exact requirements laid out in the PR 1 instructions.
 
 ## User Review Required
-> [!IMPORTANT]
-> Since this is a 5-PR rollout, please review the breakdown. We will start with PR 1 in the new worktree `Stockpy-live-agent4` on branch `fix-paper-fill-price-guard`.
-
-## Verification Plan
-1. `pytest` for all modified test files.
-2. `make verify` before final PR in each pair.
-3. specific steps per PR (e.g. running purge script, executing paper round trip).
+Please review the plan to confirm we are ready to implement the `fix-paper-fill-price-guard` changes.

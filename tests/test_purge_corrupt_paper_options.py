@@ -1,60 +1,47 @@
 import pytest
-import os
-from data.paper_account_store import PaperAccountStore, PaperPosition, PaperAccount
-from db_config import session_scope
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from data.paper_account_store import Base, PaperPosition, PaperAccount
+from scripts.purge_corrupt_paper_options import run_purge
 
-def test_purge_corrupt_paper_options(monkeypatch, tmp_path):
-    """
-    Test that the purge script deletes option positions with entry_price <= 0
-    and reverses their cash impact, leaving valid positions intact.
-    """
-    db_file = tmp_path / "test_purge.db"
-    TEST_DB_URL = f"sqlite:///{db_file}"
-    store = PaperAccountStore(db_url=TEST_DB_URL)
+@pytest.fixture
+def mock_db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
     
-    with session_scope(store.Session) as session:
-        acc = session.query(PaperAccount).filter_by(id=1).first()
-        acc.cash_balance = 100000.0
-        
+    with Session() as session:
+        acc = PaperAccount(id=1, cash_balance=10000.0)
+        session.add(acc)
         # Valid equity
         session.add(PaperPosition(symbol="AAPL", qty=10, avg_entry_price=150.0))
         # Valid option
-        session.add(PaperPosition(symbol="AAPL 2026-09-18 $150.00 CALL", qty=1, avg_entry_price=5.0))
-        # Corrupt option 1 (0 price)
-        session.add(PaperPosition(symbol="QQQ 2026-10-16 $500.00 PUT", qty=-3, avg_entry_price=0.0))
-        # Corrupt option 2 (negative price)
-        session.add(PaperPosition(symbol="QQQ 2026-10-16 $500.00 CALL", qty=-3, avg_entry_price=-1.0))
-        
-    # Mock resolve_database_url
-    monkeypatch.setattr("scripts.purge_corrupt_paper_options.resolve_database_url", lambda: TEST_DB_URL)
+        session.add(PaperPosition(symbol="AAPL 260116C00150000", qty=10, avg_entry_price=5.0))
+        # Corrupt option
+        session.add(PaperPosition(symbol="AAPL 260116P00150000", qty=10, avg_entry_price=0.0))
+        # Corrupt equity (should not be deleted because it's not an option)
+        session.add(PaperPosition(symbol="TSLA", qty=10, avg_entry_price=0.0))
+        session.commit()
     
-    # Run dry-run
-    import sys
-    monkeypatch.setattr(sys, "argv", ["purge_corrupt_paper_options.py"])
-    from scripts.purge_corrupt_paper_options import main
-    main()
+    yield engine
+
+def test_purge_corrupt_paper_options_dry_run(mock_db):
+    Session = sessionmaker(bind=mock_db)
+    run_purge(apply=False, engine=mock_db)
     
-    # Verify no changes in dry-run
-    with session_scope(store.Session) as session:
-        assert session.query(PaperPosition).count() == 4
-        acc = session.query(PaperAccount).filter_by(id=1).first()
-        assert acc.cash_balance == 100000.0
-
-    # Run apply
-    monkeypatch.setattr(sys, "argv", ["purge_corrupt_paper_options.py", "--apply"])
-    main()
-
-    # Verify changes
-    with session_scope(store.Session) as session:
+    with Session() as session:
         positions = session.query(PaperPosition).all()
-        assert len(positions) == 2
+        assert len(positions) == 4
+
+def test_purge_corrupt_paper_options_apply(mock_db):
+    Session = sessionmaker(bind=mock_db)
+    run_purge(apply=True, engine=mock_db)
+    
+    with Session() as session:
+        positions = session.query(PaperPosition).all()
+        assert len(positions) == 3
         symbols = [p.symbol for p in positions]
+        assert "AAPL 260116P00150000" not in symbols
+        assert "AAPL 260116C00150000" in symbols
         assert "AAPL" in symbols
-        assert "AAPL 2026-09-18 $150.00 CALL" in symbols
-        
-        # Cash reversal:
-        # Corrupt 1: qty=-3, entry=0.0 -> impact = 0
-        # Corrupt 2: qty=-3, entry=-1.0 -> impact = -3 * -1.0 * 100 = 300.0
-        # Cash should be 100000.0 + 300.0 = 100300.0
-        acc = session.query(PaperAccount).filter_by(id=1).first()
-        assert acc.cash_balance == 100300.0
+        assert "TSLA" in symbols

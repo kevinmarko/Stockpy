@@ -1026,44 +1026,29 @@ def execute_dispersion_trade(
         )
     elif isinstance(basket, dict):
         try:
-            idx_sym = basket.get("index_symbol", idx_sym)
-            constituents = basket.get("constituent_symbols", [])
-            if not constituents and idx_sym in INDEX_CONSTITUENTS_MAP:
-                constituents = INDEX_CONSTITUENTS_MAP[idx_sym]
-                
-            spot_map, _, _ = _source_real_dispersion_inputs(idx_sym, constituents, {})
-            
-            valid = True
-            all_legs = []
-            all_legs.extend(basket.get("index_leg_requests", []))
-            for legs in basket.get("constituent_leg_requests", {}).values():
-                all_legs.extend(legs)
-                
-            for leg in all_legs:
+            def _validate_leg(leg: Dict[str, Any], context: str) -> None:
                 price = float(leg.get("fill_price", 0.0))
                 if price <= 0.0:
-                    valid = False
-                    break
-                    
-                sym = leg.get("symbol", "")
-                parts = sym.split()
-                if len(parts) >= 4 and "$" in parts[2]:
-                    underlying = parts[0]
-                    try:
-                        strike = float(parts[2].replace("$", ""))
-                        real_spot = float(spot_map.get(underlying, 0.0))
-                        if real_spot <= 0.0 or strike < 0.2 * real_spot or strike > 5.0 * real_spot:
-                            valid = False
-                            break
-                    except ValueError:
-                        pass
-                        
-            if valid:
-                basket = DispersionBasket(**basket)
-            else:
-                basket = None
-        except Exception:
-            basket = None
+                    raise ValueError(f"Invalid fill_price {price} in {context}")
+                strike = float(leg.get("strike", 0.0))
+                if strike <= 0.0:
+                    raise ValueError(f"Invalid strike {strike} in {context}")
+
+            for leg in basket.get("index_leg_requests", []):
+                _validate_leg(leg, "index leg")
+            for sym, legs in basket.get("constituent_leg_requests", {}).items():
+                for leg in legs:
+                    _validate_leg(leg, f"constituent {sym} leg")
+
+            idx_sym = basket.get("index_symbol", idx_sym)
+            basket = DispersionBasket(**basket)
+        except Exception as e:
+            return {
+                "ok": False,
+                "index_symbol": idx_sym,
+                "message": f"Invalid client-supplied dispersion basket: {str(e)}. Refusing to execute a trade priced off invalid/fabricated inputs.",
+                "basket": None
+            }
 
     if basket is None:
         # build_dispersion_basket refused (no real spot/IV data for the index or a

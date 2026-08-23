@@ -1,7 +1,6 @@
 from unittest.mock import patch
-
 import pytest
-from data.paper_account_store import PaperAccountStore
+from data.paper_account_store import PaperAccountStore, PaperAccount, PaperPosition, PaperOrder
 from execution.broker_base import OrderStatus
 
 # We will use an in-memory SQLite DB for tests
@@ -111,7 +110,8 @@ def test_readonly_degradation(readonly_store):
     assert len(orders) == 0
 
 def test_reset_account_readonly():
-    from data.paper_account_store import PaperAccountStore
+    from data.paper_account_store import PaperAccountStore, PaperOrder
+    from execution.broker_base import OrderStatus
     store = PaperAccountStore(readonly=True)
     with pytest.raises(RuntimeError, match="Cannot reset account in readonly mode"):
         store.reset_account()
@@ -317,50 +317,37 @@ def test_settle_expired_options(store):
     assert len(store.get_open_positions()) == 0
 
 
-def test_apply_fill_reject_zero_price(store):
-    """Fills with zero or negative price must be rejected."""
-    success = store.apply_fill("client_order_zero", "AAPL", "buy", 10.0, 0.0, 0.0)
-    assert success is False
-    orders = store.get_orders()
-    assert len(orders) == 1
-    assert orders[0].status == OrderStatus.REJECTED
 
-def test_apply_multi_leg_reject_zero_price(store):
-    """Multi-leg orders with any zero price leg must be rejected entirely."""
+def test_apply_fill_zero_price_rejected(store):
+    store.reset_account(starting_cash=10000.0)
+    assert not store.apply_fill("ord_invalid", "SPY 260116C00500000", "BUY", 1.0, 0.0)
+    assert not store.apply_fill("ord_invalid2", "SPY 260116C00500000", "BUY", 1.0, -1.0)
+    
+    with store.Session() as session:
+        orders = session.query(PaperOrder).all()
+        assert len(orders) == 2
+        assert all(o.status == OrderStatus.REJECTED for o in orders)
+
+def test_apply_multi_leg_fill_zero_price_rejected(store):
+    store.reset_account(starting_cash=10000.0)
     legs = [
-        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 500.0},
-        {"symbol": "AAPL 2026-09-18 $155.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 0.0},
+        {"symbol": "SPY 260116C00500000", "side": "BUY", "qty": 1.0, "fill_price": 5.0},
+        {"symbol": "SPY 260116P00500000", "side": "SELL", "qty": 1.0, "fill_price": 0.0} # Invalid
     ]
-    success = store.apply_multi_leg_fill(
-        client_order_id="multi_zero",
-        symbol="AAPL",
-        strategy_name="Bull Call Spread",
-        contracts=1,
-        legs=legs,
-        net_cash_impact=-500.0,
-        commission_and_fees=1.30,
-    )
-    assert success is False
-    orders = store.get_orders()
-    assert len(orders) == 1
-    assert orders[0].status == OrderStatus.REJECTED
+    assert not store.apply_multi_leg_fill("multi_invalid", "SPY", "STRADDLE", 1, legs, net_cash_impact=-500.0, commission_and_fees=1.3)
+    
+    with store.Session() as session:
+        orders = session.query(PaperOrder).filter_by(client_order_id="multi_invalid").all()
+        assert len(orders) == 1
+        assert orders[0].status == OrderStatus.REJECTED
 
-def test_apply_roll_fill_reject_zero_price(store):
-    """Roll orders with any zero price leg must be rejected entirely."""
-    close_legs = [
-        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 0.0},
-    ]
-    open_legs = [
-        {"symbol": "AAPL 2026-10-16 $150.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 600.0},
-    ]
-    success = store.apply_roll_fill(
-        client_order_id="roll_zero",
-        symbol="AAPL",
-        close_legs=close_legs,
-        open_legs=open_legs,
-        contracts=1,
-    )
-    assert success is False
-    orders = store.get_orders()
-    assert len(orders) == 1
-    assert orders[0].status == OrderStatus.REJECTED
+def test_apply_roll_fill_zero_price_rejected(store):
+    store.reset_account(starting_cash=10000.0)
+    close_legs = [{"symbol": "SPY 260116C00400000", "side": "SELL", "qty": 1.0, "fill_price": 0.0}] # Invalid
+    open_legs = [{"symbol": "SPY 260116C00500000", "side": "BUY", "qty": 1.0, "fill_price": 5.0}]
+    assert not store.apply_roll_fill("roll_invalid", "SPY", close_legs, open_legs)
+    
+    with store.Session() as session:
+        orders = session.query(PaperOrder).filter_by(client_order_id="roll_invalid").all()
+        assert len(orders) == 1
+        assert orders[0].status == OrderStatus.REJECTED

@@ -466,3 +466,38 @@ def test_dispersion_trading_ast_import_safety():
             mod_name = node.module or ""
             for forbidden in forbidden_modules:
                 assert forbidden not in mod_name, f"Forbidden from-import found: {mod_name}"
+
+def test_execute_dispersion_basket_invalid_client_basket():
+    basket_dict = {
+        "index_symbol": "SPY",
+        "constituent_symbols": ["AAPL"],
+        "target_dte": 30,
+        "expiration": "2026-08-21",
+        "is_long_dispersion": True,
+        "index_contracts": 1,
+        "index_vega": 100.0,
+        "basket_vega": -100.0,
+        "vega_neutrality_ratio": -1.0,
+        "vega_imbalance_pct": 0.0,
+        "implied_correlation": 0.5,
+        "realized_correlation": 0.4,
+        "correlation_spread": 0.1,
+        "index_leg_requests": [
+            {"symbol": "SPY 260821C00500000", "side": "buy", "qty": 1, "strike": 500.0, "fill_price": 0.0} # Invalid fill_price
+        ],
+        "constituent_leg_requests": {},
+        "index_net_cash_impact": -5.0,
+        "constituent_net_cash_impact": 0.0,
+        "total_net_cash_impact": -5.0,
+        "total_commission": 0.65,
+        "constituent_allocations": {}
+    }
+    
+    from pilots.dispersion_trading import execute_dispersion_trade
+    res = execute_dispersion_trade(
+        basket=basket_dict,
+        store=None,
+        index_symbol="SPY"
+    )
+    assert not res["ok"]
+    assert "Invalid client-supplied dispersion basket: Invalid fill_price 0.0 in index leg" in res["message"]

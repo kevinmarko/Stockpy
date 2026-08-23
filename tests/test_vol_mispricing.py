@@ -612,3 +612,29 @@ def test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly():
 
     assert res["ok"] is False
     assert store.get_open_positions() == []
+
+def test_evaluate_vol_mispricing_no_spot_price_fabrication(monkeypatch):
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+    
+    # Mock data providers
+    class MockMarketProvider:
+        def get_latest_quote(self, sym):
+            raise Exception("No quote")
+            
+        def fetch_historical_volatility(self, sym, window):
+            return 0.15
+            
+    class MockOptionsProvider:
+        def fetch_options_chain(self, sym, exp=None):
+            return None
+            
+    res = get_volatility_mispricing_data(
+        symbol="SPY", 
+        market_provider=MockMarketProvider(), 
+        options_provider=MockOptionsProvider()
+    )
+    
+    # If the spot_price was fabricated as 500.0, the calculation would continue and fail later or return a surface
+    # With fabrication removed, spot_price degrades to None, which causes downstream logic to fail honestly or return empty
+    assert not res.get("ok", False)
+    assert "No option chain contracts retrieved" in res.get("message", "")

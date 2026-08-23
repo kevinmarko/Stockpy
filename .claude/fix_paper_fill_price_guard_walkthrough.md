@@ -1,44 +1,36 @@
-# PR 1 Walkthrough: Fix Paper Fill Price Guard
+# Walkthrough: Paper-Trading Data Integrity & Strategy Attribution Audit Fixes
 
-We have successfully implemented the first PR of the 5-PR rollout plan, addressing the zero fill price bug in paper trading.
+## Overview
+This walkthrough summarizes the integration fixes applied to the `data/paper_account_store.py` module after an independent multi-agent audit uncovered edge-case bugs between PR 1 (Safety/Validation) and PR 2 (Strategy Attribution).
 
 ## Changes Made
+1. **Threaded Attribution in Price Guard Rejections**:
+   - Updated the `except (ValueError, TypeError):` blocks inside `apply_fill`, `apply_multi_leg_fill`, and `apply_roll_fill`.
+   - The rejected orders are now logged with the full strategy metadata signature (`strategy_id`, `pilot_id`, `experiment_arm`, `leg_group_id`, `order_kind`) passed to `_insert_order`. This ensures that even rejected orders contribute accurately to the RL learning loop.
 
-1. **`data/paper_account_store.py`**:
-   - Added explicit `fill_price > 0.0` validation to `apply_fill`, `apply_multi_leg_fill`, and `apply_roll_fill`.
-   - The validation fails closed (Constraint #6), raising a `ValueError` and rejecting the entire atomic order if any leg has a missing or non-positive price.
-2. **`pilots/dispersion_trading.py`**:
-   - Implemented strict client-side validation in `build_dispersion_basket` to ensure all supplied legs have a positive `fill_price` and valid strike prices relative to the spot price.
-3. **`pilots/vol_mispricing.py`**:
-   - Removed hardcoded spot price fabrications (`$500.00` for SPY, `$150.00` for others), adhering to Constraint #4 ("Refuse rather than fabricate").
-4. **`scripts/purge_corrupt_paper_options.py`**:
-   - Created a CLI tool to scan the SQLite database, identify corrupt options positions with `entry_price <= 0`, delete them, and reverse their residual cash impact.
-5. **Documentation**:
-   - Added `docs/known_issues/paper_options_zero_fill_price.md` detailing the incident, root cause, and mitigation.
-   - Updated `docs/architecture/execution.md` to document the new `fill_price` guard in `PaperAccountStore`.
-   - Updated `CLAUDE.md` to record the Constraint #4 and #6 fixes for this feature.
-6. **Tests**:
-   - Added new unit tests in `tests/test_paper_account_store.py` for zero-price rejection.
-   - Created `tests/test_purge_corrupt_paper_options.py` to verify the DB cleanup script.
-   - All tests pass, and a dry-run of the purge script successfully identifies corrupt positions.
+2. **Added 'untagged' Fallback for Migration Positions**:
+   - Added logic to the position lookups in `apply_fill`, `apply_multi_leg_fill`, and `apply_roll_fill`.
+   - If a specific `strategy_id` yields no position, the engine checks for an `'untagged'` grandfathered position. If one is found, and the side is opposing the inventory (closing out the position), the engine correctly selects the `'untagged'` position for the transaction instead of improperly creating a new opposite position under the new strategy id.
 
 ## Validation Results
+- `pytest tests/test_paper_account_store.py` passed with `17 passed in 2.66s`, confirming that core logic for both existing features and PR 1 & PR 2 features remains robust.
+- Multi-leg credit, debit, and single-leg executions continue to pass unit-level verifications.
 
-Running `pytest` shows that the new validation logic and purge script correctly handle zero and negative prices.
-```
-============================= test session starts ==============================
-...
-tests/test_paper_account_store.py .................                      [ 31%]
-tests/test_dispersion_trading.py ...............                         [ 59%]
-tests/test_vol_mispricing.py ......................                      [100%]
-...
-tests/test_purge_corrupt_paper_options.py .                              [100%]
-```
+## Phase 3: Paper-Closed Trades and Transactions Bridge
 
-The purge script successfully identified 20 corrupt options positions in a dry-run against the local database.
+We've completed the implementation of Phase 3, successfully capturing entry/exit data for paper trades that was previously destroyed on flatten operations.
 
-## Next Steps
+**Changes Made:**
+1. **Model & Configuration**: 
+   - Created `PaperClosedTrade` model with fields for tracking trade lifecycle (`trade_id`, `strategy_id`, `realized_pnl`, `close_reason`, etc.).
+   - Added the `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` setting toggle in `settings.py`.
+2. **Execution State Logic**: 
+   - Added `_record_closed_trade` helper in `PaperAccountStore` for creating closed trade records with prorated commission logic.
+   - Intercepted all positional flattening events across execution paths (`apply_fill`, `apply_multi_leg_fill`, `apply_roll_fill`, and `settle_expired_options`) to capture closed trade data before the positions are flattened or deleted.
+   - Wired up the best-effort, error-resilient transactions bridge to `transactions_store.py`, failing closed if it runs into issues (CONSTRAINT #6).
+3. **Machine Learning Pipeline (Train/Serve Skew)**:
+   - Modified `ml/training_data.py` outcome-based meta-labeling functions to natively source `paper_avg_realized_pnl_30d` and `paper_hit_rate_30d` from `paper_closed_trades` utilizing true realized data instead of the triple-barrier stand-in.
+   - Populated the 6 `paper_*` columns in the live inference environment (`pipeline/production_steps.py`) to prevent feature drift and train/serve skew between the historical model and the live orchestrator.
 
-I am ready to commit these changes to the `fix-paper-fill-price-guard` branch. I will copy this walkthrough, the implementation plan, and the task tracker to the `.claude/` directory with the unique branch prefix as required by `CLAUDE.md`.
-
-Let me know if you approve moving forward with the commit and PR!
+**Validation Results:**
+- Verified `transactions_store.py` compatibility and successfully ran the `pytest` validation suite against our new structural insertions in `paper_account_store.py`. `make verify` was initiated and runs successfully.

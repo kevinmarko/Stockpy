@@ -1351,7 +1351,7 @@ def get_volatility_mispricing_data(
         except Exception:
             spot_price = None
 
-    if spot_price is None or spot_price <= 0:
+    if spot_price is not None and spot_price <= 0:
         spot_price = None
 
     har_forecast = get_har_volatility_forecast(sym, horizon_days=horizon_days, market_provider=market_provider)
@@ -1374,6 +1374,8 @@ def get_volatility_mispricing_data(
 
     raw_extracted = extract_chain_contracts(chain_data) if chain_data else []
     if not raw_extracted:
+        if spot_price is None:
+            return {"ok": False, "message": "No option chain contracts retrieved and spot price is unavailable for mock fallback", "symbol": sym, "data": None}
         exp_date = (date.today() + timedelta(days=horizon_days)).isoformat()
         moneyness_levels = [0.85, 0.90, 0.95, 0.98, 1.00, 1.02, 1.05, 1.10, 1.15]
         chain_list = []
