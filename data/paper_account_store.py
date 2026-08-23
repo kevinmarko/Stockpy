@@ -488,7 +488,9 @@ class PaperAccountStore:
                 return False
 
             self._insert_order(session, client_order_id, symbol, side, qty, qty, fill_price, status, target_qty, strategy_id, pilot_id, experiment_arm, leg_group_id, order_kind)
-            return True
+            
+        self._execute_bridges(pending_bridges)
+        return True
 
     def apply_multi_leg_fill(
         self,
@@ -656,7 +658,7 @@ class PaperAccountStore:
                 strategy_id, pilot_id, experiment_arm, None, "parent"
             )
 
-            self._execute_bridges(pending_bridges)
+        self._execute_bridges(pending_bridges)
         return True
 
     def apply_roll_fill(
@@ -869,7 +871,8 @@ class PaperAccountStore:
                 strategy_id, pilot_id, experiment_arm, None, "parent"
             )
 
-            return True
+        self._execute_bridges(pending_bridges)
+        return True
 
     def _insert_order(self, session, client_order_id, symbol, side, qty, filled_qty, fill_price, status, target_qty=None, strategy_id=None, pilot_id=None, experiment_arm=None, leg_group_id=None, order_kind=None):
         # We use a derived broker_order_id
@@ -1057,6 +1060,7 @@ class PaperAccountStore:
 
         now_d = current_date or datetime.now(timezone.utc).date()
         settled_records = []
+        pending_bridges = []
 
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
@@ -1122,7 +1126,7 @@ class PaperAccountStore:
                         acc.cash_balance += cash_settlement  # cash_settlement is negative
 
                     # Record closed trade
-                    self._record_closed_trade(session, pos, contracts, intrinsic, "expiry_settlement", 0.0)
+                    self._record_closed_trade(session, pos, contracts, intrinsic, "expiry_settlement", 0.0, pending_bridges)
 
                     # Delete position
                     session.delete(pos)
@@ -1155,5 +1159,6 @@ class PaperAccountStore:
                         "status": "SETTLED" if intrinsic > 0 else "EXPIRED",
                     })
 
+        self._execute_bridges(pending_bridges)
         return settled_records
 
