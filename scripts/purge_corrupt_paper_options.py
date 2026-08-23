@@ -77,6 +77,18 @@ def main():
         
         logger.info(f"Total positions before: {len(positions)}")
         logger.info(f"Found {len(to_delete)} corrupt option positions to delete.")
+
+        print("================================================================")
+        print("          Paper Options Purge: Before / After Summary")
+        print("================================================================")
+        print(f"Total positions before: {len(positions):>6}")
+        print(f"Corrupt options purged: {len(to_delete):>6}")
+        print(f"Total positions after:  {len(positions) - len(to_delete):>6}")
+        print("----------------------------------------------------------------")
+        print(f"Cash balance before:    ${initial_cash:>10.2f}")
+        print(f"Cash impact reversed:   ${cash_reversal:>10.2f}")
+        print(f"Cash balance after:     ${acc.cash_balance + (cash_reversal if not args.apply else 0):>10.2f}")
+        print("================================================================\n")
         
         if args.apply:
             for pos in to_delete:

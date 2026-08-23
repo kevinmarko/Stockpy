@@ -1352,7 +1352,11 @@ def get_volatility_mispricing_data(
             spot_price = None
 
     if spot_price is None or spot_price <= 0:
-        spot_price = None
+        return {
+            "status": "error",
+            "message": f"Cannot determine real spot price for {sym}. Refusing to evaluate mispricing on fabricated data.",
+            "opportunities": []
+        }
 
     har_forecast = get_har_volatility_forecast(sym, horizon_days=horizon_days, market_provider=market_provider)
     fair_iv = har_forecast.get("forecast_annualized_vol") or 0.20

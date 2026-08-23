@@ -612,3 +612,15 @@ def test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly():
 
     assert res["ok"] is False
     assert store.get_open_positions() == []
+
+
+def test_get_volatility_mispricing_data_no_fabricated_spot():
+    """Ensure that we no longer fabricate SPY/NVDA/AAPL prices when spot is unavailable."""
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+    
+    # Try SPY without mock data (fails to fetch)
+    res = get_volatility_mispricing_data(symbol="SPY")
+    assert res["status"] == "error"
+    # It should not have any opportunities because spot_price is None and thus strike mispricing fails
+    assert len(res["opportunities"]) == 0
+

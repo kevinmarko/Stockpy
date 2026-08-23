@@ -466,3 +466,21 @@ def test_dispersion_trading_ast_import_safety():
             mod_name = node.module or ""
             for forbidden in forbidden_modules:
                 assert forbidden not in mod_name, f"Forbidden from-import found: {mod_name}"
+
+
+def test_execute_dispersion_trade_client_basket_rejection():
+    """Ensures a client-supplied basket with zero-priced legs is rejected with an honest message."""
+    bad_basket = {
+        "index_symbol": "SPY",
+        "constituent_symbols": ["AAPL", "MSFT"],
+        "index_leg_requests": [{"symbol": "SPY 2026-09-18 $500.00 PUT", "fill_price": 0.0, "qty": 1}],
+        "constituent_leg_requests": {}
+    }
+    res = execute_dispersion_trade(
+        index_symbol="SPY",
+        basket=bad_basket
+    )
+    assert res["ok"] is False
+    assert "Cannot build a dispersion basket" in res["message"]
+    assert "no real spot price" in res["message"] or "Refusing to execute a trade priced off fabricated inputs" in res["message"]
+
