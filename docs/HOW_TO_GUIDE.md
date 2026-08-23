@@ -2082,3 +2082,12 @@ convenient for zero-config local use — a localhost-only API bound to your own
 machine is fine unauthenticated. But if you expose port 8600 to a network or
 the internet, **always set `STATE_API_TOKEN`** first; otherwise anyone who can
 reach the port can read your persisted state and closed-trade history.
+
+## 22. A/B Testing Framework (Experiments)
+The platform includes an A/B testing framework allowing operators to evaluate strategies against each other before full deployment. 
+
+### Enabling Experiments
+To enable experiments, adjust `EXPERIMENTS_ENABLED` and `EXPERIMENTS_WRITES_ENABLED` in your `.env`. When active, newly created runs are tagged explicitly per-symbol.
+
+### Evaluation and Insufficient Data
+Experiments are compared using the deflated Sharpe family validation. If sample data falls below the required threshold (default `EXPERIMENT_DEFAULT_MIN_SAMPLES`), the evaluation will explicitly return `insufficient_data` instead of a ranked winner to prevent overfitting.

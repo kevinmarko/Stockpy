@@ -209,6 +209,7 @@ The full per-module architecture reference (previously inlined here) is split by
 | [`docs/architecture/webapp-and-gui.md`](docs/architecture/webapp-and-gui.md) | `webapp/` (Pilots PWA), `api/data_api.py`, `api/metrics_api.py`, `gui/daemon_client.py`, `app_shell.py`/`desktop/` (daemon runtime, orchestrator daemon), `gui/` (InvestYo Command Center), `scripts/*`, `docs/GO_LIVE_CHECKLIST.md`, `docs/RUNBOOK.md` |
 | [`docs/architecture/validation-and-signals.md`](docs/architecture/validation-and-signals.md) | `validation/purged_cv.py`, `metrics.py`, `harness.py`, `stress_scenarios.py`, `signals/` package (registry, aggregator, all `SignalModule` implementations) |
 | [`docs/architecture/ml-and-reports.md`](docs/architecture/ml-and-reports.md) | `ml/` pipeline, `reports/*.html.j2` templates, `ai_verification_prompts.py` (Gravity AI Auditor) |
+| [`docs/architecture/experiments.md`](docs/architecture/experiments.md) | `experiments/` package (registry, assignment, store, compare) |
 | [`docs/architecture/testing.md`](docs/architecture/testing.md) | Index of every file under `tests/` and what each covers |
 | [`docs/architecture/orchestration-entrypoints.md`](docs/architecture/orchestration-entrypoints.md) | `engine/__init__.py`, `engine/advisory.py`, the `.env` loading convention, `alerting.py`, `Makefile`, `verify.command`, `main.py`, `main_orchestrator.py` |
 

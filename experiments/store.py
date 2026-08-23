@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Float, DateTime, JSON
 from sqlalchemy.orm import declarative_base, sessionmaker
-from db_config import resolve_database_url, create_db_engine
+from db_config import resolve_database_url, create_db_engine, create_readonly_db_engine
 
 Base = declarative_base()
 
@@ -28,7 +28,7 @@ class ExperimentObservation(Base):
 class ExperimentStore:
     def __init__(self, db_url=None, readonly=False):
         url = db_url or resolve_database_url()
-        self.engine = create_db_engine(url, readonly=readonly)
+        self.engine = create_readonly_db_engine(url) if readonly else create_db_engine(url)
         if not readonly:
             Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
