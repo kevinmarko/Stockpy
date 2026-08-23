@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 319,
-    "no_op": 3,
+    "live_safe": 320,
+    "no_op": 6,
     "restart_required": 104,
-    "total": 426
+    "total": 430
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 430,
+  "files_scanned": 437,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -214,6 +214,7 @@
     "EXCURSION_INTRADAY_ENABLED",
     "EXECUTION_PRIORITY_QUEUE_ENABLED",
     "EXECUTION_QUEUE_LEAK_RATE_PER_SEC",
+    "EXPERIMENTS_WRITES_ENABLED",
     "FINBERT_BATCH_SIZE",
     "FINBERT_ENABLED",
     "FINBERT_SCORE_CACHE_ENABLED",
@@ -462,19 +463,22 @@
     "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
   "no_op": [
+    "EXPERIMENTS_ENABLED",
+    "EXPERIMENT_DEFAULT_MIN_SAMPLES",
+    "EXPERIMENT_MAX_CONCURRENT",
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
     "PROMPT_MAX_CHARS",
     "SENTIMENT_PIT_MIN_MONTHS"
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 843,
+    "attr": 848,
     "factory_param": 4,
     "getattr_const": 368,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 248,
+    "attr": 249,
     "factory_param": 4,
     "getattr_const": 206,
     "os_environ": 18
@@ -932,7 +936,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:101",
+        "site": "data/paper_account_store.py:102",
         "via": []
       },
       {
@@ -960,6 +964,15 @@
           "cross_module_init_helper"
         ],
         "site": "execution/live_trade_proposals_store.py:103",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "experiments/store.py:30",
         "via": []
       },
       {
@@ -1096,7 +1109,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:105",
+        "site": "data/paper_account_store.py:106",
         "via": []
       },
       {
@@ -1105,7 +1118,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:107",
+        "site": "data/paper_account_store.py:108",
         "via": []
       },
       {
@@ -1160,6 +1173,15 @@
           "cross_module_init_helper"
         ],
         "site": "execution/live_trade_proposals_store.py:110",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "experiments/store.py:31",
         "via": []
       },
       {
@@ -1332,7 +1354,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:105",
+        "site": "data/paper_account_store.py:106",
         "via": []
       },
       {
@@ -1341,7 +1363,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:107",
+        "site": "data/paper_account_store.py:108",
         "via": []
       },
       {
@@ -1396,6 +1418,15 @@
           "cross_module_init_helper"
         ],
         "site": "execution/live_trade_proposals_store.py:110",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "experiments/store.py:31",
         "via": []
       },
       {
@@ -1673,9 +1704,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:157",
+        "site": "data/paper_account_store.py:170",
         "via": [
-          112
+          113
         ]
       }
     ],
@@ -2311,7 +2342,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:105",
+        "site": "data/paper_account_store.py:106",
         "via": []
       },
       {
@@ -2531,9 +2562,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "execution/options_paper_executor.py:105",
+        "site": "execution/options_paper_executor.py:77",
         "via": [
-          127
+          111
         ]
       }
     ],
@@ -3106,7 +3137,7 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 79,
+    "cross_module_init_helper": 82,
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,

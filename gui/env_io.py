@@ -595,6 +595,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "EXPERIMENT_DEFAULT_MIN_SAMPLES",
     "EXPERIMENT_MAX_CONCURRENT",
     "PAPER_BROKER_WRITES_ENABLED",
+    "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
     "FMP_PAPER_STARTING_CASH",
     # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
     # undeclared_env_var check (2026-08) — non-secret tunables.
