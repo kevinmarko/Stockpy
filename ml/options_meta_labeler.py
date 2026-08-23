@@ -32,8 +32,6 @@ class OptionsTradeFeatureRow:
     ivr: float  # 0.0 - 100.0
     vrp: float  # IV - HV (e.g. +0.03)
     vix: float  # e.g. 18.5
-    trend_bias: float  # +1.0 (bullish), -1.0 (bearish), 0.0 (neutral)
-    target_dte: int  # e.g. 35
     credit_to_width_ratio: float  # e.g. 0.30
     short_delta: float  # e.g. 0.30
     outcome_win: Optional[int] = None  # 1 for profit > 0, 0 for loss <= 0
@@ -74,40 +72,32 @@ class OptionsMetaLabeler:
             ivr = row.ivr
             vrp = row.vrp
             vix = row.vix
-            trend = row.trend_bias
-            dte = row.target_dte
-            c_w = row.credit_to_width_ratio
-            s_delta = row.short_delta
+            credit_to_width = row.credit_to_width_ratio
+            short_delta = row.short_delta
         else:
-            strat = str(row.get("strategy", ""))
+            strat = row.get("strategy", "")
             ivr = float(row.get("ivr", 50.0))
-            vrp = float(row.get("vrp", 0.02))
+            vrp = float(row.get("vrp", 0.0))
             vix = float(row.get("vix", 20.0))
-            trend_raw = row.get("trend_bias", 0.0)
-            if isinstance(trend_raw, str):
-                trend = 1.0 if "BULL" in trend_raw.upper() else (-1.0 if "BEAR" in trend_raw.upper() else 0.0)
-            else:
-                trend = float(trend_raw)
-            dte = int(row.get("target_dte", 35))
-            c_w = float(row.get("credit_to_width_ratio", 0.25))
-            s_delta = float(row.get("short_delta", 0.30))
+            credit_to_width = float(row.get("credit_to_width_ratio", 0.30))
+            short_delta = float(row.get("short_delta", 0.30))
 
-        is_put = 1.0 if "put" in strat.lower() else 0.0
-        is_call = 1.0 if "call" in strat.lower() else 0.0
-        is_ic = 1.0 if "condor" in strat.lower() else 0.0
+        strat_lower = strat.lower()
+        is_put_spread = 1.0 if "put credit spread" in strat_lower or "short put spread" in strat_lower else 0.0
+        is_call_spread = 1.0 if "call credit spread" in strat_lower or "short call spread" in strat_lower else 0.0
+        is_iron_condor = 1.0 if "iron condor" in strat_lower else 0.0
 
         return np.array([
-            is_put,
-            is_call,
-            is_ic,
+            is_put_spread,
+            is_call_spread,
+            is_iron_condor,
             ivr / 100.0,
             vrp,
-            vix / 50.0,
-            trend,
-            dte / 60.0,
-            c_w,
-            s_delta,
+            vix / 100.0,
+            credit_to_width,
+            short_delta,
         ], dtype=float)
+
 
     def train(
         self,
@@ -203,10 +193,10 @@ class OptionsMetaLabeler:
             # Fallback simple logistic regression with numpy
             weights = np.linalg.lstsq(X, y, rcond=None)[0]
             self.model = ("linear_fallback", weights)
-            is_acc = 0.60
-            is_auc = 0.60
-            oos_acc = 0.60
-            oos_auc = 0.60
+            is_acc = 0.50
+            is_auc = 0.50
+            oos_acc = 0.50
+            oos_auc = 0.50
 
         self.trained_at = datetime.now(timezone.utc)
         self.n_samples = len(y)
@@ -237,7 +227,7 @@ class OptionsMetaLabeler:
         """
         if self.model is None:
             # Fallback default probability based on base options premium collection edge (~65% win rate)
-            return 0.65
+            return 0.50
 
         x_vec = self._extract_feature_vector(row).reshape(1, -1)
 
@@ -256,7 +246,7 @@ class OptionsMetaLabeler:
             return float(np.clip(proba, 0.01, 0.99))
         except Exception as exc:
             logger.warning("predict_proba failed (%s); returning default 0.65", exc)
-            return 0.65
+            return 0.50
 
     def get_sizing_multiplier(
         self,

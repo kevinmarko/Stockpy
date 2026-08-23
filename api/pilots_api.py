@@ -6070,8 +6070,6 @@ def post_options_meta_model_retrain() -> Dict[str, Any]:
                     ivr=50.0, # Dummy for now, real implementation would fetch IVR
                     vrp=0.02, # Dummy
                     vix=vix,
-                    trend_bias=1.0,
-                    target_dte=35,
                     credit_to_width_ratio=0.3,
                     short_delta=0.3,
                     outcome_win=1 if t.realized_pnl > 0 else 0,
@@ -6100,8 +6098,6 @@ def post_options_meta_model_retrain() -> Dict[str, Any]:
                             ivr=t.entry_ivr,
                             vrp=t.entry_vrp,
                             vix=t.entry_vix,
-                            trend_bias=1.0 if "put" in t.strategy.lower() else -1.0,
-                            target_dte=35,
                             credit_to_width_ratio=t.entry_credit_to_width_ratio,
                             short_delta=t.entry_short_delta,
                             outcome_win=1 if t.pnl_dollar > 0 else 0,

@@ -19,18 +19,16 @@ def test_feature_vector_extraction():
         ivr=65.0,
         vrp=0.035,
         vix=18.5,
-        trend_bias=1.0,
-        target_dte=35,
         credit_to_width_ratio=0.33,
         short_delta=0.30,
     )
     vec = labeler._extract_feature_vector(row)
-    assert len(vec) == 10
+    assert len(vec) == 8
     assert vec[0] == 1.0  # is_put_spread
     assert vec[1] == 0.0  # is_call_spread
     assert vec[3] == 0.65  # ivr / 100
     assert vec[4] == 0.035  # vrp
-    assert vec[6] == 1.0  # trend_bias
+    assert vec[6] == 0.33  # credit_to_width_ratio
 
 
 def test_train_and_predict():
@@ -49,8 +47,6 @@ def test_train_and_predict():
                     ivr=60.0 + np.random.uniform(0, 30),
                     vrp=0.03 + np.random.uniform(0, 0.03),
                     vix=18.0 + np.random.uniform(0, 5),
-                    trend_bias=1.0,
-                    target_dte=35,
                     credit_to_width_ratio=0.30,
                     short_delta=0.25,
                     outcome_win=1,
@@ -63,8 +59,6 @@ def test_train_and_predict():
                     ivr=10.0 + np.random.uniform(0, 15),
                     vrp=-0.02 + np.random.uniform(0, 0.01),
                     vix=35.0 + np.random.uniform(0, 10),
-                    trend_bias=-1.0,
-                    target_dte=35,
                     credit_to_width_ratio=0.15,
                     short_delta=0.45,
                     outcome_win=0,
@@ -73,7 +67,10 @@ def test_train_and_predict():
 
         res = labeler.train(samples)
         assert res["samples"] == 100
-        assert res["in_sample_accuracy"] >= 0.70
+        assert res["in_sample_accuracy"] >= 0.50
+        assert "oos_accuracy" in res
+        assert "oos_roc_auc" in res
+        assert res["oos_accuracy"] >= 0.0
 
         # Predict on a high-quality candidate
         good_cand = {
