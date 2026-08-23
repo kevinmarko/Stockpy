@@ -10,5 +10,5 @@ def list_experiments() -> List[Dict[str, Any]]:
 
 def get_experiment_by_id(exp_id: str) -> Dict[str, Any]:
     # Mocking read helper for now
-    return {}
+    return None
 

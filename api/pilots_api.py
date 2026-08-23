@@ -1190,6 +1190,32 @@ def cancel_forecast_backfill_job(job_id: str) -> Dict[str, Any]:
     payload["cancelled"] = cancelled
     return payload
 
+@app.get("/pilots/experiments", dependencies=[Depends(require_read_token)])
+async def get_experiments():
+    from pilots.experiments import list_experiments
+    return {"experiments": list_experiments()}
+
+@app.get("/pilots/experiments/{exp_id}", dependencies=[Depends(require_read_token)])
+async def get_experiment(exp_id: str):
+    from pilots.experiments import get_experiment_by_id
+    exp = get_experiment_by_id(exp_id)
+    if not exp:
+        raise HTTPException(status_code=404, detail="Not found")
+    return exp
+
+@app.post("/pilots/experiments", dependencies=[Depends(require_command_token)])
+async def create_experiment():
+    if not settings.EXPERIMENTS_WRITES_ENABLED:
+        raise HTTPException(status_code=403, detail="Experiments writes disabled")
+    return {"status": "created"}
+
+@app.post("/pilots/experiments/{exp_id}/stop", dependencies=[Depends(require_command_token)])
+async def stop_experiment(exp_id: str):
+    if not settings.EXPERIMENTS_WRITES_ENABLED:
+        raise HTTPException(status_code=403, detail="Experiments writes disabled")
+    return {"status": "stopped"}
+
+
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])
 def get_pilot_detail(pilot_id: str) -> Any:
@@ -8040,24 +8066,3 @@ def get_pilots_execution_sec_606_report(
     return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
 
 
-@app.get("/pilots/experiments")
-async def get_experiments():
-    from pilots.experiments import list_experiments
-    return {"experiments": list_experiments()}
-
-@app.get("/pilots/experiments/{exp_id}")
-async def get_experiment(exp_id: str):
-    from pilots.experiments import get_experiment_by_id
-    return get_experiment_by_id(exp_id)
-
-@app.post("/pilots/experiments")
-async def create_experiment():
-    if not settings.EXPERIMENTS_WRITES_ENABLED:
-        raise HTTPException(status_code=403, detail="Experiments writes disabled")
-    return {"status": "created"}
-
-@app.post("/pilots/experiments/{exp_id}/stop")
-async def stop_experiment(exp_id: str):
-    if not settings.EXPERIMENTS_WRITES_ENABLED:
-        raise HTTPException(status_code=403, detail="Experiments writes disabled")
-    return {"status": "stopped"}
