@@ -7780,7 +7780,7 @@ async def post_pilots_execution_fix_session_reconnect() -> Dict[str, Any]:
     from execution.fix_gateway import get_global_fix_session, FixSessionState
 
     session = get_global_fix_session()
-    session.state = FixSessionState.CONNECTED
+    session._set_state(FixSessionState.CONNECTED)
     session._incoming_buffer.clear()
     session._last_received_time = time.time()
     session._last_sent_time = time.time()
