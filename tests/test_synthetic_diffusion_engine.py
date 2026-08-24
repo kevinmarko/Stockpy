@@ -10,6 +10,7 @@ from validation.synthetic_diffusion_engine import (
     generate_guided_crisis_paths,
     compute_diffusion_var,
     compute_multi_quantile_var,
+    _reverse_sde_drift,
 )
 
 
@@ -214,9 +215,13 @@ def test_classifier_free_guidance_monotonicity():
 
     # Construct distinct synthetic data distributions for classes:
     # Class 0: Baseline low vol
-    # Class 1 (vol_shock): Severe volatility and positive target gradient (inducing negative crash drift)
+    # Class 1 (vol_shock): elevated volatility with a genuine negative
+    # (crash) mean -- previously this was fabricated with a POSITIVE mean
+    # (+0.10), which happened to still pass under the pre-fix (wrong-sign)
+    # reverse SDE via pathological divergence rather than real CFG signal;
+    # see docs/known_issues/synthetic_diffusion_reverse_sde_sign_error.md.
     paths_c0 = np.random.randn(N_per_class, L) * 0.01
-    paths_c1 = np.random.randn(N_per_class, L) * 0.05 + 0.10
+    paths_c1 = np.random.randn(N_per_class, L) * 0.05 - 0.10
     paths_c2 = np.random.randn(N_per_class, L) * 0.03 + 0.05
     paths_c3 = np.random.randn(N_per_class, L) * 0.02 + 0.04
     paths_c4 = np.random.randn(N_per_class, L) * 0.04 + 0.06
@@ -335,4 +340,165 @@ def test_synthetic_diffusion_engine_no_lookahead_bias():
     # Weights must be bit-exact identical
     for k in ["W1", "b1", "W2", "b2"]:
         np.testing.assert_array_equal(model_baseline[k], model_mutated[k])
+
+
+# ---------------------------------------------------------------------------
+# 2026-08: Reverse-SDE sign-error regression guards (distributional recovery)
+#
+# Every generation test above this point only checks shape/NaN/Inf or a
+# directional monotonicity comparison -- none checks that the generated
+# distribution is actually the right one. That gap is exactly how a sign
+# error in the reverse-SDE drift (dx = [-x - 2*score]dt instead of the
+# correct dx = [x + 2*score]dt) shipped undetected: the buggy formula still
+# produced finite, differently-shaped, monotonic-in-the-right-direction
+# output, just wildly wrong in magnitude and sometimes sign. See
+# docs/known_issues/synthetic_diffusion_reverse_sde_sign_error.md for the
+# full root-cause writeup. These tests assert the generated distribution
+# actually recovers a KNOWN target, not just that it doesn't crash.
+# ---------------------------------------------------------------------------
+
+
+def test_reverse_sde_drift_recovers_known_gaussian_analytic_score():
+    """Bypasses the trained score network entirely: uses the EXACT analytic
+    score of a known conjugate target distribution x_0 ~ N(5, 1). For this
+    module's forward process (dx = -x dtau + sqrt(2) dW), the marginal
+    p_tau(x) = N(5*exp(-tau), 1) for ALL tau (x_0's own unit variance
+    exactly cancels in the marginal-variance formula
+    var0*exp(-2tau) + (1-exp(-2tau)) with var0=1), so the analytic score is
+    score(x, tau) = -(x - 5*exp(-tau)).
+
+    Integrates the reverse SDE via the real `_reverse_sde_drift` helper in a
+    loop mirroring the production discretization exactly (tau decreasing,
+    positive dt steps) from tau_max=3.0 (~ the stationary N(0,1) prior) down
+    to tau~0, and asserts the recovered empirical distribution lands close
+    to the true target N(5, 1). The pre-fix (wrong-sign) drift diverges
+    instead -- reproduced independently at these same parameters as
+    mean~-25 to -29, var~770-800 (order-of-magnitude wrong, not a rounding
+    difference)."""
+    rng = np.random.default_rng(7)
+    mu0 = 5.0
+    tau_max = 3.0
+    dt = 0.01
+    steps = 300
+    num_paths = 5000
+
+    x = rng.standard_normal(num_paths)
+    for i in range(steps):
+        tau = max(tau_max - i * dt, 1e-3)
+        score = -(x - mu0 * np.exp(-tau))
+        drift = _reverse_sde_drift(x, score)
+        z = rng.standard_normal(num_paths)
+        x = np.clip(x + drift * dt + np.sqrt(2.0) * np.sqrt(dt) * z, -50.0, 50.0)
+
+    recovered_mean = float(np.mean(x))
+    recovered_var = float(np.var(x))
+    assert abs(recovered_mean - mu0) < 0.5, (
+        f"Expected recovered mean near {mu0}, got {recovered_mean:.3f} -- "
+        "reverse SDE drift sign is likely wrong."
+    )
+    assert abs(recovered_var - 1.0) < 0.5, (
+        f"Expected recovered variance near 1.0, got {recovered_var:.3f} -- "
+        "reverse SDE drift sign is likely wrong."
+    )
+
+
+def test_generate_synthetic_crash_paths_recovers_known_training_distribution():
+    """Full-pipeline regression guard: trains the REAL train_diffusion_model
+    on data drawn from a known Gaussian and asserts the REAL
+    generate_synthetic_crash_paths actually recovers that distribution's
+    location and rough scale -- not just shape/NaN-freedom, which every
+    other generation test in this file already checked before the 2026-08
+    sign fix and was insufficient to catch it.
+
+    Uses hyperparameters in this codebase's own already-proven-reliable
+    range (matching test_classifier_free_guidance_monotonicity's data
+    scale/epoch/tau_max choices) rather than the live endpoint's much
+    shorter epochs=15/dt=1/252 combination, which a separate, disclosed,
+    NOT-yet-fixed calibration/undertraining gap (see the known-issues doc)
+    prevents from converging within a reasonable tolerance for reasons
+    unrelated to this sign bug -- using those hyperparameters here would
+    make the test measure that unrelated gap instead of the sign fix.
+
+    Tolerances are deliberately generous but bug-distinguishing: the
+    pre-fix drift, reproduced independently at these same parameters,
+    produces mean~-0.90 (vs. a true -0.04) and std~7.96 (vs. a true 0.015)
+    -- both clearly outside the bounds asserted below."""
+    np.random.seed(42)
+    N, L = 300, 5
+    true_mean, true_std = -0.04, 0.015
+    historical_data = np.random.randn(N, L) * true_std + true_mean
+
+    model = train_diffusion_model(historical_data, epochs=300, lr=0.01, seed=42)
+
+    np.random.seed(7)
+    paths = generate_synthetic_crash_paths(model, num_paths=3000, steps=50, dt=0.01)
+
+    recovered_mean = float(np.mean(paths))
+    recovered_std = float(np.std(paths))
+    assert abs(recovered_mean - true_mean) < 0.15, (
+        f"Expected recovered mean near {true_mean}, got {recovered_mean:.4f} -- "
+        "reverse SDE drift sign is likely wrong."
+    )
+    assert recovered_std < 2.0, (
+        f"Expected recovered std well below the pre-fix magnitude, got "
+        f"{recovered_std:.4f} (true training std was {true_std}) -- "
+        "reverse SDE drift sign is likely wrong."
+    )
+
+
+def test_generate_guided_crisis_paths_recovers_known_crash_regime_direction():
+    """Full-pipeline regression guard for the conditional/guided code path
+    -- the one the live `POST /pilots/options/ai/diffusion-stress-test`
+    endpoint actually calls (`generate_synthetic_crash_paths` is unused by
+    production, per api/pilots_api.py::post_diffusion_stress_test).
+
+    Trains the REAL train_conditional_diffusion_model with a genuine
+    negative-mean "vol_shock" crash class, generates via the REAL
+    generate_guided_crisis_paths with classifier-free guidance, and asserts
+    the recovered distribution has the CORRECT SIGN (a "crash" regime must
+    generate predominantly negative returns) and a bounded scale. The sign
+    check is the most direct test of this specific bug class: the pre-fix
+    drift, reproduced independently at these same parameters, recovers a
+    POSITIVE mean (~+1.02) for a regime whose real training data is
+    negative -- the wrong direction entirely, not just the wrong magnitude
+    (std~9.26 in the same buggy repro, vs. the bound asserted below)."""
+    np.random.seed(42)
+    N_per_class, L = 200, 5
+    paths_c0 = np.random.randn(N_per_class, L) * 0.01
+    true_mean, true_std = -0.08, 0.03
+    paths_c1 = np.random.randn(N_per_class, L) * true_std + true_mean
+    historical_data = np.concatenate([paths_c0, paths_c1], axis=0)
+    regime_labels = np.array([0] * N_per_class + [1] * N_per_class)
+
+    model = train_conditional_diffusion_model(
+        historical_data,
+        regime_labels=regime_labels,
+        num_classes=5,
+        epochs=300,
+        lr=0.01,
+        seed=42,
+    )
+
+    np.random.seed(7)
+    paths = generate_guided_crisis_paths(
+        model,
+        regime="vol_shock",
+        guidance_scale=2.0,
+        num_paths=3000,
+        steps=50,
+        dt=0.01,
+    )
+
+    recovered_mean = float(np.mean(paths))
+    recovered_std = float(np.std(paths))
+    assert recovered_mean < 0, (
+        f"Expected a negative (crash-direction) mean for the vol_shock "
+        f"regime (true training mean {true_mean}), got {recovered_mean:.4f} "
+        "-- reverse SDE drift sign is likely wrong."
+    )
+    assert recovered_std < 2.0, (
+        f"Expected recovered std well below the pre-fix magnitude, got "
+        f"{recovered_std:.4f} (true training std was {true_std}) -- "
+        "reverse SDE drift sign is likely wrong."
+    )
 

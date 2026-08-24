@@ -20,6 +20,37 @@ REGIME_MAP: Dict[str, int] = {
 REGIME_ID_TO_NAME: Dict[int, str] = {v: k for k, v in REGIME_MAP.items()}
 
 
+def _reverse_sde_drift(x: np.ndarray, score: np.ndarray) -> np.ndarray:
+    """Drift term for the Euler-Maruyama discretization of the reverse-time
+    OU SDE shared by ``generate_synthetic_crash_paths`` and
+    ``generate_guided_crisis_paths`` (fixes a sign error present in both
+    call sites through 2026-08 -- see
+    ``docs/known_issues/synthetic_diffusion_reverse_sde_sign_error.md``).
+
+    Forward process: ``dx = -x dtau + sqrt(2) dW`` (tau increasing, 0 ->
+    tau_max). Anderson (1982)'s reverse-time SDE for a forward process
+    ``dx = f(x,tau) dtau + g(tau) dW`` is
+    ``dx = [f - g^2 * score] d(tau_bar) + g d(W_bar)``, where ``d(tau_bar)``
+    is a NEGATIVE infinitesimal step -- time runs backward. Both generation
+    loops decrease ``tau`` each iteration (``tau = tau_max - i*dt``) while
+    taking a POSITIVE step ``dt`` (``x = x + drift*dt + ...``), i.e. they
+    discretize with ``d(tau_bar) = -dt``. Substituting flips the bracketed
+    term's sign:
+        x_{i+1} = x_i + [-f(x_i) + g^2 * score(x_i, tau_i)] * dt
+                       + g * sqrt(dt) * z
+    For this OU process, ``f(x) = -x`` and ``g^2 = 2``, so
+    ``-f + g^2 * score = x + 2 * score`` -- NOT ``-x - 2 * score`` (the
+    literal negation, which was the bug: it diverges instead of denoising,
+    since it reinforces rather than corrects the added Wiener noise).
+
+    A single shared helper -- rather than the formula inlined separately at
+    each call site -- is deliberate: two independently-inlined copies of
+    this formula is exactly how the sign bug shipped undetected at one site
+    without being caught by the other.
+    """
+    return x + 2.0 * score
+
+
 def build_return_windows(returns: np.ndarray, window_len: int, max_windows: int = 200) -> np.ndarray:
     """
     Builds overlapping windows of REAL historical returns for
@@ -358,13 +389,14 @@ def generate_synthetic_crash_paths(
             h1 = np.maximum(0, inputs @ W1 + b1)
             score = np.clip(h1 @ W2 + b2, -50.0, 50.0)
             
-            # Reverse SDE for OU: dx = [-x - 2 * score] dt + sqrt(2) dW
-            drift = -x - 2.0 * score
+            # Reverse SDE for OU: dx = [x + 2 * score] dt + sqrt(2) dW
+            # (see _reverse_sde_drift's docstring for the sign derivation)
+            drift = _reverse_sde_drift(x, score)
             diffusion = np.sqrt(2.0)
-            
+
             z = np.random.randn(num_paths, L)
             x = np.clip(x + drift * dt + diffusion * np.sqrt(dt) * z, -50.0, 50.0)
-            
+
     return x
 
 
@@ -383,8 +415,8 @@ def generate_guided_crisis_paths(
         \\tilde{s}_\\theta(x, \\tau, c) = (1 + w) s_\\theta(x, \\tau, c) - w s_\\theta(x, \\tau, 0)
         
     Reverse SDE integration:
-        dX_t = [-X_t - 2 \\tilde{s}_\\theta(X_t, \\tau, c)] dt + \\sqrt{2} dW_t
-        
+        dX_t = [X_t + 2 \\tilde{s}_\\theta(X_t, \\tau, c)] dt + \\sqrt{2} dW_t
+
     Args:
         model: Trained model dictionary with W1, b1, W2, b2, L, num_classes.
         regime: Target macro regime name (e.g. "vol_shock", "stagflation") or class index.
@@ -457,13 +489,14 @@ def generate_guided_crisis_paths(
                 
             score = np.clip(score, -50.0, 50.0)
             
-            # Reverse SDE: dx = [-x - 2 * score] dt + sqrt(2) dW
-            drift = -x - 2.0 * score
+            # Reverse SDE: dx = [x + 2 * score] dt + sqrt(2) dW
+            # (see _reverse_sde_drift's docstring for the sign derivation)
+            drift = _reverse_sde_drift(x, score)
             diffusion = np.sqrt(2.0)
-            
+
             z = np.random.randn(num_paths, L)
             x = np.clip(x + drift * dt + diffusion * np.sqrt(dt) * z, -50.0, 50.0)
-            
+
     return x
 
 
