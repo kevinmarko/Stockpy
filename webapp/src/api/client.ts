@@ -92,6 +92,7 @@ import type {
   ScreenerFilters,
   ScreenerResultsResponse,
   ScreenerFilterOptions,
+  SymbolBackfillResult,
   SyncReportResponse,
   SymbolReincludeResult,
   RecommendationsResponse,
@@ -649,6 +650,15 @@ const liveApi = {
   },
   // Symbol Screener: sector/industry enum lists for the filter dropdowns.
   getScreenerFilterOptions: () => http<ScreenerFilterOptions>("/data/screener/filters"),
+  // "Spot data download": force a write-mode bar backfill for one arbitrary
+  // symbol (data base, :8603, require_write_token -- fails CLOSED, matching
+  // updateDataUniverse's posture rather than every read endpoint's fail-open
+  // default). Never throws on an unfetchable symbol -- returns
+  // `status: "no_data"` with 200, so callers branch on the body, not a catch.
+  triggerSymbolBackfill: (symbol: string) =>
+    http<SymbolBackfillResult>(`/data/backfill/${encodeURIComponent(symbol)}`, {
+      method: "POST",
+    }),
   // Live portfolio & watchlist coverage-reconciliation report — computed
   // fresh on every call from data.portfolio_sync.build_sync_report (data
   // base, :8603). Distinct from getDataUniverse's plain add/remove list:
@@ -966,11 +976,55 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify(req),
     }),
-  watchCandidate: (symbol: string) =>
-    http<WatchResult>("/agentic/watch", {
-      method: "POST",
-      body: JSON.stringify({ symbol }),
-    }),
+  // POST /agentic/watch returns a STRUCTURED error detail on its two honest
+  // failure tags (409 watchlist_env_precedence, 422 invalid_symbol --
+  // api/pilots_api.py's post_agentic_watch) -- `{"error": tag, "message":
+  // "..."}` , not a plain string. The shared http() helper's generic
+  // `String(body.detail)` would stringify that object literally
+  // ("[object Object]"), which defeats the point of surfacing an honest
+  // server error to the operator, so this bypasses it and extracts
+  // `detail.message` directly -- same pattern runForecastBackfill above uses
+  // for its own structured 409 body.
+  watchCandidate: async (symbol: string): Promise<WatchResult> => {
+    const path = "/agentic/watch";
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
+
+    const base = baseFor(path);
+    let resp: Response;
+    try {
+      resp = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ symbol }),
+      });
+    } catch {
+      throw new ApiError(
+        `Network error reaching the API at ${base}. Is the owning service running (Pilots :8602)?`,
+        0
+      );
+    }
+
+    let body: { detail?: unknown } | null = null;
+    try {
+      body = await resp.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    if (!resp.ok) {
+      const detail = body?.detail as { error?: string; message?: string } | string | undefined;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : (detail?.message ?? detail?.error) ?? `${resp.status} ${resp.statusText}`;
+      throw new ApiError(message, resp.status);
+    }
+    return body as unknown as WatchResult;
+  },
   // ---- RLHF Calibration Review Queue (nested inside Agentic Trading; pilots
   // base, :8602) — rating an AI-proposed hypothetical paper trade, never a
   // live order. See types.ts's RlhfProposal/RlhfSummary doc comments.

@@ -5,6 +5,7 @@ import { theme, alpha } from '../../theme';
 import { fmtNum, fmtUsd } from '../../format';
 import { api } from '../../api/client';
 import { Modal } from '../Modal';
+import { loadUniverse } from '../universeCache';
 
 interface SelectedLeg {
   contract: OptionContract;
@@ -52,6 +53,18 @@ export const OptionsOrderTicket: React.FC<Props> = ({
   const [availableCash, setAvailableCash] = useState<number | null>(null);
   const [watchlistAdded, setWatchlistAdded] = useState(false);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
+  // Visible failure state for the "+ Add to Watchlist" flow -- this used to
+  // be console.error-only, so a 409 watchlist_env_precedence or a missing
+  // FOLLOW_API_TOKEN failed with zero on-screen feedback.
+  const [watchlistError, setWatchlistError] = useState<string | null>(null);
+  // Secondary, non-blocking note for the spot-data-download that fires
+  // alongside a successful watchlist add -- a backfill hiccup never rolls
+  // back the "Added to Watchlist" confirmation itself (CONSTRAINT #6).
+  const [backfillNote, setBackfillNote] = useState<string | null>(null);
+  // Inline "this symbol isn't tracked yet" prompt after a successful fill --
+  // an explicit user action (Add / Not now), never a silent auto-add.
+  const [notTracked, setNotTracked] = useState(false);
+  const [addPromptDismissed, setAddPromptDismissed] = useState(false);
 
   // Fetch Paper Account Cash
   useEffect(() => {
@@ -198,23 +211,50 @@ export const OptionsOrderTicket: React.FC<Props> = ({
       setSubmitted(true);
       // Refresh available cash
       api.getPaperBrokerAccount().then(acc => acc && setAvailableCash(acc.cash)).catch(() => {});
-      setTimeout(() => {
-        setSubmitted(false);
-        onClear();
-      }, 2000);
+      // loadUniverse() never rejects -- it degrades to [] on a fetch failure
+      // (see components/universeCache.ts) -- so no try/catch needed here.
+      const universe = await loadUniverse();
+      const isTracked = universe.some((u) => u.symbol === symbol.toUpperCase());
+      if (isTracked) {
+        setTimeout(() => {
+          setSubmitted(false);
+          onClear();
+        }, 2000);
+      } else {
+        // Don't auto-clear: give the operator a chance to see and act on
+        // the "not tracked yet" prompt below instead of it vanishing in 2s.
+        setNotTracked(true);
+      }
     }
   };
 
   const handleAddToWatchlist = async () => {
     if (watchlistAdded || watchlistLoading) return;
     setWatchlistLoading(true);
+    setWatchlistError(null);
     try {
       const res = await api.watchCandidate(symbol);
       if (res && res.symbol) {
         setWatchlistAdded(true);
+        // Non-blocking: a backfill hiccup never undoes the watchlist-add
+        // confirmation above -- surfaced as its own secondary note
+        // (CONSTRAINT #6), not rolled back into an error state.
+        api.triggerSymbolBackfill(symbol)
+          .then((backfill) => {
+            setBackfillNote(
+              backfill.status === 'ok'
+                ? `Backfilled ${backfill.rows_persisted} bars of price history.`
+                : `Added to your universe, but price history isn't available yet for ${backfill.symbol}.`
+            );
+          })
+          .catch((err) => {
+            setBackfillNote(
+              `Added to your universe, but the price-history backfill failed: ${err instanceof Error ? err.message : 'unknown error'}`
+            );
+          });
       }
     } catch (err) {
-      console.error('Failed to add to watchlist:', err);
+      setWatchlistError(err instanceof Error ? err.message : 'Failed to add to watchlist.');
     } finally {
       setWatchlistLoading(false);
     }
@@ -698,8 +738,93 @@ export const OptionsOrderTicket: React.FC<Props> = ({
           </div>
         )}
 
+        {submitted && notTracked && !addPromptDismissed && !watchlistAdded && (
+          <div
+            data-testid="not-tracked-prompt"
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: alpha(theme.accent, "15"),
+              border: `1px solid ${theme.accent}`,
+              color: theme.textPrimary,
+              fontSize: 13,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <span>
+              {symbol} isn't in your tracked universe — add it so future signals and models see it?
+            </span>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <button
+                onClick={async () => {
+                  await handleAddToWatchlist();
+                  setNotTracked(false);
+                  onClear();
+                }}
+                disabled={watchlistLoading}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: theme.accent,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: watchlistLoading ? 'default' : 'pointer',
+                  padding: 0,
+                }}
+              >
+                {watchlistLoading ? 'Adding...' : 'Add'}
+              </button>
+              <button
+                onClick={() => {
+                  setAddPromptDismissed(true);
+                  setNotTracked(false);
+                  onClear();
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                Not now
+              </button>
+            </div>
+          </div>
+        )}
+
+        {watchlistError && (
+          <div style={{
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: alpha(theme.decline, "15"),
+            border: `1px solid ${theme.decline}`,
+            color: theme.decline,
+            fontSize: 13,
+            fontWeight: 500,
+          }}>
+            Couldn't add {symbol} to your watchlist: {watchlistError}
+          </div>
+        )}
+
+        {backfillNote && (
+          <div style={{
+            padding: '8px 12px',
+            borderRadius: 8,
+            fontSize: 12,
+            color: theme.textSecondary,
+          }}>
+            {backfillNote}
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'center', gap: 24 }}>
-          <button 
+          <button
             onClick={handleAddToWatchlist}
             disabled={watchlistAdded || watchlistLoading}
             style={{
@@ -713,7 +838,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
           >
             {watchlistLoading ? 'Adding...' : watchlistAdded ? '✓ Added to Watchlist' : '+ Add to Watchlist'}
           </button>
-          <button 
+          <button
             onClick={onClear}
             style={{
               background: 'transparent',

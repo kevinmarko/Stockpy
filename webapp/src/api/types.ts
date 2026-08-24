@@ -378,6 +378,22 @@ export interface ScreenerFilterOptions {
   industries: string[];
 }
 
+/**
+ * `POST /data/backfill/{symbol}` result — mirrors `api.data_api.trigger_symbol_backfill`'s
+ * response exactly. A "spot data download": forces a full bar backfill for
+ * one arbitrary symbol into local storage, rather than waiting for it to
+ * happen lazily as a side effect of some other read. `status: "no_data"`
+ * (never a fabricated `"ok"`) covers an unknown ticker, a provider outage,
+ * or any other unexpected failure — `rows_persisted` is `0` and
+ * `last_bar_date` is `null` in that case (CONSTRAINT #4).
+ */
+export interface SymbolBackfillResult {
+  symbol: string;
+  rows_persisted: number;
+  last_bar_date: string | null;
+  status: "ok" | "no_data";
+}
+
 /** One coverage-status bucket — mirrors data.portfolio_sync.CoverageStatus's values exactly. */
 export type CoverageStatus = "full" | "stale" | "quotes_only" | "equity_only" | "uncovered" | "unknown";
 

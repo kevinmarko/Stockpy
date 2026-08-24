@@ -261,6 +261,48 @@ def get_bars(
     return _clean_nan(records)
 
 
+@app.post("/data/backfill/{symbol}", dependencies=[Depends(require_write_token)])
+def trigger_symbol_backfill(symbol: str) -> Dict[str, Any]:
+    """On-demand, user-triggered "spot data download": force a full
+    ``settings.BARS_BACKFILL_DAYS`` bar backfill for one arbitrary symbol and
+    PERSIST it, rather than only ever backfilling lazily as a side effect of
+    some other read. Unlike ``GET /data/bars/{symbol}`` above (and every
+    other symbol-detail GET in this file), this constructs ``HistoricalStore``
+    in WRITE mode on purpose — every read endpoint here deliberately uses
+    ``readonly=True``, whose live-fetch-but-never-persist short-circuit
+    (``data/historical_store.py``'s ``_get_bars_db_path``) is exactly why a
+    symbol discovered via the FMP Symbol Screener / Paper Broker Quick Trade
+    never actually landed in local storage before this endpoint existed. See
+    ``investyo_mcp_server.py::trigger_data_engine``, this endpoint's
+    write-mode MCP-tool precedent, whose body this ports into a REST route
+    the webapp can call directly.
+
+    Never a fabricated success (CONSTRAINT #4): an unknown/unfetchable symbol
+    returns HTTP 200 with ``status: "no_data"`` and ``rows_persisted: 0``, not
+    a 500 — the request itself succeeded, there was just nothing to persist
+    (bad ticker, provider outage, etc.). Any other unexpected failure also
+    dead-letters to the same honest ``"no_data"`` shape rather than crashing
+    the request (CONSTRAINT #6).
+    """
+    sym = symbol.upper().strip()
+    if not sym:
+        raise HTTPException(status_code=422, detail="symbol is required")
+
+    try:
+        store = HistoricalStore()  # write mode, deliberately not readonly=True
+        df = store.get_bars(sym, lookback_days=settings.BARS_BACKFILL_DAYS, provider=get_provider())
+    except Exception as exc:  # noqa: BLE001 -- dead-letter: bad symbol / provider outage / DB hiccup
+        logger.warning("data_api: symbol backfill failed for %s: %s", sym, exc)
+        df = None
+
+    if df is None or df.empty:
+        return {"symbol": sym, "rows_persisted": 0, "last_bar_date": None, "status": "no_data"}
+
+    last_date = df.index[-1]
+    last_str = last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date)
+    return {"symbol": sym, "rows_persisted": len(df), "last_bar_date": last_str, "status": "ok"}
+
+
 @app.get("/data/fundamentals/{symbol}", dependencies=[Depends(require_token)])
 def get_current_fundamentals(symbol: str) -> Dict[str, Any]:
     """Current fundamental metrics for ``symbol`` (yfinance ``.info``-shaped).
