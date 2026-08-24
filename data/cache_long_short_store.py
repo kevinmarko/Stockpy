@@ -70,11 +70,25 @@ class CacheLongShortTaxLot(Base):
 
 class SecurityProxy(Base):
     __tablename__ = 'cache_ls_security_proxies'
-    
+
     primary_ticker = Column(String(10), primary_key=True)
     proxy_ticker = Column(String(10), nullable=False)
     correlation_coefficient = Column(Float, nullable=False)
     computed_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
+def _naive_utc(dt: datetime) -> datetime:
+    """Normalize an aware or naive datetime to naive UTC (matching
+    data/broker_fills_store.py's helper of the same name/contract). Every
+    real caller today already computes in UTC, so a bare ``.replace(tzinfo=
+    None)`` on the raw value was harmless in practice -- but it would
+    silently mis-stamp a genuinely non-UTC tz-aware datetime (the same bug
+    class documented elsewhere in this repo for FMP's Eastern-time
+    ``publishedDate``), so normalize explicitly rather than relying on every
+    caller happening to pass UTC."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 class CacheLongShortStore:
@@ -105,7 +119,7 @@ class CacheLongShortStore:
         if self._readonly:
             raise RuntimeError("Cannot write to readonly store")
         with session_scope(self.Session) as session:
-            naive_dt = acquisition_date.replace(tzinfo=None)
+            naive_dt = _naive_utc(acquisition_date)
             lot = CacheLongShortTaxLot(
                 position_id=position_id,
                 acquisition_date=naive_dt,
@@ -125,7 +139,7 @@ class CacheLongShortStore:
                 raise ValueError(f"Lot {lot_id} not found")
             lot.status = 'closed'
             lot.realized_pnl = float(realized_pnl)
-            lot.close_date = close_date.replace(tzinfo=None)
+            lot.close_date = _naive_utc(close_date)
 
     def approve_tax_lots(self, lot_ids: List[int]) -> None:
         if self._readonly:

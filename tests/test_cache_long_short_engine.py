@@ -170,31 +170,87 @@ class TestCheckCorrelationDrift:
 
 # ---------------------------------------------------------------------------
 # check_wash_sale -- real SQL against a real in-memory store
+#
+# The rule is about ACQUISITION timing, not about a closed lot's realized
+# P&L sign or its close_date. Every case below is a real repro of the
+# pre-fix bug (which checked "closed lot, realized loss, close_date within
+# 30d" instead): a textbook recent-purchase wash sale went undetected
+# (test_blocks_on_open_lot_acquired_within_30_days_before_sale), an old,
+# fully-resolved loss with no repurchase since was false-blocked
+# (test_allows_when_acquisition_is_more_than_30_days_before_sale), and a
+# reacquisition after harvesting -- the other classic trigger -- was never
+# checked at all (test_blocks_on_reacquisition_after_closing_a_loss).
 # ---------------------------------------------------------------------------
 
 
 class TestCheckWashSale:
-    def test_blocks_on_loss_closed_within_30_days(self, store):
+    def test_blocks_on_open_lot_acquired_within_30_days_before_sale(self, store):
+        # The textbook wash-sale trigger: a recent purchase, no closed lot
+        # involved at all. The pre-fix implementation never looked at
+        # acquisitions and returned False here.
         pos_id = store.record_position("AAPL", "long")
-        lot_id = store.record_tax_lot(pos_id, datetime.datetime.now(datetime.timezone.utc), 150.0, 10.0)
-        store.close_tax_lot(lot_id, realized_pnl=-500.0, close_date=datetime.datetime.now(datetime.timezone.utc))
+        recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=25)
+        store.record_tax_lot(pos_id, recent, 150.0, 10.0)
         assert CacheLongShortEngine.check_wash_sale("AAPL") is True
 
-    def test_allows_when_closed_loss_is_older_than_30_days(self, store):
+    def test_allows_when_acquisition_is_more_than_30_days_before_sale(self, store):
+        # Acquired 35 days ago, nothing since -- outside the window either
+        # way.
         pos_id = store.record_position("AAPL", "long")
-        lot_id = store.record_tax_lot(pos_id, datetime.datetime.now(datetime.timezone.utc), 150.0, 10.0)
-        old_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=45)
-        store.close_tax_lot(lot_id, realized_pnl=-500.0, close_date=old_date)
+        old_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=35)
+        store.record_tax_lot(pos_id, old_date, 150.0, 10.0)
         assert CacheLongShortEngine.check_wash_sale("AAPL") is False
 
-    def test_allows_when_closed_lot_is_a_gain(self, store):
+    def test_closed_loss_lot_with_old_acquisition_and_no_repurchase_is_not_blocked(self, store):
+        # Pre-fix bug, over-conservative direction: an old, already-resolved
+        # loss lot with no repurchase since must NOT block just because it
+        # was closed recently -- the close_date/realized_pnl of a past lot
+        # is irrelevant to whether a NEW harvest today is a wash sale.
         pos_id = store.record_position("AAPL", "long")
-        lot_id = store.record_tax_lot(pos_id, datetime.datetime.now(datetime.timezone.utc), 150.0, 10.0)
-        store.close_tax_lot(lot_id, realized_pnl=500.0, close_date=datetime.datetime.now(datetime.timezone.utc))
+        old_acquisition = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=60)
+        lot_id = store.record_tax_lot(pos_id, old_acquisition, 150.0, 10.0)
+        store.close_tax_lot(
+            lot_id, realized_pnl=-500.0,
+            close_date=datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=20),
+        )
         assert CacheLongShortEngine.check_wash_sale("AAPL") is False
+
+    def test_blocks_on_reacquisition_after_closing_a_loss(self, store):
+        # A loss was harvested, then the same ticker was repurchased a few
+        # days later, still inside the 30-day window -- the other classic
+        # wash-sale trigger, undetectable by close_date/realized_pnl alone.
+        pos_id = store.record_position("AAPL", "long")
+        old_acquisition = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=40)
+        lot_id = store.record_tax_lot(pos_id, old_acquisition, 150.0, 10.0)
+        store.close_tax_lot(
+            lot_id, realized_pnl=-500.0,
+            close_date=datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10),
+        )
+        store.record_tax_lot(
+            pos_id, datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5), 140.0, 10.0
+        )
+        assert CacheLongShortEngine.check_wash_sale("AAPL") is True
+
+    def test_pnl_direction_of_a_closed_lot_never_affects_the_check(self, store):
+        # A closed GAIN lot acquired recently still blocks -- wash-sale
+        # eligibility is about acquisition timing, never about whether some
+        # other lot's close was a gain or a loss.
+        pos_id = store.record_position("AAPL", "long")
+        recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)
+        lot_id = store.record_tax_lot(pos_id, recent, 150.0, 10.0)
+        store.close_tax_lot(lot_id, realized_pnl=500.0, close_date=datetime.datetime.now(datetime.timezone.utc))
+        assert CacheLongShortEngine.check_wash_sale("AAPL") is True
 
     def test_allows_ticker_with_no_history(self, store):
         assert CacheLongShortEngine.check_wash_sale("NEWCO") is False
+
+    def test_as_of_param_supports_a_historical_check(self, store):
+        # A lot acquired "today" is outside a ±30-day window centered 60
+        # days in the future.
+        pos_id = store.record_position("AAPL", "long")
+        store.record_tax_lot(pos_id, datetime.datetime.now(datetime.timezone.utc), 150.0, 10.0)
+        future_check = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)
+        assert CacheLongShortEngine.check_wash_sale("AAPL", as_of=future_check) is False
 
 
 # ---------------------------------------------------------------------------
