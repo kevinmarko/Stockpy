@@ -891,6 +891,154 @@ class TestExecuteEarningsCrushTradeNetCredit:
 
 
 # ---------------------------------------------------------------------------
+# 4e. `diagnostics` kwarg Tests (degraded-scan honesty distinction, follow-up finding #7)
+# ---------------------------------------------------------------------------
+
+class TestEarningsCrushDiagnostics:
+    """Tests for the optional `diagnostics` kwarg on evaluate_earnings_crush_candidates
+    and get_earnings_crush_candidates, added so a caller (e.g. the Pilots API) can
+    distinguish "nothing qualified" from "the scan itself degraded" (CONSTRAINT #4
+    honesty) without changing either function's return type.
+    """
+
+    def test_diagnostics_none_default_is_purely_additive(self):
+        """diagnostics=None (the default) must leave behavior completely unchanged --
+        no error, no altered return value."""
+        today = date(2026, 8, 14)
+        store = MockHistoricalStore([], None)
+        options_provider = MockOptionsProvider({}, {})
+        candidates = evaluate_earnings_crush_candidates(
+            universe=["NOTHING"],
+            store=store,
+            options_provider=options_provider,
+            as_of=today,
+        )
+        assert candidates == []
+
+    def test_diagnostics_happy_path(self):
+        """A healthy scan reports store_available=True, options_provider_available=True,
+        symbols_errored=[], and symbols_total matching the universe size."""
+        today = date(2026, 8, 14)
+        earnings_date = date(2026, 8, 17)
+        exp_date = "2026-08-21"
+
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates)
+        events = [
+            {"symbol": "NVDA", "event_date": "2025-05-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-08-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-11-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStore(events, bars_df)
+        strikes = [80.0, 90.0, 100.0, 110.0, 120.0]
+        chain = MockOptionsChain(strikes, atm_iv=0.70)
+        options_provider = MockOptionsProvider(
+            expirations_map={"NVDA": [exp_date]},
+            chain_map={f"NVDA_{exp_date}": chain},
+        )
+
+        diagnostics: Dict[str, Any] = {}
+        candidates = evaluate_earnings_crush_candidates(
+            universe=["NVDA"],
+            store=store,
+            options_provider=options_provider,
+            min_edge=1.25,
+            as_of=today,
+            upcoming_earnings={"NVDA": earnings_date.isoformat()},
+            spot_prices={"NVDA": 100.0},
+            diagnostics=diagnostics,
+        )
+
+        assert len(candidates) == 1
+        assert diagnostics["symbols_total"] == 1
+        assert diagnostics["store_available"] is True
+        assert diagnostics["options_provider_available"] is True
+        assert diagnostics["symbols_errored"] == []
+
+    def test_diagnostics_store_unavailable_when_construction_fails(self):
+        """When store=None is passed and HistoricalStore() construction itself raises,
+        diagnostics must honestly report store_available=False (matching the existing
+        try/except-around-construction resolution block) rather than looking identical
+        to a healthy, empty scan."""
+        today = date(2026, 8, 14)
+        diagnostics: Dict[str, Any] = {}
+        with mock.patch(
+            "data.historical_store.HistoricalStore", side_effect=RuntimeError("db unavailable")
+        ):
+            candidates = evaluate_earnings_crush_candidates(
+                universe=["NVDA"],
+                store=None,
+                options_provider=MockOptionsProvider({}, {}),
+                as_of=today,
+                diagnostics=diagnostics,
+            )
+        assert candidates == []
+        assert diagnostics["store_available"] is False
+        assert diagnostics["options_provider_available"] is True
+
+    def test_diagnostics_records_per_symbol_error(self):
+        """A per-symbol processing exception (a malformed spot-price override, in this
+        case) must land the offending symbol in diagnostics['symbols_errored'] without
+        aborting the scan for the other, healthy symbol."""
+        today = date(2026, 8, 14)
+        earnings_date = date(2026, 8, 17)
+        exp_date = "2026-08-21"
+
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates)
+        events = [
+            {"symbol": "GOOD", "event_date": "2025-05-15", "eps_actual": 1.0},
+            {"symbol": "GOOD", "event_date": "2025-08-15", "eps_actual": 1.0},
+            {"symbol": "GOOD", "event_date": "2025-11-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStore(events, bars_df)
+        strikes = [80.0, 90.0, 100.0, 110.0, 120.0]
+        chain = MockOptionsChain(strikes, atm_iv=0.70)
+        options_provider = MockOptionsProvider(
+            expirations_map={"GOOD": [exp_date]},
+            chain_map={f"GOOD_{exp_date}": chain},
+        )
+
+        diagnostics: Dict[str, Any] = {}
+        candidates = evaluate_earnings_crush_candidates(
+            universe=["GOOD", "BAD"],
+            store=store,
+            options_provider=options_provider,
+            min_edge=1.25,
+            as_of=today,
+            upcoming_earnings={
+                "GOOD": earnings_date.isoformat(),
+                "BAD": earnings_date.isoformat(),
+            },
+            # "BAD"'s spot override is not float-convertible -> raises inside the
+            # per-symbol try block, caught by the existing outer except.
+            spot_prices={"GOOD": 100.0, "BAD": "not-a-number"},
+            diagnostics=diagnostics,
+        )
+
+        assert len(candidates) == 1
+        assert candidates[0]["symbol"] == "GOOD"
+        assert diagnostics["symbols_errored"] == ["BAD"]
+        assert diagnostics["symbols_total"] == 2
+
+    def test_get_earnings_crush_candidates_forwards_diagnostics(self):
+        """The convenience alias get_earnings_crush_candidates must accept and forward
+        the diagnostics kwarg through to evaluate_earnings_crush_candidates."""
+        from pilots.earnings_crush import get_earnings_crush_candidates
+
+        store = MockHistoricalStore([], None)
+        diagnostics: Dict[str, Any] = {}
+        candidates = get_earnings_crush_candidates(
+            symbols=["ZZZZ"],
+            store=store,
+            diagnostics=diagnostics,
+        )
+        assert candidates == []
+        assert diagnostics["symbols_total"] == 1
+        assert diagnostics["store_available"] is True
+
+
+# ---------------------------------------------------------------------------
 # 5. AST Import Safety Test
 # ---------------------------------------------------------------------------
 

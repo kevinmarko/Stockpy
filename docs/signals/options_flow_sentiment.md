@@ -111,3 +111,46 @@ See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) f
 
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
+
+---
+
+## Defects found while analysing `pilots/unusual_options_flow.py`
+
+A follow-up audit of the UOA scan engine this signal's `signals/options_flow_sentiment.py`
+consumes (`pilots/unusual_options_flow.py`, not the signal module itself) turned up six
+issues, all closed in a combined follow-up effort landed across two branches. Full detail,
+root cause, and verification for every item lives in
+[`docs/known_issues/earnings_crush_uoa_followup_audit_findings.md`](../known_issues/earnings_crush_uoa_followup_audit_findings.md)
+(findings #3–#8); summarized briefly here:
+
+1. **IV-burst HV30 wiring (finding #3).** The IV-burst score's historical-volatility
+   denominator was not actually wired to a live 30-day realized-vol computation, so the
+   burst score was silently comparing implied vol against a stale/placeholder baseline
+   rather than genuine current HV30 — fixed to source HV30 live.
+2. **Mid-block sentiment deadband (finding #4).** A block trade printed at the exact
+   midpoint of the bid/ask spread was being force-classified as bullish or bearish rather
+   than left neutral, overstating directional conviction on genuinely ambiguous prints —
+   fixed with an explicit deadband around the midpoint.
+3. **`price_is_estimated`/`spot_price_is_estimated` honesty flags (finding #5).** Trades
+   whose fill price or underlying spot had to be estimated (rather than sourced from a
+   real quote) were indistinguishable from trades with a fully real price — fixed by
+   adding two new boolean fields (now present on `webapp/src/api/types.ts`'s
+   `UnusualOptionTrade`) so a consumer can honestly tell an estimated print apart from a
+   real one (CONSTRAINT #4).
+4. **Per-contract isolation in `scan_unusual_options_activity` (finding #6).** One
+   contract's malformed/missing chain data could previously abort processing for other,
+   healthy contracts in the same scan pass — fixed to isolate a per-contract failure so
+   the rest of the scan still completes.
+5. **`degraded`/diagnostics fields on `GET /pilots/options/flow/unusual` (finding #7,
+   this doc's own signal's data source).** `get_unusual_options_activity` gained an
+   optional `diagnostics` kwarg (`symbols_fetch_failed`, `read_from_cache`) so the
+   endpoint can report an honest `degraded: bool` and `symbols_fetch_failed: string[]`
+   instead of an empty/short `records` list reading identically to "nothing unusual
+   found this cycle." See finding #7 in the known-issues doc for the full detail,
+   including the parallel fix applied to `GET /pilots/options/earnings-crush/candidates`
+   in the same effort.
+6. **Atomic write for `save_uoa_records` (finding #8).** The UOA persistence write was
+   not atomic (temp-file + rename), so a crash mid-write could leave a corrupt/partial
+   cache file behind — fixed to the same write-then-rename idiom used elsewhere in this
+   codebase (e.g. `execution/kill_switch.py`, `desktop/orchestrator_daemon.py`'s
+   `_write_daemon_file`).
