@@ -173,6 +173,11 @@ class FixSequenceError(FixError):
     """Raised on sequence number mismatch / violation."""
     pass
 
+class FixValueError(FixError):
+    """Raised when a tag/header value would corrupt FIX wire framing (contains
+    the SOH delimiter, '=', or '|')."""
+    pass
+
 
 # --- Helper Functions ---
 
@@ -205,6 +210,27 @@ def format_fix_timestamp(dt: Optional[Union[datetime.datetime, float, int, str]]
     else:
         ts = datetime.datetime.now(datetime.timezone.utc)
     return ts.strftime("%Y%m%d-%H:%M:%S.%f")[:-3]
+
+_FIX_DELIMITER_CHARS = ("\x01", "=", "|")
+
+def _reject_fix_delimiter_chars(value: str, tag: str) -> str:
+    """Reject a value that would inject spurious tag-value pairs into the wire
+    message by containing the FIX SOH delimiter, '=', or '|'. Mirrors the
+    protection api/pilots_api.py's FixRouteOrderRequest.symbol validator
+    already applies at the API boundary -- this closes the gap for every tag
+    or header value that reaches the wire via to_fix_str(), regardless of
+    which constructor or set_tag() call populated it. Note: from_fix_str's
+    tag-parsing loop uses `part.split("=", 1)` (maxsplit=1), so a bare '='
+    without an accompanying SOH is actually inert against this specific
+    parser -- we still reject it to mirror the existing 3-character
+    precedent exactly and to be robust to any future parser change.
+    """
+    for bad_char in _FIX_DELIMITER_CHARS:
+        if bad_char in value:
+            raise FixValueError(
+                f"{tag} value must not contain the FIX SOH delimiter, '=', or '|': {value!r}"
+            )
+    return value
 
 
 # --- Base FIX Message ---
@@ -242,6 +268,8 @@ class FixMessage:
         return self.msg_type.value if isinstance(self.msg_type, Enum) else str(self.msg_type)
 
     def set_tag(self, tag: Union[str, int], value: Any) -> "FixMessage":
+        val_str = value.value if isinstance(value, Enum) else str(value)
+        _reject_fix_delimiter_chars(val_str, tag=f"Tag {tag}")
         self.tags[str(tag)] = value
         return self
 
@@ -266,6 +294,17 @@ class FixMessage:
         """
         st_val = format_fix_timestamp(self.sending_time) if isinstance(self.sending_time, (int, float)) else str(self.sending_time)
 
+        # F3: reject any header field that would corrupt wire framing. This is
+        # the universal serialization choke point -- it protects header
+        # fields, which never pass through self.tags/set_tag() at all.
+        for label, hdr_val in (
+            ("MsgType(35)", self.msg_type_val),
+            ("SenderCompID(49)", self.sender_comp_id),
+            ("TargetCompID(56)", self.target_comp_id),
+            ("SendingTime(52)", st_val),
+        ):
+            _reject_fix_delimiter_chars(str(hdr_val), tag=label)
+
         # Standard header elements
         body_parts = [
             f"35={self.msg_type_val}",
@@ -280,6 +319,11 @@ class FixMessage:
         for k, v in self.tags.items():
             if str(k) not in reserved:
                 val_str = v.value if isinstance(v, Enum) else str(v)
+                # F3: reject any tag value that would corrupt wire framing --
+                # this is the choke point that also protects the 11 message
+                # subclass constructors' direct self.tags[...] writes, which
+                # bypass set_tag() entirely.
+                _reject_fix_delimiter_chars(val_str, tag=f"Tag {k}")
                 body_parts.append(f"{k}={val_str}")
 
         body_str = delimiter.join(body_parts) + delimiter
@@ -309,22 +353,66 @@ class FixMessage:
             if "=" not in part:
                 continue
             k, v = part.split("=", 1)
+            if k in tag_dict:
+                logger.warning(
+                    "FixMessage.from_fix_str: duplicate tag %s in message (MsgType=%s) -- "
+                    "keeping last occurrence, discarding earlier value %r",
+                    k, tag_dict.get("35", "?"), tag_dict.get(k),
+                )
             tag_dict[k] = v
 
-        # Validate Checksum (Tag 10)
-        if "10" in tag_dict and validate_checksum:
+        # Validate Checksum (Tag 10) and BodyLength (Tag 9).
+        if validate_checksum:
+            # F1: a message with Tag 10 entirely missing (e.g. a transport-truncated
+            # message that lost its trailing "10=xxx" field) must be treated as fatally
+            # malformed, not silently accepted with integrity checking skipped.
+            if "10" not in tag_dict:
+                raise FixChecksumError(
+                    "Missing required Tag 10 (CheckSum) -- message truncated or malformed"
+                )
             expected_chk = tag_dict["10"]
             idx = raw.rfind(f"10={expected_chk}")
-            if idx != -1:
-                prefix = raw[:idx]
-                actual_chk = compute_checksum(prefix)
-                # If delimiter was '|', also try checking with standard SOH delimiter replacement
-                if actual_chk != expected_chk and delimiter == "|":
-                    actual_chk_soh = compute_checksum(prefix.replace("|", SOH))
-                    if actual_chk_soh == expected_chk:
-                        actual_chk = expected_chk
-                if actual_chk != expected_chk:
-                    raise FixChecksumError(f"Checksum mismatch: expected {expected_chk}, calculated {actual_chk}")
+            if idx == -1:
+                raise FixChecksumError(
+                    f"Could not locate CheckSum field '10={expected_chk}' in raw message for verification"
+                )
+            prefix = raw[:idx]
+            actual_chk = compute_checksum(prefix)
+            # If delimiter was '|', also try checking with standard SOH delimiter replacement
+            if actual_chk != expected_chk and delimiter == "|":
+                actual_chk_soh = compute_checksum(prefix.replace("|", SOH))
+                if actual_chk_soh == expected_chk:
+                    actual_chk = expected_chk
+            if actual_chk != expected_chk:
+                raise FixChecksumError(f"Checksum mismatch: expected {expected_chk}, calculated {actual_chk}")
+
+            # F2: independently verify BodyLength (Tag 9) against the actual body byte
+            # count. CheckSum alone cannot catch a tampered BodyLength -- a doctored Tag 9
+            # combined with a checksum recomputed over the (now-tampered) prefix is
+            # internally self-consistent by construction, since the checksum is just a
+            # byte-sum of whatever bytes are actually present, not a statement about what
+            # Tag 9 claims. Real FIX engines use BodyLength as a primary framing/
+            # corruption-detection mechanism independent of the checksum. Only verified
+            # when Tag 9 is present -- this does not newly require it.
+            if "9" in tag_dict:
+                try:
+                    expected_body_len = int(tag_dict["9"])
+                except ValueError:
+                    raise FixParseError(f"Malformed BodyLength in tag 9: {tag_dict.get('9')!r}")
+                tag9_marker = f"9={tag_dict['9']}{delimiter}"
+                body_start_idx = raw.find(tag9_marker)
+                if body_start_idx == -1:
+                    raise FixParseError(
+                        "Could not locate Tag 9 (BodyLength) field boundary for verification"
+                    )
+                body_start = body_start_idx + len(tag9_marker)
+                body_str = raw[body_start:idx]
+                actual_body_len = len(body_str.encode("latin1"))
+                if actual_body_len != expected_body_len:
+                    raise FixParseError(
+                        f"BodyLength mismatch: tag 9 declared {expected_body_len}, "
+                        f"actual body is {actual_body_len} bytes"
+                    )
 
         begin_str = tag_dict.get("8", "FIX.4.4")
         msg_type_str = tag_dict.get("35")
@@ -1145,6 +1233,38 @@ _VALID_TRANSITIONS: Dict["FixSessionState", Set["FixSessionState"]] = {
 }
 
 
+# Narrowly-scoped OrdStatus transition guard for _process_message_payload's
+# EXECUTION_REPORT branch ONLY (NOT the separate ORDER_CANCEL_REJECT branch's
+# own pending-status-revert logic, which is legitimate and untouched). Blocks
+# exactly the reproduced bug class: a terminal status (Filled/Canceled/
+# Rejected/Expired/DoneForDay) reverting to anything else, and Filled/
+# PartiallyFilled reverting to New/PendingNew. Deliberately does not attempt
+# to fully enumerate every FIX 4.4 OrdStatus edge case (Suspended/Stopped/
+# Calculated/AcceptedForBidding/Replaced are left unconstrained -- this
+# module's own cancel/replace lifecycle relies on Replaced staying
+# non-terminal, see test_order_cancel_and_replace_lifecycle).
+_TERMINAL_ORDER_STATUSES: Set["OrdStatus"] = {
+    OrdStatus.FILLED, OrdStatus.CANCELED, OrdStatus.REJECTED,
+    OrdStatus.EXPIRED, OrdStatus.DONE_FOR_DAY,
+}
+_ADVANCED_ORDER_STATUSES: Set["OrdStatus"] = {OrdStatus.PARTIALLY_FILLED, OrdStatus.FILLED}
+_BACKWARD_ORDER_STATUSES: Set["OrdStatus"] = {OrdStatus.NEW, OrdStatus.PENDING_NEW}
+
+
+def _is_legal_order_transition(current: Any, new: Any) -> bool:
+    """Return False for an illegal OrdStatus transition per the scoped rules
+    above; True otherwise (including when current is None -- a brand-new
+    order record has no prior state to violate -- or current == new, an
+    idempotent re-delivery)."""
+    if current is None or current == new:
+        return True
+    if current in _TERMINAL_ORDER_STATUSES:
+        return False
+    if current in _ADVANCED_ORDER_STATUSES and new in _BACKWARD_ORDER_STATUSES:
+        return False
+    return True
+
+
 class FixSession:
     """
     FIX 4.4 Institutional Session State Machine with Resilient Recovery.
@@ -1173,6 +1293,8 @@ class FixSession:
         self._last_received_time: float = time.time()
         self._last_sent_time: float = time.time()
         self.pending_resend_range: Optional[Tuple[int, int]] = None
+        self._pending_test_request_id: Optional[str] = None
+        self._pending_test_request_sent_at: Optional[float] = None
 
         self.message_log: List[Dict[str, Any]] = []
         self.sent_messages: List[FixMessage] = []
@@ -1334,7 +1456,26 @@ class FixSession:
                 except asyncio.CancelledError:
                     pass
                 self._heartbeat_task = None
+            self._pending_test_request_id = None
+            self._pending_test_request_sent_at = None
             self._set_state(FixSessionState.DISCONNECTED)
+
+    def _disconnect_sync(self, text: Optional[str] = None) -> None:
+        """Synchronous counterpart to disconnect() for callers that cannot
+        await the coroutine (e.g. check_watchdog(), a sync method). Performs
+        the same state transition and Logout emission; only differs in a
+        fire-and-forget .cancel() on the heartbeat task instead of an awaited
+        one, since there is no guaranteed running event loop at the call
+        site."""
+        self._set_state(FixSessionState.LOGOUT_SENT)
+        logout_msg = Logout(self.sender_comp_id, self.target_comp_id, self.out_seq_num, text=text)
+        self._send(logout_msg)
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+        self._pending_test_request_id = None
+        self._pending_test_request_sent_at = None
+        self._set_state(FixSessionState.DISCONNECTED)
 
     async def _heartbeat_loop(self):
         """Background heartbeat and inactivity watchdog generator loop."""
@@ -1343,6 +1484,17 @@ class FixSession:
                 sleep_interval = max(0.2, min(1.0, self.heartbeat_int / 2.0))
                 await asyncio.sleep(sleep_interval)
                 now = time.time()
+                if self._pending_test_request_id is not None:
+                    if now - self._pending_test_request_sent_at >= self.heartbeat_int:
+                        logger.error(
+                            "FixSession %s: TestRequest %s unanswered after %.1fs -- "
+                            "disconnecting unresponsive counterparty.",
+                            self.session_id, self._pending_test_request_id,
+                            now - self._pending_test_request_sent_at,
+                        )
+                        await self.disconnect(text="Heartbeat timeout: TestRequest unanswered")
+                        break
+                    continue
                 # Idle Heartbeat emission
                 if now - self.last_sent_at >= self.heartbeat_int:
                     if self.state in {FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
@@ -1357,22 +1509,38 @@ class FixSession:
 
     def check_watchdog(self, now: Optional[float] = None) -> List[FixMessage]:
         """
-        Synchronously check watchdog timers and emit necessary Heartbeats or TestRequests.
+        Synchronously check watchdog timers and emit necessary Heartbeats or
+        TestRequests. If a previously-sent TestRequest has gone unanswered
+        for another full heartbeat_int (i.e. the counterparty is genuinely
+        unresponsive, not just momentarily slow), disconnects instead of
+        retrying forever.
         """
         cur_time = now if now is not None else time.time()
         emitted: List[FixMessage] = []
-        
+
         if self.state in {FixSessionState.ACTIVE, FixSessionState.RESEND_REQUESTED, FixSessionState.GAP_FILL_PROCESSING}:
-            if cur_time - self.last_heard_at >= self.heartbeat_int * 1.5:
+            if self._pending_test_request_id is not None:
+                if cur_time - self._pending_test_request_sent_at >= self.heartbeat_int:
+                    logger.error(
+                        "FixSession %s: TestRequest %s unanswered after %.1fs -- "
+                        "disconnecting unresponsive counterparty.",
+                        self.session_id, self._pending_test_request_id,
+                        cur_time - self._pending_test_request_sent_at,
+                    )
+                    self._disconnect_sync(text="Heartbeat timeout: TestRequest unanswered")
+                # else: still within the grace period, waiting for a reply -- emit nothing.
+            elif cur_time - self.last_heard_at >= self.heartbeat_int * 1.5:
                 tid = f"TEST-{uuid.uuid4().hex[:8]}"
                 msg = TestRequest(self.sender_comp_id, self.target_comp_id, self.out_seq_num, test_req_id=tid)
                 self._send(msg)
+                self._pending_test_request_id = tid
+                self._pending_test_request_sent_at = cur_time
                 emitted.append(msg)
             elif cur_time - self.last_sent_at >= self.heartbeat_int:
                 hb = Heartbeat(self.sender_comp_id, self.target_comp_id, self.out_seq_num)
                 self._send(hb)
                 emitted.append(hb)
-                
+
         return emitted
 
     def _send(self, msg: FixMessage) -> FixMessage:
@@ -1534,6 +1702,8 @@ class FixSession:
         tid = test_req_id or f"TEST-{uuid.uuid4().hex[:6]}"
         msg = TestRequest(self.sender_comp_id, self.target_comp_id, self.out_seq_num, test_req_id=tid)
         self._send(msg)
+        self._pending_test_request_id = tid
+        self._pending_test_request_sent_at = time.time()
         return tid
 
     def send_heartbeat(self, test_req_id: Optional[str] = None) -> Heartbeat:
@@ -1598,6 +1768,8 @@ class FixSession:
             msg = raw_or_msg_or_dict
 
         self.last_heard_at = time.time()
+        self._pending_test_request_id = None
+        self._pending_test_request_sent_at = None
         self.received_messages.append(msg)
         if len(self.received_messages) > _MAX_MESSAGE_LOG_SIZE:
             del self.received_messages[: len(self.received_messages) - _MAX_MESSAGE_LOG_SIZE]
@@ -1767,23 +1939,30 @@ class FixSession:
 
             if target_id:
                 order_rec = self.order_book[target_id]
-                order_rec["status"] = ord_status
-                order_rec["filled"] = cum_qty
-                order_rec["cum_qty"] = cum_qty
-                order_rec["leaves_qty"] = leaves_qty
-                order_rec["avg_px"] = avg_px
-                if order_id:
-                    order_rec["order_id"] = order_id
-                if ord_status in {OrdStatus.REPLACED, OrdStatus.CANCELED, OrdStatus.REJECTED}:
-                    if "38" in msg.tags:
-                        order_rec["qty"] = float(msg.tags["38"])
-                    if "44" in msg.tags:
-                        order_rec["price"] = float(msg.tags["44"])
-                    self.order_book[cl_ord_id] = order_rec
-                    if orig_cl_ord_id:
-                        self.order_book[orig_cl_ord_id] = order_rec
-                        self.order_book[orig_cl_ord_id]["filled"] = cum_qty
-                order_rec.setdefault("history", []).append(msg.to_dict())
+                if not _is_legal_order_transition(order_rec.get("status"), ord_status):
+                    logger.error(
+                        "FixSession %s: rejecting illegal OrdStatus transition for order %s: %s -> %s (ExecID=%s)",
+                        self.session_id, target_id, order_rec.get("status"), ord_status, msg.tags.get("17", ""),
+                    )
+                    order_rec.setdefault("history", []).append(msg.to_dict())
+                else:
+                    order_rec["status"] = ord_status
+                    order_rec["filled"] = cum_qty
+                    order_rec["cum_qty"] = cum_qty
+                    order_rec["leaves_qty"] = leaves_qty
+                    order_rec["avg_px"] = avg_px
+                    if order_id:
+                        order_rec["order_id"] = order_id
+                    if ord_status in {OrdStatus.REPLACED, OrdStatus.CANCELED, OrdStatus.REJECTED}:
+                        if "38" in msg.tags:
+                            order_rec["qty"] = float(msg.tags["38"])
+                        if "44" in msg.tags:
+                            order_rec["price"] = float(msg.tags["44"])
+                        self.order_book[cl_ord_id] = order_rec
+                        if orig_cl_ord_id:
+                            self.order_book[orig_cl_ord_id] = order_rec
+                            self.order_book[orig_cl_ord_id]["filled"] = cum_qty
+                    order_rec.setdefault("history", []).append(msg.to_dict())
             else:
                 self.order_book[cl_ord_id] = {
                     "cl_ord_id": cl_ord_id,
@@ -2315,7 +2494,7 @@ class MultiVenueAggregator:
                 avg_px=current_vwap,
                 last_px=fill_price,
                 last_qty=fill_qty,
-                text=f"Venue: {q['venue']} | Policy: {policy_str} | Latency: {q['latency_ms']:.2f}ms | NetFee: ${net_fee:.2f}",
+                text=f"Venue: {q['venue']} / Policy: {policy_str} / Latency: {q['latency_ms']:.2f}ms / NetFee: ${net_fee:.2f}",
             )
             er.tags["30"] = q["venue"]
             er.tags["12"] = str(net_fee)

@@ -37,6 +37,7 @@ from execution.fix_gateway import (
     FixSessionState,
     FixChecksumError,
     FixParseError,
+    FixValueError,
     compute_checksum,
     format_fix_timestamp,
     MultiVenueAggregator,
@@ -1250,3 +1251,159 @@ def test_fix_session_test_request_round_trip_ms_reflects_real_unmocked_timing():
     assert round_trip_ms < 1000.0
 
 
+# --- 8. Protocol-Correctness Audit Fixes (2026-08) ---
+
+
+def test_truncated_message_missing_checksum_raises():
+    """F1: a message truncated before its CheckSum (Tag 10) field must be
+    rejected outright, not silently parsed with integrity checking skipped."""
+    nos = NewOrderSingle("CLIENT", "SERVER", 1, "ORD1", "AAPL", Side.BUY, 100, 150)
+    raw_fix = nos.to_fix_str()
+    truncated = raw_fix[: raw_fix.rfind("10=")]
+    with pytest.raises(FixChecksumError):
+        FixMessage.from_fix_str(truncated, validate_checksum=True)
+
+
+def test_tampered_body_length_raises_fix_parse_error():
+    """F2: a tampered BodyLength (Tag 9) must be independently detected even
+    when the CheckSum is recomputed to match the (now-tampered) prefix --
+    CheckSum alone cannot catch a BodyLength lie, since it's just a byte-sum
+    of whatever bytes are actually present."""
+    nos = NewOrderSingle("CLIENT", "SERVER", 1, "ORD1", "AAPL", Side.BUY, 100, 150)
+    raw_fix = nos.to_fix_str()
+    import re
+    m = re.search(r"9=(\d+)\x01", raw_fix)
+    assert m is not None
+    orig_len = m.group(1)
+    tampered = raw_fix.replace(f"9={orig_len}\x01", f"9={int(orig_len) + 50}\x01", 1)
+    # Recompute checksum over the tampered prefix so checksum validation alone would pass.
+    prefix_for_chk = tampered[: tampered.rfind("10=")]
+    new_chk = compute_checksum(prefix_for_chk)
+    tampered = re.sub(r"10=\d+\x01$", f"10={new_chk}\x01", tampered)
+    with pytest.raises(FixParseError):
+        FixMessage.from_fix_str(tampered, validate_checksum=True)
+
+
+def test_soh_injection_rejected_in_symbol_field():
+    """F3: a Symbol value carrying a raw SOH byte must not be allowed to
+    inject a spurious top-level tag onto the wire."""
+    nos = NewOrderSingle(
+        "CLIENT", "SERVER", 1, "ORD1", "AAPL\x019999=INJECTED\x0155", Side.BUY, 100, 150
+    )
+    with pytest.raises(FixValueError):
+        nos.to_fix_str()
+
+
+def test_soh_injection_rejected_in_text_field():
+    """F3: a free-text Text(58) field carrying a raw SOH byte must not be
+    allowed to forge an independently-legitimate numeric tag (e.g. Price/44)
+    on reparse."""
+    er = ExecutionReport(
+        "EXCHANGE", "CLIENT", 1, "EX1", "CL1", "E1", ExecType.NEW, OrdStatus.NEW,
+        "AAPL", Side.BUY, 100, 0, 0, text="hello\x0144=0.01",
+    )
+    with pytest.raises(FixValueError):
+        er.to_fix_str()
+
+
+def test_set_tag_rejects_soh_delimiter_directly():
+    """F3: the public set_tag() API rejects a value carrying the SOH
+    delimiter (or '=' / '|') at assignment time, not just at serialization."""
+    msg = FixMessage(FixMsgType.HEARTBEAT, "SENDER", "TARGET", 1)
+    with pytest.raises(FixValueError):
+        msg.set_tag("58", "bad\x01value")
+
+
+def test_illegal_order_status_transition_rejected(caplog):
+    """F4: an ExecutionReport claiming a Filled order has reverted to New
+    must be rejected -- order_book state must not move backward out of a
+    terminal status."""
+    session = FixSession("CLIENT1", "EXCHANGE")
+    cl_ord_id = session.send_order("AAPL", Side.BUY, 100, 150.0)
+
+    er_fill = ExecutionReport(
+        "EXCHANGE", "CLIENT1", 1, "EX_1", cl_ord_id, "E1", ExecType.FILL, OrdStatus.FILLED,
+        "AAPL", Side.BUY, 0, 100, 150.0,
+    )
+    session.simulate_receive(er_fill)
+    assert session.order_book[cl_ord_id]["status"] == OrdStatus.FILLED
+
+    er_revert = ExecutionReport(
+        "EXCHANGE", "CLIENT1", 2, "EX_1", cl_ord_id, "E2", ExecType.NEW, OrdStatus.NEW,
+        "AAPL", Side.BUY, 100, 0, 0,
+    )
+    with caplog.at_level(logging.ERROR, logger="execution.fix_gateway"):
+        session.simulate_receive(er_revert)
+
+    # Status must NOT have reverted.
+    assert session.order_book[cl_ord_id]["status"] == OrdStatus.FILLED
+    assert any("illegal OrdStatus transition" in rec.message for rec in caplog.records)
+
+
+def test_legal_order_status_progression_still_applies():
+    """Companion to the above: a legitimate forward progression
+    (New -> PartiallyFilled -> Filled) must still update order_book normally
+    -- guards against an overly-strict transition table."""
+    session = FixSession("CLIENT1", "EXCHANGE")
+    cl_ord_id = session.send_order("MSFT", Side.BUY, 200, 400.0)
+
+    er1 = ExecutionReport(
+        "EXCHANGE", "CLIENT1", 1, "EX_1", cl_ord_id, "E1", ExecType.PARTIAL_FILL,
+        OrdStatus.PARTIALLY_FILLED, "MSFT", Side.BUY, 100, 100, 400.0,
+    )
+    session.simulate_receive(er1)
+    assert session.order_book[cl_ord_id]["status"] == OrdStatus.PARTIALLY_FILLED
+
+    er2 = ExecutionReport(
+        "EXCHANGE", "CLIENT1", 2, "EX_1", cl_ord_id, "E2", ExecType.FILL,
+        OrdStatus.FILLED, "MSFT", Side.BUY, 0, 200, 400.0,
+    )
+    session.simulate_receive(er2)
+    assert session.order_book[cl_ord_id]["status"] == OrdStatus.FILLED
+
+
+def test_heartbeat_timeout_triggers_disconnect(caplog):
+    """F5: a genuinely unresponsive counterparty (no reply to a TestRequest
+    for a full further heartbeat_int) must cause a disconnect, not be
+    retried forever."""
+    session = FixSession("TRADER", "BROKER", heartbeat_int=10)
+    session.state = FixSessionState.ACTIVE
+    t0 = 1000.0
+    session.last_sent_at = t0
+    session.last_heard_at = t0
+
+    # Crosses the 1.5x inactivity threshold -> TestRequest emitted, tracked as pending.
+    emitted = session.check_watchdog(now=t0 + 16.0)
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], TestRequest)
+    assert session._pending_test_request_id is not None
+
+    # A further full heartbeat_int passes with no reply -> disconnect.
+    with caplog.at_level(logging.ERROR, logger="execution.fix_gateway"):
+        emitted2 = session.check_watchdog(now=t0 + 16.0 + 11.0)
+
+    assert session.state == FixSessionState.DISCONNECTED
+    assert isinstance(session.sent_messages[-1], Logout)
+    assert any("unresponsive counterparty" in rec.message for rec in caplog.records)
+
+
+def test_heartbeat_timeout_cleared_by_reply_before_deadline():
+    """Companion to the above: a reply arriving before the grace deadline
+    clears the pending TestRequest and prevents disconnect."""
+    session = FixSession("TRADER", "BROKER", heartbeat_int=10)
+    session.state = FixSessionState.ACTIVE
+    t0 = 1000.0
+    session.last_sent_at = t0
+    session.last_heard_at = t0
+
+    emitted = session.check_watchdog(now=t0 + 16.0)
+    assert session._pending_test_request_id is not None
+
+    # Peer replies (any inbound message proves aliveness).
+    hb_reply = Heartbeat("BROKER", "TRADER", 1)
+    session.simulate_receive(hb_reply)
+    assert session._pending_test_request_id is None
+
+    # Even well past the original deadline, no disconnect -- the reply reset the clock.
+    emitted2 = session.check_watchdog(now=t0 + 16.0 + 11.0)
+    assert session.state == FixSessionState.ACTIVE
