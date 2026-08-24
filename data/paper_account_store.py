@@ -7,6 +7,8 @@ across process restarts for the FMP-based paper trading engine.
 
 import logging
 import re
+import shutil
+import sqlite3
 from datetime import datetime, timezone, date
 from typing import Optional, List, Dict, Any
 
@@ -135,43 +137,232 @@ class PaperAccountStore:
             except Exception:
                 pass
 
-            try:
-                res = conn.execute(text("PRAGMA table_info(paper_positions)")).fetchall()
-                cols = [r[1] for r in res]
-                if "strategy_id" not in cols:
-                    conn.execute(text("ALTER TABLE paper_positions RENAME TO old_paper_positions"))
-                    conn.execute(text(
-                        "CREATE TABLE paper_positions ("
-                        "symbol VARCHAR(64) NOT NULL, "
-                        "strategy_id VARCHAR(100) DEFAULT 'untagged' NOT NULL, "
-                        "pilot_id VARCHAR(100), "
-                        "experiment_arm VARCHAR(100), "
-                        "qty REAL NOT NULL, "
-                        "avg_entry_price REAL NOT NULL, "
-                        "entry_ts DATETIME, "
-                        "PRIMARY KEY (symbol, strategy_id)"
-                        ")"
-                    ))
-                    conn.execute(text(
-                        "INSERT INTO paper_positions (symbol, strategy_id, qty, avg_entry_price) "
-                        "SELECT symbol, 'untagged', qty, avg_entry_price FROM old_paper_positions"
-                    ))
-                    conn.execute(text("DROP TABLE old_paper_positions"))
-                    cols.append("entry_ts")
-                if "entry_ts" not in cols:
-                    # Additive migration for a DB created after the strategy_id
-                    # rebuild above but before entry_ts existed. Legacy rows
-                    # get NULL (genuinely unknown entry time), never a
-                    # fabricated timestamp -- CONSTRAINT #4.
-                    conn.execute(text("ALTER TABLE paper_positions ADD COLUMN entry_ts DATETIME"))
-            except Exception as exc:
-                logger.error(f"Failed to migrate paper_positions: {exc}")
+        # `paper_positions` migration (legacy single-column-PK schema ->
+        # composite (symbol, strategy_id) PK schema) is deliberately its OWN
+        # method/transaction, separate from the tolerant "ALTER TABLE ADD
+        # COLUMN, ignore if it already exists" idiom above -- see
+        # _migrate_paper_positions_schema's docstring (Bug 6, PR 872
+        # remediation) for why this one must be atomic, backed up, and
+        # dialect-aware rather than swallowed by a broad except.
+        self._migrate_paper_positions_schema()
 
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).first()
             if not acc:
                 acc = PaperAccount(id=1, cash_balance=settings.FMP_PAPER_STARTING_CASH)
                 session.add(acc)
+
+    def _migrate_paper_positions_schema(self) -> None:
+        """
+        Rebuild ``paper_positions`` from the legacy single-column-PK schema
+        (``symbol`` alone) into the composite ``(symbol, strategy_id)`` PK
+        schema the current ``PaperPosition`` ORM model declares.
+
+        Bug 6 (PR 872 remediation) -- this used to run unconditionally
+        inside the same ``with self.engine.begin()`` block as the tolerant
+        ALTER-TABLE-add-column idiom in ``_ensure_account_exists``, wrapped
+        in a broad ``except Exception: logger.error(...)``. Three real
+        problems with that, all fixed here:
+
+        1. **Fail-open on partial failure.** The ``except`` sat INSIDE the
+           transactional ``with`` block, so a failure partway through
+           RENAME -> CREATE -> INSERT -> DROP was caught and swallowed,
+           letting the ``with`` block exit normally and COMMIT whatever DDL
+           had already run -- e.g. an empty new ``paper_positions`` plus an
+           orphaned ``old_paper_positions`` still holding the real rows,
+           with the migration's own guard then seeing ``strategy_id``
+           present (on the new, empty table) forever after and never
+           retrying. Simply moving the ``except`` outside a
+           ``with self.engine.begin()`` block is NOT sufficient on its own,
+           verified directly: Python's stdlib ``sqlite3`` driver implicitly
+           COMMITS before any DDL statement (CREATE/ALTER/DROP TABLE)
+           unless the connection is put into fully-manual transaction
+           control (``isolation_level=None`` plus an explicit ``BEGIN``),
+           so a plain ``engine.begin()``/rollback leaves the RENAME and
+           CREATE committed regardless of where the ``except`` sits. For
+           the real production case (a file-backed SQLite DB) this method
+           therefore drives the RENAME -> CREATE -> INSERT -> DROP
+           sequence through a raw ``sqlite3`` connection in explicit
+           manual-transaction mode instead of ``self.engine.begin()``, so a
+           failure genuinely rolls back every statement, not just the
+           final INSERT.
+        2. **No backup.** A ``shutil.copy2`` backup of the whole DB file is
+           now taken first for the common local-SQLite case, mirroring
+           ``scripts/purge_corrupt_paper_options.py``'s own destructive-
+           migration convention (see below for why the whole file, not
+           just this one table, and why a backup failure itself must never
+           block startup).
+        3. **SQLite-only check.** The "already migrated?" test used a raw
+           SQLite-only ``PRAGMA table_info`` query, which raises on
+           Postgres and was itself swallowed by the same broad ``except``
+           -- meaning a Postgres deployment could silently keep running
+           against the OLD (single-PK) live table while the ORM model
+           above declares a composite PK, a schema mismatch nothing would
+           ever surface. Now dialect-aware via ``sqlalchemy.inspect``
+           (works on both backends); a non-SQLite backend that actually
+           needs this migration raises a clear, loud error instead of
+           silently no-opping.
+
+        CONSTRAINT #6 (fail closed): if this migration cannot complete
+        cleanly, ``PaperAccountStore`` construction must not silently
+        degrade into "no positions exist" -- it raises, and construction
+        fails, rather than letting the rest of ``__init__`` proceed against
+        a corrupted or partially-migrated table.
+        """
+        insp = inspect(self.engine)
+        try:
+            has_table = insp.has_table("paper_positions")
+        except Exception as exc:
+            raise RuntimeError(
+                f"paper_positions migration: failed to inspect schema: {exc}"
+            ) from exc
+
+        if not has_table:
+            # Fresh DB: Base.metadata.create_all() (called earlier in
+            # __init__, before _ensure_account_exists) already created the
+            # composite-PK table straight from the current PaperPosition
+            # ORM model. Nothing to migrate.
+            return
+
+        existing_cols = {c["name"] for c in insp.get_columns("paper_positions")}
+        if "strategy_id" in existing_cols:
+            if "entry_ts" not in existing_cols:
+                # Smaller, purely additive migration for a DB created after
+                # the strategy_id rebuild below but before entry_ts
+                # existed. Legacy rows get NULL (genuinely unknown entry
+                # time), never a fabricated timestamp -- CONSTRAINT #4.
+                with self.engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE paper_positions ADD COLUMN entry_ts DATETIME"))
+            return
+
+        # Legacy (pre-strategy_id) schema detected -- destructive rebuild
+        # required.
+        backend = self.engine.url.get_backend_name()
+        if backend != "sqlite":
+            raise RuntimeError(
+                "paper_positions is on the legacy single-column-PK schema "
+                "and needs migrating to the composite (symbol, strategy_id) "
+                f"PK schema, but no migration path is implemented for the "
+                f"'{backend}' backend (only sqlite). Refusing to start "
+                "PaperAccountStore with the ORM model (composite PK) "
+                "disagreeing with the live table (single-column PK) -- "
+                "migrate this database by hand before retrying."
+            )
+
+        db_path = self.engine.url.database
+        if db_path and db_path != ":memory:":
+            # Defense-in-depth for the common local-SQLite deployment: back
+            # up the whole DB FILE (not just this one table) before the
+            # destructive rebuild, mirroring
+            # scripts/purge_corrupt_paper_options.py's own backup pattern.
+            # A whole-file copy is proportionate here specifically BECAUSE
+            # this branch runs at most ONCE per database (guarded by the
+            # `"strategy_id" in existing_cols` check above), not on every
+            # construction -- a per-construction hot-path cost would make a
+            # full-file copy the wrong tradeoff; a one-time schema rebuild
+            # does not. A backup failure (disk full, permissions, ...) is
+            # logged loudly but never blocks startup: the atomicity fix
+            # below (letting the exception propagate so SQLAlchemy rolls
+            # back the transaction) is the real safety net here, this file
+            # copy is a secondary, best-effort recovery aid for the
+            # operator.
+            try:
+                backup_path = (
+                    f"{db_path}.pre-paper-positions-migration-"
+                    f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.bak"
+                )
+                shutil.copy2(db_path, backup_path)
+                logger.warning(
+                    "paper_positions: migrating legacy schema to composite "
+                    "(symbol, strategy_id) PK. Backed up database to %s "
+                    "before proceeding.",
+                    backup_path,
+                )
+            except Exception as exc:
+                logger.error(
+                    "paper_positions: pre-migration file backup failed "
+                    "(%s) -- proceeding anyway since the migration itself "
+                    "is atomic and rolls back cleanly on failure; an "
+                    "operator-run backup is still recommended.",
+                    exc,
+                )
+
+        create_sql = (
+            "CREATE TABLE paper_positions ("
+            "symbol VARCHAR(64) NOT NULL, "
+            "strategy_id VARCHAR(100) DEFAULT 'untagged' NOT NULL, "
+            "pilot_id VARCHAR(100), "
+            "experiment_arm VARCHAR(100), "
+            "qty REAL NOT NULL, "
+            "avg_entry_price REAL NOT NULL, "
+            "entry_ts DATETIME, "
+            "PRIMARY KEY (symbol, strategy_id)"
+            ")"
+        )
+        insert_sql = (
+            "INSERT INTO paper_positions (symbol, strategy_id, qty, avg_entry_price) "
+            "SELECT symbol, 'untagged', qty, avg_entry_price FROM old_paper_positions"
+        )
+
+        is_memory = db_path in (None, "", ":memory:")
+        try:
+            if is_memory:
+                # Best-effort only. This branch is not believed reachable in
+                # a real deployment -- an in-memory DB never survives a
+                # process restart, so no real installation ever has legacy
+                # data sitting in a fresh in-memory DB; it only shows up in
+                # a test that manually pre-seeds one. Genuine atomicity
+                # for this path would require driving the SAME pooled
+                # in-memory DBAPI connection SQLAlchemy already holds
+                # (SingletonThreadPool) into fully-manual transaction mode,
+                # which is not attempted here -- the real, verified,
+                # production-relevant fix is the file-backed branch below.
+                with self.engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE paper_positions RENAME TO old_paper_positions"))
+                    conn.execute(text(create_sql))
+                    conn.execute(text(insert_sql))
+                    conn.execute(text("DROP TABLE old_paper_positions"))
+            else:
+                # File-backed SQLite (the real deployment case): drive the
+                # whole RENAME -> CREATE -> INSERT -> DROP sequence through
+                # a RAW sqlite3 connection in explicit manual-transaction
+                # mode (`isolation_level=None` + our own "BEGIN"), NOT
+                # `self.engine.begin()`. Verified directly: with
+                # `engine.begin()` alone, a forced INSERT failure still
+                # left the RENAME and CREATE committed (Python's stdlib
+                # sqlite3 driver implicitly commits before DDL unless the
+                # connection is in fully-manual mode) -- an empty new
+                # `paper_positions` plus an orphaned `old_paper_positions`,
+                # exactly the fail-open outcome this fix exists to close.
+                # This raw connection is intentionally separate from (not
+                # borrowed from) the SQLAlchemy engine's own pool: the
+                # engine uses NullPool for file-backed SQLite, so no other
+                # connection should be open/holding a lock at this point,
+                # and controlling our own connection's isolation_level
+                # avoids touching engine-pooled connections other code
+                # paths depend on.
+                raw_conn = sqlite3.connect(db_path, isolation_level=None)
+                try:
+                    raw_conn.execute("BEGIN")
+                    raw_conn.execute("ALTER TABLE paper_positions RENAME TO old_paper_positions")
+                    raw_conn.execute(create_sql)
+                    raw_conn.execute(insert_sql)
+                    raw_conn.execute("DROP TABLE old_paper_positions")
+                    raw_conn.commit()
+                except Exception:
+                    raw_conn.rollback()
+                    raise
+                finally:
+                    raw_conn.close()
+        except Exception as exc:
+            raise RuntimeError(
+                "paper_positions migration failed and was rolled back "
+                f"(original legacy-schema table is intact): {exc}. "
+                "Refusing to start PaperAccountStore with a "
+                "partially-migrated or corrupted paper_positions table -- "
+                "investigate the offending row(s) (e.g. a NULL "
+                "qty/avg_entry_price) before retrying."
+            ) from exc
 
     def _resolve_position_prices(self, positions: List[PaperPosition]) -> Dict[str, float]:
         """
@@ -351,6 +542,7 @@ class PaperAccountStore:
         experiment_arm: Optional[str] = None,
         leg_group_id: Optional[str] = None,
         order_kind: Optional[str] = None,
+        allow_untagged_fallback: bool = False,
     ) -> bool:
 
         """
@@ -361,6 +553,31 @@ class PaperAccountStore:
         before a short position is opened or increased (mirroring the check
         already performed by ``apply_multi_leg_fill``/``apply_roll_fill``) -- a
         single-leg naked short otherwise has no margin requirement at all.
+
+        ``allow_untagged_fallback`` (Bug 7, PR 872 remediation): when a
+        position for ``strategy_id`` does not exist, this method used to
+        UNCONDITIONALLY fall back to searching for an opposite-signed
+        position under the legacy ``'untagged'`` bucket and silently
+        treating a fill request as closing THAT position instead of
+        opening a new one for the calling strategy. That is ambiguous by
+        construction -- a ``sell`` with no existing ``strategy_id``
+        position is equally consistent with "open a new short for
+        strategy_id" and "close the untagged long" -- and the untagged
+        bucket is exactly where every pre-migration legacy position
+        (Bug 6) lands, so this silently misattributed PnL to
+        ``'untagged'`` on essentially any strategy's first order against a
+        symbol with legacy inventory. The fallback is now STRICT OPT-IN:
+        it is only ever consulted when the caller explicitly passes
+        ``allow_untagged_fallback=True``, signaling "I am aware of and
+        intend to interact with legacy untagged inventory" (e.g. an
+        operator-driven backfill/close flow). No known caller in this
+        codebase currently intends the old auto-borrow behavior -- every
+        real call site passes its own named ``strategy_id`` with no
+        "close legacy position" intent -- so defaulting this to ``False``
+        is a pure safety fix with no loss of a real capability. Use
+        ``retag_position()`` to explicitly move a legacy untagged position
+        onto its real strategy_id once known, instead of relying on this
+        fallback at fill time.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -387,7 +604,7 @@ class PaperAccountStore:
             now_ts = datetime.now(timezone.utc).replace(tzinfo=None)
 
             pos = session.query(PaperPosition).filter_by(symbol=symbol.upper(), strategy_id=strategy_id).with_for_update().first()
-            if not pos:
+            if not pos and allow_untagged_fallback and strategy_id != "untagged":
                 untagged_pos = session.query(PaperPosition).filter_by(symbol=symbol.upper(), strategy_id="untagged").with_for_update().first()
                 if untagged_pos:
                     if side == "buy" and untagged_pos.qty < -_QTY_EPSILON:
@@ -522,10 +739,18 @@ class PaperAccountStore:
         strategy_id: str = "untagged",
         pilot_id: Optional[str] = None,
         experiment_arm: Optional[str] = None,
+        allow_untagged_fallback: bool = False,
     ) -> bool:
         """
         Executes an atomic multi-leg options order fill across all legs and updates cash balance.
         net_cash_impact: signed cash change (negative for net debit + commission, positive for net credit - commission).
+
+        ``allow_untagged_fallback``: see ``apply_fill``'s docstring (Bug 7,
+        PR 872 remediation) -- same strict-opt-in gate on the per-leg
+        legacy-``'untagged'``-position fallback below, defaulting to
+        ``False`` so a multi-leg strategy's own order flow can never
+        accidentally borrow (and misattribute the PnL of) another
+        strategy's or the legacy bucket's position.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -544,7 +769,13 @@ class PaperAccountStore:
                 except (ValueError, TypeError):
                     logger.warning(f"Rejecting multi-leg order {client_order_id}: missing or invalid fill_price in leg")
                     self._insert_order(
-                        session, client_order_id, f"{strategy_name} {symbol}", "BUY" if net_cash_impact < 0 else "SELL",
+                        # Bare `symbol`, matching every other rejection/success
+                        # path in this file -- strategy attribution lives in
+                        # the strategy_id column, not baked into the symbol
+                        # string (see apply_roll_fill's own f"ROLL {symbol}"
+                        # sibling, which is a distinct, intentional order-kind
+                        # prefix, not a strategy-name leak).
+                        session, client_order_id, symbol, "BUY" if net_cash_impact < 0 else "SELL",
                         float(contracts), 0.0, None, OrderStatus.REJECTED, float(contracts),
                         strategy_id, pilot_id, experiment_arm, None, "parent"
                     )
@@ -589,7 +820,7 @@ class PaperAccountStore:
                 leg_cost = leg_qty * leg_fill_price
 
                 pos = session.query(PaperPosition).filter_by(symbol=leg_symbol, strategy_id=strategy_id).with_for_update().first()
-                if not pos:
+                if not pos and allow_untagged_fallback and strategy_id != "untagged":
                     untagged_pos = session.query(PaperPosition).filter_by(symbol=leg_symbol, strategy_id="untagged").with_for_update().first()
                     if untagged_pos:
                         if leg_side == "buy" and untagged_pos.qty < -_QTY_EPSILON:
@@ -677,9 +908,15 @@ class PaperAccountStore:
         strategy_id: str = "untagged",
         pilot_id: Optional[str] = None,
         experiment_arm: Optional[str] = None,
+        allow_untagged_fallback: bool = False,
     ) -> bool:
         """
         Executes an atomic roll order: closes existing position legs and opens new expiration legs in a single transaction.
+
+        ``allow_untagged_fallback``: see ``apply_fill``'s docstring (Bug 7,
+        PR 872 remediation) -- same strict-opt-in gate on the per-leg
+        legacy-``'untagged'``-position fallback below, defaulting to
+        ``False``.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -787,7 +1024,7 @@ class PaperAccountStore:
                 leg_cost = leg_qty * leg_fill_price
 
                 pos = session.query(PaperPosition).filter_by(symbol=leg_symbol, strategy_id=strategy_id).with_for_update().first()
-                if not pos:
+                if not pos and allow_untagged_fallback and strategy_id != "untagged":
                     untagged_pos = session.query(PaperPosition).filter_by(symbol=leg_symbol, strategy_id="untagged").with_for_update().first()
                     if untagged_pos:
                         if leg_side == "buy" and untagged_pos.qty < -_QTY_EPSILON:
@@ -858,6 +1095,99 @@ class PaperAccountStore:
                 strategy_id, pilot_id, experiment_arm, None, "parent"
             )
 
+            return True
+
+    def retag_position(self, symbol: str, from_strategy_id: str, to_strategy_id: str) -> bool:
+        """
+        One-off backfill primitive: move a ``PaperPosition`` row from
+        ``from_strategy_id`` to ``to_strategy_id`` (e.g. re-tagging a
+        legacy ``'untagged'`` position onto its real strategy once known).
+
+        Bug 7 (PR 872 remediation): this is the explicit, deliberate
+        replacement for the old implicit fallback that used to
+        auto-borrow an ``'untagged'`` position at FILL time (removed --
+        see ``apply_fill``'s docstring). Not wired into any caller yet;
+        this only provides the primitive.
+
+        If a ``(symbol, to_strategy_id)`` position already exists, the
+        source position is MERGED into it rather than raising a
+        primary-key collision:
+          - Same-sign merge (both long or both short): a weighted average
+            of the two cost bases, using each side's own |qty| as its
+            weight -- the identical formula this file already uses when
+            averaging a new fill into an existing position.
+          - Perfectly offsetting merge (combined qty ~0): both rows are
+            deleted -- nothing is left open.
+          - Otherwise-opposite-sign merge: the larger side's own basis
+            survives unchanged (mirrors a real fill's flip-through-zero
+            handling, which resets basis to the new fill rather than
+            blending it with the closed-out side's basis); if the smaller
+            side happens to be ``dest``, its basis is replaced by
+            ``src``'s instead of being blended.
+
+        ``entry_ts``: the earlier of the two known entry_ts values
+        survives. ``None`` (unknown) never overrides a known timestamp on
+        the other side -- CONSTRAINT #4, never fabricate certainty out of
+        an unknown.
+
+        Returns ``True`` if a ``(symbol, from_strategy_id)`` position was
+        found and moved/merged, ``False`` if no such position exists.
+        """
+        if self._readonly:
+            raise RuntimeError("Cannot retag position in readonly mode.")
+
+        symbol_u = symbol.upper().strip()
+
+        with session_scope(self.Session) as session:
+            src = (
+                session.query(PaperPosition)
+                .filter_by(symbol=symbol_u, strategy_id=from_strategy_id)
+                .with_for_update()
+                .first()
+            )
+            if not src:
+                return False
+
+            dest = (
+                session.query(PaperPosition)
+                .filter_by(symbol=symbol_u, strategy_id=to_strategy_id)
+                .with_for_update()
+                .first()
+            )
+
+            if not dest:
+                src.strategy_id = to_strategy_id
+                return True
+
+            combined_qty = dest.qty + src.qty
+
+            if abs(combined_qty) < _QTY_EPSILON:
+                # Perfectly offsetting merge -- nothing left open.
+                session.delete(dest)
+                session.delete(src)
+                return True
+
+            if (dest.qty >= 0) == (src.qty >= 0):
+                # Same-sign merge: weighted average of the two cost bases.
+                dest.avg_entry_price = (
+                    (abs(dest.qty) * dest.avg_entry_price) + (abs(src.qty) * src.avg_entry_price)
+                ) / abs(combined_qty)
+            elif abs(dest.qty) < abs(src.qty):
+                # Opposite-sign merge where src ends up the larger side --
+                # basis resets to src's own, mirroring a real fill's
+                # flip-through-zero handling rather than blending the two.
+                dest.avg_entry_price = src.avg_entry_price
+            # else: dest remains the larger side -- its own basis survives
+            # unchanged.
+
+            dest.qty = combined_qty
+
+            if dest.entry_ts is None:
+                dest.entry_ts = src.entry_ts
+            elif src.entry_ts is not None and src.entry_ts < dest.entry_ts:
+                dest.entry_ts = src.entry_ts
+
+            session.delete(src)
             return True
 
     def _insert_order(self, session, client_order_id, symbol, side, qty, filled_qty, fill_price, status, target_qty=None, strategy_id=None, pilot_id=None, experiment_arm=None, leg_group_id=None, order_kind=None):

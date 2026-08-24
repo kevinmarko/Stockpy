@@ -1,8 +1,9 @@
+import sqlite3
 from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
-from data.paper_account_store import PaperAccountStore, PaperClosedTrade, PaperPosition
+from data.paper_account_store import PaperAccountStore, PaperClosedTrade, PaperOrder, PaperPosition
 from db_config import session_scope
 from execution.broker_base import OrderStatus
 
@@ -547,3 +548,323 @@ def test_closed_trade_has_real_entry_ts_and_positive_holding_period(store):
         assert row.holding_period_days is not None
         assert row.holding_period_days > 0
         assert row.holding_period_days == pytest.approx(5.0, abs=0.1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PR 872 remediation, Agent 3: migration safety (Bug 6) + untagged fallback
+# semantics (Bug 7) + the stray strategy_name-in-symbol rejection label.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _create_legacy_paper_positions_db(db_path, rows):
+    """Hand-build a pre-strategy_id `paper_positions` table (single-column
+    PK, nullable qty/avg_entry_price -- matching the real legacy shape
+    before the strategy_id/composite-PK rebuild existed) plus a minimal
+    `paper_account` row, entirely via raw sqlite3 so PaperAccountStore's
+    own migration code is never invoked while seeding the fixture.
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE paper_positions ("
+            "symbol VARCHAR(64) PRIMARY KEY, "
+            "qty REAL, "
+            "avg_entry_price REAL"
+            ")"
+        )
+        conn.execute("CREATE TABLE paper_account (id INTEGER PRIMARY KEY, cash_balance REAL NOT NULL)")
+        conn.execute("INSERT INTO paper_account (id, cash_balance) VALUES (1, 100000.0)")
+        for symbol, qty, avg_entry_price in rows:
+            conn.execute(
+                "INSERT INTO paper_positions (symbol, qty, avg_entry_price) VALUES (?, ?, ?)",
+                (symbol, qty, avg_entry_price),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_migration_success_preserves_legacy_positions(tmp_path):
+    """Happy path: a legacy single-PK paper_positions table with valid rows
+    is rebuilt into the composite (symbol, strategy_id) PK schema, and the
+    rows survive, tagged 'untagged' (since their real strategy is
+    genuinely unknown)."""
+    db_file = tmp_path / "legacy_ok.db"
+    _create_legacy_paper_positions_db(db_file, [("AAPL", 10.0, 150.0), ("MSFT", -5.0, 300.0)])
+
+    store = PaperAccountStore(db_url=f"sqlite:///{db_file}")
+
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        positions = {p.symbol: p for p in store.get_open_positions()}
+    assert set(positions) == {"AAPL", "MSFT"}
+    assert positions["AAPL"].qty == pytest.approx(10.0)
+    assert positions["AAPL"].strategy_id == "untagged"
+    assert positions["MSFT"].qty == pytest.approx(-5.0)
+
+    # A second construction against the same (now-migrated) DB must be a
+    # no-op, not attempt the destructive rebuild again.
+    store2 = PaperAccountStore(db_url=f"sqlite:///{db_file}")
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        positions2 = {p.symbol: p for p in store2.get_open_positions()}
+    assert set(positions2) == {"AAPL", "MSFT"}
+
+
+def test_migration_partial_failure_preserves_original_data(tmp_path):
+    """Bug 6 regression: a legacy row with a NULL qty (violates the new
+    table's NOT NULL constraint) must cause the WHOLE migration to roll
+    back -- not leave an empty new paper_positions table with the real
+    data silently dropped in an orphaned old_paper_positions. Construction
+    must raise loudly (fail closed, CONSTRAINT #6), and the ORIGINAL data
+    must still be present and readable afterward."""
+    db_file = tmp_path / "legacy_corrupt.db"
+    _create_legacy_paper_positions_db(
+        db_file,
+        [("AAPL", 10.0, 150.0), ("MSFT", None, 300.0)],
+    )
+
+    with pytest.raises(RuntimeError, match="paper_positions migration failed"):
+        PaperAccountStore(db_url=f"sqlite:///{db_file}")
+
+    # Original data intact and readable -- NOT silently lost. No orphaned
+    # old_paper_positions table should be left behind either (the whole
+    # transaction rolled back, including the RENAME).
+    conn = sqlite3.connect(str(db_file))
+    try:
+        tables = {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        assert "paper_positions" in tables
+        assert "old_paper_positions" not in tables
+
+        rows = sorted(
+            conn.execute("SELECT symbol, qty, avg_entry_price FROM paper_positions").fetchall()
+        )
+    finally:
+        conn.close()
+    assert rows == [("AAPL", 10.0, 150.0), ("MSFT", None, 300.0)]
+
+
+def test_migration_raises_on_unsupported_backend(monkeypatch):
+    """Bug 6 point 3: a non-SQLite backend that still needs the legacy ->
+    composite-PK migration must raise loudly instead of the old
+    SQLite-only PRAGMA check silently no-op'ing (swallowed by the former
+    broad `except`), which would otherwise leave the ORM's composite-PK
+    model disagreeing with a live single-PK table."""
+    import data.paper_account_store as pas_module
+
+    store = PaperAccountStore.__new__(PaperAccountStore)
+
+    class FakeURL:
+        database = "ignored"
+
+        def get_backend_name(self):
+            return "postgresql"
+
+    class FakeEngine:
+        url = FakeURL()
+
+    store.engine = FakeEngine()
+
+    class FakeInspector:
+        def has_table(self, name):
+            return True
+
+        def get_columns(self, name):
+            # Legacy shape: no strategy_id column.
+            return [{"name": "symbol"}, {"name": "qty"}, {"name": "avg_entry_price"}]
+
+    monkeypatch.setattr(pas_module, "inspect", lambda engine: FakeInspector())
+
+    with pytest.raises(RuntimeError, match="postgresql"):
+        store._migrate_paper_positions_schema()
+
+
+def test_untagged_fallback_does_not_silently_close_by_default(store):
+    """Bug 7 regression: a strategy_A sell-to-open request with no existing
+    strategy_A position must NOT silently reinterpret an existing
+    'untagged' long as the position being closed, under the new default
+    (allow_untagged_fallback=False). The untagged position stays
+    untouched and strategy_A gets its own new short position instead."""
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        # Legacy untagged long position (e.g. from a Bug 6 migration).
+        assert store.apply_fill("legacy_buy", "AAPL", "buy", 10.0, 100.0, 0.0) is True
+
+        # strategy_A sells AAPL with no existing strategy_A position --
+        # this must open a NEW short for strategy_A, not close 'untagged'.
+        success = store.apply_fill(
+            "stratA_sell", "AAPL", "sell", 5.0, 150.0, 0.0,
+            allow_short=True, strategy_id="strategy_A",
+        )
+        assert success is True
+
+    # Assertions run inside the session scope -- SQLAlchemy expires ORM
+    # attributes on commit, so reading them after the session has closed
+    # (and committed) raises DetachedInstanceError.
+    with session_scope(store.Session) as session:
+        untagged_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="untagged").first()
+        strat_a_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="strategy_A").first()
+        closed_untagged = session.query(PaperClosedTrade).filter_by(strategy_id="untagged").all()
+
+        assert untagged_pos is not None
+        assert untagged_pos.qty == pytest.approx(10.0)  # untouched
+
+        assert strat_a_pos is not None
+        assert strat_a_pos.qty == pytest.approx(-5.0)  # its own new short
+
+        assert closed_untagged == []  # untagged's position was never closed
+
+
+def test_untagged_fallback_works_when_explicitly_requested(store):
+    """The untagged fallback still works when a caller explicitly opts in
+    via allow_untagged_fallback=True, and the resulting closed trade is
+    correctly attributed to 'untagged' (the actual position owner being
+    closed), not to the calling strategy_id."""
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        assert store.apply_fill("legacy_buy2", "AAPL", "buy", 10.0, 100.0, 0.0) is True
+
+        success = store.apply_fill(
+            "stratA_sell2", "AAPL", "sell", 5.0, 150.0, 0.0,
+            strategy_id="strategy_A", allow_untagged_fallback=True,
+        )
+        assert success is True
+
+    with session_scope(store.Session) as session:
+        untagged_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="untagged").first()
+        strat_a_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="strategy_A").first()
+        closed = session.query(PaperClosedTrade).filter_by(symbol="AAPL").all()
+
+        # The untagged long was reduced (closed against) -- no new
+        # strategy_A position was opened.
+        assert untagged_pos is not None
+        assert untagged_pos.qty == pytest.approx(5.0)
+        assert strat_a_pos is None
+
+        assert len(closed) == 1
+        assert closed[0].strategy_id == "untagged"
+
+
+def test_untagged_fallback_multi_leg_gated_by_default(store):
+    """The same strict opt-in gate applies to apply_multi_leg_fill's
+    per-leg untagged fallback -- a strategy_A multi-leg open must not
+    silently borrow an untagged single-leg position on one of its legs."""
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        # Legacy untagged short call position on the leg strategy_A is
+        # about to "buy" (which, under the old unconditional fallback,
+        # would have been reinterpreted as closing this untagged short).
+        assert store.apply_fill(
+            "legacy_short_call", "AAPL 2026-09-18 $150.00 CALL", "sell", 2.0, 100.0, 0.0,
+            allow_short=True,
+        ) is True
+
+        legs = [
+            {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "buy", "qty": 2.0, "fill_price": 250.0},
+            {"symbol": "AAPL 2026-09-18 $155.00 CALL", "side": "sell", "qty": 2.0, "fill_price": 100.0},
+        ]
+        commission = 2.60
+        net_cash_impact = -(300.0 + commission)
+
+        success = store.apply_multi_leg_fill(
+            client_order_id="stratA_multi",
+            symbol="AAPL",
+            strategy_name="Bull Call Spread",
+            contracts=2,
+            legs=legs,
+            net_cash_impact=net_cash_impact,
+            commission_and_fees=commission,
+            strategy_id="strategy_A",
+        )
+        assert success is True
+
+    with session_scope(store.Session) as session:
+        untagged_short = (
+            session.query(PaperPosition)
+            .filter_by(symbol="AAPL 2026-09-18 $150.00 CALL", strategy_id="untagged")
+            .first()
+        )
+        strat_a_long = (
+            session.query(PaperPosition)
+            .filter_by(symbol="AAPL 2026-09-18 $150.00 CALL", strategy_id="strategy_A")
+            .first()
+        )
+        closed_untagged = session.query(PaperClosedTrade).filter_by(strategy_id="untagged").all()
+
+        assert untagged_short is not None
+        assert untagged_short.qty == pytest.approx(-2.0)  # untouched
+        assert strat_a_long is not None
+        assert strat_a_long.qty == pytest.approx(2.0)  # its own new long leg
+        assert closed_untagged == []
+
+
+def test_multi_leg_reject_uses_bare_symbol_not_strategy_prefixed(store):
+    """The multi-leg price-validation-rejection path used to insert the
+    REJECTED order under f"{strategy_name} {symbol}" instead of the bare
+    symbol -- inconsistent with every other rejection/success path in this
+    file (strategy attribution lives in strategy_id, not the symbol
+    string)."""
+    legs = [
+        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 0.0},
+    ]
+    success = store.apply_multi_leg_fill(
+        client_order_id="bad_price_order",
+        symbol="AAPL",
+        strategy_name="Bull Call Spread",
+        contracts=1,
+        legs=legs,
+        net_cash_impact=-500.0,
+        commission_and_fees=1.30,
+    )
+    assert success is False
+
+    with session_scope(store.Session) as session:
+        po = session.query(PaperOrder).filter_by(client_order_id="bad_price_order").first()
+        assert po is not None
+        assert po.symbol == "AAPL"
+        assert "Bull Call Spread" not in po.symbol
+
+
+def test_retag_position_simple_move(store):
+    """retag_position moves a position with no existing target row."""
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        assert store.apply_fill("retag_buy", "AAPL", "buy", 10.0, 150.0, 0.0) is True
+
+    moved = store.retag_position("AAPL", "untagged", "strategy_B")
+    assert moved is True
+
+    with session_scope(store.Session) as session:
+        untagged_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="untagged").first()
+        strat_b_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="strategy_B").first()
+
+        assert untagged_pos is None
+        assert strat_b_pos is not None
+        assert strat_b_pos.qty == pytest.approx(10.0)
+        assert strat_b_pos.avg_entry_price == pytest.approx(150.0)
+
+
+def test_retag_position_returns_false_when_no_source(store):
+    assert store.retag_position("AAPL", "untagged", "strategy_B") is False
+
+
+def test_retag_position_merges_with_existing_target_same_sign(store):
+    """When the target (symbol, to_strategy_id) already has a same-sign
+    position, retag_position weighted-averages the two cost bases rather
+    than raising a PK collision."""
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        # untagged: 10 shares @ 100
+        assert store.apply_fill("merge_untagged_buy", "AAPL", "buy", 10.0, 100.0, 0.0) is True
+        # strategy_B already has its own: 10 shares @ 200
+        assert store.apply_fill(
+            "merge_stratb_buy", "AAPL", "buy", 10.0, 200.0, 0.0, strategy_id="strategy_B",
+        ) is True
+
+    moved = store.retag_position("AAPL", "untagged", "strategy_B")
+    assert moved is True
+
+    with session_scope(store.Session) as session:
+        untagged_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="untagged").first()
+        strat_b_pos = session.query(PaperPosition).filter_by(symbol="AAPL", strategy_id="strategy_B").first()
+
+        assert untagged_pos is None
+        assert strat_b_pos is not None
+        assert strat_b_pos.qty == pytest.approx(20.0)
+        # Weighted average: (10*100 + 10*200) / 20 == 150
+        assert strat_b_pos.avg_entry_price == pytest.approx(150.0)
