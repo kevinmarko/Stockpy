@@ -31,6 +31,7 @@ Branch: `fix-options-pop-and-vol-skew-drift`
 - [x] Full `npm test` (webapp) — 169 files / 1869 tests, no regressions.
 - [x] PR artifacts (`.claude/options_pop_vol_skew_fix_*`) committed per
       CLAUDE.md's PR-artifact convention.
-- [ ] `docs/known_issues/options_matrix_pop_truncation_and_vol_skew_drift.md`
-      write-up, with the real PR link filled in once the PR is opened.
-- [ ] Open PR against `main`.
+- [x] Open PR against `main` — [PR #895](https://github.com/kevinmarko/Stockpy/pull/895).
+- [x] `docs/known_issues/options_matrix_pop_truncation_and_vol_skew_drift.md`
+      write-up, with the real PR link filled in, plus a
+      `docs/known_issues/README.md` index row.
