@@ -117,9 +117,75 @@ class PaperAccountStore:
             self.engine = create_db_engine(db_url)
             Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
-        
+
+        # transactions_store bridge (PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED,
+        # PR 872 remediation, Task 1): companion TransactionsStore, constructed
+        # ONCE here (never mid-fill-transaction) and bound to this EXACT same
+        # db_url -- see _init_transactions_bridge's own docstring for why both
+        # of those matter. None when the bridge is disabled/unavailable/
+        # readonly; _record_closed_trade checks this before using it.
+        self._transactions_store = None
+        # Visibility counter (Task 1, Step 3): a persistently-failing bridge
+        # write must be observable, not just silently logged -- see
+        # _record_closed_trade's own comment for why this fails OPEN, not
+        # closed. Incremented once per failed per-trade bridge attempt;
+        # inspectable by callers/tests as store._transactions_bridge_failures.
+        self._transactions_bridge_failures = 0
+
         if not readonly:
             self._ensure_account_exists()
+            if getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False):
+                self._init_transactions_bridge(db_url)
+
+    def _init_transactions_bridge(self, db_url: str) -> None:
+        """Construct the companion TransactionsStore used by
+        ``_record_closed_trade``'s bridge, bound to the SAME ``db_url`` as
+        this ``PaperAccountStore`` (not whatever ``resolve_database_url()``
+        would otherwise default to -- a real, empirically-confirmed bug this
+        fix also closes: a ``PaperAccountStore`` constructed against a
+        non-default ``db_url`` used to have its bridge writes silently land
+        in the WRONG database, since a bare ``transactions_store.
+        TransactionsStore()`` call always re-resolves the default URL).
+
+        Deliberately done HERE, at construction time, rather than lazily
+        inside ``_record_closed_trade`` (which always runs nested inside an
+        open ``session_scope(self.Session)`` transaction): this is where the
+        one-time ``Base.metadata.create_all`` schema bootstrap for the
+        ``trades`` table happens, and running that DDL/reflection while a
+        DIFFERENT connection to the same file-backed SQLite DB is mid-write
+        is exactly the same class of same-process contention the bridge
+        itself is designed to avoid (see this file's own ``_record_closed_trade``
+        comment for the empirical finding on that). Doing it once here means
+        every actual per-trade bridge write can reuse the caller's own
+        session (via ``record_trade``/``close_trade``'s new ``session=``
+        param) and never open a second connection at all.
+
+        Never raises: a bridge that fails to initialize degrades to
+        disabled (``self._transactions_store`` stays ``None``) rather than
+        aborting paper-store construction -- this is an ancillary warm-up
+        feed for sizing.kelly, not a load-bearing part of the paper broker.
+        """
+        try:
+            import transactions_store
+            # Ensure the `trades` table exists on THIS store's OWN engine
+            # (`self.engine`), not merely on the companion TransactionsStore's
+            # separately-pooled Engine object below. For a file-backed DB
+            # both point at the same physical file, so this looks redundant
+            # -- but for `sqlite:///:memory:` (the convention this codebase's
+            # own test suite uses for PaperAccountStore fixtures, and a real
+            # empirical failure mode confirmed while building this fix) each
+            # SQLAlchemy Engine gets its OWN private, unshared in-memory
+            # database: schema created via `TransactionsStore.__init__`'s
+            # `Base.metadata.create_all(self.engine)` on ITS engine is
+            # invisible to a session bound to a DIFFERENT engine, which is
+            # exactly what `record_trade(..., session=session)` uses below --
+            # confirmed empirically as "sqlite3.OperationalError: no such
+            # table: trades" before this line was added.
+            transactions_store.Base.metadata.create_all(self.engine, checkfirst=True)
+            self._transactions_store = transactions_store.TransactionsStore(db_url=db_url)
+        except Exception as exc:
+            logger.error(f"transactions_store bridge failed to initialize (bridge disabled for this store instance): {exc}")
+            self._transactions_store = None
 
     def _ensure_account_exists(self):
         with self.engine.begin() as conn:
@@ -1288,31 +1354,100 @@ class PaperAccountStore:
         session.add(pct)
         session.flush()
 
-        if getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", True):
+        # transactions_store bridge (PR 872 remediation, Task 1).
+        #
+        # EMPIRICAL FINDING on the predicted same-process WAL-writer deadlock:
+        # REFUTED as a hard deadlock/failure, but the underlying contention it
+        # predicted is real. A standalone repro (real file-backed SQLite,
+        # WAL + busy_timeout=5000ms, matching db_config.py's own PRAGMAs) that
+        # opened+closed a paper position with a SECOND, independently-
+        # constructed `transactions_store.TransactionsStore()` bridged mid-
+        # transaction (the exact prior code below this comment) never raised
+        # `sqlite3.OperationalError: database is locked` and the bridged row
+        # DID land -- but the closing call's wall-clock cost was ~30-100x the
+        # baseline single-writer cost (0.28-0.48s vs. ~0.005s), consistent
+        # with the second connection genuinely contending for and eventually
+        # winning the WAL writer lock via busy_timeout retries rather than
+        # failing outright. Under heavier concurrency or a slower disk this
+        # is exactly the kind of contention that COULD cross the 5s
+        # busy_timeout and start raising for real, so it is fixed rather than
+        # left as "doesn't reproduce today" -- see PaperAccountStore.
+        # _init_transactions_bridge's docstring for the fix (write through
+        # the SAME session/connection/transaction as the paper close,
+        # instead of opening a second one mid-transaction), which also fixes
+        # two bugs the repro surfaced independently: (a) a bare
+        # `TransactionsStore()` here re-resolves the DEFAULT db_url rather
+        # than reusing whichever db_url this PaperAccountStore was
+        # constructed with, so a non-default-db_url store's bridge writes
+        # used to land in the WRONG database entirely; (b) the two writes
+        # were not atomic with each other -- a rollback of the outer paper-
+        # close transaction left an already-committed, phantom row in
+        # `trades`. Sharing one session/transaction fixes both.
+        if self._transactions_store is not None:
             try:
-                import transactions_store
-                store = transactions_store.TransactionsStore()
-                trade_id = store.record_trade(
-                    symbol=pos.symbol,
-                    side="buy" if is_long else "sell",
-                    # Real entry time when known; None lets
-                    # transactions_store.record_trade's own documented
-                    # fallback apply (it substitutes "now" internally when
-                    # entry_ts is falsy) rather than us fabricating a "now"
-                    # here and passing it off as real.
-                    entry_ts=entry_ts,
-                    entry_price=pos.avg_entry_price,
-                    # No option_multiplier scaling -- shares/contracts is the
-                    # raw closed quantity, unscaled (same fix as realized_pnl
-                    # above; entry_price/exit_price already carry the correct
-                    # per-contract convention for options).
-                    shares=closed_qty_abs,
-                    strategy=pos.strategy_id,
-                    notes=f"Paper bridge, reason: {close_reason}"
-                )
-                store.close_trade(trade_id, now, exit_price)
+                # SAVEPOINT isolation, not a bare try/except around the raw
+                # session calls: an exception raised mid-flush on a SHARED
+                # SQLAlchemy Session (e.g. an IntegrityError, or any other
+                # DBAPI error) leaves that Session's transaction marked
+                # inactive -- SQLAlchemy then refuses ANY further use of it
+                # (`PendingRollbackError: ... first issue Session.rollback()`)
+                # until an explicit rollback happens. Since `session` here is
+                # the SAME session the outer apply_fill/apply_multi_leg_fill/
+                # apply_roll_fill call is still using for the REST of that
+                # fill (further position/cash updates after this call
+                # returns), catching the bridge's exception alone is NOT
+                # enough to keep "fails open" honest -- confirmed
+                # empirically: without begin_nested(), a forced bridge
+                # failure corrupted the outer session and made the very
+                # apply_fill call that triggered it raise, too. `with
+                # session.begin_nested()` issues a SAVEPOINT for just this
+                # block; on the exception path below it rolls back to that
+                # SAVEPOINT (undoing only the bridge's own partial writes)
+                # and leaves the outer transaction fully usable, verified in
+                # this fix's own test coverage.
+                with session.begin_nested():
+                    trade_id = self._transactions_store.record_trade(
+                        symbol=pos.symbol,
+                        side="buy" if is_long else "sell",
+                        # Real entry time when known; None lets
+                        # transactions_store.record_trade's own documented
+                        # fallback apply (it substitutes "now" internally when
+                        # entry_ts is falsy) rather than us fabricating a "now"
+                        # here and passing it off as real.
+                        entry_ts=entry_ts,
+                        entry_price=pos.avg_entry_price,
+                        # No option_multiplier scaling -- shares/contracts is
+                        # the raw closed quantity, unscaled (same fix as
+                        # realized_pnl above; entry_price/exit_price already
+                        # carry the correct per-contract convention for
+                        # options).
+                        shares=closed_qty_abs,
+                        strategy=pos.strategy_id,
+                        notes=f"Paper bridge, reason: {close_reason}",
+                        # Reuse the SAME session/transaction as the pct row
+                        # just above (this method's own `session` param) --
+                        # see the comment block above for why.
+                        session=session,
+                    )
+                    self._transactions_store.close_trade(trade_id, now, exit_price, session=session)
             except Exception as exc:
-                logger.error(f"Failed to bridge paper trade to transactions_store: {exc}")
+                # This fails OPEN, not closed: the paper close above has
+                # already been added to `session` and will still commit (or
+                # roll back together with a genuine paper-side failure) --
+                # only this bridge write is lost. A silently-failing bridge
+                # defeats the entire point of this feature (sizing.kelly /
+                # evaluation_engine staying starved), so make repeated
+                # failure observable rather than a single swallowed log line:
+                # a stable, greppable message prefix plus an in-process
+                # counter a caller/test can inspect
+                # (`self._transactions_bridge_failures`).
+                self._transactions_bridge_failures += 1
+                logger.warning(
+                    f"transactions_store bridge failed (fails OPEN -- paper "
+                    f"close still succeeded; only this bridge write did not "
+                    f"land; {self._transactions_bridge_failures} failure(s) "
+                    f"on this store instance so far): {exc}"
+                )
 
     def get_orders(self, status: Optional[str] = None, limit: int = 100) -> List[OrderResult]:
         if self._readonly:

@@ -86,36 +86,74 @@ class TransactionsStore:
         strategy: Optional[str] = None,
         notes: Optional[str] = None,
         conviction: Optional[float] = None,
+        *,
+        session=None,
     ) -> int:
-        """Records a new open trade. Returns the trade_id."""
+        """Records a new open trade. Returns the trade_id.
+
+        ``session`` (PR 872 remediation, Task 1): optional externally-managed
+        SQLAlchemy ``Session`` to write through instead of opening a fresh one
+        via ``session_scope(self.Session)``. When provided, the CALLER owns the
+        transaction boundary (commit/rollback/close) -- this method only
+        ``add``s the row and ``flush``es to populate the autoincrement PK, it
+        never commits. This exists so a caller that is itself mid-transaction
+        on the SAME physical database (e.g.
+        ``data/paper_account_store.py::_record_closed_trade``, bridging a
+        closed paper trade into this ledger) can write through its OWN
+        session/connection instead of opening a second, independent
+        ``TransactionsStore()`` against the same file-backed SQLite DB while
+        the first transaction is still open -- see that call site's own
+        comment for the full incident writeup (WAL single-writer contention,
+        plus the two writes no longer being atomic with each other on a
+        rollback). ``self.engine``/``self.Session`` are unused on this path;
+        the row lands wherever the passed-in ``session`` is bound, which the
+        caller is responsible for pointing at the same database this
+        ``TransactionsStore`` was constructed against (schema creation for
+        ``trades`` must have already happened on that bind -- see
+        ``PaperAccountStore``'s bridge-init comment).
+        """
+        # Ensure naive datetime for SQL consistency
+        naive_entry_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.now(timezone.utc).replace(tzinfo=None)
+        trade = Trade(
+            symbol=symbol.upper().strip(),
+            side=side.lower().strip(),
+            entry_ts=naive_entry_ts,
+            entry_price=float(entry_price),
+            shares=float(shares),
+            strategy=strategy,
+            notes=notes,
+            conviction=float(conviction) if conviction is not None else None,
+        )
+        if session is not None:
+            session.add(trade)
+            session.flush()  # populate the autoincrement PK; caller commits
+            return int(trade.trade_id)
         with session_scope(self.Session) as session:
-            # Ensure naive datetime for SQL consistency
-            naive_entry_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.now(timezone.utc).replace(tzinfo=None)
-            trade = Trade(
-                symbol=symbol.upper().strip(),
-                side=side.lower().strip(),
-                entry_ts=naive_entry_ts,
-                entry_price=float(entry_price),
-                shares=float(shares),
-                strategy=strategy,
-                notes=notes,
-                conviction=float(conviction) if conviction is not None else None,
-            )
             session.add(trade)
             session.flush()  # populate the autoincrement PK before the session closes
             trade_id = int(trade.trade_id)
         return trade_id
 
-    def close_trade(self, trade_id: int, exit_ts: datetime, exit_price: float) -> None:
-        """Closes an open trade by trade_id."""
-        with session_scope(self.Session) as session:
-            trade = session.query(Trade).filter(Trade.trade_id == trade_id).first()
+    def close_trade(self, trade_id: int, exit_ts: datetime, exit_price: float, *, session=None) -> None:
+        """Closes an open trade by trade_id.
+
+        ``session``: see ``record_trade``'s docstring -- same externally-
+        managed-session contract (caller owns commit/rollback/close).
+        """
+        def _apply(s):
+            trade = s.query(Trade).filter(Trade.trade_id == trade_id).first()
             if not trade:
                 raise ValueError(f"Trade ID {trade_id} not found.")
             # Ensure naive datetime for SQL consistency
             naive_exit_ts = exit_ts.replace(tzinfo=None) if exit_ts else datetime.now(timezone.utc).replace(tzinfo=None)
             trade.exit_ts = naive_exit_ts
             trade.exit_price = float(exit_price)
+
+        if session is not None:
+            _apply(session)
+            return
+        with session_scope(self.Session) as session:
+            _apply(session)
 
     def open_trades_df(self) -> pd.DataFrame:
         """Returns all open trades as a pandas DataFrame.

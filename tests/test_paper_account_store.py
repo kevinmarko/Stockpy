@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -6,6 +7,7 @@ import pytest
 from data.paper_account_store import PaperAccountStore, PaperClosedTrade, PaperOrder, PaperPosition
 from db_config import session_scope
 from execution.broker_base import OrderStatus
+from settings import settings
 
 # We will use an in-memory SQLite DB for tests
 TEST_DB_URL = "sqlite:///:memory:"
@@ -868,3 +870,92 @@ def test_retag_position_merges_with_existing_target_same_sign(store):
         assert strat_b_pos.qty == pytest.approx(20.0)
         # Weighted average: (10*100 + 10*200) / 20 == 150
         assert strat_b_pos.avg_entry_price == pytest.approx(150.0)
+
+
+# ---------------------------------------------------------------------------
+# transactions_store bridge (PR 872 remediation, Task 1: same-process WAL
+# contention repro + fix, non-atomicity fix, fails-open visibility fix).
+# ---------------------------------------------------------------------------
+
+
+def test_transactions_store_bridge_lands_row_fast_and_correctly(tmp_path, monkeypatch):
+    """A bridged closed trade must land in transactions_store's real `trades`
+    table (not just "no exception raised"), on the SAME db_url the
+    PaperAccountStore itself was constructed with, and without an anomalous
+    multi-second stall (the empirically-confirmed same-process WAL-writer
+    contention this fix closes -- see _record_closed_trade's own comment for
+    the full repro writeup). Uses a real, file-backed SQLite DB (not
+    `:memory:`) so this actually exercises db_config.py's WAL + busy_timeout
+    PRAGMAs, matching the incident's real conditions."""
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", True)
+
+    db_path = tmp_path / "bridge_fast.db"
+    db_url = f"sqlite:///{db_path}"
+    store = PaperAccountStore(db_url=db_url)
+    assert store._transactions_store is not None
+
+    assert store.apply_fill("bridge_buy", "TEST", "buy", 10.0, 100.0, strategy_id="bridge_strat") is True
+
+    t0 = time.time()
+    assert store.apply_fill("bridge_sell", "TEST", "sell", 10.0, 110.0, strategy_id="bridge_strat") is True
+    elapsed = time.time() - t0
+
+    assert store._transactions_bridge_failures == 0
+    # Generous bound: a genuinely-contended second connection under this
+    # file's own busy_timeout=5000ms PRAGMA would take multiple seconds;
+    # the fixed (session-shared) path costs the same single write as any
+    # other apply_fill call, empirically ~5ms.
+    assert elapsed < 1.0, f"bridge write took {elapsed:.3f}s -- possible regression to lock contention"
+
+    import transactions_store
+    ts = transactions_store.TransactionsStore(db_url=db_url)
+    df = ts.closed_trades_df()
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["symbol"] == "TEST"
+    assert row["strategy"] == "bridge_strat"
+    assert row["entry_price"] == pytest.approx(100.0)
+    assert row["exit_price"] == pytest.approx(110.0)
+    assert row["shares"] == pytest.approx(10.0)
+
+
+def test_transactions_store_bridge_failure_is_non_fatal_and_visible(monkeypatch, caplog):
+    """A bridge write that fails must (a) leave the paper close fully
+    successful (position closed, cash updated) and (b) be OBSERVABLE --
+    both the in-process failure counter and a greppable WARNING log."""
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", True)
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    assert store._transactions_store is not None
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced bridge failure for test")
+
+    monkeypatch.setattr(store._transactions_store, "record_trade", _boom)
+
+    assert store.apply_fill("boom_buy", "TEST", "buy", 5.0, 50.0, strategy_id="s1") is True
+
+    with caplog.at_level("WARNING"):
+        assert store.apply_fill("boom_sell", "TEST", "sell", 5.0, 55.0, strategy_id="s1") is True
+
+    # (a) The paper close itself is unaffected by the bridge failure.
+    assert store.get_open_positions() == []
+    account = store.get_account()
+    assert account.cash == pytest.approx(100000.0 - 5.0 * 50.0 + 5.0 * 55.0)
+
+    # (b) Visible: counter incremented, and a stable greppable log message.
+    assert store._transactions_bridge_failures == 1
+    assert any(
+        "transactions_store bridge failed" in rec.message for rec in caplog.records
+    ), "expected a greppable 'transactions_store bridge failed' WARNING log"
+
+
+def test_transactions_store_bridge_disabled_by_default(tmp_path):
+    """PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED defaults False -- a
+    PaperAccountStore constructed with today's real default settings must
+    never construct the bridge companion store at all (today's exact
+    pre-feature behavior preserved)."""
+    assert settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED is False
+    db_url = f"sqlite:///{tmp_path / 'bridge_off.db'}"
+    store = PaperAccountStore(db_url=db_url)
+    assert store._transactions_store is None
