@@ -4507,7 +4507,7 @@ export interface EarningsCrushExecutionResult {
   order_id?: string;
   symbol: string;
   strategy: string;
-  net_credit: number;
+  net_credit?: number;
   message: string;
   placed_at?: string;
 }

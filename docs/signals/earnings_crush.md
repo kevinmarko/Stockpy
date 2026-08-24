@@ -91,3 +91,56 @@ here without cross-referencing this file.
    `TestEvaluateEarningsCrushCandidates::test_same_day_expiration_rejected_in_favor_of_later_one`.
    Full incident write-up:
    [`docs/known_issues/earnings_crush_bmo_amc_bar_alignment.md`](../known_issues/earnings_crush_bmo_amc_bar_alignment.md).
+
+2. **FIXED (2026-08-24) — `historical_moves`/`company_name` computed but discarded before
+   reaching the API response; `net_credit` fabricatable on a partial executor response.**
+   A follow-up audit of this pilot (post item 1 above) found two more real gaps, both fixed in
+   the same pass.
+
+   First: `get_historical_earnings_moves()` already computes a genuine, bar-derived
+   `moves` list (per-quarter `event_date`/`gap_pct`/`reaction_session_inferred`/etc — the
+   exact record item 1 above introduced `reaction_session_inferred` onto) and threads it into
+   `evaluate_earnings_crush_candidates()`'s `historical_summary`, but
+   `to_earnings_crush_candidate_response()` — the reshape step `GET
+   /pilots/options/earnings-crush/candidates` actually serves — never read it, so
+   `webapp/src/components/options/EarningsCrushScanner.tsx`'s historical-move bar chart had no
+   real data to render. Similarly, `evaluate_earnings_crush_candidates()` never resolved a
+   `company_name` at all, so the scanner's symbol search (`c.company_name?.toUpperCase()`) and
+   header line always fell back to the bare ticker. Fixed by (a) adding `candidate["company_name"]`
+   — resolved defensively via `store.get_fundamentals_raw(sym)` behind a `hasattr()` guard, since
+   `tests/test_earnings_crush.py`'s `MockHistoricalStore` fixture does not implement that method
+   and the per-symbol loop's outer `try/except Exception: continue` would otherwise silently drop
+   the whole candidate on a bare `AttributeError`; and (b) exposing `hist_res["moves"]` on
+   `historical_summary["moves"]`, then mapping it to `response["historical_moves"]` — as
+   percent-scaled floats (`gap_pct * 100`) and **reversed to oldest-first**. The reversal is
+   load-bearing: `hist_res["moves"]` is newest-first (mirrors `HistoricalStore.get_earnings_events`'s
+   `ORDER BY event_date DESC`), but the scanner's bar chart labels index 0 as `Q-8` (oldest)
+   through index 7 as `Q-1` (most recent) — serving the list unreversed would have silently
+   mislabeled every bar's quarter.
+
+   `report_timing` (BMO/AMC/DURING_HOURS) was deliberately **not** added anywhere in this pass,
+   even though `webapp/src/api/types.ts`'s `EarningsCrushCandidate` interface already declares it
+   as an optional field. As item 1 above already established (verified against FMP's own
+   published `/earnings` schema), no real per-event reporting-time/session source exists in this
+   codebase — `get_historical_earnings_moves()`'s own `timing_data_available: False` field is the
+   authoritative statement of that gap. Fabricating a BMO/AMC label here would violate CONSTRAINT
+   #4 (never fabricate a metric/field); the field simply stays unset until a real source exists.
+
+   Second: `execute_earnings_crush_trade()`'s success branch (`OptionsPaperExecutor.
+   execute_earnings_crush_trade` path) never returned a `net_credit` at all, even though the
+   webapp unconditionally read `res.net_credit.toFixed(2)` in its success toast — a `TypeError`
+   waiting to happen the first time that field was undefined. Fixed by reconstructing the real
+   pre-commission per-share net credit from the executor's own returned fields
+   (`(net_cash_impact + commission) / (100 * contracts)`) rather than fabricating one; when
+   `net_cash_impact`/`commission` are absent from the executor's response, `net_credit` is
+   honestly `None` (CONSTRAINT #4), and the webapp now guards the display with
+   `res.net_credit?.toFixed(2) ?? "—"`. The pre-existing exception-fallback branch (the one that
+   calls `pilots.paper_broker_options_order.execute_paper_order` and returns its result directly)
+   was deliberately left untouched — a separate, pre-existing, out-of-scope inconsistency in a
+   shared module.
+
+   Regression-tested by `tests/test_earnings_crush.py`'s `TestCompanyNameResolution`,
+   `TestToEarningsCrushCandidateResponseHistoricalMoves`, and
+   `TestExecuteEarningsCrushTradeNetCredit` classes. Full incident write-up (filed as a
+   companion PR):
+   [`docs/known_issues/earnings_crush_uoa_followup_audit_findings.md`](../known_issues/earnings_crush_uoa_followup_audit_findings.md).
