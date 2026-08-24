@@ -67,6 +67,8 @@ class TestFetchMacroHistoryIncludesT10YIE:
             "BAA10Y": _daily_series(2.0),
             "UNRATE": _daily_series(4.0),
             "T10YIE": _daily_series(2.3),
+            "BAMLC0A0CM": _daily_series(3.5),
+            "FEDFUNDS": _daily_series(5.0),
         }
         engine = _make_engine(monkeypatch, series_map)
 
@@ -81,8 +83,8 @@ class TestFetchMacroHistoryIncludesT10YIE:
         pd.testing.assert_series_equal(
             history_df["T10YIE"].sort_index(), expected.sort_index(), check_names=False,
         )
-        # All six series present -- the pre-existing five plus T10YIE.
-        for col in ("VIXCLS", "T10Y2Y", "BAMLH0A0HYM2", "BAA10Y", "UNRATE", "T10YIE"):
+        # All eight series present -- the pre-existing six plus BAMLC0A0CM/FEDFUNDS.
+        for col in ("VIXCLS", "T10Y2Y", "BAMLH0A0HYM2", "BAA10Y", "UNRATE", "T10YIE", "BAMLC0A0CM", "FEDFUNDS"):
             assert col in history_df.columns
 
     def test_no_fred_client_failure_path_column_list_includes_t10yie(self):
@@ -98,18 +100,21 @@ class TestFetchMacroHistoryIncludesT10YIE:
         assert history_df.empty
         assert list(history_df.columns) == [
             "VIXCLS", "T10Y2Y", "BAMLH0A0HYM2", "BAA10Y", "UNRATE", "T10YIE",
+            "BAMLC0A0CM", "FEDFUNDS",
         ]
 
     def test_fetch_exception_failure_path_column_list_includes_t10yie(self, monkeypatch):
         # A mid-fetch exception (e.g. T10YIE itself unavailable) must degrade
-        # to the SAME six-column empty-DataFrame shape (CONSTRAINT #6 -- never
-        # a fabricated partial frame), not raise.
+        # to the SAME eight-column empty-DataFrame shape (CONSTRAINT #6 --
+        # never a fabricated partial frame), not raise.
         series_map = {
             "VIXCLS": _daily_series(15.0),
             "T10Y2Y": _daily_series(0.5),
             "BAMLH0A0HYM2": _daily_series(2.5),
             "BAA10Y": _daily_series(2.0),
             "UNRATE": _daily_series(4.0),
+            "BAMLC0A0CM": _daily_series(3.5),
+            "FEDFUNDS": _daily_series(5.0),
         }
         engine = _make_engine(monkeypatch, series_map, raise_on=frozenset({"T10YIE"}))
 
@@ -118,4 +123,83 @@ class TestFetchMacroHistoryIncludesT10YIE:
         assert history_df.empty
         assert list(history_df.columns) == [
             "VIXCLS", "T10Y2Y", "BAMLH0A0HYM2", "BAA10Y", "UNRATE", "T10YIE",
+            "BAMLC0A0CM", "FEDFUNDS",
         ]
+
+
+class TestFetchMacroHistoryIncludesBamlc0a0cmAndFedfunds:
+    """Regression coverage for the BAMLC0A0CM (investment-grade credit OAS)
+    and FEDFUNDS (Federal Funds Effective Rate) addition to
+    ``data_engine.DataEngine.fetch_macro_history()`` -- closes the gap where
+    ``api/pilots_api.py``'s ``get_transformer_forecast`` endpoint requested
+    these two series via ``HistoricalStore().get_macro(...)`` but
+    ``fetch_macro_history()`` never fetched them, so they always came back
+    as empty Series and the endpoint silently degraded to VIX/yield-curve-
+    only macro conditioning."""
+
+    def test_output_includes_real_bamlc0a0cm_and_fedfunds_columns(self, monkeypatch):
+        series_map = {
+            "VIXCLS": _daily_series(15.0),
+            "T10Y2Y": _daily_series(0.5),
+            "BAMLH0A0HYM2": _daily_series(2.5),
+            "BAA10Y": _daily_series(2.0),
+            "UNRATE": _daily_series(4.0),
+            "T10YIE": _daily_series(2.3),
+            "BAMLC0A0CM": _daily_series(3.5),
+            "FEDFUNDS": _daily_series(5.0),
+        }
+        engine = _make_engine(monkeypatch, series_map)
+
+        history_df = engine.fetch_macro_history()
+
+        assert "BAMLC0A0CM" in history_df.columns
+        assert "FEDFUNDS" in history_df.columns
+        assert not history_df["BAMLC0A0CM"].dropna().empty
+        assert not history_df["FEDFUNDS"].dropna().empty
+        # Real (mocked-but-realistic) values, not fabricated placeholders --
+        # the values round-trip exactly from the fake FRED source.
+        expected_baml = series_map["BAMLC0A0CM"]
+        expected_baml.index = pd.to_datetime(expected_baml.index)
+        pd.testing.assert_series_equal(
+            history_df["BAMLC0A0CM"].sort_index(), expected_baml.sort_index(), check_names=False,
+        )
+        expected_fedfunds = series_map["FEDFUNDS"]
+        expected_fedfunds.index = pd.to_datetime(expected_fedfunds.index)
+        pd.testing.assert_series_equal(
+            history_df["FEDFUNDS"].sort_index(), expected_fedfunds.sort_index(), check_names=False,
+        )
+
+    def test_no_fred_client_failure_path_column_list_includes_baml_and_fedfunds(self):
+        # self.fred is None -> the first (no-FRED-initialized) empty-DataFrame
+        # literal must also list BAMLC0A0CM/FEDFUNDS for schema consistency
+        # with the success path.
+        engine = DataEngine.__new__(DataEngine)
+        engine.fred = None
+        engine.fred_key = ""
+
+        history_df = engine.fetch_macro_history()
+
+        assert history_df.empty
+        assert "BAMLC0A0CM" in history_df.columns
+        assert "FEDFUNDS" in history_df.columns
+
+    def test_fetch_exception_failure_path_column_list_includes_baml_and_fedfunds(self, monkeypatch):
+        # A mid-fetch exception (e.g. FEDFUNDS itself unavailable) must
+        # degrade to the SAME eight-column empty-DataFrame shape
+        # (CONSTRAINT #6 -- never a fabricated partial frame), not raise.
+        series_map = {
+            "VIXCLS": _daily_series(15.0),
+            "T10Y2Y": _daily_series(0.5),
+            "BAMLH0A0HYM2": _daily_series(2.5),
+            "BAA10Y": _daily_series(2.0),
+            "UNRATE": _daily_series(4.0),
+            "T10YIE": _daily_series(2.3),
+            "BAMLC0A0CM": _daily_series(3.5),
+        }
+        engine = _make_engine(monkeypatch, series_map, raise_on=frozenset({"FEDFUNDS"}))
+
+        history_df = engine.fetch_macro_history()
+
+        assert history_df.empty
+        assert "BAMLC0A0CM" in history_df.columns
+        assert "FEDFUNDS" in history_df.columns
