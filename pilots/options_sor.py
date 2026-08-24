@@ -555,7 +555,14 @@ def analyze_routing_options(
         active_spread = active_leg["spread"]
         threshold_move = max(0.02, 0.5 * active_spread)
         if spot_val > 0 and (volatility or 0.25) > 0:
-            sigma_opt = max(0.001, active_leg["delta"] * spot_val * (volatility or 0.25) * math.sqrt(tau_years))
+            # abs() is required: active_leg["delta"] is the raw (signed) Black-Scholes
+            # delta, negative for a put. Used unsigned here as `sigma_opt` is a
+            # stochastic SCALE parameter (feeds norm.cdf as a magnitude, not a
+            # direction) -- without abs(), a put active leg collapses sigma_opt to the
+            # 0.001 floor (since delta*spot*vol*sqrt(tau) goes negative), which then
+            # floors hung_prob at its 0.02 clip regardless of real hazard. Matches the
+            # existing correct pattern for `unhedged_delta` two lines above.
+            sigma_opt = max(0.001, abs(active_leg["delta"]) * spot_val * (volatility or 0.25) * math.sqrt(tau_years))
             hung_prob = float(np.clip(2.0 * (1.0 - norm.cdf(threshold_move / sigma_opt)), 0.02, 0.85))
         else:
             hung_prob = 0.15
