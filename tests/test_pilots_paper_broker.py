@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
-from pilots.paper_broker import get_account, get_positions, get_orders, get_portfolio_greeks
+from pilots.paper_broker import get_account, get_positions, get_orders, get_closed_trades, get_portfolio_greeks
 from settings import settings
 import api.pilots_api as pilots_api
 
@@ -24,13 +24,23 @@ def test_get_account(mock_store):
 @patch("pilots.paper_broker.PaperAccountStore")
 def test_get_positions(mock_store):
     mock_instance = mock_store.return_value
-    pos = MagicMock(symbol="AAPL", qty=10, avg_entry_price=100.0, market_value=1500.0, unrealized_pl=500.0)
+    pos = MagicMock(
+        symbol="AAPL", qty=10, avg_entry_price=100.0, market_value=1500.0, unrealized_pl=500.0,
+        strategy_id="strategy_A", pilot_id="pilot-1", experiment_arm="control",
+    )
     mock_instance.get_open_positions.return_value = [pos]
 
     result = get_positions()
-    
+
     mock_store.assert_called_with(readonly=True)
-    assert result == [{"symbol": "AAPL", "qty": 10, "avg_cost": 100.0, "current_price": 150.0, "market_value": 1500.0, "unrealized_pl": 500.0, "unrealized_pl_pct": 0.5}]
+    # Regression: strategy_id/pilot_id/experiment_arm were previously dropped
+    # even though PositionSnapshot already carries them (see docs bullet on
+    # this fix in CLAUDE.md).
+    assert result == [{
+        "symbol": "AAPL", "qty": 10, "avg_cost": 100.0, "current_price": 150.0,
+        "market_value": 1500.0, "unrealized_pl": 500.0, "unrealized_pl_pct": 0.5,
+        "strategy_id": "strategy_A", "pilot_id": "pilot-1", "experiment_arm": "control",
+    }]
 
 @patch("pilots.paper_broker.PaperAccountStore")
 def test_get_orders(mock_store):
@@ -42,6 +52,17 @@ def test_get_orders(mock_store):
     mock_store.assert_called_with(readonly=True)
     mock_instance.get_full_orders.assert_called_with(status="FILLED", limit=10)
     assert result == [{"order_id": "123"}]
+
+@patch("pilots.paper_broker.PaperAccountStore")
+def test_get_closed_trades(mock_store):
+    mock_instance = mock_store.return_value
+    mock_instance.get_full_closed_trades.return_value = [{"trade_id": 1, "symbol": "AAPL"}]
+
+    result = get_closed_trades(symbol="AAPL", limit=10)
+
+    mock_store.assert_called_with(readonly=True)
+    mock_instance.get_full_closed_trades.assert_called_with(symbol="AAPL", limit=10)
+    assert result == [{"trade_id": 1, "symbol": "AAPL"}]
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +284,33 @@ class TestExecutePaperOrder:
             )
         assert resp.status_code == 401
         mock_store_cls.return_value.apply_fill.assert_not_called()
+
+
+class TestGetPaperBrokerClosedTradesEndpoint:
+    @patch("pilots.paper_broker.get_closed_trades")
+    def test_returns_200_and_passes_through(self, mock_get_closed_trades):
+        mock_get_closed_trades.return_value = [
+            {"trade_id": 1, "symbol": "AAPL", "realized_pnl": 12.5, "strategy_id": "untagged"}
+        ]
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/paper-broker/closed-trades?symbol=AAPL&limit=5",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == [{"trade_id": 1, "symbol": "AAPL", "realized_pnl": 12.5, "strategy_id": "untagged"}]
+        mock_get_closed_trades.assert_called_with(symbol="AAPL", limit=5)
+
+    @patch("pilots.paper_broker.get_closed_trades")
+    def test_fails_closed_with_wrong_token(self, mock_get_closed_trades):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/paper-broker/closed-trades",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+        mock_get_closed_trades.assert_not_called()
 
 
 class TestStrategyOptionsEndpoints:

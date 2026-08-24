@@ -144,6 +144,7 @@ import type {
   PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
+  PaperBrokerClosedTrade,
   PaperBrokerResetResult,
   StrategyOptionsCandidatesResponse,
   StrategyOptionsExecutionResult,
@@ -1180,6 +1181,10 @@ const liveApi = {
   getPaperBrokerAccount: () => http<PaperBrokerAccount>("/pilots/paper-broker/account"),
   getPaperBrokerPositions: () => http<PaperBrokerPosition[]>("/pilots/paper-broker/positions"),
   getPaperBrokerOrders: (limit = 100) => http<PaperBrokerOrder[]>(`/pilots/paper-broker/orders?limit=${limit}`),
+  getPaperBrokerClosedTrades: (limit = 100, symbol?: string) =>
+    http<PaperBrokerClosedTrade[]>(
+      `/pilots/paper-broker/closed-trades?limit=${limit}${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ""}`
+    ),
   resetPaperBroker: (cash: number) =>
     http<PaperBrokerResetResult>("/pilots/paper-broker/reset", {
       method: "POST",

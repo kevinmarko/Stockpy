@@ -205,6 +205,7 @@ import type {
   PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
+  PaperBrokerClosedTrade,
   LiveTradeProposal,
   OptionsOrderRequest,
   OptionsOrderResult,
@@ -9733,11 +9734,15 @@ export const mockApi = {
       }
 
       if (orderSide === 'SELL') {
+        const closingAvgCost = existingPos!.avg_cost;
         paperAccount.cash += totalCost;
         existingPos!.qty -= qty;
         existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
         if (existingPos!.qty <= 0) {
           paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+          // Equity positions here are always long (this endpoint has no
+          // short-sale path), so the position's own opening side is "BUY".
+          pushMockClosedTrade({ symbol: orderSymbol, side: "BUY", qty, entryPrice: closingAvgCost, exitPrice: fillPrice });
         }
       } else {
         paperAccount.cash -= totalCost;
@@ -9754,7 +9759,10 @@ export const mockApi = {
             current_price: fillPrice,
             market_value: totalCost,
             unrealized_pl: 0,
-            unrealized_pl_pct: 0
+            unrealized_pl_pct: 0,
+            strategy_id: null,
+            pilot_id: null,
+            experiment_arm: null,
           });
         }
       }
@@ -9770,7 +9778,10 @@ export const mockApi = {
         status: 'filled',
         filled_qty: qty,
         filled_avg_price: fillPrice,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        strategy_id: null,
+        pilot_id: null,
+        experiment_arm: null,
       });
 
       return delay({
@@ -9821,9 +9832,18 @@ export const mockApi = {
 
         const existingPos = paperPositions.find(p => p.symbol === legSymbol);
         if (existingPos) {
+          const preCloseQty = existingPos.qty;
+          const preCloseAvgCost = existingPos.avg_cost;
           existingPos.qty += legQty;
           if (Math.abs(existingPos.qty) < 1e-6) {
             paperPositions = paperPositions.filter(p => p.symbol !== legSymbol);
+            pushMockClosedTrade({
+              symbol: legSymbol,
+              side: preCloseQty > 0 ? "BUY" : "SELL",
+              qty: Math.abs(preCloseQty),
+              entryPrice: preCloseAvgCost,
+              exitPrice: legPrice,
+            });
           }
         } else {
           paperPositions.push({
@@ -9833,7 +9853,10 @@ export const mockApi = {
             current_price: legPrice,
             market_value: Math.abs(legQty) * legPrice,
             unrealized_pl: 0,
-            unrealized_pl_pct: 0
+            unrealized_pl_pct: 0,
+            strategy_id: null,
+            pilot_id: null,
+            experiment_arm: null,
           });
         }
       });
@@ -9847,7 +9870,10 @@ export const mockApi = {
         status: 'filled',
         filled_qty: qty,
         filled_avg_price: fillPrice,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        strategy_id: null,
+        pilot_id: null,
+        experiment_arm: null,
       });
 
       return delay({
@@ -9892,9 +9918,18 @@ export const mockApi = {
       const legQty = isBuy ? qty : -qty;
       const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
       if (existingPos) {
+        const preCloseQty = existingPos.qty;
+        const preCloseAvgCost = existingPos.avg_cost;
         existingPos.qty += legQty;
         if (Math.abs(existingPos.qty) < 1e-6) {
           paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+          pushMockClosedTrade({
+            symbol: orderSymbol,
+            side: preCloseQty > 0 ? "BUY" : "SELL",
+            qty: Math.abs(preCloseQty),
+            entryPrice: preCloseAvgCost,
+            exitPrice: fillPrice * 100,
+          });
         }
       } else {
         paperPositions.push({
@@ -9904,7 +9939,10 @@ export const mockApi = {
           current_price: fillPrice * 100,
           market_value: Math.abs(legQty) * fillPrice * 100,
           unrealized_pl: 0,
-          unrealized_pl_pct: 0
+          unrealized_pl_pct: 0,
+          strategy_id: null,
+          pilot_id: null,
+          experiment_arm: null,
         });
       }
 
@@ -9918,7 +9956,10 @@ export const mockApi = {
         status: 'filled',
         filled_qty: qty,
         filled_avg_price: fillPrice,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        strategy_id: null,
+        pilot_id: null,
+        experiment_arm: null,
       });
 
       return delay({
@@ -12242,11 +12283,16 @@ export const mockApi = {
   async getPaperBrokerOrders(_limit?: number) {
     return paperOrders;
   },
+  async getPaperBrokerClosedTrades(limit = 100, symbol?: string) {
+    const rows = symbol ? paperClosedTrades.filter(t => t.symbol === symbol.toUpperCase()) : paperClosedTrades;
+    return rows.slice(0, limit);
+  },
   async resetPaperBroker(cash: number) {
     paperAccount = { equity: cash, cash: cash, buying_power: cash };
     paperAccountInitialized = true;
     paperPositions = [];
     paperOrders = [];
+    paperClosedTrades = [];
     return { status: "reset", cash };
   },
   async getPaperBrokerSettings() {
@@ -15476,6 +15522,56 @@ let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
 let paperAccountInitialized = false;
 let paperPositions: PaperBrokerPosition[] = [];
 let paperOrders: PaperBrokerOrder[] = [];
+let paperClosedTrades: PaperBrokerClosedTrade[] = [];
+let paperClosedTradeIdSeq = 0;
+
+/**
+ * Records a synthetic realized-PnL row when a mock position fully closes,
+ * mirroring the real backend's paper_closed_trades write path
+ * (data/paper_account_store.py::_record_closed_trade). `side` is the
+ * POSITION's own opening side ("BUY" for a long, "SELL" for a short) --
+ * not the closing fill's side -- matching get_full_closed_trades' contract.
+ * `qty` is the closed quantity (always positive).
+ */
+function pushMockClosedTrade(params: {
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  entryPrice: number;
+  exitPrice: number;
+  commission?: number;
+  closeReason?: string;
+}) {
+  const { symbol, side, qty, entryPrice, exitPrice, commission = 0, closeReason = "flatten" } = params;
+  const grossPnl = side === "BUY" ? (exitPrice - entryPrice) * qty : (entryPrice - exitPrice) * qty;
+  const realizedPnlPct =
+    entryPrice > 1e-12
+      ? side === "BUY"
+        ? exitPrice / entryPrice - 1
+        : entryPrice / exitPrice - 1
+      : null; // CONSTRAINT #4: never fabricate 0 on a degenerate entry price
+  const now = new Date().toISOString();
+  paperClosedTradeIdSeq += 1;
+  paperClosedTrades.unshift({
+    trade_id: paperClosedTradeIdSeq,
+    strategy_id: null,
+    pilot_id: null,
+    experiment_arm: null,
+    symbol,
+    side,
+    qty,
+    entry_ts: now,
+    entry_price: entryPrice,
+    exit_ts: now,
+    exit_price: exitPrice,
+    commission,
+    realized_pnl: grossPnl - commission,
+    realized_pnl_pct: realizedPnlPct,
+    holding_period_days: 0,
+    close_reason: closeReason,
+    leg_group_id: null,
+  });
+}
 
 /**
  * Live-trade proposals awaiting human approve/reject -- the ONE place an
