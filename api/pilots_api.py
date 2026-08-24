@@ -6104,12 +6104,26 @@ def get_options_earnings_crush_candidates(
     symbols: Optional[str] = None,
     min_edge: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Returns upcoming earnings crush candidates with expected vs realized moves and edge ratios."""
+    """Returns upcoming earnings crush candidates with expected vs realized moves and edge ratios.
+
+    `degraded` (bool) and `symbols_errored` (list[str]) surface whether the underlying
+    scan degraded this cycle (HistoricalStore or the options provider unavailable, or a
+    per-symbol processing failure) -- so an empty `candidates` list can be told apart
+    from "nothing qualified" honestly (CONSTRAINT #4), rather than looking identical to
+    a genuinely quiet scan.
+    """
     from pilots.earnings_crush import get_earnings_crush_candidates, to_earnings_crush_candidate_response
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
-    raw_candidates = get_earnings_crush_candidates(symbols=sym_list, min_edge=min_edge)
+    diagnostics: Dict[str, Any] = {}
+    raw_candidates = get_earnings_crush_candidates(symbols=sym_list, min_edge=min_edge, diagnostics=diagnostics)
     candidates = [to_earnings_crush_candidate_response(c) for c in raw_candidates]
-    return {"count": len(candidates), "candidates": candidates}
+    degraded = not diagnostics.get("store_available", True) or not diagnostics.get("options_provider_available", True)
+    return {
+        "count": len(candidates),
+        "candidates": candidates,
+        "degraded": degraded,
+        "symbols_errored": diagnostics.get("symbols_errored", []),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -6184,20 +6198,36 @@ def get_options_flow_unusual(
     min_notional: Optional[float] = None,
     limit: int = 50,
 ) -> Dict[str, Any]:
-    """Returns live unusual options activity records with V/OI ratios, notional sizing, and sweep tags."""
+    """Returns live unusual options activity records with V/OI ratios, notional sizing, and sweep tags.
+
+    `degraded` (bool) and `symbols_fetch_failed` (list[str]) surface whether any symbol's
+    live options-chain fetch failed this cycle (and the response was not served from a
+    persisted cache) -- so an empty/short `records` list can be told apart from "nothing
+    unusual found" honestly (CONSTRAINT #4), rather than looking identical to a genuinely
+    quiet scan.
+    """
     from pilots.unusual_options_flow import get_unusual_options_activity
     # webapp/src/api/client.ts::getUnusualOptionsFlow sends a singular `symbol` query
     # param; accept both so a live single-ticker filter actually filters instead of
     # silently no-op'ing (FastAPI ignores query params with no matching handler arg).
     combined = ",".join(v for v in (symbols, symbol) if v)
     sym_list = [s.strip().upper() for s in combined.split(",") if s.strip()] if combined else None
+    diagnostics: Dict[str, Any] = {}
     records = get_unusual_options_activity(
         symbols=sym_list,
         min_vol_oi=min_vol_oi,
         min_notional=min_notional,
         limit=limit,
+        diagnostics=diagnostics,
     )
-    return {"count": len(records), "records": records, "trades": records}
+    degraded = bool(diagnostics.get("symbols_fetch_failed")) and not diagnostics.get("read_from_cache", False)
+    return {
+        "count": len(records),
+        "records": records,
+        "trades": records,
+        "degraded": degraded,
+        "symbols_fetch_failed": diagnostics.get("symbols_fetch_failed", []),
+    }
 
 
 @app.get("/pilots/options/flow/sentiment", dependencies=[Depends(require_read_token)])

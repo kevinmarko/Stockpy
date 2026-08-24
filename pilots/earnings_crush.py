@@ -644,6 +644,7 @@ def evaluate_earnings_crush_candidates(
     min_days_to_earnings: int = 1,
     max_days_to_earnings: int = 5,
     strike_grid: float = STRIKE_GRID_DEFAULT,
+    diagnostics: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> List[Dict[str, Any]]:
     """
@@ -664,10 +665,21 @@ def evaluate_earnings_crush_candidates(
     - min_days_to_earnings: Minimum days until announcement to consider (default 1)
     - max_days_to_earnings: Maximum days until announcement to consider (default 5)
     - strike_grid: Grid spacing if chain strikes unavailable (default $0.50)
+    - diagnostics: Optional mutable dict. When provided, populated with
+      `symbols_total` (int, universe size), `store_available`/`options_provider_available`
+      (bool, whether each resolved to a usable instance), and `symbols_errored`
+      (list of symbols that raised during per-symbol processing) -- lets a caller
+      (e.g. the Pilots API) distinguish "nothing qualified" from "the scan itself
+      degraded" (CONSTRAINT #4 honesty). Purely additive: when None (the default),
+      this function's return value and behavior are completely unchanged.
 
     Returns:
     - List of evaluated candidate dictionaries, sorted by crush_edge_ratio descending.
     """
+    if diagnostics is not None:
+        diagnostics["symbols_total"] = len(universe)
+        diagnostics.setdefault("symbols_errored", [])
+
     # Resolve configurable thresholds from settings
     resolved_min_edge = float(
         min_edge if min_edge is not None else getattr(settings, "OPTIONS_EARNINGS_MIN_EDGE", 1.25)
@@ -694,6 +706,10 @@ def evaluate_earnings_crush_candidates(
         except Exception as exc:
             logger.debug("OptionsProvider could not be initialized: %s", exc)
             options_provider = None
+
+    if diagnostics is not None:
+        diagnostics["store_available"] = store is not None
+        diagnostics["options_provider_available"] = options_provider is not None
 
     candidates: List[Dict[str, Any]] = []
     spot_override_map = kwargs.get("spot_prices", {})
@@ -968,6 +984,8 @@ def evaluate_earnings_crush_candidates(
 
         except Exception as exc:
             logger.warning("Error evaluating earnings crush candidate %s: %s", sym_raw, exc)
+            if diagnostics is not None:
+                diagnostics.setdefault("symbols_errored", []).append(sym)
             continue
 
     # Sort candidates by crush_edge_ratio descending
@@ -994,6 +1012,7 @@ def get_earnings_crush_candidates(
     symbols: Optional[Sequence[str]] = None,
     min_edge: Optional[float] = None,
     store: Optional[Any] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Convenience alias for evaluate_earnings_crush_candidates."""
     universe = list(symbols) if symbols else ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "AMD", "NFLX", "DIS"]
@@ -1001,6 +1020,7 @@ def get_earnings_crush_candidates(
         universe=universe,
         min_edge=min_edge,
         store=store,
+        diagnostics=diagnostics,
     )
 
 
