@@ -1949,6 +1949,28 @@ class StrategyEvalStep(PipelineStep):
         if ctx.progress is not None:
             ctx.progress.start_stage("strategy", symbols_total=len(ctx.dashboard_df))
 
+        # Populate the six paper_* ML-inference features on ctx.dashboard_df
+        # as early as possible in this step -- BEFORE both of this cycle's
+        # real consumers: (1) global_registry.run_pre_compute() below, which
+        # reaches signals/lgbm_ranker.py::LGBMRankerSignal.pre_compute ->
+        # build_pit_feature_matrix(universe_df=ctx.dashboard_df, ...) directly,
+        # and (2) the PIT snapshot's `pit_df = ctx.dashboard_df.copy()`
+        # further down, which would otherwise snapshot a copy taken before
+        # these columns existed. Previously this call sat AFTER both
+        # consumers (and inside settings.PIT_CAPTURE_ENABLED, a flag that
+        # only controls whether today's PIT snapshot is written to disk for
+        # future retrains -- see that field's own settings.py description --
+        # and has nothing to do with live inference), making it a pure
+        # train/serve-skew no-op: the columns it wrote were never read by
+        # anything (CONSTRAINT #4). Dead-lettered (CONSTRAINT #6): a failure
+        # here logs and never aborts the pipeline.
+        pit_as_of = pd.Timestamp(datetime.now(timezone.utc)).normalize()
+        try:
+            from ml.training_data import populate_live_paper_features
+            populate_live_paper_features(ctx.dashboard_df, pit_as_of)
+        except Exception as exc:
+            telemetry.warning(f"Failed to populate live paper features: {exc}")
+
         engines = ctx.engine_context
         se = (engines.strategy_engine if engines is not None and engines.strategy_engine is not None
               else StrategyEngine())
@@ -1993,11 +2015,16 @@ class StrategyEvalStep(PipelineStep):
                 from ml.feature_engineering import build_pit_feature_matrix
                 from ml.data.store import PITFeatureStore
 
+                # pit_as_of/populate_live_paper_features already ran at the top
+                # of this step's run() (before run_pre_compute() and before
+                # this copy is taken) -- reusing the same timestamp here keeps
+                # the written PIT snapshot's as_of_date consistent with what
+                # the paper_* features were computed against.
                 pit_df = ctx.dashboard_df.copy()
                 if 'Symbol' in pit_df.columns:
                     pit_df = pit_df.set_index('Symbol')
                 pit_vix = getattr(ctx.macro_dto, 'vix_value', None)
-                pit_as_of = pd.Timestamp(datetime.now(timezone.utc)).normalize()
+
                 pit_feat = build_pit_feature_matrix(
                     pit_df, as_of_date=pit_as_of, macro_vix=pit_vix,
                 )

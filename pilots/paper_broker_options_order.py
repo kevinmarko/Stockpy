@@ -74,6 +74,12 @@ def execute_paper_order(
         commission = max(1.0, round(qty * 0.005, 2))
         total_cost = (qty * fill_price) + commission if side == "buy" else (qty * fill_price) - commission
 
+        # "Manual Trade" is intentional here, not a placeholder: execute_paper_order
+        # has no strategy_id/strategy_name parameter, and neither does its caller
+        # (POST /brokerage/options/order's OptionsOrderRequestModel) -- this is a
+        # human placing an order from the Options Chain / Quick Trade order ticket,
+        # with no automated-strategy context to thread through (see docs/known_issues/
+        # paper_trade_strategy_id_vocabulary.md).
         success = store.apply_fill(
             client_order_id=client_order_id,
             symbol=symbol,
@@ -81,6 +87,7 @@ def execute_paper_order(
             qty=qty,
             fill_price=fill_price,
             commission_and_fees=commission,
+            strategy_id="Manual Trade",
         )
 
         if not success:
@@ -328,6 +335,9 @@ def execute_paper_order(
             # available cash rather than unconditionally accepted.
             collateral_required = strike * 100.0 * contracts if action == "sell" else None
 
+            # "Manual Trade" is intentional here too -- see the single-leg branch's
+            # identical comment above; same function, same caller, same lack of
+            # any strategy_id context to thread through for this multi-leg branch.
             success = store.apply_fill(
                 client_order_id=client_order_id,
                 symbol=order_symbol,
@@ -337,6 +347,7 @@ def execute_paper_order(
                 commission_and_fees=commission,
                 allow_short=True,
                 collateral_required=collateral_required,
+                strategy_id="Manual Trade",
             )
 
             if not success:

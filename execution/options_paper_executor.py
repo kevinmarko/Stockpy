@@ -336,6 +336,10 @@ class OptionsPaperExecutor:
             legs_raw = item.get("legs", [])
             target_dte = item.get("target_dte", 30)
 
+            strategy_id = item.get("strategy_id", strategy)
+            pilot_id = item.get("pilot_id")
+            experiment_arm = item.get("experiment_arm")
+
             # 1. Check max concurrent position limit
             if total_option_positions >= max_concurrent:
                 skipped.append({
@@ -509,6 +513,9 @@ class OptionsPaperExecutor:
                     net_cash_impact=net_cash_impact,
                     commission_and_fees=commission,
                     collateral_required=collateral,
+                    strategy_id=strategy_id,
+                    pilot_id=pilot_id,
+                    experiment_arm=experiment_arm,
                 )
 
                 if success:
@@ -694,6 +701,9 @@ class OptionsPaperExecutor:
                     "legs": closing_legs,
                     "net_cash_impact": round(net_cash_impact, 2),
                     "commission": round(commission, 2),
+                    "strategy_id": group[0][0].strategy_id,  # from pos.strategy_id
+                    "pilot_id": group[0][0].pilot_id,
+                    "experiment_arm": group[0][0].experiment_arm,
                 })
 
         return candidates
@@ -738,6 +748,9 @@ class OptionsPaperExecutor:
             net_cash_impact = candidate.get("net_cash_impact", 0.0)
             commission = candidate.get("commission", 0.0)
             reason = candidate.get("trigger_reason")
+            strategy_id = candidate.get("strategy_id", strategy)
+            pilot_id = candidate.get("pilot_id")
+            experiment_arm = candidate.get("experiment_arm")
             client_order_id = f"AUTO-EXIT-{sym}-{int(datetime.now(timezone.utc).timestamp())}-{idx+1}"
 
             if dry_run:
@@ -761,6 +774,9 @@ class OptionsPaperExecutor:
                     legs=legs,
                     net_cash_impact=net_cash_impact,
                     commission_and_fees=commission,
+                    strategy_id=strategy_id,
+                    pilot_id=pilot_id,
+                    experiment_arm=experiment_arm,
                 )
 
                 if success:
@@ -835,6 +851,10 @@ class OptionsPaperExecutor:
 
         strategy = str(candidate.get("strategy") or "Earnings Crush")
         earnings_date = candidate.get("earnings_date")
+        effective_strategy_name = strategy_name if strategy_name is not None else "Earnings Crush"
+        strategy_id = candidate.get("strategy_id", effective_strategy_name)
+        pilot_id = candidate.get("pilot_id")
+        experiment_arm = candidate.get("experiment_arm")
         target_dte = candidate.get("target_dte", 7)
         expiration = candidate.get("expiration") or candidate.get("exp_date") or _calculate_default_expiration(target_dte)
 
@@ -963,7 +983,6 @@ class OptionsPaperExecutor:
         # exactly (matching every existing caller/test). An explicit `strategy_name`
         # (e.g. "Vol Mispricing") overrides it so a non-earnings-crush caller reusing this
         # generic multi-leg executor gets a correctly-labeled paper-broker blotter entry.
-        effective_strategy_name = strategy_name if strategy_name is not None else "Earnings Crush"
 
         success = self.store.apply_multi_leg_fill(
             client_order_id=client_order_id,
@@ -974,6 +993,9 @@ class OptionsPaperExecutor:
             net_cash_impact=net_cash_impact,
             commission_and_fees=commission,
             collateral_required=collateral,
+            strategy_id=strategy_id,
+            pilot_id=pilot_id,
+            experiment_arm=experiment_arm,
         )
 
         return {
@@ -1010,7 +1032,7 @@ class OptionsPaperExecutor:
             ec_orders = (
                 session.query(PaperOrder)
                 .filter(
-                    (PaperOrder.symbol.like("%EARNINGS CRUSH%"))
+                    (PaperOrder.strategy_id == "Earnings Crush")
                     | ((PaperOrder.client_order_id.like("EC-%")) & (~PaperOrder.client_order_id.like("%_L%")))
                 )
                 .filter(
@@ -1051,6 +1073,9 @@ class OptionsPaperExecutor:
                     "symbol": p.symbol,
                     "qty": float(p.qty),
                     "avg_entry_price": float(p.avg_entry_price),
+                    "strategy_id": p.strategy_id,
+                    "pilot_id": p.pilot_id,
+                    "experiment_arm": p.experiment_arm,
                 }
                 for p in open_pos_rows
             }
@@ -1128,6 +1153,24 @@ class OptionsPaperExecutor:
                     legs=closing_legs,
                     net_cash_impact=net_cash_impact,
                     commission_and_fees=commission,
+                    # `.get(..., "Earnings Crush")` is NOT safe here: dict.get's
+                    # default only fires when the key is absent, not when its
+                    # value is explicitly falsy -- and a real PaperPosition row
+                    # queried above (`"strategy_id": p.strategy_id` a few dozen
+                    # lines up) can legitimately carry a falsy strategy_id (an
+                    # empty string; PaperPosition.strategy_id's NOT NULL
+                    # composite-PK constraint rules out a real None specifically,
+                    # but not ""). Every trade reaching this close path was found
+                    # via ec_order_legs, itself filtered to
+                    # PaperOrder.strategy_id == "Earnings Crush" (or a
+                    # client_order_id matching "EC-%") -- so a falsy value here
+                    # never means "some other real strategy," only "the tag
+                    # didn't round-trip onto the position row"; `or` correctly
+                    # falls back to the one strategy identity this closing flow
+                    # can ever apply to.
+                    strategy_id=trade["positions"][0].get("strategy_id") or "Earnings Crush",
+                    pilot_id=trade["positions"][0].get("pilot_id"),
+                    experiment_arm=trade["positions"][0].get("experiment_arm"),
                 )
 
                 if success:

@@ -303,7 +303,8 @@ class FMPPaperBroker(BrokerBase):
             fill_price=fill_price,
             commission_and_fees=commission_and_fees,
             target_qty=getattr(intent, "target_qty", None),
-            status=OrderStatus.FILLED.value
+            status=OrderStatus.FILLED.value,
+            strategy_id=getattr(intent, "strategy_id", "untagged"),
         )
         
         if not success:

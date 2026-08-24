@@ -647,8 +647,7 @@ def test_execute_earnings_crush_trade_default_strategy_name_is_unchanged():
 def test_execute_earnings_crush_trade_explicit_strategy_name_overrides_label():
     """A caller passing strategy_name= gets that label instead of the hardcoded
     "Earnings Crush" -- both in the returned dict and in the parent order's
-    symbol label (via apply_multi_leg_fill's strategy_name kwarg, recorded as
-    f"{strategy_name} {symbol}")."""
+    strategy_id field (no longer baked into the symbol label)."""
     store = PaperAccountStore(db_url="sqlite:///:memory:")
     executor = OptionsPaperExecutor(store=store)
 
@@ -664,8 +663,8 @@ def test_execute_earnings_crush_trade_explicit_strategy_name_overrides_label():
 
     orders = store.get_full_orders()
     parent_order = next(o for o in orders if o["order_id"] == res["order_id"])
-    assert parent_order["symbol"] == "VOL MISPRICING AAPL"
-
+    assert parent_order["symbol"] == "AAPL"
+    assert parent_order["strategy_id"] == "Vol Mispricing"
 
 def test_execute_earnings_crush_trade_never_fabricates_price():
     """A leg with no resolvable fill_price/raw_price must NOT be filled with the
@@ -695,3 +694,90 @@ def test_execute_earnings_crush_trade_never_fabricates_price():
     # No partial fill was ever submitted.
     assert store.get_open_positions() == []
     assert store.get_account().cash == initial_cash
+
+
+# ---------------------------------------------------------------------------
+# PR 872 remediation (Agent 5, Task 1.4): settle_post_earnings_trades'
+# closing strategy_id lookup used `dict.get(key, default)`, which does NOT
+# fall back to the default when the key is present but its value is
+# explicitly falsy (e.g. ""). Fixed to `dict.get(key) or default`.
+# ---------------------------------------------------------------------------
+
+
+def test_settle_post_earnings_trades_falls_back_on_falsy_position_strategy_id():
+    """A closed-over position whose strategy_id round-tripped as an empty
+    string (the DB schema's NOT NULL constraint on PaperPosition.strategy_id
+    -- a composite-PK column -- forbids a real None, but does not forbid an
+    empty string) must still close the trade under "Earnings Crush", not the
+    falsy empty-string value silently passed through by a bare
+    dict.get(key, default)."""
+    import sqlalchemy as sa
+    from data.paper_account_store import session_scope, PaperOrder
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    open_res = executor.execute_earnings_crush_trade(_iron_condor_candidate(), contracts=1)
+    assert open_res["success"] is True
+
+    # Simulate the position's strategy_id tag not round-tripping cleanly --
+    # blank it directly (bypassing the ORM's Python-level default, matching
+    # a real "the tag didn't round-trip" scenario) for every open leg.
+    with session_scope(store.Session) as session:
+        session.execute(sa.text("UPDATE paper_positions SET strategy_id = ''"))
+
+    positions_before = store.get_open_positions()
+    assert len(positions_before) == 4
+    assert all(p.strategy_id == "" for p in positions_before)
+
+    settle_res = executor.settle_post_earnings_trades(force=True)
+
+    assert settle_res["settled"], f"Expected a settled trade, got: {settle_res}"
+    assert not settle_res["failed"]
+    close_order_id = settle_res["settled"][0]["order_id"]
+
+    with session_scope(store.Session) as session:
+        parent_order = (
+            session.query(PaperOrder).filter_by(client_order_id=close_order_id).one()
+        )
+        # Must fall back to "Earnings Crush" -- NOT the falsy "" that a bare
+        # dict.get(key, default) would have silently passed through. (Note:
+        # since the ORIGINAL positions were force-blanked to strategy_id=""
+        # -- a PK component -- this closing fill nets against a DIFFERENT
+        # PaperPosition PK than the one it was "closing," which is an
+        # artifact of this test's synthetic setup, not a real production
+        # scenario; the strategy_id attribution on the closing ORDER itself
+        # is what this test targets, and that is asserted above.)
+        assert parent_order.strategy_id == "Earnings Crush"
+
+
+def test_settle_post_earnings_trades_honors_real_non_default_strategy_id():
+    """A position closed over with a genuine, non-default strategy_id (not
+    falsy) must close under THAT value, not the "Earnings Crush" fallback --
+    proving the fix didn't turn the lookup into an unconditional override."""
+    import sqlalchemy as sa
+    from data.paper_account_store import session_scope, PaperOrder
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    open_res = executor.execute_earnings_crush_trade(
+        _iron_condor_candidate(), contracts=1, strategy_name="Vol Mispricing",
+    )
+    assert open_res["success"] is True
+
+    positions_before = store.get_open_positions()
+    assert all(p.strategy_id == "Vol Mispricing" for p in positions_before)
+
+    # settle_post_earnings_trades finds this trade via its client_order_id's
+    # "EC-%" prefix (execute_earnings_crush_trade always uses that prefix
+    # regardless of strategy_name), independent of the position's own tag.
+    settle_res = executor.settle_post_earnings_trades(force=True)
+    assert settle_res["settled"], f"Expected a settled trade, got: {settle_res}"
+    close_order_id = settle_res["settled"][0]["order_id"]
+
+    with session_scope(store.Session) as session:
+        parent_order = (
+            session.query(PaperOrder).filter_by(client_order_id=close_order_id).one()
+        )
+        assert parent_order.strategy_id == "Vol Mispricing"
