@@ -62,7 +62,21 @@ class AsyncDataFetchStep(PipelineStep):
             telemetry.warning(f"Failed to load discovery candidates: {exc}")
             discovered_symbols = []
 
-        base_symbols = discovered_symbols if discovered_symbols else list(settings.DEFAULT_TICKERS)
+        # WATCHLIST env var / watchlist.txt ∪ discovered ∪ DEFAULT_TICKERS
+        # (fallback-only) — shared with main.py::_build_universe() via
+        # data.portfolio_sync so this step can no longer silently diverge
+        # from what watchlist.txt / POST /agentic/watch actually promise.
+        # Previously this line never read WATCHLIST/watchlist.txt at all and
+        # dropped DEFAULT_TICKERS outright whenever discovery had any
+        # candidate — see docs/known_issues/daemon_universe_watchlist_divergence.md.
+        from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
+
+        watchlist_symbols = load_env_watchlist(ctx.watchlist_file)
+        base_symbols = compute_tracked_universe(
+            watchlist=watchlist_symbols,
+            discovered=discovered_symbols,
+            default_tickers=settings.DEFAULT_TICKERS,
+        )
 
         # Initialize data engine
         de = ctx.market
