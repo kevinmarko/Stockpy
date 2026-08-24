@@ -47,9 +47,11 @@ def test_reader_happy_path(tmp_path: Path):
     assert out["command_count"] == 1
     assert out["dead_letters"] == ["broken.py"]
     assert out["commands"][0]["name"] == "main.py"
-    # options_strategy_registry defaults to [] when the manifest predates it
-    # (mirrors strategy_registry's own backward-compat degrade).
+    # options_strategy_registry / paper_broker_options_strategy_registry both
+    # default to [] when the manifest predates them (mirrors strategy_registry's
+    # own backward-compat degrade).
     assert out["options_strategy_registry"] == []
+    assert out["paper_broker_options_strategy_registry"] == []
 
 
 def test_reader_options_strategy_registry_passed_through(tmp_path: Path):
@@ -61,11 +63,13 @@ def test_reader_options_strategy_registry_passed_through(tmp_path: Path):
             "commands": [],
             "strategy_registry": ["rsi2_mean_reversion"],
             "options_strategy_registry": ["Iron Condor", "Put Credit Spread"],
+            "paper_broker_options_strategy_registry": ["put_credit_spread", "vrp_premium_selling"],
         },
     )
     out = commands_reader.command_manifest(path=manifest)
     assert out["strategy_registry"] == ["rsi2_mean_reversion"]
     assert out["options_strategy_registry"] == ["Iron Condor", "Put Credit Spread"]
+    assert out["paper_broker_options_strategy_registry"] == ["put_credit_spread", "vrp_premium_selling"]
 
 
 def test_reader_missing_file_is_honest_not_fabricated(tmp_path: Path):
@@ -74,6 +78,7 @@ def test_reader_missing_file_is_honest_not_fabricated(tmp_path: Path):
     assert out["command_count"] == 0
     assert out["strategy_registry"] == []
     assert out["options_strategy_registry"] == []
+    assert out["paper_broker_options_strategy_registry"] == []
     assert "build_command_manifest" in out["reason"]
 
 
@@ -110,6 +115,7 @@ def test_commands_endpoint_shape_from_committed_manifest():
     names = {c["name"] for c in body["commands"]}
     assert "main.py" in names
     assert "Iron Condor" in body["options_strategy_registry"]
+    assert "put_credit_spread" in body["paper_broker_options_strategy_registry"]
 
 
 def test_commands_endpoint_fail_open_no_token():

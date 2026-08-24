@@ -132,6 +132,32 @@ def _fetch_options_strategy_registry(*, timeout: int = _STRATEGY_REGISTRY_TIMEOU
     return _fetch_registry_via_subprocess(label="options_strategy_registry", child_code=child_code, timeout=timeout)
 
 
+def _fetch_paper_broker_options_strategy_registry(*, timeout: int = _STRATEGY_REGISTRY_TIMEOUT) -> list[str]:
+    """Fetch ``sorted(PAPER_BROKER_OPTIONS_STRATEGIES)`` via an isolated subprocess.
+
+    Second sibling of ``_fetch_strategy_registry`` -- same isolation
+    rationale, same dead-letter-to-``[]`` behavior on any failure. Distinct
+    from BOTH other registries above: ``options_strategy_registry``
+    (``STANDARD_OPTIONS_STRATEGIES``) drives ``validation.harness
+    --strategies``'s naive, ungated structural backtest; this one drives the
+    webapp Commands screen's separate "paper-broker realistic" quick action,
+    which instead runs ``scripts.refresh_validations --strategies`` against
+    the ``STRATEGY_REGISTRY`` entries that simulate real, production-gated
+    (VRP/IVR/VIX/trend-bias) options directives -- see
+    ``scripts.refresh_validations.PAPER_BROKER_OPTIONS_STRATEGIES``'s own
+    docstring for the full comparison.
+    """
+    child_code = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(_REPO_ROOT)!r})\n"
+        "from scripts.refresh_validations import PAPER_BROKER_OPTIONS_STRATEGIES\n"
+        "print(json.dumps(sorted(PAPER_BROKER_OPTIONS_STRATEGIES)))\n"
+    )
+    return _fetch_registry_via_subprocess(
+        label="paper_broker_options_strategy_registry", child_code=child_code, timeout=timeout
+    )
+
+
 def build_manifest() -> dict:
     commands: list[dict] = []
     dead_letters: list[str] = []
@@ -146,6 +172,11 @@ def build_manifest() -> dict:
     logger.info("strategy_registry: %d strategy name(s)", len(strategy_registry))
     options_strategy_registry = _fetch_options_strategy_registry()
     logger.info("options_strategy_registry: %d strategy name(s)", len(options_strategy_registry))
+    paper_broker_options_strategy_registry = _fetch_paper_broker_options_strategy_registry()
+    logger.info(
+        "paper_broker_options_strategy_registry: %d strategy name(s)",
+        len(paper_broker_options_strategy_registry),
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "command_count": len(commands),
@@ -153,6 +184,7 @@ def build_manifest() -> dict:
         "commands": commands,
         "strategy_registry": strategy_registry,
         "options_strategy_registry": options_strategy_registry,
+        "paper_broker_options_strategy_registry": paper_broker_options_strategy_registry,
     }
 
 

@@ -7691,6 +7691,18 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
     "Long Straddle",
     "Put Credit Spread",
   ],
+  // The subset of strategy_registry above that's actually production-gated
+  // (VRP/IVR/VIX/trend-bias) via validation/options_selling_backtest.py --
+  // what the Paper Broker would really trade, unlike options_strategy_registry's
+  // naive/ungated shapes above.
+  paper_broker_options_strategy_registry: [
+    "call_credit_spread",
+    "call_debit_spread",
+    "covered_call",
+    "put_credit_spread",
+    "put_debit_spread",
+    "vrp_premium_selling",
+  ],
   commands: [
     {
       name: "main.py",
