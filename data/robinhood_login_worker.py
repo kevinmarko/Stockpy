@@ -93,6 +93,84 @@ def _read_credentials(creds_fh: TextIO) -> Tuple[str, str]:
     return str(payload.get("username", "")).strip(), str(payload.get("password", "")).strip()
 
 
+def _ingest_orders_best_effort(emit) -> None:
+    """Best-effort: fetch + durably persist the operator's real Robinhood
+    filled-order history during a ``refresh`` login, reusing the real
+    ``robin_stocks`` session already established in this process.
+
+    Four non-negotiable properties (see the introducing PR / implementation
+    plan for the full rationale):
+
+    1. Its OWN try/except, covering everything below -- an orders-ingest
+       failure must NEVER flip the worker's terminal ``result`` event to
+       ``ok: false`` for an account-snapshot refresh that already succeeded.
+       Nothing in this function is allowed to raise out of it.
+    2. Called strictly AFTER ``rp.fetch_account_snapshot(force=True)`` by
+       the caller -- never allowed to delay or endanger the artifact the
+       parent process is actually blocking on.
+    3. Only reached for ``mode == "refresh"`` (see ``_run`` below) --
+       ``connect`` mode only verifies credentials, on a tighter deadline.
+    4. Bounded by ``settings.RH_ORDER_INGEST_BUDGET_SECONDS`` -- full-history
+       pagination plus one ``get_symbol_by_url`` network call per
+       unresolved instrument could otherwise approach
+       ``RH_LOGIN_DEADLINE_SECONDS`` and get the whole worker SIGKILLed
+       mid-ingest, after the snapshot was already written but before this
+       worker's own terminal ``result`` event -- turning a successful
+       refresh into a reported timeout. On exhaustion, whatever resolved so
+       far is still persisted; unresolved orders are skipped, same as any
+       other unresolvable instrument.
+    """
+    import time
+
+    from settings import settings
+
+    if not settings.BROKER_TRADE_INGEST_ENABLED:
+        return
+
+    emit({"event": "phase", "phase": "fetching_orders"})
+    try:
+        from data.broker_fills_store import BrokerFillsStore
+        from data.robinhood_orders import _default_symbol_resolver, fetch_filled_orders
+
+        deadline = time.monotonic() + max(0, settings.RH_ORDER_INGEST_BUDGET_SECONDS)
+
+        try:
+            seed = BrokerFillsStore(readonly=True).instrument_symbol_map()
+        except Exception:  # noqa: BLE001 - a cold/missing store just means no seed
+            seed = {}
+
+        inner_resolver = _default_symbol_resolver(
+            seed=seed, max_network_resolutions=settings.RH_ORDER_SYMBOL_RESOLVE_MAX
+        )
+
+        def _time_bounded_resolver(url: str):
+            if time.monotonic() > deadline:
+                return None
+            return inner_resolver(url)
+
+        fills = fetch_filled_orders(force=True, symbol_resolver=_time_bounded_resolver)
+
+        store = BrokerFillsStore()
+        counts = store.record_fills(fills)
+
+        newly_resolved = getattr(inner_resolver, "newly_resolved", None)
+        if newly_resolved:
+            try:
+                store.record_instrument_symbols(newly_resolved)
+            except Exception:  # noqa: BLE001 - resolver cache write is best-effort
+                pass
+
+        emit({
+            "event": "log",
+            "message": (
+                f"Ingested {counts.get('inserted', 0)} new fill(s) "
+                f"({len(fills)} fetched, {counts.get('divergent', 0)} corrected)."
+            ),
+        })
+    except Exception as exc:  # noqa: BLE001 - MUST NEVER propagate (see docstring)
+        emit({"event": "log", "message": f"orders ingest failed: {type(exc).__name__}"})
+
+
 def _run(mode: str, creds_fd: int, emit) -> int:
     username, password = _read_credentials(os.fdopen(creds_fd, "r", encoding="utf-8", closefd=True))
     if not username or not password:
@@ -126,6 +204,7 @@ def _run(mode: str, creds_fd: int, emit) -> int:
                 # _fetch_live_snapshot) needs to own them itself.
                 emit({"event": "phase", "phase": "fetching_snapshot"})
                 rp.fetch_account_snapshot(force=True)
+                _ingest_orders_best_effort(emit)
             else:
                 # "connect": verify the candidate credentials and establish
                 # a trusted device session. No snapshot fetch -- the caller

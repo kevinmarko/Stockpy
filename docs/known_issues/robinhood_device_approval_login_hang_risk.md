@@ -83,3 +83,29 @@ account in hand:**
 
 These must be exercised against a real account, with a real phone, before this design is
 treated as fully proven rather than "correct by construction and unit-tested in isolation."
+
+## Follow-up: orders ingest added to the worker (2026-08)
+
+`data/robinhood_login_worker.py`'s `refresh`-mode branch now also fetches and persists the
+operator's real filled-order history (`_ingest_orders_best_effort`, `data/broker_fills_store.py`)
+immediately after the account snapshot, using the same authenticated session — one login now
+produces both artifacts instead of a second device-approval push per refresh. This is
+additive to, not a replacement of, everything documented above; the login/deadline/kill
+mechanics are entirely unchanged.
+
+Four properties keep this from reintroducing a hang risk of its own: it runs in its own
+nested try/except (an ingest failure can never flip the worker's terminal `result` event to
+failure for a snapshot refresh that already succeeded); it runs strictly after the snapshot
+write; it only runs for `mode == "refresh"` (never `connect`, which stays on its tighter
+verification-only deadline); and it is bounded by `settings.RH_ORDER_INGEST_BUDGET_SECONDS`
+(default 60s, well inside the 180s `RH_LOGIN_DEADLINE_SECONDS`) plus
+`settings.RH_ORDER_SYMBOL_RESOLVE_MAX` (default 200, bounding the per-instrument
+`get_symbol_by_url` network fanout — a durable resolver-cache seed means only the FIRST
+ingest for a given instrument pays this cost).
+
+**Not verified, same limitation as the rest of this document:** whether a real account's
+full order history actually fits inside the 60s budget on a cold first ingest. If it doesn't,
+the correct fix is raising `RH_ORDER_INGEST_BUDGET_SECONDS`, never the login deadline itself
+— the login deadline protects the artifact the caller is actually blocking on (the account
+snapshot), and the orders ingest is deliberately allowed to run out of budget and simply
+persist whatever it resolved rather than risk that artifact.

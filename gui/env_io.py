@@ -192,6 +192,15 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RH_LOGIN_DEADLINE_SECONDS",
     "RH_LOGIN_GRACE_SECONDS",
     "RH_LOGIN_STARTUP_SECONDS",
+    # Broker closed-trade ingest (data/broker_fills_store.py) + universe
+    # retention for recently-closed positions. All non-secret operator
+    # tunables — no credential material, no dedicated write-endpoint gate.
+    "BROKER_TRADE_INGEST_ENABLED",
+    "RH_ORDER_INGEST_BUDGET_SECONDS",
+    "RH_ORDER_SYMBOL_RESOLVE_MAX",
+    "CLOSED_POSITION_RETENTION_DAYS",
+    "CLOSED_POSITION_RETENTION_MAX_SYMBOLS",
+    "EVAL_BROKER_TRADES_ENABLED",
     # Hosts api/pilots_api.py inside the orchestrator daemon process on
     # PILOTS_API_PORT. Non-secret; the follow write-path's command token
     # (FOLLOW_API_TOKEN) stays in SECRET_KEYS.

@@ -519,17 +519,68 @@ class EvaluationEngine:
         symbols_to_fetch = df['Symbol'].dropna().unique().tolist()
         batch_histories = store.get_trade_histories_batch(symbols_to_fetch)
 
+        # Opt-in fallback (settings.EVAL_BROKER_TRADES_ENABLED, default False --
+        # preserves today's exact NaN behavior): for a symbol with NO internal
+        # transactions_store history, fall back to the operator's REAL broker
+        # closed-trade history (data/broker_fills_store.py) so MAE/MFE/'Edge
+        # Ratio' can be real instead of NaN. Internal history always wins when
+        # present -- this dict is only ever consulted below when trade_df is
+        # empty. NEVER writes transactions_store's `trades` table and never
+        # reaches any position-sizing path (see data/broker_fills_store.py's
+        # module docstring for why that isolation is structural). One batch
+        # fetch of ALL persisted fills up front, not a per-symbol store query
+        # inside the loop.
+        broker_histories: Dict[str, pd.DataFrame] = {}
+        try:
+            from settings import settings as _settings
+            if getattr(_settings, "EVAL_BROKER_TRADES_ENABLED", False):
+                from data.broker_fills_store import BrokerFillsStore
+
+                bstore = BrokerFillsStore(readonly=True)
+                by_symbol: Dict[str, list] = {}
+                for t in bstore.closed_trades():  # newest-exit-first, unpaginated
+                    by_symbol.setdefault(t.symbol, []).append(t)
+                for sym, trades in by_symbol.items():
+                    latest = trades[0]  # already newest-first
+                    broker_histories[sym] = pd.DataFrame([{
+                        'entry_ts': latest.entry_ts,
+                        'exit_ts': latest.exit_ts,
+                        'entry_price': latest.entry_price,
+                        'exit_price': latest.exit_price,
+                        'shares': latest.quantity,
+                        # reconstruct_closed_trades() only ever produces long
+                        # round-trips (a short-sale excess is dropped, never
+                        # fabricated as an entry -- see that function's
+                        # docstring), so 'side' is always 'long' here.
+                        'side': 'long',
+                        'strategy': None,
+                        'notes': None,
+                        'conviction': np.nan,
+                    }])
+        except Exception as exc:  # noqa: BLE001 - dead-letter: MAE/MFE just stay NaN
+            logger.warning(
+                "evaluate_portfolio: broker-trade fallback unavailable (%s) -- "
+                "MAE/MFE/Edge Ratio stay NaN for symbols with no internal history.",
+                exc,
+            )
+            broker_histories = {}
+
         for idx, row in df.to_dict('index').items():
             symbol = row['Symbol']
             # Find trade history for this symbol from the batched result. A
             # non-string/NaN Symbol (e.g. a malformed row) degrades to "no
             # history" instead of crashing this whole evaluation -- one bad
             # row must never abort the run.
+            symbol_key = symbol.strip().upper() if isinstance(symbol, str) and symbol.strip() else None
             trade_df = (
-                batch_histories.get(symbol.strip().upper(), pd.DataFrame())
-                if isinstance(symbol, str) and symbol.strip()
+                batch_histories.get(symbol_key, pd.DataFrame())
+                if symbol_key is not None
                 else pd.DataFrame()
             )
+            # Internal history always wins -- the broker-trade fallback is
+            # consulted ONLY when there is no internal trade for this symbol.
+            if trade_df.empty and symbol_key is not None and symbol_key in broker_histories:
+                trade_df = broker_histories[symbol_key]
 
             entry_price = np.nan
             mae = np.nan

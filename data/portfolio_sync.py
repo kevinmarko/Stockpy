@@ -83,6 +83,15 @@ logger = logging.getLogger(__name__)
 # (see docs/architecture/data-layer.md).
 _CACHE_PATH: Path = settings.LOCAL_DATA_ROOT / "robinhood_cache" / "sync_report.json"
 
+# Synthetic watchlist key for universe-retention symbols (settings.
+# CLOSED_POSITION_RETENTION_DAYS) — symbols whose most recent real Robinhood
+# SELL fill is within the retention window, injected the same way a
+# `file:<name>` watchlist is. MUST be excluded from what async_sync_now()
+# persists to DEFAULT_TICKERS (see that function) — DEFAULT_TICKERS never
+# expires, so persisting a retained symbol there would silently convert a
+# bounded retention window into forever.
+CLOSED_RECENT_LIST_KEY = "closed:recent"
+
 
 # ---------------------------------------------------------------------------
 # Enums + frozen dataclasses
@@ -394,6 +403,34 @@ def build_sync_report(
         syms = _file_tickers(path)
         if syms:
             watchlists[f"file:{path.name}"] = syms
+
+    # Universe retention (settings.CLOSED_POSITION_RETENTION_DAYS): keep a
+    # fully-sold symbol visible for a bounded window after its most recent
+    # real Robinhood SELL fill, injected as a synthetic watchlist so it gets
+    # coverage probing, GUI attribution, and resolve_universe() inclusion for
+    # free — the same mechanism `file:<name>` watchlists already use. Never
+    # allowed to shrink the universe: any failure degrades to an empty list.
+    try:
+        retention_days = int(getattr(settings, "CLOSED_POSITION_RETENTION_DAYS", 0) or 0)
+    except (TypeError, ValueError):
+        retention_days = 0
+    if retention_days > 0:
+        try:
+            from data.broker_fills_store import recently_closed_symbols
+
+            held_now = {s.upper() for s in positions_map.keys()}
+            recent = [
+                s
+                for s in recently_closed_symbols(
+                    retention_days=retention_days,
+                    max_symbols=settings.CLOSED_POSITION_RETENTION_MAX_SYMBOLS,
+                )
+                if s not in held_now
+            ]
+            if recent:
+                watchlists[CLOSED_RECENT_LIST_KEY] = recent
+        except Exception as exc:  # noqa: BLE001 - never shrinks the universe
+            logger.warning("build_sync_report: recently-closed lookup failed (%s).", exc)
 
     sym_to_lists = _watchlists_to_symbol_map(watchlists)
 
@@ -742,6 +779,7 @@ def resolve_universe(
             snapshot = None
 
     tracked: set[str] = set()
+    report = None
     try:
         report = build_sync_report(snapshot, probe_market=False)
         tracked.update(report.symbols.keys())
@@ -764,8 +802,22 @@ def resolve_universe(
             # never marks a held symbol excluded, but subtract defensively anyway --
             # a symbol's held status can change between when it was last rated and
             # right now, and a held position must never be dropped (see module docstring).
+            # Unlike main.py's _build_universe (which unions its retention
+            # source AFTER this subtraction, making it structurally immune),
+            # `tracked` here already includes CLOSED_RECENT_LIST_KEY symbols
+            # (folded into report.symbols by build_sync_report) BEFORE this
+            # point -- a recently-closed symbol has held=False, so without
+            # this explicit protection it would be re-subtracted right back
+            # out, reproducing the exact "sold symbol silently disappears"
+            # bug this feature exists to fix, through a different door.
             held_now = set(snapshot.positions.keys()) if snapshot is not None else set()
-            tracked -= (excluded - held_now)
+            retained = (
+                {s.upper() for s in report.watchlists.get(CLOSED_RECENT_LIST_KEY, ())}
+                if report is not None
+                else set()
+            )
+            protected = held_now | retained
+            tracked -= (excluded - protected)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "resolve_universe: symbol-rating exclusion lookup failed (%s) — tracking unaffected.",
@@ -825,8 +877,15 @@ async def async_sync_now(
             from gui.env_io import write_setting
 
             # Only the symbols we actually probed (or pre-classified) — sorted
-            # for diff-friendliness.
-            tickers = sorted(report.symbols.keys())
+            # for diff-friendliness. Recently-closed retention symbols
+            # (CLOSED_RECENT_LIST_KEY) are deliberately EXCLUDED here:
+            # DEFAULT_TICKERS never expires, and resolve_universe() unions it
+            # in unconditionally, so persisting a retained symbol would
+            # silently convert a bounded CLOSED_POSITION_RETENTION_DAYS
+            # window into a permanent universe addition -- surviving even
+            # after retention is later disabled.
+            retained = {s.upper() for s in report.watchlists.get(CLOSED_RECENT_LIST_KEY, ())}
+            tickers = sorted(s for s in report.symbols.keys() if s.upper() not in retained)
             if tickers:
                 write_setting("DEFAULT_TICKERS", tickers)
                 logger.info(

@@ -1307,6 +1307,102 @@ class Settings(BaseSettings):
             "full RH_LOGIN_DEADLINE_SECONDS."
         ),
     )
+    # --- Broker closed-trade ingest (data/broker_fills_store.py, 2026-08) ---
+    # Root cause fixed: data/robinhood_orders.py's FIFO reconstruction engine
+    # existed but was never fed a real fetcher (the only production caller,
+    # pilots/realized.py, deliberately injects an empty one to avoid triggering
+    # a login on a web request), and even a real fetch would have crashed on a
+    # dead `from data.robinhood_portfolio import _login` import left over from
+    # the device-approval login rewrite. These settings gate the fix: the
+    # login worker now also ingests real filled-order history into a durable
+    # store (data/broker_fills_store.py) during a `--refresh-account` login,
+    # instead of the operator's real sells being invisible everywhere in the
+    # platform. See docs/known_issues/robinhood_order_history_window_and_fifo_limits.md.
+    BROKER_TRADE_INGEST_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True (the fix itself -- a deliberate exception to 'new "
+            "settings default to today's behavior'), the Robinhood login "
+            "worker also fetches and durably persists the operator's real "
+            "filled-order history during a `refresh` login, alongside the "
+            "account snapshot it already fetches. Set False to restore the "
+            "old behavior where no real broker trade ever reaches the "
+            "platform."
+        ),
+    )
+    RH_ORDER_INGEST_BUDGET_SECONDS: int = Field(
+        default=60,
+        description=(
+            "Wall-clock budget for the in-worker orders ingest (pagination + "
+            "instrument-symbol resolution), bounded well inside "
+            "RH_LOGIN_DEADLINE_SECONDS so a slow ingest can never turn a "
+            "successful account-snapshot refresh into a reported login "
+            "timeout. On exhaustion the worker logs a WARNING, persists "
+            "whatever resolved so far, and moves on."
+        ),
+    )
+    RH_ORDER_SYMBOL_RESOLVE_MAX: int = Field(
+        default=200,
+        description=(
+            "Cap on the number of instrument-URL -> ticker symbol resolutions "
+            "(one Robinhood API call each) performed per ingest. A durable "
+            "resolver cache (data/broker_fills_store.py's "
+            "BrokerInstrumentSymbol table) means only the FIRST ingest for a "
+            "given instrument pays this cost; later ingests reuse the cached "
+            "resolution. An order whose instrument can't be resolved within "
+            "the cap is skipped (never fabricated), same as an unresolvable "
+            "instrument today."
+        ),
+    )
+    # --- Universe retention for recently-closed positions (2026-08) ---
+    # Without this, a sold-to-zero symbol drops out of held/watchlist/discovered
+    # instantly and silently -- no "sold" state, just gone from analysis. This
+    # keeps it visible to the advisory pipeline for a bounded window after the
+    # sell, keyed off the operator's REAL Robinhood sell fills (see
+    # BROKER_TRADE_INGEST_ENABLED above), not internal paper trades.
+    CLOSED_POSITION_RETENTION_DAYS: int = Field(
+        default=180,
+        description=(
+            "Keep a fully-sold symbol in the analysis universe (main.py's "
+            "_build_universe, data/portfolio_sync.py's resolve_universe) for "
+            "this many days after its most recent real Robinhood SELL fill, "
+            "even after it drops out of held positions. A deliberate change "
+            "to today's behavior. 0 disables retention entirely, restoring "
+            "the pre-2026-08 universe exactly. A symbol that was bought but "
+            "never sold is unaffected -- retention keys off the last SELL "
+            "only."
+        ),
+    )
+    CLOSED_POSITION_RETENTION_MAX_SYMBOLS: int = Field(
+        default=25,
+        description=(
+            "Cap on how many recently-closed symbols CLOSED_POSITION_RETENTION_DAYS "
+            "can add to the universe in one cycle (most-recently-sold first). "
+            "Bounds the added per-cycle pipeline cost (a bars fetch plus a full "
+            "advisory evaluation per retained symbol) on an account with a "
+            "long trading history."
+        ),
+    )
+    # --- Broker-trade fallback for MAE/MFE/Edge Ratio (evaluation_engine.py) ---
+    EVAL_BROKER_TRADES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, evaluate_portfolio() falls back to broker-reconstructed "
+            "closed trades (data/broker_fills_store.py) for MAE/MFE/'Edge "
+            "Ratio' on symbols with no internal transactions_store trade "
+            "history. Internal history always wins when present. Default "
+            "False preserves today's exact behavior (those metrics stay NaN "
+            "for a symbol with no internal trade history). This NEVER writes "
+            "transactions_store's `trades` table and never reaches any "
+            "position-sizing path -- see data/broker_fills_store.py's module "
+            "docstring for why that isolation is structural, not just "
+            "convention. A broker-reconstructed trade carries no `conviction` "
+            "(the platform never issued a recommendation for a manual "
+            "discretionary trade), so evaluation_engine.calibration_curve's "
+            "existing conviction dropna already excludes these rows "
+            "regardless of this flag."
+        ),
+    )
     # --- Order management (execution/order_manager.py) ---
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.

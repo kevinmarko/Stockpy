@@ -742,6 +742,7 @@ export type BrokerageLoginPhase =
   | "awaiting_approval"
   | "verifying"
   | "fetching_snapshot"
+  | "fetching_orders"
   | "done";
 
 export type BrokerageLoginErrorCode =
@@ -980,6 +981,27 @@ export interface RealizedPerformance {
   trades: RealizedTrade[];
   n_fills: number;
   available: boolean; // false when nothing is cached yet (honest cold-start)
+}
+
+/**
+ * GET /portfolio/trade-history — full, paginated broker closed-trade
+ * history (durable store, distinct from RealizedPerformance above, which is
+ * cache-only and capped at 100 trades for the Portfolio screen's summary
+ * panel). `summary` is computed over the FULL filtered history, not just
+ * the returned page, so paging never changes the reported win rate /
+ * profit factor. `available` is false only when nothing has been ingested
+ * yet (an honest cold-start, not "you have no closed trades").
+ */
+export interface TradeHistoryPage {
+  trades: RealizedTrade[];
+  summary: RealizedSummary;
+  total: number;
+  limit: number;
+  offset: number;
+  symbols: string[]; // every distinct symbol with a persisted fill, for a filter control
+  available: boolean;
+  source: "durable_store";
+  last_ingested_at: string | null;
 }
 
 /**

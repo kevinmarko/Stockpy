@@ -310,6 +310,36 @@ def _load_tickers_from_sheet2() -> List[str]:
 
 from pilots.discovery import discovery
 
+def _recently_closed_universe_symbols(held: set) -> set:
+    """Symbols retained by settings.CLOSED_POSITION_RETENTION_DAYS (a
+    fully-sold symbol stays visible to the advisory pipeline for a bounded
+    window after its most recent real Robinhood SELL fill). Never raises;
+    degrades to an empty set on any failure so a store outage can never
+    shrink the universe (CONSTRAINT #6). `held` symbols are excluded --
+    retention only matters for a symbol that has already dropped out of
+    held positions.
+    """
+    try:
+        retention_days = int(getattr(settings, "CLOSED_POSITION_RETENTION_DAYS", 0) or 0)
+    except (TypeError, ValueError):
+        return set()
+    if retention_days <= 0:
+        return set()
+    try:
+        from data.broker_fills_store import recently_closed_symbols
+
+        recent = recently_closed_symbols(
+            retention_days=retention_days,
+            max_symbols=settings.CLOSED_POSITION_RETENTION_MAX_SYMBOLS,
+        )
+        return {s.upper() for s in recent} - held
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "_recently_closed_universe_symbols failed (%s) — universe unaffected.", exc
+        )
+        return set()
+
+
 def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
 
@@ -319,15 +349,32 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
       3. Discovered scan candidates from `scan_candidates.json` (always merged).
       4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
       5. Google Sheet → Sheet2 column A (fallback only when 1+2+3+4 are empty).
+      6. Recently-closed positions (settings.CLOSED_POSITION_RETENTION_DAYS,
+         always merged in LAST — see below for why the ordering matters).
 
-    When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, `combined` is
-    additionally subtracted by whatever
+    When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, the held ∪
+    watchlist ∪ discovered union is additionally subtracted by whatever
     ``rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols``
     reports (a non-held symbol on a long enough consecutive-BAD streak — see
     ``rating/symbol_rating.py::should_exclude``). Held symbols are never
-    dropped, and the lookup fails OPEN: any exception leaves `combined`
-    untouched and only logs a warning (CONSTRAINT #6). Applied once, before
-    the fallback, so exclusion is honored whether or not that fallback runs.
+    dropped, and the lookup fails OPEN: any exception leaves the universe
+    untouched and only logs a warning (CONSTRAINT #6). Both the exclusion
+    and the ``DEFAULT_TICKERS`` fallback live inside
+    ``data.portfolio_sync.compute_tracked_universe`` (shared with
+    ``pipeline/production_steps.py``'s ``AsyncDataFetchStep`` so the daemon
+    and this orchestrator can't silently diverge on the logic); only the
+    Sheet2 fallback (Google-Sheets-specific, main.py-only) stays local here.
+
+    Source 6 (recently-closed retention) is unioned in LAST, after both the
+    auto-drop subtraction and the empty-fallback decision, deliberately:
+      * a retained symbol has ``held=False``, so unioning it before the
+        auto-drop subtraction (inside ``compute_tracked_universe``) would let
+        it be immediately re-subtracted -- reproducing the exact "sold
+        symbol silently disappears" bug this feature exists to fix, through
+        a different door;
+      * unioning it before the ``if not universe:`` check would silently
+        suppress the DEFAULT_TICKERS/Sheet2 fallback on an otherwise-cold
+        account (the fallback must be decided on the pre-retention set).
     """
     from data.portfolio_sync import compute_tracked_universe
 
@@ -366,12 +413,25 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
             )
         universe = sorted(sheet2)
 
+    # 6. Recently-closed retention — applied LAST, after both the rating-
+    # exclusion subtraction and the DEFAULT_TICKERS/Sheet2 fallback decision
+    # above (both now live inside compute_tracked_universe()/the Sheet2
+    # branch), for the exact reasons in this function's own docstring.
+    recently_closed = _recently_closed_universe_symbols(held)
+    if recently_closed:
+        logger.info(
+            "Universe: retaining %d recently-closed symbol(s): %s",
+            len(recently_closed), ", ".join(sorted(recently_closed)),
+        )
+    universe = sorted(set(universe) | recently_closed)
+
     logger.info(
-        "Universe: %d symbols (%d held, %d watchlist-only, %d discovered).",
+        "Universe: %d symbols (%d held, %d watchlist-only, %d discovered, %d recently-closed).",
         len(universe),
         len(held),
         len((watchlist - held) - discovered),
         len(discovered - held),
+        len(recently_closed),
     )
     return universe
 
