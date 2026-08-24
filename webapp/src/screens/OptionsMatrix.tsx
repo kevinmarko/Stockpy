@@ -22,7 +22,7 @@ import {
   computePayoff,
   computeExpectedMove,
   computeBreakevenPoints,
-  normalProbabilityDensity,
+  computeProbabilityOfProfit,
 } from "../optionsMath";
 import {
   AreaChart,
@@ -305,20 +305,13 @@ function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: numb
     }));
   }, [payoffPoints]);
 
-  // Integrate PDF to calculate POP
+  // Closed-form Prob of Profit over the true unbounded price domain -- NOT a
+  // sum over payoffPoints, whose grid is sized for the chart's x-axis and
+  // truncates a credit spread's profitable plateau well before it actually
+  // ends (see computeProbabilityOfProfit's own doc comment in optionsMath.ts).
   const popPercent = useMemo(() => {
-    const sd = spotPrice * sigma * Math.sqrt(dte / 252);
-    if (payoffPoints.length < 2 || sd <= 0) return null;
-    let pop = 0;
-    const step = payoffPoints[1].price - payoffPoints[0].price;
-    payoffPoints.forEach((pt) => {
-      if (pt.payoff > 0) {
-        const pdfVal = normalProbabilityDensity(pt.price, spotPrice, sd);
-        if (!isNaN(pdfVal)) pop += pdfVal * step;
-      }
-    });
-    return Math.min(100, Math.max(0, pop * 100));
-  }, [payoffPoints, spotPrice, sigma, dte]);
+    return computeProbabilityOfProfit(legs, spotPrice, sigma, dte);
+  }, [legs, spotPrice, sigma, dte]);
 
   return (
     <Modal ariaLabel={`${d.Symbol} options directive`} onClose={onClose}>
