@@ -27,7 +27,7 @@ import math
 import pathlib
 from typing import Any, Dict, List
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -39,16 +39,19 @@ from pilots.unusual_options_flow import (
     DEFAULT_MIN_VOL_OI_RATIO,
     DEFAULT_MIN_VOLUME,
     IV_BURST_THRESHOLD,
+    MID_BLOCK_DIRECTIONAL_THRESHOLD,
     UOARecord,
     calculate_historical_volatility,
     calculate_iv_burst_score,
     calculate_net_flow_sentiment,
     categorize_trade_aggressiveness,
     get_symbol_flow_sentiment,
+    get_unusual_options_activity,
     load_uoa_records,
     save_uoa_records,
     scan_unusual_options_activity,
 )
+from pilots.unusual_options_flow import _resolve_live_historical_vol_30d
 from signals.base import SignalContext, SignalOutput
 from signals.options_flow_sentiment import OptionsFlowSentimentSignal
 from tests.lookahead_check import verify_no_lookahead
@@ -725,7 +728,9 @@ class TestASTSafety:
         # Assert all imports are within clean allowlist. "data" is permitted ONLY as the
         # lazy, function-scoped `data.market_data` provider import (the same live-chain
         # fetch pattern already used by pilots/options_gex.py, pilots/vol_mispricing.py,
-        # and pilots/har_volatility.py) — never a heavier `data.*` submodule.
+        # and pilots/har_volatility.py) plus `data.historical_store` (a narrow, lazy,
+        # function-scoped HistoricalStore().get_bars() read for a real HV30 denominator
+        # in _resolve_live_historical_vol_30d) — never a heavier `data.*` submodule.
         allowed_roots = {
             "__future__",
             "dataclasses",
@@ -746,8 +751,8 @@ class TestASTSafety:
         assert not unrecognized, f"Unrecognized import roots in unusual_options_flow.py: {unrecognized}"
 
         data_modules = {m for m in imported_modules if m == "data" or m.startswith("data.")}
-        assert data_modules <= {"data.market_data"}, (
-            f"pilots/unusual_options_flow.py may only import data.market_data, found: {data_modules}"
+        assert data_modules <= {"data.market_data", "data.historical_store"}, (
+            f"pilots/unusual_options_flow.py may only import data.market_data/data.historical_store, found: {data_modules}"
         )
 
         pilots_modules = {m for m in imported_modules if m == "pilots" or m.startswith("pilots.")}
@@ -757,7 +762,384 @@ class TestASTSafety:
 
 
 # ---------------------------------------------------------------------------
-# 8. OptionsFlowSentimentSignal Tests
+# 8. Follow-up Audit Findings (#3, #4, #5, #6, #7, #8) Tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveLiveHistoricalVol30d:
+    """Finding #3 — _resolve_live_historical_vol_30d helper."""
+
+    def test_returns_real_hv30_from_historical_store(self):
+        np.random.seed(7)
+        returns = np.random.normal(0, 0.015, 40)
+        prices = [100.0]
+        for r in returns:
+            prices.append(prices[-1] * math.exp(r))
+        close_series = pd.Series(prices)
+        bars_df = pd.DataFrame({"Close": close_series})
+
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = bars_df
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store):
+            hv = _resolve_live_historical_vol_30d("AAPL")
+
+        expected = calculate_historical_volatility(close_series, window=30)
+        assert hv is not None
+        assert hv == expected
+
+    def test_returns_none_when_store_construction_raises(self):
+        with patch("data.historical_store.HistoricalStore", side_effect=RuntimeError("boom")):
+            assert _resolve_live_historical_vol_30d("AAPL") is None
+
+    def test_returns_none_when_get_bars_returns_none(self):
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = None
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store):
+            assert _resolve_live_historical_vol_30d("AAPL") is None
+
+    def test_returns_none_when_bars_missing_close_column(self):
+        mock_store = MagicMock()
+        mock_store.get_bars.return_value = pd.DataFrame({"Open": [1, 2, 3]})
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store):
+            assert _resolve_live_historical_vol_30d("AAPL") is None
+
+
+class TestLiveFetchIVBurstIntegration:
+    """Finding #3 — get_unusual_options_activity's live-scan path threads a real HV30
+    into calculate_iv_burst_score instead of always seeing None."""
+
+    def test_live_scan_threads_real_hv30_into_iv_burst(self):
+        chain_map = {
+            "2026-09-18": {
+                "symbol": "TSLA",
+                "calls": [
+                    {
+                        "contractSymbol": "TSLA260918C00220000",
+                        "strike": 220.0,
+                        "lastPrice": 5.2,
+                        "bid": 5.0,
+                        "ask": 5.2,
+                        "volume": 1000,
+                        "openInterest": 200,
+                        "impliedVolatility": 0.60,
+                    }
+                ],
+                "puts": [],
+            }
+        }
+        with patch("pilots.unusual_options_flow.load_uoa_records", return_value=[]), \
+                patch("pilots.unusual_options_flow.save_uoa_records", return_value="ok"), \
+                patch("pilots.unusual_options_flow._fetch_live_options_chain_map", return_value=chain_map), \
+                patch("pilots.unusual_options_flow._resolve_live_spot_price", return_value=220.0), \
+                patch("pilots.unusual_options_flow._resolve_live_historical_vol_30d", return_value=0.40):
+            results = get_unusual_options_activity(symbols=["TSLA"])
+
+        assert len(results) == 1
+        rec = results[0]
+        assert rec["iv"] == 0.60
+        assert rec["hv_30"] == 0.40
+        assert rec["iv_burst_score"] is not None
+        assert rec["iv_burst_detected"] is True
+
+
+class TestMidBlockDeadband:
+    """Finding #4 — mid-block trades need to clear a deadband before earning a
+    directional (non-NEUTRAL) sentiment label."""
+
+    def test_fractional_offset_within_deadband_is_neutral(self):
+        # midpoint 5.00, half_spread 0.10, deadband = 0.10 * 0.25 = 0.025
+        aggressiveness, sentiment = categorize_trade_aggressiveness(
+            trade_price=5.01, bid=4.90, ask=5.10, option_type="call",
+        )
+        assert aggressiveness == "mid_block"
+        assert sentiment == "NEUTRAL"
+
+    def test_offset_outside_deadband_is_directional(self):
+        # 5.05 clears the 0.025 deadband above midpoint 5.00 -> BULLISH call lean
+        aggressiveness, sentiment = categorize_trade_aggressiveness(
+            trade_price=5.05, bid=4.90, ask=5.10, option_type="call",
+        )
+        assert aggressiveness == "mid_block"
+        assert sentiment == "BULLISH"
+
+        # 4.95 clears the deadband below midpoint -> BEARISH call lean
+        aggressiveness, sentiment = categorize_trade_aggressiveness(
+            trade_price=4.95, bid=4.90, ask=5.10, option_type="call",
+        )
+        assert aggressiveness == "mid_block"
+        assert sentiment == "BEARISH"
+
+    def test_exact_midpoint_mid_block_trade_stays_neutral(self):
+        """Re-confirms test_mid_block_trade's exact scenario under the new deadband."""
+        aggressiveness, sentiment = categorize_trade_aggressiveness(
+            trade_price=5.00, bid=4.90, ask=5.10, option_type="call",
+        )
+        assert aggressiveness == "mid_block"
+        assert sentiment == "NEUTRAL"
+
+    def test_strike_125_multi_trade_case_stays_neutral(self):
+        """Re-confirms test_multi_trade_aggressor_classification's strike-125.0 case
+        (bid=6.00, ask=6.40, price=6.20 -- exact midpoint) under the new deadband."""
+        aggressiveness, sentiment = categorize_trade_aggressiveness(
+            trade_price=6.20, bid=6.00, ask=6.40, option_type="call",
+        )
+        assert aggressiveness == "mid_block"
+        assert sentiment == "NEUTRAL"
+
+
+class TestPriceIsEstimatedFlag:
+    """Finding #5(a) — trade_price_is_estimated / price_is_estimated honesty flag."""
+
+    def test_false_when_real_last_price_present(self):
+        chain = {
+            "calls": [
+                {
+                    "contractSymbol": "TEST_C",
+                    "strike": 100.0,
+                    "lastPrice": 10.0,
+                    "bid": 9.9,
+                    "ask": 10.1,
+                    "volume": 1000,
+                    "openInterest": 100,
+                }
+            ]
+        }
+        res = scan_unusual_options_activity(chain, spot_price=100.0)
+        assert len(res) == 1
+        assert res[0].price_is_estimated is False
+        assert res[0].trade_price == 10.0
+
+    def test_true_when_price_falls_back_to_midpoint(self):
+        chain = {
+            "calls": [
+                {
+                    "contractSymbol": "TEST_C",
+                    "strike": 100.0,
+                    "lastPrice": 0.0,
+                    "bid": 9.9,
+                    "ask": 10.1,
+                    "volume": 1000,
+                    "openInterest": 100,
+                }
+            ]
+        }
+        res = scan_unusual_options_activity(chain, spot_price=100.0)
+        assert len(res) == 1
+        assert res[0].price_is_estimated is True
+        assert res[0].trade_price == round((9.9 + 10.1) / 2.0, 4)
+
+
+class TestSpotPriceIsEstimatedFlag:
+    """Finding #5(b) — spot_price_is_estimated honesty flag."""
+
+    def test_false_when_real_spot_supplied(self, sample_option_chain_dict):
+        res = scan_unusual_options_activity(sample_option_chain_dict, spot_price=150.0)
+        assert len(res) > 0
+        assert all(r.spot_price_is_estimated is False for r in res)
+
+    def test_true_when_spot_omitted_or_non_positive(self, sample_option_chain_dict):
+        for bad_spot in (None, 0.0, -5.0):
+            res = scan_unusual_options_activity(sample_option_chain_dict, spot_price=bad_spot)
+            assert len(res) > 0
+            assert all(r.spot_price_is_estimated is True for r in res)
+            assert all(r.spot_price is not None for r in res)
+
+
+class TestPerContractIsolation:
+    """Finding #6 — one malformed contract must not discard the rest of the scan."""
+
+    def test_malformed_contract_does_not_discard_other_anomalies(self):
+        # `categorize_trade_aggressiveness` is already bound at module scope (imported
+        # at the top of this file) -- that reference still points at the real,
+        # unpatched function object even after `pilots.unusual_options_flow`'s own
+        # attribute is patched below, so it's safe to delegate to it here.
+        real_categorize = categorize_trade_aggressiveness
+
+        chain = [
+            {
+                "symbol": "SPY",
+                "contract_symbol": "SPY_BAD",
+                "strike": 100.0,
+                "option_type": "call",
+                "price": 10.0,
+                "bid": 9.9,
+                "ask": 10.1,
+                "volume": 1000,
+                "open_interest": 100,
+            },
+            {
+                "symbol": "SPY",
+                "contract_symbol": "SPY_GOOD",
+                "strike": 200.0,
+                "option_type": "call",
+                "price": 20.0,
+                "bid": 19.9,
+                "ask": 20.1,
+                "volume": 1000,
+                "open_interest": 100,
+            },
+        ]
+
+        def flaky(trade_price, bid, ask, option_type):
+            if bid == 9.9:
+                raise RuntimeError("simulated malformed contract")
+            return real_categorize(trade_price, bid, ask, option_type)
+
+        with patch("pilots.unusual_options_flow.categorize_trade_aggressiveness", side_effect=flaky):
+            results = scan_unusual_options_activity(chain, spot_price=150.0)
+
+        assert len(results) == 1
+        assert results[0].strike == 200.0
+        assert results[0].contract_symbol == "SPY_GOOD"
+
+
+class TestDiagnostics:
+    """Finding #7 (UOA half) — the optional diagnostics dict on get_unusual_options_activity."""
+
+    def test_cache_hit_sets_read_from_cache_true(self):
+        cached = [
+            UOARecord(
+                symbol="AAPL",
+                contract_symbol="AAPL_X",
+                strike=150.0,
+                volume=1000,
+                notional=500000.0,
+            )
+        ]
+        diag: Dict[str, Any] = {}
+        with patch("pilots.unusual_options_flow.load_uoa_records", return_value=cached):
+            results = get_unusual_options_activity(symbols=["AAPL"], diagnostics=diag)
+
+        assert len(results) == 1
+        assert diag["symbols_requested"] == 1
+        assert diag["read_from_cache"] is True
+        # Never fetched live -- symbols_fetch_failed should not be set on a cache hit.
+        assert "symbols_fetch_failed" not in diag
+
+    def test_live_scan_path_records_fetch_failures(self):
+        diag: Dict[str, Any] = {}
+
+        def fake_fetch(sym):
+            if sym == "BAD":
+                return None
+            return {
+                "2026-09-18": {
+                    "symbol": sym,
+                    "calls": [
+                        {
+                            "contractSymbol": f"{sym}_C",
+                            "strike": 100.0,
+                            "lastPrice": 10.0,
+                            "bid": 9.9,
+                            "ask": 10.1,
+                            "volume": 1000,
+                            "openInterest": 100,
+                        }
+                    ],
+                    "puts": [],
+                }
+            }
+
+        with patch("pilots.unusual_options_flow.load_uoa_records", return_value=[]), \
+                patch("pilots.unusual_options_flow.save_uoa_records", return_value="ok"), \
+                patch("pilots.unusual_options_flow._fetch_live_options_chain_map", side_effect=fake_fetch), \
+                patch("pilots.unusual_options_flow._resolve_live_spot_price", return_value=100.0), \
+                patch("pilots.unusual_options_flow._resolve_live_historical_vol_30d", return_value=None):
+            results = get_unusual_options_activity(symbols=["GOOD", "BAD"], diagnostics=diag)
+
+        assert diag["read_from_cache"] is False
+        assert diag["symbols_fetch_failed"] == ["BAD"]
+        assert len(results) == 1
+
+    def test_live_scan_all_symbols_succeed_empty_failed_list(self):
+        diag: Dict[str, Any] = {}
+        chain = {
+            "2026-09-18": {
+                "symbol": "GOOD",
+                "calls": [
+                    {
+                        "contractSymbol": "GOOD_C",
+                        "strike": 100.0,
+                        "lastPrice": 10.0,
+                        "bid": 9.9,
+                        "ask": 10.1,
+                        "volume": 1000,
+                        "openInterest": 100,
+                    }
+                ],
+                "puts": [],
+            }
+        }
+        with patch("pilots.unusual_options_flow.load_uoa_records", return_value=[]), \
+                patch("pilots.unusual_options_flow.save_uoa_records", return_value="ok"), \
+                patch("pilots.unusual_options_flow._fetch_live_options_chain_map", return_value=chain), \
+                patch("pilots.unusual_options_flow._resolve_live_spot_price", return_value=100.0), \
+                patch("pilots.unusual_options_flow._resolve_live_historical_vol_30d", return_value=None):
+            results = get_unusual_options_activity(symbols=["GOOD"], diagnostics=diag)
+
+        assert diag["read_from_cache"] is False
+        assert diag["symbols_fetch_failed"] == []
+        assert len(results) == 1
+
+
+class TestSaveUoaRecordsAtomicWrite:
+    """Finding #8 — save_uoa_records uses an atomic temp+rename write."""
+
+    def test_failed_write_does_not_corrupt_existing_file(self, tmp_path):
+        test_file = tmp_path / "atomic_test_uoa.json"
+        original_records = [
+            UOARecord(symbol="ORIG", contract_symbol="ORIG_C", strike=100.0, volume=500, notional=100000.0)
+        ]
+        save_uoa_records(original_records, test_file)
+        original_content = test_file.read_text(encoding="utf-8")
+
+        new_records = [
+            UOARecord(symbol="NEW", contract_symbol="NEW_C", strike=200.0, volume=600, notional=200000.0)
+        ]
+
+        original_write_text = pathlib.Path.write_text
+
+        def flaky_write_text(self, *args, **kwargs):
+            if self.suffix == ".tmp":
+                raise OSError("simulated disk write failure")
+            return original_write_text(self, *args, **kwargs)
+
+        with pytest.raises(OSError), patch.object(pathlib.Path, "write_text", flaky_write_text):
+            save_uoa_records(new_records, test_file)
+
+        # Original file content must be untouched -- not corrupted/truncated by the
+        # failed write attempt against the .tmp sibling.
+        assert test_file.read_text(encoding="utf-8") == original_content
+        loaded = load_uoa_records(test_file)
+        assert len(loaded) == 1
+        assert loaded[0].symbol == "ORIG"
+
+    def test_happy_path_roundtrip_with_new_honesty_fields(self, tmp_path):
+        test_file = tmp_path / "atomic_roundtrip_uoa.json"
+        records = [
+            UOARecord(
+                symbol="ROKU",
+                contract_symbol="ROKU_C",
+                strike=80.0,
+                volume=900,
+                notional=300000.0,
+                price_is_estimated=True,
+                spot_price_is_estimated=True,
+            )
+        ]
+        saved_path = save_uoa_records(records, test_file)
+        assert saved_path == str(test_file)
+        # The atomic .tmp sibling must not be left behind.
+        assert not test_file.with_suffix(".tmp").exists()
+
+        loaded = load_uoa_records(test_file)
+        assert len(loaded) == 1
+        assert loaded[0].price_is_estimated is True
+        assert loaded[0].spot_price_is_estimated is True
+
+
+# ---------------------------------------------------------------------------
+# 9. OptionsFlowSentimentSignal Tests
 # ---------------------------------------------------------------------------
 
 
