@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "a30a956555b865d465d4b48c20b9fac00b56704e",
+    "git_commit": "93a121065a183560559225e909173bfaa46ec326",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3596,7 +3596,7 @@
     },
     {
       "file": "api/data_api.py",
-      "total_write_method_routes": 10,
+      "total_write_method_routes": 11,
       "mutating_settings_routes": 1,
       "env_writing_routes": 1,
       "live_setattr_routes": 0,
@@ -3606,10 +3606,27 @@
       "helper_functions_live_setattr": [],
       "endpoints": [
         {
+          "route": "/data/backfill/{symbol}",
+          "method": "POST",
+          "function": "trigger_symbol_backfill",
+          "line": 265,
+          "writes_env": false,
+          "env_write_calls_direct": [],
+          "env_write_calls_via_helper": [],
+          "live_setattr": false,
+          "live_setattr_sites": [],
+          "live_setattr_via_helper": [],
+          "live_daemon_push": false,
+          "live_daemon_push_calls": [],
+          "applies_values": [],
+          "applies_declared_directly": [],
+          "applies_declared_via_helper": []
+        },
+        {
           "route": "/data/universe",
           "method": "PUT",
           "function": "update_universe",
-          "line": 584,
+          "line": 626,
           "writes_env": true,
           "env_write_calls_direct": [
             "write_setting"
@@ -3628,7 +3645,7 @@
           "route": "/data/cache-long-short/simulate",
           "method": "POST",
           "function": "simulate_cache_long_short",
-          "line": 773,
+          "line": 815,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3645,7 +3662,7 @@
           "route": "/data/pairs/analyze",
           "method": "POST",
           "function": "analyze_pairs_ondemand",
-          "line": 799,
+          "line": 841,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3662,7 +3679,7 @@
           "route": "/data/pairs/scan",
           "method": "POST",
           "function": "scan_pairs_ondemand",
-          "line": 836,
+          "line": 878,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3679,7 +3696,7 @@
           "route": "/data/options/recompute",
           "method": "POST",
           "function": "recompute_options_ondemand",
-          "line": 875,
+          "line": 917,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3696,7 +3713,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 1102,
+          "line": 1144,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3713,7 +3730,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 1145,
+          "line": 1187,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3730,7 +3747,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 1247,
+          "line": 1289,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3747,7 +3764,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1396,
+          "line": 1438,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3768,7 +3785,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 1970,
+          "line": 2012,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3826,7 +3843,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 764,
+      "total_reads": 765,
       "distinct_fields": 245,
       "counts": {
         "OUTPUT_DIR": 133,
@@ -3863,6 +3880,7 @@
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 5,
         "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": 5,
         "ADVISORY_ONLY": 4,
+        "BARS_BACKFILL_DAYS": 4,
         "ETF_TRANSMISSION_SIZING_ENABLED": 4,
         "FORECAST_SKILL_WEIGHTING_ENABLED": 4,
         "HMM_N_ITER": 4,
@@ -3875,7 +3893,6 @@
         "SIZING_CAP_AUDIT_ENABLED": 4,
         "SNAPSHOT_HISTORY_DAYS": 4,
         "ANTHROPIC_API_KEY": 3,
-        "BARS_BACKFILL_DAYS": 3,
         "ETF_TRANSMISSION_ENABLED": 3,
         "ETF_TRANSMISSION_PORTFOLIO_ENABLED": 3,
         "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS": 3,
@@ -4833,7 +4850,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1385",
+          "api/data_api.py:1427",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,
