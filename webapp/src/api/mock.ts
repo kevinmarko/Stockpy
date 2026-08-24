@@ -5538,6 +5538,20 @@ const MODELS: ModelRow[] = [
     cpcv_mean_oos_sharpe: null,
     cpcv_mean_oos_max_dd: null,
   },
+  {
+    name: "options_meta_labeler",
+    role: "options_meta_labeler",
+    trained_date: MODEL_STALE_TRAINED_DATE,
+    cpcv_dsr: null,
+    pbo: null,
+    n_train: 1250,
+    deployable: false,
+    notes: "Options meta labeler for dynamic position sizing and entry filtering.",
+    age_days: daysSinceTrained(MODEL_STALE_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_STALE_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
+    cpcv_mean_oos_sharpe: null,
+    cpcv_mean_oos_max_dd: null,
+  },
 ];
 
 // ---- Strategy Health (deployability-gate breakdown) fixture ----
