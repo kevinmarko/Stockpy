@@ -373,6 +373,38 @@ class Settings(BaseSettings):
             "hardcoded DEFAULT_MARKET_ORDER_RATE = 5.0 default."
         ),
     )
+    OPTIONS_LOB_TRADE_COUNT_LOOKBACK_HOURS: int = Field(
+        default=24,
+        description=(
+            "data/market_data.py's CompositeProvider.get_intraday_trade_counts() "
+            "lookback window (hours) of real Alpaca hourly bars pulled to "
+            "genuinely measure theta_market (the Cont/Stoikov/Talreja market-order "
+            "Poisson arrival rate) from exchange-reported per-bar trade counts, "
+            "instead of falling back to OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE's "
+            "fixed constant. Alpaca-only — neither FMP nor yfinance expose a "
+            "per-bar trade-count field."
+        ),
+    )
+    OPTIONS_LOB_TRADE_COUNT_MIN_BARS: int = Field(
+        default=3,
+        description=(
+            "Minimum number of real Alpaca hourly trade-count bars required "
+            "before a theta_market calibration derived from "
+            "get_intraday_trade_counts() is trusted — guards against single-bar "
+            "noise dominating the estimate on a thin lookback window or a "
+            "symbol with sparse IEX-reported trading activity."
+        ),
+    )
+    OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS: int = Field(
+        default=300,
+        description=(
+            "In-process cache TTL (seconds) for "
+            "CompositeProvider.get_intraday_trade_counts(), mirroring "
+            "MARKET_DATA_QUOTE_TTL_SECONDS's convention — never persisted to "
+            "disk, and kept in a cache instance separate from the OHLCV bars "
+            "cache so the two can never collide."
+        ),
+    )
     OPTIONS_GEX_SEARCH_RANGE_PCT: float = Field(
         default=0.20,
         description=(

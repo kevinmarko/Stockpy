@@ -373,6 +373,97 @@ class AlpacaProvider(MarketDataProvider):
         """Alpaca does not provide fundamentals; return empty (Finnhub handles this)."""
         return {}
 
+    def get_intraday_trade_counts(self, symbol: str, lookback_hours: int = 24) -> pd.DataFrame:
+        """Fetch real, exchange-reported per-bar trade counts via Alpaca IEX
+        hourly bars for the last ``lookback_hours`` hours.
+
+        Unlike ``get_intraday_bars()`` (which discards alpaca-py's
+        ``Bar.trade_count`` field entirely), this method preserves it. Returns
+        columns ``["Volume", "TradeCount"]`` on a tz-naive, ascending
+        ``DatetimeIndex``. ``TradeCount`` is a real exchange-reported count of
+        executed trades in that bar — never an approximation or a fabricated
+        proxy; a bar with genuinely no reported trades is ``0.0``, not NaN,
+        since NaN would silently poison a downstream ``.mean()``.
+
+        This is NOT part of the ``MarketDataProvider`` ABC — ``trade_count``
+        has no equivalent on FMP or yfinance (verified: neither exposes a
+        per-bar executed-trade count), so this capability is Alpaca-only by
+        construction and deliberately not promoted to the shared interface.
+
+        Raises ``MarketDataError`` on any failure (empty/malformed payload,
+        network error), matching ``get_intraday_bars``'s exact failure
+        convention.
+
+        **Disclosed limitation, not fixed here**: this request carries no
+        regular-trading-hours filter, so a ``lookback_hours`` window that
+        spans outside 9:30-16:00 ET (overnight, or a request issued near the
+        open/close) can mix in genuinely low-volume pre/post-market bars
+        alongside regular-session ones. Since every bar counts equally in the
+        caller's ``mean()``, this can pull a theta_market calibration below
+        what the regular session alone would show. Not fixed here because
+        neither this call nor ``get_intraday_bars`` filters by session today,
+        and doing so needs a verified, not guessed-at, Alpaca session
+        convention — see the caller's own doc note in
+        ``docs/known_issues/lob_simulator_uncalibrated_live_arrival_rates.md``.
+        """
+        try:
+            from alpaca.data.requests import StockBarsRequest  # type: ignore
+            from alpaca.data.timeframe import TimeFrame  # type: ignore
+
+            start = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+            req = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Hour,
+                start=start,
+                feed="iex",
+            )
+            resp = self._client.get_stock_bars(req)
+            bars_df = resp.df
+
+            if bars_df.empty:
+                raise MarketDataError(
+                    f"Alpaca returned empty trade-count bars for {symbol}"
+                )
+
+            # resp.df has a MultiIndex (symbol, timestamp) when multiple symbols
+            # are requested; flatten if needed.
+            if isinstance(bars_df.index, pd.MultiIndex):
+                bars_df = bars_df.xs(symbol, level="symbol")
+
+            missing = [c for c in ("volume", "trade_count") if c not in bars_df.columns]
+            if missing:
+                raise MarketDataError(
+                    f"Alpaca trade-count bars for {symbol} missing expected "
+                    f"column(s) {missing}"
+                )
+
+            bars_df = bars_df[["volume", "trade_count"]].rename(
+                columns={"volume": "Volume", "trade_count": "TradeCount"}
+            ).copy()
+            # A bar with no reported trades is a real 0, never a fabricated
+            # value — NaN would silently poison a downstream .mean().
+            bars_df["TradeCount"] = bars_df["TradeCount"].fillna(0.0)
+
+            # Strip tz → timezone-naive index to match the rest of this
+            # provider's bar-shape contract; hourly bars keep their real
+            # intraday timestamp (never normalized to midnight).
+            if bars_df.index.tz is not None:
+                bars_df.index = bars_df.index.tz_localize(None)
+            bars_df.index = pd.to_datetime(bars_df.index)
+            bars_df.sort_index(inplace=True)
+
+            return bars_df
+
+        except MarketDataError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "AlpacaProvider.get_intraday_trade_counts(%s) failed: %s", symbol, exc
+            )
+            raise MarketDataError(
+                f"Alpaca trade-count bars fetch failed for {symbol}: {exc}"
+            ) from exc
+
 
 # ---------------------------------------------------------------------------
 # yfinance provider
@@ -2439,6 +2530,71 @@ class CompositeProvider(MarketDataProvider):
         """Wipe the entire in-process bars cache (e.g. on session restart)."""
         if hasattr(self, "_bars_cache"):
             self._bars_cache.clear()
+
+    def get_intraday_trade_counts(
+        self, symbol: str, lookback_hours: int = 24
+    ) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+        """Best-effort real trade-count fetch for LOB ``theta_market`` calibration.
+
+        Returns ``(dataframe, None)`` on success, ``(None, reason)`` on ANY
+        failure — Alpaca not configured (missing ``ALPACA_API_KEY`` /
+        ``ALPACA_SECRET_KEY``), ``AlpacaProvider`` construction failure, or a
+        live fetch failure. This method NEVER raises — it is a diagnostic /
+        calibration lookup, not a required-data path (distinct from
+        ``get_intraday_bars``'s raise-on-failure ABC contract), so a caller
+        can fall back to a fixed constant without a try/except of its own.
+
+        ``trade_count`` has no equivalent on FMP or yfinance, so this is
+        Alpaca-only regardless of ``MARKET_DATA_PROVIDER`` — the composite
+        constructs a dedicated ``AlpacaProvider`` for this call rather than
+        using ``self._quote_provider``/``self._effective_bars_provider``.
+
+        Cached in-process for ``settings.OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS``,
+        using a SEPARATE ``_BarsCache`` instance from ``self._bars_cache`` (the
+        real OHLCV bars cache) so a ``(symbol, lookback_days, interval)``-shaped
+        key can never collide with a differently-shaped trade-count frame
+        cached under a similar-looking key — the two caches share zero state.
+        """
+        sym = symbol.upper()
+
+        # Lazy-init for instances constructed via ``__new__`` (test fixtures),
+        # mirroring the identical guard on ``self._bars_cache``.
+        if not hasattr(self, "_trade_count_cache"):
+            self._trade_count_cache = _BarsCache(
+                ttl_seconds=int(settings.OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS)
+            )
+
+        # "trade_count_1h" is a cache-key interval value the real OHLCV path
+        # never uses, so even though this reuses the _BarsCache class, the
+        # two caches' keys can never collide.
+        cached = self._trade_count_cache.get(sym, lookback_hours, "trade_count_1h")
+        if cached is not None:
+            return cached, None
+
+        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
+        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
+        if not (alpaca_key and alpaca_secret):
+            return None, "Alpaca not configured (ALPACA_API_KEY/ALPACA_SECRET_KEY not set)"
+
+        try:
+            provider = AlpacaProvider(api_key=alpaca_key, secret_key=alpaca_secret)
+        except Exception as exc:  # noqa: BLE001 — defensive, mirrors _build_fmp_fallback_tail
+            logger.warning(
+                "CompositeProvider.get_intraday_trade_counts(%s): AlpacaProvider "
+                "construction failed (%s).", sym, exc,
+            )
+            return None, f"Alpaca provider construction failed: {exc}"
+
+        try:
+            df = provider.get_intraday_trade_counts(sym, lookback_hours=lookback_hours)
+        except Exception as exc:  # noqa: BLE001 — never raise out of this diagnostic lookup
+            logger.warning(
+                "CompositeProvider.get_intraday_trade_counts(%s) failed: %s", sym, exc,
+            )
+            return None, str(exc)
+
+        self._trade_count_cache.put(sym, lookback_hours, df, "trade_count_1h")
+        return df, None
 
     def clear_fundamentals_cache(self) -> None:
         """Wipe the in-process fundamentals cache (e.g. on session restart)."""

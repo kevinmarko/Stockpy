@@ -14327,6 +14327,12 @@ export const mockApi = {
       reason: null,
       timestamp: new Date().toISOString(),
       as_of: new Date().toISOString(),
+      // Mock mode never performs a real Alpaca trade-count calibration -- mirror
+      // the live backend's own honest fallback rather than claiming a calibration
+      // that never happened (mock/live parity).
+      theta_market_is_calibrated: false,
+      theta_market_data_source: request.theta_market != null ? "caller_supplied" : "fixed_default",
+      theta_market_bars_used: null,
     });
   },
 

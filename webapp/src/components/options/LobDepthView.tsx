@@ -522,6 +522,31 @@ export const LobDepthView: React.FC<LobDepthViewProps> = ({
             >
               📐 <b>Queue Dynamics:</b> Cont-Stoikov-Talreja (2010) Markovian queue-fill model — Poisson limit-order arrival (λ), exponential cancellation (μ), and market-order consumption (θ) govern how quickly the {depthAhead}-contract queue ahead of a resting order at ${priceLevel.toFixed(2)} depletes within the {simResult.time_horizon_sec}s horizon.
             </div>
+
+            {/* theta_market calibration honesty disclosure -- absence of the field
+                (older/mock responses) is treated identically to "not calibrated",
+                never defaulted to a calibrated-sounding claim. */}
+            <div
+              style={{
+                fontSize: "0.75rem",
+                color: theme.textMuted,
+                background: theme.surface2,
+                padding: "10px 14px",
+                borderRadius: 6,
+                lineHeight: 1.4,
+                fontStyle: "italic",
+              }}
+            >
+              {simResult.theta_market_is_calibrated === true ? (
+                <>
+                  theta (market-order rate) calibrated from {simResult.theta_market_bars_used} real Alpaca trade-count bars
+                </>
+              ) : (
+                <>
+                  theta (market-order rate) = fixed default (no real trade-count data available)
+                </>
+              )}
+            </div>
           </div>
         </>
       )}

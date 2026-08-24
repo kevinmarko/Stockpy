@@ -41,17 +41,24 @@ Design & Architecture Invariants:
    `main`, `desktop`, etc.). Imports only standard library, `numpy`, and `scipy`.
 * **Honesty (CONSTRAINT #4)** — `compute_lob_arrival_rates()` computes true, empirically
   measured Poisson arrival rates from real input order flow records when called; zero
-  fabricated fills. Degenerate books return clean sentinels without fake data. **Disclosed
-  gap**: `compute_lob_arrival_rates()` has ZERO production callers today (grepped and
-  confirmed) — the live `POST /pilots/options/lob/simulate-queue` endpoint
-  (`simulate_queue_fill()`) runs on fixed default/fallback Poisson-rate constants
-  (`settings.OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE`, and the request model's
-  `lambda_limit=4.0`/`mu_cancel=0.05` defaults), not a live per-symbol calibration, and
-  the webapp (`LobDepthView.tsx`) never sends override values either. No real L2/L3
-  order-flow or bid/ask-size data source exists anywhere in this codebase's data layer to
-  calibrate from live (confirmed absent in `data/market_data.py`/`data/fmp_client.py`),
-  so wiring this up honestly needs a genuine tick/order-flow data source first rather than
-  a fabricated proxy. See `docs/known_issues/lob_simulator_uncalibrated_live_arrival_rates.md`.
+  fabricated fills. Degenerate books return clean sentinels without fake data.
+  `theta_market` (the market-order arrival rate) is now genuinely calibrated for the live
+  `POST /pilots/options/lob/simulate-queue` endpoint (`simulate_queue_fill()`) whenever the
+  caller omits it: `estimate_calibrated_theta_market()` measures it from real Alpaca
+  per-bar `trade_count` history (`data.market_data.CompositeProvider.get_intraday_trade_counts()`,
+  Alpaca-only — see that method's own docstring) and the resolver falls back to the fixed
+  `settings.OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE` constant only when Alpaca isn't
+  configured/reachable or too few bars are available — never silently, always reported via
+  the response's `theta_market_is_calibrated`/`theta_market_data_source`/
+  `theta_market_bars_used` fields. An explicit caller-supplied `theta_market` is always
+  honored as-is and is never recalibrated. **`lambda_limit`/`mu_cancel` remain structurally
+  uncalibratable and stay on their fixed request-model defaults (`4.0`/`0.05`)** — no data
+  source anywhere in this codebase, Alpaca included, measures new-limit-order or
+  cancellation events; Alpaca's `trade_count` (like every other feed here) only reports
+  already-EXECUTED trades, which is what `theta_market` measures, not resting-order
+  additions or removals. See
+  `docs/known_issues/lob_simulator_uncalibrated_live_arrival_rates.md` for the full,
+  still-current disclosed-gap writeup on those two parameters.
 * **Never Raises (CONSTRAINT #6)** — Gracefully handles empty trade streams, negative rates, zero horizons,
   and uninitialized queues without raising uncaught exceptions.
 """
@@ -1855,13 +1862,34 @@ def simulate_queue_fill(
     s_size = float(order_size if order_size is not None else 1.0)
     d_ahead = float(depth_ahead if depth_ahead is not None else 0.0)
 
+    # theta_market resolution: an explicit caller-supplied value is always
+    # honored as-is (never silently overridden). Only when the caller omits
+    # it do we attempt a genuine live calibration from real Alpaca trade
+    # counts, falling back to the fixed default constant when calibration is
+    # unavailable/degraded.
+    theta_is_calibrated = False
+    theta_data_source = "caller_supplied"
+    theta_bars_used = None
+    if theta_market is not None:
+        resolved_theta = float(theta_market)
+    else:
+        calib = estimate_calibrated_theta_market(clean_sym)
+        if calib.get("calibrated"):
+            resolved_theta = float(calib["theta_market"])
+            theta_is_calibrated = True
+            theta_data_source = "alpaca_real_trade_count"
+            theta_bars_used = calib.get("bars_used")
+        else:
+            resolved_theta = DEFAULT_MARKET_ORDER_RATE
+            theta_data_source = "fixed_default"
+
     sim_res = simulate_queue_position(
         price_level=p_lvl,
         order_size=s_size,
         queue_ahead=d_ahead,
         lambda_limit=float(lambda_limit) if lambda_limit is not None else 4.0,
         mu_cancel=float(mu_cancel) if mu_cancel is not None else 0.05,
-        theta_market=float(theta_market) if theta_market is not None else DEFAULT_MARKET_ORDER_RATE,
+        theta_market=resolved_theta,
         time_horizon_sec=float(time_horizon_sec) if time_horizon_sec is not None else 60.0,
         num_simulations=int(num_simulations) if num_simulations is not None else 500,
         random_seed=random_seed,
@@ -1880,5 +1908,57 @@ def simulate_queue_fill(
     res_dict["queue_progression_percentiles"] = sim_res.percentiles_fill_time
     res_dict["progression_percentiles"] = sim_res.percentiles_fill_time
     res_dict["timestamp"] = datetime.now(timezone.utc).isoformat()
+    res_dict["theta_market_is_calibrated"] = theta_is_calibrated
+    res_dict["theta_market_data_source"] = theta_data_source
+    res_dict["theta_market_bars_used"] = theta_bars_used
     return res_dict
+
+
+def estimate_calibrated_theta_market(symbol: str) -> Dict[str, Any]:
+    """Attempts to genuinely calibrate theta_market (market-order Poisson arrival
+    rate, trades/sec) from real Alpaca per-bar trade counts. Returns
+    {"calibrated": True, "theta_market": <float>, "data_source":
+    "alpaca_real_trade_count", "bars_used": N} on success (>=
+    settings.OPTIONS_LOB_TRADE_COUNT_MIN_BARS real hourly bars available), or
+    {"calibrated": False, "theta_market": None, "reason": "<why>"} on any
+    degrade path (Alpaca not configured, fetch failure, too few bars). NEVER
+    raises, NEVER fabricates a plausible-looking number on failure
+    (CONSTRAINT #4).
+    """
+    try:
+        from data.market_data import get_provider
+
+        df, reason = get_provider().get_intraday_trade_counts(
+            symbol, lookback_hours=settings.OPTIONS_LOB_TRADE_COUNT_LOOKBACK_HOURS
+        )
+    except Exception as exc:  # noqa: BLE001 — this function itself must never raise
+        logger.warning(
+            "estimate_calibrated_theta_market(%s): market data fetch failed: %s",
+            symbol, exc,
+        )
+        return {"calibrated": False, "theta_market": None, "reason": str(exc)}
+
+    min_bars = int(settings.OPTIONS_LOB_TRADE_COUNT_MIN_BARS)
+
+    if df is None:
+        return {
+            "calibrated": False,
+            "theta_market": None,
+            "reason": reason or "no trade-count data available",
+        }
+
+    if len(df) < min_bars:
+        return {
+            "calibrated": False,
+            "theta_market": None,
+            "reason": f"insufficient bars: got {len(df)}, need {min_bars}",
+        }
+
+    theta_market = float(df["TradeCount"].mean()) / 3600.0
+    return {
+        "calibrated": True,
+        "theta_market": theta_market,
+        "data_source": "alpaca_real_trade_count",
+        "bars_used": len(df),
+    }
 

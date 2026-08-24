@@ -322,6 +322,96 @@ class TestAlpacaProvider:
         provider._client = MagicMock()
         assert provider.get_fundamentals("AAPL") == {}
 
+    def _make_trade_count_bar_df(self, symbol="AAPL", trade_counts=None):
+        dates = pd.date_range("2025-01-01", periods=5, freq="h", tz="UTC")
+        idx = pd.MultiIndex.from_tuples(
+            [(symbol, d) for d in dates], names=["symbol", "timestamp"]
+        )
+        if trade_counts is None:
+            trade_counts = [12.0, 8.0, 15.0, 9.0, 11.0]
+        return pd.DataFrame(
+            {"open": [100.0] * 5, "high": [101.0] * 5, "low": [99.0] * 5,
+             "close": [100.5] * 5, "volume": [1000] * 5, "trade_count": trade_counts},
+            index=idx,
+        )
+
+    def test_get_intraday_trade_counts_success(self):
+        """Real trade_count column is preserved (not discarded like
+        get_intraday_bars does), with the correct renamed columns/values."""
+        from data.market_data import AlpacaProvider
+        provider = AlpacaProvider.__new__(AlpacaProvider)
+        provider._api_key = "k"
+        provider._secret_key = "s"
+        provider._stale_threshold = 60
+
+        mock_resp = MagicMock()
+        mock_resp.df = self._make_trade_count_bar_df(
+            "AAPL", trade_counts=[12.0, 8.0, 15.0, 9.0, 11.0]
+        )
+        provider._client = MagicMock(get_stock_bars=MagicMock(return_value=mock_resp))
+
+        with patch("alpaca.data.requests.StockBarsRequest"), \
+             patch("alpaca.data.timeframe.TimeFrame"):
+            df = provider.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert list(df.columns) == ["Volume", "TradeCount"]
+        assert df["TradeCount"].tolist() == [12.0, 8.0, 15.0, 9.0, 11.0]
+        assert df["Volume"].tolist() == [1000, 1000, 1000, 1000, 1000]
+        assert df.index.tz is None
+        assert df.index.is_monotonic_increasing
+
+    def test_get_intraday_trade_counts_fills_nan_with_zero(self):
+        """A bar with no reported trades is a real 0.0, never NaN (which
+        would silently poison a downstream .mean())."""
+        from data.market_data import AlpacaProvider
+        provider = AlpacaProvider.__new__(AlpacaProvider)
+        provider._api_key = "k"
+        provider._secret_key = "s"
+        provider._stale_threshold = 60
+
+        mock_resp = MagicMock()
+        mock_resp.df = self._make_trade_count_bar_df(
+            "AAPL", trade_counts=[12.0, float("nan"), 15.0, 9.0, 11.0]
+        )
+        provider._client = MagicMock(get_stock_bars=MagicMock(return_value=mock_resp))
+
+        with patch("alpaca.data.requests.StockBarsRequest"), \
+             patch("alpaca.data.timeframe.TimeFrame"):
+            df = provider.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert df["TradeCount"].tolist() == [12.0, 0.0, 15.0, 9.0, 11.0]
+        assert not df["TradeCount"].isna().any()
+
+    def test_get_intraday_trade_counts_raises_on_empty_payload(self):
+        from data.market_data import AlpacaProvider, MarketDataError
+        provider = AlpacaProvider.__new__(AlpacaProvider)
+        provider._api_key = "k"
+        provider._secret_key = "s"
+        provider._stale_threshold = 60
+
+        mock_resp = MagicMock()
+        mock_resp.df = pd.DataFrame()
+        provider._client = MagicMock(get_stock_bars=MagicMock(return_value=mock_resp))
+
+        with patch("alpaca.data.requests.StockBarsRequest"), \
+             patch("alpaca.data.timeframe.TimeFrame"):
+            with pytest.raises(MarketDataError):
+                provider.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+    def test_get_intraday_trade_counts_raises_on_network_error(self):
+        from data.market_data import AlpacaProvider, MarketDataError
+        provider = AlpacaProvider.__new__(AlpacaProvider)
+        provider._api_key = "k"
+        provider._secret_key = "s"
+        provider._stale_threshold = 60
+        provider._client = MagicMock(
+            get_stock_bars=MagicMock(side_effect=RuntimeError("network error"))
+        )
+        with patch("alpaca.data.requests.StockBarsRequest"), \
+             patch("alpaca.data.timeframe.TimeFrame"):
+            with pytest.raises(MarketDataError):
+                provider.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
 
 # ---------------------------------------------------------------------------
 # 4. YFinanceProvider
@@ -955,6 +1045,132 @@ class TestCompositeProviderCache:
 
         assert result == primary_fund
         yf_fallback.assert_not_called()
+
+
+class TestCompositeProviderTradeCounts:
+    """CompositeProvider.get_intraday_trade_counts() — Alpaca-only, never-raises
+    diagnostic lookup for LOB theta_market calibration."""
+
+    def _make_cp(self):
+        from data.market_data import CompositeProvider, _BarsCache
+        cp = CompositeProvider.__new__(CompositeProvider)
+        cp._bars_cache = _BarsCache(ttl_seconds=300)
+        return cp
+
+    def test_degrades_when_alpaca_not_configured(self):
+        """The realistic default-deployment case (FMP is the default
+        MARKET_DATA_PROVIDER) — no Alpaca keys means no construction attempt
+        at all, just an honest (None, reason)."""
+        cp = self._make_cp()
+        with patch.multiple(
+            "settings.settings",
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS=300,
+        ), patch("data.market_data.AlpacaProvider") as mock_alpaca_cls:
+            df, reason = cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert df is None
+        assert reason is not None
+        assert "not configured" in reason
+        mock_alpaca_cls.assert_not_called()
+
+    def test_success_when_alpaca_configured(self):
+        from data.market_data import AlpacaProvider
+        cp = self._make_cp()
+        expected_df = pd.DataFrame(
+            {"Volume": [1000, 1200], "TradeCount": [12.0, 9.0]},
+            index=pd.DatetimeIndex(["2025-01-01 09:00", "2025-01-01 10:00"]),
+        )
+        mock_instance = MagicMock(spec=AlpacaProvider)
+        mock_instance.get_intraday_trade_counts.return_value = expected_df
+
+        with patch.multiple(
+            "settings.settings",
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+            OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS=300,
+        ), patch("data.market_data.AlpacaProvider", return_value=mock_instance) as mock_cls:
+            df, reason = cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert reason is None
+        assert df is not None
+        assert list(df.columns) == ["Volume", "TradeCount"]
+        mock_cls.assert_called_once_with(api_key="key123", secret_key="sec456")
+
+    def test_never_raises_on_unexpected_fetch_exception(self):
+        """A live fetch failure degrades to (None, reason) -- this is a
+        diagnostic/calibration lookup, not a required-data path."""
+        from data.market_data import AlpacaProvider
+        cp = self._make_cp()
+        mock_instance = MagicMock(spec=AlpacaProvider)
+        mock_instance.get_intraday_trade_counts.side_effect = RuntimeError("boom")
+
+        with patch.multiple(
+            "settings.settings",
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+            OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS=300,
+        ), patch("data.market_data.AlpacaProvider", return_value=mock_instance):
+            df, reason = cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert df is None
+        assert reason == "boom"
+
+    def test_never_raises_on_provider_construction_failure(self):
+        cp = self._make_cp()
+        with patch.multiple(
+            "settings.settings",
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+            OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS=300,
+        ), patch("data.market_data.AlpacaProvider", side_effect=ImportError("no alpaca-py")):
+            df, reason = cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert df is None
+        assert reason is not None
+
+    def test_cache_is_separate_from_bars_cache(self):
+        """Populating the trade-count cache must never populate/affect the
+        real OHLCV bars cache, and vice versa -- they are separate instances."""
+        from data.market_data import AlpacaProvider
+        cp = self._make_cp()
+        expected_df = pd.DataFrame(
+            {"Volume": [1000], "TradeCount": [12.0]},
+            index=pd.DatetimeIndex(["2025-01-01 09:00"]),
+        )
+        mock_instance = MagicMock(spec=AlpacaProvider)
+        mock_instance.get_intraday_trade_counts.return_value = expected_df
+
+        with patch.multiple(
+            "settings.settings",
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+            OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS=300,
+        ), patch("data.market_data.AlpacaProvider", return_value=mock_instance):
+            cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        # The trade-count cache now has an entry...
+        assert cp._trade_count_cache.get("AAPL", 24, "trade_count_1h") is not None
+        # ...but the pre-existing, separate OHLCV bars cache is untouched.
+        assert cp._bars_cache.get("AAPL", 24, "trade_count_1h") is None
+        assert cp._bars_cache.get("AAPL", 252, "1d") is None
+        assert cp._trade_count_cache is not cp._bars_cache
+
+    def test_second_call_within_ttl_is_served_from_cache(self):
+        from data.market_data import AlpacaProvider
+        cp = self._make_cp()
+        expected_df = pd.DataFrame(
+            {"Volume": [1000], "TradeCount": [12.0]},
+            index=pd.DatetimeIndex(["2025-01-01 09:00"]),
+        )
+        mock_instance = MagicMock(spec=AlpacaProvider)
+        mock_instance.get_intraday_trade_counts.return_value = expected_df
+
+        with patch.multiple(
+            "settings.settings",
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+            OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS=300,
+        ), patch("data.market_data.AlpacaProvider", return_value=mock_instance):
+            cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+            cp.get_intraday_trade_counts("AAPL", lookback_hours=24)
+
+        assert mock_instance.get_intraday_trade_counts.call_count == 1
 
 
 class TestCompositeProviderLatencyTracking:

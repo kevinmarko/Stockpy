@@ -6,8 +6,10 @@ import ast
 import json
 import math
 from pathlib import Path
+from unittest import mock
 import pytest
 import numpy as np
+import pandas as pd
 
 from pilots.lob_simulator import (
     DEFAULT_MARKET_ORDER_RATE,
@@ -33,6 +35,8 @@ from pilots.lob_simulator import (
     calculate_expected_fill_latency,
     evaluate_optimal_queue_level,
     slice_liquidity_order,
+    simulate_queue_fill,
+    estimate_calibrated_theta_market,
 )
 from pilots.order_sizing import (
     calculate_stock_sizing,
@@ -1022,3 +1026,164 @@ def test_lob_placement_and_order_sizing_integration(sample_5level_lob):
     assert valid is True
     assert err is None
 
+
+
+# ===========================================================================
+# 10. theta_market live calibration (estimate_calibrated_theta_market /
+#     simulate_queue_fill wiring)
+# ===========================================================================
+
+def _make_trade_count_df(n_bars, trade_counts):
+    idx = pd.date_range("2026-08-24 09:00", periods=n_bars, freq="1h")
+    return pd.DataFrame(
+        {
+            "Volume": [1000.0] * n_bars,
+            "TradeCount": trade_counts,
+        },
+        index=idx,
+    )
+
+
+def test_estimate_calibrated_theta_market_success():
+    """A real-shaped DataFrame with >= MIN_BARS rows calibrates successfully."""
+    from settings import settings as _settings
+
+    min_bars = int(_settings.OPTIONS_LOB_TRADE_COUNT_MIN_BARS)
+    n_bars = max(min_bars, 3) + 2
+    trade_counts = [100.0 + 10.0 * i for i in range(n_bars)]
+    df = _make_trade_count_df(n_bars, trade_counts)
+
+    fake_provider = mock.Mock()
+    fake_provider.get_intraday_trade_counts.return_value = (df, None)
+
+    with mock.patch("data.market_data.get_provider", return_value=fake_provider):
+        result = estimate_calibrated_theta_market("AAPL")
+
+    assert result["calibrated"] is True
+    expected_theta = float(np.mean(trade_counts)) / 3600.0
+    assert result["theta_market"] == pytest.approx(expected_theta)
+    assert result["data_source"] == "alpaca_real_trade_count"
+    assert result["bars_used"] == n_bars
+
+
+def test_estimate_calibrated_theta_market_no_data():
+    """(None, reason) from the data layer degrades to calibrated=False with the reason."""
+    fake_provider = mock.Mock()
+    fake_provider.get_intraday_trade_counts.return_value = (
+        None,
+        "Alpaca not configured (ALPACA_API_KEY/ALPACA_SECRET_KEY not set)",
+    )
+
+    with mock.patch("data.market_data.get_provider", return_value=fake_provider):
+        result = estimate_calibrated_theta_market("AAPL")
+
+    assert result["calibrated"] is False
+    assert result["theta_market"] is None
+    assert result["reason"]
+    assert "not configured" in result["reason"]
+
+
+def test_estimate_calibrated_theta_market_too_few_bars():
+    """Fewer than MIN_BARS rows is a distinct degrade path from 'no data at all'."""
+    from settings import settings as _settings
+
+    min_bars = int(_settings.OPTIONS_LOB_TRADE_COUNT_MIN_BARS)
+    too_few = max(min_bars - 1, 0)
+    df = _make_trade_count_df(too_few, [100.0] * too_few) if too_few > 0 else _make_trade_count_df(0, [])
+
+    fake_provider = mock.Mock()
+    fake_provider.get_intraday_trade_counts.return_value = (df, None)
+
+    with mock.patch("data.market_data.get_provider", return_value=fake_provider):
+        result = estimate_calibrated_theta_market("AAPL")
+
+    assert result["calibrated"] is False
+    assert result["theta_market"] is None
+    assert result["reason"]
+    assert "insufficient bars" in result["reason"]
+
+
+def test_simulate_queue_fill_uses_calibrated_theta_when_omitted():
+    """When the caller omits theta_market, a successful calibration is used, not the default."""
+    calibrated_theta = 0.0123
+    with mock.patch(
+        "pilots.lob_simulator.estimate_calibrated_theta_market",
+        return_value={
+            "calibrated": True,
+            "theta_market": calibrated_theta,
+            "data_source": "alpaca_real_trade_count",
+            "bars_used": 12,
+        },
+    ) as mock_calib:
+        result = simulate_queue_fill(
+            symbol="aapl",
+            price_level=100.0,
+            order_size=10.0,
+            depth_ahead=50.0,
+            theta_market=None,
+        )
+
+    mock_calib.assert_called_once_with("AAPL")
+    assert result["theta_market_is_calibrated"] is True
+    assert result["theta_market_data_source"] == "alpaca_real_trade_count"
+    assert result["theta_market_bars_used"] == 12
+
+    # Confirm the calibrated value (not DEFAULT_MARKET_ORDER_RATE) actually drove
+    # the simulation by re-running simulate_queue_position directly with the
+    # same calibrated theta and comparing the fill probability exactly.
+    direct = simulate_queue_position(
+        price_level=100.0,
+        order_size=10.0,
+        queue_ahead=50.0,
+        lambda_limit=4.0,
+        mu_cancel=0.05,
+        theta_market=calibrated_theta,
+        time_horizon_sec=60.0,
+        num_simulations=500,
+        random_seed=42,
+    )
+    assert result["fill_probability"] == pytest.approx(direct.fill_probability)
+    assert calibrated_theta != DEFAULT_MARKET_ORDER_RATE
+
+
+def test_simulate_queue_fill_falls_back_to_fixed_default_when_calibration_degrades():
+    """When calibration is unavailable, theta_market falls back to the fixed default."""
+    with mock.patch(
+        "pilots.lob_simulator.estimate_calibrated_theta_market",
+        return_value={
+            "calibrated": False,
+            "theta_market": None,
+            "reason": "Alpaca not configured",
+        },
+    ) as mock_calib:
+        result = simulate_queue_fill(
+            symbol="AAPL",
+            price_level=100.0,
+            order_size=10.0,
+            depth_ahead=50.0,
+            theta_market=None,
+        )
+
+    mock_calib.assert_called_once_with("AAPL")
+    assert result["theta_market_is_calibrated"] is False
+    assert result["theta_market_data_source"] == "fixed_default"
+    assert result["theta_market_bars_used"] is None
+
+
+def test_simulate_queue_fill_explicit_theta_market_never_overridden():
+    """An explicit caller-supplied theta_market skips calibration entirely."""
+    with mock.patch(
+        "pilots.lob_simulator.estimate_calibrated_theta_market"
+    ) as mock_calib:
+        result = simulate_queue_fill(
+            symbol="AAPL",
+            price_level=100.0,
+            order_size=10.0,
+            depth_ahead=50.0,
+            theta_market=7.5,
+        )
+
+    mock_calib.assert_not_called()
+    assert result["theta_market_is_calibrated"] is False
+    assert result["theta_market_data_source"] == "caller_supplied"
+    assert result["theta_market_bars_used"] is None

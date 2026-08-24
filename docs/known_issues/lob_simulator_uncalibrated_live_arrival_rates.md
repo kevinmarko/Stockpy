@@ -1,7 +1,11 @@
 # Known issue (2026-08-24): live LOB queue-fill endpoint runs on fixed constants, not the module's own empirical calibration
 
-**Status: partially fixed — sign/units bugs fixed and tested; live calibration wiring
-disclosed as an open, not-attempted gap.** Branch `fix-sor-lob-simulator-audit-findings`.
+**Status: `theta_market` is now genuinely live-calibrated (see the "Update" section
+below); `lambda_limit`/`mu_cancel` remain structurally uncalibratable given this
+codebase's available data sources — not a deferred task, a real data-availability
+limit.** Sign/units bugs (`mu_cancel`) fixed and tested. Branch
+`fix-sor-lob-simulator-audit-findings` (original fix), continued on
+`fully-fix-lob-theta-calibration` (the `theta_market` calibration wiring below).
 
 ## What happened
 
@@ -119,3 +123,109 @@ existing one — so it was deliberately not attempted.
   market-data-provider tier, or a genuine L2/L3 feed), `compute_lob_arrival_rates()`
   is already correct and tested and is the right place to wire it in —
   `simulate_queue_fill()`'s call site is the one place that needs to change.
+
+## Update (theta_market now genuinely calibrated) — 2026-08-24, branch `fully-fix-lob-theta-calibration`
+
+Everything above this section describes the state as of the original audit
+pass and remains historically accurate for `lambda_limit`/`mu_cancel` and for
+what the live endpoint did before this follow-up. This section documents
+what changed.
+
+**What was found**: while `data/market_data.py`/`data/fmp_client.py` genuinely
+have no L2/L3 order-book, bid/ask-size, or per-order-event data anywhere (the
+finding above still holds in full), the `alpaca-py` `Bar` model that
+`AlpacaProvider` already wraps for OHLCV bars carries a real
+`trade_count` field per bar — the exchange-reported count of executed
+trades that occurred within that bar. That is not a limit-order or
+cancellation count, but it is a genuine, real, non-fabricated per-symbol
+measurement of executed *market* order flow, which is exactly what
+`theta_market` (the CST(2010) market-order Poisson arrival rate) is defined
+to measure. This closes one of the model's three arrival-rate parameters,
+not all three.
+
+**What was wired in**:
+
+- `AlpacaProvider.get_intraday_trade_counts(symbol, lookback_hours)`
+  (`data/market_data.py`) fetches real hourly bars from Alpaca and returns a
+  `TradeCount`-indexed DataFrame — a thin, honest wrapper around the
+  existing Alpaca bars machinery, not a new data source.
+- `CompositeProvider.get_intraday_trade_counts(symbol, lookback_hours)`
+  (`data/market_data.py`) is the caller-facing entry point: it is
+  **Alpaca-only regardless of `settings.MARKET_DATA_PROVIDER`** (it
+  constructs a dedicated `AlpacaProvider` directly, since `trade_count` has
+  no equivalent on FMP or yfinance — both were checked directly, not
+  assumed), returns `(None, reason)` rather than raising on any failure
+  (Alpaca not configured, construction failure, live fetch failure), and
+  caches results in-process for `settings.OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS`
+  in a cache instance kept fully separate from the real OHLCV bars cache.
+- `pilots/lob_simulator.py::estimate_calibrated_theta_market(symbol)` calls
+  the above with `lookback_hours=settings.OPTIONS_LOB_TRADE_COUNT_LOOKBACK_HOURS`,
+  requires at least `settings.OPTIONS_LOB_TRADE_COUNT_MIN_BARS` real bars
+  before trusting the estimate (guards against single-bar noise on a thin
+  window or a thinly-traded symbol), and converts the mean per-bar
+  `TradeCount` (over an hourly bar) into a per-second rate. Returns an
+  honest `{"calibrated": False, "reason": ...}` sentinel on any degrade
+  path — never a fabricated number (CONSTRAINT #4) — and never raises
+  (CONSTRAINT #6).
+- `pilots/lob_simulator.py::simulate_queue_fill()` (the live resolver behind
+  `POST /pilots/options/lob/simulate-queue`) now calls
+  `estimate_calibrated_theta_market()` whenever the request omits
+  `theta_market`, using the calibrated value when available and falling
+  back to the fixed `settings.OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE`
+  constant otherwise. An explicit caller-supplied `theta_market` is always
+  honored as-is and is never recalibrated or overridden. Which case applied
+  is always reported on the response, never silently:
+  `theta_market_is_calibrated` (bool), `theta_market_data_source`
+  (`"alpaca_real_trade_count"` | `"fixed_default"` | `"caller_supplied"`),
+  and `theta_market_bars_used` (the real bar count behind a calibrated
+  estimate, `None` otherwise).
+
+**Real-world reach of this fix**: this codebase's default
+`settings.MARKET_DATA_PROVIDER` is `"fmp"`, and Alpaca is an optional,
+credential-gated provider (`ALPACA_API_KEY`/`ALPACA_SECRET_KEY`). An
+operator running the default configuration without Alpaca credentials set
+still gets the exact pre-fix behavior — `theta_market_data_source` reports
+`"fixed_default"` and the simulation runs on
+`OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE` — honestly, not silently. This fix
+only changes behavior for an operator who has also configured Alpaca.
+`LobDepthView.tsx` now surfaces this honestly too: it renders
+`theta_market_is_calibrated`/`theta_market_bars_used` as a small disclosure
+line under the Queue Dynamics panel ("calibrated from N real Alpaca
+trade-count bars" vs. "fixed default (no real trade-count data
+available)"), treating a missing `theta_market_is_calibrated` field (an
+older cached response, or a mock fixture that predates this field) the same
+as "not calibrated" — never defaulted to a calibrated-sounding claim.
+Regression-tested in `LobDepthView.test.tsx`.
+
+**Disclosed, not-fixed sub-limitation: extended-hours bar mixing**. Alpaca's
+`StockBarsRequest` (used by both `get_intraday_bars` and the new
+`get_intraday_trade_counts`) carries no regular-trading-hours filter. A
+`OPTIONS_LOB_TRADE_COUNT_LOOKBACK_HOURS`-hour window (default 24) run
+outside market hours, or spanning the open/close, can mix genuinely
+low-volume pre/post-market bars in with regular-session ones; since
+`estimate_calibrated_theta_market()`'s `mean()` weights every bar equally,
+this can pull the calibrated rate below what the regular session alone
+would show. This is real and plausible, not fixed in this pass — a correct
+fix needs a verified (not guessed) Alpaca regular-session filtering
+convention, which neither this method nor the pre-existing
+`get_intraday_bars` implements today. Disclosed here and in
+`AlpacaProvider.get_intraday_trade_counts`'s own docstring rather than
+silently left unmentioned.
+
+**What this update does NOT fix — stated plainly, not softened**:
+`lambda_limit` (new-limit-order Poisson arrival rate) and `mu_cancel`
+(per-share cancellation rate) remain on their fixed request-model defaults
+(`4.0`/`0.05`) and are **not** calibrated by this change. This is not a
+scope choice or something merely deferred to a future pass — it is a
+genuine structural limitation of every data source available to this
+codebase. `trade_count`, like every other feed reachable from
+`data/market_data.py`, reports only already-EXECUTED trades. No provider
+checked (Alpaca included) reports a new resting limit order being placed or
+an existing resting order being canceled — those are the two event types
+`lambda_limit`/`mu_cancel` would need to measure, and no such feed exists
+here. Closing that gap for real would require a genuine L2/L3 order-book or
+per-order-event data source, which this codebase does not have access to
+today. `pilots/lob_simulator.py`'s module docstring and
+`docs/architecture/execution.md`'s `pilots/lob_simulator.py` entry were
+both updated in this same pass to state this distinction explicitly rather
+than lump `theta_market` in with the still-uncalibratable pair.

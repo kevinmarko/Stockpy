@@ -121,4 +121,53 @@ describe("LobDepthView", () => {
 
     expect(handleClose).toHaveBeenCalled();
   });
+
+  it("renders the calibrated theta_market disclosure when the response reports a real calibration", async () => {
+    vi.mocked(api.simulateLobQueue).mockResolvedValue({
+      ...mockLobResponse,
+      theta_market_is_calibrated: true,
+      theta_market_data_source: "alpaca_real_trade_count",
+      theta_market_bars_used: 48,
+    });
+
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
+
+    expect(
+      await screen.findByText(
+        /theta \(market-order rate\) calibrated from 48 real Alpaca trade-count bars/i
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders the honest fixed-default disclosure when theta_market_is_calibrated is false or absent", async () => {
+    vi.mocked(api.simulateLobQueue).mockResolvedValue({
+      ...mockLobResponse,
+      theta_market_is_calibrated: false,
+      theta_market_data_source: "fixed_default",
+      theta_market_bars_used: null,
+    });
+
+    render(<LobDepthView initialSymbol="SPY" spotPrice={546.5} />);
+
+    expect(
+      await screen.findByText(
+        /theta \(market-order rate\) = fixed default \(no real trade-count data available\)/i
+      )
+    ).toBeInTheDocument();
+
+    // An older/mock fixture with no theta_market_* fields at all (the base
+    // mockLobResponse fixture itself) must render identically to the
+    // uncalibrated case -- never default to "calibrated".
+    vi.mocked(api.simulateLobQueue).mockResolvedValue(mockLobResponse);
+
+    render(<LobDepthView initialSymbol="QQQ" spotPrice={470.2} />);
+
+    expect(
+      (
+        await screen.findAllByText(
+          /theta \(market-order rate\) = fixed default \(no real trade-count data available\)/i
+        )
+      ).length
+    ).toBeGreaterThan(0);
+  });
 });

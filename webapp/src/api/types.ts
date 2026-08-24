@@ -5107,6 +5107,12 @@ export interface LobQueueSimulationResponse {
   reason?: string | null;
   timestamp: string;
   as_of?: string;
+  // theta_market (market-order Poisson arrival rate) calibration honesty fields --
+  // optional so older/mock fixtures without them don't break TypeScript. Absence
+  // must be treated the same as "not calibrated", never defaulted to calibrated.
+  theta_market_is_calibrated?: boolean;
+  theta_market_data_source?: "alpaca_real_trade_count" | "caller_supplied" | "fixed_default";
+  theta_market_bars_used?: number | null;
 }
 
 export type CopulaFamily = "Clayton" | "Gumbel" | "Frank" | "Gaussian" | "Student-t";

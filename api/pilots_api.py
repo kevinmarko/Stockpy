@@ -6667,7 +6667,7 @@ class LobSimulateQueueRequest(BaseModel):
     depth_ahead: float
     lambda_limit: Optional[float] = 4.0
     mu_cancel: Optional[float] = 0.05
-    theta_market: Optional[float] = 5.0
+    theta_market: Optional[float] = None
     time_horizon_sec: Optional[float] = 60.0
     num_simulations: Optional[int] = 500
 
