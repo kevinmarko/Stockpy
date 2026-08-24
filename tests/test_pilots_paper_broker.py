@@ -910,6 +910,54 @@ class TestEarningsCrushEndpoints:
         assert body["ok"] is False
         assert "Advisory-Only" in body["message"]
 
+    # -----------------------------------------------------------------------
+    # `degraded`/`symbols_errored` diagnostics follow-up (finding #7, this
+    # repo's "distinguish nothing-found from fetch-failed" honesty fix).
+    # pilots.earnings_crush.get_earnings_crush_candidates is mocked with a
+    # side_effect that mutates the `diagnostics` dict it receives, simulating
+    # the real implementation's contract (see pilots/earnings_crush.py).
+    # -----------------------------------------------------------------------
+
+    @patch("pilots.earnings_crush.get_earnings_crush_candidates")
+    def test_get_earnings_crush_candidates_degraded_true_when_store_unavailable(self, mock_get_candidates):
+        def _side_effect(*, symbols=None, min_edge=None, store=None, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics["store_available"] = False
+                diagnostics["options_provider_available"] = True
+                diagnostics["symbols_errored"] = []
+            return []
+
+        mock_get_candidates.side_effect = _side_effect
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/earnings-crush/candidates?symbols=NVDA",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["degraded"] is True
+        assert body["candidates"] == []
+
+    @patch("pilots.earnings_crush.get_earnings_crush_candidates")
+    def test_get_earnings_crush_candidates_degraded_false_when_healthy(self, mock_get_candidates):
+        def _side_effect(*, symbols=None, min_edge=None, store=None, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics["store_available"] = True
+                diagnostics["options_provider_available"] = True
+                diagnostics["symbols_errored"] = []
+            return []
+
+        mock_get_candidates.side_effect = _side_effect
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/earnings-crush/candidates?symbols=NVDA",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["degraded"] is False
+        assert body["symbols_errored"] == []
+
 
 class TestUnusualFlowEndpoints:
     @patch("pilots.unusual_options_flow.get_unusual_options_activity")
@@ -971,6 +1019,55 @@ class TestUnusualFlowEndpoints:
                 headers={"Authorization": "Bearer WRONG"},
             )
         assert resp.status_code == 401
+
+    # -----------------------------------------------------------------------
+    # `degraded`/`symbols_fetch_failed` diagnostics follow-up (finding #7, this
+    # repo's "distinguish nothing-found from fetch-failed" honesty fix).
+    # pilots.unusual_options_flow.get_unusual_options_activity does not yet
+    # carry the `diagnostics` kwarg on THIS branch (it's implemented on a
+    # sibling branch, unusual-options-flow-engine-fixes) -- so it is mocked
+    # here with a side_effect that mutates the `diagnostics` dict it
+    # receives, simulating the real implementation's contract (see the task
+    # description / docs/known_issues/earnings_crush_uoa_followup_audit_findings.md).
+    # -----------------------------------------------------------------------
+
+    @patch("pilots.unusual_options_flow.get_unusual_options_activity")
+    def test_get_unusual_flow_degraded_true_on_fetch_failure(self, mock_get_uoa):
+        def _side_effect(*, symbols=None, min_vol_oi=None, min_notional=None, limit=50, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics["symbols_fetch_failed"] = ["XYZ"]
+                diagnostics["read_from_cache"] = False
+            return []
+
+        mock_get_uoa.side_effect = _side_effect
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/unusual",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["degraded"] is True
+        assert body["symbols_fetch_failed"] == ["XYZ"]
+
+    @patch("pilots.unusual_options_flow.get_unusual_options_activity")
+    def test_get_unusual_flow_degraded_false_when_served_from_cache(self, mock_get_uoa):
+        def _side_effect(*, symbols=None, min_vol_oi=None, min_notional=None, limit=50, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics["symbols_fetch_failed"] = []
+                diagnostics["read_from_cache"] = True
+            return [{"symbol": "NVDA", "strike": 130.0}]
+
+        mock_get_uoa.side_effect = _side_effect
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/unusual",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["degraded"] is False
+        assert body["count"] == 1
 
     @patch("pilots.unusual_options_flow.get_flow_sentiment")
     def test_get_flow_sentiment_success(self, mock_sentiment):

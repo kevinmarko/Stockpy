@@ -4522,6 +4522,8 @@ export interface EarningsCrushCandidatesResponse {
   candidates: EarningsCrushCandidate[];
   count: number;
   as_of?: string;
+  degraded?: boolean;
+  symbols_errored?: string[];
 }
 
 export interface EarningsCrushExecutionResult {
@@ -4570,6 +4572,8 @@ export interface UnusualOptionsFlowResponse {
   records?: UnusualOptionTrade[];
   count: number;
   as_of?: string;
+  degraded?: boolean;
+  symbols_fetch_failed?: string[];
 }
 
 export interface FlowSentimentData {
