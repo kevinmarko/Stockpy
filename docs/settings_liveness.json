@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 318,
+    "live_safe": 324,
     "no_op": 3,
     "restart_required": 105,
-    "total": 426
+    "total": 432
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3167,
+      "line": 3187,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4273,
+      "line": 4293,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4378,
+      "line": 4398,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 429,
+  "files_scanned": 431,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -169,6 +169,7 @@
     "BROKERAGE_CONNECT_ENABLED",
     "BROKERAGE_REFRESH_ENABLED",
     "BROKER_BACKEND",
+    "BROKER_TRADE_INGEST_ENABLED",
     "CACHE_LONG_SHORT_ENABLED",
     "CACHE_LONG_SHORT_MIN_CORRELATION",
     "CACHE_LONG_SHORT_PROXY_CANDIDATES",
@@ -177,6 +178,8 @@
     "CACHE_LONG_SHORT_WRITES_ENABLED",
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+    "CLOSED_POSITION_RETENTION_DAYS",
+    "CLOSED_POSITION_RETENTION_MAX_SYMBOLS",
     "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
@@ -211,6 +214,7 @@
     "ETF_TRANSMISSION_SIZING_ENABLED",
     "ETF_TRANSMISSION_WINDOW_DAYS",
     "ETF_TRANSMISSION_WRAPPERS",
+    "EVAL_BROKER_TRADES_ENABLED",
     "EXCURSION_INTRADAY_ENABLED",
     "EXECUTION_PRIORITY_QUEUE_ENABLED",
     "EXECUTION_QUEUE_LEAK_RATE_PER_SEC",
@@ -395,6 +399,8 @@
     "RH_LOGIN_DEADLINE_SECONDS",
     "RH_LOGIN_GRACE_SECONDS",
     "RH_LOGIN_STARTUP_SECONDS",
+    "RH_ORDER_INGEST_BUDGET_SECONDS",
+    "RH_ORDER_SYMBOL_RESOLVE_MAX",
     "RH_PASSWORD",
     "RH_USERNAME",
     "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
@@ -467,15 +473,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 843,
+    "attr": 854,
     "factory_param": 4,
-    "getattr_const": 368,
+    "getattr_const": 371,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 248,
+    "attr": 252,
     "factory_param": 4,
-    "getattr_const": 206,
+    "getattr_const": 208,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -723,7 +729,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:324",
+        "site": "api/pilots_api.py:325",
         "via": []
       },
       {
@@ -904,6 +910,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/broker_fills_store.py:118",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/cache_long_short_store.py:82",
         "via": []
       },
@@ -1035,6 +1050,24 @@
       }
     ],
     "DB_MAX_OVERFLOW": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/broker_fills_store.py:123",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/broker_fills_store.py:125",
+        "via": []
+      },
       {
         "discarded": false,
         "form": "attr",
@@ -1271,6 +1304,24 @@
       }
     ],
     "DB_POOL_SIZE": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/broker_fills_store.py:123",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/broker_fills_store.py:125",
+        "via": []
+      },
       {
         "discarded": false,
         "form": "attr",
@@ -1555,7 +1606,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4755",
+        "site": "api/pilots_api.py:4775",
         "via": []
       }
     ],
@@ -1566,7 +1617,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4754",
+        "site": "api/pilots_api.py:4774",
         "via": []
       }
     ],
@@ -1577,7 +1628,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4924",
+        "site": "api/pilots_api.py:4944",
         "via": []
       },
       {
@@ -1652,7 +1703,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4896",
+        "site": "api/pilots_api.py:4916",
         "via": []
       },
       {
@@ -1696,7 +1747,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:634",
+        "site": "api/pilots_api.py:635",
         "via": []
       }
     ],
@@ -2277,6 +2328,15 @@
       }
     ],
     "MCP_DATABASE_URL_RO": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/broker_fills_store.py:123",
+        "via": []
+      },
       {
         "discarded": false,
         "form": "attr",
@@ -3034,7 +3094,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:629",
+        "site": "api/pilots_api.py:630",
         "via": []
       },
       {
@@ -3074,7 +3134,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/portfolio_sync.py:567",
+        "site": "data/portfolio_sync.py:604",
         "via": []
       },
       {
@@ -3116,7 +3176,7 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 79,
+    "cross_module_init_helper": 85,
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,

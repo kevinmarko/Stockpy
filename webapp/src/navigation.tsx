@@ -99,6 +99,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/forecast/backfill", label: "Forecast Backfill", ico: TrendingUp, match: (p) => p.startsWith("/forecast/backfill"), section: "research" },
   { to: "/data-explorer", label: "Data Explorer", ico: FolderOpen, match: (p) => p.startsWith("/data-explorer"), section: "research" },
   { to: "/symbol-screener", label: "Symbol Screener", ico: Filter, match: (p) => p.startsWith("/symbol-screener"), section: "research" },
+  { to: "/trade-history", label: "Trade History", ico: Briefcase, match: (p) => p.startsWith("/trade-history"), section: "research" },
   // Trading Tools
   { to: "/attribution", label: "Attribution", ico: Calculator, match: (p) => p.startsWith("/attribution"), section: "trading" },
   { to: "/calibration", label: "Calibration", ico: Sliders, match: (p) => p.startsWith("/calibration"), section: "trading" },

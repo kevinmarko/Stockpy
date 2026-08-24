@@ -274,6 +274,34 @@ def _isolate_execution_audit_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_broker_fills_db_in_tests(monkeypatch):
+    """Point the default broker-order-fills DB resolver at an in-memory db
+    for every test, unless the test passes its own explicit ``db_url`` to
+    ``BrokerFillsStore``.
+
+    Same risk class as ``_isolate_validation_runs_db_in_tests`` /
+    ``_isolate_execution_audit_db_in_tests`` above: ``data.broker_fills_store``
+    becomes reachable from widely-called functions with no store of their
+    own -- ``main._build_universe`` and ``data.portfolio_sync.build_sync_report``
+    both call ``recently_closed_symbols()`` (universe retention), which
+    constructs ``BrokerFillsStore(readonly=True)`` with no explicit URL --
+    and both are exercised by dozens of pre-existing test files. Left
+    unguarded, running this suite would (a) mutate the operator's real
+    ``~/.stockpy_local/quant_platform.db`` schema via the write-mode
+    constructor's ``Base.metadata.create_all``, and (b) let any reachable
+    write path (e.g. a test that drives ``data.broker_fills_store.
+    ingest_filled_orders``) seed it with fake fills.
+
+    Lazy import so a broken import in the module surfaces as a test failure
+    for whichever test actually touches it, not a collection-time failure
+    for the entire suite.
+    """
+    import data.broker_fills_store as _bfs
+
+    monkeypatch.setattr(_bfs, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""

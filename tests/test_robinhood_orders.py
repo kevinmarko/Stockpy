@@ -376,3 +376,134 @@ class TestModuleSurface:
                    "place_equity_order", "place_option_order", "order_buy",
                    "order_sell", "cancel_order"):
             assert kw not in src, f"forbidden order keyword present: {kw}"
+
+
+# ===========================================================================
+# orders_fetcher=None dispatch — the dead-import fix (2026-08)
+# ===========================================================================
+
+
+class TestDefaultFetcherDispatch:
+    """fetch_filled_orders(orders_fetcher=None) used to import a symbol
+    (`_login`) that no longer exists in data.robinhood_portfolio, silently
+    ImportError-ing and degrading to cache on every call. Now it dispatches
+    on RH_LOGIN_WORKER instead of trying to log in itself."""
+
+    def test_outside_worker_raises_approval_required_and_degrades_to_cache(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+        monkeypatch.setattr(rho, "_CACHE_PATH", tmp_path / "orders.json")
+
+        # Seed a stale cache so the degrade path has something to return.
+        seeded = [_fill("AAPL", "buy", 10, 100.0, 1)]
+        rho._write_cache(seeded)
+
+        fills = fetch_filled_orders(force=True, orders_fetcher=None)
+        assert fills == seeded  # degraded to cache, never raised out
+
+    def test_outside_worker_raises_approval_required_no_cache_returns_empty(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+        monkeypatch.setattr(rho, "_CACHE_PATH", tmp_path / "orders.json")
+
+        fills = fetch_filled_orders(force=True, orders_fetcher=None)
+        assert fills == []  # never raises out of fetch_filled_orders
+
+    def test_inside_worker_uses_get_all_stock_orders(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+        monkeypatch.setattr(rho, "_CACHE_PATH", tmp_path / "orders.json")
+
+        calls = {"n": 0}
+
+        class _FakeRobinStocks:
+            @staticmethod
+            def get_all_stock_orders():
+                calls["n"] += 1
+                return [{
+                    "state": "filled", "side": "buy", "cumulative_quantity": "1",
+                    "average_price": "100", "last_transaction_at": "2026-01-01T00:00:00Z",
+                    "instrument": "url-1", "id": "ord-1",
+                }]
+
+        import robin_stocks
+        monkeypatch.setattr(robin_stocks, "robinhood", _FakeRobinStocks)
+
+        fills = fetch_filled_orders(force=True, symbol_resolver=lambda u: "AAPL")
+        assert calls["n"] == 1
+        assert len(fills) == 1
+        assert fills[0].symbol == "AAPL"
+
+    def test_worker_env_get_all_stock_orders_exception_degrades_to_cache(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+        monkeypatch.setattr(rho, "_CACHE_PATH", tmp_path / "orders.json")
+        rho._write_cache([_fill("AAPL", "buy", 5, 50.0, 1)])
+
+        class _BoomRobinStocks:
+            @staticmethod
+            def get_all_stock_orders():
+                raise RuntimeError("session expired")
+
+        import robin_stocks
+        monkeypatch.setattr(robin_stocks, "robinhood", _BoomRobinStocks)
+
+        fills = fetch_filled_orders(force=True, symbol_resolver=lambda u: "AAPL")
+        assert len(fills) == 1  # degraded to the stale cache, not raised
+
+
+# ===========================================================================
+# Resolver seed / write-back cache (2026-08)
+# ===========================================================================
+
+
+class TestSymbolResolverSeedAndBudget:
+    def test_seed_avoids_network_call_entirely(self, monkeypatch):
+        calls = {"n": 0}
+
+        class _FakeR:
+            @staticmethod
+            def get_symbol_by_url(url):
+                calls["n"] += 1
+                return "SHOULD-NOT-BE-CALLED"
+
+        import robin_stocks
+        monkeypatch.setattr(robin_stocks, "robinhood", _FakeR)
+
+        resolve = rho._default_symbol_resolver(seed={"url-a": "AAPL"})
+        assert resolve("url-a") == "AAPL"
+        assert calls["n"] == 0
+        assert resolve.newly_resolved == {}
+
+    def test_unseeded_url_resolves_over_network_and_is_tracked(self, monkeypatch):
+        class _FakeR:
+            @staticmethod
+            def get_symbol_by_url(url):
+                return "MSFT"
+
+        import robin_stocks
+        monkeypatch.setattr(robin_stocks, "robinhood", _FakeR)
+
+        resolve = rho._default_symbol_resolver(seed={})
+        assert resolve("url-b") == "MSFT"
+        assert resolve.newly_resolved == {"url-b": "MSFT"}
+
+    def test_budget_exhausted_returns_none_without_network_call(self, monkeypatch):
+        calls = {"n": 0}
+
+        class _FakeR:
+            @staticmethod
+            def get_symbol_by_url(url):
+                calls["n"] += 1
+                return f"SYM-{url}"
+
+        import robin_stocks
+        monkeypatch.setattr(robin_stocks, "robinhood", _FakeR)
+
+        resolve = rho._default_symbol_resolver(seed={}, max_network_resolutions=1)
+        assert resolve("url-1") == "SYM-URL-1"
+        assert resolve("url-2") is None  # budget exhausted, never even tried
+        assert calls["n"] == 1
+        assert resolve.newly_resolved == {"url-1": "SYM-URL-1"}

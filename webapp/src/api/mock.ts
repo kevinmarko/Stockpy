@@ -103,6 +103,7 @@ import type {
   PortfolioHeatMetric,
   PortfolioRiskMetrics,
   RealizedPerformance,
+  TradeHistoryPage,
   RegimeOverlay,
   RestartDaemonResult,
   RiskGateBlockEntry,
@@ -1267,15 +1268,19 @@ function _mockLoginJobStatus(
   }
 
   // Happy path: starting -> authenticating -> awaiting_approval -> verifying
-  // -> fetching_snapshot -> succeeded. Timed so a 2s-interval poller sees a
-  // couple of "running" polls (awaiting_approval) before success, rather
-  // than resolving on the very first poll.
+  // -> fetching_snapshot -> fetching_orders -> succeeded. Timed so a
+  // 2s-interval poller sees a couple of "running" polls (awaiting_approval)
+  // before success, rather than resolving on the very first poll. Only a
+  // "refresh" job goes through fetching_orders -- a "connect" job (mode
+  // verification only) jumps straight from verifying to done, matching
+  // data/robinhood_login_worker.py's real dispatch.
   let phase: BrokerageLoginPhase;
   if (elapsedSeconds < 1) phase = "starting";
   else if (elapsedSeconds < 2) phase = "authenticating";
   else if (elapsedSeconds < 5) phase = "awaiting_approval";
   else if (elapsedSeconds < 6) phase = "verifying";
-  else if (elapsedSeconds < 7) phase = "fetching_snapshot";
+  else if (job.mode === "refresh" && elapsedSeconds < 7) phase = "fetching_snapshot";
+  else if (job.mode === "refresh" && elapsedSeconds < 8) phase = "fetching_orders";
   else phase = "done";
 
   if (phase !== "done") {
@@ -5147,6 +5152,32 @@ function realizedSummary(trades: RealizedTrade[]) {
     gross_loss: gl,
   };
 }
+
+// ---- Trade History fixture (durable-store, full paginated ledger) ----
+// A larger, longer-history set than REALIZED_TRADES (which caps at 6 for the
+// Portfolio screen's summary panel), plus one row with unresolvable
+// return_pct/holding_days -- an honesty branch proving the UI renders "—"
+// rather than "0"/"NaN" for a genuinely null field.
+const TRADE_HISTORY_TRADES: RealizedTrade[] = [
+  ...REALIZED_TRADES,
+  rt("TSLA", 5, 210.0, 195.0, 30),
+  rt("GOOGL", 12, 138.0, 151.2, 55),
+  rt("PBF", 45, 19.08, 38.0, 27),
+  rt("ARCC", 10, 18.65, 18.405, 8),
+  rt("IVR", 220, 8.375, 8.625, 200),
+  rt("CMCL", 17, 10.19, 25.0, 4),
+  {
+    symbol: "XYZ",
+    quantity: null,
+    entry_ts: new Date(Date.now() - 400 * 86400000).toISOString(),
+    exit_ts: new Date(Date.now() - 370 * 86400000).toISOString(),
+    entry_price: null,
+    exit_price: null,
+    realized_pnl: 0,
+    return_pct: null,
+    holding_days: null,
+  },
+];
 
 // ---- Alerts feed fixture ----
 function mockAlerts(): AlertsFeed {
@@ -9242,6 +9273,32 @@ export const mockApi = {
       trades: REALIZED_TRADES,
       n_fills: REALIZED_TRADES.length * 2,
       available: true,
+    });
+  },
+
+  async getTradeHistory(
+    opts: { limit?: number; offset?: number; symbol?: string } = {}
+  ): Promise<TradeHistoryPage> {
+    const limit = opts.limit ?? 50;
+    const offset = opts.offset ?? 0;
+    const symbol = opts.symbol?.toUpperCase();
+    // Newest-exit-first, matching the real backend's ordering.
+    const sorted = [...TRADE_HISTORY_TRADES].sort(
+      (a, b) => new Date(b.exit_ts ?? 0).getTime() - new Date(a.exit_ts ?? 0).getTime()
+    );
+    const filtered = symbol ? sorted.filter((t) => t.symbol === symbol) : sorted;
+    return delay({
+      trades: filtered.slice(offset, offset + limit),
+      // Summary over the FULL filtered set, not just the page -- matches
+      // the real backend's contract exactly (pilots/trade_history.py).
+      summary: realizedSummary(filtered),
+      total: filtered.length,
+      limit,
+      offset,
+      symbols: Array.from(new Set(TRADE_HISTORY_TRADES.map((t) => t.symbol))).sort(),
+      available: true,
+      source: "durable_store",
+      last_ingested_at: new Date(Date.now() - 2 * 3600000).toISOString(),
     });
   },
 

@@ -73,6 +73,7 @@ import type {
   RealizedPerformance,
   RollingBeta,
   RunRecord,
+  TradeHistoryPage,
   SectorSelectionView,
   StrategyMatrix,
   StrategyHealthRow,
@@ -462,6 +463,13 @@ const liveApi = {
   getEquityCurve: (range: PerfRange) =>
     http<EquityCurveResponse>(`/portfolio/equity-curve?range=${range}`),
   getRealized: () => http<RealizedPerformance>("/portfolio/realized"),
+  getTradeHistory: (opts: { limit?: number; offset?: number; symbol?: string } = {}) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts.limit ?? 50));
+    params.set("offset", String(opts.offset ?? 0));
+    if (opts.symbol) params.set("symbol", opts.symbol);
+    return http<TradeHistoryPage>(`/portfolio/trade-history?${params.toString()}`);
+  },
   getPortfolioAttribution: (lookbackDays = 60) =>
     http<PortfolioAttribution>(
       `/portfolio/attribution?lookback_days=${lookbackDays}`

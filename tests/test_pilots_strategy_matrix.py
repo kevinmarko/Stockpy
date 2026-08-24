@@ -585,6 +585,18 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"data"}
     if module_name == "realized":
         allowed = allowed | {"data", "pilots"}
+    if module_name == "trade_history":
+        # Reuses pilots.realized's null-shaping helpers (_summary_to_json /
+        # _trade_to_json) rather than re-deriving the same NaN->null rules
+        # twice, and reads data.broker_fills_store (SQLAlchemy + db_config +
+        # a lazy data.robinhood_orders import only -- confirmed
+        # dependency-light by inspection, same convention as
+        # data.sector_correlation_store above) inside its own lazy,
+        # function-local imports. Deliberately never imports
+        # transactions_store -- see data/broker_fills_store.py's module
+        # docstring for why that isolation is structural (position-sizing
+        # safety), not incidental.
+        allowed = allowed | {"data", "pilots"}
     if module_name == "rlhf_review_queue":
         # lazy rlhf_calibration_store -- same lightweight db_config/settings/
         # stdlib-only store api/pilots_api.py's own comment already calls out.

@@ -179,6 +179,7 @@ from pilots import (
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
     symbols,
+    trade_history,
     validation_trend as validation_trend_reader,
 )
 from pilots.follows_store import FollowsStore
@@ -1645,6 +1646,25 @@ def get_realized_performance() -> Dict[str, Any]:
     fabricated ``0.0`` (CONSTRAINT #4); ``available=false`` when nothing is cached
     yet. Never 500s (CONSTRAINT #6)."""
     return realized.realized_performance_view()
+
+
+@app.get("/portfolio/trade-history", dependencies=[Depends(require_read_token)])
+def get_trade_history(
+    limit: int = 50, offset: int = 0, symbol: Optional[str] = None
+) -> Dict[str, Any]:
+    """Full, paginated broker closed-trade history for the dedicated Trade
+    History screen — distinct from ``GET /portfolio/realized`` above, which
+    is cache-only and capped at 100 trades for the Portfolio summary panel.
+
+    Reads the DURABLE store (``data.broker_fills_store``, fed by the
+    Robinhood login worker's orders ingest during a ``--refresh-account``
+    login) rather than the JSON cache, so it survives cache eviction and
+    covers the operator's full ingested history. ``summary`` is computed
+    over the full filtered set, not just the returned page, so paging never
+    changes the reported win rate / profit factor. NaN fields serialize as
+    ``null``, never a fabricated ``0.0`` (CONSTRAINT #4); ``available=false``
+    when nothing has been ingested yet. Never 500s (CONSTRAINT #6)."""
+    return trade_history.trade_history_view(limit=limit, offset=offset, symbol=symbol)
 
 
 # Bounds a pathologically large book's bars-fetch fanout for the correlation-
