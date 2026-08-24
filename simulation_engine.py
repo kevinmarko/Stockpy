@@ -103,28 +103,33 @@ from typing import Tuple, Optional
 # =============================================================================
 # 1. VECTORBT: MATRIX-BASED PARAMETER OPTIMIZATION
 # =============================================================================
-def optimize_strategy_vectorbt(price_series: pd.Series):
+def optimize_strategy_vectorbt(price_series: pd.Series, market_cap: Optional[float] = None):
     """
     Uses VectorBT to test thousands of Moving Average combinations instantly
     using vectorized Numpy arrays.
+
+    market_cap: optional real market cap for the symbol being backtested, threaded into
+    TieredCostModel's liquidity-tier cost differentiation. Defaults to None (today's exact
+    behavior -- get_liquidity_tier(None) resolves "large_cap") when the caller has no ticker
+    context to resolve a real value from.
     """
     print_survivorship_warning_for_backtest(price_series.index)
     print("\n--- Running VectorBT Matrix Optimization ---")
-    
+
     # Define a range of Fast and Slow moving averages to test
     fast_windows = np.arange(10, 30, step=5)
     slow_windows = np.arange(50, 150, step=20)
     windows = np.concatenate([fast_windows, slow_windows])
-    
+
     # Generate moving averages
     fast_ma, slow_ma = vbt.MA.run_combs(price_series, window=windows, r=2, short_names=['fast', 'slow'])
-    
+
     # Generate crossover signals
     entries = fast_ma.ma_crossed_above(slow_ma)
     exits = fast_ma.ma_crossed_below(slow_ma)
-    
+
     # Get costs from model
-    fees_pct, slippage_pct = get_vbt_costs(market_cap=None)
+    fees_pct, slippage_pct = get_vbt_costs(market_cap=market_cap)
     
     # Build Portfolio and calculate Sharpe Ratios
     portfolio = vbt.Portfolio.from_signals(price_series, entries, exits, freq='1D', fees=fees_pct, slippage=slippage_pct)
@@ -196,8 +201,14 @@ class InstitutionalStrategy(bt.Strategy):
                 print(f"SIGNAL: SELL Created at close {self.data.close[0]:.2f}")
                 self.order = self.sell(size=self.position.size)
 
-def run_backtrader_simulation(dataframe: pd.DataFrame):
-    """Executes the Backtrader engine with slippage and commission."""
+def run_backtrader_simulation(dataframe: pd.DataFrame, market_cap: Optional[float] = None):
+    """Executes the Backtrader engine with slippage and commission.
+
+    market_cap: optional real market cap for the symbol being backtested, threaded into
+    TieredCostModel's liquidity-tier cost differentiation. Defaults to None (today's exact
+    behavior -- get_liquidity_tier(None) resolves "large_cap") when the caller has no ticker
+    context to resolve a real value from.
+    """
     print_survivorship_warning_for_backtest(dataframe.index)
     print("\n--- Running Event-Driven Backtrader Simulation ---")
     cerebro = bt.Cerebro()
@@ -209,11 +220,11 @@ def run_backtrader_simulation(dataframe: pd.DataFrame):
 
     # Set Institutional Capital, Fees, and Slippage Models
     cerebro.broker.setcash(100000.0)
-    
+
     try:
         from execution.cost_model import TieredCostModel, TieredCostCommissionInfo
         model = TieredCostModel()
-        comm_info = TieredCostCommissionInfo(tiered_model=model, market_cap=None, order_type='market')  # type: ignore
+        comm_info = TieredCostCommissionInfo(tiered_model=model, market_cap=market_cap, order_type='market')  # type: ignore
         cerebro.broker.addcommissioninfo(comm_info)
     except Exception as e:
         logger.warning(f"Could not load custom commission info: {e}. Falling back to flat assumptions.")
