@@ -363,9 +363,45 @@ def _fetch_live_snapshot() -> AccountSnapshot:
     # Fall back to allied fields when the primary field is absent
     # (e.g. outside market hours the "equity" key may be 0 and
     # "extended_hours_equity" carries the current value).
+    #
+    # robin_stocks' own request_get(..., dataType='indexzero') helper (what
+    # both of these call internally) does NOT raise on a non-200 response,
+    # a missing "results" key, or an empty "results" list — it swallows the
+    # failure and returns bare `None`. Left unchecked, the `or {}` below
+    # would silently turn that swallowed failure into an empty dict, and
+    # every field read from it would then fall through to a fabricated "0"
+    # (CONSTRAINT #4) with no indication anything went wrong — see
+    # docs/known_issues/robinhood_snapshot_fabricated_zero_on_swallowed_api_failure.md.
+    #
+    # A GENUINE response (success OR a real, brand-new empty account) is
+    # always a non-empty dict — Robinhood's own "indexzero" record always
+    # carries its full field set, with legitimately-zero values still
+    # present as real (non-missing) entries. So an EMPTY dict here is an
+    # unambiguous signal of a swallowed API failure, never a legitimate
+    # empty-account state — the right thing to do is raise and let the
+    # existing three-tier DB → JSON-cache → live fallback in
+    # fetch_account_snapshot() take over, exactly as it already does for
+    # any other live-fetch exception.
     # ------------------------------------------------------------------ #
     portfolio_profile: dict = r.load_portfolio_profile() or {}
     account_profile: dict = r.load_account_profile() or {}
+
+    if not portfolio_profile:
+        raise RuntimeError(
+            "Robinhood load_portfolio_profile() returned an empty/malformed "
+            "response (auth failure, rate limit, or a transient error "
+            "swallowed internally by robin_stocks). Refusing to treat this "
+            "as a successful live fetch rather than fabricate a $0 equity "
+            "reading."
+        )
+    if not account_profile:
+        raise RuntimeError(
+            "Robinhood load_account_profile() returned an empty/malformed "
+            "response (auth failure, rate limit, or a transient error "
+            "swallowed internally by robin_stocks). Refusing to treat this "
+            "as a successful live fetch rather than fabricate a $0 buying "
+            "power reading."
+        )
 
     equity_str: str = (
         portfolio_profile.get("equity")
@@ -601,6 +637,24 @@ def fetch_account_snapshot(
         return snapshot
     except Exception as exc:
         logger.error("Live Robinhood fetch failed: %s", exc)
+        # Check both fallback tiers, DB first then JSON — same order as the
+        # "auto-refresh disabled" branch above, so a JSON-cache-missing-but-
+        # DB-present split (e.g. a LOCAL_DATA_ROOT/worktree desync — see
+        # docs/known_issues/forecast_tracker_local_data_root_split.md for a
+        # prior instance of exactly this class of gap) is still resilient
+        # here instead of falling straight through to a raise.
+        try:
+            from data.historical_store import HistoricalStore
+            _db_snap = HistoricalStore().latest_account_snapshot()
+            if _db_snap is not None:
+                logger.warning(
+                    "Returning stale DB-cached Robinhood snapshot (age %.1f h) "
+                    "after live-fetch failure.",
+                    _db_snap.age_hours(),
+                )
+                return _db_snap
+        except Exception as _exc:
+            logger.debug("DB snapshot read failed, falling through: %s", _exc)
         cached = _read_cache()
         if cached is not None:
             logger.warning(

@@ -735,6 +735,243 @@ class TestAccountLevelFields:
 
 
 # ---------------------------------------------------------------------------
+# Fails-closed on a swallowed robin_stocks API failure (CONSTRAINT #4 fix)
+#
+# robin_stocks' own request_get(..., dataType='indexzero') helper — what
+# load_portfolio_profile()/load_account_profile() call internally — does NOT
+# raise on a non-200 response, a missing "results" key, or an empty
+# "results" list; it swallows the failure and returns bare `None`. Before
+# this fix, `_fetch_live_snapshot()`'s `portfolio_profile.get(...) or "0"`
+# fallbacks silently turned that into a fabricated $0 equity/buying-power
+# reading with no indication anything went wrong. See
+# docs/known_issues/robinhood_snapshot_fabricated_zero_on_swallowed_api_failure.md.
+# ---------------------------------------------------------------------------
+
+class TestFetchLiveSnapshotFailsClosedOnMalformedProfile:
+    """Scenario A: build_holdings() succeeds with real position(s), but a
+    profile call returns an empty/malformed response. Must raise instead of
+    silently persisting a fabricated $0 snapshot."""
+
+    def test_empty_portfolio_profile_raises(self, monkeypatch) -> None:
+        """load_portfolio_profile() returning {} (the swallowed-failure
+        signal) must raise, even though holdings and account_profile both
+        succeeded with real, non-zero values."""
+        _patch_robinhood(
+            monkeypatch,
+            holdings=_MOCK_HOLDINGS,  # real AAPL/MSFT positions
+            dividends=[],
+            portfolio={},  # <- swallowed robin_stocks failure
+            account={"buying_power": "500.00"},
+        )
+        with pytest.raises(RuntimeError, match="load_portfolio_profile"):
+            _fetch_live_snapshot()
+
+    def test_empty_account_profile_raises(self, monkeypatch) -> None:
+        """load_account_profile() returning {} must likewise raise, even
+        though holdings and portfolio_profile both succeeded."""
+        _patch_robinhood(
+            monkeypatch,
+            holdings=_MOCK_HOLDINGS,
+            dividends=[],
+            portfolio={"equity": "12345.67"},
+            account={},  # <- swallowed robin_stocks failure
+        )
+        with pytest.raises(RuntimeError, match="load_account_profile"):
+            _fetch_live_snapshot()
+
+    def test_none_portfolio_profile_raises(self, monkeypatch) -> None:
+        """robin_stocks' real failure mode is returning bare None (not {}) —
+        confirm the `... or {}` normalization still trips the guard.
+
+        (Note: _patch_robinhood(portfolio=None) means "use its own default"
+        by convention -- monkeypatch load_portfolio_profile directly here to
+        actually reproduce robin_stocks' real None return value.)"""
+        _patch_robinhood(
+            monkeypatch,
+            holdings=_MOCK_HOLDINGS,
+            dividends=[],
+            account={"buying_power": "500.00"},
+        )
+        monkeypatch.setattr("data.robinhood_portfolio.r.load_portfolio_profile", lambda: None)
+        with pytest.raises(RuntimeError, match="load_portfolio_profile"):
+            _fetch_live_snapshot()
+
+    def test_failure_flows_through_three_tier_fallback_to_stale_cache(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The raised exception must correctly reach fetch_account_snapshot()'s
+        existing DB -> JSON-cache -> live fallback logic, exactly like any
+        other live-fetch exception -- this is the whole point of raising
+        instead of fabricating: it re-engages logic that already existed but
+        was never triggered before this fix."""
+        from unittest.mock import MagicMock
+
+        # No DB snapshot available -- fall through to the JSON cache tier.
+        mock_store = MagicMock()
+        mock_store.latest_account_snapshot.return_value = None
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda **kw: mock_store)
+
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+        stale = _make_snapshot(age_hours=30.0)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(stale.to_dict()))
+
+        # Reproduce Scenario A through the REAL, unmodified _fetch_live_snapshot
+        # code path (not a monkeypatched stand-in) via force=True, which
+        # bypasses the cache tiers and goes straight to a live-fetch attempt.
+        _patch_robinhood(
+            monkeypatch,
+            holdings=_MOCK_HOLDINGS,
+            dividends=[],
+            portfolio={},
+            account={"buying_power": "500.00"},
+        )
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=True)
+
+        # The fabricated-$0 outcome would have been a "successful" fetch with
+        # buying_power/total_equity == 0.0 and real AAPL/MSFT positions.
+        # Instead we must get back the honest stale cache.
+        assert result.buying_power == pytest.approx(stale.buying_power)
+        assert result.total_equity == pytest.approx(stale.total_equity)
+        assert result.is_stale(max_age_hours=20.0)
+
+
+class TestFetchLiveSnapshotHoldingsAmbiguity:
+    """Scenario B and the genuinely-empty-account case: build_holdings()
+    returning {} is deliberately NOT treated as a failure signal on its own
+    -- it is ambiguous (could be a real zero-position account, e.g. a cash-
+    only account that hasn't bought anything yet) and robin_stocks' own
+    build_holdings() already returns {} whenever ANY of its three internal
+    calls (including its own separate load_portfolio_profile()/
+    load_account_profile() round-trips) come back falsy -- see
+    docs/known_issues/robinhood_snapshot_fabricated_zero_on_swallowed_api_failure.md
+    for the full reasoning on why this is a deliberate scope boundary, not a
+    gap. The unambiguous signal this fix guards on is this module's OWN,
+    separate, later load_portfolio_profile()/load_account_profile() calls
+    coming back empty."""
+
+    def test_holdings_empty_but_profiles_well_formed_does_not_raise(self, monkeypatch) -> None:
+        """Reproduces Scenario B: build_holdings()'s own internal profile
+        round-trip transiently failed (returning {} from build_holdings()),
+        but THIS module's later, separate direct profile calls succeeded
+        with real values. Since the two profile dicts this module actually
+        reads from are well-formed, this must NOT raise -- positions={} with
+        a real nonzero equity/buying_power is an accepted, internally-
+        inconsistent-looking but not-fabricated result (every field is
+        either a real fetched value or an honestly-empty dict), not
+        something this narrowly-scoped fix can safely disambiguate from a
+        legitimate cash-heavy zero-position account."""
+        _patch_robinhood(
+            monkeypatch,
+            holdings={},  # build_holdings()'s own internal hiccup
+            dividends=[],
+            portfolio={"equity": "50000.00"},
+            account={"buying_power": "1234.56"},
+        )
+        snap = _fetch_live_snapshot()
+        assert snap.positions == {}
+        assert snap.total_equity == pytest.approx(50000.0)
+        assert snap.buying_power == pytest.approx(1234.56)
+
+    def test_genuinely_empty_new_account_not_flagged_as_failure(self, monkeypatch) -> None:
+        """A brand-new account with zero positions and zero equity is a real,
+        valid state -- both profile dicts are non-empty (they carry real,
+        legitimately-zero "0.00" values), so this must NOT raise."""
+        _patch_robinhood(
+            monkeypatch,
+            holdings={},
+            dividends=[],
+            portfolio={"equity": "0.00"},
+            account={"buying_power": "0.00"},
+        )
+        snap = _fetch_live_snapshot()
+        assert snap.positions == {}
+        assert snap.total_equity == pytest.approx(0.0)
+        assert snap.buying_power == pytest.approx(0.0)
+
+
+class TestLiveFetchExceptionFallbackChecksBothTiers:
+    """The live-fetch-EXCEPTION handler (fetch_account_snapshot's outer
+    try/except around _fetch_live_snapshot()) must check the DB tier before
+    falling through to the JSON cache, matching the "auto-refresh disabled"
+    branch's DB-then-JSON order a few lines above it -- not JSON-cache-only,
+    which was asymmetric and left a JSON-cache-missing-but-DB-present split
+    unhandled (e.g. a LOCAL_DATA_ROOT/worktree desync -- see
+    docs/known_issues/forecast_tracker_local_data_root_split.md for a prior
+    instance of exactly this class of gap)."""
+
+    def test_db_snapshot_used_when_json_cache_absent(self, tmp_path, monkeypatch) -> None:
+        from data.historical_store import HistoricalStore
+
+        # No JSON cache file at all.
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+
+        # A real, fresh-ish snapshot sitting in the DB tier only.
+        db_path = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db_path)
+        db_snap = _make_snapshot(age_hours=2.0)
+        store.save_account_snapshot(db_snap)
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore", lambda **kw: HistoricalStore(db_path=db_path)
+        )
+
+        def fail_live():
+            raise ConnectionError("Robinhood unreachable")
+
+        monkeypatch.setattr("data.robinhood_portfolio._fetch_live_snapshot", fail_live)
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=True)
+
+        assert result.buying_power == pytest.approx(db_snap.buying_power)
+        assert result.total_equity == pytest.approx(db_snap.total_equity)
+
+    def test_json_cache_used_when_db_read_fails(self, tmp_path, monkeypatch) -> None:
+        """DB read error in the exception-handler fallback must still fall
+        through to the JSON cache, never crash."""
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+        json_snap = _make_snapshot(age_hours=5.0)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(json_snap.to_dict()))
+
+        def _broken_store(**kw):
+            raise RuntimeError("DB unavailable")
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore", _broken_store)
+
+        def fail_live():
+            raise ConnectionError("Robinhood unreachable")
+
+        monkeypatch.setattr("data.robinhood_portfolio._fetch_live_snapshot", fail_live)
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=True)
+
+        assert result.buying_power == pytest.approx(json_snap.buying_power)
+        assert result.total_equity == pytest.approx(json_snap.total_equity)
+
+    def test_raises_when_neither_tier_has_data(self, tmp_path, monkeypatch) -> None:
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+
+        from unittest.mock import MagicMock
+        mock_store = MagicMock()
+        mock_store.latest_account_snapshot.return_value = None
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda **kw: mock_store)
+
+        def fail_live():
+            raise ConnectionError("Robinhood unreachable")
+
+        monkeypatch.setattr("data.robinhood_portfolio._fetch_live_snapshot", fail_live)
+
+        with pytest.raises(ConnectionError):
+            fetch_account_snapshot(max_age_hours=20.0, force=True)
+
+
+# ---------------------------------------------------------------------------
 # Safety audit — no order/execution function references
 # ---------------------------------------------------------------------------
 
@@ -923,8 +1160,13 @@ class TestFetchLiveSnapshotLoginDelegation:
         monkeypatch.setattr("data.robinhood_session.backup_session_pickle", lambda: None)
         monkeypatch.setattr("data.robinhood_portfolio.r.build_holdings", lambda: {})
         monkeypatch.setattr("data.robinhood_portfolio.r.get_dividends", lambda: [])
-        monkeypatch.setattr("data.robinhood_portfolio.r.load_portfolio_profile", lambda: {})
-        monkeypatch.setattr("data.robinhood_portfolio.r.load_account_profile", lambda: {})
+        # Non-empty (genuinely-empty-account) profile dicts -- an *empty*
+        # dict here is a swallowed robin_stocks API failure, not a
+        # legitimate empty account, and now raises (see TestFetchLiveSnapshotFailsClosed
+        # below) -- this test only cares about the r.login() call args, not
+        # that fabrication path.
+        monkeypatch.setattr("data.robinhood_portfolio.r.load_portfolio_profile", lambda: {"equity": "0.00"})
+        monkeypatch.setattr("data.robinhood_portfolio.r.load_account_profile", lambda: {"buying_power": "0.00"})
 
         _fetch_live_snapshot()
 
