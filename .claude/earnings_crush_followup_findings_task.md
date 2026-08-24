@@ -18,4 +18,7 @@
 - [x] Run `pytest tests/test_earnings_crush.py tests/test_pilots_paper_broker.py -q` — pass.
 - [x] Run `npm run --prefix webapp typecheck` — clean.
 - [x] Create `.claude/` PR artifacts (this file, implementation plan, walkthrough).
-- [ ] Commit, push, open PR against `fix-earnings-crush-bmo-amc-blindspot`.
+- [x] Commit, push, open PR. Note: `fix-earnings-crush-bmo-amc-blindspot` (PR #889) was
+      merged and its branch deleted mid-session, so PR #892 targets `main` instead — verified
+      via `git diff origin/main..HEAD --stat` that the diff contains only this PR's own
+      changes.
