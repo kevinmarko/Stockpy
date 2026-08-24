@@ -50,3 +50,44 @@ See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) a
 `"UNGATEABLE_DATA_GAP"` — echoing this doc's `deployable=False` verdict inline on every execution
 attempt, so an operator hitting the live endpoint sees the same honest gate status documented
 here without cross-referencing this file.
+
+## Defects found while analysing this pilot
+
+1. **FIXED (2026-08-24) — the BMO/AMC bar-alignment blind spot.**
+   `get_historical_earnings_moves()` always computed the realized post-earnings gap as
+   `|Open[event_date] - Close[event_date-1]|` — correct only when a company reports
+   **before market open (BMO)**. For an **after-market-close (AMC)** report — the majority
+   case for large-cap tech (NVDA/AAPL/MSFT/META/GOOGL/AMZN, this module's own default
+   universe) — the real reaction shows up one day later, as `Open[event_date+1] -
+   Close[event_date]`, which the old code never looked at. Reproduced with a synthetic
+   14.66% AMC overnight reaction: the function reported `median_move_pct ≈ 0.0`. Since
+   `crush_edge_ratio = expected_move_pct / realized_move_pct`, understating the realized-move
+   denominator inflates the edge ratio and can flip `is_recommended=True` for a candidate
+   with no genuine edge — which then fires a real `dispatch_earnings_crush_alert`. The
+   identical root cause let `evaluate_earnings_crush_candidates`'s front-week expiration
+   picker choose an expiration dated exactly `event_date`, which for an AMC reporter expires
+   *before* the reaction happens.
+
+   Verified (via FMP's own published API docs) that FMP's `/earnings` calendar — this
+   codebase's sole earnings-events source — carries no reporting-time/session field
+   (`symbol`, `date`, `epsActual`, `epsEstimated`, `revenueActual`, `revenueEstimated`,
+   `lastUpdated` only), so there is no real BMO/AMC label available to thread through
+   instead. Fixed by computing BOTH candidate gaps from real bar data — the existing BMO
+   hypothesis and a new AMC hypothesis (`|Open[event_date+1] - Close[event_date]| /
+   Close[event_date]`) — and taking whichever is larger (a genuine reaction dominates
+   ordinary single-day noise; this is also the conservative direction for the bug, since it
+   can only increase the realized-move denominator, never decrease it further). Each
+   quarter's `moves` entry now carries `reaction_session_inferred: "bmo" | "amc"` —
+   explicitly labeled *inferred*, not source-confirmed — and the function's top-level return
+   dict carries `timing_data_available: False` (self-documenting; forward-compatible if a
+   real timing field is ever added). The expiration picker now requires `ed > event_date`
+   (was `ed >= event_date`), so the chosen expiration always clears the earnings date
+   entirely regardless of session.
+
+   Regression-tested by
+   `tests/test_earnings_crush.py::TestHistoricalEarningsMoves::test_amc_reaction_captured_via_next_day_open`
+   (the direct AMC reproduction), `::test_bmo_reaction_still_captured_correctly` (proves no
+   regression to the common case), and
+   `TestEvaluateEarningsCrushCandidates::test_same_day_expiration_rejected_in_favor_of_later_one`.
+   Full incident write-up:
+   [`docs/known_issues/earnings_crush_bmo_amc_bar_alignment.md`](../known_issues/earnings_crush_bmo_amc_bar_alignment.md).

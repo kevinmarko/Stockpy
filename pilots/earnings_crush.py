@@ -181,7 +181,20 @@ def get_historical_earnings_moves(
 ) -> Dict[str, Any]:
     """
     Retrieves the past 8 quarters of earnings actuals for a symbol and computes
-    percentage gap moves: |Open - PrevClose| / PrevClose.
+    percentage gap moves.
+
+    The earnings-events source (FMP's `/earnings` calendar, via
+    `data/fmp_feeds_company.py::fetch_earnings_rows`) carries no reporting-time/session
+    (before-market-open vs. after-market-close) field, so which trading session actually
+    held the reaction is unknown per-event. For each event this function therefore computes
+    TWO real, bar-derived candidate gaps -- the BMO hypothesis (`|Open[event_date] -
+    Close[event_date-1]| / Close[event_date-1]`) and the AMC hypothesis (`|Open[event_date+1]
+    - Close[event_date]| / Close[event_date]`) -- and takes whichever is larger, since a
+    genuine earnings reaction dominates ordinary single-day noise. This is a data-driven
+    inference, never a fabricated label (CONSTRAINT #4): see
+    `docs/known_issues/earnings_crush_bmo_amc_bar_alignment.md` for the full writeup of the
+    bug this replaced (always assuming BMO, which silently mis-measured the majority AMC
+    case) and why "take the larger of two real gaps" is the correct, conservative fix.
 
     If historical data is sparse (< 3 quarters or missing bars), provides realistic
     empirical fallback bounds with honest metadata flagging (`sparse_history=True`).
@@ -200,7 +213,8 @@ def get_historical_earnings_moves(
 
     Returns dictionary containing:
     - symbol: Ticker
-    - moves: List of individual quarterly move dicts (date, open, prev_close, gap_usd, gap_pct)
+    - moves: List of individual quarterly move dicts (date, open, prev_close, gap_usd, gap_pct,
+      reaction_session_inferred -- "bmo" or "amc", INFERRED from bar data, not source-confirmed)
     - quarters_count: Count of valid quarterly gap moves found
     - median_move_pct: Median historical post-earnings move (decimal)
     - mean_move_pct: Mean historical post-earnings move (decimal)
@@ -209,6 +223,8 @@ def get_historical_earnings_moves(
     - sparse_history: Boolean indicating if history had < 3 quarters
     - fallback: Boolean indicating if empirical defaults were applied
     - reason: Explanatory diagnostic message if sparse or fallback
+    - timing_data_available: Always False today -- no real per-event BMO/AMC field exists in
+      this codebase's earnings-events source (see above); forward-compatible if one is added.
     """
     sym = str(symbol or "").upper().strip()
     if not sym:
@@ -223,6 +239,7 @@ def get_historical_earnings_moves(
             "sparse_history": True,
             "fallback": True,
             "reason": "Empty or invalid symbol provided.",
+            "timing_data_available": False,
         }
 
     as_of_date = _parse_date(as_of)
@@ -248,6 +265,7 @@ def get_historical_earnings_moves(
             "sparse_history": True,
             "fallback": True,
             "reason": "HistoricalStore is unavailable.",
+            "timing_data_available": False,
         }
 
     # Retrieve earnings actuals. `on_or_before=as_of_date` is the store's dedicated
@@ -292,6 +310,7 @@ def get_historical_earnings_moves(
             "sparse_history": True,
             "fallback": True,
             "reason": "No earnings events or insufficient price bars in store.",
+            "timing_data_available": False,
         }
 
     # Build date-indexed map for fast bar lookup
@@ -338,16 +357,66 @@ def get_historical_earnings_moves(
         if prev_close <= 0.0 or open_price <= 0.0 or math.isnan(prev_close) or math.isnan(open_price):
             continue
 
-        gap_usd = abs(open_price - prev_close)
-        gap_pct = gap_usd / prev_close
+        # BMO-hypothesis gap: the overnight move INTO event_date's open -- correct if the
+        # company reported before that day's open.
+        bmo_gap_usd = abs(open_price - prev_close)
+        bmo_gap_pct = bmo_gap_usd / prev_close
+
+        # AMC-hypothesis gap: the overnight move INTO the NEXT trading day's open -- correct
+        # if the company reported after event_date's close (the majority case for large-cap
+        # tech -- NVDA/AAPL/MSFT/META/GOOGL/AMZN all report AMC). FMP's `/earnings` calendar
+        # (this store's sole earnings-events source, see data/fmp_feeds_company.py's
+        # fetch_earnings_rows) carries no reporting-time/session field -- verified against
+        # FMP's own published response schema, not assumed -- so there is no real per-event
+        # BMO/AMC label to read here. Rather than silently assuming BMO (this function's prior
+        # behavior, confirmed wrong for the AMC majority -- see
+        # docs/known_issues/earnings_crush_bmo_amc_bar_alignment.md), take whichever of the two
+        # real, bar-derived gaps is larger: a genuine earnings reaction dominates ordinary
+        # single-day noise, so this correctly attributes the move to whichever session actually
+        # held it, and it errs conservatively (never UNDERSTATES the realized move that
+        # crush_edge_ratio divides by) when the true session is unknown.
+        amc_gap_pct: Optional[float] = None
+        amc_gap_usd: Optional[float] = None
+        amc_bar_idx = bar_idx + 1
+        if amc_bar_idx < len(bars):
+            next_bar = bars.iloc[amc_bar_idx]
+            try:
+                next_open = float(next_bar["Open"])
+                event_close = float(event_bar["Close"])
+            except (KeyError, ValueError, TypeError):
+                next_open = None
+                event_close = None
+            if (
+                next_open is not None
+                and event_close is not None
+                and next_open > 0.0
+                and event_close > 0.0
+                and not math.isnan(next_open)
+                and not math.isnan(event_close)
+            ):
+                amc_gap_usd = abs(next_open - event_close)
+                amc_gap_pct = amc_gap_usd / event_close
+
+        if amc_gap_pct is not None and amc_gap_pct > bmo_gap_pct:
+            gap_usd = amc_gap_usd
+            gap_pct = amc_gap_pct
+            reaction_bar_idx = amc_bar_idx
+            reaction_session_inferred = "amc"
+        else:
+            gap_usd = bmo_gap_usd
+            gap_pct = bmo_gap_pct
+            reaction_bar_idx = bar_idx
+            reaction_session_inferred = "bmo"
 
         moves.append({
             "event_date": event_date.isoformat(),
-            "bar_date": bar_dates[bar_idx].isoformat(),
+            "bar_date": bar_dates[reaction_bar_idx].isoformat(),
             "open": round(open_price, 4),
             "prev_close": round(prev_close, 4),
             "gap_usd": round(gap_usd, 4),
             "gap_pct": round(gap_pct, 4),
+            # Inferred, not source-confirmed -- see the amc_gap_pct comment above.
+            "reaction_session_inferred": reaction_session_inferred,
             "eps_actual": event.get("eps_actual"),
             "eps_estimated": event.get("eps_estimated"),
             "revenue_actual": event.get("revenue_actual"),
@@ -366,6 +435,7 @@ def get_historical_earnings_moves(
             "sparse_history": True,
             "fallback": True,
             "reason": "Could not align earnings event dates with historical price bars.",
+            "timing_data_available": False,
         }
 
     gap_values = [m["gap_pct"] for m in moves]
@@ -386,6 +456,10 @@ def get_historical_earnings_moves(
         "sparse_history": sparse,
         "fallback": False,
         "reason": f"Sparse history: only {len(moves)} quarter(s) found (recommended >= 3)" if sparse else None,
+        # No real per-event BMO/AMC field exists in this codebase's earnings-events source
+        # today (see the reaction_session_inferred comment in the per-event loop above) --
+        # each move's session is an inference from bar data, not a source-confirmed label.
+        "timing_data_available": False,
     }
 
 
@@ -683,17 +757,27 @@ def evaluate_earnings_crush_candidates(
                 except Exception as exc:
                     logger.debug("fetch_options_chain failed for %s: %s", sym, exc)
 
-            # Find front-week expiration covering earnings
+            # Find front-week expiration covering earnings. Requires an expiration that
+            # STRICTLY clears event_date (not merely reaches it) so the position survives an
+            # after-market-close (AMC) reaction, which lands on event_date+1 -- FMP's earnings
+            # calendar carries no BMO/AMC field (see get_historical_earnings_moves's docstring
+            # and docs/known_issues/earnings_crush_bmo_amc_bar_alignment.md), so an expiration
+            # dated exactly event_date could expire before an AMC print without this. A
+            # before-market-open (BMO) reaction, which happens during event_date's own
+            # session, remains fully covered by an expiration one day later.
             target_exp_str: Optional[str] = None
             target_dte: int = 7
             for exp_candidate in expirations:
                 ed = _parse_date(exp_candidate)
-                if ed and ed >= event_date:
+                if ed and ed > event_date:
                     target_exp_str = exp_candidate
                     target_dte = max(1, (ed - as_of_date).days)
                     break
 
             if not target_exp_str and expirations:
+                # No expiration in the chain strictly clears event_date -- degenerate chain
+                # (e.g. only same-day/expired listings). Falls back to the nearest available
+                # rather than refusing the candidate outright; there is no better choice here.
                 target_exp_str = expirations[0]
                 ed = _parse_date(target_exp_str)
                 if ed:

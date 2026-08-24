@@ -210,6 +210,77 @@ class TestHistoricalEarningsMoves:
         assert "Sparse history" in str(res["reason"])
         assert len(res["moves"]) == 2
 
+    def test_amc_reaction_captured_via_next_day_open(self):
+        """Regression test for the confirmed BMO/AMC bar-alignment bug: a company that
+        reports AFTER market close (AMC) shows its real reaction as the overnight gap from
+        event_date's Close into event_date+1's Open -- NOT from event_date-1's Close into
+        event_date's Open (the BMO-only reading the old code always assumed). Before the
+        fix, this scenario reported gap_pct ~= 0.0 (the flat same-day noise); after the fix
+        it must report the true ~14.66% overnight move and label it "amc".
+        """
+        dates = pd.date_range(start="2025-06-01", end="2025-06-20", freq="B")
+        df = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000000},
+            index=dates,
+        )
+
+        event_date = pd.Timestamp("2025-06-11")  # Wednesday
+        assert event_date in df.index
+        bar_idx = df.index.get_loc(event_date)
+        next_date = df.index[bar_idx + 1]
+
+        # event_date's own Open/Close stay flat (100) -- no BMO-style reaction that day.
+        # The real (AMC) reaction shows up overnight: Close[event_date]=100 -> Open[next]=114.66.
+        df.loc[next_date, "Open"] = 114.66
+
+        events = [{
+            "symbol": "NVDA",
+            "event_date": event_date.strftime("%Y-%m-%d"),
+            "eps_actual": 1.50,
+            "eps_estimated": 1.45,
+        }]
+        store = MockHistoricalStore(events, df)
+
+        res = get_historical_earnings_moves("NVDA", store, lookback_quarters=8)
+
+        assert res["quarters_count"] == 1
+        move = res["moves"][0]
+        assert pytest.approx(move["gap_pct"], abs=1e-3) == 0.1466
+        assert move["reaction_session_inferred"] == "amc"
+        assert pytest.approx(res["median_move_pct"], abs=1e-3) == 0.1466
+        assert res["timing_data_available"] is False
+
+    def test_bmo_reaction_still_captured_correctly(self):
+        """Companion test: a classic before-market-open (BMO) reaction -- Open[event_date]
+        gapped from Close[event_date-1] -- must still be measured correctly and labeled
+        "bmo", proving the new AMC-hypothesis check doesn't regress the common case.
+        """
+        dates = pd.date_range(start="2025-06-01", end="2025-06-20", freq="B")
+        df = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000000},
+            index=dates,
+        )
+
+        event_date = pd.Timestamp("2025-06-11")
+        assert event_date in df.index
+        # 8% BMO gap; Close stays flat everywhere -> the AMC hypothesis computes to 0.
+        df.loc[event_date, "Open"] = 108.0
+
+        events = [{
+            "symbol": "AAPL",
+            "event_date": event_date.strftime("%Y-%m-%d"),
+            "eps_actual": 2.0,
+            "eps_estimated": 1.9,
+        }]
+        store = MockHistoricalStore(events, df)
+
+        res = get_historical_earnings_moves("AAPL", store, lookback_quarters=8)
+
+        assert res["quarters_count"] == 1
+        move = res["moves"][0]
+        assert pytest.approx(move["gap_pct"], abs=1e-4) == 0.08
+        assert move["reaction_session_inferred"] == "bmo"
+
     def test_empty_store_realistic_fallback(self):
         """Test that missing data or empty store returns realistic fallback empirical bounds."""
         store = MockHistoricalStore([], pd.DataFrame())
@@ -391,6 +462,52 @@ class TestEvaluateEarningsCrushCandidates:
         c = candidates[0]
         assert c["is_recommended"] is False
         assert c["crush_edge_ratio"] < 1.25
+
+    def test_same_day_expiration_rejected_in_favor_of_later_one(self):
+        """Regression test: an expiration dated exactly event_date must not be selected as
+        the front-week expiration -- it would expire before an after-market-close (AMC)
+        reaction on event_date+1 ever happens. The next later expiration must be chosen
+        instead. Under the pre-fix `ed >= event_date` comparison this scenario picked the
+        same-day expiration, whose chain quotes aren't in `chain_map` here (mirroring a
+        real chain miss), so `atm_iv` would resolve to None and the candidate would be
+        silently skipped -- `len(candidates) == 0` is exactly what the bug produces.
+        """
+        today = date(2026, 8, 14)
+        earnings_date = date(2026, 8, 17)
+        same_day_exp = "2026-08-17"  # == earnings_date -- must be rejected
+        later_exp = "2026-08-21"     # front-week Friday, clears earnings_date
+
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates)
+        events = [
+            {"symbol": "AMC_SYM", "event_date": "2025-05-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStore(events, bars_df)
+
+        strikes = [90.0, 95.0, 100.0, 105.0, 110.0]
+        chain = MockOptionsChain(strikes, atm_iv=0.70)
+        options_provider = MockOptionsProvider(
+            expirations_map={"AMC_SYM": [same_day_exp, later_exp]},
+            # Deliberately no chain entry for the same-day expiration -- a real chain
+            # snapshot has no reason to carry usable quotes for an expiration whose
+            # session hasn't happened yet relative to an AMC print.
+            chain_map={f"AMC_SYM_{later_exp}": chain},
+        )
+
+        candidates = evaluate_earnings_crush_candidates(
+            universe=["AMC_SYM"],
+            store=store,
+            options_provider=options_provider,
+            min_edge=1.25,
+            as_of=today,
+            upcoming_earnings={"AMC_SYM": earnings_date.isoformat()},
+            spot_prices={"AMC_SYM": 100.0},
+        )
+
+        assert len(candidates) == 1
+        c = candidates[0]
+        assert c["expiration"] == later_exp
+        assert c["dte"] == (date(2026, 8, 21) - today).days
 
     def test_filter_outside_1_to_5_days_window(self):
         """Test announcements 0 days away (today) or > 5 days away (e.g. 10 days) are skipped."""
