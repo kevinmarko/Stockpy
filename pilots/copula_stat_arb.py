@@ -1458,24 +1458,56 @@ def execute_copula_spread_trade(
         }
 
     strategy_name = "Copula Stat Arb"
-    order_id_y = f"{trade_id}_{sym_y}"
-    order_id_x = f"{trade_id}_{sym_x}"
+    # Matches apply_multi_leg_fill's own internal per-leg client_order_id
+    # convention (f"{client_order_id}_L{idx+1}", legs in the order passed
+    # below) so these actually correspond to the real paper_orders rows
+    # rather than a cosmetic label that never matched anything on disk.
+    order_id_y = f"{trade_id}_L1"
+    order_id_x = f"{trade_id}_L2"
 
-    res_y = paper_store.place_order(
-        symbol=sym_y,
-        side=side_y.lower(),
-        qty=float(qty_y),
-        client_order_id=order_id_y,
+    # PR 872 remediation, Task 2: `PaperAccountStore.place_order` does not
+    # exist -- confirmed by grep (`def place_order` matches nowhere in
+    # data/paper_account_store.py) -- so this used to raise AttributeError on
+    # every real (non-dry-run) call, and the two independent calls it made
+    # (one per leg) would also not have been atomic even if the method did
+    # exist: a fill on the Y leg with a subsequent failure on the X leg would
+    # leave a naked, unintended directional position instead of the intended
+    # market-neutral pair. This is a pairs/stat-arb trade -- long one stock,
+    # short the other, simultaneously -- exactly the shape
+    # `apply_multi_leg_fill` exists to make atomic (both legs commit in one
+    # transaction, or neither does; see that method's own docstring). `qty`
+    # here is SHARES, not options contracts, but the method itself makes no
+    # options-specific assumption in its per-leg cash/position bookkeeping
+    # (the ×100 in its parent-order audit-row `avg_contract_price` display
+    # field is the one options-flavored quirk; it is diagnostic-only and does
+    # not affect cash balance or position quantity/basis, both computed
+    # per-leg from the real `fill_price`/`qty` below).
+    net_cash_impact = (
+        -(qty_y * price_y) if side_y == "BUY" else (qty_y * price_y)
+    ) + (
+        -(qty_x * price_x) if side_x == "BUY" else (qty_x * price_x)
     )
 
-    res_x = paper_store.place_order(
-        symbol=sym_x,
-        side=side_x.lower(),
-        qty=float(qty_x),
-        client_order_id=order_id_x,
+    fill_ok = paper_store.apply_multi_leg_fill(
+        client_order_id=trade_id,
+        symbol=f"{sym_y}/{sym_x}",
+        strategy_name=strategy_name,
+        contracts=1,
+        legs=[
+            {"symbol": sym_y, "side": side_y.lower(), "qty": float(qty_y), "fill_price": price_y},
+            {"symbol": sym_x, "side": side_x.lower(), "qty": float(qty_x), "fill_price": price_x},
+        ],
+        net_cash_impact=net_cash_impact,
+        commission_and_fees=0.0,
+        status=OrderStatus.FILLED,
+        strategy_id=strategy_name,
     )
 
-    all_ok = bool(res_y and res_x)
+    # Atomicity by construction: apply_multi_leg_fill commits both legs in one
+    # transaction or neither -- there is no partial-success state to check for
+    # (unlike the old `bool(res_y and res_x)`, which implied two independent
+    # outcomes that could legitimately disagree and leave a naked leg).
+    all_ok = bool(fill_ok)
 
     return {
         "ok": all_ok,
@@ -1489,7 +1521,7 @@ def execute_copula_spread_trade(
         "message": (
             f"Successfully executed Copula Stat Arb spread for {sym_y}/{sym_x} ({signal})."
             if all_ok
-            else f"Failed to execute spread for {sym_y}/{sym_x}."
+            else f"Failed to execute spread for {sym_y}/{sym_x} (insufficient funds or collateral; no leg was opened)."
         ),
     }
 

@@ -183,3 +183,7 @@ mcp_widgets/build/node_modules/
 
 # Antigravity (Gemini) transient agent worktrees (scratch, never commit)
 .gemini/worktrees/
+
+# Stray patch-reject artifacts from a failed `git apply`/rebase -- must never be committed.
+*.rej
+*.orig

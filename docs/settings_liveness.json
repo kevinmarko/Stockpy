@@ -14,8 +14,8 @@
   "counts": {
     "live_safe": 318,
     "no_op": 3,
-    "restart_required": 104,
-    "total": 425
+    "restart_required": 105,
+    "total": 426
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 428,
+  "files_scanned": 429,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -469,13 +469,13 @@
   "read_forms": {
     "attr": 843,
     "factory_param": 4,
-    "getattr_const": 367,
+    "getattr_const": 368,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 248,
     "factory_param": 4,
-    "getattr_const": 205,
+    "getattr_const": 206,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -931,7 +931,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:70",
+        "site": "data/paper_account_store.py:111",
         "via": []
       },
       {
@@ -1095,7 +1095,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:74",
+        "site": "data/paper_account_store.py:115",
         "via": []
       },
       {
@@ -1104,7 +1104,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:76",
+        "site": "data/paper_account_store.py:117",
         "via": []
       },
       {
@@ -1331,7 +1331,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:74",
+        "site": "data/paper_account_store.py:115",
         "via": []
       },
       {
@@ -1340,7 +1340,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:76",
+        "site": "data/paper_account_store.py:117",
         "via": []
       },
       {
@@ -1672,9 +1672,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:93",
+        "site": "data/paper_account_store.py:218",
         "via": [
-          81
+          136
         ]
       }
     ],
@@ -2310,7 +2310,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:74",
+        "site": "data/paper_account_store.py:115",
         "via": []
       },
       {
@@ -2805,6 +2805,17 @@
         "via": []
       }
     ],
+    "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_body"
+        ],
+        "site": "data/paper_account_store.py:137",
+        "via": []
+      }
+    ],
     "PROMPT_REGISTRY_REFRESH_SECONDS": [
       {
         "discarded": false,
@@ -3110,7 +3121,7 @@
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
-    "init_body": 6,
+    "init_body": 7,
     "init_self_assign": 51,
     "method_self_assign": 4,
     "module_level": 78,

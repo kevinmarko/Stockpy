@@ -243,6 +243,18 @@ class Settings(BaseSettings):
         default=False,
         description="Automatically execute valid options strategy directives into the paper broker every cycle.",
     )
+    PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Bridge each PaperAccountStore closed trade into the real transactions_store "
+            "'trades' ledger (via record_trade+close_trade), so sizing.kelly and "
+            "evaluation_engine's MAE/MFE/calibration warm up on simulated paper fills. "
+            "Defaults False: 'trades' has no paper/live discriminator column, and it feeds "
+            "strategy_engine.py, main_orchestrator.py, pilots/mirror.py, and MCP reporting "
+            "tools -- mixing simulated PnL into that ledger by default would be a silent "
+            "data-integrity change to what those consumers report as real performance."
+        ),
+    )
     MAX_OPTION_NOTIONAL_PER_TRADE: float = Field(
         default=2500.0,
         description="Max risk notional collateral per automated options paper trade.",

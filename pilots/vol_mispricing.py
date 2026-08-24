@@ -1352,7 +1352,7 @@ def get_volatility_mispricing_data(
             spot_price = None
 
     if spot_price is None or spot_price <= 0:
-        spot_price = 500.0 if sym == "SPY" else (130.0 if sym == "NVDA" else 150.0)
+        spot_price = None
 
     har_forecast = get_har_volatility_forecast(sym, horizon_days=horizon_days, market_provider=market_provider)
     fair_iv = har_forecast.get("forecast_annualized_vol") or 0.20
@@ -1373,7 +1373,16 @@ def get_volatility_mispricing_data(
             chain_data = None
 
     raw_extracted = extract_chain_contracts(chain_data) if chain_data else []
-    if not raw_extracted:
+    # CONSTRAINT #4: the synthetic-chain fallback below computes strikes as an
+    # offset from spot_price (k = spot_price * m) -- it cannot honestly run
+    # when BOTH the live quote AND the live options-chain fetch failed
+    # (spot_price is None here, see the guard above). Building on a
+    # fabricated spot would silently corrupt every synthesized strike;
+    # skipping straight to evaluate_strike_mispricing(spot_price=None) lets
+    # that function's own pre-existing spot-price guard return an honest
+    # "INVALID_SPOT" regime instead of raising a TypeError on `None * m`
+    # (mirrors pilots/options_gex.py's degenerate-spot-price handling).
+    if not raw_extracted and spot_price is not None:
         exp_date = (date.today() + timedelta(days=horizon_days)).isoformat()
         moneyness_levels = [0.85, 0.90, 0.95, 0.98, 1.00, 1.02, 1.05, 1.10, 1.15]
         chain_list = []

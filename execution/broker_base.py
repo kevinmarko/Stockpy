@@ -122,6 +122,9 @@ class PositionSnapshot:
     avg_entry_price: float
     market_value: float
     unrealized_pl: float
+    strategy_id: Optional[str] = None
+    pilot_id: Optional[str] = None
+    experiment_arm: Optional[str] = None
 
 
 @dataclass

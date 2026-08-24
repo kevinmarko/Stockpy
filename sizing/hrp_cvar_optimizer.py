@@ -11,7 +11,7 @@ import pandas as pd
 from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
 from scipy.optimize import minimize
-from typing import List, Dict, Optional, Tuple, Any, Union
+from typing import List, Dict, Optional, Tuple, Any, Union, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -105,16 +105,16 @@ def constrain_cvar(returns: pd.DataFrame, initial_weights: pd.Series, max_cvar: 
     returns_np = returns.values
     initial_w_np = initial_weights.values
     
-    def objective(w):
+    def objective(w: np.ndarray) -> float:
         return np.sum((w - initial_w_np) ** 2)
         
-    def objective_jac(w):
+    def objective_jac(w: np.ndarray) -> np.ndarray:
         return 2 * (w - initial_w_np)
         
-    def cvar_constraint(w):
+    def cvar_constraint(w: np.ndarray) -> float:
         return max_cvar - calculate_cvar(w, returns_np, alpha)
         
-    def cvar_constraint_jac(w):
+    def cvar_constraint_jac(w: np.ndarray) -> np.ndarray:
         port_ret = np.dot(returns_np, w)
         var = np.percentile(port_ret, alpha * 100)
         tail_returns = returns_np[port_ret <= var]
@@ -122,10 +122,10 @@ def constrain_cvar(returns: pd.DataFrame, initial_weights: pd.Series, max_cvar: 
             return np.zeros_like(w)
         return np.mean(tail_returns, axis=0)
         
-    def weight_constraint(w):
+    def weight_constraint(w: np.ndarray) -> float:
         return np.sum(w) - 1.0
         
-    def weight_constraint_jac(w):
+    def weight_constraint_jac(w: np.ndarray) -> np.ndarray:
         return np.ones_like(w)
         
     constraints = [
@@ -331,7 +331,7 @@ def optimize_turnover_regularized_hrp_cvar(
         for sec_name, cap_val in sector_caps.items():
             matching_indices = [i for i, a in enumerate(assets) if sector_map.get(a) == sec_name]
             if matching_indices:
-                def make_sec_con(indices=matching_indices, cap=float(cap_val)):
+                def make_sec_con(indices: List[int] = matching_indices, cap: float = float(cap_val)) -> Callable[[np.ndarray], float]:
                     return lambda w: cap - np.sum(w[indices])
                 constraints.append({
                     'type': 'ineq',
@@ -343,14 +343,14 @@ def optimize_turnover_regularized_hrp_cvar(
         betas = np.array([float(asset_betas.get(a, 1.0)) for a in assets], dtype=float)
         beta_min, beta_max = target_beta_range
         if beta_min is not None:
-            def make_beta_min_con(b_vec=betas, b_min=float(beta_min)):
+            def make_beta_min_con(b_vec: np.ndarray = betas, b_min: float = float(beta_min)) -> Callable[[np.ndarray], float]:
                 return lambda w: np.dot(w, b_vec) - b_min
             constraints.append({
                 'type': 'ineq',
                 'fun': make_beta_min_con(betas, float(beta_min)),
             })
         if beta_max is not None:
-            def make_beta_max_con(b_vec=betas, b_max=float(beta_max)):
+            def make_beta_max_con(b_vec: np.ndarray = betas, b_max: float = float(beta_max)) -> Callable[[np.ndarray], float]:
                 return lambda w: b_max - np.dot(w, b_vec)
             constraints.append({
                 'type': 'ineq',
@@ -359,7 +359,7 @@ def optimize_turnover_regularized_hrp_cvar(
 
     # 4. Optional Max CVaR constraint: max_cvar - CVaR(w) >= 0
     if max_cvar is not None:
-        def make_cvar_con(cvar_limit=float(max_cvar)):
+        def make_cvar_con(cvar_limit: float = float(max_cvar)) -> Callable[[np.ndarray], float]:
             return lambda w: cvar_limit - calculate_cvar(w, returns_np, alpha=alpha)
         constraints.append({
             'type': 'ineq',

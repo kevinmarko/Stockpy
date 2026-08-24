@@ -383,6 +383,14 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "forced Robinhood re-login, or arbitrary flags to the "
         "orchestrators via a manifest-listed CLI target."
     ),
+    "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": (
+        "Bridges simulated PaperAccountStore closed trades into the real "
+        "transactions_store 'trades' ledger, which has no paper/live "
+        "discriminator column and feeds strategy_engine.py, "
+        "main_orchestrator.py, pilots/mirror.py, and MCP reporting tools -- "
+        "enabling it mixes simulated PnL into what those consumers report "
+        "as real performance."
+    ),
     "DEAD_LETTER_RETRY_ENABLED": (
         "Gates POST /dead-letter/retry, which spawns a real main.py "
         "subprocess (network calls, a fresh data fetch, a real advisory "

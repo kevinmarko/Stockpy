@@ -575,11 +575,11 @@ def test_execute_vol_mispricing_trade_leg_price_translation_dollar_per_share_to_
 
     assert store.get_account().cash == pytest.approx(initial_cash + 297.40)
 
-    # Trade must be labeled "Vol Mispricing" in the paper-broker blotter, not
-    # "Earnings Crush" (the shared executor's own hardcoded default).
+    # Trade must be properly attributed to "Vol Mispricing" in the paper-broker blotter
     orders = store.get_full_orders()
     parent_order = next(o for o in orders if o["order_id"] == details["order_id"])
-    assert parent_order["symbol"] == "VOL MISPRICING AAPL"
+    assert parent_order["symbol"] == "AAPL"
+    assert parent_order["strategy_id"] == "Vol Mispricing"
 
 
 def test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly():
@@ -612,3 +612,96 @@ def test_execute_vol_mispricing_trade_leg_missing_unit_price_refuses_honestly():
 
     assert res["ok"] is False
     assert store.get_open_positions() == []
+
+
+# ---------------------------------------------------------------------------
+# PR 872 remediation (Agent 5, Task 4): get_volatility_mispricing_data's
+# synthetic-chain fallback used spot_price in `k = round(spot_price * m, 2)`
+# unguarded -- when BOTH the live quote AND the live options-chain fetch
+# fail, spot_price is None (CONSTRAINT #4's honest "never fabricate" value),
+# and `None * m` used to raise an unguarded TypeError instead of degrading
+# to an honest missing-data response.
+# ---------------------------------------------------------------------------
+
+
+class _FailingMarketProvider:
+    """Raises on every quote lookup -- simulates a total live-quote outage."""
+
+    def get_latest_quote(self, symbol):
+        raise RuntimeError("quote provider unavailable")
+
+
+class _FailingOptionsProvider:
+    """Raises on every chain lookup -- simulates a total options-chain outage."""
+
+    def fetch_options_chain(self, *args, **kwargs):
+        raise RuntimeError("options chain provider unavailable")
+
+
+class _NoneQuoteMarketProvider:
+    """A provider that resolves without raising but returns no usable price
+    (e.g. a quote object with price=0 or missing) -- the OTHER honest way
+    spot_price can end up None, distinct from a raised exception."""
+
+    def get_latest_quote(self, symbol):
+        return None
+
+
+def test_get_volatility_mispricing_data_never_raises_when_spot_and_chain_both_unresolvable():
+    """Both the live quote AND the live options-chain fetch fail -> spot_price
+    stays None. Must degrade to an honest INVALID_SPOT regime response
+    (CONSTRAINT #4), never raise a TypeError from `None * moneyness`."""
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+
+    result = get_volatility_mispricing_data(
+        "ZZZZ",
+        market_provider=_FailingMarketProvider(),
+        options_provider=_FailingOptionsProvider(),
+    )
+
+    assert result["spot_price"] == 0.0
+    assert result["summary"]["regime"] == "INVALID_SPOT"
+    # No fabricated strikes -- the synthetic-chain fallback must never have run.
+    assert result["strikes"] == []
+
+
+def test_get_volatility_mispricing_data_never_raises_when_quote_resolves_to_none():
+    """A market provider that resolves cleanly but yields no usable quote
+    object (returns None) is a second, distinct path to spot_price=None --
+    must degrade the same honest way, not raise."""
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+
+    result = get_volatility_mispricing_data(
+        "ZZZZ",
+        market_provider=_NoneQuoteMarketProvider(),
+        options_provider=_FailingOptionsProvider(),
+    )
+
+    assert result["spot_price"] == 0.0
+    assert result["summary"]["regime"] == "INVALID_SPOT"
+    assert result["strikes"] == []
+
+
+def test_get_volatility_mispricing_data_synthetic_chain_still_works_with_real_spot():
+    """Regression guard: when spot_price DOES resolve but the options chain
+    fetch fails, the synthetic-chain fallback must still run exactly as
+    before (the fix must not have disabled the fallback unconditionally)."""
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+
+    class _RealQuote:
+        price = 100.0
+
+    class _WorkingMarketProvider:
+        def get_latest_quote(self, symbol):
+            return _RealQuote()
+
+    result = get_volatility_mispricing_data(
+        "AAPL",
+        market_provider=_WorkingMarketProvider(),
+        options_provider=_FailingOptionsProvider(),
+    )
+
+    assert result["spot_price"] == pytest.approx(100.0)
+    # Real synthetic strikes were built (the fallback path ran).
+    assert len(result["strikes"]) > 0
+    assert result["summary"]["regime"] != "INVALID_SPOT"

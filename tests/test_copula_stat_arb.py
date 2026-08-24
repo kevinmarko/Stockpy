@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from data.paper_account_store import PaperAccountStore
 from pilots.copula_stat_arb import (
     BestCopulaResult,
     CopulaFamily,
@@ -455,6 +456,107 @@ def test_execute_copula_spread_trade_flat_no_order():
     trade_res = execute_copula_spread_trade(res)
     assert trade_res["ok"] is False
     assert "No active entry signal" in trade_res["message"]
+
+
+def test_execute_copula_spread_trade_atomic_execution():
+    """PR 872 remediation, Task 2: `PaperAccountStore.place_order` does not
+    exist, so the prior code raised AttributeError on every real (non-dry-run)
+    call -- confirmed by grep before this fix. This exercises the real fix
+    (apply_multi_leg_fill) against a real PaperAccountStore and asserts BOTH
+    legs land as real PaperPosition rows with correct strategy attribution
+    matching docs/known_issues/paper_trade_strategy_id_vocabulary.md's
+    documented "Copula Stat Arb" convention."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    initial_cash = store.get_account().cash
+
+    res = MagicMock(spec=CopulaStatArbResult)
+    res.to_dict.return_value = {
+        "symbol_y": "EWA",
+        "symbol_x": "EWC",
+        "current_signal": "LONG_SPREAD",
+        "current_beta": 1.2,
+        "current_zscore": -2.3,
+        "summary": {"price_y": 25.0, "price_x": 30.0},
+    }
+
+    trade_res = execute_copula_spread_trade(res, store=store, capital=10000.0)
+
+    assert trade_res["ok"] is True
+    assert trade_res["strategy"] == "Copula Stat Arb"
+    assert trade_res["pair"] == "EWA/EWC"
+
+    positions = store.get_open_positions()
+    assert len(positions) == 2
+
+    ewa = next(p for p in positions if p.symbol == "EWA")
+    ewc = next(p for p in positions if p.symbol == "EWC")
+
+    # LONG_SPREAD => Buy Y (EWA), Sell X (EWC).
+    assert ewa.qty > 0
+    assert ewc.qty < 0
+    assert ewa.strategy_id == "Copula Stat Arb"
+    assert ewc.strategy_id == "Copula Stat Arb"
+    assert ewa.avg_entry_price == pytest.approx(25.0)
+    assert ewc.avg_entry_price == pytest.approx(30.0)
+
+    # Cash actually moved (net debit or credit -- either way, not untouched).
+    account = store.get_account()
+    assert account.cash != initial_cash
+
+
+def test_execute_copula_spread_trade_short_spread_sides():
+    """SHORT_SPREAD => Sell Y, Buy X -- both legs land with the flipped sign,
+    still atomically and with correct attribution."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+
+    res = MagicMock(spec=CopulaStatArbResult)
+    res.to_dict.return_value = {
+        "symbol_y": "KO",
+        "symbol_x": "PEP",
+        "current_signal": "SHORT_SPREAD",
+        "current_beta": 0.9,
+        "current_zscore": 2.5,
+        "summary": {"price_y": 60.0, "price_x": 170.0},
+    }
+
+    trade_res = execute_copula_spread_trade(res, store=store, capital=5000.0)
+    assert trade_res["ok"] is True
+
+    positions = store.get_open_positions()
+    assert len(positions) == 2
+    ko = next(p for p in positions if p.symbol == "KO")
+    pep = next(p for p in positions if p.symbol == "PEP")
+    assert ko.qty < 0
+    assert pep.qty > 0
+    assert ko.strategy_id == "Copula Stat Arb"
+    assert pep.strategy_id == "Copula Stat Arb"
+
+
+def test_execute_copula_spread_trade_insufficient_funds_leaves_no_naked_leg():
+    """A pairs trade is atomic by construction via apply_multi_leg_fill: a
+    rejected order (insufficient funds for the net debit) must leave NEITHER
+    leg opened -- there is no partial-fill state where one leg fills and the
+    other doesn't, which would otherwise leave an unintended naked directional
+    position."""
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    store.reset_account(starting_cash=1.0)
+
+    res = MagicMock(spec=CopulaStatArbResult)
+    res.to_dict.return_value = {
+        "symbol_y": "EWA",
+        "symbol_x": "EWC",
+        "current_signal": "LONG_SPREAD",
+        "current_beta": 1.2,
+        # Y (bought) priced well above X (sold) so the pair is a genuine net
+        # debit -- qty_y=50@$100=$5000 cost vs. qty_x=60@$10=$600 proceeds,
+        # net debit $4400, guaranteed to exceed the $1.00 starting cash above.
+        "summary": {"price_y": 100.0, "price_x": 10.0},
+    }
+
+    trade_res = execute_copula_spread_trade(res, store=store, capital=10000.0)
+
+    assert trade_res["ok"] is False
+    assert store.get_open_positions() == []
 
 
 # ---------------------------------------------------------------------------
