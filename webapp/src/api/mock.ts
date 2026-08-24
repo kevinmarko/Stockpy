@@ -6554,10 +6554,34 @@ function round6(n: number): number {
   return Math.round(n * 1e6) / 1e6;
 }
 
+// Sector names (post-trim, non-blank) that appear more than once. Mirrors
+// pilots/brinson.py::_find_duplicate_sectors -- see that function's docstring
+// for why a duplicate sector name must be rejected rather than silently
+// computed (it produces a dict-key collision in Sector Details downstream).
+function mockDuplicateSectors(rows: BrinsonFachlerRow[]): string[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const name = r.sector.trim();
+    if (!name) continue;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, n]) => n > 1)
+    .map(([name]) => name)
+    .sort();
+}
+
 function mockValidateBrinsonFachlerRows(rows: BrinsonFachlerRow[]): string[] {
   const warnings: string[] = [];
   const validRows = rows.filter((r) => r.sector.trim() !== "");
   if (validRows.length === 0) return ["No rows with a non-blank sector name."];
+
+  const dupes = mockDuplicateSectors(rows);
+  if (dupes.length > 0) {
+    warnings.push(
+      `Duplicate sector name(s) found: ${dupes.join(", ")} — each sector must appear in exactly one row.`,
+    );
+  }
 
   const pSum = validRows.reduce((a, r) => a + (r.portfolio_weight_pct || 0), 0);
   const bSum = validRows.reduce((a, r) => a + (r.benchmark_weight_pct || 0), 0);
@@ -6594,6 +6618,17 @@ function mockComputeBrinsonFachler(
   const validRows = rows.filter((r) => r.sector.trim() !== "");
   if (validRows.length === 0) {
     throw new ApiError("No rows with a non-blank sector name.", 422);
+  }
+
+  // Hard reject (matches pilots/brinson.py::compute_brinson_fachler): a
+  // duplicate sector name would silently collide in sectorDetails[s.sector]
+  // below, exactly like the Python dict-comprehension bug this mirrors.
+  const dupes = mockDuplicateSectors(rows);
+  if (dupes.length > 0) {
+    throw new ApiError(
+      `Duplicate sector name(s) found: ${dupes.join(", ")}. Each sector must appear in exactly one row -- merge or rename the duplicates before submitting.`,
+      422,
+    );
   }
 
   let rP = 0;

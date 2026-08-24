@@ -422,7 +422,7 @@ class TestBrinsonFachler:
         r_b = pd.Series([0.05, 0.02], index=sectors)
         out = eng.calculate_brinson_fachler(w_p, w_b, r_p, r_b)
         assert isinstance(out, pd.DataFrame)
-        assert list(out.columns) == ["BF_Allocation", "BF_Selection"]
+        assert list(out.columns) == ["BF_Allocation", "BF_Selection", "BF_Interaction"]
         assert list(out.index) == sectors
 
     def test_series_path_known_arithmetic(self):
@@ -436,8 +436,35 @@ class TestBrinsonFachler:
         # R_total_b = 0.5*0.05 + 0.5*0.02 = 0.035
         # Alloc Tech = (0.6-0.5)*(0.05-0.035) = 0.1*0.015 = 0.0015
         # Select Tech = 0.5*(0.08-0.05) = 0.015
+        # Interaction Tech = (0.6-0.5)*(0.08-0.05) = 0.1*0.03 = 0.003
         assert out.loc["Tech", "BF_Allocation"] == pytest.approx(0.0015, abs=1e-9)
         assert out.loc["Tech", "BF_Selection"] == pytest.approx(0.015, abs=1e-9)
+        assert out.loc["Tech", "BF_Interaction"] == pytest.approx(0.003, abs=1e-9)
+
+    def test_series_path_interaction_effect_sums_to_active_return(self):
+        """Regression guard for the missing-interaction-effect bug: the
+        array-input branch previously omitted BF_Interaction entirely, which
+        broke the fundamental Brinson-Fachler identity (Allocation +
+        Selection + Interaction == Active Return) whenever both weight AND
+        return differ between portfolio and benchmark for a sector. The
+        DataFrame/compat path already has an equivalent identity test
+        (test_dataframe_path_attribution_sum_matches_active_return below);
+        this brings the array-input path to parity."""
+        eng = _engine()
+        sectors = ["Tech", "Energy"]
+        w_p = pd.Series([0.6, 0.4], index=sectors)
+        w_b = pd.Series([0.5, 0.5], index=sectors)
+        r_p = pd.Series([0.08, 0.03], index=sectors)
+        r_b = pd.Series([0.05, 0.02], index=sectors)
+        out = eng.calculate_brinson_fachler(w_p, w_b, r_p, r_b)
+
+        active_return = float((w_p * r_p).sum() - (w_b * r_b).sum())
+        attribution_sum = float(
+            (out["BF_Allocation"] + out["BF_Selection"] + out["BF_Interaction"]).sum()
+        )
+        assert attribution_sum == pytest.approx(active_return, abs=1e-9)
+        assert active_return == pytest.approx(0.025, abs=1e-9)
+        assert attribution_sum == pytest.approx(0.025, abs=1e-9)
 
     def test_dataframe_path_returns_aggregate_dict(self):
         eng = _engine()

@@ -152,6 +152,7 @@ COLUMN_SCHEMA = [
     {"header": "Max Adverse Excursion", "key": "MAE", "format": "percent"},
     {"header": "BF Allocation Effect", "key": "BF_Allocation", "format": "number"},
     {"header": "BF Selection Effect", "key": "BF_Selection", "format": "number"},
+    {"header": "BF Interaction Effect", "key": "BF_Interaction", "format": "number"},
     {"header": "Portfolio Heat", "key": "Portfolio_Heat", "format": "percent"},
 
     # ==========================================================

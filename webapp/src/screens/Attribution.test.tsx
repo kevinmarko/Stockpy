@@ -264,6 +264,37 @@ describe("Brinson-Fachler manual-input calculator", () => {
     const errorBox = await screen.findByTestId("brinson-error");
     expect(errorBox).toHaveTextContent("No rows with a non-blank sector name.");
   });
+
+  it("a duplicate sector name is rejected by the real mock, not silently mis-computed (mock/live parity)", async () => {
+    // No spy on getBrinsonFachlerAttribution here -- this exercises the real
+    // mock implementation (mockComputeBrinsonFachler), not a stand-in error,
+    // to prove the mock actually mirrors pilots/brinson.py's new hard-reject
+    // behavior rather than merely being told to reject.
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    // Paste two rows sharing the sector name "Tech" -- the only way to
+    // introduce a duplicate sector name via this UI (the default GICS-11
+    // grid's sector column isn't editable).
+    await user.click(screen.getByText("Bulk paste from spreadsheet (TSV / CSV)"));
+    await user.click(screen.getByLabelText("Pasted sector matrix"));
+    await user.paste(
+      "Sector\tPortfolio Weight (%)\tPortfolio Return (%)\tBenchmark Weight (%)\tBenchmark Return (%)\n" +
+        "Tech\t50\t10\t50\t8\n" +
+        "Tech\t50\t12\t50\t9"
+    );
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+    await screen.findByText("Parsed 2 sector row(s) -- table updated below.");
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+
+    const errorBox = await screen.findByTestId("brinson-error");
+    expect(errorBox).toHaveTextContent("Duplicate sector name(s) found: Tech");
+    // No result section should render on a rejected request.
+    expect(screen.queryByText("Portfolio return")).not.toBeInTheDocument();
+  });
 });
 
 describe("Brinson-Fachler bulk paste from spreadsheet", () => {
