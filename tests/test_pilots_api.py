@@ -6689,6 +6689,38 @@ class TestDiffusionStressTest:
         assert resp.status_code == 200
         assert resp.json()["regime_conditioned"] is False
 
+    def test_var_cvar_computed_from_the_same_paths_returned_to_the_client(self):
+        # 2026-08 regression guard, see docs/known_issues/
+        # synthetic_diffusion_reverse_sde_sign_error.md's "VaR/CVaR-vs-paths
+        # consistency" section. Previously VaR/CVaR were computed from the
+        # raw, unclipped generated log-returns while `paths` were built from
+        # a clipped/compounded variant of the SAME draw -- two consumers
+        # reading different effective data. This recomputes VaR/CVaR
+        # entirely independently from ONLY the `paths` array in the
+        # response body (each path's total realized simple return,
+        # final_price/spot - 1, percentile-ranked) and asserts it matches
+        # the endpoint's own reported figures exactly -- proving VaR/CVaR
+        # really is derived from the exact data the client also sees, not a
+        # separately-drawn or separately-transformed variant of it.
+        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(5, n=400, start=150.0)})
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
+            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
+        assert resp.status_code == 200
+        body = resp.json()
+        spot = 150.0
+
+        from validation.synthetic_diffusion_engine import compute_diffusion_var
+
+        total_simple_returns = np.array([p[-1] / spot - 1.0 for p in body["paths"]])
+        for cl, var_key, cvar_key in ((0.95, "VaR_95", "CVaR_95"), (0.99, "VaR_99", "CVaR_99")):
+            expected_var_frac, expected_cvar_frac = compute_diffusion_var(
+                total_simple_returns, confidence_level=cl,
+            )
+            expected_var = max(0.0, spot * expected_var_frac)
+            expected_cvar = max(0.0, spot * expected_cvar_frac)
+            assert body[var_key] == pytest.approx(expected_var, rel=1e-9, abs=1e-9)
+            assert body[cvar_key] == pytest.approx(expected_cvar, rel=1e-9, abs=1e-9)
+
 
 # ---------------------------------------------------------------------------
 # Phase 34 remediation item 10 (audit Critical #5) -- unit tests for the

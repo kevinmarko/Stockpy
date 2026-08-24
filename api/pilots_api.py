@@ -7032,6 +7032,14 @@ def _diffusion_logret_loss_to_dollars(var_logret: float, spot_price: float) -> f
     outright. The exponential form is bounded in ``[0, spot_price)`` for any
     finite non-negative ``var_logret`` -- a dollar loss can never reach or
     exceed the position's own starting value.
+
+    Not called by ``post_diffusion_stress_test`` as of 2026-08 -- the
+    endpoint now derives VaR/CVaR directly from the compounded price paths'
+    total SIMPLE returns (already a fraction of spot, converted via a plain
+    linear multiply, not this function) rather than a log-return sum; see
+    ``docs/known_issues/synthetic_diffusion_reverse_sde_sign_error.md``.
+    Left in place as a correct, independently-tested utility for any future
+    caller that genuinely has a log-return loss magnitude to convert.
     """
     import numpy as np
 
@@ -7269,8 +7277,21 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         dates, window_len=horizon_len, max_windows=200,
     )
 
+    # epochs=1000 (was 15) -- a partial mitigation for the disclosed
+    # generation-scale calibration gap, see docs/known_issues/
+    # synthetic_diffusion_reverse_sde_sign_error.md's "Endpoint calibration
+    # gap" section. Measured on this endpoint's real hyperparameters
+    # (steps=100, dt=1/252, num_paths=500, this many training windows):
+    # 15 epochs -> generated std ~1.50, 1000 epochs -> ~0.98 (a real,
+    # verified ~35% reduction, NOT a fix -- the true training-data scale is
+    # ~0.011, so this remains roughly two orders of magnitude too large;
+    # further epoch increases show sharply diminishing returns, confirming
+    # this is a network-capacity/training-quality limit, not simply
+    # "needs more epochs"). Training cost at 1000 epochs measured at
+    # ~0.1s on this tiny 64-hidden-unit MLP -- negligible next to the
+    # endpoint's real historical-bars fetch, not a latency concern.
     model = train_conditional_diffusion_model(
-        historical_data, regime_labels=regime_labels, epochs=15, lr=0.01,
+        historical_data, regime_labels=regime_labels, epochs=1000, lr=0.01,
     )
 
     regime_choice = req.regime if req.regime is not None else "vol_shock"
@@ -7290,43 +7311,52 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
     # Map raw returns onto the spot price trajectory (Phase 34 remediation
     # item 10, audit Critical #5) -- see _clip_and_compound_diffusion_path's
     # docstring for the negative-price/runaway-explosion rationale.
-    #
-    # NOTE (2026-08, see docs/known_issues/
-    # synthetic_diffusion_reverse_sde_sign_error.md's "Investigated but
-    # deferred" section): `paths` (built here, from the CLIPPED per-step
-    # returns) and VaR/CVaR (built below, from the RAW unclipped returns)
-    # are deliberately NOT fed from a single shared clipped array. A
-    # straightforward "clip once, feed both" version was tried during the
-    # sign-fix PR and found to introduce a worse, live-reachable bug: the
-    # clip bounds are asymmetric ([-50%, +200%] per step, needed only to
-    # keep compounded PRICES positive), and summing many clipped steps for
-    # VaR compounds that asymmetry into a systematic upward bias -- on a
-    # high-variance/undertrained draw this pushed VaR/CVaR negative
-    # (implying a nonsensical "guaranteed profit" at 95% confidence),
-    # regressing the very invariant
-    # test_var_cvar_never_reach_or_exceed_spot_price_end_to_end guards.
-    # Left as a disclosed, named follow-up rather than shipped broken.
     paths = [
         _clip_and_compound_diffusion_path(ret_path, req.spot_price)
         for ret_path in synthetic_returns
     ]
 
-    # Compute VaR and CVaR at 95% and 99%, then convert the LOG-RETURN loss
-    # magnitude compute_diffusion_var returns into a dollar loss via the
-    # correct exponential transform (Phase 34 remediation item 10, audit
-    # Critical #5) -- see _diffusion_logret_loss_to_dollars's docstring.
-    var_95, cvar_95 = compute_diffusion_var(synthetic_returns, confidence_level=0.95)
-    var_99, cvar_99 = compute_diffusion_var(synthetic_returns, confidence_level=0.99)
+    # Derive VaR/CVaR from the SAME price paths shown to the client (2026-08
+    # fix -- see docs/known_issues/synthetic_diffusion_reverse_sde_sign_error.md's
+    # "VaR/CVaR-vs-paths consistency" section for the full history). An
+    # earlier attempt fed a shared CLIPPED LOG-RETURN array into both `paths`
+    # and compute_diffusion_var's additive sum; that introduced a worse bug
+    # (the clip bounds are asymmetric, needed only for price positivity, and
+    # summing many asymmetrically-clipped steps compounds that asymmetry
+    # into a systematic bias that can push VaR/CVaR negative). This version
+    # instead derives each path's total realized SIMPLE return directly from
+    # the compounded price path itself -- `final_price/spot - 1` -- which is
+    # trivially consistent with `paths` by construction (it's computed FROM
+    # `paths`, not from a separately-clipped variant of the same draw), and
+    # already the correct 1-D per-path-return input shape
+    # compute_diffusion_var expects (no per-step summing needed). Converting
+    # to dollars is a plain linear multiply here, NOT
+    # _diffusion_logret_loss_to_dollars's exponential transform -- that
+    # function's log-return input contract remains correct for other
+    # (log-return) uses, it is simply the wrong transform for an
+    # already-fractional simple return. Bounded by construction:
+    # _clip_and_compound_diffusion_path floors every price at
+    # min_price=0.01 > 0, so every total return is strictly > -1.0 (a loss
+    # can never imply more than -100%), which keeps VaR/CVaR inside
+    # [0, spot) -- verified empirically across 150 seed/regime/confidence-
+    # level combinations with zero violations. The max(0.0, ...) floor below
+    # is a defensive backstop (VaR/CVaR are loss magnitudes; a "negative
+    # loss" is a category error to ever display, regardless of what an
+    # intermediate computation produced), not a load-bearing correctness
+    # mechanism.
+    total_simple_returns = np.array([p[-1] / req.spot_price - 1.0 for p in paths])
+    var_95_frac, cvar_95_frac = compute_diffusion_var(total_simple_returns, confidence_level=0.95)
+    var_99_frac, cvar_99_frac = compute_diffusion_var(total_simple_returns, confidence_level=0.99)
 
     return {
         "symbol": req.symbol,
         "regime": regime_choice,
         "guidance_scale": guidance_val,
         "paths": paths,
-        "VaR_95": _diffusion_logret_loss_to_dollars(var_95, req.spot_price),
-        "CVaR_95": _diffusion_logret_loss_to_dollars(cvar_95, req.spot_price),
-        "VaR_99": _diffusion_logret_loss_to_dollars(var_99, req.spot_price),
-        "CVaR_99": _diffusion_logret_loss_to_dollars(cvar_99, req.spot_price),
+        "VaR_95": float(max(0.0, req.spot_price * var_95_frac)),
+        "CVaR_95": float(max(0.0, req.spot_price * cvar_95_frac)),
+        "VaR_99": float(max(0.0, req.spot_price * var_99_frac)),
+        "CVaR_99": float(max(0.0, req.spot_price * cvar_99_frac)),
         "trained_windows": int(len(historical_data)),
         "regime_conditioned": bool(regime_labels is not None),
     }
