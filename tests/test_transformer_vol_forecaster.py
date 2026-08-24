@@ -366,6 +366,91 @@ def test_align_macro_causal_well_formed_index_unaffected_by_dead_code_removal():
         assert aligned["vix"].iloc[i] == pytest.approx(as_of)
 
 
+def test_align_macro_causal_lags_monthly_series_no_early_exposure():
+    """
+    Regression test for the publication-lag fix: a monthly (e.g. UNRATE-style)
+    macro series dated at the first of each month is NOT actually published
+    until roughly one month later, so _align_macro_causal must lag it by one
+    native observation before exposing it on bars_index -- generalizing
+    scripts/refresh_validations.py::_reconstruct_macro_regime_series's
+    existing "Lag UNRATE by 1 month" convention.
+
+    Before the fix, the aligned output exposed a given month's value starting
+    exactly that month's own nominal date -- a full month early. This test
+    reproduces that exact repro and asserts it is no longer true.
+    """
+    bars = _synthetic_ohlcv(n_days=120, seed=11)
+
+    # Synthetic monthly macro series (one row per month, first-of-month dated,
+    # like FRED's UNRATE/FEDFUNDS native cadence) covering the bars span with
+    # a little margin, each month uniquely identifiable by its value.
+    month_starts = pd.date_range(
+        start=bars.index.min() - pd.DateOffset(months=1),
+        end=bars.index.max(),
+        freq="MS",
+    )
+    monthly_values = 100.0 + np.arange(len(month_starts))
+    macro_df = pd.DataFrame({"unrate_like": monthly_values}, index=month_starts)
+
+    aligned = _align_macro_causal(bars.index, macro_df)
+
+    # Pick a concrete month boundary from the synthetic data: the row
+    # nominally dated the first of some month strictly inside the bars span.
+    candidate_dates = [d for d in month_starts if bars.index.min() < d < bars.index.max()]
+    assert len(candidate_dates) >= 1
+    boundary_date = candidate_dates[len(candidate_dates) // 2]
+    boundary_value = float(macro_df.loc[boundary_date, "unrate_like"])
+
+    # Find this boundary month's own nominal date and the NEXT native monthly
+    # date after it.
+    boundary_idx = list(month_starts).index(boundary_date)
+    next_native_date = month_starts[boundary_idx + 1] if boundary_idx + 1 < len(month_starts) else None
+
+    # Every bars-index date strictly before the NEXT native monthly date must
+    # NOT show boundary_value -- the value must not leak in on its own
+    # nominal date (a full period early). (Note: comparing a pandas Series
+    # to a scalar with `== pytest.approx(...)` does NOT broadcast elementwise
+    # -- it always evaluates False -- so np.isclose is used here instead.)
+    pre_next_mask = bars.index < (next_native_date if next_native_date is not None else bars.index.max() + pd.Timedelta(days=1))
+    on_or_after_boundary_mask = bars.index >= boundary_date
+    exposed_early_mask = pre_next_mask & on_or_after_boundary_mask
+    if exposed_early_mask.any():
+        early_values = aligned.loc[exposed_early_mask, "unrate_like"]
+        assert not np.isclose(early_values.to_numpy(dtype=float), boundary_value).any(), (
+            "boundary month's value leaked onto its own nominal date -- a full "
+            "period early, reproducing the pre-fix lookahead bug"
+        )
+
+    # From the NEXT native monthly date onward, the (lagged) value must show up.
+    if next_native_date is not None:
+        post_mask = bars.index >= next_native_date
+        if post_mask.any():
+            # It should show up eventually (ffill) at/after the next native date.
+            post_values = aligned.loc[post_mask, "unrate_like"]
+            assert np.isclose(post_values.to_numpy(dtype=float), boundary_value).any()
+
+
+def test_align_macro_causal_daily_series_still_contemporaneous():
+    """
+    Guard test: a business-daily-cadence macro column must receive ZERO
+    additional lag from the publication-lag fix -- protects against
+    _MACRO_DAILY_CADENCE_MAX_GAP_DAYS or the detection logic being loosened
+    later and silently lagging daily series too (VIX, yield-curve slope,
+    credit-spread OAS variants, breakeven inflation must all stay
+    contemporaneously available, exactly as before this fix).
+    """
+    bars = _synthetic_ohlcv(n_days=60, seed=12)
+    daily_values = np.linspace(15.0, 25.0, len(bars.index))
+    macro_df = pd.DataFrame({"vix": daily_values}, index=bars.index)
+
+    aligned = _align_macro_causal(bars.index, macro_df)
+
+    # No additional shift: aligned value at each bars date equals that date's
+    # own native observation exactly (behavior identical to before the fix).
+    expected = pd.Series(daily_values, index=bars.index)
+    pd.testing.assert_series_equal(aligned["vix"], expected, check_names=False)
+
+
 def test_causal_end_to_end_prediction_perturbation():
     """End-to-end causal test: mutating future price and macro data strictly after date T
     causes ZERO change in model input features and quantile predictions at date T."""
@@ -477,4 +562,31 @@ def test_transformer_vol_forecaster_no_lookahead_bias():
     for h in ['1d', '5d', '21d', '60d']:
         np.testing.assert_array_equal(forecast_baseline[h], forecast_mutated[h])
     np.testing.assert_array_equal(attn_baseline, attn_mutated)
+
+
+def test_build_tft_model_is_seeded_deterministic():
+    """
+    build_tft_model's frozen attention/gating weights (the "ELM" design
+    freezes them as random projections forever after init) must be
+    bit-identical across two separate calls now that TFT_RANDOM_SEED is
+    applied -- mirrors cnn_lstm_worker.py's CNN_LSTM_RANDOM_SEED
+    reproducibility guarantee.
+    """
+    model_a = build_tft_model(seq_len=10, d_model=16, num_heads=4, horizons=[1, 5, 21, 60])
+    model_b = build_tft_model(seq_len=10, d_model=16, num_heads=4, horizons=[1, 5, 21, 60])
+
+    weights_a = model_a['weights']
+    weights_b = model_b['weights']
+
+    for key in ['W_q', 'W_k', 'W_v', 'W_o', 'W_gate1', 'W_gate2']:
+        np.testing.assert_array_equal(weights_a[key], weights_b[key])
+
+    qw_a = weights_a['quantile_weights']
+    qw_b = weights_b['quantile_weights']
+    assert set(qw_a.keys()) == set(qw_b.keys())
+    for q in qw_a:
+        W_a, b_a = qw_a[q]
+        W_b, b_b = qw_b[q]
+        np.testing.assert_array_equal(W_a, W_b)
+        np.testing.assert_array_equal(b_a, b_b)
 

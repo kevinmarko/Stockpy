@@ -245,15 +245,30 @@ class DataEngine(IDataProvider):
         BAMLH0A0HYM2 (HY OAS credit spread), BAA10Y (Moody's Seasoned Baa
         Corporate Bond Spread -- a continuous-since-1986 fallback for
         BAMLH0A0HYM2, which only starts 2023-08-08), UNRATE (unemployment
-        rate, the Sahm Rule input), and T10YIE (10-Year Breakeven Inflation
-        Rate, market-implied inflation expectations) from FRED. Used by
-        regime/hmm_regime.py to fit/refit on an expanding window (VIXCLS/
-        T10Y2Y only, plus T10YIE when settings.HMM_INFLATION_FEATURE_ENABLED
-        is set) AND by scripts/refresh_validations.py's macro_regime_pit
-        adapter, which needs all six series to reconstruct
+        rate, the Sahm Rule input), T10YIE (10-Year Breakeven Inflation
+        Rate, market-implied inflation expectations), BAMLC0A0CM (ICE BofA
+        US Corporate Index Option-Adjusted Spread -- investment-grade credit
+        OAS, DAILY cadence, same family as BAMLH0A0HYM2 above but for
+        investment-grade rather than high-yield issuers), and FEDFUNDS
+        (Federal Funds Effective Rate -- MONTHLY average; FRED dates each
+        observation the 1st of the month it summarizes but does not publish
+        it until early the following month, so downstream consumers must
+        lag it accordingly rather than treating it as same-day-available)
+        from FRED. Used by regime/hmm_regime.py to fit/refit on an
+        expanding window (VIXCLS/T10Y2Y only, plus T10YIE when
+        settings.HMM_INFLATION_FEATURE_ENABLED is set) AND by
+        scripts/refresh_validations.py's macro_regime_pit adapter, which
+        needs the first six series to reconstruct
         dto_models.MacroEconomicDTO's market_regime/killSwitch classification
         at any historical date -- a single current-snapshot value
-        (fetch_macro_raw) cannot do this. Returns an empty DataFrame (never
+        (fetch_macro_raw) cannot do this. This method is also the source
+        HistoricalStore.get_macro() tops up from, which is in turn what
+        api/pilots_api.py's get_transformer_forecast endpoint reads
+        BAMLC0A0CM/FEDFUNDS from for the transformer volatility
+        forecaster's macro conditioning -- previously only 2 of that
+        endpoint's 4 requested series (VIXCLS, T10Y2Y) were genuinely
+        available here, so BAMLC0A0CM/FEDFUNDS always came back as empty
+        Series; this closes that gap. Returns an empty DataFrame (never
         fabricated placeholder rows) if FRED is unavailable or the fetch
         fails.
 
@@ -270,9 +285,11 @@ class DataEngine(IDataProvider):
         two-series (T10Y2Y/UNRATE) snapshot-only supplement that IS wired, in
         fetch_macro_raw() above.
         """
+        _EMPTY_COLUMNS = ['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'BAA10Y', 'UNRATE', 'T10YIE', 'BAMLC0A0CM', 'FEDFUNDS']
+
         if not self.fred:
             logger.warning("FRED API not initialized. Cannot fetch macro history.")
-            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'BAA10Y', 'UNRATE', 'T10YIE'])
+            return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
         try:
             vix_series = self.fred.get_series('VIXCLS').rename('VIXCLS')
@@ -281,15 +298,26 @@ class DataEngine(IDataProvider):
             baa_spread_series = self.fred.get_series('BAA10Y').rename('BAA10Y')
             unrate_series = self.fred.get_series('UNRATE').rename('UNRATE')
             t10yie_series = self.fred.get_series('T10YIE').rename('T10YIE')
+            bamlc0a0cm_series = self.fred.get_series('BAMLC0A0CM').rename('BAMLC0A0CM')
+            fedfunds_series = self.fred.get_series('FEDFUNDS').rename('FEDFUNDS')
             history_df = pd.concat(
-                [vix_series, yield_curve_series, credit_spread_series, baa_spread_series, unrate_series, t10yie_series],
+                [
+                    vix_series,
+                    yield_curve_series,
+                    credit_spread_series,
+                    baa_spread_series,
+                    unrate_series,
+                    t10yie_series,
+                    bamlc0a0cm_series,
+                    fedfunds_series,
+                ],
                 axis=1,
             )
             history_df.index = pd.to_datetime(history_df.index)
             return history_df.sort_index()
         except Exception as e:
             logger.error(f"Error fetching macro history from FRED: {e}")
-            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'BAA10Y', 'UNRATE', 'T10YIE'])
+            return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         """

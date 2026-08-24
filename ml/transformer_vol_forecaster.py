@@ -14,6 +14,14 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 
 logger = logging.getLogger(__name__)
 
+# Fixed seed for reproducible TFT attention/gating weight init (see
+# build_tft_model). Mirrors cnn_lstm_worker.py's CNN_LSTM_RANDOM_SEED
+# convention -- this "ELM" (Extreme Learning Machine) design freezes
+# attention/gating as random projections forever after init and only fits
+# the output layer, so without a fixed seed two back-to-back model builds
+# would produce numerically different forecasts against unchanged input.
+TFT_RANDOM_SEED = 42
+
 
 def pinball_loss(
     y_true: Union[np.ndarray, List[float], float],
@@ -44,7 +52,12 @@ def build_tft_model(
     Supports standard output heads and quantile output heads.
     """
     assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-    
+
+    # Reproducible weight init (mirrors cnn_lstm_worker.py's CNN_LSTM_RANDOM_SEED
+    # precedent) -- these weights are frozen forever after this call, so without
+    # a fixed seed two back-to-back builds would diverge for no reason.
+    np.random.seed(TFT_RANDOM_SEED)
+
     qs = quantiles if quantiles is not None else [0.10, 0.50, 0.90]
     
     # Initialize weights
@@ -458,10 +471,64 @@ def _safe_zscore(value: pd.Series, mean: pd.Series, std: pd.Series) -> pd.Series
     return z.where(mean.notna())
 
 
+_MACRO_DAILY_CADENCE_MAX_GAP_DAYS = 5.0  # tolerates weekends/holidays in a business-daily series
+
+
+def _detect_low_frequency_macro_column(raw_series: pd.Series) -> bool:
+    """True when *raw_series*'s own (non-NaN) observation cadence is a periodic
+    aggregate release (weekly/monthly/quarterly), not business-daily.
+
+    FRED daily/business-day series (VIX, yield-curve slope, credit-spread OAS
+    variants, breakeven inflation) are published same-day or next-business-day
+    -- contemporaneous use is correct and already how this codebase treats them
+    (see regime/hmm_regime.py::build_feature_matrix's own docstring: "the
+    regime classifier legitimately uses today's own close"). Periodic
+    aggregate releases (e.g. UNRATE, a monthly-average FEDFUNDS series) are
+    dated as the FIRST day of the period they summarize but are not actually
+    published until roughly one full period later -- see
+    scripts/refresh_validations.py::_reconstruct_macro_regime_series's
+    existing "Lag UNRATE by 1 month" convention, which _align_macro_causal
+    generalizes below (detected by cadence, not a hardcoded per-series id
+    list, so a future lower-frequency series added to a caller's macro
+    request list is lagged correctly by default instead of leaking).
+    """
+    obs = raw_series.dropna()
+    if len(obs) < 2:
+        return False
+    gaps = obs.index.to_series().diff().dropna().dt.days
+    if gaps.empty:
+        return False
+    return float(gaps.median()) > _MACRO_DAILY_CADENCE_MAX_GAP_DAYS
+
+
 def _align_macro_causal(bars_index: pd.Index, macro_df: pd.DataFrame) -> pd.DataFrame:
     """
     Causally aligns macro series onto bars_index without lookahead.
     Any observation at date > t cannot affect the row at date t.
+
+    Publication-lag handling: this function receives macro_df as a
+    multi-column DataFrame whose index is the UNION across heterogeneous
+    native cadences (e.g. a daily VIX column padded with NaN on the same
+    union index as a monthly FEDFUNDS column -- callers build it via
+    ``pd.DataFrame({sid: series, ...})`` from per-series
+    ``HistoricalStore.get_macro()`` results, which omit dates with no real
+    observation rather than padding NaN). Treating a low-frequency series'
+    nominal FRED date as its *availability* date would leak a value up to
+    ~1 period before it was actually published -- a real lookahead bug for
+    e.g. a monthly UNRATE-style or FEDFUNDS-style aggregate.
+
+    Each column is therefore handled independently: ``_detect_low_frequency_macro_column``
+    inspects that column's own dropna'd native-cadence series, and a
+    low-frequency column is shifted by one native observation
+    (``.sort_index().shift(1)``) BEFORE the union/ffill step -- the exact
+    generalization of scripts/refresh_validations.py::_reconstruct_macro_regime_series's
+    existing "Lag UNRATE by 1 month" convention (a plain positional
+    ``.shift(1)`` on a series with one row per native period moves each
+    period's real value to the NEXT period's date-slot, i.e. exactly a
+    1-period lag, before an as-of merge picks it up -- no calendar-day
+    arithmetic needed). A business-daily-cadence column (VIX, yield-curve
+    slope, credit-spread OAS variants, breakeven inflation) gets no
+    additional shift and stays contemporaneously available, as before.
     """
     m_df = macro_df.copy()
     if not isinstance(m_df.index, pd.DatetimeIndex):
@@ -476,10 +543,26 @@ def _align_macro_causal(bars_index: pd.Index, macro_df: pd.DataFrame) -> pd.Data
     macro_dt = pd.to_datetime(m_df.index)
     m_df.index = macro_dt
     macro_sorted = m_df.sort_index()
-    
-    # Union of timestamps to preserve historical points before forward-fill
-    full_dt = bars_dt.union(macro_sorted.index).sort_values()
-    macro_reindexed = macro_sorted.reindex(full_dt).ffill().reindex(bars_dt)
+
+    # Per-column: detect cadence and apply the publication lag on that
+    # column's own native (dropna'd) series, then union each column's
+    # (possibly-lagged) index with bars_dt for the final reindex+ffill step.
+    lagged_columns: Dict[str, pd.Series] = {}
+    full_dt = bars_dt
+    for col in macro_sorted.columns:
+        native_series = macro_sorted[col].dropna()
+        if _detect_low_frequency_macro_column(native_series):
+            lagged_series = native_series.sort_index().shift(1)
+        else:
+            lagged_series = native_series
+        lagged_columns[col] = lagged_series
+        full_dt = full_dt.union(lagged_series.index)
+
+    full_dt = full_dt.sort_values()
+    macro_reindexed = pd.DataFrame(index=full_dt)
+    for col, lagged_series in lagged_columns.items():
+        macro_reindexed[col] = lagged_series.reindex(full_dt)
+    macro_reindexed = macro_reindexed.ffill().reindex(bars_dt)
     macro_reindexed.index = bars_index
     return macro_reindexed
 
