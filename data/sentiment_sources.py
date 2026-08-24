@@ -86,6 +86,24 @@ codebase's existing convention for avoiding circular imports with
 roll, computed once, shared by every source, rather than each provider
 reimplementing it.
 
+Cross-source dedup
+--------------------
+``_dedup_key()`` alone only catches a duplicate WITHIN one source (the same
+document returned by two overlapping fetch windows of the same feed) --
+its hash includes ``source_name``, so it cannot catch a widely-syndicated
+story picked up by two DIFFERENT sources (e.g. Yahoo RSS and Google News
+both carrying an identical wire headline), which would otherwise
+double-count in the credibility-weighted sentiment aggregate.
+``CompositeSentimentSource.fetch_all()`` runs a second pass on top of the
+exact-hash check: a Jaccard token-overlap fuzzy-title comparison (the same
+technique/threshold ``GoogleNewsRSSSource._fuzzy_dedup`` already uses for
+its own within-source dedup), applied across ALL sources' combined
+per-symbol candidate list and scoped per ``trading_day`` (the same story
+reported on two different days is real, distinct coverage, not a
+duplicate). Sources are polled in ``_SOURCE_PRIORITY`` order, so when two
+sources carry the same story, the higher-priority source's copy is the one
+kept.
+
 Sector Heat Factor (attention, not sentiment)
 -----------------------------------------------
 This module also hosts ``GDELTVolumeSource``/``compute_sector_heat_factors()``
@@ -183,7 +201,14 @@ class SentimentDocument:
 
 def _dedup_key(doc: SentimentDocument, trading_day: str) -> str:
     """Rolling dedup hash: same source+symbol+trading_day+text is one document,
-    even if two overlapping fetch windows both return it."""
+    even if two overlapping fetch windows both return it.
+
+    This is a WITHIN-SOURCE check only (``source_name`` is part of the hash)
+    -- it does not catch the same underlying story reported by two DIFFERENT
+    sources (e.g. Yahoo RSS and Google News both carrying an identical wire
+    headline). ``CompositeSentimentSource.fetch_all()`` runs a SECOND,
+    cross-source near-duplicate pass after this exact-hash check -- see its
+    own docstring."""
     raw = f"{doc.source_name}|{doc.symbol.upper()}|{trading_day}|{doc.text_content}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -1919,6 +1944,12 @@ class CompositeSentimentSource:
         ``reset_cycle()``) and a per-source circuit breaker
         (``settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD`` consecutive
         failures) -- see the module docstring's Backpressure section.
+
+        Documents are deduped twice: an exact within-source hash
+        (``_dedup_key()``) and, on top of that, a cross-source fuzzy-title
+        pass so the same wire story reported by two different sources isn't
+        double-counted -- see the module docstring's "Cross-source dedup"
+        section.
         """
         from settings import settings as _settings
         from data.historical_store import HistoricalStore  # lazy import (project convention)
@@ -1941,6 +1972,11 @@ class CompositeSentimentSource:
 
         merged: List[SentimentDocument] = []
         seen_hashes: set = set()
+        # Cross-source near-duplicate tracking -- trading_day -> list of
+        # already-kept documents' normalized-title token sets, built up as
+        # docs are accepted below (see module docstring's "Cross-source
+        # dedup" section).
+        fuzzy_kept_tokens_by_day: Dict[str, List[set]] = {}
         budget = int(_settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE)
         breaker_threshold = int(_settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD)
 
@@ -1988,6 +2024,30 @@ class CompositeSentimentSource:
                 if key in seen_hashes:
                     continue
                 seen_hashes.add(key)
+
+                # Cross-source near-duplicate check (module docstring's
+                # "Cross-source dedup" section): _dedup_key above only
+                # catches a duplicate WITHIN one source. Reuses
+                # GoogleNewsRSSSource's own Jaccard token-overlap fuzzy-title
+                # matching (same normalization, same similarity threshold),
+                # generalized here across ALL sources' documents for this
+                # trading_day. Sources are polled in priority order, so the
+                # higher-priority source's copy is the one that survives.
+                # Never consumes the per-cycle document budget for a
+                # detected duplicate (the increment below is skipped too).
+                doc_tokens = set(
+                    GoogleNewsRSSSource._normalize_title(doc.text_content).split()
+                )
+                day_kept_tokens = fuzzy_kept_tokens_by_day.setdefault(trading_day, [])
+                if doc_tokens and any(
+                    len(doc_tokens & existing) / len(doc_tokens | existing)
+                    >= GoogleNewsRSSSource._SIMILARITY_THRESHOLD
+                    for existing in day_kept_tokens
+                ):
+                    continue
+                if doc_tokens:
+                    day_kept_tokens.append(doc_tokens)
+
                 if _settings.SENTIMENT_DESENTENCIZE_ENABLED:
                     doc = SentimentDocument(
                         as_of=doc.as_of, symbol=doc.symbol, source_name=doc.source_name,
