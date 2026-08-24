@@ -31,4 +31,4 @@ Branch: `fix-rh-snapshot-fabrication`
       walkthrough) — both my own work and the other session's displaced
       work fully recovered and preserved.
 - [x] Create PR artifacts under `.claude/` with branch-scoped unique names.
-- [ ] Open PR.
+- [x] Open PR — https://github.com/kevinmarko/Stockpy/pull/906
