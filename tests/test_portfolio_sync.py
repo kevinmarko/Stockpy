@@ -25,12 +25,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pandas as pd
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Test doubles — minimal stand-ins for AccountSnapshot, RobinhoodClient,
@@ -54,7 +52,7 @@ class _FakePosition:
 class _FakeSnapshot:
     """Mimics ``data.robinhood_portfolio.AccountSnapshot``."""
 
-    positions: Dict[str, _FakePosition]
+    positions: dict[str, _FakePosition]
     buying_power: float = 1_000.0
     total_equity: float = 10_000.0
     total_dividends: float = 0.0
@@ -66,12 +64,12 @@ class _FakeRobinhoodClient:
     only the bits :mod:`data.portfolio_sync` actually touches.
     """
 
-    def __init__(self, holdings: Dict[str, Any], watchlists: Dict[str, list]):
+    def __init__(self, holdings: dict[str, Any], watchlists: dict[str, list]):
         self._holdings = holdings
         self._watchlists = watchlists
         self.is_authenticated = True
 
-    def fetch_positions(self):  # noqa: D401 - test stub
+    def fetch_positions(self):
         return self._holdings
 
     # Methods used by data.robinhood_client.discover_watchlists():
@@ -95,9 +93,9 @@ class _FakeProvider:
     def __init__(
         self,
         *,
-        covered: Optional[set] = None,
-        has_funds: Optional[set] = None,
-        stale: Optional[set] = None,
+        covered: set | None = None,
+        has_funds: set | None = None,
+        stale: set | None = None,
     ):
         self._covered = covered or set()
         self._has_funds = has_funds or set()
@@ -122,7 +120,7 @@ class _FakeProvider:
             index=idx,
         )
 
-    def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
+    def get_fundamentals(self, symbol: str) -> dict[str, Any]:
         if symbol in self._has_funds:
             return {"trailingPE": 12.0, "marketCap": 5e9}
         return {}
@@ -226,9 +224,9 @@ def test_stale_quote_produces_stale_status_not_full(monkeypatch):
     quote is flagged ``is_stale=True`` (delayed feed / past the provider's
     staleness threshold), must be classified STALE -- distinct from FULL --
     rather than being silently folded into FULL."""
+    import data.market_data as md
     from data import portfolio_sync as ps
     from data import robinhood_client as rc
-    import data.market_data as md
 
     held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
     snap = _FakeSnapshot(positions=held)
@@ -255,9 +253,9 @@ def test_fresh_quote_still_classifies_full(monkeypatch):
     """Sanity check: a fresh quote with full coverage still produces FULL,
     not STALE -- the new status must be additive, not a regression on the
     existing happy path."""
+    import data.market_data as md
     from data import portfolio_sync as ps
     from data import robinhood_client as rc
-    import data.market_data as md
 
     held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
     snap = _FakeSnapshot(positions=held)
@@ -284,9 +282,9 @@ def test_fresh_quote_still_classifies_full(monkeypatch):
 
 def test_held_uncovered_classified_equity_only(monkeypatch):
     """A held symbol with no market-data coverage must surface as EQUITY_ONLY."""
+    import data.market_data as md
     from data import portfolio_sync as ps
     from data import robinhood_client as rc
-    import data.market_data as md
 
     held = {
         "OBSCURE": _FakePosition("OBSCURE", 100, 5.0, 0.0, 0.0),
@@ -320,9 +318,9 @@ def test_held_uncovered_classified_equity_only(monkeypatch):
 
 def test_universe_dedup_and_sort(monkeypatch):
     """Overlapping sources collapse to one alphabetised universe."""
+    import data.market_data as md
     from data import portfolio_sync as ps
     from data import robinhood_client as rc
-    import data.market_data as md
     from settings import settings
 
     # See test_build_sync_report_happy_path's identical comment above --
@@ -362,8 +360,8 @@ def test_universe_dedup_and_sort(monkeypatch):
 
 def test_async_sync_now_dry_run_skips_env_write(monkeypatch, tmp_path):
     """``persist_default_tickers=False`` must NOT touch gui.env_io."""
-    from data import portfolio_sync as ps
     import data.market_data as md
+    from data import portfolio_sync as ps
     from gui import env_io
     from settings import settings
 
@@ -403,8 +401,8 @@ def test_async_sync_now_dry_run_skips_env_write(monkeypatch, tmp_path):
 
 def test_async_sync_now_persist_swallows_env_io_failure(monkeypatch, tmp_path):
     """A failing env_io.write_setting must NOT propagate (CONSTRAINT #6)."""
-    from data import portfolio_sync as ps
     import data.market_data as md
+    from data import portfolio_sync as ps
     from gui import env_io
     from settings import settings
 
@@ -502,8 +500,8 @@ class TestResolveUniverse:
     def test_explicit_list_never_touches_robinhood_or_market(self, monkeypatch):
         """An explicit comma list is sanitized (upper/strip/dedupe/sort) with NO
         snapshot fetch, NO market probe, NO DB — the hot/common path stays free."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
+        from data import portfolio_sync as ps
 
         def _boom(*a, **k):  # pragma: no cover - must never run
             raise AssertionError("explicit list must not fetch an account snapshot")
@@ -514,8 +512,8 @@ class TestResolveUniverse:
     def test_all_degrades_to_default_tickers_when_no_snapshot(self, monkeypatch):
         """The cron/headless degrade path: a failed snapshot fetch still yields
         DEFAULT_TICKERS (CONSTRAINT #6) — never a crash, never empty by accident."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
+        from data import portfolio_sync as ps
         from settings import settings
 
         monkeypatch.setattr(
@@ -531,8 +529,8 @@ class TestResolveUniverse:
     def test_all_unions_holdings_watchlist_files_and_defaults(self, monkeypatch, tmp_path):
         """'all' = held ∪ watchlist files ∪ DEFAULT_TICKERS, via a probe_market=False
         build_sync_report (zero per-symbol market I/O)."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
+        from data import portfolio_sync as ps
         from settings import settings
 
         # A held position and a file-backed watchlist entry.
@@ -551,8 +549,8 @@ class TestResolveUniverse:
     def test_all_passes_probe_market_false(self, monkeypatch):
         """resolve_universe must never trigger a per-symbol market probe (pure
         waste in a universe-resolve). Spy on build_sync_report's kwargs."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
+        from data import portfolio_sync as ps
 
         monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: None)
         seen = {}
@@ -562,7 +560,7 @@ class TestResolveUniverse:
 
             @dataclass
             class _R:
-                symbols: Dict[str, Any]
+                symbols: dict[str, Any]
 
             return _R(symbols={})
 
@@ -573,8 +571,8 @@ class TestResolveUniverse:
     def test_all_never_calls_interactive_login(self, monkeypatch):
         """The 'all' path must use the non-interactive TOTP snapshot, never the
         stdin-prompting RobinhoodClient.login() (which would hang a cron job)."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
+        from data import portfolio_sync as ps
         from data import robinhood_client as rc
 
         def _no_login(self, *a, **k):  # pragma: no cover - must never run
@@ -600,7 +598,7 @@ class _FakeRatingStore:
     """Minimal stand-in for rating.symbol_rating_store.SymbolRatingStore --
     only the surface resolve_universe() actually calls."""
 
-    last_kwargs: Optional[Dict[str, Any]] = None
+    last_kwargs: dict[str, Any] | None = None
 
     def __init__(self, *, excluded=None, boom=False, readonly=False):
         self._excluded = excluded or set()
@@ -621,8 +619,8 @@ class TestResolveUniverseSymbolRatingAutoDrop:
     def test_flag_off_never_touches_rating_store(self, monkeypatch):
         """Default (SYMBOL_RATING_AUTO_DROP_ENABLED=False) must be byte-identical
         to pre-change behavior -- the rating store is never even imported/called."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
+        from data import portfolio_sync as ps
         from settings import settings
 
         held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
@@ -641,9 +639,9 @@ class TestResolveUniverseSymbolRatingAutoDrop:
         assert got == expected
 
     def test_auto_drop_excludes_non_held_symbol(self, monkeypatch):
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
         import rating.symbol_rating_store as rating_store_mod
+        from data import portfolio_sync as ps
         from settings import settings
 
         held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
@@ -666,9 +664,9 @@ class TestResolveUniverseSymbolRatingAutoDrop:
         """Non-negotiable safety invariant: even if the store (incorrectly, or
         due to a stale most-recent row) reports a held symbol as excluded,
         resolve_universe's own defensive subtraction must keep it."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
         import rating.symbol_rating_store as rating_store_mod
+        from data import portfolio_sync as ps
         from settings import settings
 
         held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
@@ -690,9 +688,9 @@ class TestResolveUniverseSymbolRatingAutoDrop:
     def test_auto_drop_store_failure_fails_open(self, monkeypatch):
         """A DB hiccup in get_excluded_symbols must leave the universe
         completely unaffected (CONSTRAINT #6) -- never shrink it."""
-        from data import portfolio_sync as ps
         import data.robinhood_portfolio as rp
         import rating.symbol_rating_store as rating_store_mod
+        from data import portfolio_sync as ps
         from settings import settings
 
         held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
@@ -710,3 +708,121 @@ class TestResolveUniverseSymbolRatingAutoDrop:
         got = ps.resolve_universe("all")
         expected = sorted({"NVDA", "BADSTOCK"})
         assert got == expected
+
+
+# ---------------------------------------------------------------------------
+# compute_tracked_universe() / load_env_watchlist() -- the shared primitives
+# behind the daemon universe-divergence fix (see
+# docs/known_issues/daemon_universe_watchlist_divergence.md). main.py's
+# _build_universe()/_load_watchlist() and pipeline/production_steps.py's
+# AsyncDataFetchStep both delegate to these now instead of drifting.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeTrackedUniverse:
+    def test_union_of_held_watchlist_discovered(self, monkeypatch):
+        from data import portfolio_sync as ps
+        from settings import settings
+
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", False)
+        got = ps.compute_tracked_universe(
+            held=["aapl"], watchlist=["msft"], discovered=["nvda"], default_tickers=["ibm"],
+        )
+        assert got == ["AAPL", "MSFT", "NVDA"]
+
+    def test_default_tickers_used_only_when_union_empty(self, monkeypatch):
+        from data import portfolio_sync as ps
+        from settings import settings
+
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", False)
+        assert ps.compute_tracked_universe(default_tickers=["SPY"]) == ["SPY"]
+        # Any non-empty input at all suppresses the fallback.
+        got = ps.compute_tracked_universe(watchlist=["QQQ"], default_tickers=["SPY"])
+        assert got == ["QQQ"]
+
+    def test_everything_empty_returns_empty_list(self, monkeypatch):
+        from data import portfolio_sync as ps
+        from settings import settings
+
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", False)
+        assert ps.compute_tracked_universe() == []
+
+    def test_rating_exclusion_never_drops_held(self, monkeypatch):
+        import rating.symbol_rating_store as rating_store_mod
+        from data import portfolio_sync as ps
+        from settings import settings
+
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        monkeypatch.setattr(
+            rating_store_mod, "SymbolRatingStore",
+            lambda **kw: _FakeRatingStore(excluded={"NVDA", "MSFT"}, **kw),
+        )
+
+        got = ps.compute_tracked_universe(held=["NVDA"], watchlist=["MSFT"], discovered=["TSLA"])
+        # NVDA is held -> never dropped even though the rating store excludes
+        # it; MSFT is watchlist-only and correctly dropped; TSLA survives.
+        assert got == ["NVDA", "TSLA"]
+
+    def test_rating_exclusion_lookup_failure_fails_open(self, monkeypatch):
+        import rating.symbol_rating_store as rating_store_mod
+        from data import portfolio_sync as ps
+        from settings import settings
+
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        monkeypatch.setattr(
+            rating_store_mod, "SymbolRatingStore",
+            lambda **kw: _FakeRatingStore(boom=True, **kw),
+        )
+
+        got = ps.compute_tracked_universe(watchlist=["NVDA", "MSFT"])
+        assert got == ["MSFT", "NVDA"]
+
+    def test_apply_rating_exclusion_false_skips_the_store_entirely(self, monkeypatch):
+        import rating.symbol_rating_store as rating_store_mod
+        from data import portfolio_sync as ps
+        from settings import settings
+
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+
+        def _boom(**kw):
+            raise AssertionError("SymbolRatingStore must not be constructed when apply_rating_exclusion=False")
+
+        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _boom)
+        got = ps.compute_tracked_universe(watchlist=["NVDA"], apply_rating_exclusion=False)
+        assert got == ["NVDA"]
+
+
+class TestLoadEnvWatchlist:
+    def test_env_var_only(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.setenv("WATCHLIST", "aapl, msft")
+        got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
+        assert got == ["AAPL", "MSFT"]
+
+    def test_file_only(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.delenv("WATCHLIST", raising=False)
+        wl = tmp_path / "watchlist.txt"
+        wl.write_text("nvda\n# a comment\ntsla\n\n")
+        got = ps.load_env_watchlist(str(wl))
+        assert got == ["NVDA", "TSLA"]
+
+    def test_env_and_file_merge_deduped(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.setenv("WATCHLIST", "AAPL")
+        wl = tmp_path / "watchlist.txt"
+        wl.write_text("AAPL\nMSFT\n")
+        got = ps.load_env_watchlist(str(wl))
+        assert got == ["AAPL", "MSFT"]
+
+    def test_neither_configured_returns_empty(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.delenv("WATCHLIST", raising=False)
+        got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
+        assert got == []

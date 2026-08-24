@@ -270,30 +270,20 @@ def _load_watchlist() -> List[str]:
     Both sources are read (when present) and merged/deduped -- neither one
     takes precedence over the other. Returns an empty list when neither
     source is configured.
+
+    Thin wrapper around ``data.portfolio_sync.load_env_watchlist`` — the
+    logic now lives there so ``pipeline/production_steps.py``'s
+    ``AsyncDataFetchStep`` (the daemon's per-cycle universe builder) can
+    share it instead of never reading WATCHLIST/watchlist.txt at all, which
+    was the root cause of a symbol silently never reaching the daemon's
+    tracked universe. See docs/known_issues/daemon_universe_watchlist_divergence.md.
+    ``WATCHLIST_FILE`` stays a module attribute (read here, not baked into a
+    default argument) so ``monkeypatch.setattr(main, "WATCHLIST_FILE", ...)``
+    in the test suite keeps working exactly as before.
     """
-    # dict.fromkeys preserves first-seen order while deduping -- env-var
-    # tickers first, then file tickers, matching the order each source is read.
-    tickers: dict = {}
+    from data.portfolio_sync import load_env_watchlist
 
-    env_val = os.environ.get("WATCHLIST", "").strip()
-    if env_val:
-        for t in env_val.split(","):
-            t = t.strip().upper()
-            if t:
-                tickers[t] = None
-
-    wl_path = Path(WATCHLIST_FILE)
-    if wl_path.exists():
-        file_tickers = [
-            line.strip().upper()
-            for line in wl_path.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
-        logger.info("Loaded %d tickers from %s.", len(file_tickers), WATCHLIST_FILE)
-        for t in file_tickers:
-            tickers[t] = None
-
-    return list(tickers.keys())
+    return load_env_watchlist(WATCHLIST_FILE)
 
 
 def _load_tickers_from_sheet2() -> List[str]:
@@ -339,6 +329,8 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     untouched and only logs a warning (CONSTRAINT #6). Applied once, before
     the fallback, so exclusion is honored whether or not that fallback runs.
     """
+    from data.portfolio_sync import compute_tracked_universe
+
     held = set(snapshot.positions.keys())
     watchlist = set(_load_watchlist())
 
@@ -352,39 +344,28 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     except Exception as exc:
         logger.warning("Failed to load discovery candidates: %s", exc)
 
-    combined = held | watchlist | discovered
-
-    if settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
-        try:
-            from rating.symbol_rating_store import SymbolRatingStore
-
-            excluded = SymbolRatingStore(readonly=True).get_excluded_symbols(
-                threshold_cycles=settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES,
-                known_symbols=combined,
+    # Union + rating-exclusion + DEFAULT_TICKERS-fallback-if-empty all live in
+    # compute_tracked_universe() now, shared with pipeline/production_steps.py's
+    # AsyncDataFetchStep (the daemon's own per-cycle universe builder) so the
+    # two can no longer silently diverge on this logic.
+    universe = compute_tracked_universe(
+        held=held,
+        watchlist=watchlist,
+        discovered=discovered,
+        default_tickers=settings.DEFAULT_TICKERS,
+    )
+    if not universe:
+        # held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS were all empty (or
+        # rating-exclusion emptied them) — last-resort Sheet2 fallback, kept
+        # main.py-only (the daemon path has no Google Sheets dependency).
+        sheet2 = set(_load_tickers_from_sheet2())
+        if sheet2:
+            logger.info(
+                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
+                len(sheet2),
             )
-            # held is never dropped regardless of get_excluded_symbols()'s own
-            # is_held handling -- defensive subtraction, see docstring above.
-            combined -= (excluded - held)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "_build_universe: symbol-rating exclusion lookup failed (%s) — universe unaffected.",
-                exc,
-            )
+        universe = sorted(sheet2)
 
-    if not combined:
-        if settings.DEFAULT_TICKERS:
-            combined = set(t.upper() for t in settings.DEFAULT_TICKERS)
-            logger.info("Using %d DEFAULT_TICKERS as fallback universe.", len(combined))
-        else:
-            sheet2 = set(_load_tickers_from_sheet2())
-            if sheet2:
-                logger.info(
-                    "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
-                    len(sheet2),
-                )
-            combined = sheet2
-
-    universe = sorted(combined)
     logger.info(
         "Universe: %d symbols (%d held, %d watchlist-only, %d discovered).",
         len(universe),

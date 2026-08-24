@@ -535,6 +535,124 @@ def read_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Shared universe-builder primitives for main.py's ``_build_universe()`` and
+# pipeline/production_steps.py's ``AsyncDataFetchStep`` — the two entry points
+# behind, respectively, ``main.py --interval``/``--agent`` and the persistent
+# orchestrator daemon (main_orchestrator.py / desktop/daemon_runtime.py). See
+# docs/known_issues/daemon_universe_watchlist_divergence.md for the incident
+# these two functions close: before this, ``AsyncDataFetchStep`` reimplemented
+# its own narrower union inline and never read WATCHLIST/watchlist.txt at all,
+# so a symbol added via watchlist.txt (or POST /agentic/watch) never reached
+# the daemon's actual per-cycle universe.
+# ---------------------------------------------------------------------------
+
+
+def load_env_watchlist(watchlist_file: str) -> List[str]:
+    """Return the union of uppercase tickers from the ``WATCHLIST`` env var and
+    a plain-text watchlist file (one ticker per line, ``#`` = comment).
+
+    Verbatim port of ``main.py``'s original ``_load_watchlist()`` body,
+    parameterized by file path so both ``main.py`` and
+    ``pipeline/production_steps.py`` share one implementation instead of
+    drifting. Neither source takes precedence — both are read (when present)
+    and merged/deduped, env-var tickers first. Returns ``[]`` when neither
+    source is configured; never raises.
+    """
+    import os
+
+    # dict.fromkeys preserves first-seen order while deduping -- env-var
+    # tickers first, then file tickers, matching the order each source is read.
+    tickers: Dict[str, None] = {}
+
+    env_val = os.environ.get("WATCHLIST", "").strip()
+    if env_val:
+        for t in env_val.split(","):
+            t = t.strip().upper()
+            if t:
+                tickers[t] = None
+
+    wl_path = Path(watchlist_file)
+    if wl_path.exists():
+        try:
+            file_tickers = [
+                line.strip().upper()
+                for line in wl_path.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+        except OSError as exc:  # dead-letter: unreadable file, not a crash
+            logger.warning("load_env_watchlist: could not read %s (%s).", watchlist_file, exc)
+            file_tickers = []
+        else:
+            logger.info("Loaded %d tickers from %s.", len(file_tickers), watchlist_file)
+        for t in file_tickers:
+            tickers[t] = None
+
+    return list(tickers.keys())
+
+
+def compute_tracked_universe(
+    *,
+    held: Iterable[str] = (),
+    watchlist: Iterable[str] = (),
+    discovered: Iterable[str] = (),
+    default_tickers: Iterable[str] = (),
+    apply_rating_exclusion: bool = True,
+) -> List[str]:
+    """Resolve one cycle's evaluation universe: ``held ∪ watchlist ∪ discovered``,
+    optionally rating-excluded, falling back to ``default_tickers`` only when
+    that whole union is empty.
+
+    This is the shared core of ``main.py::_build_universe()`` — callers there
+    still layer their own Robinhood-snapshot ``held`` set, their own
+    ``pilots.discovery.discovery()`` call, and (main.py only) a Google-Sheet
+    fallback tier on top of this function's result. It intentionally does
+    **not** attempt to also cover ``resolve_universe()``'s CLI/MCP semantics
+    above, whose ``DEFAULT_TICKERS`` handling is unconditional-union rather
+    than fallback-only by design (see that function's own docstring) — the
+    two are related but genuinely different universes, and unifying them is
+    out of scope for the divergence this function fixes.
+
+    When ``apply_rating_exclusion`` and ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED``
+    are both true, the combined set is additionally subtracted by whatever
+    ``rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols``
+    reports (a non-held symbol on a long enough consecutive-BAD streak — see
+    ``rating/symbol_rating.py::should_exclude``). Held symbols are never
+    dropped, and the lookup fails OPEN: any exception leaves the set
+    untouched and only logs a warning (CONSTRAINT #6). Never raises.
+    """
+    held_set = {s.upper().strip() for s in held if s and s.strip()}
+    watchlist_set = {s.upper().strip() for s in watchlist if s and s.strip()}
+    discovered_set = {s.upper().strip() for s in discovered if s and s.strip()}
+    combined = held_set | watchlist_set | discovered_set
+
+    if apply_rating_exclusion and settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
+        try:
+            from rating.symbol_rating_store import SymbolRatingStore
+
+            excluded = SymbolRatingStore(readonly=True).get_excluded_symbols(
+                threshold_cycles=settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES,
+                known_symbols=combined,
+            )
+            # held is never dropped regardless of get_excluded_symbols()'s own
+            # is_held handling -- defensive subtraction, matches the precedent
+            # already established in resolve_universe() above.
+            combined -= (excluded - held_set)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "compute_tracked_universe: symbol-rating exclusion lookup failed (%s) — universe unaffected.",
+                exc,
+            )
+
+    if not combined:
+        default_set = {s.upper().strip() for s in default_tickers if s and s.strip()}
+        if default_set:
+            logger.info("compute_tracked_universe: using %d DEFAULT_TICKERS as fallback universe.", len(default_set))
+            combined = default_set
+
+    return sorted(combined)
+
+
+# ---------------------------------------------------------------------------
 # Universe resolution — the "all" sentinel shared by the EDGAR backfill CLI
 # (scripts/backfill_edgar_fundamentals.py) and the trigger_edgar_backfill MCP
 # tool, so the two can never drift on what "all" means (they used to: the MCP
