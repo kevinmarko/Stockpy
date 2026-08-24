@@ -1,0 +1,56 @@
+name: Auto-Update PR Branches
+
+# `main`'s branch protection requires PR branches to be up to date before
+# merging (required_status_checks.strict=true). Without this workflow, every
+# merge to main flips every other open PR to BEHIND, and a human has to
+# manually click "Update branch" on each one before it can merge -- the
+# slow-PR-merge cascade discussed 2026-08-24. This automates that click; it
+# does not batch or queue merges (a GitHub merge queue would do that) and it
+# does not skip CI -- each update still re-triggers a full CI run on that
+# PR's branch, which is the intended re-validation against the new main tip.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-behind-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update every open, non-draft PR that is behind main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+
+          # mergeStateStatus="BEHIND" means the PR branch doesn't contain the
+          # latest main tip. DIRTY/CONFLICTING PRs are left alone -- an
+          # automatic update-branch call there would just fail, and a real
+          # conflict needs a human regardless. Drafts are skipped too, so we
+          # don't burn CI minutes re-validating PRs nobody's trying to merge
+          # yet; they'll get updated once marked ready (on the next push to
+          # main) or via a manual workflow_dispatch run.
+          prs=$(gh pr list --repo "$repo" --state open --base main \
+            --json number,mergeStateStatus,isDraft \
+            --jq '.[] | select(.mergeStateStatus == "BEHIND" and .isDraft == false) | .number')
+
+          if [ -z "$prs" ]; then
+            echo "No behind PRs to update."
+            exit 0
+          fi
+
+          for pr in $prs; do
+            echo "Updating branch for PR #$pr..."
+            if gh api --method PUT "repos/$repo/pulls/$pr/update-branch" >/dev/null 2>&1; then
+              echo "  -> update requested for #$pr"
+            else
+              echo "  -> update-branch call failed for #$pr (likely a real conflict); skipping"
+            fi
+          done
