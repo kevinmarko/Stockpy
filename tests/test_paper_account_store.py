@@ -1,7 +1,9 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
-from data.paper_account_store import PaperAccountStore
+from data.paper_account_store import PaperAccountStore, PaperClosedTrade, PaperPosition
+from db_config import session_scope
 from execution.broker_base import OrderStatus
 
 # We will use an in-memory SQLite DB for tests
@@ -364,3 +366,184 @@ def test_apply_roll_fill_reject_zero_price(store):
     orders = store.get_orders()
     assert len(orders) == 1
     assert orders[0].status == OrderStatus.REJECTED
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PR 872 remediation: closed-trade PnL arithmetic regression tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_option_realized_pnl_is_per_contract_not_100x(store):
+    """Bug 1 regression: option entry/exit prices passed to apply_fill are
+    already per-CONTRACT dollar amounts (matching every real writer in this
+    codebase -- see apply_roll_fill's own docstring). _record_closed_trade
+    must NOT re-apply a x100 multiplier on top of that.
+
+    1 contract, BUY open @ $500/contract, SELL close @ $502/contract,
+    commission on the closing leg = $0.65. Expected realized_pnl:
+        (502 - 500) * 1 - 0.65 == 1.35
+    NOT 200.0 (the old, un-fixed x100-multiplied number) and NOT 2.0 - 0.65
+    misapplied some other way -- exactly 1.35.
+    """
+    symbol = "AAPL 2026-09-18 $150.00 CALL"
+    success = store.apply_fill(
+        "opt_buy_1", symbol, "buy", 1.0, 500.0,
+        commission_and_fees=0.0, status=OrderStatus.FILLED,
+    )
+    assert success is True
+
+    commission = 0.65
+    success = store.apply_fill(
+        "opt_sell_1", symbol, "sell", 1.0, 502.0,
+        commission_and_fees=commission, status=OrderStatus.FILLED,
+    )
+    assert success is True
+
+    with session_scope(store.Session) as session:
+        row = (
+            session.query(PaperClosedTrade)
+            .filter_by(symbol=symbol, close_reason="flatten")
+            .first()
+        )
+        assert row is not None
+        assert row.realized_pnl == pytest.approx(1.35)
+        assert row.realized_pnl != pytest.approx(200.0)
+
+
+def test_short_equity_close_sign_non_regression(store):
+    """Non-regression: the audit found the long/short sign logic in
+    _record_closed_trade was already correct pre-fix; only the option x100
+    multiplier and the realized_pnl_pct guard changed. A short equity
+    position that is bought back at a lower price must realize a POSITIVE
+    PnL: entry $100/share short, cover $90/share, 10 shares, no commission
+    -> (100 - 90) * 10 == 100.0.
+    """
+    success = store.apply_fill(
+        "short_open", "TSLA", "sell", 10.0, 100.0,
+        commission_and_fees=0.0, allow_short=True,
+    )
+    assert success is True
+
+    success = store.apply_fill(
+        "short_close", "TSLA", "buy", 10.0, 90.0,
+        commission_and_fees=0.0,
+    )
+    assert success is True
+
+    with session_scope(store.Session) as session:
+        row = session.query(PaperClosedTrade).filter_by(symbol="TSLA").first()
+        assert row is not None
+        assert row.side == "sell"
+        assert row.realized_pnl == pytest.approx(100.0)
+
+
+def test_settle_expired_options_profit_matches_cash_credit(store):
+    """Bug 2 regression: settle_expired_options's `intrinsic` is a per-SHARE
+    dollar amount (proven by cash_settlement's own *100.0 conversion), but
+    pos.avg_entry_price is per-CONTRACT -- it must be converted to
+    per-contract before being handed to _record_closed_trade as exit_price,
+    so the closed-trade ledger row and the real cash credit agree.
+
+    1 contract, BUY open @ $500/contract. Expires ITM with spot=$157,
+    strike=$150 -> intrinsic = $7.00/share -> cash credit = 7.00*1*100 =
+    $700.00. Expected realized_pnl = (700 - 500) * 1 = $200.00, matching
+    the SIGN and rough MAGNITUDE of the real $700 cash credit (not the old
+    buggy apples-to-oranges (7 - 500) subtraction).
+    """
+    symbol = "AAPL 2020-01-17 $150.00 CALL"
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 157.0}]):
+        success = store.apply_fill(
+            "settle_buy", symbol, "buy", 1.0, 500.0,
+            commission_and_fees=0.0, status=OrderStatus.FILLED,
+        )
+        assert success is True
+
+        cash_before = store.get_account().cash
+
+        class MockQuote:
+            price = 157.0
+
+        class MockMarketProvider:
+            def get_latest_quote(self, ticker):
+                return MockQuote()
+
+        from datetime import date
+        settled = store.settle_expired_options(
+            market_provider=MockMarketProvider(),
+            current_date=date(2024, 1, 1),
+        )
+        assert len(settled) == 1
+        assert settled[0]["cash_settlement"] == pytest.approx(700.0)
+
+        cash_after = store.get_account().cash
+
+    # Real cash credit actually applied to the account.
+    assert cash_after - cash_before == pytest.approx(700.0)
+
+    with session_scope(store.Session) as session:
+        row = (
+            session.query(PaperClosedTrade)
+            .filter_by(symbol=symbol, close_reason="expiry_settlement")
+            .first()
+        )
+        assert row is not None
+        assert row.realized_pnl > 0
+        assert row.realized_pnl == pytest.approx(200.0)
+
+
+def test_realized_pnl_pct_none_for_degenerate_avg_entry_price(store):
+    """Bug 3 regression: a position with avg_entry_price <= 0 (real production
+    rows can have this -- see scripts/purge_corrupt_paper_options.py) must
+    close with realized_pnl_pct == None, never a fabricated 0.0 (CONSTRAINT
+    #4). Guard threshold must be `>= 1e-12`, never an exact `> 0` check.
+    """
+    corrupt_pos = PaperPosition(
+        symbol="CORRUPT", strategy_id="untagged", pilot_id=None,
+        experiment_arm=None, qty=10.0, avg_entry_price=0.0, entry_ts=None,
+    )
+    with session_scope(store.Session) as session:
+        store._record_closed_trade(session, corrupt_pos, 10.0, 50.0, "flatten", 0.0)
+
+    with session_scope(store.Session) as session:
+        row = session.query(PaperClosedTrade).filter_by(symbol="CORRUPT").first()
+        assert row is not None
+        assert row.realized_pnl_pct is None
+
+
+def test_closed_trade_has_real_entry_ts_and_positive_holding_period(store):
+    """Bug 4 regression: PaperPosition.entry_ts is set at open time and must
+    survive into the closed-trade ledger row (not falsified to exit_ts /
+    "now"), and holding_period_days must be computed from the real gap.
+    """
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        success = store.apply_fill("ht_buy", "AAPL", "buy", 10.0, 100.0, 0.0)
+        assert success is True
+
+        # Simulate a real 5-day holding period by moving the position's
+        # recorded entry_ts back in time (apply_fill itself always stamps a
+        # real "now" on open -- this only manufactures a time gap for the
+        # test, it does not touch the code path under test).
+        with session_scope(store.Session) as session:
+            pos = (
+                session.query(PaperPosition)
+                .filter_by(symbol="AAPL", strategy_id="untagged")
+                .first()
+            )
+            assert pos.entry_ts is not None
+            pos.entry_ts = pos.entry_ts - timedelta(days=5)
+
+        success = store.apply_fill("ht_sell", "AAPL", "sell", 10.0, 110.0, 0.0)
+        assert success is True
+
+    with session_scope(store.Session) as session:
+        row = (
+            session.query(PaperClosedTrade)
+            .filter_by(symbol="AAPL", close_reason="flatten")
+            .first()
+        )
+        assert row is not None
+        assert row.entry_ts is not None
+        assert row.exit_ts is not None
+        assert row.entry_ts < row.exit_ts
+        assert row.holding_period_days is not None
+        assert row.holding_period_days > 0
+        assert row.holding_period_days == pytest.approx(5.0, abs=0.1)

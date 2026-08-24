@@ -345,9 +345,15 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
                 )
                 slice_trades = paper_closed_trades[trade_mask]
                 if not slice_trades.empty:
+                    # Both outcome features must share the same basis --
+                    # net-of-commission realized_pnl -- so a trade can't count
+                    # as a loss for the hit rate while still pulling the
+                    # average up as a gain (realized_pnl_pct is gross, no
+                    # commission; mixing the two produced exactly that
+                    # inconsistency). See PR 872 remediation.
                     hits = (slice_trades["realized_pnl"] > 0).sum()
                     row["paper_hit_rate_30d"] = float(hits / len(slice_trades))
-                    row["paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl_pct"].mean())
+                    row["paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl"].mean())
 
     return row
 
@@ -451,9 +457,12 @@ def populate_live_paper_features(dashboard_df: pd.DataFrame, as_of_date: pd.Time
                 )
                 slice_trades = paper_closed_trades[trade_mask]
                 if not slice_trades.empty:
+                    # Same net-of-commission basis for both features -- see
+                    # the identical comment in _pit_ticker_row above (PR 872
+                    # remediation).
                     hits = (slice_trades["realized_pnl"] > 0).sum()
                     dashboard_df.loc[idx, "paper_hit_rate_30d"] = float(hits / len(slice_trades))
-                    dashboard_df.loc[idx, "paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl_pct"].mean())
+                    dashboard_df.loc[idx, "paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl"].mean())
 
 def _empty_panel(universe) -> Tuple[pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
     """Return correctly-shaped empty (X, y, t1, price_history)."""

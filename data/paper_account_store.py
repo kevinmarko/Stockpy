@@ -44,6 +44,11 @@ class PaperPosition(Base):
     experiment_arm = Column(String(100), nullable=True)
     qty = Column(Float, nullable=False)
     avg_entry_price = Column(Float, nullable=False)
+    # Real open time of this position, set when it is first opened from flat
+    # (or re-opened after a full flip through zero) and left untouched while
+    # averaging in. NULL only for a legacy/migrated position whose true entry
+    # time is genuinely unknown -- never fabricated (CONSTRAINT #4).
+    entry_ts = Column(DateTime, nullable=True)
 
 
 
@@ -83,7 +88,10 @@ class PaperClosedTrade(Base):
     exit_price = Column(Float, nullable=False)
     commission = Column(Float, nullable=False, default=0.0)
     realized_pnl = Column(Float, nullable=False)
-    realized_pnl_pct = Column(Float, nullable=False)
+    # Nullable: undefined (None/NaN), never fabricated, when avg_entry_price
+    # is degenerate (<=0 -- see scripts/purge_corrupt_paper_options.py for
+    # why real production rows can have this) -- CONSTRAINT #4.
+    realized_pnl_pct = Column(Float, nullable=True)
     holding_period_days = Column(Float, nullable=True)
     close_reason = Column(String(20), nullable=False)
     leg_group_id = Column(String(100), nullable=True)
@@ -140,6 +148,7 @@ class PaperAccountStore:
                         "experiment_arm VARCHAR(100), "
                         "qty REAL NOT NULL, "
                         "avg_entry_price REAL NOT NULL, "
+                        "entry_ts DATETIME, "
                         "PRIMARY KEY (symbol, strategy_id)"
                         ")"
                     ))
@@ -148,9 +157,16 @@ class PaperAccountStore:
                         "SELECT symbol, 'untagged', qty, avg_entry_price FROM old_paper_positions"
                     ))
                     conn.execute(text("DROP TABLE old_paper_positions"))
+                    cols.append("entry_ts")
+                if "entry_ts" not in cols:
+                    # Additive migration for a DB created after the strategy_id
+                    # rebuild above but before entry_ts existed. Legacy rows
+                    # get NULL (genuinely unknown entry time), never a
+                    # fabricated timestamp -- CONSTRAINT #4.
+                    conn.execute(text("ALTER TABLE paper_positions ADD COLUMN entry_ts DATETIME"))
             except Exception as exc:
                 logger.error(f"Failed to migrate paper_positions: {exc}")
-                
+
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).first()
             if not acc:
@@ -367,7 +383,9 @@ class PaperAccountStore:
             acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
             if not acc:
                 return False
-                
+
+            now_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+
             pos = session.query(PaperPosition).filter_by(symbol=symbol.upper(), strategy_id=strategy_id).with_for_update().first()
             if not pos:
                 untagged_pos = session.query(PaperPosition).filter_by(symbol=symbol.upper(), strategy_id="untagged").with_for_update().first()
@@ -377,7 +395,7 @@ class PaperAccountStore:
                     elif side == "sell" and untagged_pos.qty > _QTY_EPSILON:
                         pos = untagged_pos
             current_qty = pos.qty if pos else 0.0
-            
+
             if side == "buy":
                 if pos and pos.qty < -_QTY_EPSILON:
                     # Buying to close an existing short position
@@ -387,17 +405,22 @@ class PaperAccountStore:
                         self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty, strategy_id, pilot_id, experiment_arm, leg_group_id, order_kind)
                         return False
                     acc.cash_balance -= cost_to_close
-                    
+
                     closed_qty = min(abs(pos.qty), qty)
                     prorated_comm = commission_and_fees * (closed_qty / qty) if qty > 0 else 0.0
                     self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm)
-                    
+
                     new_qty = pos.qty + qty
                     if abs(new_qty) < _QTY_EPSILON:
                         session.delete(pos)
                     elif new_qty > 0:
+                        # Short fully closed and flipped through zero into a
+                        # brand-new long -- reset entry_ts along with
+                        # avg_entry_price rather than leaving it pinned to the
+                        # now-fully-closed short's open time.
                         pos.qty = new_qty
                         pos.avg_entry_price = fill_price
+                        pos.entry_ts = now_ts
                     else:
                         pos.qty = new_qty
                 else:
@@ -407,17 +430,20 @@ class PaperAccountStore:
                         logger.warning(f"Insufficient funds for paper buy of {qty} {symbol}: cash={acc.cash_balance}, cost={total_cost}")
                         self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty, strategy_id, pilot_id, experiment_arm, leg_group_id, order_kind)
                         return False
-                        
+
                     acc.cash_balance -= total_cost
-                    
+
                     if pos:
+                        # Averaging into an existing position -- avg_entry_price
+                        # is a weighted average, and entry_ts is likewise left
+                        # untouched rather than reset to now.
                         new_qty = pos.qty + qty
                         pos.avg_entry_price = ((pos.qty * pos.avg_entry_price) + cost_basis_impact) / new_qty
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=qty, avg_entry_price=fill_price)
+                        pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=qty, avg_entry_price=fill_price, entry_ts=now_ts)
                         session.add(pos)
-                    
+
             elif side == "sell":
                 if pos and pos.qty > _QTY_EPSILON:
                     # Selling against long inventory
@@ -446,7 +472,11 @@ class PaperAccountStore:
                     if abs(pos.qty) < _QTY_EPSILON:
                         session.delete(pos)
                     elif pos.qty < -_QTY_EPSILON:
+                        # Long fully closed and flipped through zero into a
+                        # brand-new short -- same entry_ts reset reasoning as
+                        # the buy-side flip above.
                         pos.avg_entry_price = fill_price
+                        pos.entry_ts = now_ts
                 else:
                     # Selling to open short (options or short stock)
                     if not is_option_contract:
@@ -463,13 +493,15 @@ class PaperAccountStore:
                     acc.cash_balance += total_proceeds
 
                     if pos:
+                        # Averaging into an existing short -- entry_ts left
+                        # untouched, same reasoning as the long-side average-in.
                         new_qty = pos.qty - qty
                         pos.avg_entry_price = ((abs(pos.qty) * pos.avg_entry_price) + cost_basis_impact) / abs(new_qty)
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-qty, avg_entry_price=fill_price)
+                        pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-qty, avg_entry_price=fill_price, entry_ts=now_ts)
                         session.add(pos)
-                    
+
             else:
                 return False
 
@@ -546,6 +578,8 @@ class PaperAccountStore:
             # Update account cash
             acc.cash_balance += net_cash_impact
 
+            now_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+
             # Update each constituent leg position
             for idx, leg in enumerate(legs):
                 leg_symbol = str(leg["symbol"]).upper().strip()
@@ -574,16 +608,19 @@ class PaperAccountStore:
                         if abs(new_qty) < _QTY_EPSILON:
                             session.delete(pos)
                         elif new_qty > 0:
+                            # Flipped through zero -- brand-new position basis.
                             pos.qty = new_qty
                             pos.avg_entry_price = leg_fill_price
+                            pos.entry_ts = now_ts
                         else:
                             pos.qty = new_qty
                     elif pos:
+                        # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty + leg_qty
                         pos.avg_entry_price = ((pos.qty * pos.avg_entry_price) + leg_cost) / new_qty
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price)
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
                         session.add(pos)
                 elif leg_side == "sell":
                     if pos and pos.qty > _QTY_EPSILON:
@@ -595,13 +632,16 @@ class PaperAccountStore:
                         if abs(pos.qty) < _QTY_EPSILON:
                             session.delete(pos)
                         elif pos.qty < -_QTY_EPSILON:
+                            # Flipped through zero -- brand-new position basis.
                             pos.avg_entry_price = leg_fill_price
+                            pos.entry_ts = now_ts
                     elif pos:
+                        # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty - leg_qty
                         pos.avg_entry_price = ((abs(pos.qty) * pos.avg_entry_price) + leg_cost) / abs(new_qty)
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price)
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
                         session.add(pos)
 
                 # Record individual leg order
@@ -733,6 +773,8 @@ class PaperAccountStore:
             # Update account cash
             acc.cash_balance += net_cash_impact
 
+            now_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+
             # Update each constituent leg position
             for idx, leg in enumerate(all_legs):
                 leg_symbol = str(leg["symbol"]).upper().strip()
@@ -764,16 +806,19 @@ class PaperAccountStore:
                         if abs(new_qty) < _QTY_EPSILON:
                             session.delete(pos)
                         elif new_qty > 0:
+                            # Flipped through zero -- brand-new position basis.
                             pos.qty = new_qty
                             pos.avg_entry_price = leg_fill_price
+                            pos.entry_ts = now_ts
                         else:
                             pos.qty = new_qty
                     elif pos:
+                        # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty + leg_qty
                         pos.avg_entry_price = ((pos.qty * pos.avg_entry_price) + leg_cost) / new_qty
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price)
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
                         session.add(pos)
                 elif leg_side == "sell":
                     if pos and pos.qty > _QTY_EPSILON:
@@ -785,13 +830,16 @@ class PaperAccountStore:
                         if abs(pos.qty) < _QTY_EPSILON:
                             session.delete(pos)
                         elif pos.qty < -_QTY_EPSILON:
+                            # Flipped through zero -- brand-new position basis.
                             pos.avg_entry_price = leg_fill_price
+                            pos.entry_ts = now_ts
                     elif pos:
+                        # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty - leg_qty
                         pos.avg_entry_price = ((abs(pos.qty) * pos.avg_entry_price) + leg_cost) / abs(new_qty)
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price)
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
                         session.add(pos)
 
                 # Record individual leg order
@@ -851,17 +899,44 @@ class PaperAccountStore:
         is_long = pos.qty > 0
         if is_long:
             realized_pnl = (exit_price - pos.avg_entry_price) * closed_qty_abs
-            realized_pnl_pct = (exit_price - pos.avg_entry_price) / pos.avg_entry_price if pos.avg_entry_price > 0 else 0.0
         else:
             realized_pnl = (pos.avg_entry_price - exit_price) * closed_qty_abs
-            realized_pnl_pct = (pos.avg_entry_price - exit_price) / pos.avg_entry_price if pos.avg_entry_price > 0 else 0.0
 
-        option_multiplier = 100.0 if " " in pos.symbol else 1.0
-        realized_pnl *= option_multiplier
+        # NOTE (bug fix, PR 872 remediation): no ×100 option multiplier here.
+        # Every writer in this codebase stores option entry/exit prices already
+        # as a per-CONTRACT dollar amount -- apply_roll_fill's own docstring
+        # states it explicitly: "fill_price is always already a per-contract
+        # dollar amount". Both entry_price (pos.avg_entry_price) and
+        # exit_price are per-contract for options and per-share for equities;
+        # qty (contracts vs. shares) is what varies, not the price convention.
+        # Re-applying ×100 here double-counts the multiplier and inflated
+        # realized_pnl 100x for every closed option trade.
         realized_pnl -= commission
-        
+
+        # CONSTRAINT #4 / "Degenerate-std guard convention" (CLAUDE.md): guard
+        # with `>= 1e-12`, never an exact `> 0`/`== 0` check, and the
+        # undefined case must be None, never a fabricated 0.0. Real production
+        # rows can have avg_entry_price <= 0 (see
+        # scripts/purge_corrupt_paper_options.py) -- those must not close as a
+        # fabricated "flat trade".
+        if abs(pos.avg_entry_price) >= 1e-12:
+            if is_long:
+                realized_pnl_pct = (exit_price - pos.avg_entry_price) / pos.avg_entry_price
+            else:
+                realized_pnl_pct = (pos.avg_entry_price - exit_price) / pos.avg_entry_price
+        else:
+            realized_pnl_pct = None
+
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        
+
+        # Real entry time when known (set at position-open time on
+        # PaperPosition.entry_ts); None only for a genuinely unknown
+        # (legacy/migrated) position -- never fabricated as "now".
+        entry_ts = pos.entry_ts
+        holding_period_days = (
+            (now - entry_ts).total_seconds() / 86400.0 if entry_ts is not None else None
+        )
+
         pct = PaperClosedTrade(
             strategy_id=pos.strategy_id,
             pilot_id=pos.pilot_id,
@@ -869,20 +944,20 @@ class PaperAccountStore:
             symbol=pos.symbol,
             side="buy" if is_long else "sell",
             qty=closed_qty_abs,
-            entry_ts=None,
+            entry_ts=entry_ts,
             entry_price=pos.avg_entry_price,
             exit_ts=now,
             exit_price=exit_price,
             commission=commission,
             realized_pnl=realized_pnl,
             realized_pnl_pct=realized_pnl_pct,
-            holding_period_days=None,
+            holding_period_days=holding_period_days,
             close_reason=close_reason,
             leg_group_id=None,
         )
         session.add(pct)
         session.flush()
-        
+
         if getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", True):
             try:
                 import transactions_store
@@ -890,9 +965,18 @@ class PaperAccountStore:
                 trade_id = store.record_trade(
                     symbol=pos.symbol,
                     side="buy" if is_long else "sell",
-                    entry_ts=now,
+                    # Real entry time when known; None lets
+                    # transactions_store.record_trade's own documented
+                    # fallback apply (it substitutes "now" internally when
+                    # entry_ts is falsy) rather than us fabricating a "now"
+                    # here and passing it off as real.
+                    entry_ts=entry_ts,
                     entry_price=pos.avg_entry_price,
-                    shares=closed_qty_abs * option_multiplier,
+                    # No option_multiplier scaling -- shares/contracts is the
+                    # raw closed quantity, unscaled (same fix as realized_pnl
+                    # above; entry_price/exit_price already carry the correct
+                    # per-contract convention for options).
+                    shares=closed_qty_abs,
                     strategy=pos.strategy_id,
                     notes=f"Paper bridge, reason: {close_reason}"
                 )
@@ -1045,8 +1129,22 @@ class PaperAccountStore:
                         cash_settlement = -(intrinsic * contracts * 100.0)
                         acc.cash_balance += cash_settlement  # cash_settlement is negative
 
-                    # Record closed trade
-                    self._record_closed_trade(session, pos, contracts, intrinsic, "expiry_settlement", 0.0)
+                    # Record closed trade. `intrinsic` above is a per-SHARE
+                    # dollar amount (proven by cash_settlement's own *100.0
+                    # conversion just above), but pos.avg_entry_price is
+                    # already a per-CONTRACT dollar amount (this codebase's
+                    # option-price convention -- see apply_roll_fill's
+                    # docstring) and _record_closed_trade expects exit_price
+                    # on that same per-contract basis. Convert before passing
+                    # so the ledger row's realized_pnl agrees, by
+                    # construction, with the real cash_settlement applied to
+                    # acc.cash_balance above -- an apples-to-oranges
+                    # subtraction here previously produced a fake, wildly
+                    # wrong PnL (or, after removing the ×100 multiplier in
+                    # _record_closed_trade alone, a mismatched sign/magnitude
+                    # against the real cash credit).
+                    intrinsic_per_contract = intrinsic * 100.0
+                    self._record_closed_trade(session, pos, contracts, intrinsic_per_contract, "expiry_settlement", 0.0)
 
                     # Delete position
                     session.delete(pos)
