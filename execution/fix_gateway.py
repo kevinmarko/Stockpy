@@ -309,22 +309,66 @@ class FixMessage:
             if "=" not in part:
                 continue
             k, v = part.split("=", 1)
+            if k in tag_dict:
+                logger.warning(
+                    "FixMessage.from_fix_str: duplicate tag %s in message (MsgType=%s) -- "
+                    "keeping last occurrence, discarding earlier value %r",
+                    k, tag_dict.get("35", "?"), tag_dict.get(k),
+                )
             tag_dict[k] = v
 
-        # Validate Checksum (Tag 10)
-        if "10" in tag_dict and validate_checksum:
+        # Validate Checksum (Tag 10) and BodyLength (Tag 9).
+        if validate_checksum:
+            # F1: a message with Tag 10 entirely missing (e.g. a transport-truncated
+            # message that lost its trailing "10=xxx" field) must be treated as fatally
+            # malformed, not silently accepted with integrity checking skipped.
+            if "10" not in tag_dict:
+                raise FixChecksumError(
+                    "Missing required Tag 10 (CheckSum) -- message truncated or malformed"
+                )
             expected_chk = tag_dict["10"]
             idx = raw.rfind(f"10={expected_chk}")
-            if idx != -1:
-                prefix = raw[:idx]
-                actual_chk = compute_checksum(prefix)
-                # If delimiter was '|', also try checking with standard SOH delimiter replacement
-                if actual_chk != expected_chk and delimiter == "|":
-                    actual_chk_soh = compute_checksum(prefix.replace("|", SOH))
-                    if actual_chk_soh == expected_chk:
-                        actual_chk = expected_chk
-                if actual_chk != expected_chk:
-                    raise FixChecksumError(f"Checksum mismatch: expected {expected_chk}, calculated {actual_chk}")
+            if idx == -1:
+                raise FixChecksumError(
+                    f"Could not locate CheckSum field '10={expected_chk}' in raw message for verification"
+                )
+            prefix = raw[:idx]
+            actual_chk = compute_checksum(prefix)
+            # If delimiter was '|', also try checking with standard SOH delimiter replacement
+            if actual_chk != expected_chk and delimiter == "|":
+                actual_chk_soh = compute_checksum(prefix.replace("|", SOH))
+                if actual_chk_soh == expected_chk:
+                    actual_chk = expected_chk
+            if actual_chk != expected_chk:
+                raise FixChecksumError(f"Checksum mismatch: expected {expected_chk}, calculated {actual_chk}")
+
+            # F2: independently verify BodyLength (Tag 9) against the actual body byte
+            # count. CheckSum alone cannot catch a tampered BodyLength -- a doctored Tag 9
+            # combined with a checksum recomputed over the (now-tampered) prefix is
+            # internally self-consistent by construction, since the checksum is just a
+            # byte-sum of whatever bytes are actually present, not a statement about what
+            # Tag 9 claims. Real FIX engines use BodyLength as a primary framing/
+            # corruption-detection mechanism independent of the checksum. Only verified
+            # when Tag 9 is present -- this does not newly require it.
+            if "9" in tag_dict:
+                try:
+                    expected_body_len = int(tag_dict["9"])
+                except ValueError:
+                    raise FixParseError(f"Malformed BodyLength in tag 9: {tag_dict.get('9')!r}")
+                tag9_marker = f"9={tag_dict['9']}{delimiter}"
+                body_start_idx = raw.find(tag9_marker)
+                if body_start_idx == -1:
+                    raise FixParseError(
+                        "Could not locate Tag 9 (BodyLength) field boundary for verification"
+                    )
+                body_start = body_start_idx + len(tag9_marker)
+                body_str = raw[body_start:idx]
+                actual_body_len = len(body_str.encode("latin1"))
+                if actual_body_len != expected_body_len:
+                    raise FixParseError(
+                        f"BodyLength mismatch: tag 9 declared {expected_body_len}, "
+                        f"actual body is {actual_body_len} bytes"
+                    )
 
         begin_str = tag_dict.get("8", "FIX.4.4")
         msg_type_str = tag_dict.get("35")
