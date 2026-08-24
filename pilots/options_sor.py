@@ -637,6 +637,35 @@ def analyze_routing_options(
                 f"guaranteeing atomic execution at net mid/limit without hung-leg risk."
             )
 
+    # Commission modeling (audit item #6): reuses execution.cost_model.TieredCostModel --
+    # this repo's single source of truth for trading costs -- rather than a locally
+    # hardcoded literal, via a lazy, function-local import matching this module's own
+    # "pure quant / AST-safe" convention (pilots/mirror.py, pilots/vol_mispricing.py, and
+    # pilots/earnings_crush.py all lazily import execution.* the same way).
+    #
+    # All three routing policies get the SAME base per-contract-per-leg commission: OCC/
+    # exchange options fees are levied per contract per leg by regulation, not per order
+    # ticket submitted, so COB_NET_PACKAGE's single atomic order costs the same base fee as
+    # SPLIT_DIRECT's multiple direct orders for the same total legs filled. The actual
+    # DIFFERENTIAL cost between policies is the EXPECTED extra round-trip commission from
+    # unwinding a naked leg left behind by a hung passive-first/split fill -- the same real,
+    # additional risk simulate_legging_execution() already prices on the spread side via its
+    # own `naked_unwind_cost` treatment, applied here to the commission side of that
+    # identical risk. This is deliberately an informational cost-completeness fix: it makes
+    # the commission differential visible/comparable per policy without rewiring
+    # `recommended_policy`'s own selection thresholds (see the walkthrough for this fix).
+    try:
+        from execution.cost_model import TieredCostModel
+
+        per_contract_fee = float(TieredCostModel().options_per_contract)
+    except Exception:
+        per_contract_fee = 0.65  # TieredCostModel's own default; only reached if the import itself is broken
+
+    base_commission = per_contract_fee * order_size * legs_count
+
+    def _commission_with_unwind_risk(hung_leg_risk: float) -> float:
+        return base_commission + (max(0.0, float(hung_leg_risk)) * per_contract_fee * order_size)
+
     policies_comparison = [
         {
             "policy": POLICY_COB_NET_PACKAGE,
@@ -647,6 +676,7 @@ def analyze_routing_options(
             "fill_probability": round(fill_prob_mid, 4),
             "recommended": recommended_policy == POLICY_COB_NET_PACKAGE,
             "description": "Simultaneous execution via Complex Order Book; guaranteed atomic fill, zero legging risk.",
+            "commission_cost_dollars": round(_commission_with_unwind_risk(0.0), 2),
         },
         {
             "policy": POLICY_LEG_PASSIVE_FIRST,
@@ -657,6 +687,7 @@ def analyze_routing_options(
             "fill_probability": round(0.75 * (1.0 - synthetic_legging["hung_leg_probability"]), 4),
             "recommended": recommended_policy == POLICY_LEG_PASSIVE_FIRST,
             "description": "Post passive limit order on wider-spread leg, sweep active leg upon fill to capture spread edge.",
+            "commission_cost_dollars": round(_commission_with_unwind_risk(synthetic_legging["hung_leg_probability"]), 2),
         },
         {
             "policy": POLICY_SPLIT_DIRECT,
@@ -667,6 +698,7 @@ def analyze_routing_options(
             "fill_probability": round(max(0.20, fill_prob_mid * 0.9), 4),
             "recommended": recommended_policy == POLICY_SPLIT_DIRECT,
             "description": "Direct venue limit routing with adaptive midpoint pegging across all legs.",
+            "commission_cost_dollars": round(_commission_with_unwind_risk(min(0.50, hung_prob * 1.3)), 2),
         },
     ]
 

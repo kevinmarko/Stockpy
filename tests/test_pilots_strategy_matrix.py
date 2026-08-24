@@ -642,7 +642,14 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # earnings_crush/har_volatility above.
         allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "scipy"}
     if module_name == "options_sor":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
+        # analyze_routing_options() (audit item #6 fix, 2026-08) added a lazy, function-scoped
+        # `from execution.cost_model import TieredCostModel` to price a real per-contract-per-leg
+        # commission differential instead of comparing routing policies gross of cost --
+        # execution.cost_model.py itself is dependency-light (stdlib logging/typing + numpy,
+        # with backtrader already optional/try-except-guarded inside that module), same
+        # `execution` allowance already granted to pilots/mirror.py and pilots/earnings_crush.py
+        # for their own lazy execution.* imports.
+        allowed = allowed | {"dataclasses", "datetime", "execution", "numpy", "pilots", "re", "scipy"}
     if module_name == "paper_broker_options_order":
         allowed = allowed | {"data", "pilots", "uuid"}
     if module_name == "options_risk":
