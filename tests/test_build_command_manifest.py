@@ -29,7 +29,31 @@ from scripts.build_command_manifest import (
 # Real invocation -- light smoke test
 # --------------------------------------------------------------------------- #
 def test_fetch_strategy_registry_real_invocation_returns_nonempty_list_of_strings():
-    names = _fetch_strategy_registry(timeout=120)
+    """Real (non-mocked) subprocess invocation -- confirms the isolation path
+    in scripts/build_command_manifest.py actually works end-to-end against
+    the live scripts.refresh_validations.STRATEGY_REGISTRY.
+
+    Retries a bounded number of times on an empty result before failing.
+    scripts.refresh_validations heavy-imports pandas/numpy/lightgbm/the quant
+    engines in a fresh subprocess, and on the shared GitHub Actions runner
+    under `-n auto` parallel-worker load this has, on rare occasions,
+    aborted with a native "terminate called without an active exception"
+    (SIGABRT) during that import -- never reproduced locally, and not
+    correlated with any particular code change (confirmed by re-running this
+    same invocation, unchanged, across multiple CI runs where it alternated
+    pass/fail). _fetch_strategy_registry dead-letters ANY subprocess failure
+    to [] by design (CONSTRAINT #6: don't crash the manifest build), so a
+    transient resource-contention abort and a genuine regression (e.g. a
+    broken import in STRATEGY_REGISTRY's own construction) are both observed
+    here as a single empty result -- and a genuine regression fails the same
+    way on every attempt, so retrying only filters the transient case rather
+    than masking a real one.
+    """
+    names: list[str] = []
+    for _ in range(3):
+        names = _fetch_strategy_registry(timeout=120)
+        if names:
+            break
     assert isinstance(names, list)
     assert len(names) > 0
     assert all(isinstance(n, str) for n in names)
