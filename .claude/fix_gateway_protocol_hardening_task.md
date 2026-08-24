@@ -16,4 +16,4 @@
 | 12 | `pytest tests/test_pilots_api.py -q -k fix` — zero failures | ✅ 31/31 passed |
 | 13 | `pytest tests/test_multi_broker_gateway.py -q` — zero failures | ✅ 38/38 passed |
 | 14 | Full offline suite (`pytest tests/ -q -p no:randomly -m "not network"`) | ✅ 12056 passed, 5 pre-existing unrelated failures (confirmed via `git stash`) |
-| 15 | PR opened | ⏳ pending |
+| 15 | PR opened | ✅ [#880](https://github.com/kevinmarko/Stockpy/pull/880) |
