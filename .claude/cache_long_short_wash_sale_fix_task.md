@@ -19,4 +19,4 @@
 - [x] `ruff check --select=F821,F822,F823,E9` clean.
 - [x] `pytest tests/test_cache_long_short_engine.py tests/test_cache_long_short_store.py tests/test_cache_long_short_api.py` — 67 passed.
 - [x] `docs/architecture/signal-engines.md` — new Cache Long/Short entry added.
-- [ ] Open PR (feature branch already created: `fix-cache-long-short-wash-sale`).
+- [x] Open PR (feature branch already created: `fix-cache-long-short-wash-sale`) — [PR #899](https://github.com/kevinmarko/Stockpy/pull/899).
