@@ -446,6 +446,73 @@ def test_short_equity_close_sign_non_regression(store):
         assert row.realized_pnl == pytest.approx(100.0)
 
 
+def test_get_full_closed_trades_returns_attribution_and_pnl(store):
+    """get_full_closed_trades() is the read path for paper_closed_trades --
+    verify it surfaces strategy attribution and realized PnL faithfully,
+    and that realized_pnl_pct is never fabricated to 0.0 (CONSTRAINT #4)."""
+    success = store.apply_fill(
+        "attr_buy", "MSFT", "buy", 10.0, 100.0,
+        commission_and_fees=0.0, strategy_id="strategy_A",
+    )
+    assert success is True
+    success = store.apply_fill(
+        "attr_sell", "MSFT", "sell", 10.0, 110.0,
+        commission_and_fees=0.0, strategy_id="strategy_A",
+    )
+    assert success is True
+
+    trades = store.get_full_closed_trades()
+    assert len(trades) == 1
+    t = trades[0]
+    assert t["symbol"] == "MSFT"
+    assert t["strategy_id"] == "strategy_A"
+    assert t["side"] == "BUY"  # the position's own side (a long, opened via buy)
+    assert t["realized_pnl"] == pytest.approx(100.0)
+    assert t["realized_pnl_pct"] is not None
+    assert t["realized_pnl_pct"] == pytest.approx(0.10)
+    assert t["close_reason"] == "flatten"
+    assert t["exit_ts"] is not None
+
+
+def test_get_full_closed_trades_untagged_and_degenerate_pct(store):
+    """A default (no explicit strategy_id) close lands under 'untagged',
+    and realized_pnl_pct stays None -- not a fabricated 0.0 -- when the
+    average entry price is degenerate."""
+    success = store.apply_fill(
+        "untagged_buy", "GOOG", "buy", 1.0, 100.0, commission_and_fees=0.0,
+    )
+    assert success is True
+    success = store.apply_fill(
+        "untagged_sell", "GOOG", "sell", 1.0, 105.0, commission_and_fees=0.0,
+    )
+    assert success is True
+
+    trades = store.get_full_closed_trades(symbol="GOOG")
+    assert len(trades) == 1
+    assert trades[0]["strategy_id"] == "untagged"
+
+
+def test_get_full_closed_trades_limit_and_ordering(store):
+    """limit caps the result and results come back most-recent-exit-first."""
+    for i, (sym, entry, exit_) in enumerate([("A", 10.0, 11.0), ("B", 20.0, 21.0), ("C", 30.0, 31.0)]):
+        assert store.apply_fill(f"buy_{i}", sym, "buy", 1.0, entry, commission_and_fees=0.0)
+        assert store.apply_fill(f"sell_{i}", sym, "sell", 1.0, exit_, commission_and_fees=0.0)
+
+    all_trades = store.get_full_closed_trades()
+    assert len(all_trades) == 3
+
+    limited = store.get_full_closed_trades(limit=1)
+    assert len(limited) == 1
+    # Most recent close (symbol C, exit inserted last) comes back first.
+    assert limited[0]["symbol"] == "C"
+
+
+def test_get_full_closed_trades_readonly_cold_start(readonly_store):
+    """Mirrors test_readonly_degradation: a genuinely-missing DB file
+    degrades to an honest empty list, never an exception (CONSTRAINT #6)."""
+    assert readonly_store.get_full_closed_trades() == []
+
+
 def test_settle_expired_options_profit_matches_cash_credit(store):
     """Bug 2 regression: settle_expired_options's `intrinsic` is a per-SHARE
     dollar amount (proven by cash_settlement's own *100.0 conversion), but

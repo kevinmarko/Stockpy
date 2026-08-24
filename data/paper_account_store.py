@@ -1515,6 +1515,55 @@ class PaperAccountStore:
                 })
         return results
 
+    def get_full_closed_trades(self, symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Realized-PnL history for flattened/expired/rolled paper positions.
+
+        Read path for ``paper_closed_trades`` (written by ``_record_closed_trade``).
+        Mirrors ``get_full_orders``'s shape exactly: readonly-safe cold start
+        when the table doesn't exist yet, most-recent-first, capped at
+        ``limit``. ``realized_pnl_pct`` is passed through raw -- never
+        coerced from ``None`` to ``0.0`` (CONSTRAINT #4; see the column's
+        own comment on ``PaperClosedTrade``).
+        """
+        if self._readonly:
+            try:
+                insp = inspect(self.engine)
+                if not insp.has_table("paper_closed_trades"):
+                    return []
+            except Exception:
+                return []
+
+        results = []
+        with session_scope(self.Session) as session:
+            q = session.query(PaperClosedTrade)
+            if symbol:
+                q = q.filter_by(symbol=symbol.upper())
+            q = q.order_by(PaperClosedTrade.exit_ts.desc()).limit(limit)
+
+            for t in q.all():
+                entry_ts = t.entry_ts.replace(tzinfo=timezone.utc).isoformat() if t.entry_ts else None
+                exit_ts = t.exit_ts.replace(tzinfo=timezone.utc).isoformat()
+                results.append({
+                    "trade_id": t.trade_id,
+                    "strategy_id": t.strategy_id,
+                    "pilot_id": t.pilot_id,
+                    "experiment_arm": t.experiment_arm,
+                    "symbol": t.symbol,
+                    "side": t.side.upper(),
+                    "qty": t.qty,
+                    "entry_ts": entry_ts,
+                    "entry_price": t.entry_price,
+                    "exit_ts": exit_ts,
+                    "exit_price": t.exit_price,
+                    "commission": t.commission,
+                    "realized_pnl": t.realized_pnl,
+                    "realized_pnl_pct": t.realized_pnl_pct,
+                    "holding_period_days": t.holding_period_days,
+                    "close_reason": t.close_reason,
+                    "leg_group_id": t.leg_group_id,
+                })
+        return results
+
     def settle_expired_options(
         self,
         market_provider=None,
