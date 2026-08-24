@@ -27,8 +27,10 @@ from pilots.earnings_crush import (
     FALLBACK_MIN_MOVE_PCT,
     calculate_expected_earnings_move,
     evaluate_earnings_crush_candidates,
+    execute_earnings_crush_trade,
     get_historical_earnings_moves,
     snap_strike_to_grid_or_chain,
+    to_earnings_crush_candidate_response,
 )
 
 
@@ -638,6 +640,254 @@ class TestEvaluateEarningsCrushCandidates:
         assert candidates[0]["symbol"] == "HIGH"
         assert candidates[1]["symbol"] == "MED"
         assert candidates[0]["crush_edge_ratio"] > candidates[1]["crush_edge_ratio"]
+
+
+# ---------------------------------------------------------------------------
+# 4b. company_name resolution (follow-up audit finding #2)
+# ---------------------------------------------------------------------------
+
+class MockHistoricalStoreWithFundamentals(MockHistoricalStore):
+    """MockHistoricalStore extended with a get_fundamentals_raw() method -- the real
+    HistoricalStore's method evaluate_earnings_crush_candidates's defensive company_name
+    lookup calls via hasattr()."""
+
+    def __init__(
+        self,
+        events: List[Dict[str, Any]],
+        bars_df: Optional[pd.DataFrame],
+        fundamentals_map: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(events, bars_df)
+        self._fundamentals_map = fundamentals_map or {}
+
+    def get_fundamentals_raw(self, symbol: str) -> Any:
+        return self._fundamentals_map.get(symbol)
+
+
+class TestCompanyNameResolution:
+    def _high_edge_scenario(self, store):
+        today = date(2026, 8, 14)
+        earnings_date = date(2026, 8, 17)
+        exp_date = "2026-08-21"
+        strikes = [80.0, 85.0, 90.0, 95.0, 100.0, 105.0, 110.0, 115.0, 120.0]
+        chain = MockOptionsChain(strikes, atm_iv=0.70)
+        options_provider = MockOptionsProvider(
+            expirations_map={"NVDA": [exp_date]},
+            chain_map={f"NVDA_{exp_date}": chain},
+        )
+        return evaluate_earnings_crush_candidates(
+            universe=["NVDA"],
+            store=store,
+            options_provider=options_provider,
+            min_edge=1.25,
+            wing_multiplier=1.20,
+            as_of=today,
+            upcoming_earnings={"NVDA": earnings_date.isoformat()},
+            spot_prices={"NVDA": 100.0},
+        )
+
+    def test_company_name_populated_when_store_provides_it(self):
+        """A store whose get_fundamentals_raw() returns a real company_name populates the
+        candidate's company_name field (and, downstream, to_earnings_crush_candidate_response's
+        response)."""
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates
+        )
+        events = [
+            {"symbol": "NVDA", "event_date": "2025-05-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-08-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStoreWithFundamentals(
+            events, bars_df, fundamentals_map={"NVDA": {"company_name": "NVIDIA Corporation"}}
+        )
+
+        candidates = self._high_edge_scenario(store)
+        assert len(candidates) == 1
+        assert candidates[0]["company_name"] == "NVIDIA Corporation"
+
+        response = to_earnings_crush_candidate_response(candidates[0])
+        assert response["company_name"] == "NVIDIA Corporation"
+
+    def test_company_name_none_when_store_lacks_get_fundamentals_raw(self):
+        """Regression test: the plain MockHistoricalStore fixture used throughout this file
+        does NOT implement get_fundamentals_raw at all. Without the hasattr() guard, a bare
+        call would raise AttributeError inside the per-symbol try/except and silently drop
+        the candidate entirely -- proving the fixture still works and no company_name key
+        leaks a MagicMock/garbage value."""
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates
+        )
+        events = [
+            {"symbol": "NVDA", "event_date": "2025-05-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-08-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStore(events, bars_df)
+        assert not hasattr(store, "get_fundamentals_raw")
+
+        candidates = self._high_edge_scenario(store)
+        assert len(candidates) == 1
+        assert candidates[0]["company_name"] is None
+
+        response = to_earnings_crush_candidate_response(candidates[0])
+        assert "company_name" not in response
+
+    @pytest.mark.parametrize(
+        "fundamentals_row",
+        [
+            {},  # missing company_name key entirely
+            {"company_name": ""},  # empty string
+            {"company_name": "   "},  # whitespace-only
+            {"company_name": 12345},  # non-string
+            None,  # get_fundamentals_raw itself returns None
+        ],
+    )
+    def test_company_name_omitted_when_raw_value_unusable(self, fundamentals_row):
+        dates = pd.date_range(start="2025-01-01", end="2026-08-14", freq="B")
+        bars_df = pd.DataFrame(
+            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 100000}, index=dates
+        )
+        events = [
+            {"symbol": "NVDA", "event_date": "2025-05-15", "eps_actual": 1.0},
+            {"symbol": "NVDA", "event_date": "2025-08-15", "eps_actual": 1.0},
+        ]
+        store = MockHistoricalStoreWithFundamentals(
+            events, bars_df, fundamentals_map={"NVDA": fundamentals_row}
+        )
+
+        candidates = self._high_edge_scenario(store)
+        assert len(candidates) == 1
+        assert candidates[0]["company_name"] is None
+
+        response = to_earnings_crush_candidate_response(candidates[0])
+        assert "company_name" not in response
+
+
+# ---------------------------------------------------------------------------
+# 4c. to_earnings_crush_candidate_response: historical_moves (follow-up audit finding #2)
+# ---------------------------------------------------------------------------
+
+class TestToEarningsCrushCandidateResponseHistoricalMoves:
+    @staticmethod
+    def _base_candidate(moves: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "symbol": "AAPL",
+            "spot": 100.0,
+            "earnings_date": "2026-08-17",
+            "days_to_earnings": 3,
+            "expiration": "2026-08-21",
+            "dte": 7,
+            "atm_iv": 0.50,
+            "expected_move_usd": 5.0,
+            "expected_move_pct": 0.05,
+            "realized_move_pct": 0.05,
+            "crush_edge_ratio": 1.30,
+            "is_recommended": True,
+            "strategy": "Iron Condor",
+            "strikes": {"long_put": 90.0, "short_put": 95.0, "short_call": 105.0, "long_call": 110.0},
+            "legs": [],
+            "net_credit": 1.20,
+            "max_profit": 120.0,
+            "max_loss": 380.0,
+            "pricing_is_estimated": False,
+            "company_name": None,
+            "historical_summary": {
+                "quarters_count": len(moves),
+                "median_move_pct": 0.05,
+                "sparse_history": len(moves) < 3,
+                "fallback": False,
+                "moves": moves,
+            },
+        }
+
+    def test_historical_moves_oldest_first_and_percent_scaled(self):
+        # Newest-first input order, matching HistoricalStore.get_earnings_events's
+        # `ORDER BY event_date DESC` -- exactly what get_historical_earnings_moves produces.
+        moves = [
+            {"event_date": "2026-05-15", "gap_pct": 0.081},  # newest (Q-1)
+            {"event_date": "2026-02-15", "gap_pct": 0.052},
+            {"event_date": "2025-11-15", "gap_pct": 0.033},  # oldest (Q-3 here, would be Q-8 at full depth)
+        ]
+        candidate = self._base_candidate(moves)
+
+        response = to_earnings_crush_candidate_response(candidate)
+
+        assert "historical_moves" in response
+        # Must be reversed (oldest-first) relative to the input, and percent-scaled (*100).
+        expected = [round(m["gap_pct"] * 100.0, 2) for m in reversed(moves)]
+        assert response["historical_moves"] == expected
+        assert response["historical_moves"][0] == pytest.approx(3.3)   # oldest first
+        assert response["historical_moves"][-1] == pytest.approx(8.1)  # most recent last
+
+    def test_historical_moves_omitted_when_empty(self):
+        """Sparse/fallback candidates carry an empty moves list -- the key must be OMITTED
+        entirely (matching this function's existing 'omit if missing' convention), not present
+        as an empty array."""
+        candidate = self._base_candidate([])
+
+        response = to_earnings_crush_candidate_response(candidate)
+
+        assert "historical_moves" not in response
+
+    def test_report_timing_never_populated(self):
+        """report_timing is deliberately never fabricated -- no real BMO/AMC source exists in
+        this codebase (see get_historical_earnings_moves's timing_data_available field)."""
+        candidate = self._base_candidate([{"event_date": "2026-05-15", "gap_pct": 0.05}])
+
+        response = to_earnings_crush_candidate_response(candidate)
+
+        assert "report_timing" not in response
+
+
+# ---------------------------------------------------------------------------
+# 4d. execute_earnings_crush_trade: net_credit (follow-up audit finding #9)
+# ---------------------------------------------------------------------------
+
+class TestExecuteEarningsCrushTradeNetCredit:
+    def test_net_credit_computed_from_real_executor_fields(self):
+        """net_credit is reconstructed from the executor's real net_cash_impact/commission/
+        contracts fields -- never fabricated (CONSTRAINT #4)."""
+        fake_res = {
+            "success": True,
+            "order_id": "ec_test123",
+            "net_cash_impact": 150.0,
+            "commission": 2.60,
+            "contracts": 2,
+        }
+        mock_executor_instance = mock.MagicMock()
+        mock_executor_instance.execute_earnings_crush_trade.return_value = fake_res
+
+        with mock.patch(
+            "execution.options_paper_executor.OptionsPaperExecutor",
+            return_value=mock_executor_instance,
+        ):
+            result = execute_earnings_crush_trade("NVDA", contracts=2)
+
+        assert result["ok"] is True
+        expected_net_credit = round((150.0 + 2.60) / (100.0 * 2), 2)
+        assert result["net_credit"] == expected_net_credit
+
+    def test_net_credit_none_when_fields_missing(self):
+        """A success response missing net_cash_impact/commission yields net_credit=None,
+        never a fabricated 0 (CONSTRAINT #4)."""
+        fake_res = {
+            "success": True,
+            "order_id": "ec_test456",
+            "contracts": 2,
+            # net_cash_impact and commission deliberately absent
+        }
+        mock_executor_instance = mock.MagicMock()
+        mock_executor_instance.execute_earnings_crush_trade.return_value = fake_res
+
+        with mock.patch(
+            "execution.options_paper_executor.OptionsPaperExecutor",
+            return_value=mock_executor_instance,
+        ):
+            result = execute_earnings_crush_trade("NVDA", contracts=2)
+
+        assert result["ok"] is True
+        assert result["net_credit"] is None
 
 
 # ---------------------------------------------------------------------------
