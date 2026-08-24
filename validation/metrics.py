@@ -338,7 +338,7 @@ def probability_of_backtest_overfitting(
     """
     n_paths, n_strategies = in_sample_sharpes.shape
     if n_paths == 0 or n_strategies == 0:
-        return 0.0
+        return float("nan")
 
     overfit_count = 0
     measurable_paths = 0

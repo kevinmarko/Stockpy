@@ -893,6 +893,15 @@ def calculate_equity_curve_metrics(
         # Same degenerate-value guard as sharpe_ratio above -- a near-zero
         # (but not exactly zero) max_drawdown would otherwise let
         # cagr / abs(max_drawdown) explode into an absurd ratio.
+        #
+        # NOTE ON CONVENTION: this is the textbook CAGR-based Calmar
+        # (compounded CAGR / abs(max_drawdown)). validation/harness.py's
+        # Calmar computation instead uses ARITHMETIC-MEAN annualization
+        # (mean(returns) * freq / max_dd, for consistency with that file's
+        # own Sharpe/Sortino convention) -- the two are NOT directly
+        # comparable for the same underlying returns series, since arithmetic-
+        # mean and compounded-CAGR annualization diverge for any non-trivial
+        # (especially volatile) return series.
         if pd.isna(cagr) or abs(max_drawdown) < 1e-12 or pd.isna(max_drawdown):
             calmar_ratio = float("nan")
         else:
