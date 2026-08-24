@@ -1,0 +1,7 @@
+- [x] Investigate why `options_meta_labeler` lacks a retrain button.
+- [x] Update `Models.tsx` to render the button.
+- [x] Wire the button to the correct synchronous API endpoint.
+- [x] Update `mock.ts` with test data.
+- [x] Add regression tests for the button.
+- [x] Fix TestingLibrary multiple-elements-found error in `Models.test.tsx`.
+- [x] Verify typecheck and tests pass.

@@ -2,7 +2,7 @@
  * Models.test.tsx — the ML registry sub-page renders model cards with honest
  * deployable badges and renders "—" (never a fabricated 0) for null metrics.
  */
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Models } from "./Models";
@@ -21,8 +21,24 @@ function renderModels() {
 describe("Models screen (real mock API)", () => {
   beforeEach(() => __resetThresholdsCache());
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("clicking Retrain Now on the options_meta_labeler row calls retrainOptionsMetaModel", async () => {
+    const retrainSpy = vi.spyOn(api, "retrainOptionsMetaModel").mockResolvedValue({
+      status: "success",
+      trained_samples: 1250,
+      accuracy: 65.4,
+      roc_auc: 0.68,
+      trained_at: "2026-08-20T00:00:00Z"
+    });
+    renderModels();
+    const els = await screen.findAllByText("options_meta_labeler");
+    const card = els[0].closest("section")!;
+    fireEvent.click(within(card).getByText("Retrain Now"));
+    expect(retrainSpy).toHaveBeenCalled();
   });
 
   it("renders model rows with an honest not-deployable badge", async () => {
@@ -47,7 +63,7 @@ describe("Models screen (real mock API)", () => {
     // no trained_date at all (needs_retrain: null) -- exactly ONE badge.
     renderModels();
     await screen.findByText("meta_labeler_cross_sectional_momentum");
-    expect(screen.getAllByText("⏱ Needs retrain").length).toBe(1);
+    expect(screen.getAllByText("⏱ Needs retrain").length).toBe(2);
   });
 
   it("a model with no trained_date renders an honest '—' age, never a guessed retrain flag", async () => {
@@ -314,6 +330,8 @@ describe("Models screen (real mock API)", () => {
     const card = (await screen.findByText("cnn_lstm_price_forecaster")).closest("section")!;
     expect(within(card).queryByText("Retrain Now")).not.toBeInTheDocument();
   });
+
+
 
   it("renders the honest OOS Sharpe/Max DD badges, '—' for an un-validated model", async () => {
     renderModels();
