@@ -198,6 +198,44 @@ describe("VolSurface3D Component & Helpers Suite", () => {
       expect(typeof metrics.skew25d).toBe("number");
       expect(typeof metrics.termSlope).toBe("number");
     });
+
+    it("calculateSurfaceMetrics prefers the real backend skew_25delta over the " +
+      "moneyness-proxy recompute when a real volResponse is supplied -- the " +
+      "sibling 2D screen (VolSurfaceView.tsx) renders the backend field under " +
+      "the identical '25-Delta Put-Call Skew' label, so the two must agree", () => {
+        const mesh = buildMeshFromPointsOrResponse(undefined, mockVolResponse);
+
+        // Give the backend a real skew value distinct from whatever the
+        // moneyness proxy recomputes from this same mesh, to prove
+        // preference rather than coincidental agreement.
+        const withoutResponse = calculateSurfaceMetrics(mesh); // no real volResponse -> proxy
+        const proxyValue = withoutResponse.skew25d as number;
+        const divergentResponse: VolSurfaceResponse = {
+          ...mockVolResponse,
+          skew: { ...mockVolResponse.skew, skew_25delta: proxyValue + 0.10 },
+        };
+        const withRealSkew = calculateSurfaceMetrics(mesh, divergentResponse);
+
+        expect(withoutResponse.skew25dIsReal).toBe(false);
+
+        expect(withRealSkew.skew25dIsReal).toBe(true);
+        expect(withRealSkew.skew25d).toBeCloseTo(proxyValue + 0.10, 6); // the real backend value, not the proxy
+        expect(withRealSkew.skew25d).not.toBeCloseTo(proxyValue, 4);
+      });
+
+    it("calculateSurfaceMetrics reports an honest null (never the proxy) when a " +
+      "real volResponse is supplied but its skew_25delta is absent -- a present- " +
+      "but-empty backend field must not silently fall back to a disagreeing proxy", () => {
+        const mesh = buildMeshFromPointsOrResponse(undefined, mockVolResponse);
+        const noSkewResponse: VolSurfaceResponse = {
+          ...mockVolResponse,
+          skew: { ...mockVolResponse.skew, skew_25delta: undefined },
+        };
+
+        const metrics = calculateSurfaceMetrics(mesh, noSkewResponse);
+        expect(metrics.skew25d).toBeNull();
+        expect(metrics.skew25dIsReal).toBe(false);
+      });
   });
 
   describe("Component Mounting, Interactions & Controls", () => {
