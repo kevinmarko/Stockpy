@@ -826,3 +826,45 @@ class TestLoadEnvWatchlist:
         monkeypatch.delenv("WATCHLIST", raising=False)
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == []
+
+    def test_env_var_inline_comment_artifact_is_rejected_not_fetched(self, monkeypatch, tmp_path, caplog):
+        """Regression test for the 2026-08 pipeline hang: python-dotenv does not
+        strip a trailing '# comment' from an unquoted, otherwise-blank value, so
+        WATCHLIST=                    # Plain text comma-separated fallback ticker list
+        sets the real env var to the literal comment text. That text must never
+        be treated as a ticker and handed to a live bars fetch."""
+        from data import portfolio_sync as ps
+
+        monkeypatch.setenv(
+            "WATCHLIST", "# Plain text comma-separated fallback ticker list"
+        )
+        with caplog.at_level("WARNING"):
+            got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
+        assert got == []
+        assert "rejected" in caplog.text
+        assert "PLAIN TEXT COMMA-SEPARATED FALLBACK TICKER LIST" in caplog.text
+
+    def test_env_var_mixed_valid_and_garbage_keeps_only_valid(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.setenv("WATCHLIST", "aapl, # a stray comment fragment, msft")
+        got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
+        assert got == ["AAPL", "MSFT"]
+
+    def test_file_ticker_with_embedded_whitespace_is_rejected(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.delenv("WATCHLIST", raising=False)
+        wl = tmp_path / "watchlist.txt"
+        # A line that survives the '#'-prefix comment filter (doesn't start
+        # with '#') but is obviously not a real ticker.
+        wl.write_text("nvda\nnot a real ticker\ntsla\n")
+        got = ps.load_env_watchlist(str(wl))
+        assert got == ["NVDA", "TSLA"]
+
+    def test_implausibly_long_candidate_is_rejected(self, monkeypatch, tmp_path):
+        from data import portfolio_sync as ps
+
+        monkeypatch.setenv("WATCHLIST", "AAPL," + "X" * 40)
+        got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
+        assert got == ["AAPL"]

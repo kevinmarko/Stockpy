@@ -584,6 +584,37 @@ def read_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+_MAX_PLAUSIBLE_TICKER_LEN = 15
+
+
+def _is_plausible_ticker(candidate: str) -> bool:
+    """Reject a string that can never be a real ticker symbol before it ever
+    reaches a live market-data fetch.
+
+    Deliberately permissive on real ticker shape (short upper-case tokens of
+    letters/digits/``.``/``-``, e.g. ``AAPL``, ``BRK.B``, ``BTC-USD``) --
+    this exists only to catch garbage, not to validate legitimate symbols.
+    It rejects anything containing whitespace or ``#``, or implausibly long.
+
+    Concrete incident this guards against (2026-08): python-dotenv does not
+    strip an inline ``KEY=   # comment`` trailing a blank value the way it
+    strips a whole-line ``# comment`` (verified directly against the
+    installed library) -- so a ``.env`` line like
+    ``WATCHLIST=                    # Plain text comma-separated fallback
+    ticker list`` sets the real ``WATCHLIST`` env var to the literal comment
+    text, not empty. ``load_env_watchlist`` filters `#`-prefixed *lines* from
+    the file source but, before this guard, applied no such filter to the
+    env-var source -- so that comment text was split into one bogus "ticker"
+    and handed straight to a 504-day cold-start bars backfill, hanging the
+    orchestrator daemon on a bad-symbol network fetch for over an hour (no
+    per-symbol timeout bounds that fetch). See
+    ``docs/known_issues/watchlist_env_inline_comment_hang.md``.
+    """
+    if not candidate or len(candidate) > _MAX_PLAUSIBLE_TICKER_LEN:
+        return False
+    return "#" not in candidate and not any(ch.isspace() for ch in candidate)
+
+
 def load_env_watchlist(watchlist_file: str) -> List[str]:
     """Return the union of uppercase tickers from the ``WATCHLIST`` env var and
     a plain-text watchlist file (one ticker per line, ``#`` = comment).
@@ -594,19 +625,30 @@ def load_env_watchlist(watchlist_file: str) -> List[str]:
     drifting. Neither source takes precedence — both are read (when present)
     and merged/deduped, env-var tickers first. Returns ``[]`` when neither
     source is configured; never raises.
+
+    Every candidate from both sources is run through
+    :func:`_is_plausible_ticker` before being added -- a rejected candidate
+    is dropped (dead-letter: logged at WARNING with the exact raw value,
+    never silently swallowed) rather than entering the universe. See that
+    function's docstring for the incident this protects against.
     """
     import os
 
     # dict.fromkeys preserves first-seen order while deduping -- env-var
     # tickers first, then file tickers, matching the order each source is read.
     tickers: Dict[str, None] = {}
+    rejected: List[str] = []
 
     env_val = os.environ.get("WATCHLIST", "").strip()
     if env_val:
         for t in env_val.split(","):
             t = t.strip().upper()
-            if t:
+            if not t:
+                continue
+            if _is_plausible_ticker(t):
                 tickers[t] = None
+            else:
+                rejected.append(t)
 
     wl_path = Path(watchlist_file)
     if wl_path.exists():
@@ -622,7 +664,19 @@ def load_env_watchlist(watchlist_file: str) -> List[str]:
         else:
             logger.info("Loaded %d tickers from %s.", len(file_tickers), watchlist_file)
         for t in file_tickers:
-            tickers[t] = None
+            if _is_plausible_ticker(t):
+                tickers[t] = None
+            else:
+                rejected.append(t)
+
+    if rejected:
+        logger.warning(
+            "load_env_watchlist: rejected %d implausible ticker(s), never fetched: %r. "
+            "If this came from WATCHLIST in .env, check for a trailing inline "
+            "'# comment' on that line -- python-dotenv folds it into the value "
+            "instead of stripping it; move the comment to its own line.",
+            len(rejected), rejected,
+        )
 
     return list(tickers.keys())
 
