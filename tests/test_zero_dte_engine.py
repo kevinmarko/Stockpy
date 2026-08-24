@@ -691,3 +691,129 @@ class TestManageZeroDteExits:
         mock_execute.assert_not_called()
         assert result["reason"] == "no_exit_conditions_triggered"
         assert result["executed_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# PR 872 remediation (Agent 5, Task 1.3): the exit path must close a position
+# under the SAME strategy_id it was opened under, not a re-hardcoded literal.
+# ---------------------------------------------------------------------------
+class TestZeroDteExitStrategyIdAttribution:
+    """A 0DTE position opened under a custom strategy_name must be closed
+    (via evaluate_0dte_exits -> execute_0dte_exits, the manage_0dte_exits
+    composition) under that SAME strategy_id -- not re-hardcoded to the
+    literal "0DTE Momentum Breakout", which would silently break per-strategy
+    Kelly attribution for any non-default-named 0DTE strategy instance."""
+
+    def test_open_then_close_preserves_custom_strategy_id_end_to_end(self):
+        from data.paper_account_store import PaperAccountStore, PaperOrder
+        from data.paper_account_store import session_scope
+
+        store = PaperAccountStore(db_url="sqlite:///:memory:")
+        custom_name = "My Custom 0DTE Variant"
+
+        open_res = execute_0dte_trade(
+            symbol="SPY",
+            side="buy",
+            strike=500.0,
+            expiration="2026-08-14",
+            contracts=1,
+            store=store,
+            quote_price=2.00,
+            strategy_name=custom_name,
+        )
+        assert open_res["ok"] is True
+
+        positions = store.get_open_positions()
+        assert len(positions) == 1
+        assert positions[0].strategy_id == custom_name
+
+        exits = evaluate_0dte_exits(
+            positions=positions,
+            current_time_str="15:45",
+            current_quotes={"SPY 2026-08-14 $500.00 CALL": 2.20},
+        )
+        assert len(exits) == 1
+        # The exit signal itself must carry the real strategy_id forward,
+        # not the historical-default literal.
+        assert exits[0].strategy_id == custom_name
+
+        exec_res = execute_0dte_exits(exits, store=store)
+        assert exec_res["executed_count"] == 1
+        closing_order_id = exec_res["executed"][0]["order_id"]
+
+        with session_scope(store.Session) as session:
+            closing_order = (
+                session.query(PaperOrder)
+                .filter_by(client_order_id=closing_order_id)
+                .one()
+            )
+            assert closing_order.strategy_id == custom_name
+
+    def test_default_strategy_name_still_closes_under_default_literal(self):
+        """Backward-compat: a position opened WITHOUT a custom strategy_name
+        (the default '0DTE Momentum Breakout') still closes under that same
+        default -- the fix doesn't change today's default-path behavior."""
+        from data.paper_account_store import PaperAccountStore, PaperOrder
+        from data.paper_account_store import session_scope
+
+        store = PaperAccountStore(db_url="sqlite:///:memory:")
+
+        execute_0dte_trade(
+            symbol="SPY", side="buy", strike=500.0, expiration="2026-08-14",
+            contracts=1, store=store, quote_price=2.00,
+        )
+        positions = store.get_open_positions()
+        assert positions[0].strategy_id == "0DTE Momentum Breakout"
+
+        exits = evaluate_0dte_exits(
+            positions=positions,
+            current_time_str="15:45",
+            current_quotes={"SPY 2026-08-14 $500.00 CALL": 2.20},
+        )
+        assert exits[0].strategy_id == "0DTE Momentum Breakout"
+
+        exec_res = execute_0dte_exits(exits, store=store)
+        closing_order_id = exec_res["executed"][0]["order_id"]
+
+        with session_scope(store.Session) as session:
+            closing_order = (
+                session.query(PaperOrder)
+                .filter_by(client_order_id=closing_order_id)
+                .one()
+            )
+            assert closing_order.strategy_id == "0DTE Momentum Breakout"
+
+    def test_execute_0dte_exits_reads_strategy_id_off_dict_directive(self):
+        """execute_0dte_exits also accepts plain dict exit directives (not
+        just ZeroDteExitSignal objects) -- a dict carrying an explicit
+        strategy_id must be honored too, not overridden by the hardcoded
+        literal."""
+        from data.paper_account_store import PaperAccountStore, PaperOrder
+        from data.paper_account_store import session_scope
+
+        store = PaperAccountStore(db_url="sqlite:///:memory:")
+        execute_0dte_trade(
+            symbol="SPY", side="buy", strike=500.0, expiration="2026-08-14",
+            contracts=1, store=store, quote_price=2.00,
+            strategy_name="Dict-Path Strategy",
+        )
+
+        directive = {
+            "contract_symbol": "SPY 2026-08-14 $500.00 CALL",
+            "side": "sell",
+            "qty": 1,
+            "current_price": 2.20,
+            "exit_reason": "MANUAL_TEST_EXIT",
+            "strategy_id": "Dict-Path Strategy",
+        }
+        exec_res = execute_0dte_exits([directive], store=store)
+        assert exec_res["executed_count"] == 1
+        closing_order_id = exec_res["executed"][0]["order_id"]
+
+        with session_scope(store.Session) as session:
+            closing_order = (
+                session.query(PaperOrder)
+                .filter_by(client_order_id=closing_order_id)
+                .one()
+            )
+            assert closing_order.strategy_id == "Dict-Path Strategy"

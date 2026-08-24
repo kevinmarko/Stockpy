@@ -296,66 +296,98 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
     else:
         row["GARCH_Vol"] = float("nan")
 
-    # Paper Execution & Meta-Labeling Features
-    row["paper_order_count_30d"] = float("nan")
-    row["paper_size_variance_30d"] = float("nan")
-    row["paper_size_vs_kelly_ratio_30d"] = float("nan")
-    row["paper_hit_rate_30d"] = float("nan")
-    row["paper_avg_realized_pnl_30d"] = float("nan")
-    row["paper_fill_rate_30d"] = float("nan")
-    row["paper_has_history_30d"] = 0.0
-
-    if paper_orders is not None and not paper_orders.empty and symbol and as_of_date:
-        as_of_naive = as_of_date.tz_localize(None) if as_of_date.tz is not None else as_of_date
-        start_date = as_of_naive - pd.Timedelta(days=30)
-        
-        mask = (
-            (paper_orders["symbol"] == symbol) & 
-            (paper_orders["timestamp"] < as_of_naive) & 
-            (paper_orders["timestamp"] >= start_date)
-        )
-        slice_orders = paper_orders[mask]
-        
-        if len(slice_orders) > 0:
-            row["paper_has_history_30d"] = 1.0
-            
-            # Conviction & Sizing consistency
-            row["paper_order_count_30d"] = float(len(slice_orders))
-            if len(slice_orders) >= 2:
-                row["paper_size_variance_30d"] = float(slice_orders["qty"].var(ddof=1))
-            else:
-                row["paper_size_variance_30d"] = 0.0
-                
-            total_qty = slice_orders["qty"].sum()
-            filled_qty = slice_orders["filled_qty"].sum()
-            if total_qty > 0:
-                row["paper_fill_rate_30d"] = float(filled_qty / total_qty)
-
-            if "target_qty" in slice_orders.columns:
-                target_qty = slice_orders["target_qty"].sum()
-                if target_qty > 0:
-                    row["paper_size_vs_kelly_ratio_30d"] = float(total_qty / target_qty)
-
-            # Outcome-Based Meta-Labeling
-            if paper_closed_trades is not None and not paper_closed_trades.empty:
-                trade_mask = (
-                    (paper_closed_trades["symbol"] == symbol) & 
-                    (paper_closed_trades["exit_ts"] < as_of_naive) & 
-                    (paper_closed_trades["exit_ts"] >= start_date)
-                )
-                slice_trades = paper_closed_trades[trade_mask]
-                if not slice_trades.empty:
-                    # Both outcome features must share the same basis --
-                    # net-of-commission realized_pnl -- so a trade can't count
-                    # as a loss for the hit rate while still pulling the
-                    # average up as a gain (realized_pnl_pct is gross, no
-                    # commission; mixing the two produced exactly that
-                    # inconsistency). See PR 872 remediation.
-                    hits = (slice_trades["realized_pnl"] > 0).sum()
-                    row["paper_hit_rate_30d"] = float(hits / len(slice_trades))
-                    row["paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl"].mean())
+    # Paper Execution & Meta-Labeling Features -- delegated to the shared
+    # helper _paper_features_for_symbol() so this training-panel path and
+    # populate_live_paper_features()'s live-inference path can never silently
+    # re-diverge (both used to duplicate this exact mask/aggregation logic;
+    # the net-of-commission realized_pnl fix below had to be hand-applied to
+    # both copies independently before this refactor -- see PR 872
+    # remediation and docs/known_issues/paper_trade_strategy_id_vocabulary.md
+    # for the broader attribution-vocabulary context).
+    row.update(_paper_features_for_symbol(symbol, as_of_date, paper_orders, paper_closed_trades))
 
     return row
+
+
+def _paper_features_for_symbol(
+    symbol: Optional[str],
+    as_of_date: Optional[pd.Timestamp],
+    paper_orders: Optional[pd.DataFrame],
+    paper_closed_trades: Optional[pd.DataFrame],
+) -> dict:
+    """Computes the 7 ``paper_*`` feature values for one symbol as of one date.
+
+    Shared by :func:`_pit_ticker_row` (the training-panel/PIT-snapshot path)
+    and :func:`populate_live_paper_features` (the live-inference path) --
+    the SAME underlying computation, so a future fix only needs to land once.
+    Every value is ``NaN``/``0.0`` (never fabricated -- CONSTRAINT #4) when
+    ``symbol``/``as_of_date`` is missing or no paper-order history exists in
+    the trailing 30-day window.
+    """
+    out: dict[str, float] = {
+        "paper_order_count_30d": float("nan"),
+        "paper_size_variance_30d": float("nan"),
+        "paper_size_vs_kelly_ratio_30d": float("nan"),
+        "paper_hit_rate_30d": float("nan"),
+        "paper_avg_realized_pnl_30d": float("nan"),
+        "paper_fill_rate_30d": float("nan"),
+        "paper_has_history_30d": 0.0,
+    }
+
+    if paper_orders is None or paper_orders.empty or not symbol or as_of_date is None:
+        return out
+
+    as_of_naive = as_of_date.tz_localize(None) if as_of_date.tz is not None else as_of_date
+    start_date = as_of_naive - pd.Timedelta(days=30)
+
+    mask = (
+        (paper_orders["symbol"] == symbol) &
+        (paper_orders["timestamp"] < as_of_naive) &
+        (paper_orders["timestamp"] >= start_date)
+    )
+    slice_orders = paper_orders[mask]
+
+    if len(slice_orders) == 0:
+        return out
+
+    out["paper_has_history_30d"] = 1.0
+
+    # Conviction & Sizing consistency
+    out["paper_order_count_30d"] = float(len(slice_orders))
+    if len(slice_orders) >= 2:
+        out["paper_size_variance_30d"] = float(slice_orders["qty"].var(ddof=1))
+    else:
+        out["paper_size_variance_30d"] = 0.0
+
+    total_qty = slice_orders["qty"].sum()
+    filled_qty = slice_orders["filled_qty"].sum()
+    if total_qty > 0:
+        out["paper_fill_rate_30d"] = float(filled_qty / total_qty)
+
+    if "target_qty" in slice_orders.columns:
+        target_qty = slice_orders["target_qty"].sum()
+        if target_qty > 0:
+            out["paper_size_vs_kelly_ratio_30d"] = float(total_qty / target_qty)
+
+    # Outcome-Based Meta-Labeling
+    if paper_closed_trades is not None and not paper_closed_trades.empty:
+        trade_mask = (
+            (paper_closed_trades["symbol"] == symbol) &
+            (paper_closed_trades["exit_ts"] < as_of_naive) &
+            (paper_closed_trades["exit_ts"] >= start_date)
+        )
+        slice_trades = paper_closed_trades[trade_mask]
+        if not slice_trades.empty:
+            # Both outcome features must share the same basis -- net-of-
+            # commission realized_pnl -- so a trade can't count as a loss for
+            # the hit rate while still pulling the average up as a gain
+            # (realized_pnl_pct is gross, no commission; mixing the two
+            # produced exactly that inconsistency). See PR 872 remediation.
+            hits = (slice_trades["realized_pnl"] > 0).sum()
+            out["paper_hit_rate_30d"] = float(hits / len(slice_trades))
+            out["paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl"].mean())
+
+    return out
 
 
 # Raw PIT-fundamental keys HistoricalStore.get_fundamentals_asof() returns
@@ -399,70 +431,48 @@ def _pit_fundamentals_for_symbol(symbol: str, as_of_date, store) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
+_PAPER_FEATURE_COLS = (
+    "paper_order_count_30d", "paper_size_variance_30d",
+    "paper_size_vs_kelly_ratio_30d", "paper_hit_rate_30d",
+    "paper_avg_realized_pnl_30d", "paper_fill_rate_30d",
+    "paper_has_history_30d",
+)
+
+
 def populate_live_paper_features(dashboard_df: pd.DataFrame, as_of_date: pd.Timestamp) -> None:
-    """Populates the 6 paper_* columns in the live dashboard_df for ML inference."""
+    """Populates the 7 paper_* columns in the live dashboard_df for ML inference.
+
+    Per-symbol computation is delegated to :func:`_paper_features_for_symbol`
+    -- the SAME helper :func:`_pit_ticker_row` (the training-panel path)
+    uses -- so this live-inference path and the training path can never
+    silently re-diverge (see that function's own docstring; PR 872
+    remediation had to hand-apply an identical fix to both copies before
+    this refactor existed).
+
+    Must be called BEFORE ``global_registry.run_pre_compute()`` /
+    ``build_pit_feature_matrix()`` read ``dashboard_df`` downstream --
+    calling it after either of those is a train/serve-skew no-op, since the
+    six ``paper_*`` columns wouldn't exist yet at the point they're read
+    (see pipeline/production_steps.py::StrategyEvalStep and
+    docs/known_issues/ for the incident this fixes).
+    """
     paper_orders = _load_all_paper_orders()
     paper_closed_trades = _load_all_paper_closed_trades()
-    
-    # Initialize columns with NaN
-    for col in [
-        "paper_order_count_30d", "paper_size_variance_30d", 
-        "paper_size_vs_kelly_ratio_30d", "paper_hit_rate_30d", 
-        "paper_avg_realized_pnl_30d", "paper_fill_rate_30d", 
-        "paper_has_history_30d"
-    ]:
-        dashboard_df[col] = float("nan")
-        if col == "paper_has_history_30d":
-            dashboard_df[col] = 0.0
+
+    # Initialize columns with NaN (0.0 for the has-history flag)
+    for col in _PAPER_FEATURE_COLS:
+        dashboard_df[col] = 0.0 if col == "paper_has_history_30d" else float("nan")
 
     if paper_orders is None or paper_orders.empty:
         return
-        
-    as_of_naive = as_of_date.tz_localize(None) if as_of_date.tz is not None else as_of_date
-    start_date = as_of_naive - pd.Timedelta(days=30)
-    
-    for symbol in dashboard_df['Symbol'].unique():
-        mask = (
-            (paper_orders["symbol"] == symbol) & 
-            (paper_orders["timestamp"] < as_of_naive) & 
-            (paper_orders["timestamp"] >= start_date)
-        )
-        slice_orders = paper_orders[mask]
-        
-        if len(slice_orders) > 0:
-            idx = dashboard_df['Symbol'] == symbol
-            dashboard_df.loc[idx, "paper_has_history_30d"] = 1.0
-            dashboard_df.loc[idx, "paper_order_count_30d"] = float(len(slice_orders))
-            
-            if len(slice_orders) >= 2:
-                dashboard_df.loc[idx, "paper_size_variance_30d"] = float(slice_orders["qty"].var(ddof=1))
-            else:
-                dashboard_df.loc[idx, "paper_size_variance_30d"] = 0.0
-                
-            total_qty = slice_orders["qty"].sum()
-            filled_qty = slice_orders["filled_qty"].sum()
-            if total_qty > 0:
-                dashboard_df.loc[idx, "paper_fill_rate_30d"] = float(filled_qty / total_qty)
 
-            if "target_qty" in slice_orders.columns:
-                target_qty = slice_orders["target_qty"].sum()
-                if target_qty > 0:
-                    dashboard_df.loc[idx, "paper_size_vs_kelly_ratio_30d"] = float(total_qty / target_qty)
-                    
-            if paper_closed_trades is not None and not paper_closed_trades.empty:
-                trade_mask = (
-                    (paper_closed_trades["symbol"] == symbol) & 
-                    (paper_closed_trades["exit_ts"] < as_of_naive) & 
-                    (paper_closed_trades["exit_ts"] >= start_date)
-                )
-                slice_trades = paper_closed_trades[trade_mask]
-                if not slice_trades.empty:
-                    # Same net-of-commission basis for both features -- see
-                    # the identical comment in _pit_ticker_row above (PR 872
-                    # remediation).
-                    hits = (slice_trades["realized_pnl"] > 0).sum()
-                    dashboard_df.loc[idx, "paper_hit_rate_30d"] = float(hits / len(slice_trades))
-                    dashboard_df.loc[idx, "paper_avg_realized_pnl_30d"] = float(slice_trades["realized_pnl"].mean())
+    for symbol in dashboard_df['Symbol'].unique():
+        feats = _paper_features_for_symbol(symbol, as_of_date, paper_orders, paper_closed_trades)
+        if feats["paper_has_history_30d"] == 0.0:
+            continue  # no paper-order history for this symbol -- leave the NaN/0.0 initialization
+        idx = dashboard_df['Symbol'] == symbol
+        for col, val in feats.items():
+            dashboard_df.loc[idx, col] = val
 
 def _empty_panel(universe) -> Tuple[pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
     """Return correctly-shaped empty (X, y, t1, price_history)."""

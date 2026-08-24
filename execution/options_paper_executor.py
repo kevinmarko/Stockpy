@@ -1153,7 +1153,22 @@ class OptionsPaperExecutor:
                     legs=closing_legs,
                     net_cash_impact=net_cash_impact,
                     commission_and_fees=commission,
-                    strategy_id=trade["positions"][0].get("strategy_id", "Earnings Crush"),
+                    # `.get(..., "Earnings Crush")` is NOT safe here: dict.get's
+                    # default only fires when the key is absent, not when its
+                    # value is explicitly falsy -- and a real PaperPosition row
+                    # queried above (`"strategy_id": p.strategy_id` a few dozen
+                    # lines up) can legitimately carry a falsy strategy_id (an
+                    # empty string; PaperPosition.strategy_id's NOT NULL
+                    # composite-PK constraint rules out a real None specifically,
+                    # but not ""). Every trade reaching this close path was found
+                    # via ec_order_legs, itself filtered to
+                    # PaperOrder.strategy_id == "Earnings Crush" (or a
+                    # client_order_id matching "EC-%") -- so a falsy value here
+                    # never means "some other real strategy," only "the tag
+                    # didn't round-trip onto the position row"; `or` correctly
+                    # falls back to the one strategy identity this closing flow
+                    # can ever apply to.
+                    strategy_id=trade["positions"][0].get("strategy_id") or "Earnings Crush",
                     pilot_id=trade["positions"][0].get("pilot_id"),
                     experiment_arm=trade["positions"][0].get("experiment_arm"),
                 )

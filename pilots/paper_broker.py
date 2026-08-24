@@ -152,6 +152,14 @@ def execute_roll(
     store = PaperAccountStore()
     client_order_id = f"ROLL-{symbol}-{int(datetime.now(timezone.utc).timestamp())}"
 
+    # "Manual Trade" is intentional here, not a placeholder: execute_roll has
+    # no strategy_id/strategy_name parameter of its own, and neither does its
+    # one caller (POST /pilots/paper-broker/roll's RollOrderRequest) or the
+    # webapp's PaperBroker.tsx roll dialog, which only ever sends
+    # symbol/close_legs/open_legs/limit_price/contracts -- this is the
+    # operator manually rolling a position from the Paper Broker screen, with
+    # no automated-strategy context to thread through (see docs/known_issues/
+    # paper_trade_strategy_id_vocabulary.md).
     success = store.apply_roll_fill(
         client_order_id=client_order_id,
         symbol=symbol,
