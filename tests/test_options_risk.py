@@ -134,16 +134,27 @@ def test_calculate_black_scholes_greeks_0dte_fallback():
     assert g_call_itm["theta_daily"] == 0.0
     assert g_call_itm["vega_1pct"] == 0.0
     assert g_call_itm["price"] == 5.0
+    # 0DTE must still carry the rho keys (textbook rho = 0.0 for an expiring option) --
+    # a future caller that unconditionally reads bs["rho"] must not KeyError on 0DTE.
+    assert g_call_itm["rho"] == 0.0
+    assert g_call_itm["rho_1pct"] == 0.0
+    assert g_call_itm["rho_raw"] == 0.0
 
     # OTM Call at expiration
     g_call_otm = calculate_black_scholes_greeks(145.0, strike, t_years=0.0, sigma=0.25, option_type="call")
     assert g_call_otm["delta"] == 0.0
     assert g_call_otm["price"] == 0.0
+    assert g_call_otm["rho"] == 0.0
+    assert g_call_otm["rho_1pct"] == 0.0
+    assert g_call_otm["rho_raw"] == 0.0
 
     # ITM Put at expiration
     g_put_itm = calculate_black_scholes_greeks(140.0, strike, t_years=0.0, sigma=0.25, option_type="put")
     assert g_put_itm["delta"] == -1.0
     assert g_put_itm["price"] == 10.0
+    assert g_put_itm["rho"] == 0.0
+    assert g_put_itm["rho_1pct"] == 0.0
+    assert g_put_itm["rho_raw"] == 0.0
 
 
 def test_calculate_black_scholes_greeks_degenerate_volatility():
@@ -152,6 +163,18 @@ def test_calculate_black_scholes_greeks_degenerate_volatility():
     assert g["gamma"] == 0.0
     assert g["theta_daily"] == 0.0
     assert g["vega_1pct"] == 0.0
+
+
+def test_black_scholes_greeks_return_shape_consistent_across_branches():
+    """The 0DTE, degenerate-sigma, and main-computation branches must return dicts with the
+    identical key set. A prior bug omitted rho/rho_1pct/rho_raw from the 0DTE branch only,
+    which would KeyError any future caller doing bs["rho"] unconditionally on a 0DTE option."""
+    g_0dte = calculate_black_scholes_greeks(spot=150.0, strike=150.0, t_years=0.0, sigma=0.25, option_type="call")
+    g_degenerate_sigma = calculate_black_scholes_greeks(spot=150.0, strike=150.0, t_years=0.1, sigma=1e-15, option_type="call")
+    g_main = calculate_black_scholes_greeks(spot=150.0, strike=150.0, t_years=30.0 / 365.0, sigma=0.25, option_type="call")
+
+    assert set(g_0dte.keys()) == set(g_degenerate_sigma.keys()) == set(g_main.keys())
+    assert "rho" in g_0dte and "rho_1pct" in g_0dte and "rho_raw" in g_0dte
 
 
 def test_calculate_portfolio_greeks_missing_data_exclusion():

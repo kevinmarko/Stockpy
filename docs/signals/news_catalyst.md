@@ -282,6 +282,15 @@ Notes:
 | No headlines in lookback window | score = 0.0 (no news ≠ neutral news, but we treat it as neutral to avoid punishing quiet periods). |
 | Symbol with no coverage from either provider | empty news list → score = 0.0. |
 
+`SignalOutput.confidence` (diagnostics/LLM-commentary-facing only — not consumed by
+`SignalAggregator`'s weighted-sum trading math) reports `0.75` when the symbol had a genuinely
+scored headline this cycle, `0.5` otherwise (no provider configured, symbol absent from the
+universe, or a real zero-headline/fetch-error day). It is derived from `self._news_archive_scores`
+— the archive-only score `NewsCatalystSignal.__init__` documents as staying genuinely `NaN` exactly
+on a zero-headline/fetch-error day (see `_score_via_provider`) — not from mere presence in
+`self._news_scores`, which is always populated with a deliberate `0.0` fallback once a provider is
+configured, so presence alone can't distinguish a real quiet day from a fabricated neutral one.
+
 ---
 
 ## Multi-Source Credibility Blend
@@ -314,7 +323,11 @@ rather than one blended number that would overstate confidence in the weaker com
 `pre_compute()` additionally reads the current trading day's aggregate from
 `HistoricalStore.get_sentiment_aggregate_by_symbol()` — populated at ingest time by
 `data/sentiment_sources.py`'s `CompositeSentimentSource` (Yahoo RSS/GDELT/Reddit/EDGAR/Finnhub/FMP
-documents, deduplicated, trading-day-rolled — `FMPNewsSource`, `name="fmp_news"`, is opt-in via
+documents, deduplicated twice — an exact within-source hash plus a cross-source Jaccard
+fuzzy-title pass so the same wire story picked up by two different sources (e.g. Yahoo RSS and
+Google News both carrying an identical headline) doesn't double-count, scoped per trading-day so
+the same story on two different days is real, distinct coverage; see `CompositeSentimentSource
+.fetch_all()`'s own docstring for the mechanics — `FMPNewsSource`, `name="fmp_news"`, is opt-in via
 `SENTIMENT_SOURCES` alongside `FinnhubSentimentSource`, `name="finnhub"`, neither in the default)
 and `signals/credibility.py`'s per-document
 credibility scoring (`S_authority`/`S_humanity`/`S_verification` sub-scores → a

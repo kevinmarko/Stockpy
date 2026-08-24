@@ -758,6 +758,10 @@ class TestSignalCompute:
     def test_compute_reads_cached_score(self):
         sig = _make_signal()
         sig._news_scores = {"AAPL": 0.75}
+        # A real-headline day: _news_archive_scores holds the same value
+        # _score_via_provider would have archived (see confidence honesty
+        # tests below for the zero-headline-day counterpart).
+        sig._news_archive_scores = {"AAPL": 0.75}
         sig._earnings_dt = {"AAPL": None}
         out = sig.compute(self._make_row("AAPL"), _make_context())
         assert abs(out.score - 0.75) < 1e-6
@@ -768,6 +772,68 @@ class TestSignalCompute:
         out = sig.compute(self._make_row("TSLA"), _make_context())
         assert out.score == 0.0
         assert out.confidence == 0.5
+
+    def test_compute_confidence_reflects_genuine_headlines_not_mere_presence(self):
+        """CONSTRAINT #4 honesty fix: confidence must distinguish a real
+        scored-headline day from a zero-headline/fetch-error day that merely
+        fell back to the deliberate 0.0 neutral -- `symbol in self._news_scores`
+        alone can't tell those apart, since _news_scores is always populated
+        once a provider is configured. _news_archive_scores is the honest
+        signal (NaN exactly on a zero-headline/fetch-error day)."""
+        sig = _make_signal()
+        # Mirrors _score_via_provider's own zero-headline fallback: live
+        # score stays a safe finite neutral, archive score stays NaN.
+        sig._news_scores = {"AAPL": 0.0}
+        sig._news_archive_scores = {"AAPL": float("nan")}
+        sig._earnings_dt = {"AAPL": None}
+        out = sig.compute(self._make_row("AAPL"), _make_context())
+        assert out.confidence == 0.5
+
+    def test_compute_confidence_high_on_genuine_headline_day(self):
+        """Counterpart to the zero-headline case above: a real archived
+        score (non-NaN) reports the higher confidence."""
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.42}
+        sig._news_archive_scores = {"AAPL": 0.42}
+        sig._earnings_dt = {"AAPL": None}
+        out = sig.compute(self._make_row("AAPL"), _make_context())
+        assert out.confidence == 0.75
+
+    def test_compute_social_score_nan_degrades_to_headline_only(self):
+        """Defensive NaN guard: an unguarded read of
+        credibility_weighted_sentiment could propagate NaN into
+        SignalOutput.score, corrupting final_score for every other signal
+        module this cycle via the aggregator's unguarded score*weight
+        multiply. A NaN social score must degrade to the headline-only
+        score, mirroring _build_archive_scores' existing guard on the same
+        field."""
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.4}
+        sig._news_archive_scores = {"AAPL": 0.4}
+        sig._earnings_dt = {"AAPL": None}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": float("nan")}
+        }
+        out = sig.compute(self._make_row("AAPL"), _make_context())
+        assert not math.isnan(out.score)
+        assert abs(out.score - 0.4) < 1e-6
+        assert "social blend" not in out.explanation
+
+    def test_compute_social_score_finite_still_blends(self):
+        """No-regression sanity check: a genuine finite social score still
+        blends exactly as before the NaN guard was added."""
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.4}
+        sig._news_archive_scores = {"AAPL": 0.4}
+        sig._earnings_dt = {"AAPL": None}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": 0.8}
+        }
+        with patch("settings.settings.SENTIMENT_SOCIAL_BLEND_WEIGHT", 0.4):
+            out = sig.compute(self._make_row("AAPL"), _make_context())
+        expected = 0.6 * 0.4 + 0.4 * 0.8
+        assert abs(out.score - expected) < 1e-6
+        assert "social blend" in out.explanation
 
     def test_compute_negative_score(self):
         sig = _make_signal()
