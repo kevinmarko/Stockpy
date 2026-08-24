@@ -31,13 +31,21 @@ def get_positions() -> List[Dict[str, Any]]:
             "current_price": current_price,
             "market_value": p.market_value,
             "unrealized_pl": p.unrealized_pl,
-            "unrealized_pl_pct": unrealized_pl_pct
+            "unrealized_pl_pct": unrealized_pl_pct,
+            "strategy_id": p.strategy_id,
+            "pilot_id": p.pilot_id,
+            "experiment_arm": p.experiment_arm,
         })
     return results
 
 def get_orders(status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
     store = PaperAccountStore(readonly=True)
     return store.get_full_orders(status=status, limit=limit)
+
+def get_closed_trades(symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Realized-PnL history for flattened/expired/rolled paper positions."""
+    store = PaperAccountStore(readonly=True)
+    return store.get_full_closed_trades(symbol=symbol, limit=limit)
 
 def execute_paper_order(
     symbol: str,
