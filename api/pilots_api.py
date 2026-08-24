@@ -5778,6 +5778,12 @@ def get_paper_broker_orders(status: Optional[str] = None, limit: int = 100) -> L
     from pilots.paper_broker import get_orders
     return get_orders(status=status, limit=limit)
 
+@app.get("/pilots/paper-broker/closed-trades", dependencies=[Depends(require_read_token)])
+def get_paper_broker_closed_trades(symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Realized-PnL history for flattened/expired/rolled paper positions."""
+    from pilots.paper_broker import get_closed_trades
+    return get_closed_trades(symbol=symbol, limit=limit)
+
 @app.post("/pilots/paper-broker/reset", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
 def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> Dict[str, Any]:
     from data.paper_account_store import PaperAccountStore

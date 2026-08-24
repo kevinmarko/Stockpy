@@ -4008,6 +4008,9 @@ export interface PaperBrokerPosition {
   market_value: number | null;
   unrealized_pl: number | null;
   unrealized_pl_pct: number | null;
+  strategy_id: string | null;
+  pilot_id: string | null;
+  experiment_arm: string | null;
 }
 
 export interface PaperBrokerOrder {
@@ -4020,6 +4023,34 @@ export interface PaperBrokerOrder {
   filled_qty: number;
   filled_avg_price: number | null;
   created_at: string;
+  strategy_id: string | null;
+  pilot_id: string | null;
+  experiment_arm: string | null;
+}
+
+// Realized-PnL history for a flattened/expired/rolled paper position --
+// read path for paper_closed_trades (see data/paper_account_store.py's
+// PaperClosedTrade / get_full_closed_trades). realized_pnl_pct and
+// holding_period_days are genuinely nullable (CONSTRAINT #4 -- never
+// fabricated to 0/0.0 on a degenerate avg_entry_price).
+export interface PaperBrokerClosedTrade {
+  trade_id: number;
+  strategy_id: string | null;
+  pilot_id: string | null;
+  experiment_arm: string | null;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  entry_ts: string | null;
+  entry_price: number;
+  exit_ts: string;
+  exit_price: number;
+  commission: number;
+  realized_pnl: number;
+  realized_pnl_pct: number | null;
+  holding_period_days: number | null;
+  close_reason: string;
+  leg_group_id: string | null;
 }
 
 export interface PaperBrokerResetResult {
