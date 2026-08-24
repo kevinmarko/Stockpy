@@ -27,7 +27,7 @@ The four factors and their priors:
 | Factor | Variable | Prior (Hou-Xue-Zhang) |
 |--------|----------|----------------------|
 | **Value** | Book-to-market + earnings yield | High value → higher returns |
-| **Quality** | ROE + operating margin | High quality → higher returns (Asness, Frazzini & Pedersen 2019) |
+| **Quality** | Mean of available {ROE, operating margin, gross margin} | High quality → higher returns (Asness, Frazzini & Pedersen 2019) |
 | **Low Volatility** | −realized vol (60-day) | Low vol → higher risk-adjusted returns (Frazzini & Pedersen 2014) |
 | **Size** | −log(market cap) | Smaller → higher expected returns (Fama & French 1993) |
 
@@ -67,8 +67,11 @@ preserving relative ordering while bounding extremes.
 book_to_market = 1 / pb_ratio        # NaN if pb_ratio unavailable
 earnings_yield = 1 / pe_ratio        # NaN if pe_ratio unavailable
 
-# Quality
-quality_factor_score = 0.5 * roe + 0.5 * operating_margin   # or −debt_to_equity fallback
+# Quality = mean of whichever of {roe, operating_margin, gross_margin} are
+# available this cycle (skip missing, never treat a missing one as 0.0);
+# falls back to -debt_to_equity only when none of the three are present.
+quality_factor_score = mean(available_among(roe, operating_margin, gross_margin))
+# or -debt_to_equity if none of the three are available
 
 # Low-Vol (negative realised vol → lower vol = positive score)
 low_vol_score = −realized_vol_60d
