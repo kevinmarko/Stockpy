@@ -203,8 +203,9 @@ def test_resolve_registry_path_priorities(tmp_path, monkeypatch):
 def test_model_registry_rows_self_healing(tmp_path, monkeypatch):
     """Self-healing discovery: if a newer dated .pkl exists in LOCAL_DATA_ROOT/ml_models,
     model_registry_rows surfaces the real artifact date and calculates freshness."""
-    from settings import settings
+    from ml import registry_io
     from pilots.models import model_registry_rows
+    from settings import settings
 
     fake_local = tmp_path / "stockpy_local"
     models_dir = fake_local / "ml_models"
@@ -230,6 +231,21 @@ models:
     (models_dir / "lgbm_20260814.pkl").write_text("binary", encoding="utf-8")
 
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+    # Isolate from the real, git-tracked ml/registry.yaml (its trained_date changes
+    # over time as models are retrained, which would otherwise win the smart-merge
+    # against this test's local fixture whenever it's newer). Intercept the repo-side
+    # read (rather than repointing _DEFAULT_REGISTRY_PATH itself, which would also
+    # flip load_registry's is_in_repo check and silently fall back to re-reading the
+    # real file via a hardcoded relative path) so lgbm_ranker is absent from repo_data
+    # and this test only ever exercises local self-healing.
+    _real_load_yaml_file = registry_io._load_yaml_file
+
+    def _fake_load_yaml_file(path):
+        if path == registry_io._DEFAULT_REGISTRY_PATH:
+            return {"models": {}}
+        return _real_load_yaml_file(path)
+
+    monkeypatch.setattr(registry_io, "_load_yaml_file", _fake_load_yaml_file)
 
     rows = model_registry_rows()
     row = next(r for r in rows if r["name"] == "lgbm_ranker")
@@ -240,8 +256,9 @@ models:
 def test_model_registry_rows_unvalidated_artifact_resets_metrics(tmp_path, monkeypatch):
     """If a new .pkl exists on disk whose filename does not match the registry's validated
     artifact_file, the row surfaces the new date but resets metrics to None (CONSTRAINT #4)."""
-    from settings import settings
+    from ml import registry_io
     from pilots.models import model_registry_rows
+    from settings import settings
 
     fake_local = tmp_path / "stockpy_local"
     models_dir = fake_local / "ml_models"
@@ -265,6 +282,16 @@ models:
     # New artifact on disk with different filename/date
     (models_dir / "lgbm_20260815.pkl").write_text("binary", encoding="utf-8")
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+    # Isolate from the real, git-tracked ml/registry.yaml (see comment in
+    # test_model_registry_rows_self_healing above).
+    _real_load_yaml_file = registry_io._load_yaml_file
+
+    def _fake_load_yaml_file(path):
+        if path == registry_io._DEFAULT_REGISTRY_PATH:
+            return {"models": {}}
+        return _real_load_yaml_file(path)
+
+    monkeypatch.setattr(registry_io, "_load_yaml_file", _fake_load_yaml_file)
 
     rows = model_registry_rows()
     row = next(r for r in rows if r["name"] == "lgbm_ranker")
@@ -276,8 +303,9 @@ models:
 
 def test_load_registry_smart_merge_git_newer(tmp_path, monkeypatch):
     """When git-tracked registry has a newer model than LOCAL_DATA_ROOT, git entry wins."""
-    from settings import settings
+    from ml import registry_io
     from ml.registry_io import load_registry
+    from settings import settings
 
     fake_local = tmp_path / "stockpy_local"
     models_dir = fake_local / "ml_models"
@@ -299,7 +327,35 @@ models:
 
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
 
-    # load_registry merges with repo _DEFAULT_REGISTRY_PATH (which has 2026-08-14)
+    # Use an explicit, self-contained "git" fixture instead of the real, evolving
+    # ml/registry.yaml — that file's trained_date changes every retrain and this
+    # test only needs to prove "the newer of the two dates wins the merge". Intercept
+    # the repo-side read rather than repointing _DEFAULT_REGISTRY_PATH itself, which
+    # would also flip load_registry's is_in_repo check and silently fall back to
+    # re-reading the real file via a hardcoded relative path (see comment in
+    # test_model_registry_rows_self_healing above).
+    fake_repo_data = {
+        "models": {
+            "lgbm_ranker": {
+                "role": "cross_sectional_ranker",
+                "path": "ml/models/lgbm_latest.pkl",
+                "trained_date": "2026-08-14",
+                "cpcv_dsr": 0.99,
+                "pbo": 0.2,
+                "n_train": 460,
+                "deployable": True,
+            }
+        }
+    }
+    _real_load_yaml_file = registry_io._load_yaml_file
+
+    def _fake_load_yaml_file(path):
+        if path == registry_io._DEFAULT_REGISTRY_PATH:
+            return fake_repo_data
+        return _real_load_yaml_file(path)
+
+    monkeypatch.setattr(registry_io, "_load_yaml_file", _fake_load_yaml_file)
+
     data = load_registry()
     assert "models" in data
     assert data["models"]["lgbm_ranker"]["trained_date"] == "2026-08-14"
@@ -308,14 +364,15 @@ models:
 
 def test_load_registry_smart_merge_local_newer(tmp_path, monkeypatch):
     """When LOCAL_DATA_ROOT has a newer retrained model than git, local entry wins."""
-    from settings import settings
+    from ml import registry_io
     from ml.registry_io import load_registry
+    from settings import settings
 
     fake_local = tmp_path / "stockpy_local"
     models_dir = fake_local / "ml_models"
     models_dir.mkdir(parents=True)
 
-    # Local has a freshly retrained model with newer date (2026-09-01 > 2026-08-14)
+    # Local has a freshly retrained model with a newer date than the fake "git" fixture below.
     local_reg = models_dir / "registry.yaml"
     local_reg.write_text("""
 models:
@@ -330,6 +387,30 @@ models:
 """, encoding="utf-8")
 
     monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    # Explicit, self-contained "git" fixture — see test_load_registry_smart_merge_git_newer
+    # for why this must not depend on the real, evolving ml/registry.yaml.
+    fake_repo_data = {
+        "models": {
+            "lgbm_ranker": {
+                "role": "cross_sectional_ranker",
+                "path": "ml/models/lgbm_latest.pkl",
+                "trained_date": "2026-08-14",
+                "cpcv_dsr": 0.99,
+                "pbo": 0.2,
+                "n_train": 460,
+                "deployable": True,
+            }
+        }
+    }
+    _real_load_yaml_file = registry_io._load_yaml_file
+
+    def _fake_load_yaml_file(path):
+        if path == registry_io._DEFAULT_REGISTRY_PATH:
+            return fake_repo_data
+        return _real_load_yaml_file(path)
+
+    monkeypatch.setattr(registry_io, "_load_yaml_file", _fake_load_yaml_file)
 
     data = load_registry()
     assert "models" in data
