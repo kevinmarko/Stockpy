@@ -382,3 +382,91 @@ def _clean_signal_registry_between_tests() -> Any:
                 global_registry.unregister(k)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_paper_and_transactions_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Point PaperAccountStore's and TransactionsStore's default DB
+    resolver at a private, per-test temp-file db for every test, unless the
+    test passes its own explicit ``db_url``.
+
+    Incident (2026-08, PR 872 remediation): both ``data.paper_account_store``
+    and ``transactions_store`` resolve ``db_url or resolve_database_url()``
+    in ``__init__`` when no explicit URL is given -- and PR 872 added a new
+    IMPLICIT write path (``PaperAccountStore._record_closed_trade``'s
+    ``transactions_store`` bridge) that fires deep inside a normal paper-fill
+    call, with no way for a caller who forgets to pass ``db_url`` to opt
+    out. Before this fixture existed, running this repo's test suite against
+    that branch -- from ANY of this repo's several concurrent agent
+    worktrees, not just one -- silently wrote 260+ synthetic rows (entry/exit
+    prices like "AAPL $150.00 -> $150.00", expiries in the past, tagged
+    ``notes="Paper bridge, ..."``) into the real, shared, live
+    ``~/.stockpy_local/quant_platform.db``'s ``trades`` table over the
+    course of roughly a day before it was caught by a manual DB audit --
+    confirmed 100% test contamination (every row bridge-tagged; the table
+    had 0 rows before this branch's bridge feature existed at all) and
+    cleaned up by hand, backed up first via ``sqlite3 ... ".backup"``.
+
+    This is the exact same risk class ``_isolate_validation_runs_db_in_tests``
+    above exists to prevent for ``validation_history_store`` -- a session-wide
+    autouse fixture here (rather than per-file opt-in) is required for the
+    same reason: dozens of pre-existing test files across this suite
+    construct these stores directly, with no single choke point to edit
+    instead.
+
+    Lazy imports (mirrors the FMP/GDELT/validation-runs fixtures above) so a
+    broken import in either module surfaces as a test failure for whichever
+    test actually touches it, not a collection-time failure for the entire
+    suite.
+
+    A PLAIN ``sqlite:///:memory:`` is NOT sufficient here and was tried
+    first: SQLite gives each separate Engine/connection its OWN private
+    in-memory database even when they share the identical URL string, so a
+    pre-existing test that constructs TWO independent store instances
+    expecting them to see each other's writes (e.g.
+    ``tests/test_investyo_mcp_server.py``'s ``TestGetOrderExecutionHistory``,
+    which builds a ``TransactionsStore()`` to seed rows and then calls
+    ``get_order_execution_history()`` -- itself a SEPARATE
+    ``TransactionsStore()`` construction, by design, since it's a real
+    production code path, not test scaffolding) would silently read back
+    nothing, exactly the "no execution history recorded yet" false-empty
+    result caught while verifying this fixture. Before this fixture
+    existed, both constructions coincidentally resolved to the SAME real
+    file, which is what let them see each other's data (and is the
+    coupling that let live-DB contamination happen in the first place).
+
+    A SQLite shared-cache in-memory URI (``file:<name>?mode=memory&
+    cache=shared``) would restore that "every construction in this test
+    sees the same db" property in principle, but fights
+    ``db_config.create_db_engine``'s own pooling logic in a way that
+    matters here: its ``is_memory`` check is a literal
+    ``url.database in (None, "", ":memory:")`` test, which a
+    ``file:...?mode=memory&cache=shared`` URL fails (the ``database``
+    component is the whole ``file:...`` string, not literally
+    ``":memory:"``), so it would get routed onto the file-backed branch
+    (``NullPool`` + the WAL/busy_timeout PRAGMA hook) instead of the
+    memory branch -- and with ``NullPool``, connections are opened and
+    closed constantly, so the one guarantee a shared-cache memory db
+    actually needs (at least one connection to that name stays open at
+    all times, or SQLite destroys it) is not reliably held, risking a
+    flaky "the data vanished between the write and the read" failure mode
+    strictly worse than what this fixture exists to fix.
+
+    A private, per-test temp FILE sidesteps all of that: it is correctly
+    recognized by ``create_db_engine`` as file-backed (so it gets the
+    exact PRAGMA/pooling treatment production code gets -- a strictly
+    more faithful test double, and the only way to exercise Agent 4's
+    WAL-lock-contention fix at all, since that fix is specific to
+    file-backed SQLite), naturally lets any number of separate store
+    constructions within one test see each other's writes (matching what
+    these pre-existing tests actually rely on), and is isolated from both
+    the real live db AND every other test by pytest's own per-test
+    ``tmp_path`` (a fresh, automatically-cleaned-up temp directory).
+    """
+    import data.paper_account_store as _pas
+    import transactions_store as _ts
+
+    isolated_url = f"sqlite:///{tmp_path / 'pytest_isolated_paper_and_transactions.db'}"
+
+    monkeypatch.setattr(_pas, "resolve_database_url", lambda: isolated_url)
+    monkeypatch.setattr(_ts, "resolve_database_url", lambda: isolated_url)

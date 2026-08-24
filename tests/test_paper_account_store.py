@@ -115,9 +115,16 @@ def test_readonly_degradation(readonly_store):
     orders = readonly_store.get_orders()
     assert len(orders) == 0
 
-def test_reset_account_readonly():
+def test_reset_account_readonly(tmp_path):
     from data.paper_account_store import PaperAccountStore
-    store = PaperAccountStore(readonly=True)
+    # Explicit isolated db_url (matches the readonly_store fixture above) --
+    # create_readonly_db_engine legitimately rejects ":memory:" (this
+    # repo's autouse _isolate_paper_and_transactions_db_in_tests fixture's
+    # default for an omitted db_url), and this test's intent is only to
+    # verify the readonly-mode guard raises, not to exercise any real query
+    # against a populated DB, so a nonexistent file path is fine.
+    db_file = tmp_path / "readonly_reset.db"
+    store = PaperAccountStore(db_url=f"sqlite:///{db_file}", readonly=True)
     with pytest.raises(RuntimeError, match="Cannot reset account in readonly mode"):
         store.reset_account()
 
@@ -959,3 +966,64 @@ def test_transactions_store_bridge_disabled_by_default(tmp_path):
     db_url = f"sqlite:///{tmp_path / 'bridge_off.db'}"
     store = PaperAccountStore(db_url=db_url)
     assert store._transactions_store is None
+
+
+# ---------------------------------------------------------------------------
+# Test-isolation regression (2026-08 incident): constructing PaperAccountStore
+# or TransactionsStore WITHOUT an explicit db_url must never resolve to the
+# real, shared ~/.stockpy_local/quant_platform.db during a test run -- see
+# conftest.py::_isolate_paper_and_transactions_db_in_tests's own docstring
+# for the full incident writeup (260 synthetic rows leaked into the live
+# `trades` table before this fixture existed).
+# ---------------------------------------------------------------------------
+
+
+def _live_db_path() -> str:
+    """The real, resolved path the fixture must never let a test hit --
+    read directly from db_config (bypassing the autouse-patched module-local
+    names in data.paper_account_store/transactions_store) so this helper
+    itself can't be fooled by the same patch it's verifying."""
+    import db_config
+    return str(db_config.resolve_database_url())
+
+
+def test_paper_account_store_default_db_url_is_isolated_from_live_db(tmp_path):
+    """A PaperAccountStore constructed with NO db_url (the exact call shape
+    that leaked test data into the live DB) must resolve to the isolated
+    per-test temp-file db the autouse conftest fixture patches in -- inside
+    THIS test's own tmp_path, never the real ~/.stockpy_local/quant_platform.db
+    -- proven by asserting the resolved URL is neither the live path nor
+    ":memory:" (the fixture deliberately uses neither; see its own
+    docstring for why), and genuinely lives under this test's tmp_path."""
+    store = PaperAccountStore()
+    resolved = str(store.engine.url)
+    assert resolved != f"sqlite:///{_live_db_path()}"
+    assert "quant_platform.db" not in resolved
+    assert str(tmp_path) in resolved
+
+
+def test_transactions_store_default_db_url_is_isolated_from_live_db(tmp_path):
+    """Same guarantee as above, for transactions_store.TransactionsStore
+    directly -- this is the module the bridge's implicit companion store
+    construction (data/paper_account_store.py's _transactions_store) relies
+    on when a caller omits db_url."""
+    import transactions_store
+    store = transactions_store.TransactionsStore()
+    resolved = str(store.engine.url)
+    assert resolved != f"sqlite:///{_live_db_path()}"
+    assert "quant_platform.db" not in resolved
+    assert str(tmp_path) in resolved
+
+
+def test_paper_account_store_and_transactions_store_share_the_same_isolated_db(tmp_path):
+    """The two stores' default resolution must point at the SAME isolated
+    per-test db as each other (not merely 'each is isolated from the live
+    db, but from each other too') -- this is exactly the property
+    tests/test_investyo_mcp_server.py::TestGetOrderExecutionHistory relies
+    on (it constructs a TransactionsStore() to seed rows, then calls a real
+    MCP tool that constructs its OWN, separate TransactionsStore() to read
+    them back)."""
+    import transactions_store
+    pas_store = PaperAccountStore()
+    ts_store = transactions_store.TransactionsStore()
+    assert str(pas_store.engine.url) == str(ts_store.engine.url)
