@@ -279,13 +279,10 @@ class TestForecastDirectionIntegration:
         deployable is True (CONSTRAINT #4)."""
         from execution.cost_model import TieredCostModel
         from validation.harness import StrategyValidationHarness
-        from scripts.refresh_validations import _make_strategy_fn
-        import yfinance as yf
-        import pandas as pd
+        from scripts.refresh_validations import _download_closes, _make_strategy_fn
 
         tickers = ["AAPL", "JNJ"]
-        df = yf.download(tickers, start="2023-01-01", end="2023-12-31", progress=False)
-        closes = pd.DataFrame({t: df["Close"][t] for t in tickers}).dropna(how="all")
+        closes = _download_closes(tickers, "2023-01-01", "2023-12-31")
         assert len(closes) > 100
 
         X, y, precomputed = _build_forecast_direction_adapter(closes)

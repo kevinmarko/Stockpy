@@ -107,9 +107,14 @@ def test_lgbm_ranker_strategy_fn_produces_real_trades(price_history, monkeypatch
 
 
 def test_lgbm_ranker_validation_harness_runs(price_history, monkeypatch, tmp_path):
-    """Validates the full harness runs without crashing and produces the
-    expected metrics dict shape. Does not assert profitability (test data
-    is arbitrary/small)."""
+    """Smoke-tests the StrategyValidationHarness end-to-end on the
+    production lgbm_ranker adapter. Asserts a well-formed report (not NaN,
+    deployable is a bool) rather than deployability itself — a 10-name,
+    reduced-split test configuration is not expected to clear the Sharpe/DSR
+    bar on its own, and that is not what this test is verifying (the
+    production registry entry's own real numbers are recorded in
+    docs/signals/lgbm_ranker.md instead).
+    """
     import scripts.refresh_validations
     monkeypatch.setattr(scripts.refresh_validations, "_XSEC_UNIVERSE_CAPPED", TICKERS)
     
