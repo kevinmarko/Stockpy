@@ -763,6 +763,23 @@ def evaluate_earnings_crush_candidates(
                 )
                 continue
 
+            # 2b. Resolve a display company name, defensively. `store` may be a test stub
+            # (see tests/test_earnings_crush.py's MockHistoricalStore) that does not implement
+            # get_fundamentals_raw at all -- the hasattr guard keeps that a clean no-op rather
+            # than an AttributeError that the outer per-symbol try/except would otherwise turn
+            # into a silently-dropped candidate. Never fabricated (CONSTRAINT #4): None/omitted
+            # when unavailable.
+            company_name: Optional[str] = None
+            try:
+                if store is not None and hasattr(store, "get_fundamentals_raw"):
+                    raw_fund = store.get_fundamentals_raw(sym)
+                    if isinstance(raw_fund, dict):
+                        cn = raw_fund.get("company_name")
+                        if isinstance(cn, str) and cn.strip():
+                            company_name = cn.strip()
+            except Exception as exc:
+                logger.debug("company_name lookup failed for %s: %s", sym, exc)
+
             # 3. Retrieve options chain and find target expiration
             expirations: List[str] = []
             if options_provider is not None:
@@ -973,11 +990,13 @@ def evaluate_earnings_crush_candidates(
                 "max_profit": max_profit,
                 "max_loss": max_loss,
                 "pricing_is_estimated": pricing_is_estimated,
+                "company_name": company_name,
                 "historical_summary": {
                     "quarters_count": hist_res["quarters_count"],
                     "median_move_pct": hist_res["median_move_pct"],
                     "sparse_history": hist_res["sparse_history"],
                     "fallback": hist_res["fallback"],
+                    "moves": hist_res["moves"],
                 },
             }
             candidates.append(candidate)
@@ -1075,6 +1094,26 @@ def to_earnings_crush_candidate_response(candidate: Dict[str, Any]) -> Dict[str,
     if strikes.get("long_call") is not None:
         response["call_wing_strike"] = strikes["long_call"]
 
+    # historical_moves: raw per-quarter gap moves, percent-scaled, OLDEST-FIRST. `hist_res["moves"]`
+    # (see get_historical_earnings_moves / HistoricalStore.get_earnings_events's `ORDER BY
+    # event_date DESC`) is newest-first, but webapp/src/components/options/EarningsCrushScanner.tsx's
+    # bar chart labels index 0 as "Q-8" (oldest) through index 7 as "Q-1" (most recent) -- so the
+    # response array must be reversed here to line up with those labels.
+    moves = (candidate.get("historical_summary") or {}).get("moves") or []
+    if moves:
+        response["historical_moves"] = [round(float(m["gap_pct"]) * 100.0, 2) for m in reversed(moves)]
+    if candidate.get("company_name"):
+        response["company_name"] = candidate["company_name"]
+
+    # report_timing (BMO/AMC/DURING_HOURS) is deliberately NOT populated here. No real source
+    # exists in this codebase: FMP's `/earnings` calendar (this store's sole earnings-events
+    # source, see data/fmp_feeds_company.py::fetch_earnings_rows) carries no reporting-time/
+    # session field -- verified against FMP's own published response schema, not assumed (see
+    # get_historical_earnings_moves's own docstring/comments and its `timing_data_available:
+    # False` field). Fabricating a BMO/AMC label here would violate CONSTRAINT #4 (never
+    # fabricate a metric/field); the webapp's `report_timing` type field stays optional and
+    # simply never gets set until a real source is wired up.
+
     return response
 
 
@@ -1124,12 +1163,30 @@ def execute_earnings_crush_trade(
         }
         res = executor.execute_earnings_crush_trade(candidate, contracts=contracts)
         if res.get("success"):
+            # Reconstruct the real pre-commission per-share net credit from the executor's own
+            # returned fields -- never fabricate a value (CONSTRAINT #4). `net_cash_impact` is
+            # the total cash impact of the fill (positive for a net credit); adding back the
+            # commission recovers the raw premium, then dividing by (100 * contracts) converts
+            # back to a per-share credit.
+            net_credit: Optional[float] = None
+            try:
+                net_cash_impact = res.get("net_cash_impact")
+                commission = res.get("commission")
+                res_contracts = res.get("contracts") or contracts
+                if net_cash_impact is not None and commission is not None and res_contracts:
+                    net_credit = round(
+                        (float(net_cash_impact) + float(commission)) / (100.0 * float(res_contracts)), 2
+                    )
+            except (TypeError, ValueError, ZeroDivisionError):
+                net_credit = None
+
             return {
                 "ok": True,
                 "order_id": res.get("order_id") or f"ec_{uuid.uuid4().hex[:8]}",
                 "symbol": sym,
                 "strategy": strategy,
                 "contracts": contracts,
+                "net_credit": net_credit,
                 "message": f"Successfully executed {strategy} earnings crush trade for {sym}.",
                 "details": res,
             }
