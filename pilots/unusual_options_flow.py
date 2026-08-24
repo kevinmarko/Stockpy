@@ -31,12 +31,16 @@ Key Capabilities:
 Design Invariants:
 * **AST-Safe (CONSTRAINT #1 & #3)** — Pure compute/read module. Never imports heavy engines
   (`processing_engine`, `technical_options_engine`, `strategy_engine`, `macro_engine`, etc.).
-  The one exception is a lazy, function-scoped `data.market_data` import inside
+  Two lazy, function-scoped import exceptions are permitted, both enforced by
+  `tests/test_unusual_options_flow.py::TestASTSafety`: (1) `data.market_data` inside
   `get_unusual_options_activity`'s live-fetch helpers (`_fetch_live_options_chain_map`,
   `_resolve_live_spot_price`) — the same lightweight `CompositeOptionsProvider`/
   `CompositeProvider` live-fetch pattern already used by `pilots/options_gex.py`,
-  `pilots/vol_mispricing.py`, and `pilots/har_volatility.py`; enforced by
-  `tests/test_unusual_options_flow.py::TestASTSafety`.
+  `pilots/vol_mispricing.py`, and `pilots/har_volatility.py`; (2) `data.historical_store`
+  inside `_resolve_live_historical_vol_30d` — a narrow, single-purpose `HistoricalStore()`
+  read for a real HV30 denominator (mirroring `pilots/earnings_crush.py`'s own
+  unrestricted use of `HistoricalStore`, except this module deliberately keeps that
+  usage AST-allowlisted rather than unrestricted).
 * **Honesty (CONSTRAINT #4)** — Preserves None / 0.0 for uncomputable metrics, never fabricates fake
   prices, and never falls back to a synthetic/simulated chain when the live provider has no data.
 * **Never Raises (CONSTRAINT #6)** — Degrades gracefully on empty/malformed option chains.
@@ -64,6 +68,7 @@ DEFAULT_MIN_VOL_OI_RATIO = 3.0
 DEFAULT_MIN_NOTIONAL = 100000.0
 DEFAULT_MIN_VOLUME = 500
 IV_BURST_THRESHOLD = 1.25
+MID_BLOCK_DIRECTIONAL_THRESHOLD = 0.25  # fraction of the half-spread a mid-block trade must clear (toward bid or ask) from the midpoint to earn a directional (non-NEUTRAL) sentiment label
 TRADING_DAYS_PER_YEAR = 252.0
 _FILENAME = "unusual_options_flow.json"
 MAX_PERSISTED_UOA_RECORDS = 2000  # bounds output/unusual_options_flow.json growth (read-through cache)
@@ -119,6 +124,8 @@ class UOARecord:
     vol_oi_ratio: float = 0.0
     notional: float = 0.0  # Premium notional (price * volume * 100)
     underlying_notional: float = 0.0  # Underlying notional (spot * volume * 100)
+    price_is_estimated: bool = False  # True when trade_price was derived from (bid+ask)/2 rather than a real reported last price
+    spot_price_is_estimated: bool = False  # True when spot_price was inferred as median(strikes) rather than a real caller-supplied quote
     aggressiveness: str = "mid_block"  # "ask_sweep", "bid_sweep", "mid_block"
     trade_type: str = "block"  # "ask_sweep", "bid_sweep", "mid_block", "block"
     aggressor_side: str = ""  # "ASK", "BID", "MID"
@@ -281,6 +288,12 @@ def categorize_trade_aggressiveness(
     """
     Categorizes trade aggressiveness and inferred sentiment.
 
+    A mid-block trade (bid < trade_price < ask) only earns a directional sentiment when
+    it clears a deadband of `MID_BLOCK_DIRECTIONAL_THRESHOLD` (25%) of the half-spread
+    away from the exact midpoint, toward the bid or the ask; a print that lands within
+    that deadband is NEUTRAL rather than being classified fully BULLISH/BEARISH off a
+    fractional lean.
+
     Returns:
         (aggressiveness, sentiment)
         aggressiveness: "ask_sweep" | "bid_sweep" | "mid_block"
@@ -299,11 +312,16 @@ def categorize_trade_aggressiveness(
     # If bid and ask exist and trade price is between bid and ask -> Mid Block
     elif bid > 0 and ask > 0 and bid < trade_price < ask:
         aggressiveness = "mid_block"
-        # Mid-market block with slight lean if near edges
+        # Mid-market block with directional lean only outside a deadband around the
+        # midpoint (MID_BLOCK_DIRECTIONAL_THRESHOLD of the half-spread) -- a print
+        # fractionally off-center stays NEUTRAL rather than being classified fully
+        # directional off noise.
         midpoint = (bid + ask) / 2.0
-        if trade_price > midpoint:
+        half_spread = (ask - bid) / 2.0
+        deadband = half_spread * MID_BLOCK_DIRECTIONAL_THRESHOLD
+        if trade_price > midpoint + deadband:
             sentiment = "BULLISH" if opt_type == "call" else "BEARISH"
-        elif trade_price < midpoint:
+        elif trade_price < midpoint - deadband:
             sentiment = "BEARISH" if opt_type == "call" else "BULLISH"
         else:
             sentiment = "NEUTRAL"
@@ -475,8 +493,10 @@ def _extract_contract_fields(
         ask = 0.0
 
     # If trade_price is 0 but bid/ask exists, use midpoint
+    trade_price_is_estimated = False
     if trade_price <= 0.0 and bid > 0 and ask > 0:
         trade_price = round((bid + ask) / 2.0, 4)
+        trade_price_is_estimated = True
 
     # Volume
     vol_val = get_val("volume") or get_val("vol") or get_val("trade_volume") or 0
@@ -543,6 +563,7 @@ def _extract_contract_fields(
         "open_interest": open_interest,
         "iv": iv,
         "hv": hv,
+        "trade_price_is_estimated": trade_price_is_estimated,
     }
 
 
@@ -730,14 +751,20 @@ def scan_unusual_options_activity(
 
         # Infer spot price if not provided
         resolved_spot = spot_price
+        spot_was_estimated = False
         if (resolved_spot is None or resolved_spot <= 0) and raw_contracts:
             strikes = [c["strike"] for c in raw_contracts if c["strike"] > 0]
             if strikes:
                 resolved_spot = float(np.median(strikes))
+                spot_was_estimated = True
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("scan_unusual_options_activity failed: %s", exc)
+        return []
 
-        anomalies: List[UOARecord] = []
+    anomalies: List[UOARecord] = []
 
-        for c in raw_contracts:
+    for c in raw_contracts:
+        try:
             volume = c["volume"]
             oi = c["open_interest"]
             trade_price = c["trade_price"]
@@ -809,6 +836,8 @@ def scan_unusual_options_activity(
                 vol_oi_ratio=vol_oi_ratio if vol_oi_ratio != float("inf") else 999.99,
                 notional=notional,
                 underlying_notional=underlying_notional,
+                price_is_estimated=bool(c.get("trade_price_is_estimated", False)),
+                spot_price_is_estimated=spot_was_estimated,
                 aggressiveness=aggressiveness,
                 trade_type=trade_type,
                 sentiment=sentiment,
@@ -823,14 +852,16 @@ def scan_unusual_options_activity(
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
             anomalies.append(record)
+        except Exception as exc:  # noqa: BLE001 — one bad contract must not discard the rest (CONSTRAINT #6)
+            logger.debug(
+                "scan_unusual_options_activity: skipping malformed contract %s: %s",
+                c.get("contract_symbol", "?"), exc,
+            )
+            continue
 
-        # Sort anomalies by premium notional descending
-        anomalies.sort(key=lambda x: x.notional, reverse=True)
-        return anomalies
-
-    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
-        logger.debug("scan_unusual_options_activity failed: %s", exc)
-        return []
+    # Sort anomalies by premium notional descending
+    anomalies.sort(key=lambda x: x.notional, reverse=True)
+    return anomalies
 
 
 # ---------------------------------------------------------------------------
@@ -965,11 +996,13 @@ def save_uoa_records(
     records: Sequence[Union[UOARecord, Dict[str, Any]]],
     path: Optional[Union[str, Path]] = None,
 ) -> str:
-    """Persists UOA records to output JSON file (atomic write)."""
+    """Persists UOA records to output JSON file (atomic write via temp+rename)."""
     p = Path(path) if path else _default_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     serializable = [r.to_dict() if isinstance(r, UOARecord) else r for r in records]
-    p.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+    tmp.replace(p)
     return str(p)
 
 
@@ -1059,11 +1092,32 @@ def _resolve_live_spot_price(symbol: str) -> Optional[float]:
     return None
 
 
+def _resolve_live_historical_vol_30d(symbol: str) -> Optional[float]:
+    """Resolves a real 30-day annualized realized volatility for `symbol` via
+    HistoricalStore, so calculate_iv_burst_score has a genuine HV30 denominator instead
+    of always seeing None (the live yfinance options chain carries no
+    `historicalVolatility` field of its own). Returns None (never fabricated —
+    CONSTRAINT #4) on any failure or insufficient history.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        bars = store.get_bars(symbol, lookback_days=45)
+        if bars is None or "Close" not in getattr(bars, "columns", []):
+            return None
+        return calculate_historical_volatility(bars["Close"], window=30)
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("_resolve_live_historical_vol_30d failed for %s: %s", symbol, exc)
+        return None
+
+
 def get_unusual_options_activity(
     symbols: Optional[List[str]] = None,
     min_vol_oi: Optional[float] = None,
     min_notional: Optional[float] = None,
     limit: int = 50,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Public accessor for unusual options activity flow — a read-through cache.
 
@@ -1080,7 +1134,21 @@ def get_unusual_options_activity(
     Honesty (CONSTRAINT #4): never fabricates a record. A request with no `symbols`
     and nothing persisted yet, or a provider miss for every requested symbol, degrades
     to `[]` rather than a synthetic/simulated scan.
+
+    `diagnostics`, when passed, is populated in-place (purely additive — this function's
+    return value/type is unchanged) with:
+    - `symbols_requested`: count of the caller-supplied `symbols` list (0 if `None`).
+    - `read_from_cache`: `True` iff the response was served entirely from the persisted
+      cache, `False` on any path that reached the live-scan loop.
+    - `symbols_fetch_failed`: list of symbols whose live chain fetch came back empty,
+      populated ONLY on the live-scan path. Deliberately left unset (not even an empty
+      list) on a cache-hit response, so a caller can distinguish "we tried a live fetch
+      and nothing failed" from "we never got far enough to try" — setting it to `[]` on
+      the cache-hit path would falsely imply a live fetch was attempted.
     """
+    if diagnostics is not None:
+        diagnostics["symbols_requested"] = len(symbols) if symbols else 0
+
     persisted = load_uoa_records()
     if persisted:
         records = [r.to_dict() if hasattr(r, "to_dict") else asdict(r) for r in persisted]
@@ -1092,6 +1160,8 @@ def get_unusual_options_activity(
         if min_notional is not None:
             records = [r for r in records if float(r.get("notional", 0)) >= min_notional]
         if records:
+            if diagnostics is not None:
+                diagnostics["read_from_cache"] = True
             return records[:limit]
 
     # Nothing usable persisted. A live scan only makes sense for a bounded, caller-named
@@ -1099,15 +1169,28 @@ def get_unusual_options_activity(
     # isn't viable, so an unfiltered request with nothing persisted yet honestly
     # returns [] rather than a meaningless scan of an empty chain.
     if not symbols:
+        if diagnostics is not None:
+            diagnostics["read_from_cache"] = False
         return []
+
+    if diagnostics is not None:
+        diagnostics["read_from_cache"] = False
+        diagnostics["symbols_fetch_failed"] = []
 
     new_records: List[UOARecord] = []
     for sym in sorted({s.upper().strip() for s in symbols if s and s.strip()}):
         chain_map = _fetch_live_options_chain_map(sym)
         if not chain_map:
+            if diagnostics is not None:
+                diagnostics["symbols_fetch_failed"].append(sym)
             continue
         spot_price = _resolve_live_spot_price(sym)
-        scanned = scan_unusual_options_activity(chain_data=chain_map, spot_price=spot_price)
+        historical_vol_30d = _resolve_live_historical_vol_30d(sym)
+        scanned = scan_unusual_options_activity(
+            chain_data=chain_map,
+            spot_price=spot_price,
+            historical_vol_30d=historical_vol_30d,
+        )
         new_records.extend(scanned)
 
     if not new_records:

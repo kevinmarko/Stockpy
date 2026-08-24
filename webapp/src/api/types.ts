@@ -4508,6 +4508,8 @@ export interface UnusualOptionTrade {
   historical_vol_30d?: number;
   iv_burst_score?: number;
   iv_expansion_flag?: boolean;
+  price_is_estimated?: boolean;
+  spot_price_is_estimated?: boolean;
 }
 
 export interface UnusualOptionsFlowResponse {
