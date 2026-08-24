@@ -87,6 +87,7 @@ export function PaperBroker() {
   const account = useApi(() => api.getPaperBrokerAccount());
   const positions = useApi(() => api.getPaperBrokerPositions());
   const orders = useApi(() => api.getPaperBrokerOrders(100));
+  const closedTrades = useApi(() => api.getPaperBrokerClosedTrades(100));
 
   // Automated Strategy Options Execution: optional operator-supplied symbol
   // list. Blank preserves today's exact default (getStrategyOptionsCandidates
@@ -1358,6 +1359,7 @@ export function PaperBroker() {
               <thead>
                 <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Symbol</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Strategy</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Qty</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Avg Cost</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Current Price</th>
@@ -1372,17 +1374,17 @@ export function PaperBroker() {
               <tbody>
                 {positions.loading && !positions.data && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading positions...</td>
+                    <td colSpan={11} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading positions...</td>
                   </tr>
                 )}
                 {positions.error && !positions.data && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load positions: {positions.error}</td>
+                    <td colSpan={11} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load positions: {positions.error}</td>
                   </tr>
                 )}
                 {positions.data?.length === 0 && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No open positions</td>
+                    <td colSpan={11} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No open positions</td>
                   </tr>
                 )}
                 {positions.data?.map(p => {
@@ -1422,6 +1424,9 @@ export function PaperBroker() {
                             </span>
                           )}
                         </div>
+                      </td>
+                      <td style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 13 }}>
+                        {p.strategy_id ?? "—"}
                       </td>
                       <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: isShort ? 600 : 400, color: isShort ? theme.decline : theme.textPrimary }}>
                         {p.qty}
@@ -1487,6 +1492,7 @@ export function PaperBroker() {
                 <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Date</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Symbol</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Strategy</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Side</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Qty</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Price</th>
@@ -1497,23 +1503,24 @@ export function PaperBroker() {
               <tbody>
                 {orders.loading && !orders.data && (
                   <tr>
-                    <td colSpan={7} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading orders...</td>
+                    <td colSpan={8} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading orders...</td>
                   </tr>
                 )}
                 {orders.error && !orders.data && (
                   <tr>
-                    <td colSpan={7} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load orders: {orders.error}</td>
+                    <td colSpan={8} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load orders: {orders.error}</td>
                   </tr>
                 )}
                 {orders.data?.length === 0 && (
                   <tr>
-                    <td colSpan={7} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No recent orders</td>
+                    <td colSpan={8} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No recent orders</td>
                   </tr>
                 )}
                 {orders.data?.map(o => (
                   <tr key={o.order_id} style={{ borderBottom: `1px solid ${theme.border}` }}>
                     <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>{new Date(o.created_at).toLocaleString()}</td>
                     <td style={{ padding: "12px 16px", fontWeight: 500 }}>{o.symbol}</td>
+                    <td style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 13 }}>{o.strategy_id ?? "—"}</td>
                     <td style={{ padding: "12px 16px", color: o.side === "BUY" ? theme.growth : theme.decline }}>{o.side}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>{o.qty}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>${o.price.toFixed(2)}</td>
@@ -1521,6 +1528,63 @@ export function PaperBroker() {
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>
                       {o.filled_qty} {o.filled_avg_price != null ? ` @ $${o.filled_avg_price.toFixed(2)}` : ""}
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>Closed Trades</h2>
+          <div style={{ background: theme.surface, borderRadius: 8, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Exit Time</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Symbol</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Strategy</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Side</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Qty</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Entry Price</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Exit Price</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Realized P&L</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Realized P&L %</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Close Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {closedTrades.loading && !closedTrades.data && (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading closed trades...</td>
+                  </tr>
+                )}
+                {closedTrades.error && !closedTrades.data && (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load closed trades: {closedTrades.error}</td>
+                  </tr>
+                )}
+                {closedTrades.data?.length === 0 && (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No closed trades</td>
+                  </tr>
+                )}
+                {closedTrades.data?.map(t => (
+                  <tr key={t.trade_id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                    <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>{new Date(t.exit_ts).toLocaleString()}</td>
+                    <td style={{ padding: "12px 16px", fontWeight: 500 }}>{t.symbol}</td>
+                    <td style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 13 }}>{t.strategy_id ?? "—"}</td>
+                    <td style={{ padding: "12px 16px", color: t.side === "BUY" ? theme.growth : theme.decline }}>{t.side}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "right" }}>{t.qty}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "right" }}>${t.entry_price.toFixed(2)}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "right" }}>${t.exit_price.toFixed(2)}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "right", color: t.realized_pnl >= 0 ? theme.growth : theme.decline }}>
+                      ${t.realized_pnl.toFixed(2)}
+                    </td>
+                    <td style={{ padding: "12px 16px", textAlign: "right", color: (t.realized_pnl_pct ?? 0) >= 0 ? theme.growth : theme.decline }}>
+                      {t.realized_pnl_pct != null ? `${(t.realized_pnl_pct * 100).toFixed(2)}%` : "—"}
+                    </td>
+                    <td style={{ padding: "12px 16px", color: theme.textSecondary }}>{t.close_reason}</td>
                   </tr>
                 ))}
               </tbody>

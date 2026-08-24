@@ -15,6 +15,7 @@ vi.mock("../api/client", async (importOriginal) => {
       getPaperBrokerAccount: vi.fn(),
       getPaperBrokerPositions: vi.fn(),
       getPaperBrokerOrders: vi.fn(),
+      getPaperBrokerClosedTrades: vi.fn(),
       resetPaperBroker: vi.fn(),
       getStrategyOptionsCandidates: vi.fn(),
       executeStrategyOptions: vi.fn(),
@@ -58,6 +59,9 @@ describe("PaperBroker", () => {
       enabled: true,
     });
     vi.mocked(api.getStrategyOptionsCandidates).mockResolvedValue({ count: 0, candidates: [] });
+    // Default: no closed trades. Individual tests override this to assert
+    // populated/loading/error states for the Closed Trades section.
+    vi.mocked(api.getPaperBrokerClosedTrades).mockResolvedValue([]);
     // SymbolInput's shared universe fetch -- give it a default resolved value
     // so its lazy `loadUniverse()` effect never hits an unmocked call.
     vi.mocked(api.getUniverse).mockResolvedValue({ symbols: [] });
@@ -150,6 +154,9 @@ describe("PaperBroker", () => {
         market_value: 15500,
         unrealized_pl: 500,
         unrealized_pl_pct: 0.0333,
+        strategy_id: "strategy_A",
+        pilot_id: null,
+        experiment_arm: null,
       },
     ]);
     vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([
@@ -163,6 +170,30 @@ describe("PaperBroker", () => {
         order_id: "123",
         price: 150,
         created_at: "2026-08-12T00:00:00Z",
+        strategy_id: "strategy_A",
+        pilot_id: null,
+        experiment_arm: null,
+      },
+    ]);
+    vi.mocked(api.getPaperBrokerClosedTrades).mockResolvedValue([
+      {
+        trade_id: 1,
+        strategy_id: "untagged",
+        pilot_id: null,
+        experiment_arm: null,
+        symbol: "TSLA",
+        side: "BUY",
+        qty: 5,
+        entry_ts: "2026-08-10T00:00:00Z",
+        entry_price: 200,
+        exit_ts: "2026-08-11T00:00:00Z",
+        exit_price: 220,
+        commission: 0,
+        realized_pnl: 100,
+        realized_pnl_pct: 0.1,
+        holding_period_days: 1,
+        close_reason: "flatten",
+        leg_group_id: null,
       },
     ]);
 
@@ -183,9 +214,16 @@ describe("PaperBroker", () => {
     // Positions
     expect(screen.getAllByText("AAPL")).toHaveLength(2); // Position and order
     expect(screen.getByText("$155.00")).toBeInTheDocument(); // current price
-    
+    expect(screen.getAllByText("strategy_A")).toHaveLength(2); // Position and order attribution
+
     // Orders
-    expect(screen.getByText("BUY")).toBeInTheDocument();
+    expect(screen.getAllByText("BUY")).toHaveLength(2); // Order and closed trade
+
+    // Closed Trades
+    expect(await screen.findByText("TSLA")).toBeInTheDocument();
+    expect(screen.getByText("untagged")).toBeInTheDocument();
+    expect(screen.getByText("$100.00")).toBeInTheDocument(); // realized P&L
+    expect(screen.getByText("10.00%")).toBeInTheDocument(); // realized P&L %
   });
 
 
@@ -617,6 +655,9 @@ describe("PaperBroker", () => {
         market_value: -240,
         unrealized_pl: 260,
         unrealized_pl_pct: 0.52,
+        strategy_id: null,
+        pilot_id: null,
+        experiment_arm: null,
       },
     ]);
     vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
@@ -774,6 +815,44 @@ describe("PaperBroker", () => {
       );
 
       expect(await screen.findByText(/Failed to load positions: positions boom/i)).toBeInTheDocument();
+    });
+
+    it("shows a loading placeholder for closed trades while the fetch is pending", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerClosedTrades).mockReturnValue(pending());
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText("Loading closed trades...")).toBeInTheDocument();
+    });
+
+    it("shows an inline error message for closed trades when the fetch rejects", async () => {
+      vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+        equity: 100000,
+        cash: 100000,
+        buying_power: 100000,
+      });
+      vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+      vi.mocked(api.getPaperBrokerClosedTrades).mockRejectedValue(new Error("closed trades boom"));
+
+      render(
+        <MemoryRouter>
+          <PaperBroker />
+        </MemoryRouter>
+      );
+
+      expect(await screen.findByText(/Failed to load closed trades: closed trades boom/i)).toBeInTheDocument();
     });
 
     it("shows a loading placeholder for portfolio Greeks while the fetch is pending", async () => {
