@@ -295,8 +295,16 @@ class EvaluationEngine:
 
             df['BF_Allocation'] = (df['w_p'] - df['w_b']) * (df['R_b'] - R_total_b)
             df['BF_Selection'] = df['w_b'] * (df['R_p'] - df['R_b'])
-            
-            return df[['BF_Allocation', 'BF_Selection']]
+            # FIX (2026-08 attribution audit): this branch previously omitted
+            # the interaction effect entirely, breaking the fundamental
+            # Brinson-Fachler identity
+            # (Allocation + Selection + Interaction == Active Return) whenever
+            # both weight AND return differ between portfolio and benchmark for
+            # a sector (the general case). Mirrors the DataFrame/compat path's
+            # correct `interaction_effect` formula below.
+            df['BF_Interaction'] = (df['w_p'] - df['w_b']) * (df['R_p'] - df['R_b'])
+
+            return df[['BF_Allocation', 'BF_Selection', 'BF_Interaction']]
         except Exception as e:
             logger.error(f"Error calculating Brinson-Fachler attribution: {e}")
             return pd.DataFrame()
@@ -705,6 +713,7 @@ class EvaluationEngine:
                 )
                 df['BF_Allocation'] = 0.0
                 df['BF_Selection'] = 0.0
+                df['BF_Interaction'] = 0.0
             else:
                 port_sector_weights = (
                     df.groupby('sector')['position_size'].sum() / total_position_size
@@ -720,10 +729,12 @@ class EvaluationEngine:
 
                 df['BF_Allocation'] = df['sector'].map(bf_df['BF_Allocation']).fillna(0.0).round(4)
                 df['BF_Selection'] = df['sector'].map(bf_df['BF_Selection']).fillna(0.0).round(4)
+                df['BF_Interaction'] = df['sector'].map(bf_df['BF_Interaction']).fillna(0.0).round(4)
         else:
             logger.warning("Missing sector or benchmark data. Defaulting Brinson-Fachler to 0.")
             df['BF_Allocation'] = 0.0
             df['BF_Selection'] = 0.0
+            df['BF_Interaction'] = 0.0
 
         # 5. Evaluate Tail Dependency Risk (CoVaR Proxy)
         var_key = 'VaR 95' if 'VaR 95' in df.columns else 'VaR_95' if 'VaR_95' in df.columns else None
@@ -1301,4 +1312,4 @@ if __name__ == "__main__":
     # them from (the single-bar 'High'/'Low' fields above are honestly no
     # longer treated as a substitute for one -- see evaluate_portfolio).
     print("\n--- EVALUATION ENGINE DIAGNOSTICS ---")
-    print(processed_df[['Symbol', 'Realized Slippage', 'CoVaR Proxy', 'MAE', 'MFE', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']])
+    print(processed_df[['Symbol', 'Realized Slippage', 'CoVaR Proxy', 'MAE', 'MFE', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection', 'BF_Interaction']])

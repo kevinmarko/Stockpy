@@ -41,6 +41,7 @@ def _empty(reason: str) -> Dict[str, Any]:
         "commands": [],
         "strategy_registry": [],
         "options_strategy_registry": [],
+        "paper_broker_options_strategy_registry": [],
         "reason": reason,
     }
 
@@ -72,6 +73,7 @@ def command_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
         "commands": commands,
         "strategy_registry": data.get("strategy_registry", []),
         "options_strategy_registry": data.get("options_strategy_registry", []),
+        "paper_broker_options_strategy_registry": data.get("paper_broker_options_strategy_registry", []),
         "reason": None,
     }
 

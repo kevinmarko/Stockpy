@@ -150,6 +150,34 @@ const MAIN_PY_COMMAND: CommandSpec = {
   ],
 };
 
+/** Minimal refresh_validations.py fixture for the "paper-broker-realistic
+ * button hides when the manifest lacks paper_broker_options_strategy_registry"
+ * test below -- distinct from MAIN_PY_COMMAND so that test can carry the
+ * command the "Bulk Validate All Strategies" button targets while still
+ * using buildManifest() (which never sets any of the three registry fields),
+ * exercising the real "command present, registry field absent/empty" case. */
+const REFRESH_VALIDATIONS_PY_COMMAND: CommandSpec = {
+  name: "refresh_validations.py",
+  invocation: "python -m scripts.refresh_validations",
+  aliases: [],
+  description: "Walk-forward strategy validation cadence.",
+  positionals: [],
+  subcommands: [],
+  options: [
+    {
+      name: "--strategies",
+      aliases: ["--strategies"],
+      description: "Comma-separated strategy names to validate in bulk.",
+      default: null,
+      choices: null,
+      required: false,
+      arg_kind: "optional",
+      metavar: "NAMES",
+      takes_value: true,
+    },
+  ],
+};
+
 /** A believable "running" JobRecord for a command job, cast past the strict
  * `JobType` union (which the parallel agent's implementation is expected to
  * extend with `"command"`) since this test file must stay independently
@@ -593,6 +621,57 @@ describe("Commands screen — Run button", () => {
 
     expect(
       screen.queryByRole("button", { name: /Bulk Validate Options Strategies/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the paper-broker-realistic Validate Options Strategies button, and clicking it opens Form Mode for refresh_validations.py pre-selected to only the paper-broker options names", async () => {
+    renderCommands();
+    await screen.findByText("main.py");
+
+    const realisticButton = await screen.findByRole("button", {
+      name: /Validate Options Strategies \(Paper-Broker Realistic\)/i,
+    });
+    fireEvent.click(realisticButton);
+
+    const modal = await screen.findByTestId("command-form-builder");
+    expect(within(modal).getByText("refresh_validations.py")).toBeInTheDocument();
+
+    const composed = within(modal).getByTestId("command-composed");
+    // The 6 real paper-broker options strategies are selected...
+    for (const name of [
+      "put_credit_spread",
+      "call_credit_spread",
+      "call_debit_spread",
+      "put_debit_spread",
+      "vrp_premium_selling",
+      "covered_call",
+    ]) {
+      expect(composed.textContent).toContain(name);
+    }
+    // ...but the rest of the full ~29-name equity/cross-sectional registry is
+    // NOT -- this is the whole point of the override (contrast with "Bulk
+    // Validate All Strategies", which pre-selects everything).
+    expect(composed.textContent).not.toContain("options_flow_sentiment");
+    expect(composed.textContent).not.toContain("rsi2_mean_reversion");
+  });
+
+  it("does not render the paper-broker-realistic button when the manifest's refresh_validations.py has no paper_broker_options_strategy_registry (older/degraded manifest)", async () => {
+    vi.spyOn(api, "getCommands").mockResolvedValueOnce(
+      buildManifest([MAIN_PY_COMMAND, REFRESH_VALIDATIONS_PY_COMMAND])
+    );
+
+    renderCommands();
+    await screen.findByText("main.py");
+
+    // The pre-existing "Bulk Validate All Strategies" button still shows
+    // (only gated on the command being present)...
+    expect(
+      await screen.findByRole("button", { name: /Bulk Validate All Strategies/i })
+    ).toBeInTheDocument();
+    // ...but the paper-broker-realistic one does not, since buildManifest's
+    // fixture manifest carries no paper_broker_options_strategy_registry field.
+    expect(
+      screen.queryByRole("button", { name: /Paper-Broker Realistic/i })
     ).not.toBeInTheDocument();
   });
 

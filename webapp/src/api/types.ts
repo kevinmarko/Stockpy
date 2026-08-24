@@ -3185,6 +3185,21 @@ export interface CommandManifest {
    * commandParse.ts's REGISTERED_OPTIONS_STRATEGIES constant when absent.
    */
   options_strategy_registry?: string[];
+  /**
+   * The subset of `strategy_registry` above that simulates a real,
+   * production-gated (VRP/IVR/VIX/trend-bias) options directive via
+   * validation/options_selling_backtest.py -- i.e. what the Paper Broker
+   * would actually trade -- as opposed to `options_strategy_registry`'s
+   * naive/ungated STANDARD_OPTIONS_STRATEGIES shapes above, which blindly
+   * re-enter a fixed strike/DTE structure every ~35-42 days regardless of
+   * regime. Drives the Commands screen's separate "paper-broker realistic"
+   * quick action (runs `refresh_validations.py --strategies` against these
+   * names, not `validation.harness --strategies`). Optional for backward
+   * compat with older mocks/manifests; empty/absent hides that quick action
+   * rather than falling back to a hardcoded list -- there's no safe static
+   * substitute for "what the production engine actually simulates".
+   */
+  paper_broker_options_strategy_registry?: string[];
   commands: CommandSpec[];
   reason: string | null;
 }

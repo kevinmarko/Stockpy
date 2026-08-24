@@ -459,6 +459,49 @@ describe("CommandFormBuilder", () => {
       expect(screen.getByText(`${REGISTERED_STRATEGIES.length} of ${REGISTERED_STRATEGIES.length} selected`)).toBeInTheDocument();
     });
 
+    it("initialStrategiesOverride narrows the initial selection to just the supplied names, instead of the full strategyRegistry", () => {
+      const override = ["put_credit_spread", "call_debit_spread"];
+      render(
+        <CommandFormBuilder
+          command={REFRESH_VALIDATIONS_COMMAND}
+          onClose={vi.fn()}
+          strategyRegistry={FAKE_STRATEGY_REGISTRY}
+          initialStrategiesOverride={override}
+        />
+      );
+
+      const composed = screen.getByTestId("command-composed");
+      for (const name of override) {
+        expect(composed.textContent).toContain(name);
+      }
+      for (const name of FAKE_STRATEGY_REGISTRY) {
+        expect(composed.textContent).not.toContain(name);
+      }
+      expect(screen.getByText(`${override.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
+    });
+
+    it("Reset restores initialStrategiesOverride's narrowed selection, not the full strategyRegistry", async () => {
+      const user = userEvent.setup();
+      const override = ["put_credit_spread"];
+      render(
+        <CommandFormBuilder
+          command={REFRESH_VALIDATIONS_COMMAND}
+          onClose={vi.fn()}
+          strategyRegistry={FAKE_STRATEGY_REGISTRY}
+          initialStrategiesOverride={override}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "Select All" }));
+      expect(
+        screen.getByText(`${FAKE_STRATEGY_REGISTRY.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Reset" }));
+      expect(screen.getByText(`${override.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
+      expect(screen.getByTestId("command-composed").textContent).toContain("put_credit_spread");
+    });
+
     it("does NOT affect the singular --strategy select on validation.harness -- still starts empty with no strategyRegistry prop", () => {
       render(<CommandFormBuilder command={HARNESS_COMMAND} onClose={vi.fn()} />);
       const select = screen.getByDisplayValue("-- Select --strategy --");
