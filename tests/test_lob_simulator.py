@@ -132,6 +132,97 @@ def test_compute_lob_arrival_rates_side_and_level_filtering():
     assert rates_bid_lvl1.event_counts["MARKET"] == 1
 
 
+def test_compute_lob_arrival_rates_mu_cancel_uses_canceled_shares_not_event_count():
+    """Regression test: the depth-observed (primary) mu_cancel formula must divide by
+    total CANCELED SHARES (total_sizes["CANCEL"]), not the cancel EVENT COUNT. Before
+    the fix, average cancel size != 1 share silently mis-scaled mu_cancel (5 cancels of
+    10 shares each reported the same mu_cancel as 5 cancels of 1 share each)."""
+    records = []
+    # 5 cancellations of 10 shares each -> 50 total canceled shares, avg depth 20.0
+    for i in range(5):
+        records.append(
+            {"timestamp": i * 1.0, "event_type": "CANCEL", "side": "BID", "size": 10.0, "level": 1, "depth": 20.0}
+        )
+
+    rates = compute_lob_arrival_rates(records, observation_duration_sec=10.0)
+
+    assert rates.valid is True
+    assert rates.event_counts["CANCEL"] == 5
+    assert rates.average_order_size["CANCEL"] == pytest.approx(10.0)
+
+    # Correct (post-fix): mu = total_canceled_shares / (T * Q_bar) = 50 / (10 * 20) = 0.25
+    assert rates.mu_cancel == pytest.approx(0.25, abs=1e-6)
+    # The pre-fix (buggy, event-count-based) formula would have reported
+    # counts["CANCEL"] / (T * Q_bar) = 5 / (10 * 20) = 0.025 -- 10x too small.
+    assert rates.mu_cancel != pytest.approx(0.025, abs=1e-6)
+
+
+def test_compute_lob_arrival_rates_mu_cancel_fallback_is_unit_consistent_with_downstream_use():
+    """Regression test: when NO depth data is observed in the input records (forcing the
+    fallback branch), mu_cancel must be scaled to a per-share rate, not a raw events/sec
+    rate -- otherwise it silently corrupts every downstream caller that multiplies it by
+    a queue depth measured in shares (simulate_queue_position, compute_cst_fill_probability).
+
+    Reproduces the audit's own repro: a realistic ~2 cancels/sec of 5-share cancels fed
+    (via the pre-fix raw events/sec value) into simulate_queue_position with
+    queue_ahead=100 flipped fill_probability from ~0.03% to ~100% and collapsed expected
+    wait time from ~59s to ~12.5s. Post-fix, the fallback-derived rate must NOT reproduce
+    that catastrophic swing relative to a comparable depth-calibrated rate.
+    """
+    # No "depth"/"queue_depth" field anywhere -> forces the no-depth fallback branch.
+    # 100-share average cancel size is realistic for a liquid name's resting queue.
+    records = []
+    for i in range(20):
+        records.append({"timestamp": i * 0.5, "event_type": "CANCEL", "side": "BID", "size": 100.0})
+
+    rates = compute_lob_arrival_rates(records, observation_duration_sec=10.0)
+    assert rates.valid is True
+    assert rates.average_queue_depth == 0.0  # confirms the fallback branch was taken
+
+    # 20 cancels / 10s = 2.0 events/sec (the pre-fix, buggy mu_cancel value).
+    raw_events_per_sec = 2.0
+    assert rates.mu_cancel != pytest.approx(raw_events_per_sec, abs=1e-6)
+    # Post-fix: normalized by average cancel order size (100.0 shares) -> 2.0 / 100 = 0.02,
+    # matching this module's own DEFAULT_CANCEL_RATE order of magnitude.
+    assert rates.mu_cancel == pytest.approx(0.02, abs=1e-6)
+
+    # Feed both the pre-fix raw rate and the post-fix rate through the real downstream
+    # consumer and confirm the fix avoids the catastrophic swing the audit reported.
+    sim_buggy = simulate_queue_position(
+        price_level=100.0,
+        order_size=1.0,
+        queue_ahead=100.0,
+        lambda_limit=1.0,
+        mu_cancel=raw_events_per_sec,
+        theta_market=1.0,
+        time_horizon_sec=60.0,
+        num_simulations=500,
+        random_seed=42,
+    )
+    sim_fixed = simulate_queue_position(
+        price_level=100.0,
+        order_size=1.0,
+        queue_ahead=100.0,
+        lambda_limit=1.0,
+        mu_cancel=rates.mu_cancel,
+        theta_market=1.0,
+        time_horizon_sec=60.0,
+        num_simulations=500,
+        random_seed=42,
+    )
+
+    # The pre-fix raw events/sec rate is catastrophically over-scaled: it reproduces the
+    # audit's reported ~100% fill probability / near-zero wait time.
+    assert sim_buggy.fill_probability > 0.90
+    assert sim_buggy.expected_fill_time_sec is not None
+    assert sim_buggy.expected_fill_time_sec < 20.0
+
+    # The post-fix, unit-consistent rate must NOT reproduce that -- it should behave like
+    # a genuinely modest cancellation intensity against a 100-share queue over 60s, not an
+    # instant-clear queue.
+    assert sim_fixed.fill_probability < 0.90
+
+
 # ===========================================================================
 # 2. Closed-Form Analytical CST Formula Tests
 # ===========================================================================

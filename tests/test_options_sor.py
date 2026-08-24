@@ -212,6 +212,74 @@ def test_synthetic_legging_passive_first():
     assert "LEG_PASSIVE_FIRST" in res.policy_rationale
 
 
+def _build_hung_leg_test_legs(active_option_type: str, active_delta: float) -> list:
+    """Builds a 2-leg spread with a fixed wide-spread passive leg and a tight-spread
+    active leg whose option_type/delta are parameterized -- used to prove hung-leg
+    hazard is symmetric between an economically-equivalent PUT active leg (negative
+    delta) and CALL active leg (positive delta) of the same magnitude."""
+    return [
+        {
+            "symbol": "SYM 2026-09-18 $100.00 PUT",
+            "action": "sell",
+            "strike": 100.0,
+            "type": "put",
+            "expiration": "2026-09-18",
+            "bid": 1.00,
+            "ask": 3.00,  # Wide spread ($2.00) -> passive leg
+            "delta": -0.30,
+        },
+        {
+            "symbol": f"SYM 2026-09-18 $110.00 {active_option_type.upper()}",
+            "action": "buy",
+            "strike": 110.0,
+            "type": active_option_type,
+            "expiration": "2026-09-18",
+            "bid": 2.00,
+            "ask": 2.05,  # Tight spread ($0.05) -> active leg
+            "delta": active_delta,
+        },
+    ]
+
+
+def test_hung_leg_probability_symmetric_for_put_and_call_active_leg():
+    """Regression test for the unsigned-delta bug: hung_leg_probability must be driven
+    by the MAGNITUDE of the active leg's delta, not its sign. Before the fix, a PUT
+    active leg (negative delta) collapsed sigma_opt to its 0.001 floor (since
+    delta*spot*vol*sqrt(tau) went negative), silently flooring hung_leg_probability at
+    its 0.02 clip regardless of real hazard, while an economically identical CALL
+    active leg (same |delta|) reported the correct, much higher value."""
+    spot = 101.0
+    volatility = 0.80  # high vol to keep the correct (unclipped) value away from 0.02
+
+    legs_call_active = _build_hung_leg_test_legs("call", 0.80)
+    legs_put_active = _build_hung_leg_test_legs("put", -0.80)
+
+    res_call = analyze_routing_options(legs_call_active, spot_price=spot, volatility=volatility)
+    res_put = analyze_routing_options(legs_put_active, spot_price=spot, volatility=volatility)
+
+    assert res_call.valid is True
+    assert res_put.valid is True
+
+    synth_call = res_call.synthetic_legging
+    synth_put = res_put.synthetic_legging
+
+    # Sanity: the tight-spread leg (index 1) is selected as the active leg in both cases.
+    assert synth_call["active_leg_index"] == 1
+    assert synth_put["active_leg_index"] == 1
+
+    hung_call = synth_call["hung_leg_probability"]
+    hung_put = synth_put["hung_leg_probability"]
+
+    # The core fix: |delta|=0.80 for both -> hung_leg_probability must match regardless
+    # of PUT (-0.80) vs CALL (+0.80) sign.
+    assert hung_put == pytest.approx(hung_call, abs=1e-4)
+
+    # Neither should be pinned at the degenerate 0.02 floor -- proves this is a genuine
+    # computed hazard, not the sign bug silently collapsing sigma_opt to its floor.
+    assert hung_call > 0.10
+    assert hung_put > 0.10
+
+
 # ---------------------------------------------------------------------------
 # 5. Multi-Leg 4-Leg Strategy (Iron Condor -> COB_NET_PACKAGE)
 # ---------------------------------------------------------------------------

@@ -39,8 +39,19 @@ Design & Architecture Invariants:
 * **AST-Safe (CONSTRAINT #1 & #3)** — Pure quantitative module. NEVER imports heavy forbidden engines
   (`processing_engine`, `technical_options_engine`, `strategy_engine`, `forecasting_engine`, `macro_engine`,
    `main`, `desktop`, etc.). Imports only standard library, `numpy`, and `scipy`.
-* **Honesty (CONSTRAINT #4)** — True Poisson arrival rates derived from input order flow records; zero fabricated
-  fills. Degenerate books return clean sentinels without fake data.
+* **Honesty (CONSTRAINT #4)** — `compute_lob_arrival_rates()` computes true, empirically
+  measured Poisson arrival rates from real input order flow records when called; zero
+  fabricated fills. Degenerate books return clean sentinels without fake data. **Disclosed
+  gap**: `compute_lob_arrival_rates()` has ZERO production callers today (grepped and
+  confirmed) — the live `POST /pilots/options/lob/simulate-queue` endpoint
+  (`simulate_queue_fill()`) runs on fixed default/fallback Poisson-rate constants
+  (`settings.OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE`, and the request model's
+  `lambda_limit=4.0`/`mu_cancel=0.05` defaults), not a live per-symbol calibration, and
+  the webapp (`LobDepthView.tsx`) never sends override values either. No real L2/L3
+  order-flow or bid/ask-size data source exists anywhere in this codebase's data layer to
+  calibrate from live (confirmed absent in `data/market_data.py`/`data/fmp_client.py`),
+  so wiring this up honestly needs a genuine tick/order-flow data source first rather than
+  a fabricated proxy. See `docs/known_issues/lob_simulator_uncalibrated_live_arrival_rates.md`.
 * **Never Raises (CONSTRAINT #6)** — Gracefully handles empty trade streams, negative rates, zero horizons,
   and uninitialized queues without raising uncaught exceptions.
 """
@@ -574,11 +585,30 @@ def compute_lob_arrival_rates(
     # Per-share cancellation rate mu:
     # In CST (2010), each share in queue has cancellation hazard mu.
     # If mean queue depth Q_bar is known, total cancellations in time T is mu * Q_bar * T
-    # => mu = N_cancel / (T * Q_bar). If Q_bar is unobserved, mu = N_cancel / T.
+    # => mu = N_cancel / (T * Q_bar), where N_cancel is total canceled SHARES
+    # (total_sizes["CANCEL"]), not the cancel EVENT COUNT -- using event count silently
+    # mis-scales mu whenever the average cancel size isn't exactly 1 share.
     if avg_depth > EPSILON:
-        mu_cancel = counts["CANCEL"] / (duration * avg_depth)
+        mu_cancel = total_sizes["CANCEL"] / (duration * avg_depth)
     else:
-        mu_cancel = counts["CANCEL"] / duration
+        # No real queue-depth was ever observed in this window, so Q_bar is unknown.
+        # Falling back to a raw events/sec rate here is dimensionally wrong: every
+        # downstream caller (simulate_queue_position, compute_cst_fill_probability)
+        # multiplies mu_cancel by a queue depth measured in SHARES, expecting units of
+        # 1/(sec*share) -- an events/sec-only value is off by whatever the real average
+        # queue depth would have been, and empirically produces catastrophic
+        # (fill_probability flips from ~0.03% to 100%, expected wait time collapses
+        # ~59s -> ~12.5s) results the moment queue_ahead is nontrivial. Substitute the
+        # average CANCEL order size itself as a best-effort per-share normalization --
+        # still an approximation (no real average resting-queue-depth measurement
+        # exists without depth data in the input records), but keeps the units
+        # consistent with every caller instead of returning a value orders of
+        # magnitude too large. Callers that need a genuinely calibrated mu_cancel
+        # should supply per-event queue_depth/depth in the input records.
+        avg_cancel_order_size = (
+            total_sizes["CANCEL"] / counts["CANCEL"] if counts["CANCEL"] > 0 else 1.0
+        )
+        mu_cancel = (counts["CANCEL"] / duration) / max(EPSILON, avg_cancel_order_size)
 
     # Format side and level breakdowns into rates
     side_breakdowns: Dict[str, Dict[str, float]] = {}
