@@ -147,6 +147,7 @@ import type {
   ScreenerResult,
   ScreenerResultsResponse,
   ScreenerFilterOptions,
+  SymbolBackfillResult,
   SyncReportResponse,
   SyncReportSymbol,
   SymbolReincludeResult,
@@ -11515,6 +11516,23 @@ export const mockApi = {
           ? `${sym} is already on the watchlist.`
           : "Added to watchlist.txt — the pipeline will evaluate it on the next run. No order was placed.",
       },
+      150,
+    );
+  },
+
+  // "Spot data download": any syntactically valid, non-delisted ticker gets
+  // an honest `status: "ok"` with a fabricated-but-plausible row count --
+  // this is a mock, there is no real HistoricalStore to persist into.
+  // DELISTEDCO (also used by SCREENER_UNIVERSE's isActivelyTrading=false
+  // fixture row) exercises the honest `status: "no_data"` branch so the mock
+  // doesn't teach every caller that a backfill always succeeds.
+  async triggerSymbolBackfill(symbol: string): Promise<SymbolBackfillResult> {
+    const sym = (symbol ?? "").trim().toUpperCase();
+    if (!MOCK_SYMBOL_RE.test(sym) || sym === "DELISTEDCO") {
+      return delay({ symbol: sym, rows_persisted: 0, last_bar_date: null, status: "no_data" }, 150);
+    }
+    return delay(
+      { symbol: sym, rows_persisted: 504, last_bar_date: "2026-08-21", status: "ok" },
       150,
     );
   },

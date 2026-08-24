@@ -191,6 +191,73 @@ def test_bars_lookback_days_is_bounded(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# POST /data/backfill/{symbol}
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_requires_write_token_even_when_unset(monkeypatch):
+    """Unlike GET /data/bars/{symbol}, this WRITES to local storage (a
+    write-mode HistoricalStore, no readonly=True) -- require_write_token,
+    fail CLOSED when STATE_API_TOKEN is unset, matching PUT /data/universe's
+    posture rather than the fail-open GET siblings."""
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=_make_bars(3)))
+    monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.post("/data/backfill/AAPL")
+    assert resp.status_code == 403
+
+
+def test_backfill_happy_path(monkeypatch):
+    captured = {}
+
+    class _WriteModeStore(_FakeStore):
+        def get_bars(self, symbol, lookback_days=252, provider=None):
+            captured["symbol"] = symbol
+            captured["lookback_days"] = lookback_days
+            return super().get_bars(symbol, lookback_days=lookback_days, provider=provider)
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _WriteModeStore(bars=_make_bars(5)))
+    monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", "secret"), \
+         mock.patch.object(settings, "BARS_BACKFILL_DAYS", 504):
+        resp = client.post("/data/backfill/aapl", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbol"] == "AAPL"
+    assert body["rows_persisted"] == 5
+    assert body["status"] == "ok"
+    assert body["last_bar_date"] == "2026-01-05"
+    assert captured["symbol"] == "AAPL"
+    assert captured["lookback_days"] == 504
+
+
+def test_backfill_unknown_symbol_returns_no_data_not_500(monkeypatch):
+    """CONSTRAINT #4/#6: an unfetchable symbol is an honest 200/no_data, never
+    a fabricated success and never a 500."""
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+    monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+        resp = client.post("/data/backfill/ZZZZ", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "symbol": "ZZZZ", "rows_persisted": 0, "last_bar_date": None, "status": "no_data",
+    }
+
+
+def test_backfill_store_exception_dead_letters_to_no_data(monkeypatch):
+    class _BoomStore:
+        def get_bars(self, symbol, lookback_days=252, provider=None):
+            raise RuntimeError("DB unavailable")
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomStore())
+    monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+        resp = client.post("/data/backfill/AAPL", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "no_data"
+
+
+# ---------------------------------------------------------------------------
 # GET /data/fundamentals/{symbol}
 # ---------------------------------------------------------------------------
 
