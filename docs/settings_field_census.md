@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `a30a956555b865d465d4b48c20b9fac00b56704e`
+- Measured at commit: `93a121065a183560559225e909173bfaa46ec326`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -230,7 +230,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 764 | 245 |
+| (a) `settings.KEY` | 765 | 245 |
 | (b) `getattr(settings, "KEY", default)` | 368 | 206 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
@@ -254,7 +254,7 @@ referenced by name somewhere and is probably read dynamically.
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11070` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1385`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1427`, `pilots/feature_flags.py:49` | likely read dynamically |
 
 ### Fields reachable ONLY via form (b) or (d), never via (a) — **172**
 
