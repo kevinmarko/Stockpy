@@ -114,6 +114,53 @@ def test_invalid_parameters():
             risk_aversion=0.0
         )
 
+def test_degenerate_cost_parameterization_raises():
+    """AC(2001) requires eta_tilde = temp_impact - 0.5*perm_impact*tau > 0 for a well-posed
+    convex cost function. A temp_impact too small relative to perm_impact*tau must raise
+    rather than silently produce a nonsensical (possibly negative) expected_shortfall."""
+    # tau = total_time / n_intervals = 1.0 / 1 = 1.0
+    # threshold = 0.5 * perm_impact * tau = 0.5 * 1.0 * 1.0 = 0.5
+    # temp_impact = 0.01 < 0.5 -> degenerate, must raise
+    with pytest.raises(ValueError, match="well-posed"):
+        compute_trading_trajectory(
+            total_shares=1000.0,
+            total_time=1.0,
+            n_intervals=1,
+            volatility=0.1,
+            temp_impact=0.01,
+            perm_impact=1.0,
+            risk_aversion=0.5
+        )
+
+    # Exactly at the boundary (eta_tilde == 0) is still degenerate (guard uses <=).
+    with pytest.raises(ValueError, match="well-posed"):
+        compute_trading_trajectory(
+            total_shares=1000.0,
+            total_time=1.0,
+            n_intervals=1,
+            volatility=0.1,
+            temp_impact=0.5,
+            perm_impact=1.0,
+            risk_aversion=0.5
+        )
+
+
+def test_well_posed_cost_parameterization_just_above_threshold_does_not_raise():
+    """A temp_impact just above the AC(2001) well-posedness threshold must NOT raise --
+    guards against the new check over-triggering on legitimate parameterizations."""
+    # Same tau=1.0, threshold=0.5 as above; temp_impact=0.51 clears it.
+    res = compute_trading_trajectory(
+        total_shares=1000.0,
+        total_time=1.0,
+        n_intervals=1,
+        volatility=0.1,
+        temp_impact=0.51,
+        perm_impact=1.0,
+        risk_aversion=0.5
+    )
+    assert not math.isnan(res["expected_shortfall"])
+
+
 def test_shortfall_and_variance():
     """Test that shortfall and variance calculations make sense."""
     res_high_risk = compute_trading_trajectory(

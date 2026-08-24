@@ -55,14 +55,18 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from validation.thresholds import STRESS_MAX_DRAWDOWN
+
 logger = logging.getLogger(__name__)
 
 # Deployability threshold: an options-selling strategy must keep max drawdown
-# strictly below this in EVERY stress window. 50% is a deliberately lenient
+# strictly below this in EVERY stress window. Sourced from validation/thresholds.py
+# (the single source of truth for all deployability-gate thresholds) rather than
+# duplicated here, so the two can never drift apart. 50% is a deliberately lenient
 # survival bar — a short-vol book down 50% in a two-week shock is already in
 # serious trouble; anything worse is disqualifying regardless of full-sample
 # metrics.
-MAX_STRESS_DRAWDOWN: float = 0.50
+MAX_STRESS_DRAWDOWN: float = STRESS_MAX_DRAWDOWN
 
 
 @dataclass(frozen=True)

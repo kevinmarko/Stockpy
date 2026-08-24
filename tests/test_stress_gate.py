@@ -153,3 +153,12 @@ def test_partial_scenario_coverage_fails_closed():
     full = run_stress_tests(_iron_condor_with_stops_returns)
     partial = {k: full[k] for k in list(full.keys())[:2]}  # drop two windows
     assert passes_stress_gate(partial) is False
+
+
+def test_max_stress_drawdown_is_sourced_from_thresholds_module():
+    """validation/stress_scenarios.py must not duplicate this threshold as an independent
+    literal -- it has to be sourced from validation/thresholds.py (the single source of
+    truth for deployability-gate thresholds) so the two can never drift apart."""
+    from validation.thresholds import STRESS_MAX_DRAWDOWN
+
+    assert MAX_STRESS_DRAWDOWN == STRESS_MAX_DRAWDOWN

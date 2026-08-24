@@ -557,7 +557,10 @@ class TestAnalyticsWidgetsSmoke:
         fake_provider = MagicMock()
         fake_provider.get_intraday_bars.return_value = fake_df
         monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
-        monkeypatch.setattr("simulation_engine.run_backtrader_simulation", lambda df: print("Starting Portfolio Value: $100,000.00\nFinal Portfolio Value: $115,000.00"))
+        monkeypatch.setattr(
+            "simulation_engine.run_backtrader_simulation",
+            lambda df, market_cap=None: print("Starting Portfolio Value: $100,000.00\nFinal Portfolio Value: $115,000.00"),
+        )
 
         result = srv.run_backtest("AAPL", period="1y")
         assert "```json" in result

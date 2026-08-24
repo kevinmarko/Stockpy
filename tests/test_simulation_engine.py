@@ -272,6 +272,46 @@ class TestVectorbtOptimization:
         out = capsys.readouterr().out
         assert "VectorBT" in out
 
+    def test_market_cap_is_threaded_to_get_vbt_costs(self, monkeypatch):
+        """Regression: optimize_strategy_vectorbt used to hardcode get_vbt_costs(market_cap=None)
+        regardless of what the caller passed, so TieredCostModel's liquidity-tier cost
+        differentiation was defined but never actually exercised through this path."""
+        pytest.importorskip("vectorbt")
+        monkeypatch.setattr(sim, "print_survivorship_warning_for_backtest", lambda index: None)
+
+        captured = {}
+        real_get_vbt_costs = sim.get_vbt_costs
+
+        def _spy_get_vbt_costs(market_cap=None):
+            captured["market_cap"] = market_cap
+            return real_get_vbt_costs(market_cap=market_cap)
+
+        monkeypatch.setattr(sim, "get_vbt_costs", _spy_get_vbt_costs)
+
+        price = _synthetic_close(periods=300, seed=11)
+        sim.optimize_strategy_vectorbt(price, market_cap=1e8)
+
+        assert captured["market_cap"] == 1e8
+
+    def test_default_market_cap_is_none_preserves_prior_behavior(self, monkeypatch):
+        """Callers that don't pass market_cap must keep getting None (today's exact behavior)."""
+        pytest.importorskip("vectorbt")
+        monkeypatch.setattr(sim, "print_survivorship_warning_for_backtest", lambda index: None)
+
+        captured = {}
+        real_get_vbt_costs = sim.get_vbt_costs
+
+        def _spy_get_vbt_costs(market_cap=None):
+            captured["market_cap"] = market_cap
+            return real_get_vbt_costs(market_cap=market_cap)
+
+        monkeypatch.setattr(sim, "get_vbt_costs", _spy_get_vbt_costs)
+
+        price = _synthetic_close(periods=300, seed=11)
+        sim.optimize_strategy_vectorbt(price)
+
+        assert captured["market_cap"] is None
+
 
 # ===========================================================================
 # 5. run_backtrader_simulation / InstitutionalStrategy  (requires backtrader)
@@ -309,3 +349,56 @@ class TestBacktraderSimulation:
         df = _synthetic_ohlcv(periods=20, seed=3)
         with pytest.raises(IndexError):
             sim.run_backtrader_simulation(df)
+
+    def test_market_cap_is_threaded_to_tiered_cost_commission_info(self, monkeypatch):
+        """Regression: run_backtrader_simulation used to hardcode
+        TieredCostCommissionInfo(..., market_cap=None, ...) regardless of what the caller
+        passed, so TieredCostModel's liquidity-tier cost differentiation was defined but
+        never actually exercised through this path."""
+        pytest.importorskip("backtrader")
+        from execution import cost_model as cost_model_module
+
+        monkeypatch.setattr(sim, "print_survivorship_warning_for_backtest", lambda index: None)
+
+        captured = {}
+        RealCommInfo = cost_model_module.TieredCostCommissionInfo
+
+        class _SpyCommInfo(RealCommInfo):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                # backtrader's Params metaclass resolves kwargs into self.p during
+                # __init__ -- reading kwargs directly (before super().__init__()) does
+                # not reliably reflect the value backtrader actually bound.
+                captured["market_cap"] = self.p.market_cap
+
+        monkeypatch.setattr(cost_model_module, "TieredCostCommissionInfo", _SpyCommInfo)
+
+        df = _synthetic_ohlcv(periods=300, seed=5)
+        sim.run_backtrader_simulation(df, market_cap=1e8)
+
+        assert captured["market_cap"] == 1e8
+
+    def test_default_market_cap_is_none_preserves_prior_behavior(self, monkeypatch):
+        """Callers that don't pass market_cap must keep getting None (today's exact behavior)."""
+        pytest.importorskip("backtrader")
+        from execution import cost_model as cost_model_module
+
+        monkeypatch.setattr(sim, "print_survivorship_warning_for_backtest", lambda index: None)
+
+        captured = {}
+        RealCommInfo = cost_model_module.TieredCostCommissionInfo
+
+        class _SpyCommInfo(RealCommInfo):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                # backtrader's Params metaclass resolves kwargs into self.p during
+                # __init__ -- reading kwargs directly (before super().__init__()) does
+                # not reliably reflect the value backtrader actually bound.
+                captured["market_cap"] = self.p.market_cap
+
+        monkeypatch.setattr(cost_model_module, "TieredCostCommissionInfo", _SpyCommInfo)
+
+        df = _synthetic_ohlcv(periods=300, seed=5)
+        sim.run_backtrader_simulation(df)
+
+        assert captured["market_cap"] is None

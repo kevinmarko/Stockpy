@@ -3411,8 +3411,9 @@ class TestRunBacktest:
 
         called = {}
 
-        def _fake_sim(df):
+        def _fake_sim(df, market_cap=None):
             called["columns"] = list(df.columns)
+            called["market_cap"] = market_cap
             print("Backtrader simulation output")
 
         monkeypatch.setattr(simulation_engine, "run_backtrader_simulation", _fake_sim)
@@ -3424,6 +3425,62 @@ class TestRunBacktest:
         # Column names lowercased for the Backtrader feed.
         assert called["columns"] == ["open", "high", "low", "close", "volume"]
         fake_provider.get_intraday_bars.assert_called_once_with("AAPL", lookback_days=365)
+
+    def test_market_cap_resolved_and_threaded_to_simulation_engine(self, monkeypatch):
+        """Regression: run_backtest used to call run_backtrader_simulation(df) with no
+        market cap at all, so TieredCostModel's liquidity-tier cost differentiation was
+        never actually exercised through this tool. A resolvable real marketCap must now
+        be threaded through to the simulation engine."""
+        import simulation_engine
+        import data.market_data as md_mod
+
+        idx = pd.bdate_range("2024-01-01", periods=10)
+        hist = pd.DataFrame(
+            {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100}, index=idx
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        fake_provider.get_fundamentals.return_value = {"marketCap": 5_000_000_000.0}
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        called = {}
+
+        def _fake_sim(df, market_cap=None):
+            called["market_cap"] = market_cap
+
+        monkeypatch.setattr(simulation_engine, "run_backtrader_simulation", _fake_sim)
+
+        srv.run_backtest("AAPL", "1y")
+
+        assert called["market_cap"] == 5_000_000_000.0
+        fake_provider.get_fundamentals.assert_called_once_with("AAPL")
+
+    def test_market_cap_defaults_to_none_when_fundamentals_unavailable(self, monkeypatch):
+        """A fundamentals fetch failure (or a bad/missing marketCap value) must degrade to
+        None -- never a fabricated 0.0 (CONSTRAINT #4) -- and must never crash the backtest."""
+        import simulation_engine
+        import data.market_data as md_mod
+
+        idx = pd.bdate_range("2024-01-01", periods=10)
+        hist = pd.DataFrame(
+            {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100}, index=idx
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = hist
+        fake_provider.get_fundamentals.side_effect = md_mod.MarketDataError("fundamentals unavailable")
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        called = {}
+
+        def _fake_sim(df, market_cap=None):
+            called["market_cap"] = market_cap
+
+        monkeypatch.setattr(simulation_engine, "run_backtrader_simulation", _fake_sim)
+
+        result = srv.run_backtest("AAPL", "1y")
+
+        assert "Backtest Results for AAPL" in result
+        assert called["market_cap"] is None
 
     def test_engine_exception_degrades_to_error_string(self, monkeypatch):
         import simulation_engine
@@ -3437,7 +3494,7 @@ class TestRunBacktest:
         fake_provider.get_intraday_bars.return_value = hist
         monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
 
-        def _raise(df):
+        def _raise(df, market_cap=None):
             raise RuntimeError("cerebro exploded")
 
         monkeypatch.setattr(simulation_engine, "run_backtrader_simulation", _raise)
