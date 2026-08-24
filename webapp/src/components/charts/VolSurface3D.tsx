@@ -431,12 +431,32 @@ export function sliceMesh(
 
 /**
  * Computes surface summary metrics (ATM IV, Skew, Min/Max IV, Term Slope).
+ *
+ * `skew25d` prefers the real, delta-derived backend value
+ * (`volResponse.skew.skew_25delta`, from `pilots/volatility_surface.py`'s
+ * `compute_25delta_skew` -- an actual Black-Scholes delta lookup against the
+ * live chain) whenever a real `volResponse` was supplied. The moneyness
+ * proxy below (nearest strike to spot * 0.95 / 1.05 -- never touches a
+ * `.delta` field despite the "25-delta" label) is used ONLY as a fallback
+ * for the synthetic/demo mesh path, where no real chain data exists at all.
+ * This mirrors `optionsHonesty.effectiveIvr`'s real-vs-proxy preference
+ * pattern -- and matters because `VolSurfaceView.tsx` (the sibling 2D
+ * screen) already renders the real backend value under the IDENTICAL "25-
+ * Delta Put-Call Skew" label; falling back to the proxy whenever a real
+ * value is merely ABSENT (rather than never supplied) would silently show a
+ * second, disagreeing number under that same label instead of an honest
+ * "unavailable" -- so a present-but-empty backend skew reports `null`, not
+ * the proxy.
  */
-export function calculateSurfaceMetrics(mesh: VolSurfaceMesh): {
+export function calculateSurfaceMetrics(
+  mesh: VolSurfaceMesh,
+  volResponse?: VolSurfaceResponse
+): {
   atmIv: number;
   minIv: number;
   maxIv: number;
-  skew25d: number;
+  skew25d: number | null;
+  skew25dIsReal: boolean;
   termSlope: number;
   spotPrice: number;
 } {
@@ -479,7 +499,15 @@ export function calculateSurfaceMetrics(mesh: VolSurfaceMesh): {
 
   const putIv = frontRow[putIdx] ?? atmIv;
   const callIv = frontRow[callIdx] ?? atmIv;
-  const skew25d = putIv - callIv;
+  const proxySkew25d = putIv - callIv;
+
+  const realSkew25d = volResponse?.skew?.skew_25delta;
+  const hasRealSkew = typeof realSkew25d === "number" && Number.isFinite(realSkew25d);
+  // No volResponse at all -> genuinely synthetic mesh, the moneyness proxy
+  // is the only estimate available. volResponse present but its skew field
+  // absent -> honest "unavailable", never a silent proxy substitution.
+  const skew25d = hasRealSkew ? (realSkew25d as number) : volResponse ? null : proxySkew25d;
+  const skew25dIsReal = hasRealSkew;
 
   // Term slope (Back month ATM IV - Front month ATM IV)
   const backAtmIv = backRow[atmIdx] ?? atmIv;
@@ -490,6 +518,7 @@ export function calculateSurfaceMetrics(mesh: VolSurfaceMesh): {
     minIv: mesh.minIv,
     maxIv: mesh.maxIv,
     skew25d,
+    skew25dIsReal,
     termSlope,
     spotPrice: mesh.spotPrice,
   };
@@ -531,7 +560,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
     return buildMeshFromPointsOrResponse(points, volResponse, spotPrice, symbol);
   }, [points, volResponse, spotPrice, symbol]);
 
-  const metrics = useMemo(() => calculateSurfaceMetrics(mesh), [mesh]);
+  const metrics = useMemo(() => calculateSurfaceMetrics(mesh, volResponse), [mesh, volResponse]);
 
   // View & Interactive State
   const [yaw, setYaw] = useState<number>(40); // Horizontal azimuth in degrees
@@ -1476,24 +1505,30 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
             background: "var(--surface-2)",
             borderRadius: "var(--r-sm)",
             border: "1px solid var(--border)",
-            borderLeft: `3px solid ${metrics.skew25d >= 0 ? "var(--caution)" : "var(--growth)"}`,
+            borderLeft: `3px solid ${(metrics.skew25d ?? 0) >= 0 ? "var(--caution)" : "var(--growth)"}`,
           }}
         >
           <div style={{ fontSize: "var(--t-micro)", color: "var(--text-muted)", marginBottom: 2 }}>
-            25Δ PUT-CALL SKEW
+            25Δ PUT-CALL SKEW {metrics.skew25d != null ? (metrics.skew25dIsReal ? "(chain)" : "(proxy)") : ""}
           </div>
           <div
+            data-testid="metric-skew-value"
             style={{
               fontSize: "var(--t-callout)",
               fontWeight: 700,
-              color: metrics.skew25d >= 0 ? "var(--caution)" : "var(--growth)",
+              color: (metrics.skew25d ?? 0) >= 0 ? "var(--caution)" : "var(--growth)",
             }}
           >
-            {metrics.skew25d > 0 ? "+" : ""}
-            {(metrics.skew25d * 100).toFixed(2)}%
+            {metrics.skew25d != null
+              ? `${metrics.skew25d > 0 ? "+" : ""}${(metrics.skew25d * 100).toFixed(2)}%`
+              : "—"}
           </div>
           <div style={{ fontSize: "var(--t-micro)", color: "var(--text-secondary)", marginTop: 2 }}>
-            {metrics.skew25d > 0 ? "Put skew premium" : "Call skew / flat"}
+            {metrics.skew25d == null
+              ? "Unavailable this cycle"
+              : metrics.skew25d > 0
+                ? "Put skew premium"
+                : "Call skew / flat"}
           </div>
         </div>
 
