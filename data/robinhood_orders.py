@@ -357,30 +357,51 @@ def _read_cache(max_age_hours: float) -> Optional[List[OrderFill]]:
 # Network fetch (READ ONLY)
 # ---------------------------------------------------------------------------
 
-def _default_symbol_resolver() -> Callable[[str], Optional[str]]:
+def _default_symbol_resolver(
+    *,
+    seed: Optional[Dict[str, Optional[str]]] = None,
+    max_network_resolutions: Optional[int] = None,
+) -> Callable[[str], Optional[str]]:
     """Build an instrument-URL → ticker resolver backed by robin_stocks.
 
+    ``seed`` pre-populates the in-process cache (e.g. from
+    ``data.broker_fills_store.BrokerFillsStore.instrument_symbol_map()``), so
+    only instruments not already resolved on a prior ingest pay the network
+    cost. ``max_network_resolutions`` bounds how many NEW (non-seeded)
+    lookups this resolver will perform before it starts returning ``None``
+    for any further unseeded URL without even trying the network — the
+    resolutions it did perform are still returned via
+    ``resolve.newly_resolved`` (set on the function object) so a caller can
+    persist them for next time regardless of whether the budget was hit.
+
     Memoised so each unique instrument URL hits the network at most once per
-    process.  Returns ``None`` for any URL that cannot be resolved (never
+    process. Returns ``None`` for any URL that cannot be resolved (never
     raises) so ``parse_orders`` simply skips that order.
     """
     import robin_stocks.robinhood as r  # local import — keep module import light
 
-    cache: Dict[str, Optional[str]] = {}
+    cache: Dict[str, Optional[str]] = dict(seed or {})
+    newly_resolved: Dict[str, Optional[str]] = {}
+    budget = math.inf if max_network_resolutions is None else max(0, max_network_resolutions)
 
     def resolve(url: str) -> Optional[str]:
         if not url:
             return None
         if url in cache:
             return cache[url]
+        if budget <= len(newly_resolved):
+            return None
         sym: Optional[str] = None
         try:
             sym = r.get_symbol_by_url(url)
         except Exception as exc:
             logger.debug("symbol resolve failed for %s: %s", url, exc)
-        cache[url] = (str(sym).upper() if sym else None)
-        return cache[url]
+        resolved = str(sym).upper() if sym else None
+        cache[url] = resolved
+        newly_resolved[url] = resolved
+        return resolved
 
+    resolve.newly_resolved = newly_resolved  # type: ignore[attr-defined]
     return resolve
 
 
@@ -409,12 +430,34 @@ def fetch_filled_orders(
 
     try:
         if orders_fetcher is None:
-            # Reuse the read-only TOTP login from the portfolio module so we
-            # share one session and one credential path.
-            from data.robinhood_portfolio import _login as _rh_login
-            import robin_stocks.robinhood as r
-            _rh_login()
-            orders_fetcher = lambda: r.get_all_stock_orders() or []  # noqa: E731
+            if os.environ.get("RH_LOGIN_WORKER") == "1":
+                # Inside the isolated login worker there is already a real,
+                # authenticated robin_stocks session in this process (see
+                # data/robinhood_portfolio.py's RH_LOGIN_WORKER branch) —
+                # use it directly, same pattern as _fetch_live_snapshot.
+                import robin_stocks.robinhood as r
+                orders_fetcher = lambda: r.get_all_stock_orders() or []  # noqa: E731
+            else:
+                # No session exists in this process, and logging in here is
+                # structurally forbidden (see
+                # data.robinhood_portfolio._login_with's RH_LOGIN_WORKER
+                # guard) — a second, unsupervised login attempt from a web
+                # request or GUI callback would either hang on a blocking
+                # approval prompt or silently fail. Real order history is
+                # only ever fetched inside the login worker during a
+                # `refresh` login (data/robinhood_login_worker.py, gated by
+                # settings.BROKER_TRADE_INGEST_ENABLED). This is caught by
+                # the except below and degrades to the cache, exactly as
+                # every existing caller (pilots/realized.py,
+                # execution/receipts_store.py, both of which inject their
+                # own fetcher) already expects.
+                from data.robinhood_portfolio import RobinhoodApprovalRequired
+
+                raise RobinhoodApprovalRequired(
+                    "Robinhood order history can only be fetched inside the "
+                    "isolated login worker. Run `python3 main.py "
+                    "--refresh-account` to ingest it."
+                )
         if symbol_resolver is None:
             symbol_resolver = _default_symbol_resolver()
 

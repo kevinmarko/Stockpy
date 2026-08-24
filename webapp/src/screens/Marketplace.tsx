@@ -239,6 +239,13 @@ export function Marketplace() {
                 Search &amp; filter beyond your watchlist
               </div>
             </Link>
+            <Link to="/trade-history" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>💼</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Trade history</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
+                Your full real, closed-trade ledger
+              </div>
+            </Link>
             <Link to="/signals" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧬</div>
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Signal breakdown</div>

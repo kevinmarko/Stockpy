@@ -15,6 +15,7 @@ export const PHASE_LABEL: Record<BrokerageLoginPhase, string> = {
   awaiting_approval: "Waiting for approval…",
   verifying: "Verifying…",
   fetching_snapshot: "Fetching your account…",
+  fetching_orders: "Fetching your trade history…",
   done: "Done",
 };
 

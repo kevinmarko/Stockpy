@@ -284,8 +284,11 @@ export function Portfolio() {
 
       {/* Realized performance (broker order history, FIFO round-trips) */}
       <section data-grid-area="realized" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div style={{ marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Realized performance</h2>
+          <Link to="/trade-history" style={{ fontSize: "var(--t-footnote)" }}>
+            Full trade history →
+          </Link>
         </div>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)" }}>
           Reconstructed from your Robinhood filled-order history (closed round-trips).

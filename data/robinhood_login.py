@@ -50,7 +50,8 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 LoginPhase = Literal[
-    "starting", "authenticating", "awaiting_approval", "verifying", "fetching_snapshot", "done"
+    "starting", "authenticating", "awaiting_approval", "verifying", "fetching_snapshot",
+    "fetching_orders", "done"
 ]
 LoginState = Literal["running", "succeeded", "failed", "timeout", "cancelled"]
 LoginMode = Literal["connect", "refresh"]

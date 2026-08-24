@@ -1142,6 +1142,54 @@ class TestRealizedPerformance:
         assert s["profit_factor"] is None
 
 
+class TestTradeHistory:
+    def test_shape_and_cold_start_honesty(self, tmp_path, monkeypatch):
+        import data.broker_fills_store as bfs
+
+        db_url = f"sqlite:///{tmp_path}/cold_trade_history.db"
+        from data.broker_fills_store import BrokerFillsStore
+
+        BrokerFillsStore(db_url=db_url)  # create schema, no fills
+        monkeypatch.setattr(bfs, "resolve_database_url", lambda: db_url)
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/portfolio/trade-history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {
+            "trades", "summary", "total", "limit", "offset", "symbols",
+            "available", "source", "last_ingested_at",
+        }
+        assert body["available"] is False
+        assert body["trades"] == []
+        assert body["total"] == 0
+        assert body["source"] == "durable_store"
+        assert body["summary"]["win_rate"] is None
+
+    def test_populated_and_paginated(self, tmp_path, monkeypatch):
+        import data.broker_fills_store as bfs
+        from data.broker_fills_store import BrokerFillsStore
+        from data.robinhood_orders import OrderFill
+        from datetime import datetime, timezone
+
+        db_url = f"sqlite:///{tmp_path}/populated_trade_history.db"
+        monkeypatch.setattr(bfs, "resolve_database_url", lambda: db_url)
+        store = BrokerFillsStore(db_url=db_url)
+        store.record_fills([
+            OrderFill("AAPL", "buy", 10, 100, datetime(2026, 1, 1, tzinfo=timezone.utc), "a1"),
+            OrderFill("AAPL", "sell", 10, 120, datetime(2026, 1, 5, tzinfo=timezone.utc), "a2"),
+        ])
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/portfolio/trade-history?limit=1&offset=0")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["available"] is True
+        assert body["total"] == 1
+        assert len(body["trades"]) == 1
+        assert body["trades"][0]["symbol"] == "AAPL"
+
+
 # ---------------------------------------------------------------------------
 # GET /portfolio/attribution
 # ---------------------------------------------------------------------------

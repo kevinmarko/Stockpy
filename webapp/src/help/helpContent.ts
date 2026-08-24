@@ -66,6 +66,14 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Post-trade quality: how far a trade ran in your favor (MFE) versus against you (MAE). An edge ratio ≥ 1 means favorable excursion dominated adverse excursion.",
   "mfe / mae":
     "Maximum Favorable Excursion and Maximum Adverse Excursion — the best and worst unrealized moves during a trade's life. Together they measure trade quality independent of the final exit.",
+  "fifo round-trip":
+    "How your closed trades are reconstructed from raw Robinhood filled orders: each sell is matched against your OLDEST still-open buy lot (first in, first out), producing one closed trade per matched slice. A sell that exceeds your open lots (a short sale, or a buy older than what was fetched) has the unmatched excess dropped, never invented as a zero-cost trade.",
+  "realized p&l":
+    "Profit or loss actually locked in by closing a position — as opposed to unrealized P&L, which reflects a position you still hold. Computed as (exit price − entry price) × shares for each closed round-trip, then summed.",
+  "win rate":
+    "The fraction of your closed trades that were profitable. Shown as '—' rather than 0% when you have zero closed trades — there's no rate to report yet, not a 0% rate.",
+  "profit factor":
+    "Gross profit divided by the absolute value of gross loss across your closed trades. Above 1 means your winners outweighed your losers in dollar terms. Shown as '—' (not a fabricated number) when you have no losing trades — the ratio is undefined, not infinite.",
   deployable: (t) =>
     `An honesty badge. A strategy is 'deployable' only if it clears every validation gate — PBO < ${fmtNum(t?.pbo_max, 1)}, DSR > ${fmtNum(t?.dsr_min, 2)}, net-of-cost Sharpe > ${fmtNum(t?.net_sharpe_min, 1)}, Max Drawdown < ${fmtPct(t?.max_drawdown_max, 0, { fromFraction: true })}. A strategy that fails any gate reads 'not deployable', never softened.`,
   pbo: (t) =>
@@ -386,6 +394,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist. Send a discovered symbol straight to Paper Broker's Quick Trade, or a whole selection to its Strategy Scan.",
     keyConcepts: [],
+  },
+  "trade-history": {
+    title: "Trade history",
+    description:
+      "Your full, real Robinhood closed-trade ledger — every FIFO round-trip reconstructed from your actual filled orders, paginated and filterable by symbol. Ingested during a device-approval login (`python3 main.py --refresh-account`) and persisted durably, so it survives across sessions. Equities only — options and crypto activity aren't covered. This is a read-only record of what already happened; it never feeds position sizing.",
+    keyConcepts: ["fifo round-trip", "realized p&l", "win rate", "profit factor", "advisory only"],
   },
   attribution: {
     title: "Portfolio attribution",
