@@ -2601,7 +2601,7 @@ class StrategyEvalStep(PipelineStep):
 
         ctx.dashboard_df = ee.evaluate_portfolio(ctx.dashboard_df, benchmark_df, data_provider=ctx.tech_raw)
 
-        export_keys = ['MAE', 'MFE', 'Edge Ratio', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']
+        export_keys = ['MAE', 'MFE', 'Edge Ratio', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection', 'BF_Interaction']
         for key in export_keys:
             if key in ctx.dashboard_df.columns:
                 if key not in ['MAE', 'MFE', 'Edge Ratio']:

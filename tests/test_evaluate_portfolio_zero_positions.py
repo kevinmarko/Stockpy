@@ -87,13 +87,15 @@ class TestZeroPositionSizes:
         assert result is not None
 
     def test_bf_columns_default_to_zero_on_zero_positions(self) -> None:
-        """BF_Allocation and BF_Selection must be 0.0, not NaN, when skipped."""
+        """BF_Allocation, BF_Selection, and BF_Interaction must be 0.0, not
+        NaN, when skipped."""
         ee = _patched_ee()
         df = _make_watchlist_df()
         bench = _make_benchmark_df()
         result = ee.evaluate_portfolio(df, bench)
         assert (result["BF_Allocation"] == 0.0).all()
         assert (result["BF_Selection"] == 0.0).all()
+        assert (result["BF_Interaction"] == 0.0).all()
 
     def test_portfolio_heat_column_present(self) -> None:
         """Portfolio_Heat column must exist and be a valid float even at zero positions."""
