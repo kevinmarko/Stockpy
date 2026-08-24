@@ -49,7 +49,7 @@ export const EarningsCrushScanner: React.FC<EarningsCrushScannerProps> = ({
       const res = await executeMutation.run(c);
       if (res && res.ok) {
         setStatusMessage({
-          text: res.message || `Successfully executed ${res.strategy} on ${res.symbol} (Credit: $${res.net_credit.toFixed(2)})`,
+          text: res.message || `Successfully executed ${res.strategy} on ${res.symbol} (Credit: $${res.net_credit?.toFixed(2) ?? "—"})`,
           type: "success",
         });
         if (onTradeExecuted) {
