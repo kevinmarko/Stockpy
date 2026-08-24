@@ -225,6 +225,9 @@ def get_historical_earnings_moves(
     - reason: Explanatory diagnostic message if sparse or fallback
     - timing_data_available: Always False today -- no real per-event BMO/AMC field exists in
       this codebase's earnings-events source (see above); forward-compatible if one is added.
+      (A real source -- FMP's separate `/stable/earnings-calendar` endpoint -- has since been
+      identified but not yet wired in; see
+      docs/known_issues/earnings_crush_uoa_followup_audit_findings.md's Finding #2 correction.)
     """
     sym = str(symbol or "").upper().strip()
     if not sym:
@@ -1105,14 +1108,23 @@ def to_earnings_crush_candidate_response(candidate: Dict[str, Any]) -> Dict[str,
     if candidate.get("company_name"):
         response["company_name"] = candidate["company_name"]
 
-    # report_timing (BMO/AMC/DURING_HOURS) is deliberately NOT populated here. No real source
-    # exists in this codebase: FMP's `/earnings` calendar (this store's sole earnings-events
-    # source, see data/fmp_feeds_company.py::fetch_earnings_rows) carries no reporting-time/
-    # session field -- verified against FMP's own published response schema, not assumed (see
-    # get_historical_earnings_moves's own docstring/comments and its `timing_data_available:
-    # False` field). Fabricating a BMO/AMC label here would violate CONSTRAINT #4 (never
-    # fabricate a metric/field); the webapp's `report_timing` type field stays optional and
-    # simply never gets set until a real source is wired up.
+    # report_timing (BMO/AMC/DURING_HOURS) is deliberately NOT populated here yet. No real
+    # source is WIRED IN today: FMP's per-symbol `/earnings` calendar (this store's sole
+    # earnings-events source, see data/fmp_feeds_company.py::fetch_earnings_rows) carries no
+    # reporting-time/session field -- verified against FMP's own published response schema,
+    # not assumed (see get_historical_earnings_moves's own docstring/comments and its
+    # `timing_data_available: False` field). Fabricating a BMO/AMC label here would violate
+    # CONSTRAINT #4 (never fabricate a metric/field); the webapp's `report_timing` type field
+    # stays optional and simply never gets set until a real source is wired up.
+    #
+    # UPDATE (2026-08-24): a real source now exists but is not yet integrated -- FMP publishes
+    # a SEPARATE bulk Earnings Calendar endpoint (`/stable/earnings-calendar`, distinct from
+    # the per-symbol `/earnings` endpoint above) whose documented schema carries a real `time`
+    # field ("bmo"/"amc"). See docs/known_issues/earnings_crush_uoa_followup_audit_findings.md's
+    # Finding #2 correction for the full detail, disclosed unknowns, and planned follow-up
+    # (a new data/fmp_client.py wrapper + a schema migration to persist confirmed timing rather
+    # than re-fetching live on every read). Do not "helpfully" fabricate a value here in the
+    # meantime -- wire the real endpoint or leave this omitted.
 
     return response
 

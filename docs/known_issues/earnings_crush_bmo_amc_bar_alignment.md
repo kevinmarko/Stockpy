@@ -136,3 +136,13 @@ expiration one day later).
 - Full existing suite (17 pre-existing tests) re-run green — the fix is a verified no-op
   against every existing fixture (they only ever vary `Open` on the event date, never `Close`,
   so the AMC-hypothesis gap always computes to `0` there).
+
+## Follow-up (2026-08-24, same day)
+
+A real, source-confirmed BMO/AMC field has since been identified — FMP's separate bulk
+**Earnings Calendar** endpoint (`/stable/earnings-calendar`, distinct from the per-symbol
+`/earnings` endpoint verified above, which genuinely still lacks the field). See
+[`docs/known_issues/earnings_crush_uoa_followup_audit_findings.md`](earnings_crush_uoa_followup_audit_findings.md)'s
+Finding #2 correction for the full detail and disclosed unknowns. Not yet wired in — this
+fix's `reaction_session_inferred: "bmo" | "amc"` bar-derived inference remains the correct,
+conservative fallback until it is.

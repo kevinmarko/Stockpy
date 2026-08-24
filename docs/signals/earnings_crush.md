@@ -80,7 +80,9 @@ here without cross-referencing this file.
    quarter's `moves` entry now carries `reaction_session_inferred: "bmo" | "amc"` —
    explicitly labeled *inferred*, not source-confirmed — and the function's top-level return
    dict carries `timing_data_available: False` (self-documenting; forward-compatible if a
-   real timing field is ever added). The expiration picker now requires `ed > event_date`
+   real timing field is ever added — see item 2 below's correction: a real timing field
+   (FMP's separate `/stable/earnings-calendar` endpoint) has since been identified, not yet
+   wired in). The expiration picker now requires `ed > event_date`
    (was `ed >= event_date`), so the chosen expiration always clears the earnings date
    entirely regardless of session.
 
@@ -125,6 +127,16 @@ here without cross-referencing this file.
    codebase — `get_historical_earnings_moves()`'s own `timing_data_available: False` field is the
    authoritative statement of that gap. Fabricating a BMO/AMC label here would violate CONSTRAINT
    #4 (never fabricate a metric/field); the field simply stays unset until a real source exists.
+
+   **Correction (2026-08-24, same day):** a real source has since been found and this is now a
+   disclosed, planned follow-up rather than a closed non-fix — see
+   [`docs/known_issues/earnings_crush_uoa_followup_audit_findings.md`](../known_issues/earnings_crush_uoa_followup_audit_findings.md)'s
+   Finding #2 addendum for the full detail. In short: FMP publishes a separate bulk **Earnings
+   Calendar** endpoint (`/stable/earnings-calendar`), distinct from the per-symbol `/earnings`
+   endpoint checked above, whose documented schema carries a real `time` field
+   (`"bmo"`/`"amc"`). Not yet wrapped in `data/fmp_client.py` or wired into this module — the
+   verification above (that the per-symbol `/earnings` endpoint lacks the field) remains
+   accurate, it was just answering a narrower question than "does any real source exist at all."
 
    Second: `execute_earnings_crush_trade()`'s success branch (`OptionsPaperExecutor.
    execute_earnings_crush_trade` path) never returned a `net_credit` at all, even though the

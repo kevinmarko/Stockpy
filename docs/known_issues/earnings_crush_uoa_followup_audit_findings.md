@@ -50,6 +50,49 @@ computed retroactively from historical bar data) as a forward-looking,
 source-confirmed fact about an *upcoming* earnings print. Declining to expose
 it is the CONSTRAINT #4-correct choice, not an oversight.
 
+**Correction (2026-08-24, same day) — a real source was found and this is now a
+planned follow-up, not a closed non-fix.** The "no real source exists" claim
+above is accurate for the SPECIFIC endpoint it was checked against — FMP's
+per-symbol `/earnings` calendar (`data/fmp_client.py::earnings()` /
+`data/fmp_feeds_company.py::fetch_earnings_rows`, this codebase's sole
+earnings-events source today) — but FMP publishes a SEPARATE, not-yet-wrapped
+bulk **Earnings Calendar** endpoint
+([`/stable/earnings-calendar`](https://site.financialmodelingprep.com/developer/docs/stable/earnings-calendar))
+whose documented response schema carries a real `time` field with `"bmo"`/`"amc"`
+values (e.g. `{"symbol": "AAPL", "date": "2021-07-27", "epsEstimated": ...,
+"time": "amc"}`). This is a distinct endpoint from the one `fetch_earnings_rows`
+already wraps — the historical-actuals `/earnings` endpoint's own schema still
+carries no such field, so nothing about that earlier verification was wrong,
+it was just scoped to the wrong endpoint for this question. (FMP's docs site
+returns HTTP 403 to automated fetches — see the `settings.py`
+`FMP_BARS_ADJUSTMENT` field's own precedent for this same site behavior — so
+this was corroborated via two independent search-indexed excerpts of the live
+docs page rather than a direct page capture; treat the exact field list as
+believed-correct-but-not-directly-observed until a real `FMP_API_KEY` call
+confirms it, matching this repo's `docs/FMP_INTEGRATION.md` §9 honesty
+convention for unverified FMP endpoints.)
+
+This makes a real, non-fabricated `report_timing` reachable for BOTH: (a) the
+prospective case this finding covers (an upcoming candidate's report timing),
+and (b) retroactively corroborating/replacing
+`get_historical_earnings_moves()`'s inferred `reaction_session_inferred`
+label with a source-confirmed one where FMP has the data. Deliberately scoped
+to FMP only, not Finnhub — `signals/news_catalyst.py::fetch_next_earnings()`
+independently calls Finnhub's own `earnings_calendar` endpoint (which also
+carries an equivalent `hour: "bmo"|"amc"|"dmh"` field, already silently
+discarded there, reading only `entry["date"]`) for a *different* purpose
+(the 48h pre-earnings news-suppression window), but per explicit operator
+direction this repo's FMP-primary-source policy (see CLAUDE.md's
+"FMP-primary-source audit" bullet) takes precedence over adding a second,
+Finnhub-only data path for the same fact. Not yet implemented — a planned
+follow-up needs: a new `data/fmp_client.py` wrapper for `/earnings-calendar`,
+threading its `time` field into both `evaluate_earnings_crush_candidates`
+(prospective) and `get_historical_earnings_moves` (retrospective,
+source-confirmed vs. inferred distinction per quarter), and very likely a
+schema migration (`earnings_events` gaining nullable `report_timing`/
+`report_timing_source` columns) so a confirmed timing is persisted rather
+than re-fetched live on every read.
+
 ---
 
 ## Finding #3 (implemented on `unusual-options-flow-engine-fixes`): IV-burst HV30 live wiring
