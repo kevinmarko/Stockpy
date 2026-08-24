@@ -21,6 +21,9 @@ const UNIVERSE = {
 beforeEach(() => {
   __resetUniverseCache();
   vi.spyOn(api, "getUniverse").mockResolvedValue(UNIVERSE);
+  // Default: no FMP matches -- individual tests override this to exercise
+  // the "not yet tracked" section.
+  vi.spyOn(api, "getSymbolSearch").mockResolvedValue({ query: "", results: [], reason: null });
 });
 
 afterEach(() => {
@@ -131,5 +134,69 @@ describe("SymbolInput autocomplete", () => {
     await user.keyboard("{Enter}");
 
     expect(onSubmit).toHaveBeenCalledWith("AAPL");
+  });
+
+  it("shows FMP results not in the tracked universe under a 'Not yet tracked' section", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
+      query: "XO",
+      results: [{ symbol: "XOM", name: "Exxon Mobil", currency: "USD", exchange: "NYSE", exchange_full_name: null }],
+      reason: null,
+    });
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} />);
+
+    await user.type(screen.getByTestId("symbol-input"), "XO");
+    const list = await screen.findByTestId("symbol-suggestions");
+    expect(within(list).getByText("XOM")).toBeInTheDocument();
+    expect(within(list).getByText("Not yet tracked")).toBeInTheDocument();
+
+    await user.click(within(list).getByText("XOM"));
+    expect(onSubmit).toHaveBeenCalledWith("XOM");
+  });
+
+  it("does not duplicate a symbol that is both tracked and returned by FMP search", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
+      query: "AAPL",
+      results: [{ symbol: "AAPL", name: "Apple", currency: "USD", exchange: "NASDAQ", exchange_full_name: null }],
+      reason: null,
+    });
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={vi.fn()} />);
+
+    await user.type(screen.getByTestId("symbol-input"), "AAP");
+    const list = await screen.findByTestId("symbol-suggestions");
+    expect(within(list).getAllByText("AAPL")).toHaveLength(1);
+    expect(within(list).queryByText("Not yet tracked")).not.toBeInTheDocument();
+  });
+
+  it("suppresses the FMP section entirely when enableFmpSuggestions is false", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
+      query: "XO",
+      results: [{ symbol: "XOM", name: "Exxon Mobil", currency: "USD", exchange: "NYSE", exchange_full_name: null }],
+      reason: null,
+    });
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={vi.fn()} enableFmpSuggestions={false} />);
+
+    await user.type(screen.getByTestId("symbol-input"), "XO");
+    // No tracked matches for "XO" and FMP is suppressed -- no dropdown at all.
+    await new Promise((r) => setTimeout(r, 250)); // outlast the 200ms debounce
+    expect(screen.queryByTestId("symbol-suggestions")).not.toBeInTheDocument();
+    expect(api.getSymbolSearch).not.toHaveBeenCalled();
+  });
+
+  it("trackedSymbols overrides the shared universe cache entirely", async () => {
+    const getUniverseSpy = vi.spyOn(api, "getUniverse");
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} trackedSymbols={["ZZZZ"]} />);
+
+    await user.type(screen.getByTestId("symbol-input"), "ZZ");
+    const list = await screen.findByTestId("symbol-suggestions");
+    expect(within(list).getByText("ZZZZ")).toBeInTheDocument();
+    // The shared GET /universe cache is never consulted -- this instance
+    // has its own tracked list (mirrors Universe Manager's own fix).
+    expect(getUniverseSpy).not.toHaveBeenCalled();
   });
 });

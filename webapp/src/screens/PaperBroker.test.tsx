@@ -39,6 +39,10 @@ vi.mock("../api/client", async (importOriginal) => {
       postOptionsOrder: vi.fn(),
       watchCandidate: vi.fn(),
       getUniverse: vi.fn(),
+      // SymbolInput's "not yet tracked" FMP section + OptionsOrderTicket's
+      // spot-data-download-on-watchlist-add.
+      getSymbolSearch: vi.fn(),
+      triggerSymbolBackfill: vi.fn(),
     },
   };
 });
@@ -57,6 +61,7 @@ describe("PaperBroker", () => {
     // SymbolInput's shared universe fetch -- give it a default resolved value
     // so its lazy `loadUniverse()` effect never hits an unmocked call.
     vi.mocked(api.getUniverse).mockResolvedValue({ symbols: [] });
+    vi.mocked(api.getSymbolSearch).mockResolvedValue({ query: "", results: [], reason: null });
 
     vi.mocked(api.getDeltaHedgePreview).mockResolvedValue({
       symbol: "SPY",

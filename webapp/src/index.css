@@ -551,6 +551,19 @@ button {
   color: var(--text-muted);
   letter-spacing: 0.02em;
 }
+.combobox-section-header {
+  padding: 6px 10px 4px;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.combobox-section-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}
 
 /* ---- Tab guide ("How this works" education panel) ---- */
 .tab-guide {

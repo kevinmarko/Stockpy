@@ -179,6 +179,10 @@ export function SectorSelection() {
         label="Target symbol"
         onSubmit={(sym) => setTarget(sym)}
         pending={loading}
+        // GET /sector/selection only ever reads persisted DB state -- an
+        // FMP-known but untracked symbol is a guaranteed honest-empty dead
+        // end here, so suggesting one would just be misleading.
+        enableFmpSuggestions={false}
       />
 
       <div style={{ maxWidth: 160, marginBottom: "var(--s-4)" }}>
