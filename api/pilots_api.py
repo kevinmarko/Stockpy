@@ -6966,8 +6966,19 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
     }
 
 
+# Shared clip bounds for a single diffusion-generated per-step return.
+# Defined once here so `_clip_and_compound_diffusion_path` and
+# `post_diffusion_stress_test`'s VaR/CVaR computation can never silently
+# drift apart onto different bounds (2026-08, see
+# docs/known_issues/synthetic_diffusion_reverse_sde_sign_error.md's "Also
+# found while root-causing" section).
+_DIFFUSION_PATH_MIN_STEP = -0.5
+_DIFFUSION_PATH_MAX_STEP = 2.0
+
+
 def _clip_and_compound_diffusion_path(
-    ret_path, spot_price: float, *, min_step: float = -0.5, max_step: float = 2.0,
+    ret_path, spot_price: float, *,
+    min_step: float = _DIFFUSION_PATH_MIN_STEP, max_step: float = _DIFFUSION_PATH_MAX_STEP,
     min_price: float = 0.01,
 ) -> List[float]:
     """Compound a single diffusion-generated return path onto a spot-price
@@ -7279,6 +7290,22 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
     # Map raw returns onto the spot price trajectory (Phase 34 remediation
     # item 10, audit Critical #5) -- see _clip_and_compound_diffusion_path's
     # docstring for the negative-price/runaway-explosion rationale.
+    #
+    # NOTE (2026-08, see docs/known_issues/
+    # synthetic_diffusion_reverse_sde_sign_error.md's "Investigated but
+    # deferred" section): `paths` (built here, from the CLIPPED per-step
+    # returns) and VaR/CVaR (built below, from the RAW unclipped returns)
+    # are deliberately NOT fed from a single shared clipped array. A
+    # straightforward "clip once, feed both" version was tried during the
+    # sign-fix PR and found to introduce a worse, live-reachable bug: the
+    # clip bounds are asymmetric ([-50%, +200%] per step, needed only to
+    # keep compounded PRICES positive), and summing many clipped steps for
+    # VaR compounds that asymmetry into a systematic upward bias -- on a
+    # high-variance/undertrained draw this pushed VaR/CVaR negative
+    # (implying a nonsensical "guaranteed profit" at 95% confidence),
+    # regressing the very invariant
+    # test_var_cvar_never_reach_or_exceed_spot_price_end_to_end guards.
+    # Left as a disclosed, named follow-up rather than shipped broken.
     paths = [
         _clip_and_compound_diffusion_path(ret_path, req.spot_price)
         for ret_path in synthetic_returns
