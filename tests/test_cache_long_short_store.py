@@ -60,6 +60,51 @@ def test_close_tax_lot(store):
     assert closed[0].realized_pnl == -250.0
 
 
+def test_record_tax_lot_normalizes_non_utc_tz_to_naive_utc(store):
+    # A tz-aware datetime in a non-UTC zone must be converted to UTC before
+    # the tzinfo is stripped -- a bare .replace(tzinfo=None) on the raw
+    # value (the pre-fix behavior) would silently mis-stamp it by the zone
+    # offset, the same bug class this repo hit with FMP's Eastern-time
+    # publishedDate.
+    from zoneinfo import ZoneInfo
+
+    eastern = ZoneInfo("America/New_York")
+    # 2026-01-15 09:00 ET == 2026-01-15 14:00 UTC (EST, UTC-5).
+    aware_eastern = datetime(2026, 1, 15, 9, 0, 0, tzinfo=eastern)
+
+    pos_id = store.record_position("AAPL", "long")
+    lot_id = store.record_tax_lot(pos_id, aware_eastern, 150.0, 100.0)
+
+    session = store.Session()
+    try:
+        from data.cache_long_short_store import CacheLongShortTaxLot
+
+        lot = session.query(CacheLongShortTaxLot).filter(CacheLongShortTaxLot.lot_id == lot_id).first()
+        assert lot.acquisition_date == datetime(2026, 1, 15, 14, 0, 0)
+    finally:
+        session.close()
+
+
+def test_close_tax_lot_normalizes_non_utc_tz_to_naive_utc(store):
+    from zoneinfo import ZoneInfo
+
+    eastern = ZoneInfo("America/New_York")
+    aware_eastern = datetime(2026, 1, 15, 9, 0, 0, tzinfo=eastern)
+
+    pos_id = store.record_position("AAPL", "long")
+    lot_id = store.record_tax_lot(pos_id, datetime.now(), 150.0, 100.0)
+    store.close_tax_lot(lot_id, realized_pnl=-100.0, close_date=aware_eastern)
+
+    session = store.Session()
+    try:
+        from data.cache_long_short_store import CacheLongShortTaxLot
+
+        lot = session.query(CacheLongShortTaxLot).filter(CacheLongShortTaxLot.lot_id == lot_id).first()
+        assert lot.close_date == datetime(2026, 1, 15, 14, 0, 0)
+    finally:
+        session.close()
+
+
 def test_close_tax_lot_missing_raises():
     s = CacheLongShortStore(db_url="sqlite:///:memory:")
     with pytest.raises(ValueError):

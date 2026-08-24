@@ -4,13 +4,29 @@ Advisory only: nothing here submits a broker order. Every method reuses
 existing platform infra rather than reimplementing it:
   - calculate_beta: processing_engine.calculate_rolling_beta over
     HistoricalStore.get_bars.
-  - find_correlated_proxy / check_correlation_drift: pairs_ondemand.analyze_pair,
-    via data.market_data.get_provider() -- the same lightweight
+  - find_correlated_proxy: ranks proxy candidates by
+    pairs_ondemand.analyze_pair's rolling cointegration p-value, via
+    data.market_data.get_provider() -- the same lightweight
     CompositeProvider api/data_api.py's POST /data/pairs/analyze uses.
     NOT data_engine.DataEngine, which has no get_intraday_bars method and
     would silently make every pairs_ondemand call degrade to "not found".
-  - check_wash_sale: a real SQL query against CacheLongShortStore's closed
-    tax lots, not a hardcoded stub.
+    The winning candidate's PERSISTED correlation number, however, is a
+    separately computed Pearson correlation (_pearson_correlation below),
+    not anything read off analyze_pair's own return value -- analyze_pair
+    returns cointegration/beta/z-score/half-life diagnostics, not a plain
+    correlation coefficient, so there is no "the" analyze_pair correlation
+    to reuse for this. This is a deliberate second, intentional
+    implementation for a different question ("how correlated are these two
+    price series", not "are these two series cointegrated"), not an
+    accidental duplicate of analyze_pair's math.
+  - check_correlation_drift: recomputes that same _pearson_correlation --
+    NOT analyze_pair, for the same reason as above. (A prior revision of
+    this docstring described both functions as delegating to analyze_pair
+    for their correlation number, which was never accurate for either.)
+  - check_wash_sale: a real SQL query against CacheLongShortStore's tax
+    lots' ACQUISITION dates (the actual IRS wash-sale trigger -- see the
+    method's own docstring), not a stub and not merely a closed-lot P&L
+    lookup.
 
 Only called from main_orchestrator.py's background worker (settings-gated)
 and api/data_api.py's interactive POST /data/cache-long-short/simulate --
@@ -119,7 +135,10 @@ class CacheLongShortEngine:
     @staticmethod
     def check_correlation_drift(ticker: str, proxy: str) -> Optional[float]:
         """Recomputes and persists the real correlation between ``ticker``
-        and its ``proxy`` hedge. Returns the fresh correlation coefficient
+        and its ``proxy`` hedge via _pearson_correlation -- NOT
+        pairs_ondemand.analyze_pair, which returns cointegration/beta/
+        z-score diagnostics rather than a plain correlation coefficient (see
+        the module docstring). Returns the fresh correlation coefficient
         (None if it couldn't be computed) -- callers compare against
         settings.CACHE_LONG_SHORT_MIN_CORRELATION to decide whether the
         hedge is "out of balance"."""
@@ -131,28 +150,57 @@ class CacheLongShortEngine:
         return corr
 
     @staticmethod
-    def check_wash_sale(ticker: str) -> bool:
-        """True if ``ticker`` has a closed lot with a realized loss in the
-        last 30 days (IRS wash-sale window) -- a real query, not a stub."""
+    def check_wash_sale(ticker: str, as_of: Optional[datetime] = None) -> bool:
+        """True if selling ``ticker`` today (``as_of``, default now) would
+        trigger the IRS wash-sale disallowance (26 U.S.C. Sec. 1091): a
+        "substantially identical" security was ACQUIRED within 30 calendar
+        days before -- or, if already on record, after -- the sale date.
+        This checks acquisition dates (ANY tax lot for the ticker, open or
+        closed), which is the actual wash-sale trigger -- a prior revision
+        of this function instead looked at whether a *closed* lot had
+        realized a loss in the last 30 days, which is a different question
+        that neither implies nor is implied by an actual wash sale: it
+        missed the textbook case (a recent purchase with no closed lot at
+        all) and could also false-block on an old, already-fully-resolved
+        loss with no repurchase since.
+
+        Only the backward-looking half of the 61-day window (30 days
+        *before* the sale) can ever be a real check at call time -- a
+        future repurchase has no row to find before it happens. Checking
+        30 days *after* ``as_of`` as well is harmless for a live call (no
+        such row can exist yet) and makes this correct for a historical/
+        backtest ``as_of`` too, but it does NOT mean this function can warn
+        about a real future repurchase before the operator makes it --
+        that's why generate_sell_down_orders below also returns a
+        forward-looking advisory note.
+
+        Scoped to exact-ticker match only, not the correlated-proxy
+        relationships this module also tracks (find_correlated_proxy) --
+        the IRS's "substantially identical" test is narrower than mere
+        price correlation, and widening this check to a proxy ticker is a
+        deliberate policy call left for a future change, not assumed here.
+        """
         store = CacheLongShortStore()
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        sale_date = as_of if as_of is not None else datetime.now(timezone.utc)
+        if sale_date.tzinfo is None:
+            sale_date = sale_date.replace(tzinfo=timezone.utc)
+        window_start = (sale_date - timedelta(days=30)).replace(tzinfo=None)
+        window_end = (sale_date + timedelta(days=30)).replace(tzinfo=None)
         session = store.Session()
         try:
             from data.cache_long_short_store import CacheLongShortTaxLot, CacheLongShortPosition
 
-            naive_cutoff = cutoff.replace(tzinfo=None)
-            blocked = (
+            acquired_in_window = (
                 session.query(CacheLongShortTaxLot)
                 .join(CacheLongShortPosition)
                 .filter(
                     CacheLongShortPosition.ticker == ticker.upper().strip(),
-                    CacheLongShortTaxLot.status == "closed",
-                    CacheLongShortTaxLot.close_date >= naive_cutoff,
-                    CacheLongShortTaxLot.realized_pnl < 0,
+                    CacheLongShortTaxLot.acquisition_date >= window_start,
+                    CacheLongShortTaxLot.acquisition_date <= window_end,
                 )
                 .first()
             )
-            return blocked is not None
+            return acquired_in_window is not None
         except Exception as exc:
             logger.debug("check_wash_sale failed for %s: %s", ticker, exc)
             return False
@@ -210,9 +258,17 @@ class CacheLongShortEngine:
     @staticmethod
     def generate_sell_down_orders(ticker: str) -> Dict[str, Any]:
         """Sizes an advisory sell-down recommendation against the tax bank,
-        blocked by the wash-sale guardrail."""
+        blocked by the wash-sale guardrail (see check_wash_sale's docstring
+        for what it actually checks -- acquisition timing, not closed-lot
+        P&L)."""
         if CacheLongShortEngine.check_wash_sale(ticker):
-            return {"status": "blocked", "reason": "Wash sale guardrail active (loss realized within 30d)"}
+            return {
+                "status": "blocked",
+                "reason": (
+                    f"Wash sale guardrail active: {ticker} was acquired within the last 30 days, "
+                    "which would disallow this loss under the IRS wash-sale rule (Sec. 1091)."
+                ),
+            }
 
         store = CacheLongShortStore()
         tax_bank = store.tax_bank()
@@ -223,4 +279,14 @@ class CacheLongShortEngine:
             "status": "approved",
             "recommended_sell_value": tax_bank,  # 1:1 offset for simplicity in V1
             "reason": f"Sized to match ${tax_bank:,.2f} tax bank",
+            # The forward-looking half of the wash-sale window (a repurchase
+            # in the 30 days AFTER this sale) has no row to check against --
+            # it hasn't happened yet. check_wash_sale can only ever enforce
+            # the backward-looking half; this note is the honest,
+            # operator-facing substitute for the half the code cannot
+            # enforce.
+            "wash_sale_note": (
+                f"To preserve this harvested loss, avoid repurchasing {ticker} "
+                "(or a substantially identical security) for 30 days after this sale."
+            ),
         }
