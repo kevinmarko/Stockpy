@@ -1,9 +1,3 @@
-"""
-scripts/launch_mcp_builder_agents.py
-====================================
-Launches 5 concurrent Antigravity agents in separate git worktrees to build
-out the MCP Financial Asset-Class Tools suite defined in AGENTS.md.
-"""
 import asyncio
 import sys
 from pathlib import Path

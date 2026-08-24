@@ -65,7 +65,6 @@ from ml.feature_engineering import (
     compute_multifactor_zscores,
 )
 from ml.data.store import PITFeatureStore
-from ml.triple_barrier import apply_triple_barrier
 
 logger = logging.getLogger("ML.TrainingData")
 

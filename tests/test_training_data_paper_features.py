@@ -11,7 +11,6 @@ import pandas as pd
 import pytest
 
 from ml.training_data import _pit_ticker_row
-from ml.triple_barrier import apply_triple_barrier
 
 
 def test_pit_ticker_row_with_paper_orders():
