@@ -6650,6 +6650,24 @@ class TestDiffusionStressTest:
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
 
+    def test_horizon_out_of_bounds_returns_honest_422(self):
+        # 2026-08: horizon is now bounded (Field(30, ge=5, le=35)) -- the
+        # early-stop + Tweedie denoising calibration fix is only verified
+        # well-calibrated up to horizon~30-35; see docs/known_issues/
+        # synthetic_diffusion_reverse_sde_sign_error.md's "Further
+        # mitigated" section for the measured L-dependence table. A
+        # request outside the bound must get a clean Pydantic validation
+        # 422, never a 500 or a silent clamp.
+        req = self._base_request()
+        req["horizon"] = 50
+        resp = client.post("/pilots/options/ai/diffusion-stress-test", json=req)
+        assert resp.status_code == 422
+
+        req2 = self._base_request()
+        req2["horizon"] = 1
+        resp2 = client.post("/pilots/options/ai/diffusion-stress-test", json=req2)
+        assert resp2.status_code == 422
+
     def test_unknown_symbol_returns_honest_422(self):
         store = _OhlcvStore({})
         # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --

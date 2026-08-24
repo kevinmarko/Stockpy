@@ -99,3 +99,66 @@ for the root-cause write-up.
   `docs/settings_field_census.md` staleness gate (the Autofix bot partially
   regenerated the `.json` companion but not the `.md`); fixed by re-running
   `scripts/measure_settings_census.py --write` at current HEAD.
+
+## Round 3 (2026-08-24, same day): "fully fix" the calibration gap
+
+- [x] Diagnosed root cause: score network prediction accuracy collapses
+      below `tau~0.1-0.3` (measured true-vs-predicted score at 6 tau
+      values). Ruled out score clipping and the training/generation
+      tau-floor mismatch. Tested and rejected an eps-parametrization
+      redesign (error amplification at reconstruction).
+- [x] Implemented `_tweedie_denoise` + `tau_stop` param + `_resolve_tau_stop`
+      clamp on both generation functions.
+- [x] **Found and fixed a real bug in my own planning-phase validation**:
+      the prototype sweep that chose the first `tau_stop=0.18` never
+      actually exercised CFG guidance (always evaluated `c_uncond`).
+      Re-swept against the real `generate_guided_crisis_paths` function at
+      the endpoint's real `guidance_scale=2.0` default — the naive fix
+      only helped ~3-5%, not the ~90% the flawed prototype suggested.
+- [x] Root-caused: CFG's `(1+w)*score_cond - w*score_uncond` combination
+      amplifies the score network's own inaccuracy by up to `(1+2w)`.
+      Fixed by making `_predict_score`'s final analytic step always use
+      `guidance_scale=0`, keeping full guidance during the noisy loop.
+      Re-swept `tau_stop` with this correction: best `tau_stop=0.28`.
+- [x] **Discovered and disclosed a real trade-off**: discounting CFG for
+      the final step weakens (and can invert, confirmed on the module's
+      own `test_classifier_free_guidance_monotonicity` fixture) CFG's
+      directional effect on the final reported numbers. Fixed the test to
+      pass `tau_stop=0.0` explicitly, isolating the CFG formula's own
+      correctness from this separate, denoise-stop-specific side effect.
+- [x] `api/pilots_api.py`: `DiffusionStressTestRequest.horizon` bounded to
+      `Field(30, ge=5, le=35)` (per operator's explicit `AskUserQuestion`
+      decision), matching the range the fix is actually verified for.
+      Updated the epochs=1000 comment block to describe the new fix.
+- [x] `webapp/src/components/charts/GenerativeDiffusionStressView.tsx`:
+      horizon input `max` capped to match.
+- [x] 8 new tests in `tests/test_synthetic_diffusion_engine.py`
+      (`_tweedie_denoise` exact-match, `_resolve_tau_stop` clamp,
+      2 production-representative before/after tests confirmed to fail
+      against a deliberately-forced `_DEFAULT_TAU_STOP=0.0` regression,
+      `tau_stop=0.0` opt-out exact bit-for-bit match, short-horizon clamp
+      test), plus tightened 2 existing bound tests and updated the CFG
+      monotonicity test's isolation strategy.
+- [x] 1 new test in `tests/test_pilots_api.py`
+      (`test_horizon_out_of_bounds_returns_honest_422`).
+- [x] Full suite: `tests/test_synthetic_diffusion_engine.py` 22 passed,
+      `tests/test_pilots_api.py -k Diffusion` 20 passed, full targeted
+      sweep 635 passed. `npm run --prefix webapp -s typecheck` clean.
+- [x] Docs: known-issues doc rewritten with the full honest account
+      (including the mid-implementation design correction and the
+      disclosed trade-off), README index row updated, CLAUDE.md bullet
+      updated (auto-mirrored to AGENTS.md).
+- [x] PR #884 (the prior round's branch) merged while this round's work
+      was in progress — resolved a merge conflict (doc/census files only,
+      no production code conflicts) as the first action after exiting
+      plan mode, per the approved plan's Stage 7.
+
+### Honest final numbers (production-representative, `L=29`, `guidance_scale=2.0`)
+
+| Scenario | Disabled (`tau_stop=0.0`) | Default (`tau_stop=0.28`, final `w=0`) |
+|---|---|---|
+| Unconditional | ~38x true scale | ~18x true scale |
+| Guided (real crash bias) | ~14x true scale | ~7x true scale |
+
+Not claimed fully fixed — a genuine resolution needs an architecture/
+training redesign, disclosed as a further follow-up.

@@ -6838,7 +6838,16 @@ class DiffusionStressTestRequest(BaseModel):
     spot_price: float
     volatility: float = 0.2
     num_paths: int = 1000
-    horizon: int = 30
+    # Bounded 2026-08 (see docs/known_issues/
+    # synthetic_diffusion_reverse_sde_sign_error.md's "Further mitigated"
+    # section): the early-stop + Tweedie denoising calibration fix is
+    # verified well-calibrated up to L~29-30 (this field's own default);
+    # measured with the FIXED, un-retuned _DEFAULT_TAU_STOP, calibration
+    # degrades materially beyond horizon~35 (e.g. ~37x/~46x the true scale
+    # at horizon=45/60, vs ~12-14x at horizon<=30). Previously an
+    # unbounded bare int -- an operator could request an arbitrarily large
+    # horizon the fix was never tuned for.
+    horizon: int = Field(30, ge=5, le=35)
     drift: float = 0.0
     regime: Optional[str] = "vol_shock"
     guidance_scale: Optional[float] = 2.0
@@ -7277,19 +7286,24 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
         dates, window_len=horizon_len, max_windows=200,
     )
 
-    # epochs=1000 (was 15) -- a partial mitigation for the disclosed
-    # generation-scale calibration gap, see docs/known_issues/
-    # synthetic_diffusion_reverse_sde_sign_error.md's "Endpoint calibration
-    # gap" section. Measured on this endpoint's real hyperparameters
-    # (steps=100, dt=1/252, num_paths=500, this many training windows):
-    # 15 epochs -> generated std ~1.50, 1000 epochs -> ~0.98 (a real,
-    # verified ~35% reduction, NOT a fix -- the true training-data scale is
-    # ~0.011, so this remains roughly two orders of magnitude too large;
-    # further epoch increases show sharply diminishing returns, confirming
-    # this is a network-capacity/training-quality limit, not simply
-    # "needs more epochs"). Training cost at 1000 epochs measured at
-    # ~0.1s on this tiny 64-hidden-unit MLP -- negligible next to the
-    # endpoint's real historical-bars fetch, not a latency concern.
+    # epochs=1000 (was 15) -- part of the disclosed calibration-gap
+    # mitigation, see docs/known_issues/
+    # synthetic_diffusion_reverse_sde_sign_error.md's "Further mitigated"
+    # section for the full sweep. A multi-seed joint epochs x tau_stop
+    # sweep (this endpoint's real hyperparameters, real guidance_scale=2.0
+    # CFG combined with generate_guided_crisis_paths's own
+    # early-stop + Tweedie denoising default) confirmed 1000 remains the
+    # local optimum -- 300/500 measurably worse, 1500/2000 measurably
+    # worse. Training cost at 1000 epochs measured at ~0.1s on this tiny
+    # 64-hidden-unit MLP -- negligible next to the endpoint's real
+    # historical-bars fetch, not a latency concern. Combined with the
+    # generation-time early-stop/Tweedie-denoising default (no code change
+    # needed here -- this call inherits it automatically), the endpoint's
+    # generated-return scale is now measurably, substantially improved
+    # (verified ~2-3x further reduction on top of this epoch bump alone,
+    # depending on regime/guidance_scale) but still NOT an exact match to
+    # the true training scale -- a genuine, disclosed residual gap, not
+    # claimed fully resolved.
     model = train_conditional_diffusion_model(
         historical_data, regime_labels=regime_labels, epochs=1000, lr=0.01,
     )

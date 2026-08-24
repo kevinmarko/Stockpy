@@ -2,8 +2,17 @@
 
 **Status: sign error fixed and verified; VaR/CVaR-vs-paths consistency
 fixed and verified (2026-08-24 follow-up); endpoint calibration gap
-partially mitigated (measurably improved, not resolved) with the
-remaining gap explicitly disclosed.** Branch `fix-diffusion-reverse-sde-sign`.
+substantially mitigated via early-stop + analytic Tweedie denoising plus
+a request-contract horizon bound (2026-08-24, second follow-up) --
+generated-return scale improved a further ~2-3x on top of the epoch bump,
+still NOT an exact match to the true training scale, disclosed explicitly.
+A real trade-off discovered and disclosed during this work: the fix's
+analytic finishing step deliberately discounts CFG guidance for stability,
+which measurably weakens (and can invert, on some data) classifier-free
+guidance's directional effect on the final reported numbers.** Branches
+`fix-diffusion-reverse-sde-sign` (merged, #882),
+`fix-diffusion-varcvar-consistency-and-calibration` (merged, #884), and
+this round's follow-up.
 
 ## What happened
 
@@ -165,7 +174,7 @@ previously-hardcoded defaults during the reverted first attempt) were kept
 regardless — harmless, single-source-of-truth cleanup with no behavior
 change.
 
-## Partially mitigated: endpoint calibration/undertraining gap
+## Historical: epoch-bump mitigation (2026-08-24, first follow-up, PR #884)
 
 Fixing the sign does **not** fully resolve the endpoint's downstream
 "VaR/CVaR saturates near 100% of spot" symptom at its literal production
@@ -224,11 +233,176 @@ noise-schedule-aware network, explicit `tau` embedding, a
 higher-order/predictor-corrector SDE solver, or simply accepting a
 materially smaller `tau_max` for this endpoint's real-time latency budget
 and re-deriving what "stress" means at that shorter horizon) — out of scope
-here, and conflating it with this PR's regression tests would have made
-them unreliable (see Tests below for how they were scoped around this
-gap). Left as a named follow-up; an operator relying on this endpoint's
-absolute VaR/CVaR *magnitudes* today should treat them as measurably
-improved but not yet realistic.
+for that PR, and conflating it with its regression tests would have made
+them unreliable. This is exactly the gap the round below addresses.
+
+## Further mitigated: early-stop + analytic Tweedie denoising (2026-08-24, second follow-up)
+
+The user asked to "fully fix" the residual calibration gap. This round
+diagnosed the ACTUAL root cause (not just "undertrained"), implemented a
+real fix, discovered and corrected a genuine flaw in the fix's first
+design, and shipped a substantially — not fully — improved result. The
+honest account, including the false start:
+
+### Diagnosis: score accuracy collapses below tau~0.1
+
+Directly measured the trained score network's prediction accuracy against
+the ANALYTIC target score (sampling `x0` from real training data,
+propagating through the exact forward marginal, comparing the network's
+prediction to the true `score = -z/std`):
+
+```
+tau=0.500: true_score std=1.26  pred_score std=1.34   (median rel err 16%)
+tau=0.100: true_score std=2.33  pred_score std=2.54   (median rel err 17%)
+tau=0.050: true_score std=3.19  pred_score std=2.77   (median rel err 17%)
+tau=0.010: true_score std=7.16  pred_score std=1.87   (median rel err 74%)  <- training's own tau floor
+tau=0.001: true_score std=22.31 pred_score std=0.65   (median rel err 97%)  <- generation's floor
+```
+
+The tiny (64-hidden-unit, single-hidden-layer, raw-scalar-`tau`-input) MLP
+never learns to reproduce the true score's `~1/sqrt(tau)` blow-up as
+`tau→0`. Ruled out: score clipping (max abs raw score seen during
+generation was ~11.4, nowhere near the ±50 clip) and a
+generation-vs-training tau-floor mismatch (generation's `1e-3` floor vs.
+training's `0.01` — tested explicitly, made ~0% difference). Also tested
+and **rejected** an eps-parametrization redesign (train the network to
+predict unscaled `-z` instead of `-z/std`, reconstruct
+`score = -eps_hat/std` at inference): eps-prediction accuracy was much
+better in absolute terms, but dividing by the near-zero `std` at small
+`tau` to reconstruct the score amplifies whatever residual eps error
+remains — measured to make generation noticeably *worse*, not better.
+
+### The fix: stop early, finish with one analytic Tweedie step
+
+Instead of integrating the noisy Euler-Maruyama loop all the way to
+`tau≈1e-3`, stop early at `tau_stop` (while the score is still reasonably
+accurate) and finish with one deterministic analytic step — Tweedie's
+formula for this OU/VP-SDE:
+
+```python
+x0_hat = (x + var(tau_stop) * score(x, tau_stop)) / exp(-tau_stop)
+```
+
+Implemented as `_tweedie_denoise` in `validation/synthetic_diffusion_engine.py`,
+independently re-derived two ways (Tweedie's formula directly, and the
+closed-form Gaussian-Gaussian conjugate posterior mean for the
+`x0 ~ N(mu0,1)` case this module's own tests already use) — both give the
+exact same expression, confirmed via an exact pointwise unit test
+(`test_tweedie_denoise_recovers_known_posterior_mean_gaussian`). This is
+the same "denoised estimate"/x0-prediction technique used in the
+diffusion-modeling literature (Karras et al. 2022 EDM, DDIM's
+x0-parametrization), though a genuinely new pattern for this codebase (no
+existing precedent).
+
+`generate_synthetic_crash_paths` and `generate_guided_crisis_paths` both
+gained an optional `tau_stop: Optional[float] = None` parameter (`None` →
+`_DEFAULT_TAU_STOP`; `0.0` disables early-stopping entirely and reproduces
+the original full-integration behavior byte-for-byte — verified via
+`test_generate_paths_tau_stop_zero_disables_early_stop`). `_resolve_tau_stop`
+clamps the effective stop point to guarantee at least 2 real noisy
+integration steps always run, so a short-`tau_max` caller can never hit a
+degenerate zero-step case (`test_tau_stop_clamp_preserves_at_least_two_noisy_steps_on_short_horizons`).
+
+### A real flaw found in the first design: CFG amplifies the network's own noise
+
+The FIRST version of this fix (`tau_stop=0.18`, chosen from a sweep on a
+flawed prototype -- see below) measured a dramatic ~7-10x improvement.
+Re-verifying against the ACTUAL shipped `generate_guided_crisis_paths`
+function at the endpoint's real `guidance_scale=2.0` default showed only a
+~3-5% improvement — the sweep that chose `tau_stop=0.18` had a real bug: it
+always evaluated the model's *unconditional* score (`c_uncond`), never
+actually exercising the CFG combination `(1+w)*score_cond - w*score_uncond`
+the live endpoint uses. Re-swept properly against the real CFG-guided
+function:
+
+| guidance_scale | 0.0 | 1.0 | 2.0 (endpoint default) | 3.0 |
+|---|---|---|---|---|
+| ratio at tau_stop=0.18 | 28.8x | 56.9x | 87.1x | — |
+
+CFG's `(1+w)*score_cond - w*score_uncond` combination amplifies EACH
+underlying score prediction's own inaccuracy by up to a `(1+2w)` factor —
+at `w=2.0` this dominates over the early-stop benefit almost entirely.
+
+**Fix for the fix**: the analytic Tweedie step now always uses
+`guidance_scale=0` (pure conditional, no CFG) for its own single step,
+regardless of what guidance was requested for the noisy loop — the noisy
+loop still uses the full requested CFG guidance (that's what supplies the
+regime's real directional signal), only the final denoising step drops it.
+Re-swept `tau_stop` with this correction at the real `guidance_scale=2.0`:
+best around **`tau_stop=0.28`** (ratio ~27-32x across 3 data seeds and all
+4 regimes), vs. ~87-98x with early-stopping disabled — a real, verified
+~3x further improvement, this time on the actual production code path.
+
+### A disclosed trade-off: CFG's directional effect on the FINAL output is weakened
+
+Discounting CFG for the final step is not free. On this module's own
+`test_classifier_free_guidance_monotonicity` fixture (5 well-separated
+synthetic classes), running the DEFAULT (denoise-stop enabled) behavior at
+`guidance_scale=0` vs. `guidance_scale=3.0` **reversed** the expected
+monotonic relationship (`var95: 1.89→1.51`, decreasing with more guidance,
+not increasing) — because the neutral final step "resets" toward the
+sober, pure-conditional estimate regardless of how strongly the noisy loop
+was guided. On the production-representative scenario (real overlapping
+windows, `L=29`) with a genuinely-trained (not degenerate) two-class
+regime distinction, the effect is smaller but still present (`var95` at
+`w=0..3`: `2.72→2.70→2.67→2.65`, a slight, unintended *decrease*).
+
+This is a genuine, disclosed limitation, not silently accepted: CFG
+guidance still works correctly *during the noisy loop* (verified via
+`test_generate_guided_crisis_paths_early_stop_measurably_improves_calibration`'s
+negative-mean/crash-direction check), but its effect on the exact FINAL
+reported VaR/CVaR magnitude is now muted, and can go the wrong direction
+on some data. `test_classifier_free_guidance_monotonicity` was updated to
+pass `tau_stop=0.0` explicitly, isolating what it actually verifies (the
+CFG combination formula's own correctness) from this separate,
+denoise-stop-specific side effect — the calibration property of the
+DEFAULT behavior is covered by the new dedicated tests instead, not
+re-asserted in that test.
+
+### Honest final numbers
+
+At the endpoint's real hyperparameters (`steps=100, dt=1/252,
+guidance_scale=2.0`, the shipped `epochs=1000`, `tau_stop=0.28`,
+`_predict_score`'s final-step `w=0` fix):
+
+| Scenario | Disabled (tau_stop=0.0) | Default (tau_stop=0.28, final w=0) |
+|---|---|---|
+| Unconditional, `L=29` | ~38x true scale | ~18x true scale |
+| Guided, `L=29`, real crash bias, `w=2.0` | ~14x true scale | ~7x true scale |
+
+Roughly a further ~2x improvement on top of the epoch-bump mitigation
+above, reproducible and verified by the new tests — **still not an exact
+match**, and the residual gap remains a genuine, disclosed limitation of
+this small hand-rolled MLP architecture. An operator relying on this
+endpoint's absolute VaR/CVaR magnitudes should treat them as measurably,
+substantially improved across two rounds of mitigation, but not yet
+realistic — a true fix needs its own architecture/training redesign
+(explicit `tau` embedding or a noise-schedule-aware network, likely a
+bigger model), out of scope for both rounds so far.
+
+### L-dependence and the new horizon bound
+
+The fixed `tau_stop=0.28` default was tuned for the endpoint's actual
+default `horizon=30` (`L=29`) and is **not** re-tuned per `L`. Measured
+(not estimated, with the real CFG-guided function, `guidance_scale=2.0`, a
+genuinely-trained two-class regime distinction) across the realistic `L`
+range:
+
+| L (horizon) | 9 (10) | 14 (15) | 29 (30) | 44 (45) | 59 (60) |
+|---|---|---|---|---|---|
+| ratio | 22.4x | 21.1x | **18.3x** | 35.1x | 41.8x |
+
+Good and relatively stable for `L` up to ~30 (the production default),
+degrading materially beyond it — a real, disclosed limitation of this
+small fixed-capacity network, not something `tau_stop` alone can paper
+over for larger horizons.
+
+`DiffusionStressTestRequest.horizon` was previously an unbounded bare
+`int`; it is now `Field(30, ge=5, le=35)` — matching the range the fix is
+actually verified for — so an operator can no longer request a horizon
+this fix was never tuned for and get a silently worse-calibrated result.
+The webapp's horizon `<input>` (`GenerativeDiffusionStressView.tsx`) got a
+matching `max="35"` cap.
 
 ## Tests
 
@@ -257,7 +431,11 @@ fixture fix to an existing test:
   sign entirely* (positive mean for a negative-mean training regime), not
   merely the wrong magnitude.
 - `test_classifier_free_guidance_monotonicity` — fixture fixed (see "The
-  fix" above); still asserts CFG's directional amplification behavior.
+  fix" above); still asserts CFG's directional amplification behavior (as
+  of the second follow-up below, now with `tau_stop=0.0` explicit, to
+  isolate the CFG formula's own correctness from the separate
+  denoise-stop-specific side effect documented in "A disclosed trade-off"
+  above).
 
 All three new tests, plus the fixed monotonicity test, were confirmed to
 fail against a deliberately-reintroduced sign bug (verified by temporarily
@@ -285,6 +463,40 @@ The existing `test_var_cvar_never_reach_or_exceed_spot_price_end_to_end`
 times with the real fix applied, plus a 150-combination seed/regime/
 confidence-level sweep outside the test suite (documented above) — zero
 violations in either.
+
+`tests/test_synthetic_diffusion_engine.py` gained five more new tests for
+the second follow-up (early-stop + Tweedie denoising):
+
+- `test_tweedie_denoise_recovers_known_posterior_mean_gaussian` — exact
+  pointwise match against the closed-form conjugate posterior mean, not
+  just a statistical bound (the two formulas are algebraically identical,
+  per the derivation above).
+- `test_resolve_tau_stop_defaults_and_clamps` — `None` resolves to
+  `_DEFAULT_TAU_STOP`; the short-horizon clamp preserves at least 2 real
+  steps.
+- `test_generate_synthetic_crash_paths_early_stop_measurably_improves_calibration`
+  and `test_generate_guided_crisis_paths_early_stop_measurably_improves_calibration` —
+  production-representative (`steps=100, dt=1/252`) before/after tests for
+  the unconditional and CFG-guided (`guidance_scale=2.0`, the endpoint's
+  real default) code paths respectively; both assert the default run's
+  std-to-true-std ratio is strictly better than the same draw with
+  early-stopping explicitly disabled, plus a concrete absolute bound.
+  Confirmed to fail (both, correctly) when `_DEFAULT_TAU_STOP` is
+  temporarily forced to `0.0` (simulating a reintroduced regression).
+- `test_generate_paths_tau_stop_zero_disables_early_stop` — `tau_stop=0.0`
+  reproduces the pre-2026-08 full-integration loop bit-for-bit (verified
+  via a hand-rolled replica of the exact original discretization and RNG
+  consumption order).
+- `test_tau_stop_clamp_preserves_at_least_two_noisy_steps_on_short_horizons` —
+  finite, non-degenerate output at the tightest `tau_max` already exercised
+  elsewhere in this file.
+
+`tests/test_pilots_api.py::TestDiffusionStressTest` gained one more test
+for the new horizon bound:
+
+- `test_horizon_out_of_bounds_returns_honest_422` — `horizon=50` and
+  `horizon=1` both return a clean Pydantic validation 422, never a 500 or
+  a silent clamp.
 
 ## Related
 
