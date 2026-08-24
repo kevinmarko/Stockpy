@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-21T17:29:44.417654+00:00",
+  "generated_at": "2026-08-24T18:46:23.538095+00:00",
   "command_count": 13,
   "dead_letters": [],
   "commands": [
@@ -739,7 +739,7 @@
           "aliases": [
             "--json"
           ],
-          "description": "Also print ONE machine-readable JSON line (the LAST line of stdout) mapping strategy_id \u2192 {deployable, pbo, dsr, sharpe, max_drawdown[, error]}. The human pass/fail table is still printed above it.",
+          "description": "Also print ONE machine-readable JSON line (the LAST line of stdout) mapping strategy_id \u2192 {deployable, pbo, dsr, sharpe, max_drawdown, universe_coverage_pct, universe_coverage_ok[, error]}. The human pass/fail table is still printed above it.",
           "default": false,
           "choices": null,
           "required": false,
@@ -763,7 +763,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/code-review-786-91e400/output",
+          "default": "/Users/kevinlee/Stockpy-live/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -799,7 +799,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/code-review-786-91e400/output",
+          "default": "/Users/kevinlee/Stockpy-live/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -933,5 +933,13 @@
     "Iron Condor",
     "Long Straddle",
     "Put Credit Spread"
+  ],
+  "paper_broker_options_strategy_registry": [
+    "call_credit_spread",
+    "call_debit_spread",
+    "covered_call",
+    "put_credit_spread",
+    "put_debit_spread",
+    "vrp_premium_selling"
   ]
 }

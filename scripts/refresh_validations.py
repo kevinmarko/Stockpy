@@ -3813,6 +3813,43 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
 }
 
 
+# The subset of STRATEGY_REGISTRY entries that simulate a real, production
+# options strategy shape via validation/options_selling_backtest.py's
+# OptionsPricingRecommender-driven simulators -- i.e. the same VRP/IVR/VIX/
+# trend-bias-gated logic technical_options_engine.py::generate_strategy_pricing_matrix
+# uses to build the live directives execution/options_paper_executor.py scans
+# and actually trades in the Paper Broker. This is deliberately NOT the same
+# list as validation/options_harness.py's STANDARD_OPTIONS_STRATEGIES (the
+# webapp's other options-strategy picker, for validation.harness --strategies):
+# that harness is a simpler, ungated simulator that blindly re-enters a fixed
+# strike/DTE shape every ~35-42 days regardless of regime, and its results do
+# not reflect what the Paper Broker would actually trade -- see
+# docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-22 entries and
+# docs/architecture/webapp-and-gui.md's "options-strategy realism" bullet for
+# the full comparison. Also note the naming doesn't line up 1:1: the naive
+# harness's directional "Bull Call Spread"/"Bear Put Spread" correspond to
+# this registry's "call_debit_spread"/"put_debit_spread" (delta-targeted
+# strikes, gated on cheap IV + matching trend -- not a fixed %-OTM offset
+# entered unconditionally), and its "Long Straddle" has no production
+# equivalent here at all (the live engine never emits a long-volatility
+# directive).
+#
+# Sourced by scripts/build_command_manifest.py into the webapp Commands
+# screen's manifest (the `paper_broker_options_strategy_registry` field) so
+# an operator can run a "does this reflect live trading" bulk validation
+# instead of (or alongside) the naive one. Every name here MUST also be a
+# STRATEGY_REGISTRY key -- tests/test_command_manifest_freshness.py enforces
+# both that and drift against this exact list.
+PAPER_BROKER_OPTIONS_STRATEGIES: List[str] = [
+    "call_credit_spread",
+    "call_debit_spread",
+    "covered_call",
+    "put_credit_spread",
+    "put_debit_spread",
+    "vrp_premium_selling",
+]
+
+
 def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str], pd.Series]]:
     """Returns the ``stress_returns_fn`` (``validation.stress_scenarios.ReturnsFn``)
     for options-selling ``STRATEGY_REGISTRY`` entries, or ``None`` for every

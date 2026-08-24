@@ -13,6 +13,17 @@ interface CommandFormBuilderProps {
   onClose: () => void;
   strategyRegistry?: string[];
   optionsStrategyRegistry?: string[];
+  /**
+   * Overrides the `--strategies` multi-select's initial (and Reset-button)
+   * selection for this one open, instead of the command's usual "everything
+   * in the relevant registry" default. Used by the Commands screen's
+   * "paper-broker realistic" quick action to pre-select just
+   * `paper_broker_options_strategy_registry` on `refresh_validations.py`
+   * rather than its full ~29-strategy registry. Ignored for any option other
+   * than `--strategies`, and ignored entirely when omitted/empty (the
+   * pre-existing `registryForOption` default still applies).
+   */
+  initialStrategiesOverride?: string[];
 }
 
 export function CommandFormBuilder({
@@ -20,6 +31,7 @@ export function CommandFormBuilder({
   onClose,
   strategyRegistry = [],
   optionsStrategyRegistry = [],
+  initialStrategiesOverride = [],
 }: CommandFormBuilderProps) {
   if (!command) return null;
 
@@ -74,6 +86,15 @@ export function CommandFormBuilder({
       ? effectiveOptionsStrategies
       : effectiveStrategies;
 
+  // `--strategies`' initial/Reset selection: the caller-supplied override
+  // (e.g. Commands.tsx's "paper-broker realistic" quick action) wins when
+  // present; otherwise the pre-existing "everything in the relevant
+  // registry" default from registryForOption above.
+  const initialStrategiesSelection = (optName: string): string[] =>
+    optName === "--strategies" && initialStrategiesOverride.length > 0
+      ? initialStrategiesOverride
+      : registryForOption(optName);
+
   // Form values state: flag alias -> string | boolean
   const [optionValues, setOptionValues] = useState<Record<string, string | boolean>>(() => {
     const initial: Record<string, string | boolean> = {};
@@ -86,8 +107,9 @@ export function CommandFormBuilder({
         // Plural --strategies defaults to "the whole registry" when omitted
         // (both refresh_validations.py and validation.harness's bulk mode) --
         // make that default explicit and visible in the form instead of
-        // leaving it silently blank.
-        initial[opt.name] = registryForOption(opt.name).join(",");
+        // leaving it silently blank -- unless a caller-supplied override
+        // (see initialStrategiesSelection above) narrows it for this open.
+        initial[opt.name] = initialStrategiesSelection(opt.name).join(",");
       } else {
         initial[opt.name] = "";
       }
@@ -211,7 +233,7 @@ export function CommandFormBuilder({
                 for (const opt of activeSpec.options) {
                   if (!opt.takes_value) reset[opt.name] = Boolean(opt.default);
                   else if (opt.default !== null && opt.default !== undefined) reset[opt.name] = String(opt.default);
-                  else if (opt.name === "--strategies") reset[opt.name] = registryForOption(opt.name).join(",");
+                  else if (opt.name === "--strategies") reset[opt.name] = initialStrategiesSelection(opt.name).join(",");
                   else reset[opt.name] = "";
                 }
                 setOptionValues(reset);
