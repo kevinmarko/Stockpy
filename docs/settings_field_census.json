@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "74346f9966a858c278e81aaf0e870689fad1cc0a",
+    "git_commit": "cc7eebd77f6fedd9b68096b7153a6769bb65c3a6",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {

@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 319,
+    "live_safe": 318,
     "no_op": 3,
-    "restart_required": 104,
+    "restart_required": 105,
     "total": 426
   },
   "dynamic_sites": [
@@ -363,7 +363,6 @@
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
     "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
-    "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
     "PAPER_TRADING_START_DATE",
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
@@ -932,7 +931,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:101",
+        "site": "data/paper_account_store.py:111",
         "via": []
       },
       {
@@ -1096,7 +1095,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:105",
+        "site": "data/paper_account_store.py:115",
         "via": []
       },
       {
@@ -1105,7 +1104,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:107",
+        "site": "data/paper_account_store.py:117",
         "via": []
       },
       {
@@ -1332,7 +1331,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:105",
+        "site": "data/paper_account_store.py:115",
         "via": []
       },
       {
@@ -1341,7 +1340,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:107",
+        "site": "data/paper_account_store.py:117",
         "via": []
       },
       {
@@ -1673,9 +1672,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:157",
+        "site": "data/paper_account_store.py:218",
         "via": [
-          112
+          136
         ]
       }
     ],
@@ -2311,7 +2310,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:105",
+        "site": "data/paper_account_store.py:115",
         "via": []
       },
       {
@@ -2806,6 +2805,17 @@
         "via": []
       }
     ],
+    "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_body"
+        ],
+        "site": "data/paper_account_store.py:137",
+        "via": []
+      }
+    ],
     "PROMPT_REGISTRY_REFRESH_SECONDS": [
       {
         "discarded": false,
@@ -3111,7 +3121,7 @@
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
-    "init_body": 6,
+    "init_body": 7,
     "init_self_assign": 51,
     "method_self_assign": 4,
     "module_level": 78,
