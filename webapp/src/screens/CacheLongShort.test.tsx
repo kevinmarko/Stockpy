@@ -16,6 +16,10 @@ vi.mock("../api/client", () => ({
     // rather than needing a full Thresholds fixture here.
     getThresholds: vi.fn().mockResolvedValue(null),
     getUniverse: vi.fn().mockResolvedValue({ symbols: [] }),
+    // SymbolInput (ConfiguratorWizard's Symbol field) also queries this for
+    // its "not yet tracked" FMP section -- both files resolve
+    // "../api/client"/"../../api/client" to the same webapp/src/api/client.ts.
+    getSymbolSearch: vi.fn().mockResolvedValue({ query: "", results: [], reason: null }),
   },
   apiMeta: { useMock: false },
 }));

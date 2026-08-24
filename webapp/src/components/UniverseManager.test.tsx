@@ -3,11 +3,14 @@
  * Covers the seeded chip list, add (persists + triggers onSelect), remove, and
  * the default navigate-to-symbol-detail behavior when no onSelect is passed.
  */
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UniverseManager } from "./UniverseManager";
+import { api } from "../api/client";
 import { __resetMockDataUniverse } from "../api/mock";
+import { __resetUniverseCache } from "./universeCache";
 
 function LocationProbe() {
   const loc = useLocation();
@@ -112,5 +115,40 @@ describe("UniverseManager (real mock API)", () => {
     );
     fireEvent.click(await screen.findByText("AAPL"));
     expect(onSelect).toHaveBeenCalledWith("AAPL");
+  });
+
+  it("adding a stock also triggers a spot data backfill for it", async () => {
+    const backfillSpy = vi.spyOn(api, "triggerSymbolBackfill");
+    render(
+      <MemoryRouter>
+        <UniverseManager />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("universe-chip-AAPL");
+
+    fireEvent.change(screen.getByLabelText("Add a stock"), { target: { value: "tsla" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(backfillSpy).toHaveBeenCalledWith("TSLA"));
+  });
+
+  it("the 'Add a stock' field suggests from its OWN tracked list (DEFAULT_TICKERS), not the shared pipeline-snapshot universe", async () => {
+    // The shared GET /universe cache (universeCache.ts) is a DIFFERENT list
+    // from what this screen manages -- this is the fix for the bug where
+    // SymbolInput here suggested from the wrong universe entirely.
+    __resetUniverseCache();
+    const getUniverseSpy = vi.spyOn(api, "getUniverse");
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <UniverseManager />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("universe-chip-AAPL"); // seeded DEFAULT_TICKERS includes AAPL
+
+    await user.type(screen.getByLabelText("Add a stock"), "AAP");
+    const list = await screen.findByTestId("symbol-suggestions");
+    expect(within(list).getByText("AAPL")).toBeInTheDocument();
+    expect(getUniverseSpy).not.toHaveBeenCalled();
   });
 });

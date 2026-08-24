@@ -54,6 +54,11 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
     }
     await persist([...list, sym], sym);
     setDraft("");
+    // Non-blocking "spot data download" -- this screen's entire purpose is
+    // adding an untracked symbol, so pair the add with a real bar backfill
+    // instead of leaving it waiting for the next cycle's lazy backfill-on-
+    // miss. A failure here never affects the add itself (CONSTRAINT #6).
+    api.triggerSymbolBackfill(sym).catch(() => {});
   };
 
   const remove = (sym: string) => persist(list.filter((s) => s !== sym));
@@ -158,6 +163,12 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
             hint="Enter any ticker and press Add — it joins your tracked universe."
             buttonText="Add"
             pending={pending}
+            // This screen's own tracked set IS `list` (DEFAULT_TICKERS via
+            // GET/PUT /data/universe) -- a different list from the shared
+            // universeCache (GET /universe, the pipeline-snapshot
+            // universe), which is what SymbolInput suggested from here
+            // before this fix.
+            trackedSymbols={list}
           />
           {(note || saveError) && (
             <div style={{ marginTop: "var(--s-2)", fontSize: "var(--t-body)", color: saveError ? theme.decline : theme.textMuted }}>

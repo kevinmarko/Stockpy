@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useId,
   useMemo,
@@ -8,22 +9,30 @@ import {
 } from "react";
 import { Button } from "./ui";
 import { useDebounce } from "../hooks/useDebounce";
-import type { UniverseSymbol } from "../api/types";
+import { api } from "../api/client";
+import type { UniverseSymbol, SymbolSearchResult } from "../api/types";
 import { loadUniverse, getCachedUniverse } from "./universeCache";
 
 /**
  * Shared symbol entry bar for the per-symbol research screens (Data Explorer,
- * Signal Breakdown, Forecast Viewer). An accessible combobox: as the operator
- * types, it suggests tickers from the tracked universe (`GET /universe`) so they
- * don't have to know a symbol by heart — every suggestion resolves to a real
- * detail page. Selecting a suggestion (Enter on a highlighted row, Tab, or
- * click) loads it immediately.
+ * Signal Breakdown, Forecast Viewer, Sentiment Dynamics, Sector Selection),
+ * Pairs Radar, Cache Long/Short, Paper Broker's Quick Trade, and Universe
+ * Manager. An accessible combobox: as the operator types, it suggests
+ * tickers from the tracked universe (`GET /universe`, or `trackedSymbols` --
+ * see below) so they don't have to know a symbol by heart — every tracked
+ * suggestion resolves to a real detail page. It ALSO suggests any FMP-known
+ * symbol not yet tracked (`GET /data/symbol-search`, debounced, rendered
+ * under a "Not yet tracked" section) unless `enableFmpSuggestions={false}`.
+ * Selecting a suggestion (Enter on a highlighted row, Tab, or click) loads it
+ * immediately, tracked or not.
  *
  * Free-text is preserved: pressing Load — or Enter with nothing highlighted —
  * submits whatever is typed, uppercased/trimmed, even if it isn't in the
- * universe (so arbitrary tickers still work). The universe fetch is lazy,
- * shared across all instances (module cache), and non-fatal: if it fails the
- * field silently degrades to a plain text input.
+ * universe or FMP's results (so arbitrary tickers still work). The tracked
+ * universe fetch is lazy, shared across all instances (module cache) UNLESS
+ * `trackedSymbols` is supplied, and non-fatal: if either fetch fails the
+ * field silently degrades (tracked → plain text input; FMP → tracked-only
+ * suggestions).
  *
  * Only commits to `onSubmit` on a deliberate action (submit / accept), never per
  * keystroke, so the owning screen's `useApi` refetches once per lookup.
@@ -33,7 +42,10 @@ import { loadUniverse, getCachedUniverse } from "./universeCache";
 // pure module, no React) so this file only exports the `SymbolInput`
 // component -- see that file for the module-level cache and fetch contract.
 
-const MAX_SUGGESTIONS = 8;
+const MAX_TRACKED_SUGGESTIONS = 8;
+const MAX_FMP_SUGGESTIONS = 5;
+
+type SuggestionRow = { symbol: string; action: string | null; tracked: boolean };
 
 export function SymbolInput({
   initial = "",
@@ -45,6 +57,8 @@ export function SymbolInput({
   buttonText,
   onChange,
   testId = "symbol-input",
+  trackedSymbols,
+  enableFmpSuggestions = true,
 }: {
   initial?: string;
   onSubmit: (symbol: string) => void;
@@ -60,9 +74,24 @@ export function SymbolInput({
    * "symbol-input" to stay compatible with every existing single-instance
    * caller/test. */
   testId?: string;
+  /** Supply the caller's OWN tracked-symbol list instead of the shared
+   * `GET /universe` module cache. Universe Manager needs this: its own
+   * tracked set is `DEFAULT_TICKERS` (`GET/PUT /data/universe`), a
+   * different list from the pipeline-snapshot universe every other
+   * SymbolInput instance suggests from -- passing this avoids suggesting
+   * from the wrong universe entirely, and skips the shared cache fetch. */
+  trackedSymbols?: string[];
+  /** Set `false` to suppress the FMP "not yet tracked" section entirely --
+   * used by Sector Selection, where `GET /sector/selection` only ever reads
+   * persisted DB state, so an untracked symbol is a guaranteed honest-empty
+   * dead end and surfacing one here would just be misleading. */
+  enableFmpSuggestions?: boolean;
 }) {
   const [value, setValue] = useState(initial);
-  const [universe, setUniverse] = useState<UniverseSymbol[]>(getCachedUniverse() ?? []);
+  const [universe, setUniverse] = useState<UniverseSymbol[]>(
+    trackedSymbols ? [] : getCachedUniverse() ?? []
+  );
+  const [fmpResults, setFmpResults] = useState<SymbolSearchResult[]>([]);
   const [open, setOpen] = useState(false);
   // -1 = nothing highlighted → Enter submits the typed text (free-text default);
   // 0..n-1 = a suggestion is highlighted → Enter/Tab accept it.
@@ -72,6 +101,7 @@ export function SymbolInput({
   const hintId = `${autoId}-hint`;
 
   useEffect(() => {
+    if (trackedSymbols) return; // caller supplies its own tracked list -- no shared fetch needed
     let alive = true;
     void loadUniverse().then((u) => {
       if (alive) setUniverse(u);
@@ -79,22 +109,78 @@ export function SymbolInput({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [trackedSymbols]);
 
   const debouncedValue = useDebounce(value, 200);
   const q = debouncedValue.trim().toUpperCase();
-  const suggestions = useMemo(() => {
+
+  // trackedSymbols (when supplied) wins over the shared universe cache --
+  // reshaped to the same {symbol, action} shape so the rest of this
+  // component doesn't need to know which source it came from.
+  const trackedList = useMemo<UniverseSymbol[]>(
+    () =>
+      trackedSymbols
+        ? trackedSymbols.map((s) => ({ symbol: s.toUpperCase(), action: null }))
+        : universe,
+    [trackedSymbols, universe]
+  );
+
+  const trackedSuggestions = useMemo(() => {
     if (!q) return [];
     const starts: UniverseSymbol[] = [];
     const contains: UniverseSymbol[] = [];
-    for (const u of universe) {
+    for (const u of trackedList) {
       const s = u.symbol;
       if (s === q) continue; // exact match needs no suggestion — Enter submits it
       if (s.startsWith(q)) starts.push(u);
       else if (s.includes(q)) contains.push(u);
     }
-    return [...starts, ...contains].slice(0, MAX_SUGGESTIONS);
-  }, [q, universe]);
+    return [...starts, ...contains].slice(0, MAX_TRACKED_SUGGESTIONS);
+  }, [q, trackedList]);
+
+  // Debounced live FMP symbol search for the "not yet tracked" section.
+  // Non-fatal: a failed/disabled fetch just leaves this section empty,
+  // matching the tracked-universe fetch's own degrade-silently contract.
+  useEffect(() => {
+    if (!enableFmpSuggestions || !q) {
+      setFmpResults([]);
+      return;
+    }
+    let alive = true;
+    api
+      .getSymbolSearch(q, MAX_FMP_SUGGESTIONS)
+      .then((res) => {
+        if (alive) setFmpResults(res.results ?? []);
+      })
+      .catch(() => {
+        if (alive) setFmpResults([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [q, enableFmpSuggestions]);
+
+  const trackedSymbolSet = useMemo(
+    () => new Set(trackedList.map((u) => u.symbol)),
+    [trackedList]
+  );
+
+  // Merged, flat list -- tracked first, then FMP results not already
+  // tracked -- so keyboard nav (activeIndex) stays a single flat index
+  // across both visual sections.
+  const suggestions = useMemo<SuggestionRow[]>(() => {
+    const tracked: SuggestionRow[] = trackedSuggestions.map((u) => ({
+      symbol: u.symbol,
+      action: u.action,
+      tracked: true,
+    }));
+    if (!enableFmpSuggestions) return tracked;
+    const untracked: SuggestionRow[] = fmpResults
+      .filter((r) => r.symbol !== q && !trackedSymbolSet.has(r.symbol))
+      .slice(0, MAX_FMP_SUGGESTIONS)
+      .map((r) => ({ symbol: r.symbol, action: null, tracked: false }));
+    return [...tracked, ...untracked];
+  }, [trackedSuggestions, fmpResults, trackedSymbolSet, enableFmpSuggestions, q]);
 
   const showDropdown = open && suggestions.length > 0;
   const activeId =
@@ -210,21 +296,31 @@ export function SymbolInput({
           >
             {suggestions.map((s, i) => {
               const selected = i === activeIndex;
+              // Section header right before the first untracked row --
+              // i === 0 covers the FMP-only case (no tracked matches at
+              // all), the previous-row check covers the mixed case.
+              const showHeader = !s.tracked && (i === 0 || suggestions[i - 1].tracked);
               return (
-                <li
-                  key={s.symbol}
-                  id={`${listId}-opt-${i}`}
-                  className={`combobox-option${selected ? " is-active" : ""}`}
-                  role="option"
-                  aria-selected={selected}
-                  onMouseDown={(e) => {
-                    e.preventDefault(); // keep focus in the input through the click
-                    commit(s.symbol);
-                  }}
-                >
-                  <span className="combobox-symbol">{s.symbol}</span>
-                  {s.action && <span className="combobox-action">{s.action}</span>}
-                </li>
+                <Fragment key={s.symbol}>
+                  {showHeader && (
+                    <li role="presentation" className="combobox-section-header" aria-hidden="true">
+                      Not yet tracked
+                    </li>
+                  )}
+                  <li
+                    id={`${listId}-opt-${i}`}
+                    className={`combobox-option${selected ? " is-active" : ""}`}
+                    role="option"
+                    aria-selected={selected}
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // keep focus in the input through the click
+                      commit(s.symbol);
+                    }}
+                  >
+                    <span className="combobox-symbol">{s.symbol}</span>
+                    {s.action && <span className="combobox-action">{s.action}</span>}
+                  </li>
+                </Fragment>
               );
             })}
           </ul>
