@@ -345,7 +345,8 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
             type="number"
             step="1"
             min="5"
-            max="252"
+            max="35"
+            title="The calibration fix is only verified well-calibrated up to a 30-35 day horizon; the backend now rejects requests outside this range."
             className="w-full bg-gray-800 border border-gray-600 p-1.5 rounded text-sm text-white focus:border-accent focus:outline-none"
             value={horizonDays}
             onChange={(e) => setHorizonDays(parseInt(e.target.value, 10) || 30)}
