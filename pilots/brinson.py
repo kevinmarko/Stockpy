@@ -46,10 +46,23 @@ that overflows float arithmetic) could still trigger the engine's own
 fabricated-zero fallback. Callers of :func:`compute_brinson_fachler` should
 treat an all-zero result with a nonzero-input request as a signal worth
 surfacing to the operator, not as ground truth.
+
+A second, related-but-distinct known limitation, same "do NOT touch
+``evaluation_engine.py``" boundary: ``_calculate_brinson_fachler_compat``'s
+``pd.merge(..., on="sector", how="outer")`` has no duplicate-sector dedup
+check of its own — two rows sharing a sector name make that merge produce a
+Cartesian-product row set for the sector, which its own downstream
+``{row["sector"]: {...}}`` dict comprehension then silently collapses via
+key collision (aggregate totals stay correct; only ``Sector Details`` loses
+data). Rather than touch the shared engine, this module rejects duplicate
+sector names outright (a hard ``ValueError`` -> HTTP 422) in
+:func:`compute_brinson_fachler`, before the engine is ever called — see
+:func:`_find_duplicate_sectors`.
 """
 from __future__ import annotations
 
 import math
+from collections import Counter
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
@@ -99,6 +112,33 @@ def _clean_nan(obj: Any) -> Any:
     if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
         return None
     return obj
+
+
+def _find_duplicate_sectors(rows: List[Dict[str, Any]]) -> List[str]:
+    """Return the sorted list of sector names that appear more than once
+    among ``rows`` (post-strip, non-blank names only -- a blank sector is
+    already rejected elsewhere and isn't a "duplicate" in any meaningful
+    sense).
+
+    Why this matters: ``EvaluationEngine._calculate_brinson_fachler_compat``
+    merges the portfolio/benchmark frames ``pd.merge(..., on="sector",
+    how="outer")`` with no dedup check. Two rows sharing a sector name make
+    that merge produce a Cartesian-product row set for that sector, and the
+    downstream ``{row["sector"]: {...} for row in merged.to_dict('records')}``
+    dict comprehension then silently collapses all but one of those rows via
+    dict-key collision -- real per-sector data loss in ``Sector Details``
+    (the aggregate totals stay correct, since that math is linear and
+    insensitive to how the rows are split). Detected and rejected here,
+    before the engine is ever called, rather than left to that downstream
+    collision.
+    """
+    names = [
+        str(r.get("sector") or "").strip()
+        for r in (rows or [])
+        if isinstance(r, dict) and str(r.get("sector") or "").strip()
+    ]
+    counts = Counter(names)
+    return sorted(name for name, n in counts.items() if n > 1)
 
 
 def build_brinson_fachler_frames(
@@ -168,7 +208,11 @@ def validate_brinson_fachler_rows(rows: List[Dict[str, Any]]) -> List[str]:
         sector weight almost always indicates a data-entry error in
         long-only attribution);
       * at least one non-zero weight overall (an all-zero matrix is legal
-        input shape-wise but produces a meaningless all-zero result).
+        input shape-wise but produces a meaningless all-zero result);
+      * no duplicate sector names (see :func:`_find_duplicate_sectors` --
+        this one is escalated to a hard ``ValueError`` by
+        :func:`compute_brinson_fachler`, not merely a warning, since letting
+        it through would silently corrupt the per-sector breakdown).
     """
     warnings: List[str] = []
     valid_rows = [
@@ -177,6 +221,13 @@ def validate_brinson_fachler_rows(rows: List[Dict[str, Any]]) -> List[str]:
     ]
     if not valid_rows:
         return ["No rows with a non-blank sector name."]
+
+    dupes = _find_duplicate_sectors(rows)
+    if dupes:
+        warnings.append(
+            "Duplicate sector name(s) found: " + ", ".join(dupes)
+            + " -- each sector must appear in exactly one row."
+        )
 
     p_sum = sum(_coerce_float(r.get("portfolio_weight_pct")) for r in valid_rows)
     b_sum = sum(_coerce_float(r.get("benchmark_weight_pct")) for r in valid_rows)
@@ -221,6 +272,20 @@ def compute_brinson_fachler(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     # shows them inline) and do not block computation.
     if validation_errors and validation_errors[0].startswith("No rows with a non-blank sector name"):
         raise ValueError(validation_errors[0])
+
+    # Duplicate sector names are ALSO a hard failure (checked independently of
+    # validate_brinson_fachler_rows()'s warning-list ordering above) -- unlike
+    # the other checks, letting a duplicate through would silently corrupt
+    # the per-sector breakdown via a Cartesian-product merge + dict-key
+    # collision downstream in EvaluationEngine._calculate_brinson_fachler_compat
+    # (see _find_duplicate_sectors' docstring for the full mechanism).
+    dupes = _find_duplicate_sectors(rows)
+    if dupes:
+        raise ValueError(
+            "Duplicate sector name(s) found: " + ", ".join(dupes)
+            + ". Each sector must appear in exactly one row -- merge or "
+            "rename the duplicates before submitting."
+        )
 
     portfolio_df, benchmark_df = build_brinson_fachler_frames(rows)
 
