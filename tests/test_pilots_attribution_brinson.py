@@ -160,6 +160,26 @@ class TestValidateRows:
         warnings = validate_brinson_fachler_rows(rows)
         assert "All weights are zero — nothing to attribute." in warnings
 
+    def test_duplicate_sector_name_warns(self):
+        rows = [
+            {
+                "sector": "Technology",
+                "portfolio_weight_pct": 30.0,
+                "portfolio_return_pct": 10.0,
+                "benchmark_weight_pct": 30.0,
+                "benchmark_return_pct": 8.0,
+            },
+            {
+                "sector": "Technology",
+                "portfolio_weight_pct": 30.0,
+                "portfolio_return_pct": 12.0,
+                "benchmark_weight_pct": 20.0,
+                "benchmark_return_pct": 9.0,
+            },
+        ]
+        warnings = validate_brinson_fachler_rows(rows)
+        assert any("Duplicate sector name(s) found: Technology" in w for w in warnings)
+
 
 # ---------------------------------------------------------------------------
 # pilots/brinson.py — compute_brinson_fachler (engine bridge)
@@ -205,6 +225,37 @@ class TestComputeBrinsonFachler:
     def test_blank_sector_only_raises_value_error(self):
         with pytest.raises(ValueError):
             compute_brinson_fachler([{"sector": ""}])
+
+    def test_duplicate_sector_name_raises_value_error(self):
+        """A repeated sector name must be a hard reject, not silently
+        computed -- letting it through would corrupt Sector Details via a
+        Cartesian-product merge + dict-key collision in
+        EvaluationEngine._calculate_brinson_fachler_compat."""
+        rows = [
+            {
+                "sector": "Technology",
+                "portfolio_weight_pct": 30.0,
+                "portfolio_return_pct": 10.0,
+                "benchmark_weight_pct": 30.0,
+                "benchmark_return_pct": 8.0,
+            },
+            {
+                "sector": "Technology",
+                "portfolio_weight_pct": 30.0,
+                "portfolio_return_pct": 12.0,
+                "benchmark_weight_pct": 20.0,
+                "benchmark_return_pct": 9.0,
+            },
+            {
+                "sector": "Financials",
+                "portfolio_weight_pct": 40.0,
+                "portfolio_return_pct": 5.0,
+                "benchmark_weight_pct": 50.0,
+                "benchmark_return_pct": 6.0,
+            },
+        ]
+        with pytest.raises(ValueError, match="Duplicate sector name.*Technology"):
+            compute_brinson_fachler(rows)
 
     def test_result_is_json_clean_no_nan(self):
         import math
@@ -256,6 +307,15 @@ class TestBrinsonFachlerEndpoint:
             json={"rows": [{"sector": "   "}]},
         )
         assert resp.status_code == 422
+
+    def test_duplicate_sector_name_returns_422_with_message(self):
+        rows = _TWO_SECTOR_ROWS + [dict(_TWO_SECTOR_ROWS[0])]  # duplicate "Technology"
+        resp = client.post(
+            "/portfolio/attribution/brinson-fachler",
+            json={"rows": rows},
+        )
+        assert resp.status_code == 422
+        assert "Technology" in resp.json()["detail"]
 
     def test_weights_not_summing_to_100_still_computes_with_warnings(self):
         rows = [{

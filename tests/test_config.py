@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 114
+    EXPECTED_COLUMN_COUNT = 115
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -270,7 +270,7 @@ class TestAdvisoryColumnCoverage:
         "VaR 95", "Beta", "CoVaR Proxy", "Realized Slippage",
         "Forecast_10", "Forecast_60", "Forecast_90",
         "Forecast_30_Prophet_Lower", "Forecast_30_Prophet_Upper",
-        "MFE", "MAE", "BF_Allocation", "BF_Selection", "Portfolio_Heat",
+        "MFE", "MAE", "BF_Allocation", "BF_Selection", "BF_Interaction", "Portfolio_Heat",
         "XSec_12_1M", "XSec_Momentum_Rank",
         "Value_Z", "Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite",
         "News_Sentiment", "Earnings_Date", "Correlation_Cluster",
@@ -315,8 +315,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 79
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 114
+        assert len(unmapped) == 80
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 115
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and
