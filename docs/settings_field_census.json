@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "566860d9badb26a6470b81b090b224523d7d3377",
+    "git_commit": "8e5a25a33c9ccd70ff024fc9627173f66c3f34dd",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3863,7 +3863,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 769,
+      "total_reads": 772,
       "distinct_fields": 249,
       "counts": {
         "OUTPUT_DIR": 133,
@@ -3909,6 +3909,7 @@
         "MARKET_DATA_QUOTE_TTL_SECONDS": 4,
         "MCP_DATABASE_URL_RO": 4,
         "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 4,
+        "PROMPT_REGISTRY_ENABLED": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
         "SIZING_CAP_AUDIT_ENABLED": 4,
         "SNAPSHOT_HISTORY_DAYS": 4,
@@ -3927,7 +3928,7 @@
         "NEWS_EARNINGS_SUPPRESS_HOURS": 3,
         "OPTIONS_TRUE_IVR_ENABLED": 3,
         "OPTIONS_VRP_THRESHOLD": 3,
-        "PROMPT_REGISTRY_ENABLED": 3,
+        "PROMPT_REGISTRY_SIGNING_KEY": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
         "ROBINHOOD_EXECUTION_MODE": 3,
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 3,
@@ -3999,8 +4000,8 @@
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
         "PILOTS_API_PORT": 2,
         "PROGRESS_POLL_SECONDS": 2,
+        "PROMPT_REGISTRY_BACKEND": 2,
         "PROMPT_REGISTRY_PINS": 2,
-        "PROMPT_REGISTRY_SIGNING_KEY": 2,
         "PROMPT_REGISTRY_URL": 2,
         "PROMPT_REGISTRY_WRITES_ENABLED": 2,
         "RH_LOGIN_DEADLINE_SECONDS": 2,
@@ -4067,7 +4068,6 @@
         "PIT_CAPTURE_ENABLED": 1,
         "PROMPT_CACHE_DIR": 1,
         "PROMPT_CACHE_KEEP_VERSIONS": 1,
-        "PROMPT_REGISTRY_BACKEND": 1,
         "PROMPT_REGISTRY_PUBLISH_TOKEN": 1,
         "PROMPT_REGISTRY_TOKEN": 1,
         "PYTRENDS_ENABLED": 1,

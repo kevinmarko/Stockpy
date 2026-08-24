@@ -586,8 +586,8 @@ def _pr_resolve_source(reg, prompt_id: str):
     """Return (resolved_version, source_label) for prompt_id without calling
     reg.get() (which would echo the full body). Mirrors the resolution order
     PromptRegistry.get() actually uses: pin -> remote manifest -> newest disk
-    cache -> baseline -- so the reported version matches what get() would
-    return, unlike the panel's version which read the OLDEST cached entry.
+    cache -> baseline -- matching gui/panels/prompt_registry.py's own
+    _pr_resolve_source, which also reads the newest (versions[0]) cached entry.
     """
     pinned_ver = getattr(reg, "_pins", {}).get(prompt_id)
     if pinned_ver is not None:

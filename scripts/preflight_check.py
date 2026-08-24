@@ -160,13 +160,30 @@ Checks (15 total)
                                   regardless of broker mode).
 
 Note: the "(N total)" figure above and the numbered list are historical and
-have drifted from ALL_CHECKS as checks were added over time (27 entries as
+have drifted from ALL_CHECKS as checks were added over time (28 entries as
 of this writing, most recently robinhood_execution_mode /
 robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_session_present
 / env_no_duplicate_keys / alert_channels_reachable / no_stray_database_files /
-output_dir_matches_local_data_root / daemon_pid_alive, none of which carry a
-number above). ALL_CHECKS is the single source of truth for the actual set
-and order of checks that run.
+output_dir_matches_local_data_root / daemon_pid_alive /
+prompt_registry_signing_key_configured, none of which carry a number above).
+ALL_CHECKS is the single source of truth for the actual set and order of
+checks that run.
+
+prompt_registry_signing_key_configured — BLOCKING (not warning-only). Fails
+                                        if PROMPT_REGISTRY_ENABLED=True with
+                                        PROMPT_REGISTRY_BACKEND in {http,
+                                        firestore} but no
+                                        PROMPT_REGISTRY_SIGNING_KEY is set —
+                                        that combination fetches prompt bodies
+                                        over the network with signature
+                                        verification silently skipped, so an
+                                        attacker or compromised endpoint could
+                                        inject unverified instructions into
+                                        every live LLM call site. Passes
+                                        (no-op) when the registry is disabled,
+                                        or backend=local (no network fetch).
+                                        See
+                                        docs/known_issues/prompt_registry_unsigned_remote_adoption.md.
 
 no_stray_database_files              — WARNING-ONLY diagnostic tripwire (never
                                         blocking). Resolves the canonical DB
@@ -1858,6 +1875,58 @@ def check_alert_channels_reachable() -> CheckResult:
         )
 
 
+def check_prompt_registry_signing_key_configured() -> CheckResult:
+    """Fail if a remote-fetching Prompt Registry backend is enabled with no signing key.
+
+    ``PROMPT_REGISTRY_ENABLED=True`` with ``PROMPT_REGISTRY_BACKEND`` set to
+    ``"http"`` or ``"firestore"`` fetches prompt bodies over the network.
+    ``prompt_registry.registry.PromptRegistry._safe_adopt``'s Gate 1 (HMAC-SHA256
+    signature verification) is a no-op whenever ``PROMPT_REGISTRY_SIGNING_KEY``
+    is unset — every fetched version then only has to clear the guardrails
+    deny-list (``prompt_registry/guardrails.py``) to be adopted and reach every
+    live LLM call site (Gravity, chart insight, commentary, research, portfolio
+    context). ``prompt_registry.registry.PromptRegistry.__init__`` and
+    ``_build_registry_from_settings`` both now refuse this combination at
+    runtime (raising / falling back to cache-baseline-only respectively) — this
+    check exists so the misconfiguration is caught at go-live time too, not
+    only discovered via a CRITICAL log line after the fact. ``"local"`` backend
+    is exempt: it reads a local file, never the network, so there is nothing in
+    transit for an attacker to forge. See
+    ``docs/known_issues/prompt_registry_unsigned_remote_adoption.md``.
+
+    Blocking (not warning-only) — this risk is independent of trading mode or
+    ``ADVISORY_ONLY``; the LLM call sites it protects run in every deployment
+    shape, not just when submitting broker orders.
+    """
+    name = "prompt_registry_signing_key_configured"
+    try:
+        enabled = settings.PROMPT_REGISTRY_ENABLED
+        backend = (settings.PROMPT_REGISTRY_BACKEND or "http").strip().lower()
+        signing_key = settings.PROMPT_REGISTRY_SIGNING_KEY
+    except Exception as exc:
+        return CheckResult(name, False, f"Check raised: {exc}")
+    if not enabled:
+        return CheckResult(name, True, "PROMPT_REGISTRY_ENABLED=False — remote registry inactive")
+    if backend not in ("http", "firestore"):
+        return CheckResult(
+            name, True,
+            f"PROMPT_REGISTRY_BACKEND={backend!r} — no network fetch; signing not required",
+        )
+    if not signing_key:
+        return CheckResult(
+            name, False,
+            f"PROMPT_REGISTRY_ENABLED=True with PROMPT_REGISTRY_BACKEND={backend!r} "
+            "but PROMPT_REGISTRY_SIGNING_KEY is not set — every fetched prompt "
+            "version would skip signature verification, letting a compromised or "
+            "malicious endpoint inject unverified instructions into every live LLM "
+            "call site. Set PROMPT_REGISTRY_SIGNING_KEY in .env, or switch "
+            "PROMPT_REGISTRY_BACKEND=local for offline dev.",
+        )
+    return CheckResult(
+        name, True, f"PROMPT_REGISTRY_SIGNING_KEY is configured for backend={backend!r}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -1894,6 +1963,7 @@ ALL_CHECKS = [
     check_no_unexpected_risk_blocks,
     check_calibration_drift,
     check_alert_channels_reachable,
+    check_prompt_registry_signing_key_configured,
 ]
 
 
