@@ -1,10 +1,12 @@
 # Known issue (2026-08-19, resolved): two independent `orchestrator_daemon` processes running concurrently against the same live database
 
-**Status: resolved on the spot (stale process terminated, single daemon
-confirmed healthy).** Found incidentally while investigating the
-`forecast_tracker_local_data_root_split.md` known issue — not itself a code
-bug, but a real operational hazard worth recording, since the root cause of
-*why* it happened is only partially understood.
+**Status: root cause found and fixed (2026-08-24 follow-up below).** The
+2026-08-19 incident below was resolved on the spot (stale process killed)
+with the root cause only partially understood. It recurred on 2026-08-24 —
+same symptom, same two processes (an always-on `com.investyo.stack` instance
+and a manually-launched one) — and that second occurrence was actually
+traced to a real race condition in `launch_webapp.command`, now fixed. See
+"2026-08-24 follow-up" at the bottom for the mechanism and the fix.
 
 ## What was found
 
@@ -112,3 +114,67 @@ database, with `output/daemon.json` accurately reflecting it.
   previously-documented failure mode (a new daemon's own bind failing
   because an old one holds the port) from the one found here (two daemons
   both fully alive, neither failing to start).
+
+## 2026-08-24 follow-up: root cause found and fixed
+
+Recurred with the identical two-process signature — one `com.investyo.stack`
+launchd instance (`--interval 300`), one manually-launched instance from an
+open `launch_webapp.command --live` terminal session — surfaced this time as
+the Pilots PWA's Pipeline screen repeatedly showing the same "FULL" run
+recorded multiple times in quick succession, and the screen appearing to
+refresh continuously (both explained by two daemons independently ticking
+their own timers against the same shared `pipeline_runs` DB, and the
+webapp's "poll every 3s while a run is in flight" logic never settling
+because `is_running` kept flipping as the two daemons alternated).
+
+**Immediate cleanup done on the affected machine** (same remedy as the
+2026-08-19 incident, this time by explicit operator decision to fully
+decouple the two mechanisms rather than just kill the extra process):
+`launchctl unload ~/Library/LaunchAgents/com.investyo.stack.plist`, plist
+moved to `~/Library/LaunchAgents/disabled/` (not deleted — trivially
+restorable), and the orphaned process killed. The operator explicitly chose
+"app-controlled only" going forward on this machine (daemon runs only while
+the app is open; no background collection while it's closed) over "keep
+always-on, fix the race" — a real trade-off, not a bug fix, and specific to
+this operator's stated preference; another operator could reasonably choose
+the other side.
+
+**Root cause, this time actually found**: `launch_webapp.command`'s
+`_bring_up_control_and_pilots_api()` decided whether to start a daemon based
+on a single, non-retried `_port_up 8601 || _port_up 8602` health check —
+unlike every other reuse check in the same script (`_start_api`), which
+retries for up to ~20s before giving up. A real daemon process can be alive
+but not yet answering `/health` for several genuine reasons: engines still
+warming on startup (the same "can take several seconds" window
+`_start_api`'s own retry loop already accounts for), or — specific to the
+`com.investyo.stack` case — mid-restart inside `launchd`'s own
+`ThrottleInterval` window after a crash. Any one-shot check that lands
+inside that window reads as "nothing is running" and proceeds to start a
+second daemon process. Only one of the two ever wins the actual port bind;
+the loser keeps running, unbound and outside this script's shutdown trap
+(never added to `STARTED_PIDS`), independently ticking its own interval
+timer against the same shared database — exactly the two-daemon signature
+both incidents in this file describe. This mechanism was not identified in
+the 2026-08-19 investigation above; "why it happened" was previously
+unresolved, and this is the actual answer for at least this occurrence.
+
+**Fix**: `launch_webapp.command` now checks for an already-running
+`desktop.orchestrator_daemon` *process* (`pgrep -f`) before deciding to
+start a new one — a much stronger signal than "does the health endpoint
+answer right now" for the one decision that matters here. If a matching
+process is already running, the script waits (same ~20s grace `_start_api`
+already gives a fresh daemon) for it to become healthy instead of racing it
+with a second one, and never adds its PID to `STARTED_PIDS` — leaving it
+running untouched on exit, same as any daemon this script didn't start.
+This does not change behavior for the common case (daemon already healthy,
+or genuinely nothing running) — it only closes the specific silent-but-alive
+window that produced both incidents in this file.
+
+**What is still open, honestly**: this fix addresses the race inside
+`launch_webapp.command` specifically. It does not add the "count
+`orchestrator_daemon` processes and warn above one" preflight/observability
+check the 2026-08-19 investigation flagged as a cheap follow-up — that
+remains undone. Nor does it change anything about `desktop/daemon_runtime.py`
+or `desktop/orchestrator_daemon.py` themselves; a daemon started by some
+other means entirely (not via `launch_webapp.command`) is not protected by
+this fix.

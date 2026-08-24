@@ -422,6 +422,27 @@ _start_api() {  # $1 = module:app ; $2 = port ; $3 = friendly name
     fi
 }
 
+# Detects an already-running orchestrator daemon PROCESS, independent of
+# whether it currently answers /health. A single _port_up check has no grace
+# period for a real daemon that's genuinely up but momentarily silent — e.g.
+# a launchd-managed instance (com.investyo.stack) mid-restart inside its own
+# ThrottleInterval window, or a daemon (this script's own or launchd's) still
+# warming its engines on startup, which _start_api's own retry loop below
+# already treats as normal and worth waiting ~20s for. Without this check,
+# that silent window reads as "nothing is running" and this script starts a
+# SECOND daemon process racing the first for :8601 — only one wins the bind,
+# and the loser keeps running unbound, invisible to this script's shutdown
+# trap, independently ticking its own timer loop against the same shared
+# pipeline_runs DB as the winner. That's what produced duplicate/overlapping
+# "FULL" pipeline runs in practice; matching on the process's own argv is a
+# strictly stronger signal than "did :8601 answer just now" for the one
+# decision that actually matters here — whether to spawn a second process at
+# all. See docs/known_issues/duplicate_orchestrator_daemon_processes.md's
+# "2026-08-24 follow-up" section for the full incident and root cause.
+_orchestrator_daemon_pid() {
+    pgrep -f "desktop\.orchestrator_daemon" 2>/dev/null | head -n 1
+}
+
 # control_api (:8601) and pilots_api (:8602) are, in the fully-configured
 # case, ONE process (desktop/orchestrator_daemon.py) rather than two
 # independent uvicorn stubs — see the file header comment for why starting
@@ -434,6 +455,41 @@ _bring_up_control_and_pilots_api() {
         # exactly like every other _start_api call in this script.
         _start_api "api.pilots_api:app"   8602 "pilots_api"
         _start_api "api.control_api:app"  8601 "control_api"
+        return 0
+    fi
+
+    # Neither port answered just now, but a real orchestrator daemon process
+    # may still be alive and simply not ready to answer /health yet (see
+    # _orchestrator_daemon_pid's comment above). Wait for THAT one instead of
+    # racing it with a second process — starting a competing daemon here can
+    # never actually help, only leave an orphaned second one running.
+    local existing_pid
+    existing_pid="$(_orchestrator_daemon_pid)"
+    if [ -n "$existing_pid" ]; then
+        echo "  ▶  an orchestrator daemon process is already running (PID $existing_pid) — waiting for it…"
+        local ok=false
+        for _ in $(seq 1 40); do          # same ~20s grace _start_api gives a fresh daemon
+            if _port_up 8601; then ok=true; break; fi
+            sleep 0.5
+        done
+        if [ "$ok" = true ]; then
+            echo "  ✓  reusing existing orchestrator daemon (control_api :8601, PID $existing_pid)"
+        else
+            echo "  ⚠  PID $existing_pid is running but never answered on :8601 — not starting a"
+            echo "     second daemon (that would only race it for the port). It wasn't started by"
+            echo "     this script, so check its own log (e.g. output/stack_daemon.log if it's the"
+            echo "     launchd-managed service) rather than /tmp/stockpy_webapp_logs/."
+        fi
+        # PILOTS_API_ENABLED=false -> the daemon process doesn't host :8602
+        # itself; fall back to starting it standalone, same as below.
+        if _port_up 8602; then
+            echo "  ✓  pilots_api already up on :8602 (hosted by the daemon)"
+        else
+            _start_api "api.pilots_api:app" 8602 "pilots_api"
+        fi
+        # This invocation did not start the daemon — deliberately NOT added
+        # to STARTED_PIDS, so the exit trap leaves it running untouched
+        # (same "only stop what THIS script started" contract as elsewhere).
         return 0
     fi
 
