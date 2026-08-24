@@ -19,8 +19,19 @@ A remote or cached record is **adopted** only after two independent checks
 run inside :meth:`_safe_adopt`:
 
 1. ``signing.verify(body, signature, key)`` — constant-time HMAC-SHA256.
-   Skipped when no ``PROMPT_REGISTRY_SIGNING_KEY`` is configured (appropriate
-   for ``LocalJSONStore`` offline dev use).
+   Skipped only when no ``PROMPT_REGISTRY_SIGNING_KEY`` is configured AND the
+   configured store never fetches over the network (``LocalJSONStore``,
+   genuinely local offline dev use — a body it reads never crossed a wire an
+   attacker could tamper with). This restriction is enforced in code, not
+   merely documented here: constructing this class with a *remote-fetching*
+   store (``HTTPStore`` / ``FirestoreStore``) and ``signing_key=None`` raises
+   ``ValueError`` immediately (see :meth:`__init__`), and
+   :func:`_build_registry_from_settings` refuses to build an ``http`` /
+   ``firestore`` store at all under that same misconfiguration — logging
+   CRITICAL and falling back to cache/baseline-only resolution rather than
+   ever adopting an unverified remote record. See
+   ``docs/known_issues/prompt_registry_unsigned_remote_adoption.md`` for the
+   full incident write-up.
 2. ``guardrails.validate_prompt(prompt_id, body)`` — deny-list, size, and
    required-marker checks.  These run even on locally-stored records so a
    tampered-on-disk body is still rejected.
@@ -88,14 +99,25 @@ class PromptRegistry:
         the standard ``output/prompt_cache/`` directory with ``keep=5``.
     signing_key:
         Symmetric HMAC-SHA256 key (hex or raw string) for signature checks.
-        When ``None`` signature verification is skipped — appropriate for
-        offline ``LocalJSONStore`` dev setups.
+        When ``None``, signature verification is skipped — but ONLY for a
+        local/offline *store* (``LocalJSONStore`` or ``None``).  Passing a
+        remote-fetching store (``HTTPStore`` / ``FirestoreStore``) together
+        with ``signing_key=None`` raises ``ValueError``: running a remote
+        backend unsigned would let a compromised or malicious endpoint
+        inject unverified instructions into every live LLM call site with no
+        code-level defense left standing but the guardrail deny-list.
     pins:
         Mapping of ``{prompt_id: version}`` that forces specific versions.
         Updated in-memory by :meth:`rollback`.
     enabled:
         Master switch.  When ``False`` the remote store is never contacted
         and all resolution falls straight through to cache → baseline.
+
+    Raises
+    ------
+    ValueError
+        If *store* is an ``HTTPStore`` or ``FirestoreStore`` instance and
+        *signing_key* is ``None`` — see *signing_key* above.
     """
 
     def __init__(
@@ -107,6 +129,19 @@ class PromptRegistry:
         pins: Optional[Dict[str, str]] = None,
         enabled: bool = True,
     ) -> None:
+        if signing_key is None and isinstance(store, (HTTPStore, FirestoreStore)):
+            raise ValueError(
+                f"PromptRegistry refuses to construct with a remote-fetching "
+                f"store ({type(store).__name__}) and signing_key=None — every "
+                f"fetched prompt version would skip HMAC-SHA256 verification "
+                f"entirely (_safe_adopt's Gate 1 is a no-op when signing_key "
+                f"is None), letting a compromised or malicious remote endpoint "
+                f"inject unverified instructions into every live LLM call "
+                f"site.  Configure PROMPT_REGISTRY_SIGNING_KEY, or use "
+                f"LocalJSONStore for offline dev (the one backend that never "
+                f"fetches over the network, so there is nothing in transit "
+                f"for an attacker to tamper with)."
+            )
         self._store = store
         self._cache = cache if cache is not None else CacheManager()
         self._signing_key = signing_key or None
@@ -455,6 +490,13 @@ def _build_registry_from_settings() -> PromptRegistry:
 
     When ``settings.PROMPT_REGISTRY_ENABLED`` is falsy, returns a
     baseline-only registry with no store (zero network calls, CONSTRAINT #5).
+
+    When ``PROMPT_REGISTRY_BACKEND`` is ``"http"`` or ``"firestore"`` and no
+    ``PROMPT_REGISTRY_SIGNING_KEY`` is configured, refuses to construct that
+    remote store at all — logs CRITICAL, fires an alert, and returns a
+    cache/baseline-only registry — rather than adopting unverified remote
+    content (see :class:`PromptRegistry`'s "Security gates" module docstring
+    and ``docs/known_issues/prompt_registry_unsigned_remote_adoption.md``).
     """
     from settings import settings as _settings  # lazy import — avoids import-order coupling
 
@@ -494,6 +536,37 @@ def _build_registry_from_settings() -> PromptRegistry:
     # ── Backend / store ───────────────────────────────────────────────────────
     backend = (_settings.PROMPT_REGISTRY_BACKEND or "http").strip().lower()
     store: Optional[PromptStore] = None
+
+    # Security gate: a remote-fetching backend (http / firestore) with no
+    # signing key means every fetched prompt version would skip HMAC-SHA256
+    # verification entirely — PromptRegistry.__init__ itself now refuses to
+    # accept that combination (raises ValueError), so this check has to run
+    # BEFORE constructing HTTPStore/FirestoreStore rather than letting that
+    # raise propagate out of the singleton factory and crash every caller of
+    # get_registry(). Refuse to build the store instead: log CRITICAL + fire
+    # an alert, and fall back to cache/baseline-only resolution — mirroring
+    # the existing "PROMPT_REGISTRY_URL not set" degrade below, just at
+    # CRITICAL rather than WARNING given the severity (unverified remote
+    # content would otherwise reach every live LLM call site). LocalJSONStore
+    # is exempt — it never fetches over the network, so there is nothing in
+    # transit for an attacker to tamper with. See
+    # docs/known_issues/prompt_registry_unsigned_remote_adoption.md.
+    if backend in ("http", "firestore") and not signing_key:
+        msg = (
+            f"PROMPT REGISTRY MISCONFIGURATION — PROMPT_REGISTRY_BACKEND={backend!r} "
+            "is enabled with no PROMPT_REGISTRY_SIGNING_KEY configured. Every "
+            "fetched prompt version would skip signature verification entirely. "
+            "Refusing to construct the remote store; falling back to "
+            "cache/baseline-only resolution. Set PROMPT_REGISTRY_SIGNING_KEY in "
+            ".env, or use PROMPT_REGISTRY_BACKEND=local for offline dev."
+        )
+        logger.critical(msg)
+        try:
+            from observability.alerts import send_alert  # lazy import
+            send_alert("CRITICAL", msg)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_build_registry: failed to dispatch alert: %s", exc)
+        return PromptRegistry(cache=cache, signing_key=signing_key, pins=pins, enabled=enabled)
 
     try:
         if backend == "http":
