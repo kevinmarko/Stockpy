@@ -11182,6 +11182,12 @@ export const mockApi = {
       portfolio_beta: portBeta,
       sector_exposures: sectorExposures,
       diversification_ratio: divRatio,
+      // The mock doesn't run a real SLSQP solve, so it can never genuinely fail to
+      // converge -- these are here for type/contract parity with the live endpoint,
+      // not to simulate non-convergence. See HrpPortfolioOptimizerView.test.tsx for
+      // the fallback-banner UI test, which supplies its own "fallback" fixture.
+      status: "optimal" as const,
+      hrp_fallback: false,
       as_of: new Date().toISOString(),
     }, 400);
   },
@@ -12239,6 +12245,10 @@ export const mockApi = {
           ivr: 62.4,
           trend_bias: "Bullish",
           target_dte: 30,
+          vrp: 0.031,
+          vix: 17.8,
+          short_delta: 0.28,
+          credit_to_width_ratio: 0.29,
           legs: [
             { Strike: 150.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 2.20 },
             { Strike: 145.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.75 },
@@ -12252,6 +12262,10 @@ export const mockApi = {
           ivr: 58.0,
           trend_bias: "Neutral",
           target_dte: 30,
+          vrp: 0.024,
+          vix: 17.8,
+          short_delta: 0.24,
+          credit_to_width_ratio: 0.42,
           legs: [
             { Strike: 400.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 1.80 },
             { Strike: 395.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.70 },
@@ -12396,6 +12410,7 @@ export const mockApi = {
       train_roc_auc: 0.812,
       trained_at: "2026-08-14T12:00:00Z",
       enabled: true,
+      metrics_are_in_sample: true,
     });
   },
   async retrainOptionsMetaModel() {
@@ -12405,6 +12420,7 @@ export const mockApi = {
       accuracy: 78.5,
       roc_auc: 0.812,
       trained_at: new Date().toISOString(),
+      metrics_are_in_sample: true,
     });
   },
   async settleExpiredPaperOptions() {

@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from validation.metrics import probability_of_backtest_overfitting
 
@@ -82,3 +83,17 @@ def test_pbo_nan_oos_for_is_winner_excluded_not_miscounted_as_not_overfit():
     # were wrongly counted as measurable-and-not-overfit (the pre-fix bug),
     # this would come out to 0.5 instead.
     assert pbo == 1.0
+
+
+def test_pbo_empty_input_returns_nan_not_fabricated_zero():
+    """
+    Calling with genuinely empty arrays (n_paths == 0) must degrade to NaN
+    ("cannot measure this"), never a fabricated 0.0 ("no overfitting
+    detected") -- CONSTRAINT #4. This matches the function's own
+    measurable_paths == 0 -> NaN convention used later in the same function;
+    the empty-shape guard at the top must not silently disagree with it.
+    """
+    in_sample_sharpes = np.empty((0, 0))
+    out_of_sample_sharpes = np.empty((0, 0))
+    pbo = probability_of_backtest_overfitting(in_sample_sharpes, out_of_sample_sharpes)
+    assert math.isnan(pbo)

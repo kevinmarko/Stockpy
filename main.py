@@ -660,6 +660,16 @@ def _build_context_extras(
 
     Returns an empty dict (and logs a warning) if pre_compute raises.
     """
+    # This is a THIRD hand-duplicated copy of the same Jegadeesh-Titman (1993)
+    # 12-1m momentum formula -- see main_orchestrator.py::compute_xsec_momentum_ranks
+    # (the reference implementation) and pipeline/production_steps.py::
+    # _compute_xsec_momentum (the live orchestrator-path copy, whose own
+    # docstring names all three and cross-references this one). If
+    # SKIP_DAYS/LOOKBACK_DAYS ever change here, change them in both of those
+    # too -- tests/test_xsec_momentum_advisory_parity.py numerically verifies
+    # all three stay in agreement at their shared default constants and will
+    # fail CI on drift (this copy hardcodes the constants as locals rather
+    # than parameters, so only the default-constants comparison applies to it).
     SKIP_DAYS = 22       # 1-month skip for Jegadeesh-Titman momentum
     LOOKBACK_DAYS = 252  # 12-month lookback
     REQUIRED = LOOKBACK_DAYS + SKIP_DAYS + 1

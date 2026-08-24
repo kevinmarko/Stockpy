@@ -438,7 +438,7 @@ heterogeneously tethered — ownership 0.25/0.15/0.10/0.05, comovement
 ETF_TRANSMISSION_COV_INFLATION` at `{0.0, 0.15, 0.30, 0.50} × {0.0, 0.25,
 0.50, 1.00}`, holding every other knob at its shipped default. Baseline
 per-name weight is a uniform 0.10 (40 × 0.10 = 4.0 gross), deliberately
-above `MAX_PORTFOLIO_GROSS`'s shipped default of 3.0 so the portfolio cap
+above `MAX_PORTFOLIO_GROSS`'s shipped default of 2.0 so the portfolio cap
 binds even with both features off.
 
 | max_derate ↓ / cov_inflation → | 0.00 | 0.25 | 0.50 | 1.00 |

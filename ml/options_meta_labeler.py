@@ -9,6 +9,7 @@ probability dynamically gates and scales contract sizing in automated paper trad
 from __future__ import annotations
 
 import logging
+import math
 import pickle
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -39,6 +40,50 @@ class OptionsTradeFeatureRow:
     outcome_win: Optional[int] = None  # 1 for profit > 0, 0 for loss <= 0
 
 
+_UNSET = object()
+
+
+def _resolve_numeric_feature(row: Dict[str, Any], key: str, default: float) -> float:
+    """Resolves a numeric feature from a raw feature dict.
+
+    Returns ``default`` only when ``key`` is entirely absent from ``row`` (a
+    caller simply didn't mention this feature -- today's existing,
+    backward-compatible behavior). Returns ``NaN`` when ``key`` IS present but
+    its value is ``None``, non-finite, or unparseable as a float -- i.e. an
+    EXPLICITLY unresolved value, as opposed to an omitted one. Silently
+    substituting the same ``default`` for that case was the root cause of a
+    real bug: an unresolvable IVR (present in the dict as `float("nan")`, not
+    absent) previously sailed through as a normal value and produced an
+    overconfident prediction. The NaN this returns instead propagates into
+    the feature vector, letting ``OptionsMetaLabeler.predict_probability``'s
+    finiteness gate decline to score rather than silently guessing.
+    """
+    raw = row.get(key, _UNSET)
+    if raw is _UNSET:
+        return default
+    if raw is None:
+        return float("nan")
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return float("nan")
+    return val if math.isfinite(val) else float("nan")
+
+
+def _finite_or_nan(value: Any) -> float:
+    """Coerces a dataclass field value to float, collapsing None/non-finite/
+    unparseable input to NaN rather than raising or silently defaulting --
+    mirrors ``_resolve_numeric_feature``'s NaN-propagation contract for the
+    ``OptionsTradeFeatureRow`` dataclass path."""
+    if value is None:
+        return float("nan")
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return val if math.isfinite(val) else float("nan")
+
+
 class OptionsMetaLabeler:
     """
     Stage 4 ML Meta-Labeling classifier for quantitative options strategies.
@@ -53,7 +98,6 @@ class OptionsMetaLabeler:
         "ivr",
         "vrp",
         "vix",
-        "trend_bias",
         "target_dte",
         "credit_to_width_ratio",
         "short_delta",
@@ -68,29 +112,30 @@ class OptionsMetaLabeler:
         self.train_roc_auc: float = 0.0
 
     def _extract_feature_vector(self, row: Dict[str, Any] | OptionsTradeFeatureRow) -> np.ndarray:
-        """Extracts normalized numerical feature vector from feature row."""
+        """Extracts normalized numerical feature vector from feature row.
+
+        NOTE: ``trend_bias`` is deliberately NOT a model feature (see
+        docs/known_issues/options_meta_labeler_serving_time_gaps.md) -- it
+        meant a different thing at train time (a pure function of strategy
+        name) than at serve time (a real technical trend signal), so it was
+        dropped rather than left silently mismatched.
+        """
         if isinstance(row, OptionsTradeFeatureRow):
             strat = row.strategy
-            ivr = row.ivr
-            vrp = row.vrp
-            vix = row.vix
-            trend = row.trend_bias
-            dte = row.target_dte
-            c_w = row.credit_to_width_ratio
-            s_delta = row.short_delta
+            ivr = _finite_or_nan(row.ivr)
+            vrp = _finite_or_nan(row.vrp)
+            vix = _finite_or_nan(row.vix)
+            dte = _finite_or_nan(row.target_dte)
+            c_w = _finite_or_nan(row.credit_to_width_ratio)
+            s_delta = _finite_or_nan(row.short_delta)
         else:
             strat = str(row.get("strategy", ""))
-            ivr = float(row.get("ivr", 50.0))
-            vrp = float(row.get("vrp", 0.02))
-            vix = float(row.get("vix", 20.0))
-            trend_raw = row.get("trend_bias", 0.0)
-            if isinstance(trend_raw, str):
-                trend = 1.0 if "BULL" in trend_raw.upper() else (-1.0 if "BEAR" in trend_raw.upper() else 0.0)
-            else:
-                trend = float(trend_raw)
-            dte = int(row.get("target_dte", 35))
-            c_w = float(row.get("credit_to_width_ratio", 0.25))
-            s_delta = float(row.get("short_delta", 0.30))
+            ivr = _resolve_numeric_feature(row, "ivr", default=50.0)
+            vrp = _resolve_numeric_feature(row, "vrp", default=0.02)
+            vix = _resolve_numeric_feature(row, "vix", default=20.0)
+            dte = _resolve_numeric_feature(row, "target_dte", default=35.0)
+            c_w = _resolve_numeric_feature(row, "credit_to_width_ratio", default=0.25)
+            s_delta = _resolve_numeric_feature(row, "short_delta", default=0.30)
 
         is_put = 1.0 if "put" in strat.lower() else 0.0
         is_call = 1.0 if "call" in strat.lower() else 0.0
@@ -103,7 +148,6 @@ class OptionsMetaLabeler:
             ivr / 100.0,
             vrp,
             vix / 50.0,
-            trend,
             dte / 60.0,
             c_w,
             s_delta,
@@ -149,7 +193,7 @@ class OptionsMetaLabeler:
             self.model = ("baseline", float(y[0]))
             self.trained_at = datetime.now(timezone.utc)
             self.n_samples = len(y)
-            return {"accuracy": 1.0, "roc_auc": 0.50, "samples": len(y)}
+            return {"accuracy": 1.0, "roc_auc": 0.50, "samples": len(y), "metrics_are_in_sample": True}
 
         try:
             from sklearn.ensemble import HistGradientBoostingClassifier
@@ -191,7 +235,7 @@ class OptionsMetaLabeler:
         # Automatically persist
         self.save_model()
 
-        return {"accuracy": acc, "roc_auc": auc, "samples": len(y)}
+        return {"accuracy": acc, "roc_auc": auc, "samples": len(y), "metrics_are_in_sample": True}
 
     def predict_probability(self, row: Dict[str, Any] | OptionsTradeFeatureRow) -> float:
         """
@@ -204,8 +248,19 @@ class OptionsMetaLabeler:
 
         x_vec = self._extract_feature_vector(row).reshape(1, -1)
 
+        if not np.all(np.isfinite(x_vec)):
+            logger.warning(
+                "OptionsMetaLabeler.predict_probability: declining to score -- "
+                "one or more required features (ivr/vrp/vix/target_dte/"
+                "credit_to_width_ratio/short_delta) were missing or non-finite "
+                "for this directive. Returning the neutral fallback (0.65 / "
+                "1.0x sizing) instead of letting NaN reach the model, which "
+                "previously produced a confident prediction on unresolved data."
+            )
+            return 0.65
+
         if isinstance(self.model, tuple) and self.model[0] == "baseline":
-            return float(self.model[1])
+            return float(np.clip(self.model[1], 0.05, 0.95))
 
         if isinstance(self.model, tuple) and self.model[0] == "linear_fallback":
             weights = self.model[1]
@@ -240,6 +295,15 @@ class OptionsMetaLabeler:
         multiplier = 1.0 + (edge - 0.15) * 4.0
         return float(np.clip(multiplier, 0.30, 1.50))
 
+    def _row_features_finite(self, row: Dict[str, Any] | OptionsTradeFeatureRow) -> bool:
+        """Whether every feature this row would produce is finite -- independent
+        of whether a model is currently loaded. Used to distinguish "the model
+        gave a genuinely neutral/low-confidence answer" from "scoring was
+        skipped because required data was unresolved" in score_option_directive's
+        returned metadata."""
+        x_vec = self._extract_feature_vector(row)
+        return bool(np.all(np.isfinite(x_vec)))
+
     def score_option_directive(
         self,
         directive: Dict[str, Any],
@@ -259,6 +323,7 @@ class OptionsMetaLabeler:
             "sizing_multiplier": round(sizing_mult, 2),
             "approved": approved,
             "trained_samples": self.n_samples,
+            "features_resolved": self._row_features_finite(directive),
         }
 
     def save_model(self, path: Optional[Path] = None) -> None:

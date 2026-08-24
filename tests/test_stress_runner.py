@@ -142,6 +142,29 @@ def test_compute_max_drawdown_empty_is_nan():
     assert np.isnan(compute_max_drawdown(pd.Series(dtype=float)))
 
 
+def test_compute_max_drawdown_day_one_wipeout_is_total():
+    # A -100% day-1 return means running_max stays 0 for the whole series
+    # (equity is wiped out immediately and never recovers via cumprod) --
+    # this must report a full 1.0 drawdown, not NaN (CONSTRAINT #4: a real
+    # 100% loss must never read as "unmeasurable").
+    returns = pd.Series([-1.0, 0.1, 0.05])
+    assert compute_max_drawdown(returns) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_compute_max_drawdown_mid_series_wipeout_is_total():
+    # Regression: a wipeout *after* some initial gain already unambiguously
+    # produced 1.0 before this fix (running_max was nonzero going into the
+    # -100% day) -- pins that this fix doesn't change that path.
+    returns = pd.Series([0.05, -0.5, -1.0, 0.2])
+    assert compute_max_drawdown(returns) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_compute_max_drawdown_empty_still_nan_after_fix():
+    # Confirms the empty-series short-circuit (unrelated to the zero_peak
+    # guard added for the day-1-wipeout case) is untouched by this fix.
+    assert np.isnan(compute_max_drawdown(pd.Series([], dtype=float)))
+
+
 def test_account_survival_blowup_detected():
     # A -100% day wipes the account.
     assert account_survived(pd.Series([0.01, -1.0, 0.02])) is False

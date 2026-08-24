@@ -365,6 +365,52 @@ class TestConfigCompleteness:
             "deliberately and this test's expectation should change."
         )
 
+    def test_vol_target_fallback_matches_settings_defaults(self):
+        """``_compute_kelly_sizing_detailed``'s OTHER branch -- the
+        volatility-target fallback used when trade history is insufficient
+        for the fractional-Kelly path -- hardcodes ``max_leverage=2.0`` /
+        ``target_vol=0.10`` as bare literals rather than importing
+        ``settings.MAX_LEVERAGE`` / ``settings.VOL_TARGET``. Unlike
+        ``kelly_fraction``/``kelly_cap`` above, this pair has no drift test:
+        it happens to match today's live defaults, but if either settings
+        value is ever tuned without updating this hardcoded fallback, the
+        advisory path would silently diverge from the orchestrator's
+        ``sizing.position_sizer.size_position()`` path with nothing to catch
+        it. This exercises the fallback branch directly (an empty
+        transactions store forces ``estimate_win_rate_and_payoff`` to return
+        NaN/NaN) and compares its output against calling
+        ``sizing.vol_target.volatility_target_weight`` with the current
+        settings values -- mirroring
+        ``test_kelly_config_matches_settings_defaults``'s pattern for the
+        aggregate-Kelly branch.
+        """
+        from engine.advisory import _compute_kelly_sizing_detailed
+        from sizing.vol_target import volatility_target_weight
+        from transactions_store import TransactionsStore
+        from settings import settings
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")  # no closed trades -> forces the fallback
+        garch_vol = 0.20
+
+        # A very high ceiling isolates the fallback's own literals from the
+        # advisory-layer clamp (CONFIG["max_single_position_pct"]), which is
+        # a separate, already-covered concern.
+        final_pct, _was_capped, _binding = _compute_kelly_sizing_detailed(
+            garch_vol, ts, max_pct=1e6,
+        )
+
+        expected_raw = volatility_target_weight(
+            garch_vol, target_vol=settings.VOL_TARGET, max_leverage=settings.MAX_LEVERAGE,
+        )
+        assert final_pct == pytest.approx(expected_raw), (
+            "engine.advisory._compute_kelly_sizing_detailed's vol-target "
+            "fallback hardcodes max_leverage=2.0/target_vol=0.10 -- these "
+            "have drifted from settings.MAX_LEVERAGE/settings.VOL_TARGET. "
+            "Update the literals in _compute_kelly_sizing_detailed "
+            "(engine/advisory.py) to match, or this decision was made "
+            "deliberately and this test's expectation should change."
+        )
+
     def test_no_magic_numbers_in_logic(self):
         """Sanity: decision logic constants are never literals outside CONFIG."""
         import inspect

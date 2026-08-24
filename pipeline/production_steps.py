@@ -1884,8 +1884,19 @@ def _compute_xsec_momentum(
     Mirrors main_orchestrator.compute_xsec_momentum_ranks()'s exact
     formula, defaults, and insufficient-history exclusion -- duplicated
     here (not imported) because this fix's file scope is deliberately
-    restricted to pipeline/production_steps.py; keep the two in lockstep
-    if skip_days/lookback_days ever change in either place.
+    restricted to pipeline/production_steps.py.
+
+    NOTE: this formula is actually hand-duplicated a THIRD time, in
+    main.py::_build_context_extras (its own inline copy, for the advisory
+    path -- search that file for ``SKIP_DAYS = 22``). Keep all three
+    (main_orchestrator.py::compute_xsec_momentum_ranks, this function, and
+    main.py::_build_context_extras) in lockstep if skip_days/lookback_days
+    ever change in any one of them. This is no longer just a hand-maintained
+    comment: tests/test_xsec_momentum_advisory_parity.py numerically
+    cross-checks all three at their shared default constants and will fail
+    CI the moment one of them drifts from the other two (tests/test_xsec_
+    momentum.py separately covers the first two, including custom
+    skip_days/lookback_days).
 
     Parameters
     ----------

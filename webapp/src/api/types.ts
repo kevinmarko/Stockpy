@@ -3998,6 +3998,13 @@ export interface StrategyOptionCandidate {
   trend_bias: string;
   target_dte: number;
   legs: any[];
+  // Stage 4 ML Meta-Labeler inference features -- null when unresolvable
+  // (e.g. no macro/vrp context passed, or no short leg on this directive).
+  // Not rendered anywhere today; present for mock/live parity.
+  vrp?: number | null;
+  vix?: number | null;
+  short_delta?: number | null;
+  credit_to_width_ratio?: number | null;
 }
 
 export interface StrategyOptionsCandidatesResponse {
@@ -4218,6 +4225,9 @@ export interface OptionsMetaModelStatus {
   train_roc_auc: number;
   trained_at: string | null;
   enabled: boolean;
+  // In-sample only -- train() has no purged/held-out evaluation. See
+  // docs/known_issues/options_meta_labeler_serving_time_gaps.md.
+  metrics_are_in_sample?: boolean;
 }
 
 export interface OptionsMetaModelRetrainResult {
@@ -4226,6 +4236,7 @@ export interface OptionsMetaModelRetrainResult {
   accuracy: number;
   roc_auc: number;
   trained_at: string;
+  metrics_are_in_sample?: boolean;
 }
 
 export interface PaperBrokerSettleExpiredResult {
@@ -5165,6 +5176,16 @@ export interface HrpCvarOptimizeResponse {
   portfolio_beta: number;
   sector_exposures: Record<string, number>;
   diversification_ratio: number;
+  /** Whether the SLSQP solve actually converged ("optimal") or fell back to the
+   * clipped/normalized initial HRP guess ("fallback", e.g. an infeasible sector-cap
+   * or beta-range combination). See sizing/hrp_cvar_optimizer.py's
+   * optimize_turnover_regularized_hrp_cvar -- this was previously computed but never
+   * returned by the API, making a non-convergent solve indistinguishable from a
+   * clean optimum (2026-08 math-audit finding). */
+  status: "optimal" | "fallback";
+  /** Whether HRP quasi-diagonalization itself (the clustering step, independent of
+   * the SLSQP solve above) fell back to equal-weight. */
+  hrp_fallback?: boolean;
   as_of?: string;
 }
 
