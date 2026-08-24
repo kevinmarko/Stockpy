@@ -10,6 +10,9 @@ import pytest
 import numpy as np
 
 from pilots.lob_simulator import (
+    DEFAULT_MARKET_ORDER_RATE,
+    DEFAULT_CANCEL_RATE,
+    DEFAULT_TIME_HORIZON_SEC,
     OrderFlowEvent,
     LOBArrivalRates,
     QueueSimulationResult,
@@ -769,9 +772,18 @@ def test_evaluate_optimal_queue_level_basic(sample_5level_lob):
     c2 = res.candidates[1]  # Level 2
     c3 = res.candidates[2]  # Level 3
 
-    # Level 1 has highest fill probability & lowest latency
+    # Level 1 has the lowest latency, and fill probability never INCREASES with depth. Not
+    # asserted strictly-decreasing: evaluate_optimal_queue_level() now wires in the rigorous
+    # CST (2010) compute_cst_fill_probability() formula (fix for audit item #5 -- it previously
+    # called a separate, un-derived heuristic here) instead, and under this book's realistic
+    # default calibration (theta=5 orders/sec, 60s horizon => ~300 expected market orders) that
+    # formula genuinely judges levels 1-3's modest queue depths (25/110/270 shares ahead) as
+    # all effectively certain to fill within the horizon -- all three legitimately saturate at
+    # the function's own [0.01, 0.99] display clamp rather than being distinguishable at 4
+    # decimal places. expected_fill_latency_sec (computed independently of the fill-probability
+    # formula) remains a strictly increasing, reliably distinguishing metric.
     assert c1["level_index"] == 1
-    assert c1["fill_probability"] > c2["fill_probability"] > c3["fill_probability"]
+    assert c1["fill_probability"] >= c2["fill_probability"] >= c3["fill_probability"]
     assert c1["expected_fill_latency_sec"] < c2["expected_fill_latency_sec"] < c3["expected_fill_latency_sec"]
 
     # Level 2 & 3 capture higher spread than Level 1
@@ -786,34 +798,90 @@ def test_evaluate_optimal_queue_level_basic(sample_5level_lob):
 
 def test_evaluate_optimal_queue_level_urgency_tradeoff(sample_5level_lob):
     """
-    Test urgency modulation:
-    - 'aggressive' / 'immediate' prioritizes fast execution at Level 1.
-    - 'passive' is willing to place deeper at Level 2/3 for higher spread capture.
+    Test urgency modulation via the recommended level's expected fill latency, which is the
+    robust, formula-agnostic invariant here: as urgency intensity relaxes (immediate ->
+    aggressive -> normal -> passive, i.e. decay_multiplier decreasing from 4.5 -> 2.0 -> 0.80 ->
+    0.20), the time-decay penalty on a deeper/slower level shrinks, so the recommended level's
+    expected fill latency must be monotonically non-decreasing.
+
+    This does NOT assert an exact recommended_level (e.g. "aggressive == Level 1") because,
+    after wiring in the rigorous CST (2010) compute_cst_fill_probability() formula (fix for
+    audit item #5), this book's realistic default calibration (theta=5 orders/sec, 60s horizon)
+    judges Levels 1-3's modest queue depths as all effectively certain to fill within the
+    horizon -- several urgency profiles can legitimately agree on the same "deepest still safe"
+    level once fill probability itself stops discriminating between them. Latency remains
+    strictly meaningful regardless of that saturation.
     """
     bids, asks = sample_5level_lob
 
-    # Immediate / Aggressive urgency
-    res_agg = evaluate_optimal_queue_level(
-        bids=bids,
-        asks=asks,
-        target_size=10.0,
-        urgency="aggressive",
-        side="buy",
-    )
-    assert res_agg.recommended_level == 1, "Aggressive urgency should select Level 1 (Touch)"
-    assert res_agg.recommended_price == 100.00
+    res_imm = evaluate_optimal_queue_level(bids=bids, asks=asks, target_size=10.0, urgency="immediate", side="buy")
+    res_agg = evaluate_optimal_queue_level(bids=bids, asks=asks, target_size=10.0, urgency="aggressive", side="buy")
+    res_nor = evaluate_optimal_queue_level(bids=bids, asks=asks, target_size=10.0, urgency="normal", side="buy")
+    res_pas = evaluate_optimal_queue_level(bids=bids, asks=asks, target_size=10.0, urgency="passive", side="buy")
 
-    # Passive urgency
-    res_pas = evaluate_optimal_queue_level(
-        bids=bids,
-        asks=asks,
-        target_size=10.0,
-        urgency="passive",
-        side="buy",
-    )
-    # Passive urgency favors deeper book (Level 2 or 3) for higher spread capture
+    assert res_imm.expected_fill_latency_sec <= res_agg.expected_fill_latency_sec
+    assert res_agg.expected_fill_latency_sec <= res_nor.expected_fill_latency_sec
+    assert res_nor.expected_fill_latency_sec <= res_pas.expected_fill_latency_sec
+
+    # Passive urgency never captures LESS spread than aggressive urgency for the same book.
     assert res_pas.recommended_level >= 1
     assert res_pas.expected_spread_capture >= res_agg.expected_spread_capture
+
+
+def test_evaluate_optimal_queue_level_wires_in_rigorous_cst_formula(sample_5level_lob):
+    """Regression for audit item #5: evaluate_optimal_queue_level() must compute its p_reach
+    ("does the market reach this level at all") and p_drain ("does our order fill once it
+    does") legs via the module's own rigorous, CST (2010)-derived compute_cst_fill_probability()
+    -- not the separate, un-derived calculate_cont_stoikov_fill_probability() heuristic that
+    was previously wired in here. Reproduces Level 2's fill_probability by hand from the exact
+    formula and asserts it matches the candidate the live function actually returns, proving
+    the wiring is real rather than merely documented in a comment."""
+    bids, asks = sample_5level_lob
+    res = evaluate_optimal_queue_level(bids=bids, asks=asks, target_size=10.0, urgency="normal", side="buy")
+    c2 = res.candidates[1]  # Level 2: bids[1] = (99.95, 120.0), cumulative depth ahead of it = bids[0].size = 50.0
+
+    depth_ahead = 50.0 + (120.0 * 0.5)  # cumulative_depth_prior + lvl.size * 0.5 = 110.0
+    p_reach = compute_cst_fill_probability(
+        queue_ahead=0.0,
+        order_size=50.0,  # cumulative_depth_prior before Level 2's own depth is added
+        theta_market=DEFAULT_MARKET_ORDER_RATE,
+        mu_cancel=DEFAULT_CANCEL_RATE,
+        time_horizon_sec=DEFAULT_TIME_HORIZON_SEC,
+    )
+    p_drain = compute_cst_fill_probability(
+        queue_ahead=depth_ahead,
+        order_size=10.0,
+        theta_market=DEFAULT_MARKET_ORDER_RATE,
+        mu_cancel=DEFAULT_CANCEL_RATE,
+        time_horizon_sec=DEFAULT_TIME_HORIZON_SEC,
+    )
+    expected_fill_prob = round(max(0.01, min(0.99, p_reach * p_drain)), 4)
+
+    assert c2["fill_probability"] == pytest.approx(expected_fill_prob, abs=1e-4)
+
+
+def test_cst_heuristic_and_rigorous_formula_diverge_materially():
+    """Documents WHY audit item #5 mattered: calculate_cont_stoikov_fill_probability() (the
+    heuristic previously wired into evaluate_optimal_queue_level()) and
+    compute_cst_fill_probability() (the rigorous CST (2010) closed-form this module derives
+    everywhere else) are not interchangeable -- they diverge materially on realistic inputs.
+    A regression back to calling the heuristic inside evaluate_optimal_queue_level() would not
+    be caught by any assertion that only checks fill_probability lies in [0.01, 0.99], so this
+    pins the concrete numeric gap directly."""
+    kwargs = dict(queue_ahead=50.0, order_size=5.0, theta_market=1.0, mu_cancel=0.0, time_horizon_sec=10.0)
+    exact = compute_cst_fill_probability(**kwargs)
+    heuristic = calculate_cont_stoikov_fill_probability(
+        queue_position=kwargs["queue_ahead"],
+        depth_at_price=kwargs["queue_ahead"],
+        target_size=kwargs["order_size"],
+        lambda_market=kwargs["theta_market"],
+        mu_cancel=kwargs["mu_cancel"],
+        time_horizon=kwargs["time_horizon_sec"],
+    )
+
+    assert exact == pytest.approx(0.0, abs=1e-6)
+    assert heuristic > 0.15
+    assert abs(exact - heuristic) > 0.1
 
 
 def test_evaluate_optimal_queue_level_sell_side(sample_5level_lob):

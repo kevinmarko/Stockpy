@@ -95,6 +95,11 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     # off -> staleness always fails) deterministically; see TestStateSnapshotFresh
     # for tests that explicitly override this to True.
     m.ORCHESTRATOR_EXTENDED_HOURS_ONLY = overrides.get("ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+    # Prompt Registry (real settings.py defaults: disabled, http backend, no
+    # signing key) so tests that don't touch this check get a clean PASS.
+    m.PROMPT_REGISTRY_ENABLED = overrides.get("PROMPT_REGISTRY_ENABLED", False)
+    m.PROMPT_REGISTRY_BACKEND = overrides.get("PROMPT_REGISTRY_BACKEND", "http")
+    m.PROMPT_REGISTRY_SIGNING_KEY = overrides.get("PROMPT_REGISTRY_SIGNING_KEY", None)
     return m
 
 
@@ -1886,6 +1891,84 @@ class TestAlertChannelsReachable:
         assert results[0].passed
         assert results[0].warning
         assert all(r.passed for r in results)  # exit-code-relevant condition
+
+# ---------------------------------------------------------------------------
+# prompt_registry_signing_key_configured
+# ---------------------------------------------------------------------------
+
+class TestPromptRegistrySigningKeyConfigured:
+    """A remote-fetching Prompt Registry backend (http/firestore) with no
+    signing key would skip signature verification entirely — blocking, not
+    warning-only, since the risk (unverified content reaching every live LLM
+    call site) is independent of trading mode. See
+    docs/known_issues/prompt_registry_unsigned_remote_adoption.md.
+    """
+
+    def test_passes_when_disabled(self, tmp_path):
+        from scripts.preflight_check import check_prompt_registry_signing_key_configured
+        s = _settings(tmp_path, PROMPT_REGISTRY_ENABLED=False)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_prompt_registry_signing_key_configured()
+        assert r.passed
+        assert not r.warning
+
+    def test_fails_when_http_backend_enabled_without_signing_key(self, tmp_path):
+        from scripts.preflight_check import check_prompt_registry_signing_key_configured
+        s = _settings(
+            tmp_path,
+            PROMPT_REGISTRY_ENABLED=True,
+            PROMPT_REGISTRY_BACKEND="http",
+            PROMPT_REGISTRY_SIGNING_KEY=None,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_prompt_registry_signing_key_configured()
+        assert not r.passed
+        assert not r.warning  # blocking, not a warning
+        assert "PROMPT_REGISTRY_SIGNING_KEY" in r.reason
+
+    def test_fails_when_firestore_backend_enabled_without_signing_key(self, tmp_path):
+        from scripts.preflight_check import check_prompt_registry_signing_key_configured
+        s = _settings(
+            tmp_path,
+            PROMPT_REGISTRY_ENABLED=True,
+            PROMPT_REGISTRY_BACKEND="firestore",
+            PROMPT_REGISTRY_SIGNING_KEY=None,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_prompt_registry_signing_key_configured()
+        assert not r.passed
+        assert not r.warning
+
+    def test_passes_when_local_backend_without_signing_key(self, tmp_path):
+        """LocalJSONStore never fetches over the network — no signing required."""
+        from scripts.preflight_check import check_prompt_registry_signing_key_configured
+        s = _settings(
+            tmp_path,
+            PROMPT_REGISTRY_ENABLED=True,
+            PROMPT_REGISTRY_BACKEND="local",
+            PROMPT_REGISTRY_SIGNING_KEY=None,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_prompt_registry_signing_key_configured()
+        assert r.passed
+
+    def test_passes_when_http_backend_has_signing_key(self, tmp_path):
+        from scripts.preflight_check import check_prompt_registry_signing_key_configured
+        s = _settings(
+            tmp_path,
+            PROMPT_REGISTRY_ENABLED=True,
+            PROMPT_REGISTRY_BACKEND="http",
+            PROMPT_REGISTRY_SIGNING_KEY="a-real-shared-secret",
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_prompt_registry_signing_key_configured()
+        assert r.passed
+        assert not r.warning
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_prompt_registry_signing_key_configured
+        assert check_prompt_registry_signing_key_configured in ALL_CHECKS
+
 
 def test_check_broker_backend_matches_live_intent():
     from scripts.preflight_check import check_broker_backend_matches_live_intent

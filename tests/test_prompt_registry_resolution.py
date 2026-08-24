@@ -44,7 +44,13 @@ from prompt_registry.registry import (
     reset_registry,
 )
 from prompt_registry.signing import compute_sha256, sign, verify
-from prompt_registry.store import PromptStore, RegistryFetchError
+from prompt_registry.store import (
+    FirestoreStore,
+    HTTPStore,
+    LocalJSONStore,
+    PromptStore,
+    RegistryFetchError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +122,171 @@ class FailingStore(PromptStore):
 
     def fetch_manifest(self) -> RegistryManifest:
         raise RegistryFetchError("FailingStore: forced failure")
+
+
+# ---------------------------------------------------------------------------
+# Security gate — unsigned remote store construction is refused
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for the real gap: PromptRegistry._safe_adopt's Gate 1
+# (HMAC-SHA256 verification) was a silent no-op whenever signing_key was
+# None, for EVERY backend (HTTPStore / FirestoreStore alike), not narrowly
+# scoped to LocalJSONStore offline dev as the module docstring implied. A
+# tampered PromptRecord (real body + an injected instruction worded to dodge
+# the guardrails deny-list) fetched from an unsigned remote store was
+# silently adopted and reached every live LLM call site. See
+# docs/known_issues/prompt_registry_unsigned_remote_adoption.md.
+
+
+class TestUnsignedRemoteStoreConstructionRefused:
+    """PromptRegistry.__init__ must refuse HTTPStore/FirestoreStore + signing_key=None."""
+
+    def test_http_store_without_signing_key_raises(self):
+        """The exact reported gap: an HTTPStore-backed registry with no key
+        must never be constructible — this is what makes an unsigned,
+        tampered remote record impossible to adopt, not merely discouraged.
+        """
+        store = HTTPStore("https://example.com/registry.json")
+        with pytest.raises(ValueError, match="signing_key"):
+            PromptRegistry(store=store, signing_key=None, enabled=True)
+
+    def test_http_store_without_signing_key_raises_even_when_disabled(self):
+        """The guard does not depend on ``enabled`` — a caller should never be
+        able to construct this combination and flip it on later.
+        """
+        store = HTTPStore("https://example.com/registry.json")
+        with pytest.raises(ValueError):
+            PromptRegistry(store=store, signing_key=None, enabled=False)
+
+    def test_firestore_store_without_signing_key_raises(self):
+        store = FirestoreStore()
+        with pytest.raises(ValueError, match="signing_key"):
+            PromptRegistry(store=store, signing_key=None, enabled=True)
+
+    def test_http_store_with_signing_key_does_not_raise(self):
+        """A configured signing key is the actual fix — construction succeeds."""
+        store = HTTPStore("https://example.com/registry.json")
+        reg = PromptRegistry(store=store, signing_key=_TEST_KEY, enabled=True)
+        assert reg._store is store
+
+    def test_local_json_store_without_signing_key_does_not_raise(self, tmp_path):
+        """LocalJSONStore is the one legitimate unsigned case — it never
+        fetches over the network, so there is nothing in transit to forge.
+        """
+        registry_file = tmp_path / "registry.json"
+        registry_file.write_text('{"registry_version": "t", "signing_alg": "HMAC-SHA256", "prompts": {}}')
+        store = LocalJSONStore(str(registry_file))
+        reg = PromptRegistry(store=store, signing_key=None, enabled=True)
+        assert reg._store is store
+
+    def test_no_store_without_signing_key_does_not_raise(self, tmp_path):
+        """store=None (cache/baseline-only) is unaffected — the overwhelming
+        majority of this file's existing tests rely on exactly this."""
+        reg = PromptRegistry(store=None, cache=CacheManager(tmp_path), signing_key=None, enabled=True)
+        assert reg._store is None
+
+    def test_fake_test_double_store_without_signing_key_does_not_raise(self, tmp_path):
+        """A hand-rolled PromptStore test double is not HTTPStore/FirestoreStore
+        and must not trip the guard — this file's resolution-chain tests
+        deliberately use unsigned FakeStore/FailingStore instances to exercise
+        rung mechanics independent of the signing model."""
+        manifest = _make_manifest({_KNOWN_ID: "unsigned test body — Output in JSON."})
+        reg = PromptRegistry(
+            store=FakeStore(manifest), cache=CacheManager(tmp_path),
+            signing_key=None, enabled=True,
+        )
+        assert isinstance(reg._store, FakeStore)
+
+
+class TestUnsignedRemoteBackendRefusedByFactory:
+    """_build_registry_from_settings must not let PromptRegistry.__init__'s
+    ValueError propagate and crash get_registry() for every caller — it
+    refuses to build the store instead, logging CRITICAL and degrading to
+    cache/baseline-only resolution (CONSTRAINT #6, fail closed without
+    taking the whole platform down).
+    """
+
+    def test_http_backend_no_signing_key_falls_back_to_no_store(self):
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "http"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", "https://example.com/registry.json"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_SIGNING_KEY", None):
+            reset_registry()
+            reg = get_registry()  # must not raise
+        assert reg._enabled is True
+        assert reg._store is None
+        reset_registry()
+
+    def test_firestore_backend_no_signing_key_falls_back_to_no_store(self):
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "firestore"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_SIGNING_KEY", None):
+            reset_registry()
+            reg = get_registry()  # must not raise
+        assert reg._enabled is True
+        assert reg._store is None
+        reset_registry()
+
+    def test_http_backend_no_signing_key_sends_critical_alert(self):
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "http"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", "https://example.com/registry.json"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_SIGNING_KEY", None):
+            reset_registry()
+            with unittest.mock.patch("observability.alerts.send_alert") as mock_alert:
+                get_registry()
+        assert mock_alert.called
+        assert mock_alert.call_args[0][0] == "CRITICAL"
+        reset_registry()
+
+    def test_local_backend_no_signing_key_still_builds_store(self, tmp_path):
+        """LocalJSONStore is exempt — the factory must still build it."""
+        registry_file = tmp_path / "registry.json"
+        registry_file.write_text('{"registry_version": "t", "signing_alg": "HMAC-SHA256", "prompts": {}}')
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "local"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", str(registry_file)), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_SIGNING_KEY", None):
+            reset_registry()
+            reg = get_registry()
+        assert reg._store is not None
+        assert isinstance(reg._store, LocalJSONStore)
+        reset_registry()
+
+    def test_http_backend_with_signing_key_builds_real_store(self):
+        """Sanity check: the fix does not disable the http backend outright —
+        configuring a signing key is enough to build a real HTTPStore."""
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "http"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", "https://example.com/registry.json"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_SIGNING_KEY", _TEST_KEY):
+            reset_registry()
+            reg = get_registry()
+        assert isinstance(reg._store, HTTPStore)
+        reset_registry()
+
+    def test_tampered_content_scenario_closed_end_to_end(self):
+        """Re-runs the original tamper-test scenario end to end: a malicious
+        actor able to serve arbitrary (unsigned) content from the configured
+        PROMPT_REGISTRY_URL, with no signing key configured, must never reach
+        get(). Before the fix, PromptRegistry would have fetched and adopted
+        that content (only the guardrails deny-list stood in the way — a
+        worded-to-dodge instruction would have passed straight through).
+        After the fix, the remote store is never even constructed, so no
+        fetch is ever attempted: get() resolves straight to the committed
+        baseline, unconditionally.
+        """
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "http"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", "https://attacker.example/registry.json"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_SIGNING_KEY", None):
+            reset_registry()
+            reg = get_registry()
+            assert reg._store is None  # nothing to fetch from — the fix's actual guarantee
+            assert reg.sync() is False  # no store to sync from
+            result = reg.get(_KNOWN_ID)
+        assert result == read_baseline(_KNOWN_ID)
+        reset_registry()
 
 
 # ---------------------------------------------------------------------------

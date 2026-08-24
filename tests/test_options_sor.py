@@ -212,6 +212,94 @@ def test_synthetic_legging_passive_first():
     assert "LEG_PASSIVE_FIRST" in res.policy_rationale
 
 
+# ---------------------------------------------------------------------------
+# 4b. Commission Modeling (audit item #6): reuses execution.cost_model.TieredCostModel
+# ---------------------------------------------------------------------------
+
+
+_ASYMMETRIC_SPREAD_LEGS = [
+    {
+        "symbol": "XYZ 2026-09-18 $100.00 PUT",
+        "action": "sell",
+        "strike": 100.0,
+        "type": "put",
+        "expiration": "2026-09-18",
+        "bid": 4.50,
+        "ask": 5.00,
+    },
+    {
+        "symbol": "XYZ 2026-09-18 $95.00 PUT",
+        "action": "buy",
+        "strike": 95.0,
+        "type": "put",
+        "expiration": "2026-09-18",
+        "bid": 2.00,
+        "ask": 2.02,
+    },
+]
+
+
+def test_policies_comparison_has_commission_cost_dollars():
+    """Every policies_comparison entry must carry a commission_cost_dollars field."""
+    res = analyze_routing_options(_ASYMMETRIC_SPREAD_LEGS, spot_price=101.0, volatility=0.20, order_size=3)
+    assert res.valid is True
+    assert len(res.policies_comparison) == 3
+    for policy in res.policies_comparison:
+        assert "commission_cost_dollars" in policy
+        assert policy["commission_cost_dollars"] > 0.0
+
+
+def test_cob_net_package_commission_is_base_only():
+    """COB_NET_PACKAGE is atomic (zero hung-leg risk), so its commission is exactly the base
+    per-contract-per-leg fee (TieredCostModel.options_per_contract * order_size * legs_count),
+    with no extra unwind-risk surcharge."""
+    from execution.cost_model import TieredCostModel
+
+    order_size = 4
+    res = analyze_routing_options(_ASYMMETRIC_SPREAD_LEGS, spot_price=101.0, volatility=0.20, order_size=order_size)
+    per_contract_fee = TieredCostModel().options_per_contract
+    expected = round(per_contract_fee * order_size * res.legs_count, 2)
+
+    cob = next(p for p in res.policies_comparison if p["policy"] == POLICY_COB_NET_PACKAGE)
+    assert cob["commission_cost_dollars"] == pytest.approx(expected, abs=0.01)
+
+
+def test_leg_passive_first_commission_exceeds_cob_when_hung_leg_risk_positive():
+    """The audit's core ask: routing policies with real hung-leg unwind risk (LEG_PASSIVE_FIRST,
+    SPLIT_DIRECT) must carry a HIGHER expected commission than the atomic COB_NET_PACKAGE
+    policy, whenever that risk is nonzero -- previously there was no commission differential
+    of any kind between policies."""
+    res = analyze_routing_options(_ASYMMETRIC_SPREAD_LEGS, spot_price=101.0, volatility=0.20, order_size=2)
+    assert res.synthetic_legging["hung_leg_probability"] > 0.0
+
+    by_policy = {p["policy"]: p for p in res.policies_comparison}
+    cob_commission = by_policy[POLICY_COB_NET_PACKAGE]["commission_cost_dollars"]
+    passive_first_commission = by_policy[POLICY_LEG_PASSIVE_FIRST]["commission_cost_dollars"]
+    split_direct_commission = by_policy[POLICY_SPLIT_DIRECT]["commission_cost_dollars"]
+
+    assert passive_first_commission > cob_commission
+    assert split_direct_commission > cob_commission
+
+
+def test_commission_cost_reuses_tiered_cost_model_not_a_hardcoded_literal(monkeypatch):
+    """Proves commission_cost_dollars is genuinely SOURCED from
+    execution.cost_model.TieredCostModel.options_per_contract -- not an independently
+    hardcoded literal that happens to currently match it. Monkeypatching the model's default
+    must change the computed commission proportionally."""
+    from execution.cost_model import TieredCostModel
+
+    order_size = 5
+    res_default = analyze_routing_options(_ASYMMETRIC_SPREAD_LEGS, spot_price=101.0, volatility=0.20, order_size=order_size)
+    cob_default = next(p for p in res_default.policies_comparison if p["policy"] == POLICY_COB_NET_PACKAGE)
+
+    monkeypatch.setattr(TieredCostModel, "__init__", lambda self, **kwargs: setattr(self, "options_per_contract", 5.00))
+    res_patched = analyze_routing_options(_ASYMMETRIC_SPREAD_LEGS, spot_price=101.0, volatility=0.20, order_size=order_size)
+    cob_patched = next(p for p in res_patched.policies_comparison if p["policy"] == POLICY_COB_NET_PACKAGE)
+
+    assert cob_patched["commission_cost_dollars"] != cob_default["commission_cost_dollars"]
+    assert cob_patched["commission_cost_dollars"] == pytest.approx(5.00 * order_size * res_patched.legs_count, abs=0.01)
+
+
 def _build_hung_leg_test_legs(active_option_type: str, active_delta: float) -> list:
     """Builds a 2-leg spread with a fixed wide-spread passive leg and a tight-spread
     active leg whose option_type/delta are parameterized -- used to prove hung-leg

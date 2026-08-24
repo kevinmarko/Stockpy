@@ -1568,7 +1568,6 @@ def evaluate_optimal_queue_level(
     decay_multiplier = urgency_weights.get(urgency_str, 0.80)
 
     vol_per_sec = (volatility / math.sqrt(252.0 * 6.5 * 3600.0)) if volatility > 0 else 0.0001
-    expected_mkt_vol = market_order_rate * time_horizon_sec
 
     max_eval_levels = min(5, len(same_side_levels))
     candidates: List[QueuePlacementCandidate] = []
@@ -1581,26 +1580,48 @@ def evaluate_optimal_queue_level(
 
         depth_ahead = cumulative_depth_prior + (lvl.size * 0.5)
 
-        # First-passage reach probability: Probability that market orders consume all depth ahead
+        # First-passage reach probability: Probability that market orders (net of
+        # cancellations) fully deplete `cumulative_depth_prior` -- the depth resting at every
+        # level strictly closer to the touch than this one -- within the horizon. This is
+        # exactly p_reach's own definition, so it is computed with the SAME rigorous CST
+        # (2010) Poisson-tail/diffusion death-process formula this module already uses
+        # everywhere else (compute_cst_fill_probability), rather than the previous uncited
+        # `exp(-1.5 * cumulative_depth_prior / expected_mkt_vol)` heuristic -- which had no
+        # stated derivation for the 1.5 constant and, worse, used a DIFFERENT formula from
+        # p_drain immediately below for what is conceptually the same underlying quantity
+        # (probability of depleting a given amount of resting depth within T). Using one
+        # formula throughout keeps this function's own p_reach/p_drain internally consistent.
         if cumulative_depth_prior == 0.0:
             p_reach = 1.0
             latency_sec = (depth_ahead + 0.5 * target_size) / (market_order_rate + EPSILON)
         else:
-            p_reach = math.exp(-1.5 * cumulative_depth_prior / max(1.0, expected_mkt_vol))
+            p_reach = compute_cst_fill_probability(
+                queue_ahead=0.0,
+                order_size=cumulative_depth_prior,
+                theta_market=market_order_rate,
+                mu_cancel=cancel_rate,
+                time_horizon_sec=time_horizon_sec,
+            )
             time_reach = cumulative_depth_prior / (market_order_rate + EPSILON)
             time_drain = (lvl.size * 0.5 + 0.5 * target_size) / (market_order_rate + cancel_rate * lvl.size * 0.5 + EPSILON)
             latency_sec = time_reach + time_drain
 
         cumulative_depth_prior += lvl.size
 
-        # Queue fill probability given reach
-        p_drain = calculate_cont_stoikov_fill_probability(
-            queue_position=depth_ahead,
-            depth_at_price=lvl.size,
-            target_size=target_size,
-            lambda_market=market_order_rate,
+        # Queue fill probability given reach: the same rigorous compute_cst_fill_probability()
+        # used for p_reach above. Previously called the separate, un-derived
+        # calculate_cont_stoikov_fill_probability() heuristic (`1 - exp(-drain_rate*T/scale)`,
+        # clamped to [0.01, 0.99]) -- confirmed to diverge materially from this exact formula
+        # on realistic inputs (e.g. one measured case: exact=0.0000 vs heuristic=0.1361) with
+        # nothing enforcing they stay close. compute_cst_fill_probability() returns an
+        # unclamped [0, 1] float; the existing `fill_prob = max(0.01, min(0.99, ...))` clamp
+        # immediately below already bounds the product, so no extra clamping is needed here.
+        p_drain = compute_cst_fill_probability(
+            queue_ahead=depth_ahead,
+            order_size=target_size,
+            theta_market=market_order_rate,
             mu_cancel=cancel_rate,
-            time_horizon=time_horizon_sec,
+            time_horizon_sec=time_horizon_sec,
         )
         fill_prob = max(0.01, min(0.99, p_reach * p_drain))
 
