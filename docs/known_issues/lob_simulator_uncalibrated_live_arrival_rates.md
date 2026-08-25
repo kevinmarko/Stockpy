@@ -1,7 +1,9 @@
 # Known issue (2026-08-24): live LOB queue-fill endpoint runs on fixed constants, not the module's own empirical calibration
 
 **Status: partially fixed — sign/units bugs fixed and tested; live calibration wiring
-disclosed as an open, not-attempted gap.** Branch `fix-sor-lob-simulator-audit-findings`.
+remains a disclosed, deliberately-not-attempted gap (two candidate fixes investigated
+and explicitly rejected — see "Alpaca- and Robinhood-based calibration both
+investigated and rejected" below).** Branch `fix-sor-lob-simulator-audit-findings`.
 
 ## What happened
 
@@ -119,3 +121,75 @@ existing one — so it was deliberately not attempted.
   market-data-provider tier, or a genuine L2/L3 feed), `compute_lob_arrival_rates()`
   is already correct and tested and is the right place to wire it in —
   `simulate_queue_fill()`'s call site is the one place that needs to change.
+
+## Alpaca- and Robinhood-based calibration both investigated and rejected (2026-08-25)
+
+Two follow-up attempts at closing this gap were made and both were explicitly
+rejected — documented here so neither is silently re-attempted without this
+context. See CLAUDE.md's "Data-source policy for NEW live-data-dependent
+features" bullet for the resulting standing project rule this episode
+produced.
+
+### Attempt 1: Alpaca's `Bar.trade_count` field for `theta_market`
+
+`alpaca-py`'s `Bar` model genuinely carries a `trade_count: Optional[float]`
+field — a real, exchange-reported count of executed trades per bar, not an
+approximation. `AlpacaProvider.get_intraday_bars()` (`data/market_data.py`)
+discards it. This is a real, non-fabricated lever for calibrating
+`theta_market` specifically (the market-order Poisson arrival rate — trade
+counts measure executions, not new limit orders or cancellations, so
+`lambda_limit`/`mu_cancel` were never in scope for this attempt either way).
+Neither FMP's `/historical-chart/{interval}` nor yfinance's `.history()`
+expose an equivalent field.
+
+A full implementation was built on branch `fully-fix-lob-theta-calibration`:
+`AlpacaProvider.get_intraday_trade_counts()` + a `CompositeProvider`
+pass-through (honest `(df, reason)` tuple return, never raises), a new
+`estimate_calibrated_theta_market()` in `pilots/lob_simulator.py` wired into
+`simulate_queue_fill()` (explicit caller values never overridden;
+`LobSimulateQueueRequest.theta_market`'s Pydantic default changed `5.0 →
+None` so the endpoint could finally distinguish "caller omitted it" from
+"caller wants 5.0"), a webapp disclosure UI, and full test/doc coverage
+(379 tests passing, opened as PR #909).
+
+**Rejected and reverted** — closed unmerged, branch deleted. Not because the
+code was wrong (it wasn't — it was tested, honest, and correctly degraded
+when Alpaca wasn't configured); rejected purely on data-source policy: this
+codebase's live-data features are meant to depend on FMP or Yahoo, not
+Alpaca, even though `AlpacaProvider` is already a legitimate, existing
+`CompositeProvider` backend for its established uses (opt-in
+`MARKET_DATA_PROVIDER=alpaca`, the FMP-fallback-chain tail). Building a NEW
+capability that only works when Alpaca specifically is configured — which,
+given this codebase's FMP-primary default, is not the common case — was
+judged the wrong tradeoff regardless of how honestly it degraded otherwise.
+
+### Attempt 2: Robinhood's Level-2 price book
+
+Investigated as a second candidate before also being rejected. Robinhood's
+brokerage API genuinely exposes a real Level-2 order book (bid/ask price
+ladder with resting size per level — reachable in this environment via the
+Robinhood Trading MCP's `get_equity_price_book` tool, which wraps
+`robin_stocks`' pricebook endpoint). This is real depth data, of a kind
+neither FMP nor yfinance expose at all.
+
+Rejected before any implementation was attempted, for two independent,
+structural reasons — not merely "wrong provider" this time:
+
+1. **It's a snapshot, not a rate.** `lambda_limit`/`mu_cancel`/`theta_market`
+   are arrival *rates* (events per second). A single Level-2 read is a
+   point-in-time depth reading; deriving a genuine rate from it needs
+   repeated polling over time plus new inference logic to back out
+   drain/replenishment rates from how the ladder changes between samples —
+   a materially bigger, novel piece of engineering than a straight
+   field-swap, and nothing in this codebase already does this.
+2. **Robinhood login in this codebase is device-approval-gated** (see
+   CLAUDE.md's Robinhood login rewrite bullet) — it requires a human tapping
+   "approve" on their phone per login attempt. A stateless API request
+   (`POST /pilots/options/lob/simulate-queue`) has no way to trigger or wait
+   on that flow synchronously the way it can hit FMP with an API key; this
+   data source is fundamentally unsuited to a live, on-demand request path
+   regardless of the data-source policy question.
+
+No code was written for this attempt — confirmed via grep that
+`data/`, `pilots/`, and `investyo_mcp_server.py` have zero existing
+references to Robinhood's price-book/order-book endpoint.
