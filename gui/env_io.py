@@ -675,6 +675,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
     "OPTIONS_GEX_SEARCH_RANGE_PCT",
     "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
+    "OPTIONS_LOB_TRADE_COUNT_LOOKBACK_HOURS",
+    "OPTIONS_LOB_TRADE_COUNT_MIN_BARS",
+    "OPTIONS_LOB_TRADE_COUNT_CACHE_TTL_SECONDS",
     "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
     # FIX 4.4 Gateway (execution/fix_gateway.py) + WS risk stream (api/ws_api.py).
     # All three are non-secret tunables — no credential material. The FIX

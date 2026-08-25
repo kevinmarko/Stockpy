@@ -556,7 +556,14 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "options_gex":
         allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
     if module_name == "lob_simulator":
-        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "scipy"}
+        # estimate_calibrated_theta_market() (2026-08-24, real Alpaca trade_count
+        # calibration for theta_market -- see
+        # docs/known_issues/lob_simulator_uncalibrated_live_arrival_rates.md's
+        # "Update" section) added a lazy, function-scoped `from data.market_data
+        # import get_provider` to fetch real hourly bars instead of always using a
+        # fixed constant -- same shared market-data import already allowed for
+        # options_vpin/dispersion_trading/zero_dte_engine/earnings_crush above.
+        allowed = allowed | {"data", "dataclasses", "datetime", "enum", "numpy", "scipy"}
     if module_name == "copula_stat_arb":
         allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "pandas", "scipy", "data", "uuid"}
     # --- newly auto-discovered modules (2026-08, verified via a throwaway
