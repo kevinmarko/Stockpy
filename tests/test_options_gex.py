@@ -115,6 +115,101 @@ def test_compute_total_net_gex_degenerate_inputs():
     assert compute_total_net_gex_at_spot([{"strike": 500}], spot=-10.0) == 0.0
 
 
+def test_net_gex_uses_percent_move_scaling_not_raw_100x():
+    """Regression for the confirmed 100x dollar-scaling bug (secondary audit,
+    2026-08-24): raw Gamma*OI*100*S^2 with no *0.01 "per 1% move" factor
+    overstated every dollar GEX figure by exactly 100x relative to this
+    module's own `dealer_hedging_flow` field and to the industry-standard
+    SqueezeMetrics/SpotGamma convention. Pin the correct, hand-derived
+    magnitude directly rather than just checking sign/nonzero.
+    """
+    gamma = calculate_black_scholes_gamma(spot=500.0, strike=500.0, t_years=30.0 / 365.0, sigma=0.20, r=0.045)
+    oi = 10_000
+    expected = round(gamma * oi * 100.0 * 500.0 * 500.0 * 0.01, 2)
+
+    chain = [{
+        "strike": 500.0,
+        "option_type": "CALL",
+        "open_interest": oi,
+        "implied_volatility": 0.20,
+        "dte": 30.0,
+    }]
+    net_gex = compute_total_net_gex_at_spot(chain, spot=500.0, r=0.045)
+    assert pytest.approx(net_gex, rel=1e-6) == expected
+    # A single ATM strike with realistic OI must land in a plausible
+    # multi-million-dollar range, not the ~$3.46 BILLION the pre-fix raw
+    # formula produced for this exact case.
+    assert 0 < net_gex < 50_000_000
+
+
+def test_get_options_gex_profile_net_gex_matches_dealer_hedging_flow(monkeypatch):
+    """Regression: get_options_gex_profile's headline `net_gex` and its
+    `dealer_hedging_flow` field must describe the same quantity (both are
+    "dollar hedging flow per 1% move") -- pre-fix, dealer_hedging_flow applied
+    the *0.01 convention correctly while net_gex/call_gex/put_gex/strikes[]
+    did not, making the two fields silently disagree by 100x.
+    """
+    from unittest.mock import MagicMock, patch
+    from pilots.options_gex import get_options_gex_profile
+
+    mock_quote = MagicMock()
+    mock_quote.price = 500.0
+    mock_market_provider = MagicMock()
+    mock_market_provider.get_latest_quote.return_value = mock_quote
+
+    mock_options_provider = MagicMock()
+    mock_options_provider.fetch_options_chain.side_effect = (
+        lambda symbol, expiration=None: (
+            ["2026-09-18"] if expiration is None else _make_fake_yf_chain()
+        )
+    )
+
+    with patch("data.market_data.get_provider", return_value=mock_market_provider), \
+         patch("data.market_data.get_options_provider", return_value=mock_options_provider):
+        result = get_options_gex_profile("SPY")
+
+    assert result["net_gex"] != 0.0
+    assert pytest.approx(result["net_gex"], abs=0.01) == result["dealer_hedging_flow"]
+    assert pytest.approx(result["net_gex"], abs=0.01) == result["dealer_hedging_per_1pct_move_dollars"]
+
+
+# ---------------------------------------------------------------------------
+# 2b. CONSTRAINT #4 -- missing IV/expiration must exclude the contract, never
+#     fabricate a placeholder sigma=0.25 / dte=30.0
+# ---------------------------------------------------------------------------
+
+def test_normalize_chain_data_excludes_contract_with_missing_iv():
+    records = _normalize_chain_data([
+        {"strike": 500.0, "option_type": "CALL", "open_interest": 100, "dte": 30.0},  # no IV field at all
+        {"strike": 505.0, "option_type": "CALL", "open_interest": 100, "implied_volatility": 0.0, "dte": 30.0},  # stale-quote zero IV
+        {"strike": 510.0, "option_type": "CALL", "open_interest": 100, "implied_volatility": float("nan"), "dte": 30.0},
+        {"strike": 515.0, "option_type": "CALL", "open_interest": 100, "implied_volatility": 0.20, "dte": 30.0},  # the one valid record
+    ])
+    assert len(records) == 1
+    assert records[0]["strike"] == 515.0
+    assert records[0]["sigma"] == pytest.approx(0.20)
+
+
+def test_normalize_chain_data_excludes_contract_with_missing_expiration():
+    records = _normalize_chain_data([
+        {"strike": 500.0, "option_type": "CALL", "open_interest": 100, "implied_volatility": 0.20},  # no expiration at all
+        {"strike": 505.0, "option_type": "CALL", "open_interest": 100, "implied_volatility": 0.20, "expiration": "not-a-date"},
+        {"strike": 510.0, "option_type": "CALL", "open_interest": 100, "implied_volatility": 0.20, "dte": 30.0},  # the one valid record
+    ])
+    assert len(records) == 1
+    assert records[0]["strike"] == 510.0
+    assert records[0]["dte"] == pytest.approx(30.0)
+
+
+def test_parse_expiration_dte_returns_none_never_fabricated_30():
+    assert _parse_expiration_dte(None) is None
+    assert _parse_expiration_dte("not-a-date") is None
+    assert _parse_expiration_dte("") is None
+    # Genuinely-parsed values are unaffected -- this only changes the
+    # unparseable/missing fallback, not real parsing.
+    assert _parse_expiration_dte(15.0) == pytest.approx(15.0)
+
+
 # ---------------------------------------------------------------------------
 # 3. Zero-Gamma Flip Root Finder
 # ---------------------------------------------------------------------------

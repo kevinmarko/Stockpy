@@ -202,6 +202,14 @@ class TestOpalThreadsIntoContext:
         prompt = fake_rationale_prov.captured_user_prompts[0]
         assert "Research context" in prompt
         assert "Unique thesis marker ABC123." in prompt
+        # Regression (secondary audit, 2026-08-24 -- prompt-injection
+        # finding): the research-context block must be structurally fenced,
+        # not raw-interpolated, since it was itself synthesized from
+        # externally-sourced news text by another model.
+        assert "<research_context>" in prompt
+        assert "</research_context>" in prompt
+        assert prompt.index("<research_context>") < prompt.index("Unique thesis marker ABC123.") \
+            < prompt.index("</research_context>")
 
     def test_research_provider_raises_does_not_block_rationale(self, monkeypatch):
         from engine import advisory as advisory_mod

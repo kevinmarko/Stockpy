@@ -187,6 +187,10 @@ class TestExecutionAuditStorePersistence:
         assert r["maker_taker_fee_rebate"] == 0.30
         assert r["price_improvement"] == 5.00
         assert r["is_option"] is False
+        # nbbo_bid/nbbo_ask were both supplied -> nbbo_available must be True
+        # (CONSTRAINT #4: this is what distinguishes a genuine measurement
+        # from an unmeasurable order defaulted to price_improvement=0.0).
+        assert r["nbbo_available"] is True
 
     def test_batch_record_and_filtering(self, mem_store):
         batch = [
@@ -331,6 +335,12 @@ class TestSecRule606ReporterQuarterlyMetrics:
         - Order 2 (Market): 100 shares routed to VIRTU, fee/rebate: +$0.25, price improvement: $0.00
         - Order 3 (Marketable Limit): 200 shares routed to CITADEL, fee/rebate: +$0.60, price improvement: $2.00 ($0.01/sh)
         - Order 4 (Non-Marketable Limit): 300 shares routed to ARCA, fee/rebate: +$0.90, price improvement: $0.00
+
+        Every order carries a real nbbo_bid/nbbo_ask (nbbo_available=True for
+        all 4) so the reporter's coverage-aware price-improvement rates (see
+        docs/known_issues/sec_606_price_improvement_fabricated_zero.md) are
+        exercised on a fully-covered dataset here; TestNbboCoverage below
+        covers the partial/zero-coverage cases.
         """
         db_file = tmp_path / "sec606_q1.db"
         store = ExecutionAuditStore(sqlite_path=str(db_file))
@@ -343,6 +353,8 @@ class TestSecRule606ReporterQuarterlyMetrics:
                 "order_type": "Market",
                 "routing_timestamp": datetime(2026, 1, 15, 14, 0, 0),
                 "fill_price": 150.00,
+                "nbbo_bid": 149.99,
+                "nbbo_ask": 150.01,
                 "executed_shares": 400.0,
                 "maker_taker_fee_rebate": 1.20,
                 "price_improvement": 4.00,
@@ -356,6 +368,8 @@ class TestSecRule606ReporterQuarterlyMetrics:
                 "order_type": "Market",
                 "routing_timestamp": datetime(2026, 2, 10, 15, 0, 0),
                 "fill_price": 400.00,
+                "nbbo_bid": 399.98,
+                "nbbo_ask": 400.00,
                 "executed_shares": 100.0,
                 "maker_taker_fee_rebate": 0.25,
                 "price_improvement": 0.00,
@@ -369,6 +383,8 @@ class TestSecRule606ReporterQuarterlyMetrics:
                 "order_type": "Marketable Limit",
                 "routing_timestamp": datetime(2026, 3, 5, 11, 0, 0),
                 "fill_price": 175.00,
+                "nbbo_bid": 174.99,
+                "nbbo_ask": 175.01,
                 "executed_shares": 200.0,
                 "maker_taker_fee_rebate": 0.60,
                 "price_improvement": 2.00,
@@ -382,6 +398,8 @@ class TestSecRule606ReporterQuarterlyMetrics:
                 "order_type": "Non-Marketable Limit",
                 "routing_timestamp": datetime(2026, 3, 20, 9, 35, 0),
                 "fill_price": 180.00,
+                "nbbo_bid": 180.00,
+                "nbbo_ask": 180.05,
                 "executed_shares": 300.0,
                 "maker_taker_fee_rebate": 0.90,
                 "price_improvement": 0.00,
@@ -472,6 +490,162 @@ class TestSecRule606ReporterQuarterlyMetrics:
         assert pytest.approx(citadel_mkt["pct_of_category_orders"], 1e-2) == 50.0
         assert citadel_mkt["executed_shares"] == 400.0
         assert pytest.approx(citadel_mkt["pct_of_category_shares"], 1e-2) == 80.0
+
+
+class TestNbboCoverageAndLimitClassification:
+    """Regression coverage for the secondary audit finding (2026-08-24):
+    price_improvement previously defaulted to 0.0 for BOTH a genuine
+    zero-improvement measurement AND a genuinely-unmeasurable order (no
+    NBBO), making a report full of unmeasurable orders read as "0% improved"
+    instead of the honest "0% measurable" -- and classify_limit_order
+    existed, was tested, and had zero write-path callers, so "Marketable
+    Limit" was structurally unreachable in every real report.
+    """
+
+    def test_zero_nbbo_coverage_reports_honest_zero_coverage_not_fabricated_rate(self, tmp_path):
+        """An order book with NO NBBO data anywhere must report
+        nbbo_coverage_pct == 0.0 alongside price_improvement_rate == 0.0 --
+        never just the rate on its own, which would read as "measured, none
+        improved" rather than "nothing was measurable".
+        """
+        db_file = tmp_path / "no_nbbo.db"
+        store = ExecutionAuditStore(sqlite_path=str(db_file))
+        store.record_audits([
+            {
+                "order_id": f"O-{i}",
+                "symbol": "AAPL",
+                "side": "buy",
+                "venue": "CITADEL",
+                "order_type": "Market",
+                "routing_timestamp": datetime(2026, 1, 15, 14, 0, 0),
+                "fill_price": 150.00,
+                "executed_shares": 100.0,
+                "maker_taker_fee_rebate": 0.10,
+                # Deliberately no nbbo_bid/nbbo_ask and no explicit
+                # price_improvement override -- forces the store's own
+                # calculate_price_improvement(nbbo_bid=None, ...) path,
+                # which returns 0.0 (unmeasurable, not "measured zero").
+            }
+            for i in range(3)
+        ])
+
+        reporter = SecRule606Reporter(audit_store=store)
+        report = reporter.generate_quarterly_report(year=2026, quarter=1)
+        summary = report["summary"]
+
+        assert summary["total_orders"] == 3
+        assert summary["nbbo_covered_orders_count"] == 0
+        assert summary["nbbo_coverage_pct"] == 0.0
+        # The rate is 0.0 too, but ONLY alongside 0% coverage -- a caller
+        # reading price_improvement_rate in isolation without also checking
+        # nbbo_coverage_pct would previously have no way to know these 3
+        # orders were never actually measurable.
+        assert summary["overall_price_improvement_rate"] == 0.0
+        assert summary["total_price_improvement_dollars"] == 0.0
+
+        mkt = report["order_category_breakdown"][ORDER_CATEGORY_MARKET]
+        assert mkt["nbbo_covered_orders_count"] == 0
+        assert mkt["nbbo_coverage_pct"] == 0.0
+
+        markdown = reporter.generate_markdown_summary(report)
+        assert "NBBO data was unavailable for 100.00%" in markdown
+
+    def test_partial_nbbo_coverage_rate_denominated_by_covered_orders_only(self, tmp_path):
+        """2 of 4 orders have real NBBO (1 improved, 1 not); the other 2 have
+        none. price_improvement_rate must be 50% (1 of 2 MEASURABLE orders),
+        not 25% (1 of 4 total orders) -- the latter silently penalizes the
+        rate for coverage gaps that have nothing to do with execution
+        quality.
+        """
+        db_file = tmp_path / "partial_nbbo.db"
+        store = ExecutionAuditStore(sqlite_path=str(db_file))
+        store.record_audits([
+            {  # covered, improved
+                "order_id": "O-1", "symbol": "AAPL", "side": "buy", "venue": "CITADEL",
+                "order_type": "Market", "routing_timestamp": datetime(2026, 1, 5, 10, 0, 0),
+                "fill_price": 150.00, "nbbo_bid": 149.99, "nbbo_ask": 150.02,
+                "executed_shares": 100.0, "maker_taker_fee_rebate": 0.0,
+            },
+            {  # covered, not improved
+                "order_id": "O-2", "symbol": "MSFT", "side": "buy", "venue": "CITADEL",
+                "order_type": "Market", "routing_timestamp": datetime(2026, 1, 6, 10, 0, 0),
+                "fill_price": 400.00, "nbbo_bid": 399.98, "nbbo_ask": 400.00,
+                "executed_shares": 100.0, "maker_taker_fee_rebate": 0.0,
+            },
+            {  # NOT covered
+                "order_id": "O-3", "symbol": "GOOGL", "side": "buy", "venue": "CITADEL",
+                "order_type": "Market", "routing_timestamp": datetime(2026, 1, 7, 10, 0, 0),
+                "fill_price": 175.00, "executed_shares": 100.0, "maker_taker_fee_rebate": 0.0,
+            },
+            {  # NOT covered
+                "order_id": "O-4", "symbol": "AMZN", "side": "buy", "venue": "CITADEL",
+                "order_type": "Market", "routing_timestamp": datetime(2026, 1, 8, 10, 0, 0),
+                "fill_price": 180.00, "executed_shares": 100.0, "maker_taker_fee_rebate": 0.0,
+            },
+        ])
+
+        reporter = SecRule606Reporter(audit_store=store)
+        report = reporter.generate_quarterly_report(year=2026, quarter=1)
+        summary = report["summary"]
+
+        assert summary["total_orders"] == 4
+        assert summary["nbbo_covered_orders_count"] == 2
+        assert pytest.approx(summary["nbbo_coverage_pct"], 1e-2) == 50.0
+        assert summary["price_improved_orders_count"] == 1
+        # 1 improved / 2 MEASURABLE -- not 1/4 == 25.0
+        assert pytest.approx(summary["overall_price_improvement_rate"], 1e-2) == 50.0
+
+    def test_marketable_limit_classification_wired_when_nbbo_and_limit_price_available(self, tmp_path):
+        """classify_limit_order must actually be reachable from the write
+        path: a "limit" order with a real limit_price and NBBO that makes it
+        marketable must be classified ORDER_CATEGORY_MARKETABLE_LIMIT, not
+        left at normalize_order_type's blind "Non-Marketable Limit" default.
+        """
+        db_file = tmp_path / "limit_classification.db"
+        store = ExecutionAuditStore(sqlite_path=str(db_file))
+        store.record_audit({
+            "order_id": "O-MKTBL",
+            "symbol": "AAPL",
+            "side": "buy",
+            "venue": "CITADEL",
+            "order_type": "limit",
+            "limit_price": 150.10,  # >= nbbo_ask -> marketable
+            "routing_timestamp": datetime(2026, 1, 15, 14, 0, 0),
+            "fill_price": 150.05,
+            "nbbo_bid": 150.00,
+            "nbbo_ask": 150.10,
+            "executed_shares": 100.0,
+            "maker_taker_fee_rebate": 0.0,
+        })
+
+        records = store.get_records(symbol="AAPL")
+        assert len(records) == 1
+        assert records[0]["order_type"] == ORDER_CATEGORY_MARKETABLE_LIMIT
+
+    def test_limit_order_stays_non_marketable_default_without_limit_price(self, tmp_path):
+        """Unchanged default behavior: a "limit" order with no limit_price
+        supplied (today's universal case -- no current caller passes one)
+        must still default to Non-Marketable Limit exactly as before this
+        fix, even when NBBO happens to be available.
+        """
+        db_file = tmp_path / "limit_no_price.db"
+        store = ExecutionAuditStore(sqlite_path=str(db_file))
+        store.record_audit({
+            "order_id": "O-NOLIM",
+            "symbol": "AAPL",
+            "side": "buy",
+            "venue": "CITADEL",
+            "order_type": "limit",
+            "routing_timestamp": datetime(2026, 1, 15, 14, 0, 0),
+            "fill_price": 150.05,
+            "nbbo_bid": 150.00,
+            "nbbo_ask": 150.10,
+            "executed_shares": 100.0,
+            "maker_taker_fee_rebate": 0.0,
+        })
+
+        records = store.get_records(symbol="AAPL")
+        assert records[0]["order_type"] == ORDER_CATEGORY_NON_MARKETABLE_LIMIT
 
 
 class TestEmptyRecordsHandling:

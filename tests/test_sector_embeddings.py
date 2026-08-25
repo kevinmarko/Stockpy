@@ -215,3 +215,59 @@ class TestResolveTargetDescription:
         store.get_fundamentals_history.side_effect = RuntimeError("db down")
         result = resolve_target_description("NIO", historical_store=store, descriptions_path=path)
         assert result is None
+
+    def test_as_of_omitted_uses_get_fundamentals_history_unchanged(self, tmp_path):
+        """Regression: today's default (as_of=None, every existing caller)
+        must stay byte-identical -- most-recent-row lookup via
+        get_fundamentals_history, never the point-in-time path."""
+        path = self._yaml(tmp_path, targets={})
+        store = MagicMock()
+        import pandas as pd
+        store.get_fundamentals_history.return_value = pd.DataFrame([
+            {"raw_json": json.dumps({"longBusinessSummary": "Makes electric vehicles."})}
+        ])
+        result = resolve_target_description("NIO", historical_store=store, descriptions_path=path)
+        assert result == "Makes electric vehicles."
+        store.get_fundamentals_raw_json_asof.assert_not_called()
+
+    def test_as_of_given_uses_point_in_time_lookup_not_most_recent(self, tmp_path):
+        """Regression (secondary audit, 2026-08-24 -- see
+        docs/known_issues/sector_selection_similarity_lookahead.md): passing
+        as_of must route through the point-in-time
+        get_fundamentals_raw_json_asof(symbol, as_of) lookup, never the
+        unconditional-most-recent get_fundamentals_history path (which would
+        leak a FUTURE business description into a past-dated backtest
+        replay)."""
+        from datetime import datetime, timezone
+        path = self._yaml(tmp_path, targets={})
+        store = MagicMock()
+        store.get_fundamentals_raw_json_asof.return_value = json.dumps(
+            {"longBusinessSummary": "2015-era description."}
+        )
+        as_of = datetime(2015, 6, 1, tzinfo=timezone.utc)
+
+        result = resolve_target_description(
+            "NIO", historical_store=store, descriptions_path=path, as_of=as_of,
+        )
+
+        assert result == "2015-era description."
+        store.get_fundamentals_raw_json_asof.assert_called_once_with("NIO", as_of)
+        store.get_fundamentals_history.assert_not_called()
+
+    def test_as_of_given_no_pit_row_returns_none_not_a_future_description(self, tmp_path):
+        """A symbol with no fundamentals row whose report_date <= as_of
+        (e.g. it only has data from AFTER the scored date) must resolve to
+        None, never silently fall back to whatever's most recently cached --
+        that fallback is exactly the lookahead leak this fix closes."""
+        from datetime import datetime, timezone
+        path = self._yaml(tmp_path, targets={})
+        store = MagicMock()
+        store.get_fundamentals_raw_json_asof.return_value = None
+        as_of = datetime(2015, 6, 1, tzinfo=timezone.utc)
+
+        result = resolve_target_description(
+            "NIO", historical_store=store, descriptions_path=path, as_of=as_of,
+        )
+
+        assert result is None
+        store.get_fundamentals_history.assert_not_called()

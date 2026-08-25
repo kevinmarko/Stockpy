@@ -459,11 +459,28 @@ class OrderManager:
         best-effort persistence pattern in
         ``desktop/daemon_runtime.py::_run_one_cycle``.
 
-        NBBO bid/ask are deliberately omitted (left ``None``): this class has
-        no generic NBBO source across brokers, and
-        ``ExecutionAuditStore._build_record_dict`` already treats missing
-        NBBO honestly (price_improvement computes to 0.0, never fabricated --
-        CONSTRAINT #4) rather than requiring one.
+        NBBO bid/ask are still omitted here (left ``None``) -- CORRECTION
+        (secondary audit, 2026-08-24): a single-provider quote via
+        ``data.market_data.get_provider().get_latest_quote()`` DOES carry a
+        real ``bid``/``ask`` (see that ``Quote`` dataclass), so the previous
+        docstring's "this class has no generic NBBO source across brokers"
+        was not accurate -- a real source exists, it's just not wired in
+        here. Deliberately not wired in THIS pass: it would add a
+        synchronous network call to the post-fill audit hot path with no
+        bounded timeout, a cost/latency tradeoff that deserves its own
+        design pass rather than being folded into an audit-fixing change,
+        and a single provider's own quote is at best an approximation of a
+        true cross-exchange NBBO, which should be labeled honestly if wired
+        in. ``ExecutionAuditStore._build_record_dict`` already treats a
+        missing NBBO honestly (price_improvement computes to 0.0 AND
+        ``nbbo_available`` is stamped ``False`` so a report can distinguish
+        "measured, zero improvement" from "unmeasurable" -- CONSTRAINT #4)
+        rather than requiring one. See
+        docs/known_issues/sec_606_price_improvement_fabricated_zero.md for
+        the full write-up and this disclosed follow-up. ``limit_price`` IS
+        passed through below when present -- combined with a real NBBO (from
+        any future caller/source), it lets ``classify_limit_order`` actually
+        run instead of staying permanently dead code.
         """
         try:
             if self._audit_store is None:
@@ -483,6 +500,7 @@ class OrderManager:
                 "side": intent.side.value,
                 "venue": venue,
                 "order_type": order_type,
+                "limit_price": intent.limit_price,
                 "routing_timestamp": result.submitted_at,
                 "fill_price": result.filled_avg_price,
                 "executed_shares": result.filled_qty,

@@ -45,9 +45,20 @@ correlation_coefficient = cosine_similarity(target, sector) * SHF(sector)
 ```
 
 Sectors are ranked descending by `correlation_coefficient`; the top N
-(default 3) are selected. The `cosine_similarity` term (SBERT max-pooled
-embeddings) ships in a follow-on PR; this document currently covers the
-`SHF` term only.
+(default 3) are selected. The `cosine_similarity` term (SBERT max-pooled, or
+OpenAI, embeddings via `data/sector_embeddings.py::resolve_target_description`
+/`embed_text`/`cosine_similarity`, selected by `settings.
+SECTOR_SIMILARITY_EMBEDDER`) is now fully wired — this document previously
+said it "ships in a follow-on PR" and covered the `SHF` term only; that PR
+landed and this section is corrected accordingly. `NaN` (never a fabricated
+value) whenever either input is unavailable — see "Honest degradation" below
+for the SHF side and "No-lookahead-bias fix" below for the similarity side.
+A row's `degraded_reason` records why: `similarity_reason` (a similarity-side
+blocking failure — `no_target_description`/`no_embedder`/
+`no_sector_description`/`embedding_failed`) takes priority over
+`heat_degraded_reason` (SHF's own, non-blocking provenance flag,
+e.g. `"review_unavailable"`) whenever the two disagree, fixed 2026-08-24 — see
+below.
 
 ## Sector Heat Factor (SHF)
 
@@ -96,6 +107,36 @@ Sector membership (`{symbol: sector}`) is supplied by the caller — the
 existing `forecasting/data/ticker_sectors.csv` (regenerable via
 `scripts/build_ticker_sector_map.py`) is the intended source, reused rather
 than duplicated in a new table. Sector *descriptions* (used by the
-semantic-similarity term) will live in a new committed
-`data/sector_descriptions.yaml` in the follow-on PR — this module does no
-description loading of its own.
+semantic-similarity term) live in the committed `data/sector_descriptions.yaml`
+(`sectors:` block, keyed by the same sector names `ticker_sectors.csv` uses —
+enforced by `tests/test_sector_descriptions.py::TestSectorDescriptionsKeySuperset`).
+A target symbol's own description is resolved by
+`data.sector_embeddings.resolve_target_description`, in priority order: (1)
+an operator-authored override in the same YAML's `targets:` block, (2)
+`fundamentals_history.raw_json['longBusinessSummary']` (read-only, never a
+live fetch), (3) `None` — never synthesized from ticker+sector name
+(CONSTRAINT #4).
+
+## No-lookahead-bias fix (2026-08-24)
+
+`resolve_target_description` previously had NO point-in-time awareness at
+all — it always resolved the target's CURRENT business description
+regardless of what `as_of` date a caller was scoring, defeating the
+lookahead-safety design the Sector Heat Factor term above already has (that
+term correctly threads `as_of` into its trailing-window query). Dormant at
+the time it was found (`run_sector_selection`'s one real production caller,
+`pipeline/production_steps.py`, never scores anything but "now," where
+current and as-of descriptions are the same thing) but a real gap for the
+first backtest/replay caller that would ever exercise it. Fixed via a new
+point-in-time lookup, `HistoricalStore.get_fundamentals_raw_json_asof(symbol,
+as_of_date)` (mirroring the existing `get_fundamentals_asof` convention —
+`report_date`, the causal filing date, not `as_of`, the cache-write
+timestamp, is the filter column), threaded through
+`resolve_target_description(..., as_of=...)` and
+`_rank_one_target`/`run_sector_selection`. `run_sector_selection` now passes
+`as_of=resolved_now` internally on EVERY call (not only when a caller
+supplies an explicit historical `as_of`), so this has a real, disclosed
+effect on the live daily pipeline too — see
+[`docs/known_issues/sector_selection_similarity_lookahead.md`](../known_issues/sector_selection_similarity_lookahead.md)
+for the full write-up, including the verified (not assumed) analysis of
+which real fundamentals-provider payload shapes are and aren't affected.

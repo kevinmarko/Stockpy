@@ -177,6 +177,42 @@ class TestHonestDegradation:
         assert row["correlation_coefficient"] == pytest.approx(0.3)  # 1.0 * 0.3
         assert row["degraded_reason"] == "review_unavailable"
 
+    def test_blocking_similarity_reason_not_masked_by_informational_heat_reason(self):
+        """Regression (secondary audit, 2026-08-24): when similarity ITSELF
+        fails (correlation_coefficient is None because of it, not merely
+        because of heat) at the same time heat's own degraded_reason happens
+        to be set too, the ACTUAL blocking cause (similarity_reason) must be
+        reported -- not silently masked by heat's routine, non-blocking
+        provenance flag. Before the fix, `heat_degraded_reason or
+        similarity_reason` always reported "review_unavailable" here even
+        though similarity (no_target_description) is what actually made the
+        row un-rankable.
+        """
+        heat = {
+            "Technology": _heat_entry(shf=0.3, degraded_reason="review_unavailable"),
+        }
+        descriptions = {"Technology": "desc-tech"}
+        sector_map = {"AAPL": "Technology"}
+
+        with patch("settings.settings.SECTOR_SELECTION_ENABLED", True), \
+             patch("settings.settings.SECTOR_SELECTION_TOP_N", 3), \
+             patch("settings.settings.SECTOR_SIMILARITY_EMBEDDER", "sbert"), \
+             patch("settings.settings.SECTOR_SIMILARITY_POOLING", "max"), \
+             patch("data.sector_embeddings.SBERT_AVAILABLE", True), \
+             patch("data.sector_selection_heat.compute_spec_sector_heat", return_value=heat), \
+             patch("data.sector_embeddings.load_sector_descriptions", return_value=descriptions), \
+             patch("engine.portfolio_exposure._load_sector_map", return_value=sector_map), \
+             patch("data.sector_embeddings.resolve_target_description", return_value=None), \
+             patch("data.sector_embeddings.embed_text", return_value=None):
+            result = run_sector_selection(
+                ["NIO"], historical_store=_fake_store(), correlation_store=MagicMock(),
+            )
+        row = result["NIO"][0]
+        assert row["cosine_similarity"] is None
+        assert row["correlation_coefficient"] is None
+        # The real, blocking reason -- not heat's merely-informational one.
+        assert row["degraded_reason"] == "no_target_description"
+
     def test_embedder_none_marks_no_embedder(self):
         heat = {"Technology": _heat_entry(shf=0.5)}
         with patch("settings.settings.SECTOR_SELECTION_ENABLED", True), \
@@ -204,7 +240,7 @@ class TestPerTargetResilience:
         descriptions = {"Technology": "desc-tech"}
         sector_map = {"AAPL": "Technology"}
 
-        def fake_resolve(symbol, historical_store=None):
+        def fake_resolve(symbol, historical_store=None, as_of=None):
             if symbol == "BAD":
                 raise RuntimeError("simulated failure resolving BAD's description")
             return "Good target description."
