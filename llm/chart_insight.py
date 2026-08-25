@@ -131,7 +131,7 @@ def render_price_chart_png(
         plt.close(fig)
         return buf.getvalue()
     except Exception as exc:
-        import traceback; traceback.print_exc(); logger.warning("render_price_chart_png failed for %s: %s", symbol, exc)
+        logger.warning("render_price_chart_png failed for %s: %s", symbol, exc, exc_info=True)
         return None
 
 

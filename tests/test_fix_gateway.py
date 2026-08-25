@@ -45,6 +45,7 @@ from execution.fix_gateway import (
     RoutingPolicy,
     VenueConfig,
     SOH,
+    derive_nbbo_from_venue_quotes,
 )
 
 # --- 1. Checksum and Raw Serialization Tests ---
@@ -569,6 +570,49 @@ def test_multi_venue_aggregator_venues_and_nbbo_synthesis():
     assert nbbo["best_ask_venue"] in expected_venues
     assert " x " in nbbo["nbbo_string"]
     assert len(nbbo["venue_quotes"]) == 6
+
+
+def test_derive_nbbo_handles_normal_uncrossed_quotes():
+    """Sanity check on the extracted pure helper against a normal,
+    non-crossed multi-venue quote set (mirrors what synthesize_nbbo's own
+    self-generated venue_quotes always looks like)."""
+    venue_quotes = {
+        "A": {"bid": 99.98, "ask": 100.02},
+        "B": {"bid": 99.95, "ask": 100.05},
+        "C": {"bid": 100.00, "ask": 100.01},  # tightest market -> best NBBO
+    }
+    nbbo = derive_nbbo_from_venue_quotes("SPY", venue_quotes)
+    assert nbbo["best_bid"] == pytest.approx(100.00)
+    assert nbbo["best_bid_venue"] == "C"
+    assert nbbo["best_ask"] == pytest.approx(100.01)
+    assert nbbo["best_ask_venue"] == "C"
+    assert nbbo["spread"] == pytest.approx(0.01)
+    assert nbbo["mid_price"] == pytest.approx(100.005)
+
+
+def test_derive_nbbo_fails_closed_on_crossed_market(caplog):
+    """Regression (secondary audit, 2026-08-24): a crossed market across
+    venues (max(bid) > min(ask)) must report spread/mid_price as an honest
+    None (CONSTRAINT #6), never a negative spread or a meaningless midpoint.
+    Unreachable via MultiVenueAggregator.synthesize_nbbo's own
+    self-generated quotes (every venue individually satisfies bid < ref_px <
+    ask, so max(bid) < min(ask) is guaranteed there) -- this is exactly why
+    the NBBO derivation was factored into its own pure function, so a
+    crossed input CAN be hand-constructed and tested directly.
+    """
+    venue_quotes = {
+        "A": {"bid": 100.50, "ask": 100.00},  # already crossed on its own
+        "B": {"bid": 100.10, "ask": 100.60},
+    }
+    with caplog.at_level(logging.WARNING):
+        nbbo = derive_nbbo_from_venue_quotes("SPY", venue_quotes)
+
+    assert nbbo["best_bid"] == pytest.approx(100.50)
+    assert nbbo["best_ask"] == pytest.approx(100.00)
+    assert nbbo["best_bid"] > nbbo["best_ask"]
+    assert nbbo["spread"] is None
+    assert nbbo["mid_price"] is None
+    assert any("crossed NBBO" in rec.message for rec in caplog.records)
 
 
 @pytest.mark.anyio

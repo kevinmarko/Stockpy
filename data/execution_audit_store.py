@@ -65,6 +65,18 @@ class ExecutionAuditRecord(Base):
     executed_shares = Column(Float, nullable=False, default=0.0)
     maker_taker_fee_rebate = Column(Float, nullable=False, default=0.0)  # Net rebate (+) or fee (-) in $
     price_improvement = Column(Float, nullable=False, default=0.0)  # Total price improvement in $
+    # True only when both nbbo_bid AND nbbo_ask were genuinely supplied and
+    # finite for this record -- CONSTRAINT #4. `price_improvement` above
+    # stays a NOT-NULL 0.0-default column for both "measured, zero
+    # improvement" AND "NBBO unavailable, unmeasurable" (a physical DB
+    # constraint change would need a nullable-column migration this table
+    # doesn't have yet), so this flag is what actually distinguishes the two
+    # -- SecRule606Reporter reads it and MUST NOT report a price-improvement
+    # rate/dollar figure without excluding nbbo_available=False rows from the
+    # denominator, or a report full of unmeasurable orders silently reads as
+    # "0% improved" instead of "0% measurable". See
+    # docs/known_issues/sec_606_price_improvement_fabricated_zero.md.
+    nbbo_available = Column(Boolean, nullable=False, default=False, index=True)
     is_option = Column(Boolean, nullable=False, default=False)
     notes = Column(String(255), nullable=True)
 
@@ -213,6 +225,7 @@ def _row_to_dict(row: ExecutionAuditRecord) -> Dict[str, Any]:
         "executed_shares": row.executed_shares,
         "maker_taker_fee_rebate": row.maker_taker_fee_rebate,
         "price_improvement": row.price_improvement,
+        "nbbo_available": bool(row.nbbo_available),
         "is_option": bool(row.is_option),
         "notes": row.notes,
     }
@@ -245,8 +258,43 @@ class ExecutionAuditStore:
         else:
             self.engine = create_db_engine(self.db_url)
             Base.metadata.create_all(self.engine)
+            self._migrate_add_nbbo_available_column()
 
         self.Session = sessionmaker(bind=self.engine)
+
+    def _migrate_add_nbbo_available_column(self) -> None:
+        """Additive migration: add ``execution_audit_records.nbbo_available``
+        to a pre-existing DB that predates it (secondary audit, 2026-08-24 --
+        see the column's own docstring for why it exists).
+
+        ``Base.metadata.create_all`` only creates missing TABLES, never adds
+        a column to an existing one, so a DB created before this column was
+        added needs this explicit step. `ADD COLUMN` on an already-migrated
+        (or freshly-created, since CREATE TABLE already includes the column)
+        DB raises a duplicate-column error, which is swallowed here --
+        matching ``data/paper_account_store.py::_ensure_account_exists``'s
+        identical tolerant-ALTER idiom rather than SQLite-only
+        ``PRAGMA table_info`` probing, since this store (like that one) is
+        resolved through ``db_config.py`` and must stay SQLite/Postgres
+        portable. ``DEFAULT FALSE`` (the SQL-standard boolean literal, not
+        SQLite's ``0``) is understood by both dialects. Never raises
+        (CONSTRAINT #6): a failed migration just means older rows stay
+        indistinguishable from a genuine zero-improvement measurement, which
+        is exactly today's pre-fix behavior for that data -- no worse than
+        before.
+        """
+        try:
+            with self.engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "ALTER TABLE execution_audit_records "
+                    "ADD COLUMN nbbo_available BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                logger.info(
+                    "ExecutionAuditStore: migrated execution_audit_records — "
+                    "added nbbo_available column."
+                )
+        except Exception:
+            pass  # column already exists (fresh DB or already-migrated) -- expected on every subsequent construction
 
     def record_audit(self, audit_record: Union[Dict[str, Any], ExecutionAuditRecord]) -> int:
         """Insert a single execution audit record into the persistent store.
@@ -317,6 +365,7 @@ class ExecutionAuditStore:
                 "executed_shares": data.executed_shares,
                 "maker_taker_fee_rebate": data.maker_taker_fee_rebate,
                 "price_improvement": data.price_improvement,
+                "nbbo_available": bool(getattr(data, "nbbo_available", False)),
                 "is_option": bool(data.is_option),
                 "notes": data.notes,
             }
@@ -330,6 +379,10 @@ class ExecutionAuditStore:
         nbbo_bid = _opt_float(d.get("nbbo_bid"))
         nbbo_ask = _opt_float(d.get("nbbo_ask"))
         executed_shares = float(_opt_float(d.get("executed_shares"), 0.0) or 0.0)
+        nbbo_available = (
+            nbbo_bid is not None and math.isfinite(nbbo_bid)
+            and nbbo_ask is not None and math.isfinite(nbbo_ask)
+        )
 
         # Compute price improvement if not explicitly provided
         if "price_improvement" in d and d["price_improvement"] is not None:
@@ -341,6 +394,28 @@ class ExecutionAuditStore:
                 nbbo_bid=nbbo_bid,
                 nbbo_ask=nbbo_ask,
                 shares=executed_shares,
+            )
+
+        # Marketable-vs-non-marketable limit classification requires real
+        # NBBO to determine -- only override normalize_order_type's default
+        # ("Non-Marketable Limit" for any bare "limit" order_type string,
+        # since it has no NBBO to check against) when a genuine limit_price
+        # AND real NBBO are both available. Previously `classify_limit_order`
+        # existed, was unit-tested, and had ZERO callers in the write path --
+        # a confirmed audit finding (2026-08-24) -- so "Marketable Limit" was
+        # structurally unreachable in every real report regardless of how
+        # many marketable limit orders actually occurred.
+        limit_price = _opt_float(d.get("limit_price"))
+        if (
+            nbbo_available
+            and limit_price is not None
+            and normalized_ot in (ORDER_CATEGORY_MARKETABLE_LIMIT, ORDER_CATEGORY_NON_MARKETABLE_LIMIT)
+        ):
+            normalized_ot = classify_limit_order(
+                side=side or "",
+                limit_price=limit_price,
+                nbbo_bid=nbbo_bid,
+                nbbo_ask=nbbo_ask,
             )
 
         fee_rebate = float(_opt_float(d.get("maker_taker_fee_rebate"), 0.0) or 0.0)
@@ -360,6 +435,7 @@ class ExecutionAuditStore:
             "executed_shares": executed_shares,
             "maker_taker_fee_rebate": fee_rebate,
             "price_improvement": price_improvement,
+            "nbbo_available": nbbo_available,
             "is_option": bool(d.get("is_option", False)),
             "notes": str(d["notes"]) if d.get("notes") else None,
         }

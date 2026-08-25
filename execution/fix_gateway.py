@@ -2254,6 +2254,57 @@ class VenueConfig:
         }
 
 
+def derive_nbbo_from_venue_quotes(symbol: str, venue_quotes: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Pure NBBO derivation (max-of-bids / min-of-asks) from a pre-built
+    per-venue quote dict -- factored out of ``MultiVenueAggregator.synthesize_nbbo``
+    (secondary audit, 2026-08-24) purely so the crossed/locked-market guard
+    below is independently unit-testable: ``synthesize_nbbo`` always
+    self-generates ``venue_quotes`` such that every venue's own
+    ``bid < ask``, and every venue shares the same reference price, so
+    ``max(bid) < min(ask)`` is mathematically guaranteed there -- a crossed
+    market can never actually be constructed through that code path, which
+    means a test exercising `synthesize_nbbo` alone could never reach this
+    guard. This function accepts an arbitrary caller-supplied ``venue_quotes``
+    dict instead, so a test can hand-construct a genuinely crossed input.
+
+    CONSTRAINT #6: on a crossed/locked market (``best_ask < best_bid``, a
+    real if rare live-market condition), ``spread``/``mid_price`` fail closed
+    to ``None`` rather than silently propagating a negative spread or a
+    meaningless midpoint -- unreachable today via the caller's own
+    self-generated quotes, but real insurance for the moment this function
+    accepts externally-supplied (i.e. genuinely live) per-venue quotes.
+    """
+    best_bid = max(q["bid"] for q in venue_quotes.values())
+    best_bid_venue = next(k for k, v in venue_quotes.items() if v["bid"] == best_bid)
+    best_ask = min(q["ask"] for q in venue_quotes.values())
+    best_ask_venue = next(k for k, v in venue_quotes.items() if v["ask"] == best_ask)
+
+    if best_ask < best_bid:
+        logger.warning(
+            "derive_nbbo_from_venue_quotes: crossed NBBO for %s (best_bid=%.4f > "
+            "best_ask=%.4f across venues) -- reporting spread/mid_price as "
+            "unavailable rather than a negative spread",
+            symbol, best_bid, best_ask,
+        )
+        spread = None
+        mid_price = None
+    else:
+        spread = round(best_ask - best_bid, 4)
+        mid_price = round((best_bid + best_ask) / 2.0, 4)
+
+    return {
+        "symbol": symbol,
+        "best_bid": best_bid,
+        "best_bid_venue": best_bid_venue,
+        "best_ask": best_ask,
+        "best_ask_venue": best_ask_venue,
+        "spread": spread,
+        "mid_price": mid_price,
+        "nbbo_string": f"{best_bid:.2f} @ {best_bid_venue} x {best_ask:.2f} @ {best_ask_venue}",
+        "venue_quotes": venue_quotes,
+    }
+
+
 class MultiVenueAggregator:
     """
     Simulates cross-exchange Smart Order Routing (SOR) and liquidity aggregation
@@ -2306,24 +2357,7 @@ class MultiVenueAggregator:
                 "latency_ms": lat,
             }
 
-        best_bid = max(q["bid"] for q in venue_quotes.values())
-        best_bid_venue = next(k for k, v in venue_quotes.items() if v["bid"] == best_bid)
-        best_ask = min(q["ask"] for q in venue_quotes.values())
-        best_ask_venue = next(k for k, v in venue_quotes.items() if v["ask"] == best_ask)
-        spread = round(best_ask - best_bid, 4)
-        mid_price = round((best_bid + best_ask) / 2.0, 4)
-
-        return {
-            "symbol": symbol,
-            "best_bid": best_bid,
-            "best_bid_venue": best_bid_venue,
-            "best_ask": best_ask,
-            "best_ask_venue": best_ask_venue,
-            "spread": spread,
-            "mid_price": mid_price,
-            "nbbo_string": f"{best_bid:.2f} @ {best_bid_venue} x {best_ask:.2f} @ {best_ask_venue}",
-            "venue_quotes": venue_quotes,
-        }
+        return derive_nbbo_from_venue_quotes(symbol, venue_quotes)
 
     def get_venues_info(self, symbol: Optional[str] = "SPY", spot_price: Optional[float] = None) -> Dict[str, Any]:
         """

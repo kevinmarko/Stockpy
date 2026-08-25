@@ -45,6 +45,35 @@ class TestAsOfThreading:
         _, kwargs = heat_mock.call_args
         assert kwargs["as_of"] == as_of
 
+    def test_as_of_forwarded_to_resolve_target_description(self):
+        """Companion to the heat-term test above, for the SIMILARITY term's
+        own lookahead gap (secondary audit, 2026-08-24):
+        resolve_target_description had NO point-in-time awareness at all
+        before this fix -- it always embedded the target's CURRENT business
+        description regardless of what as_of date was being scored. This
+        pins that the real as_of is now actually threaded through, not
+        silently dropped in favor of a None ("use whatever's freshest")
+        default. See docs/known_issues/sector_selection_similarity_lookahead.md.
+        """
+        as_of = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
+        resolve_mock = MagicMock(return_value="desc")
+
+        with patch("settings.settings.SECTOR_SELECTION_ENABLED", True), \
+             patch("settings.settings.SECTOR_SELECTION_TOP_N", 3), \
+             patch("settings.settings.SECTOR_SIMILARITY_EMBEDDER", "none"), \
+             patch("data.sector_selection_heat.compute_spec_sector_heat", return_value={
+                 "Technology": {"shf": 0.5, "news_volume": 1.0, "review_volume": 0.0, "degraded_reason": None},
+             }), \
+             patch("data.sector_embeddings.load_sector_descriptions", return_value={"Technology": "desc"}), \
+             patch("engine.portfolio_exposure._load_sector_map", return_value={"AAPL": "Technology"}), \
+             patch("data.sector_embeddings.resolve_target_description", resolve_mock):
+            run_sector_selection(
+                ["NIO"], as_of=as_of, historical_store=_fake_store(), correlation_store=MagicMock(),
+            )
+
+        _, kwargs = resolve_mock.call_args
+        assert kwargs["as_of"] == as_of
+
     def test_persisted_as_of_derived_from_passed_as_of_not_wall_clock(self):
         """The trading-day label used to PERSIST a ranking must come from
         resolve_trading_day(as_of) -- if it silently used datetime.now()

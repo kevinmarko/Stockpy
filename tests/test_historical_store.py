@@ -1366,6 +1366,86 @@ class TestPITFundamentals:
         out_latest = store.get_fundamentals_asof("AAPL", datetime(2020, 2, 1, tzinfo=timezone.utc))
         assert out_latest["pe_ratio"] == 15.0
 
+    def test_get_fundamentals_raw_json_asof_latest_leq_cutoff(self, tmp_path):
+        """Regression (secondary audit, 2026-08-24 -- see
+        docs/known_issues/sector_selection_similarity_lookahead.md): the raw
+        JSON blob (holding longBusinessSummary, consumed by
+        data.sector_embeddings.resolve_target_description) must respect the
+        SAME report_date <= as_of_date point-in-time cutoff as
+        get_fundamentals_asof's typed-numeric-field sibling above -- a
+        symbol scored as of a past date must never see a LATER filing's
+        description."""
+        import json
+        store = HistoricalStore(db_path=str(tmp_path / "pit_raw_json.db"))
+
+        store.upsert_fundamentals_pit(
+            "AAPL", {"pe_ratio": 10.0}, {"longBusinessSummary": "2019-era description."},
+            report_date="2019-10-30", source="edgar",
+        )
+        store.upsert_fundamentals_pit(
+            "AAPL", {"pe_ratio": 15.0}, {"longBusinessSummary": "2020-era description."},
+            report_date="2020-01-30", source="edgar",
+        )
+
+        # Before the first filing -> no PIT-eligible row at all.
+        assert store.get_fundamentals_raw_json_asof("AAPL", datetime(2019, 10, 29, tzinfo=timezone.utc)) is None
+
+        # Exactly on / between the first filing and the second -> the FIRST
+        # (older) filing's description, never the later one.
+        raw_first = store.get_fundamentals_raw_json_asof("AAPL", datetime(2019, 10, 30, tzinfo=timezone.utc))
+        assert json.loads(raw_first)["longBusinessSummary"] == "2019-era description."
+        raw_mid = store.get_fundamentals_raw_json_asof("AAPL", datetime(2019, 12, 31, tzinfo=timezone.utc))
+        assert json.loads(raw_mid)["longBusinessSummary"] == "2019-era description."
+
+        # After the second filing -> the newer description.
+        raw_latest = store.get_fundamentals_raw_json_asof("AAPL", datetime(2020, 2, 1, tzinfo=timezone.utc))
+        assert json.loads(raw_latest)["longBusinessSummary"] == "2020-era description."
+
+    def test_get_fundamentals_raw_json_asof_unknown_symbol_returns_none(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit_raw_json.db"))
+        assert store.get_fundamentals_raw_json_asof("NOSUCH", datetime(2020, 1, 1, tzinfo=timezone.utc)) is None
+
+    def test_get_fundamentals_raw_json_asof_excludes_row_with_no_report_date(self, tmp_path):
+        """Realistic degrade case for the actual production write path
+        (secondary audit, 2026-08-24 -- verified against
+        _upsert_fundamentals/_extract_report_date_str's real behavior, not
+        just asserted): a provider payload that carries longBusinessSummary
+        but none of REPORT_DATE_KEYS (mostRecentQuarter/lastFiscalYearEnd/
+        report_date/earningsTimestamp) writes report_date=NULL via the
+        REGULAR (non-PIT) get_fundamentals_raw() caching path -- confirmed
+        this is the realistic shape by reading
+        data/yahoo_fundamentals.py::compute_fundamentals's return keys (no
+        longBusinessSummary at all) vs. YFinanceProvider's raw .info
+        passthrough (has both longBusinessSummary AND a REPORT_DATE_KEYS
+        field from the same dict). A row like this must be excluded from
+        the point-in-time lookup (report_date IS NOT NULL), not silently
+        treated as eligible -- get_fundamentals_raw_json_asof must return
+        None rather than leaking an unverifiable-timing description into a
+        point-in-time-scored caller.
+        """
+        store = HistoricalStore(db_path=str(tmp_path / "pit_raw_json.db"))
+
+        class _FakeProvider:
+            source_name = "test_provider"
+
+            def get_fundamentals(self, symbol):
+                return {
+                    "longBusinessSummary": "Current-era description with no report date.",
+                    "sector": "Technology",
+                }
+
+        raw = store.get_fundamentals_raw("AAPL", provider=_FakeProvider())
+        assert raw.get("longBusinessSummary")  # sanity: the row really was written
+
+        # The row exists (get_fundamentals_history sees it) but has no
+        # report_date -- the point-in-time lookup must not use it.
+        hist = store.get_fundamentals_history("AAPL")
+        assert len(hist) == 1
+        assert hist.iloc[0]["report_date"] is None
+
+        result = store.get_fundamentals_raw_json_asof("AAPL", datetime.now(timezone.utc))
+        assert result is None
+
     def test_get_fundamentals_history_additive(self, tmp_path):
         store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
         store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 12.0}, {"raw": 1}, report_date="2021-05-01", source="edgar")

@@ -301,6 +301,40 @@ export const GexProfileView: React.FC<GexProfileViewProps> = ({
 
       {data && (
         <>
+          {/* Honesty banner (CONSTRAINT #4): the backend degrades to a
+              procedurally-generated illustrative chain (chain_source
+              "synthetic") on a live-chain resolution failure, and/or reports
+              spot_price_source "unavailable" when it couldn't resolve a real
+              quote either -- both are honestly flagged by the API, but were
+              previously never surfaced here, so a fabricated GEX profile
+              rendered indistinguishably from a real one. "mock" (the app-wide
+              offline demo backend) gets the same badge for the same reason. */}
+          {data.chain_source && data.chain_source !== "live" && (
+            <div
+              style={{
+                padding: "10px 14px",
+                background: alpha(theme.caution, "20"),
+                color: theme.caution,
+                borderRadius: 8,
+                border: `1px solid ${theme.caution}`,
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span style={{ textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                {data.chain_source === "mock" ? "Demo Data" : "Synthetic Data"}
+              </span>
+              <span style={{ fontWeight: 400 }}>
+                {data.spot_price_source === "unavailable"
+                  ? "No live options chain or spot quote could be resolved for this symbol — every figure below is an illustrative, procedurally-generated chain, not real market structure."
+                  : "No live options chain could be resolved for this symbol — every GEX figure below is an illustrative, procedurally-generated chain, not real market structure."}
+              </span>
+            </div>
+          )}
+
           {/* Volatility Regime & Gamma Walls KPI Banner */}
           <div
             style={{

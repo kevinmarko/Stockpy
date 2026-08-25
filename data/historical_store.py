@@ -1637,8 +1637,46 @@ class HistoricalStore:
                         
         except Exception as exc:
             logger.warning("HistoricalStore.get_fundamentals_asof failed: %s", exc)
-            
+
         return out
+
+    def get_fundamentals_raw_json_asof(self, symbol: str, as_of_date: datetime) -> Optional[str]:
+        """Return the most recent ``fundamentals_history.raw_json`` whose
+        ``report_date <= as_of_date`` -- the same point-in-time convention as
+        ``get_fundamentals_asof`` (``report_date``, the causal filing date,
+        not ``as_of``, the cache-write timestamp) -- for a caller that needs
+        the raw JSON blob (e.g. ``sector_selection_engine``'s
+        ``longBusinessSummary`` lookup via
+        ``data.sector_embeddings.resolve_target_description``) rather than
+        the 9 typed numeric fields ``get_fundamentals_asof`` returns.
+
+        Returns ``None`` when no row is stored with ``report_date <=
+        as_of_date`` -- e.g. every stored row predates PIT tracking
+        (``report_date IS NULL``, excluded rather than trusted) or the
+        symbol has no fundamentals history at all -- NEVER the most recent
+        row regardless of date, which would leak future information into a
+        backtest/replay caller (no-lookahead-bias guarantee, secondary
+        audit 2026-08-24 -- see
+        docs/known_issues/sector_selection_similarity_lookahead.md).
+        """
+        as_of_str = as_of_date.strftime("%Y-%m-%d")
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                row = conn.execute(
+                    """
+                    SELECT raw_json
+                    FROM fundamentals_history
+                    WHERE symbol = ? AND report_date <= ? AND report_date IS NOT NULL
+                    ORDER BY report_date DESC
+                    LIMIT 1
+                    """,
+                    (symbol.upper(), as_of_str),
+                ).fetchone()
+                return row[0] if row and row[0] else None
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_fundamentals_raw_json_asof failed: %s", exc)
+            return None
 
     def upsert_fundamentals_pit(
         self,

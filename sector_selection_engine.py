@@ -89,6 +89,7 @@ def run_sector_selection(
                 target, sectors, sector_descriptions, heat_by_sector,
                 embedder=embedder, pooling=pooling,
                 historical_store=historical_store, top_n=n,
+                as_of=resolved_now,
             )
         except Exception as exc:
             logger.warning("run_sector_selection: target %r failed: %s", target, exc)
@@ -116,10 +117,13 @@ def _rank_one_target(
     pooling: str,
     historical_store: Any,
     top_n: int,
+    as_of: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
     from data.sector_embeddings import SBERT_AVAILABLE, cosine_similarity, resolve_target_description
 
-    target_description = resolve_target_description(target, historical_store=historical_store)
+    target_description = resolve_target_description(
+        target, historical_store=historical_store, as_of=as_of,
+    )
     embedder_ready = embedder == "openai" or (embedder == "sbert" and SBERT_AVAILABLE)
     target_vector = _embed(target_description, embedder=embedder, pooling=pooling)
 
@@ -146,7 +150,21 @@ def _rank_one_target(
             else:
                 similarity_reason = "embedding_failed"
 
-        degraded_reason = heat_degraded_reason or similarity_reason
+        # `similarity_reason` wins whenever it's set (secondary audit,
+        # 2026-08-24 -- was `heat_degraded_reason or similarity_reason`,
+        # backwards): `heat_degraded_reason` (e.g. "review_unavailable") is a
+        # deliberately broad provenance flag stamped even when `shf`
+        # computed fine and `coefficient` is a genuinely valid number (see
+        # tests/test_sector_selection_engine.py -- that priority is
+        # intentional and preserved here for the cos-is-valid case). But
+        # when `cos` is itself NaN, `similarity_reason` IS the actual reason
+        # `coefficient` is None -- the old precedence let a routine heat
+        # flag silently mask that real, blocking cause (e.g. reporting
+        # "review_unavailable" for a row that was actually
+        # "no_target_description" and could never have scored regardless of
+        # heat). `similarity_reason` is None whenever `cos` is valid, so this
+        # still falls through to `heat_degraded_reason` in that case.
+        degraded_reason = similarity_reason or heat_degraded_reason
         coefficient = float("nan") if (math.isnan(cos) or math.isnan(shf)) else cos * shf
         ingestion_volume = _nan_aware_sum(news_volume, review_volume)
 
