@@ -437,9 +437,14 @@ class AgenticForecastBackfiller:
             context = make_context()
             module.pre_compute(universe_df, context)
 
-            for idx, row in group.iterrows():
+            # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+            # F-03 FIX: Use to_dict('records') to avoid DataFrame iterrows() performance penalty
+            group_dicts = group.to_dict('records')
+            group_indices = group.index
+            for i, idx in enumerate(group_indices):
                 ticker = idx[1]  # self.data's index is (Date, Ticker)
-                row_with_symbol = row.copy()
+                # Ensure the Series retains the original name (tuple index) as iterrows would
+                row_with_symbol = pd.Series(group_dicts[i], name=idx)
                 row_with_symbol["Symbol"] = ticker
                 out = module.compute(row_with_symbol, context)
                 scores[idx] = out.score

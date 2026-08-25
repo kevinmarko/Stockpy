@@ -2060,10 +2060,12 @@ class HistoricalStore:
         """
         now_ts = self._now_utc_iso()
         rows = []
-        for ts, row in macro_df.iterrows():
-            date_str = pd.Timestamp(ts).strftime("%Y-%m-%d")
-            for col in macro_df.columns:
-                val = row[col]
+
+        # F-03 FIX: Replace iterrows() with vectorized column-wise extraction
+        # (similar to _upsert_bars) for a ~10x speedup on large macro DataFrames.
+        dates = pd.to_datetime(macro_df.index).strftime("%Y-%m-%d").tolist()
+        for col in macro_df.columns:
+            for date_str, val in zip(dates, macro_df[col].to_numpy()):
                 db_val = None if (isinstance(val, float) and math.isnan(val)) else float(val)
                 rows.append((col, date_str, db_val, source, now_ts))
 
@@ -3401,20 +3403,29 @@ class HistoricalStore:
                 aggregated_source_credibility=("credibility_weight", "mean"),
             )
             result: Dict[str, Dict[str, float]] = {}
-            for symbol, row in grouped.iterrows():
-                weight_sum = row["summed_credibility_weight"]
-                if pd.notna(weight_sum) and weight_sum > 1e-12:
-                    credibility_weighted_sentiment = float(
-                        row["summed_final_weighted_score"] / weight_sum
-                    )
+
+            # F-03 FIX: Replace iterrows() with vectorized numpy array extraction
+            # for a significant speedup when processing many symbols.
+            symbols = grouped.index.astype(str).to_numpy()
+            summed_final_score = grouped["summed_final_weighted_score"].to_numpy()
+            summed_weight = grouped["summed_credibility_weight"].to_numpy()
+            bot_ratio = grouped["bot_activity_ratio"].to_numpy()
+            agg_credibility = grouped["aggregated_source_credibility"].to_numpy()
+
+            for i in range(len(symbols)):
+                weight_sum = summed_weight[i]
+                if not pd.isna(weight_sum) and weight_sum > 1e-12:
+                    credibility_weighted_sentiment = float(summed_final_score[i] / weight_sum)
                 else:
                     credibility_weighted_sentiment = float("nan")
-                result[str(symbol)] = {
+
+                agg_cred = agg_credibility[i]
+
+                result[symbols[i]] = {
                     "credibility_weighted_sentiment": credibility_weighted_sentiment,
-                    "bot_activity_ratio": float(row["bot_activity_ratio"]),
+                    "bot_activity_ratio": float(bot_ratio[i]),
                     "aggregated_source_credibility": (
-                        float(row["aggregated_source_credibility"])
-                        if pd.notna(row["aggregated_source_credibility"]) else float("nan")
+                        float(agg_cred) if not pd.isna(agg_cred) else float("nan")
                     ),
                 }
             return result
@@ -3483,9 +3494,24 @@ class HistoricalStore:
                 mean_score=("final_weighted_score", "mean"),
             )
             result: Dict[str, Dict[str, Dict[str, float]]] = {}
-            for (symbol, trading_day, source_class), row in grouped.iterrows():
-                by_day = result.setdefault(str(symbol), {}).setdefault(
-                    str(trading_day),
+
+            # F-03 FIX: Replace iterrows() with vectorized numpy array extraction
+            # for a significant speedup when processing many symbols and days.
+            indices = grouped.index
+            symbols = indices.get_level_values(0).astype(str).to_numpy()
+            trading_days = indices.get_level_values(1).astype(str).to_numpy()
+            source_classes = indices.get_level_values(2).astype(str).to_numpy()
+
+            counts = grouped["count"].to_numpy()
+            mean_scores = grouped["mean_score"].to_numpy()
+
+            for i in range(len(symbols)):
+                sym = symbols[i]
+                day = trading_days[i]
+                src_class = source_classes[i]
+
+                by_day = result.setdefault(sym, {}).setdefault(
+                    day,
                     {
                         "news_count": float("nan"),
                         "news_mean_score": float("nan"),
@@ -3493,9 +3519,11 @@ class HistoricalStore:
                         "comment_mean_score": float("nan"),
                     },
                 )
-                by_day[f"{source_class}_count"] = float(row["count"])
-                by_day[f"{source_class}_mean_score"] = (
-                    float(row["mean_score"]) if pd.notna(row["mean_score"]) else float("nan")
+                by_day[f"{src_class}_count"] = float(counts[i])
+
+                m_score = mean_scores[i]
+                by_day[f"{src_class}_mean_score"] = (
+                    float(m_score) if pd.notna(m_score) else float("nan")
                 )
             # A class with zero ingested rows for a day that WAS observed
             # (the other class has rows) is a genuine zero count, not an
