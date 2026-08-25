@@ -33,4 +33,4 @@
 - [x] Flag pre-existing `docs/settings_liveness.json` staleness via `spawn_task`
       (unrelated to this branch's changes, confirmed by history)
 - [x] Write PR artifacts (this file + implementation plan + walkthrough)
-- [ ] Commit and open PR
+- [x] Commit and open PR — [#910](https://github.com/kevinmarko/Stockpy/pull/910)
