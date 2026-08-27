@@ -89,3 +89,23 @@ def test_paper_broker_options_strategies_are_all_real_strategy_registry_entries(
     assert not unknown, (
         f"PAPER_BROKER_OPTIONS_STRATEGIES contains name(s) not in STRATEGY_REGISTRY: {sorted(unknown)}"
     )
+
+def test_manifest_commands_match_targets():
+    from cli_introspect.targets import TARGETS
+    data = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest_commands = {cmd["name"] for cmd in data.get("commands", [])}
+    manifest_dead_letters = {dl["name"] for dl in data.get("dead_letters", [])}
+    all_manifest_names = manifest_commands | manifest_dead_letters
+    
+    target_names = {t.name for t in TARGETS}
+    
+    missing_from_manifest = target_names - all_manifest_names
+    stale_in_manifest = all_manifest_names - target_names
+    
+    assert not missing_from_manifest and not stale_in_manifest, (
+        "cli_introspect/command_manifest.json commands/dead_letters has drifted "
+        "from cli_introspect.targets.TARGETS -- regenerate it with "
+        "`python3 scripts/build_command_manifest.py`.\n"
+        f"Missing from manifest (in TARGETS but not the file): {sorted(missing_from_manifest)}\n"
+        f"Stale in manifest (in the file but not TARGETS): {sorted(stale_in_manifest)}"
+    )

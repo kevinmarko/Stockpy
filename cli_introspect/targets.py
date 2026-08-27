@@ -42,4 +42,28 @@ TARGETS: list[Target] = [
         "repair_price_bars_adjustment.py",
         "python scripts/repair_price_bars_adjustment.py",
     ),
+    Target(
+        "path",
+        "scripts/backfill_edgar_fundamentals.py",
+        "backfill_edgar_fundamentals.py",
+        "python scripts/backfill_edgar_fundamentals.py",
+    ),
+    Target(
+        "path",
+        "scripts/backfill_news_history.py",
+        "backfill_news_history.py",
+        "python scripts/backfill_news_history.py",
+    ),
+    Target(
+        "path",
+        "scripts/backfill_news_history_from_audit.py",
+        "backfill_news_history_from_audit.py",
+        "python scripts/backfill_news_history_from_audit.py",
+    ),
+    Target(
+        "path",
+        "scripts/backfill_sentiment_history.py",
+        "backfill_sentiment_history.py",
+        "python scripts/backfill_sentiment_history.py",
+    ),
 ]

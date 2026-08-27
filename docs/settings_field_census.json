@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "9c10faef2763a9b0c51085dc7ee647b27134176a",
+    "git_commit": "452420d6adbc2fd200f3d1100f9406e54397a376",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3607,7 +3607,7 @@
           "route": "/jobs/{job_id}/cancel",
           "method": "POST",
           "function": "cancel_job",
-          "line": 677,
+          "line": 724,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],

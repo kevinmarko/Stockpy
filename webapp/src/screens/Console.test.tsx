@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Console } from "./Console";
 import { api } from "../api/client";
+import { JobConflictError } from "../api/types";
 import { DensityProvider } from "../components/DensityContext";
 import { ToastProvider } from "../components/ToastProvider";
 
@@ -50,6 +51,23 @@ describe("Console screen (real mock API)", () => {
     // job-history table below it (both real, both the same job).
     expect(screen.getAllByText("running").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Cancel Active Job" })).toBeInTheDocument();
+  });
+
+  it("a JobConflictError from createJob shows an 'already running' toast naming the existing job, not a generic launch-failed error", async () => {
+    vi.spyOn(api, "createJob").mockRejectedValueOnce(
+      new JobConflictError(
+        "Job of type 'preflight' conflicts with already-running job 'preflight' (ID: job-existing-1)",
+        "job-existing-1",
+        "preflight",
+        null
+      )
+    );
+    renderConsole();
+    screen.getByText("🛡️ Preflight Check").click();
+
+    expect(await screen.findByText("Already running")).toBeInTheDocument();
+    expect(screen.getByText(/job-existing-1/)).toBeInTheDocument();
+    expect(screen.queryByText(/failed to launch/)).not.toBeInTheDocument();
   });
 
   it("does not render a Cancel button for a non-cancellable job", async () => {
