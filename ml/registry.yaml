@@ -17,6 +17,8 @@
 # n_train:         number of training samples in the most recent run
 # notes:           any caveats, data limitations, or scope restrictions
 # deployable:      true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+# owner:           team or person responsible for the model
+# materiality_tier: experimental, non_material, or material
 #
 # Provenance fields (optional; captured for reproducibility — never affect `deployable`)
 # ----------------------------------------------------------------------------------------
@@ -33,6 +35,8 @@
 models:
   lgbm_ranker:
     role: cross_sectional_ranker
+    owner: "TBD"
+    materiality_tier: "experimental"
     path: ml/models/lgbm_latest.pkl
     trained_date: '2026-08-24'
     cpcv_dsr: 0.02407823552192498
@@ -94,6 +98,8 @@ models:
     cpcv_mean_oos_max_dd: 0.012760134209014428
   meta_labeler_timeseries_momentum:
     role: meta_labeler
+    owner: "TBD"
+    materiality_tier: "experimental"
     path: ml/models/meta_timeseries_momentum_latest.pkl
     trained_date: '2026-08-21'
     cpcv_dsr: 6.698769815553169e-45
@@ -131,6 +137,8 @@ models:
     cpcv_mean_oos_max_dd: 1.0
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
+    owner: "TBD"
+    materiality_tier: "experimental"
     path: ml/models/meta_cross_sectional_momentum_latest.pkl
     trained_date: '2026-08-23'
     cpcv_dsr: 5.439908371777128e-08
@@ -168,6 +176,8 @@ models:
     cpcv_mean_oos_max_dd: 1.0
   options_meta_labeler:
     role: options_meta_labeler
+    owner: "TBD"
+    materiality_tier: "experimental"
     path: ml/models/options_meta_labeler_latest.pkl
     trained_date: '2026-08-22'
     cpcv_dsr: 0.0
