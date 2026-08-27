@@ -19,10 +19,16 @@ not a test double of it.
 
 from __future__ import annotations
 
+import socket
+import threading
+import time
+
 import pandas as pd
+import pytest
 
 import data_engine
-from data_engine import DataEngine
+from data_engine import DataEngine, _bounded_fred_timeout
+from settings import settings
 
 
 class _FakeFred:
@@ -203,3 +209,177 @@ class TestFetchMacroHistoryIncludesBamlc0a0cmAndFedfunds:
         assert history_df.empty
         assert "BAMLC0A0CM" in history_df.columns
         assert "FEDFUNDS" in history_df.columns
+
+
+# ---------------------------------------------------------------------------
+# 2026-08 fix: fredapi.Fred.get_series() calls a bare urlopen() with no
+# timeout parameter and no session-injection hook -- a stalled FRED
+# connection used to block DataEngine's macro fetches forever, wedging the
+# entire pipeline cycle. See docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
+# ---------------------------------------------------------------------------
+
+class _BlackHoleServer:
+    """A real TCP server that accepts a connection and then never sends a
+    byte -- the one way to prove a bound is genuinely enforced on a blocking
+    socket read, rather than mocking the timeout away. Used (not a bare
+    ``bind+listen`` with no ``accept()`` at all) so a client's ``connect()``
+    succeeds immediately and the hang is isolated to the subsequent read,
+    matching what a stalled-but-connected FRED server would look like."""
+
+    def __init__(self) -> None:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(1)
+        self.port = self._sock.getsockname()[1]
+        self._stop = False
+        self._thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._thread.start()
+
+    def _accept_loop(self) -> None:
+        self._sock.settimeout(0.05)
+        conns = []
+        while not self._stop:
+            try:
+                conn, _ = self._sock.accept()
+                conns.append(conn)  # accepted, held open, never written to
+            except socket.timeout:
+                continue
+        for conn in conns:
+            conn.close()
+
+    def close(self) -> None:
+        self._stop = True
+        self._thread.join(timeout=1.0)
+        self._sock.close()
+
+
+class TestBoundedFredTimeout:
+    """Pure unit coverage for the ``_bounded_fred_timeout`` context manager
+    itself -- no fredapi/DataEngine involved."""
+
+    def test_sets_and_restores_default_timeout(self):
+        previous = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(None)
+            with _bounded_fred_timeout(2.5):
+                assert socket.getdefaulttimeout() == 2.5
+            assert socket.getdefaulttimeout() is None
+        finally:
+            socket.setdefaulttimeout(previous)
+
+    def test_restores_default_timeout_even_on_exception(self):
+        previous = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(None)
+            with pytest.raises(RuntimeError):
+                with _bounded_fred_timeout(1.0):
+                    assert socket.getdefaulttimeout() == 1.0
+                    raise RuntimeError("boom")
+            assert socket.getdefaulttimeout() is None
+        finally:
+            socket.setdefaulttimeout(previous)
+
+    def test_genuinely_bounds_a_real_blocking_socket_read(self):
+        """Proof, not assumption: a real socket connected to a server that
+        never responds is bounded by _bounded_fred_timeout, not left to
+        block forever -- this is the exact failure mode urlopen() inside
+        fredapi hits against a stalled FRED connection."""
+        server = _BlackHoleServer()
+        try:
+            started = time.monotonic()
+            with pytest.raises((socket.timeout, TimeoutError, OSError)):
+                with _bounded_fred_timeout(0.1):
+                    sock = socket.create_connection(("127.0.0.1", server.port))
+                    try:
+                        sock.recv(1024)  # blocks forever without the bound
+                    finally:
+                        sock.close()
+            elapsed = time.monotonic() - started
+            assert elapsed < 1.0
+        finally:
+            server.close()
+
+
+class _RealSocketFakeFred:
+    """Like ``_FakeFred``, but the series listed in ``hang_on`` perform a
+    REAL blocking socket read against a black-hole server instead of
+    returning instantly -- proving the bound is enforced at the actual
+    DataEngine call site, not just on the context manager in isolation."""
+
+    def __init__(self, series_map: dict, *, hang_on: frozenset, port: int):
+        self._series_map = series_map
+        self._hang_on = hang_on
+        self._port = port
+
+    def get_series(self, series_id: str, **kwargs) -> pd.Series:
+        if series_id in self._hang_on:
+            sock = socket.create_connection(("127.0.0.1", self._port))
+            try:
+                sock.recv(1024)  # never returns without the ambient timeout
+            finally:
+                sock.close()
+        series = self._series_map.get(series_id)
+        if series is None:
+            raise KeyError(f"_RealSocketFakeFred has no series configured for {series_id!r}")
+        return series
+
+
+class TestFetchMacroCallsBoundedByRequestTimeout:
+    """End-to-end (within DataEngine): a hung self.fred.get_series() call
+    must bound out within settings.FRED_REQUEST_TIMEOUT_SECONDS and degrade
+    via the EXISTING broad except-Exception handling -- no new fallback
+    logic required, since socket.timeout/TimeoutError are OSError->Exception
+    subclasses those blocks already catch."""
+
+    def test_fetch_macro_raw_detailed_bounds_a_hung_fred_call(self, monkeypatch):
+        monkeypatch.setattr(settings, "FRED_REQUEST_TIMEOUT_SECONDS", 0.1)
+        server = _BlackHoleServer()
+        try:
+            monkeypatch.setattr(
+                data_engine, "Fred",
+                lambda api_key: _RealSocketFakeFred(
+                    {}, hang_on=frozenset({"T10Y2Y"}), port=server.port
+                ),
+            )
+            engine = DataEngine(fred_api_key="fake-test-key")
+
+            started = time.monotonic()
+            result, fabricated = engine.fetch_macro_raw_detailed()
+            elapsed = time.monotonic() - started
+
+            assert elapsed < 1.0
+            # The hung call raises before ever reaching a real value -- the
+            # whole snapshot degrades to the documented hardcoded fallback
+            # (CONSTRAINT #4: an honest, always-fabricated sentinel, never a
+            # value that LOOKS real), exactly like any other FRED exception.
+            assert fabricated  # non-empty: every key is a placeholder
+        finally:
+            server.close()
+
+    def test_fetch_macro_history_bounds_a_hung_fred_call(self, monkeypatch):
+        monkeypatch.setattr(settings, "FRED_REQUEST_TIMEOUT_SECONDS", 0.1)
+        server = _BlackHoleServer()
+        try:
+            series_map = {
+                "VIXCLS": _daily_series(15.0),
+                # T10Y2Y hangs -- everything else would succeed if reached.
+            }
+            monkeypatch.setattr(
+                data_engine, "Fred",
+                lambda api_key: _RealSocketFakeFred(
+                    series_map, hang_on=frozenset({"T10Y2Y"}), port=server.port
+                ),
+            )
+            engine = DataEngine(fred_api_key="fake-test-key")
+
+            started = time.monotonic()
+            history_df = engine.fetch_macro_history()
+            elapsed = time.monotonic() - started
+
+            assert elapsed < 1.0
+            # Existing dead-letter contract: a mid-fetch exception degrades
+            # to the empty 8-column frame, never a fabricated partial one.
+            assert history_df.empty
+            assert "T10Y2Y" in history_df.columns
+        finally:
+            server.close()
