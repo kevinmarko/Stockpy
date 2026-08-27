@@ -29,3 +29,10 @@
 **Testing:**
 - Backend tests passed via `pytest`.
 - Webapp type-checked via `npm run typecheck`.
+
+## Follow-up Architectural Fixes
+
+1. **JobManager Memory Leak**: Capped `JobManager._jobs` to 100 historical records to prevent unbounded memory growth over long-running sessions.
+2. **Coarse Locking**: Reduced coarse locking in `JobManager.start_job` around the blocking `Popen` call to prevent the event loop from stalling.
+3. **Log Truncation**: Fixed log truncation in `control_api.py`'s `log_event_generator` to ensure long log lines are yielded correctly to the frontend.
+4. **Console Render Loop**: Fixed the `setInterval` render loop in `Console.tsx` to use deep equality checks, preventing unnecessary re-renders of the terminal component.

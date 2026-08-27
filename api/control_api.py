@@ -814,7 +814,7 @@ def stream_job_logs(
                     current_offset = new_offset
                     sent_any = True
 
-            if not rec.handle.is_running():
+            if not rec.handle.is_running() and current_offset >= size:
                 # Stream final lines if any and stop
                 yield f"event: end\ndata: Job completed with exit code {rec.exit_code()}\n\n"
                 # getattr-guarded for the same reason as create_job's

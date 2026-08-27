@@ -145,6 +145,14 @@ export function Console() {
     setJobHistory((prev) => {
       const idx = prev.findIndex((j) => j.job_id === job.job_id);
       if (idx >= 0) {
+        const existing = prev[idx];
+        if (
+          existing.status === job.status &&
+          existing.exit_code === job.exit_code &&
+          existing.is_running === job.is_running
+        ) {
+          return prev;
+        }
         const next = [...prev];
         next[idx] = job;
         return next;
