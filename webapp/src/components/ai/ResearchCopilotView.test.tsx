@@ -348,13 +348,29 @@ describe("Synthetic Data Banner", () => {
       passes_regime_stability: true,
     });
 
+    vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
+      success: true,
+      code: "def generate_signals(df):\n    return df['close'] * 0",
+      metadata: {},
+      validation_passed: true,
+      validation_errors: [],
+      source_prompt: "Test",
+      synthesis_mode: "hypothesis",
+      explanation: "Dummy",
+      target_asset_class: null,
+      strategy_type: "Mean Reversion",
+    });
+
     const { getByText, queryByText, getByRole } = render(
       <ResearchCopilotView
         onDeployStrategy={vi.fn()}
       />
     );
 
-    const button = getByRole("button", { name: /Run AI Backtest/i });
+    fireEvent.click(getByRole("button", { name: /Synthesize Strategy/i }));
+    await waitFor(() => expect(getByRole("button", { name: /Execute Autonomous Backtest/i })).toBeInTheDocument());
+
+    const button = getByRole("button", { name: /Execute Autonomous Backtest/i });
     fireEvent.click(button);
 
     await waitFor(() => {
