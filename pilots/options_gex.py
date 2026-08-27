@@ -12,14 +12,27 @@ Mathematical Formulation & Dealer Hedging Mechanics:
    $$\Gamma(S, K, T, \sigma, r) = \frac{\phi(d_1)}{S \cdot \sigma \sqrt{T}}$$
    where $d_1 = \frac{\ln(S / K) + (r + \frac{1}{2}\sigma^2)T}{\sigma \sqrt{T}}$ and $\phi(x) = \frac{1}{\sqrt{2\pi}} e^{-x^2/2}$.
 
-2. Contract Dollar Gamma Exposure ($GEX$):
+2. Contract Dollar Gamma Exposure ($GEX$), expressed per the industry-standard
+   convention of "dollar hedging flow dealers must transact for a 1% move in
+   the underlying" (SqueezeMetrics / SpotGamma convention -- see the 0.01
+   factor derivation below):
    For each option contract (100 shares multiplier):
-   $$\text{Dollar } GEX = \Gamma(S) \times OI \times 100 \times S^2$$
-   - **Call Options (Dealer Long Gamma)**: $+ \Gamma \times OI \times 100 \times S^2$
-   - **Put Options (Dealer Short Gamma)**: $- \Gamma \times OI \times 100 \times S^2$
+   $$\text{Dollar } GEX = \Gamma(S) \times OI \times 100 \times S^2 \times 0.01$$
+   - **Call Options (Dealer Long Gamma)**: $+ \Gamma \times OI \times 100 \times S^2 \times 0.01$
+   - **Put Options (Dealer Short Gamma)**: $- \Gamma \times OI \times 100 \times S^2 \times 0.01$
+
+   Derivation of the $0.01$ factor: $\Gamma$ is the change in delta per $1
+   move in $S$. A 1% move in the underlying is $0.01 \times S$ dollars, so
+   the number of shares dealers must transact for a 1% move is
+   $\Gamma \times OI \times 100 \times (0.01 \times S)$, and the dollar value
+   of that share flow is that quantity times $S$ again, i.e.
+   $\Gamma \times OI \times 100 \times S^2 \times 0.01$. Omitting the $0.01$
+   (as an earlier version of this module did) overstates every dollar GEX
+   figure by exactly 100x relative to this convention -- see
+   `docs/known_issues/options_gex_100x_dollar_scaling.md`.
 
 3. Total Net GEX at spot $S$:
-   $$NetGEX(S) = \sum_{c \in \text{Calls}} \Gamma_c(S) \cdot OI_c \cdot 100 \cdot S^2 - \sum_{p \in \text{Puts}} \Gamma_p(S) \cdot OI_p \cdot 100 \cdot S^2$$
+   $$NetGEX(S) = 0.01 \left[ \sum_{c \in \text{Calls}} \Gamma_c(S) \cdot OI_c \cdot 100 \cdot S^2 - \sum_{p \in \text{Puts}} \Gamma_p(S) \cdot OI_p \cdot 100 \cdot S^2 \right]$$
 
 4. Zero-Gamma Flip Point ($S^*$):
    Exact spot price $S^*$ where aggregate dealer gamma flips sign:
@@ -85,6 +98,16 @@ DEFAULT_PIN_RISK_THRESHOLD_PCT = 0.005  # 0.5%
 DEFAULT_CONCENTRATION_THRESHOLD_PCT = 15.0  # 15% of total absolute GEX
 DEFAULT_RISK_FREE_RATE = 0.045
 DEFAULT_CONTRACT_MULTIPLIER = 100.0
+# Converts a raw Gamma*OI*multiplier*S^2 dollar-gamma sum into the
+# industry-standard "dollar hedging flow per 1% move in the underlying"
+# convention (SqueezeMetrics/SpotGamma). See the module docstring's
+# "Derivation of the 0.01 factor" note. Applied once, at the point every GEX
+# dollar figure is aggregated (`compute_total_net_gex_at_spot`,
+# `calculate_strike_gex`) so every downstream figure (net/call/put GEX,
+# per-strike GEX, dealer_hedging_flow) is consistently scaled -- omitting it
+# was a confirmed 100x overstatement, see
+# docs/known_issues/options_gex_100x_dollar_scaling.md.
+PERCENT_MOVE_SCALING_FACTOR = 0.01
 TRADING_DAYS_PER_YEAR = 252.0
 _DEGENERATE_THRESHOLD = 1e-12
 
@@ -250,10 +273,19 @@ _OCC_SYM_RE = re.compile(
 )
 
 
-def _parse_expiration_dte(exp_val: Any, now: Optional[datetime] = None) -> float:
-    """Parses expiration string/date/number into days to expiration (DTE)."""
+def _parse_expiration_dte(exp_val: Any, now: Optional[datetime] = None) -> Optional[float]:
+    """Parses expiration string/date/number into days to expiration (DTE).
+
+    Returns None (never a fabricated placeholder like 30.0) when `exp_val` is
+    missing or unparseable -- CONSTRAINT #4. A contract whose real expiration
+    can't be determined has no real gamma/theta either; the caller
+    (`_normalize_chain_data`) excludes such a contract rather than pricing it
+    as if it were a 30-day option. See
+    docs/known_issues/options_gex_100x_dollar_scaling.md for the historical
+    default this replaces.
+    """
     if exp_val is None:
-        return 30.0
+        return None
 
     if isinstance(exp_val, (int, float)):
         return max(0.0, float(exp_val))
@@ -283,9 +315,9 @@ def _parse_expiration_dte(exp_val: Any, now: Optional[datetime] = None) -> float
         try:
             return max(0.0, float(val_str))
         except Exception:
-            return 30.0
+            return None
 
-    return 30.0
+    return None
 
 
 def _normalize_chain_data(
@@ -308,6 +340,8 @@ def _normalize_chain_data(
         return []
 
     records: List[Dict[str, Any]] = []
+    excluded_missing_iv = 0
+    excluded_missing_dte = 0
 
     if isinstance(chain_data, pd.DataFrame):
         if chain_data.empty:
@@ -396,25 +430,40 @@ def _normalize_chain_data(
         except (ValueError, TypeError):
             volume = 0.0
 
-        # Extract Implied Volatility (sigma)
+        # Extract Implied Volatility (sigma). CONSTRAINT #4: a missing,
+        # non-positive, or unparseable IV means this contract's gamma is
+        # genuinely uncomputable -- exclude the contract rather than
+        # substituting a fabricated 25% placeholder, which previously
+        # silently mis-stated its real contribution to every downstream GEX
+        # figure with no diagnostic trace. A real yfinance chain routinely
+        # reports impliedVolatility=0.0 for illiquid/stale-quote strikes, so
+        # this path is reachable on live data, not just malformed test
+        # fixtures. See docs/known_issues/options_gex_100x_dollar_scaling.md.
         iv_raw = (
             d.get("implied_volatility")
             or d.get("impliedVolatility")
             or d.get("iv")
             or d.get("sigma")
             or d.get("volatility")
-            or 0.25
         )
+        if iv_raw is None:
+            excluded_missing_iv += 1
+            continue
         try:
             sigma = float(iv_raw)
             if sigma > 5.0 and sigma <= 500.0:  # Percentage format e.g. 25.0% -> 0.25
                 sigma = sigma / 100.0
             if sigma <= _DEGENERATE_THRESHOLD or np.isnan(sigma):
-                sigma = 0.25
+                excluded_missing_iv += 1
+                continue
         except (ValueError, TypeError):
-            sigma = 0.25
+            excluded_missing_iv += 1
+            continue
 
-        # Extract Expiration / DTE
+        # Extract Expiration / DTE. Same CONSTRAINT #4 reasoning as IV above
+        # -- a contract whose expiration can't be determined has no real
+        # theta/gamma either, and is excluded rather than priced as if it
+        # were a fabricated 30-day option.
         exp_raw = (
             d.get("expiration")
             or d.get("expiration_date")
@@ -425,6 +474,9 @@ def _normalize_chain_data(
             or d.get("days_to_expiration")
         )
         dte = _parse_expiration_dte(exp_raw, now=now)
+        if dte is None:
+            excluded_missing_dte += 1
+            continue
         t_years = max(_DEGENERATE_THRESHOLD, dte / 365.0)
 
         exp_str = str(exp_raw) if exp_raw is not None else ""
@@ -442,6 +494,16 @@ def _normalize_chain_data(
             "symbol": symbol_str,
         })
 
+    if excluded_missing_iv or excluded_missing_dte:
+        logger.warning(
+            "options_gex: excluded %d contract(s) with unusable IV and %d "
+            "with unresolvable expiration from a %d-record chain (never "
+            "fabricated a placeholder sigma/DTE for them)",
+            excluded_missing_iv,
+            excluded_missing_dte,
+            len(raw_list),
+        )
+
     return records
 
 
@@ -457,9 +519,11 @@ def compute_total_net_gex_at_spot(
     contract_multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
 ) -> float:
     """
-    Computes total aggregate Dollar Net GEX across the option chain at a candidate spot price $S$.
+    Computes total aggregate Dollar Net GEX (per 1% underlying move -- see
+    module docstring's "Derivation of the 0.01 factor") across the option
+    chain at a candidate spot price $S$.
 
-    $$NetGEX(S) = \\sum_{c \\in \\text{Calls}} \\Gamma_c(S) \\cdot OI_c \\cdot 100 \\cdot S^2 - \\sum_{p \\in \\text{Puts}} \\Gamma_p(S) \\cdot OI_p \\cdot 100 \\cdot S^2$$
+    $$NetGEX(S) = 0.01 \\left[ \\sum_{c \\in \\text{Calls}} \\Gamma_c(S) \\cdot OI_c \\cdot 100 \\cdot S^2 - \\sum_{p \\in \\text{Puts}} \\Gamma_p(S) \\cdot OI_p \\cdot 100 \\cdot S^2 \\right]$$
 
     Parameters:
     -----------
@@ -481,7 +545,7 @@ def compute_total_net_gex_at_spot(
         return 0.0
 
     rate = _get_risk_free_rate(r)
-    spot_sq = spot * spot * contract_multiplier
+    spot_sq = spot * spot * contract_multiplier * PERCENT_MOVE_SCALING_FACTOR
 
     total_net_gex = 0.0
 
@@ -746,7 +810,7 @@ def calculate_strike_gex(
         return []
 
     rate = _get_risk_free_rate(r)
-    spot_sq = spot_price * spot_price * contract_multiplier
+    spot_sq = spot_price * spot_price * contract_multiplier * PERCENT_MOVE_SCALING_FACTOR
 
     strike_map: Dict[float, Dict[str, Any]] = {}
 
@@ -1236,7 +1300,14 @@ def get_options_gex_profile(
     res_dict["zero_gamma_flip"] = res.zero_gamma_flip
     res_dict["gamma_regime"] = res.gamma_regime
     res_dict["regime_description"] = res.regime_description
-    dealer_dollars = round(res.net_gex * 0.01, 2)
+    # res.net_gex is already the "dollar hedging flow per 1% move" figure --
+    # PERCENT_MOVE_SCALING_FACTOR (0.01) is now applied once, upstream, at
+    # aggregation (calculate_strike_gex / compute_total_net_gex_at_spot), not
+    # here. Previously this line re-applied *0.01 on top of an unscaled
+    # net_gex, which happened to make dealer_hedging_flow correct while
+    # net_gex/call_gex/put_gex/strikes[].*_gex were left 100x too large --
+    # see docs/known_issues/options_gex_100x_dollar_scaling.md.
+    dealer_dollars = round(res.net_gex, 2)
     dealer_shares = round(dealer_dollars / spot_price, 2) if spot_price > 0 else 0.0
     res_dict["dealer_hedging_flow"] = dealer_dollars
     res_dict["dealer_hedging_per_1pct_move_dollars"] = dealer_dollars

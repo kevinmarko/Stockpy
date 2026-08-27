@@ -144,4 +144,44 @@ describe("GexProfileView", () => {
 
     expect(handleClose).toHaveBeenCalled();
   });
+
+  it("does not render a synthetic-data banner for a live chain_source", async () => {
+    render(<GexProfileView initialSymbol="SPY" spotPrice={546.50} />);
+
+    await screen.findByText("+$1245.8M");
+    expect(screen.queryByText(/Synthetic Data/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Demo Data/i)).not.toBeInTheDocument();
+  });
+
+  it("renders an honest synthetic-data banner when the backend fell back to a generated chain (CONSTRAINT #4)", async () => {
+    // Regression for the confirmed audit finding (2026-08-24): the API
+    // already flags chain_source/spot_price_source honestly on a live-chain
+    // resolution failure, but this component previously never read either
+    // field, so a fully fabricated GEX profile rendered indistinguishably
+    // from a real one.
+    vi.mocked(api.getOptionsGexProfile).mockResolvedValue({
+      ...mockGexResponse,
+      chain_source: "synthetic",
+      spot_price_source: "unavailable",
+    });
+
+    render(<GexProfileView initialSymbol="ZZZZ" spotPrice={546.50} />);
+
+    expect(await screen.findByText(/Synthetic Data/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No live options chain or spot quote could be resolved/i)
+    ).toBeInTheDocument();
+  });
+
+  it("renders a Demo Data banner when running against the offline mock backend", async () => {
+    vi.mocked(api.getOptionsGexProfile).mockResolvedValue({
+      ...mockGexResponse,
+      chain_source: "mock",
+      spot_price_source: "mock",
+    });
+
+    render(<GexProfileView initialSymbol="SPY" spotPrice={546.50} />);
+
+    expect(await screen.findByText(/Demo Data/i)).toBeInTheDocument();
+  });
 });

@@ -76,6 +76,7 @@ def resolve_target_description(
     *,
     historical_store: Optional[Any] = None,
     descriptions_path: Optional[Path] = None,
+    as_of: Optional[Any] = None,
 ) -> Optional[str]:
     """Resolve a target stock's business description for embedding.
 
@@ -85,11 +86,27 @@ def resolve_target_description(
 
     1. An operator-authored override in ``sector_descriptions.yaml``'s
        ``targets:`` block.
-    2. The most recent cached ``fundamentals_history.raw_json
-       ['longBusinessSummary']`` (read-only — ``get_fundamentals_history``
-       never triggers a live fetch, so this never makes a network call).
+    2. ``fundamentals_history.raw_json['longBusinessSummary']`` (read-only —
+       this never triggers a live fetch, so this never makes a network
+       call). When ``as_of`` is given, resolved point-in-time via
+       ``HistoricalStore.get_fundamentals_raw_json_asof`` (the most recent
+       row whose ``report_date <= as_of`` — never a later, future-relative
+       description); when ``as_of`` is ``None`` (every existing caller today
+       — the live daily pipeline has no "as of a past date" concept), the
+       most recently cached row is used exactly as before this parameter
+       existed.
     3. ``None`` — the caller must treat this as "similarity unavailable
        for this target", never fall back to a fabricated description.
+
+    ``as_of`` closes a confirmed lookahead-bias gap (secondary audit,
+    2026-08-24): this function previously had NO point-in-time awareness at
+    all, so a future backtest/replay caller scoring a past date would
+    silently embed the company's CURRENT business description regardless of
+    what date was being scored — see
+    docs/known_issues/sector_selection_similarity_lookahead.md. Dormant
+    until a caller passes ``as_of`` (today, only ``sector_selection_engine``
+    threads it, and does so via ``resolved_now`` -- effectively a no-op for
+    the one real production caller, which always scores "now").
     """
     symbol_upper = str(symbol).upper()
     try:
@@ -105,10 +122,16 @@ def resolve_target_description(
         if historical_store is None:
             from data.historical_store import HistoricalStore
             historical_store = HistoricalStore()
-        history_df = historical_store.get_fundamentals_history(symbol_upper)
-        if history_df is None or history_df.empty:
-            return None
-        raw_json_str = history_df.iloc[-1].get("raw_json")
+
+        if as_of is not None:
+            raw_json_str = historical_store.get_fundamentals_raw_json_asof(symbol_upper, as_of)
+        else:
+            history_df = historical_store.get_fundamentals_history(symbol_upper)
+            raw_json_str = (
+                history_df.iloc[-1].get("raw_json")
+                if history_df is not None and not history_df.empty
+                else None
+            )
         if not raw_json_str:
             return None
         parsed = json.loads(raw_json_str)
