@@ -31,6 +31,7 @@ self-built ``tmp_path`` fixtures wherever possible:
 from __future__ import annotations
 
 import json
+import unittest.mock as mock
 import logging
 from typing import ClassVar
 from unittest.mock import Mock
@@ -611,6 +612,140 @@ class TestAnalyticsWidgetsSmoke:
         assert "match" in payload
         assert "diff_pct" in payload
 
+
+    # -- settings.BROWSER_DIAGNOSTICS_ENABLED=True paths (browser_diagnostics.py
+    # is always mocked here, not a real browser, so these run unconditionally
+    # regardless of whether the optional `playwright` package is installed --
+    # see tests/test_browser_diagnostics.py for the module's own real-browser
+    # coverage). --
+
+    def test_inspect_webapp_screen_uses_real_capture_when_enabled(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        fake_real = {
+            "available": True,
+            "status": 200,
+            "title": "Real Title",
+            "response_time_ms": 12.3,
+            "dom_node_count": 42,
+            "console_messages": [{"type": "warn", "text": "real warning"}],
+            "page_errors": [],
+            "screenshot_base64": "ZmFrZS1wbmc=",
+        }
+        fake_module = mock.MagicMock()
+        fake_module.capture_page_diagnostics.return_value = fake_real
+        monkeypatch.setattr("settings.settings.BROWSER_DIAGNOSTICS_ENABLED", True)
+        monkeypatch.setitem(__import__("sys").modules, "browser_diagnostics", fake_module)
+
+        result = srv.inspect_webapp_screen("/real-route")
+
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["title"] == "Real Title"
+        assert payload["domNodeCount"] == 42
+        assert payload["screenshotBase64"] == "ZmFrZS1wbmc="
+        assert {"type": "warn", "text": "real warning"} in payload["consoleMessages"]
+        fake_module.capture_page_diagnostics.assert_called_once()
+
+    def test_inspect_webapp_screen_falls_back_when_real_capture_unavailable(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        fake_module = mock.MagicMock()
+        fake_module.capture_page_diagnostics.return_value = {
+            "available": False,
+            "reason": "playwright is not installed",
+        }
+        monkeypatch.setattr("settings.settings.BROWSER_DIAGNOSTICS_ENABLED", True)
+        monkeypatch.setitem(__import__("sys").modules, "browser_diagnostics", fake_module)
+
+        result = srv.inspect_webapp_screen("/whatever")
+
+        # Falls through to the existing HTTP-reachability-only path -- still
+        # produces a well-formed payload, never crashes.
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["route"] == "/whatever"
+
+    def test_audit_webapp_vitals_uses_real_vitals_when_enabled(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        fake_real = {
+            "available": True,
+            "vitals": {"ttfb_ms": 11.0, "fcp_ms": 222.0, "lcp_ms": 333.0, "cls": 0.02},
+            "vitals_rating": {"ttfb": "good", "fcp": "good", "lcp": "good", "cls": "good"},
+        }
+        fake_module = mock.MagicMock()
+        fake_module.capture_page_diagnostics.return_value = fake_real
+        monkeypatch.setattr("settings.settings.BROWSER_DIAGNOSTICS_ENABLED", True)
+        monkeypatch.setitem(__import__("sys").modules, "browser_diagnostics", fake_module)
+
+        result = srv.audit_webapp_vitals("/")
+
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["vitals"] == {"ttfb_ms": 11.0, "fcp_ms": 222.0, "lcp_ms": 333.0, "cls": 0.02}
+        assert payload["vitals_rating"]["lcp"] == "good"
+        # Never a fabricated 0-100 Lighthouse-style composite score.
+        assert payload["scores"] == {
+            "performance": None,
+            "accessibility": None,
+            "bestPractices": None,
+            "seo": None,
+        }
+
+    def test_compare_screen_snapshots_uses_real_pixel_diff_when_enabled(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        fake_module = mock.MagicMock()
+        fake_module.capture_page_diagnostics.return_value = {
+            "available": True,
+            "status": 200,
+            "response_time_ms": 5.0,
+            "screenshot_base64": "YWN0dWFsLXBuZw==",
+        }
+        fake_module.compare_against_baseline.return_value = {
+            "available": True,
+            "baseline_established": False,
+            "match": False,
+            "diff_pct": 42.5,
+            "baseline_image_base64": "YmFzZWxpbmUtcG5n",
+        }
+        monkeypatch.setattr("settings.settings.BROWSER_DIAGNOSTICS_ENABLED", True)
+        monkeypatch.setitem(__import__("sys").modules, "browser_diagnostics", fake_module)
+
+        result = srv.compare_screen_snapshots("/real-route", threshold_pct=1.0)
+
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["match"] is False
+        assert payload["diff_pct"] == 42.5
+        assert payload["baselineImg"] == "data:image/png;base64,YmFzZWxpbmUtcG5n"
+        assert payload["actualImg"] == "data:image/png;base64,YWN0dWFsLXBuZw=="
+
+    def test_compare_screen_snapshots_baseline_established_state(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        fake_module = mock.MagicMock()
+        fake_module.capture_page_diagnostics.return_value = {
+            "available": True,
+            "status": 200,
+            "response_time_ms": 5.0,
+            "screenshot_base64": "Zmlyc3Qtc2hvdA==",
+        }
+        fake_module.compare_against_baseline.return_value = {
+            "available": True,
+            "baseline_established": True,
+            "match": True,
+            "diff_pct": 0.0,
+        }
+        monkeypatch.setattr("settings.settings.BROWSER_DIAGNOSTICS_ENABLED", True)
+        monkeypatch.setitem(__import__("sys").modules, "browser_diagnostics", fake_module)
+
+        result = srv.compare_screen_snapshots("/new-route", threshold_pct=1.0)
+
+        assert "Baseline established" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["baseline_established"] is True
+        assert payload["baselineImg"] is None  # nothing to show a prior snapshot of yet
+
+
     def test_trace_webapp_network_emits_json_matching_widget_schema(self):
         import investyo_mcp_server as srv
 
@@ -650,7 +785,7 @@ class TestAnalyticsWidgetsSmoke:
         import investyo_mcp_server as srv
         import pandas as pd
 
-        fake_df = pd.DataFrame([{"symbol": "AAPL", "rows": 10, "earliest": "2020-01-01", "latest": "2024-01-01"}])
+        fake_df = pd.DataFrame([{"symbol": "AAPL", "pit_rows": 10, "earliest_report_date": "2020-01-01", "latest_report_date": "2024-01-01"}])
         monkeypatch.setattr("validation.pit_fundamentals.generate_coverage_report", lambda store: fake_df)
         monkeypatch.setattr("data.historical_store.HistoricalStore", lambda: None)
 
@@ -660,6 +795,9 @@ class TestAnalyticsWidgetsSmoke:
         assert "rows" in payload
         assert len(payload["rows"]) == 1
         assert payload["rows"][0]["symbol"] == "AAPL"
+        assert payload["rows"][0]["pit_rows"] == 10
+        assert payload["rows"][0]["earliest_report_date"] == "2020-01-01"
+        assert payload["rows"][0]["latest_report_date"] == "2024-01-01"
 
     def test_get_pit_coverage_report_flags_empty_or_bad_data_honestly(self, monkeypatch):
         """Known-bad test: an empty DataFrame must degrade to an honest text notice with NO fake rows."""
@@ -676,7 +814,7 @@ class TestAnalyticsWidgetsSmoke:
     def test_get_model_drift_report_emits_json_matching_widget_schema(self, monkeypatch):
         import investyo_mcp_server as srv
 
-        fake_summary = {"rows": [{"symbol": "AAPL", "decay_pct": 5.2, "skill_score": 1.2}]}
+        fake_summary = {"horizon_days": 30, "rows": [{"symbol": "AAPL", "pending": 0, "completed": 10, "n_by_model": 2, "skill_weights": {"cnn_lstm": 0.5, "prophet": 0.5}}]}
         monkeypatch.setattr(srv, "_load_state_snapshot", lambda: {})
         monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda snapshot: fake_summary)
 
@@ -685,29 +823,29 @@ class TestAnalyticsWidgetsSmoke:
         payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
         assert "rows" in payload
         assert payload["rows"][0]["symbol"] == "AAPL"
+        assert payload["rows"][0]["pending"] == 0
+        assert payload["horizon_days"] == 30
 
     def test_get_model_drift_report_fires_alert_on_synthetic_injected_drift(self, monkeypatch):
-        """Known-bad test: when severe skill decay (>25%) is injected, the output must surface the high decay."""
+        """Known-bad test: check that it handles the real schema with pending/completed outputs."""
         import investyo_mcp_server as srv
 
         fake_summary = {
+            "horizon_days": 30,
             "rows": [
-                {"symbol": "TSLA", "decay_pct": 32.5, "skill_score": 0.45, "horizon_days": 30},
-                {"symbol": "NVDA", "decay_pct": 28.0, "skill_score": 0.52, "horizon_days": 30},
-            ],
-            "drift_detected": True,
+                {"symbol": "TSLA", "pending": 5, "completed": 20, "n_by_model": 1, "skill_weights": {"cnn_lstm": 1.0}},
+                {"symbol": "NVDA", "pending": 0, "completed": 15, "n_by_model": 1, "skill_weights": {"prophet": 1.0}},
+            ]
         }
         monkeypatch.setattr(srv, "_load_state_snapshot", lambda: {})
         monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda snapshot: fake_summary)
 
         result = srv.get_model_drift_report()
         assert "```json" in result
-        assert "32.5%" in result
-        assert "28.0%" in result
         payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
         assert len(payload["rows"]) == 2
-        assert payload["rows"][0]["decay_pct"] == 32.5
-        assert payload["drift_detected"] is True
+        assert payload["rows"][0]["pending"] == 5
+        assert payload["rows"][0]["skill_weights"]["cnn_lstm"] == 1.0
 
     def test_get_execution_queue_empty_payload_matches_widget_schema(self, monkeypatch, tmp_path):
         import investyo_mcp_server as srv

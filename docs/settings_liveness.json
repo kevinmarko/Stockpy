@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 324,
+    "live_safe": 326,
     "no_op": 3,
     "restart_required": 105,
-    "total": 432
+    "total": 434
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 431,
+  "files_scanned": 432,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -170,6 +170,8 @@
     "BROKERAGE_REFRESH_ENABLED",
     "BROKER_BACKEND",
     "BROKER_TRADE_INGEST_ENABLED",
+    "BROWSER_DIAGNOSTICS_ENABLED",
+    "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS",
     "CACHE_LONG_SHORT_ENABLED",
     "CACHE_LONG_SHORT_MIN_CORRELATION",
     "CACHE_LONG_SHORT_PROXY_CANDIDATES",
@@ -473,13 +475,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 857,
+    "attr": 864,
     "factory_param": 4,
     "getattr_const": 371,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 252,
+    "attr": 254,
     "factory_param": 4,
     "getattr_const": 208,
     "os_environ": 18
@@ -2453,7 +2455,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5909",
+        "site": "investyo_mcp_server.py:6055",
         "via": []
       }
     ],
@@ -2473,7 +2475,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5861",
+        "site": "investyo_mcp_server.py:6007",
         "via": []
       }
     ],
@@ -2513,7 +2515,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5869",
+        "site": "investyo_mcp_server.py:6015",
         "via": []
       }
     ],
@@ -2639,6 +2641,15 @@
       }
     ],
     "OUTPUT_DIR": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "browser_diagnostics.py:89",
+        "via": []
+      },
       {
         "discarded": false,
         "form": "attr",
@@ -3184,7 +3195,7 @@
     "init_body": 7,
     "init_self_assign": 51,
     "method_self_assign": 4,
-    "module_level": 78,
+    "module_level": 79,
     "os_environ": 25
   },
   "restart_required_via_name_literal_only": [

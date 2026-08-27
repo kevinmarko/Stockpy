@@ -230,6 +230,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (market_data_latency.py) feeding Mission Control's data-latency
     # heatmap. Non-secret, read-only diagnostic -- carries no credential.
     "MARKET_DATA_LATENCY_TRACKING_ENABLED",
+    "BROWSER_DIAGNOSTICS_ENABLED",  # non-secret opt-in dependency flags, no credential material
+    "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS",
     # Opt-in real-time WS quote ingestion (data/market_data_ws.py). Non-secret
     # tunables only; Alpaca credentials stay in SECRET_KEYS.
     "MARKET_DATA_WS_ENABLED",

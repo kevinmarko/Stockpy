@@ -105,3 +105,7 @@ pytrends>=4.9.2
 # never a fabricated value (CONSTRAINT #4) -- exactly like the CNN-LSTM/
 # FinBERT/RAG paths above without their own optional dependency.
 sentence-transformers>=2.2
+
+# Browser Diagnostics (headless Chromium capture/vitals for webapp debugging)
+# Requires a separate `playwright install chromium` step by the operator.
+playwright>=1.40

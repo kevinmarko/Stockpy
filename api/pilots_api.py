@@ -1085,7 +1085,8 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
             with open(summary_path, "r") as f:
                 return json.load(f)
         except Exception as exc:
-            logger.warning("Failed to read agentic_forecast_summary.json: %s", exc)
+            logger.error(f"Failed to read agentic_forecast_summary.json: {exc}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Corrupt forecast summary file")
 
     return {
         "status": "not_run",
@@ -6114,7 +6115,8 @@ def post_paper_broker_settle_expired() -> Dict[str, Any]:
     try:
         from data.market_data import get_provider
         engine = get_provider()
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to instantiate DataEngine for paper broker settlement: {e}", exc_info=True)
         engine = None
 
     store = PaperAccountStore()
