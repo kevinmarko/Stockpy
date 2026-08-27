@@ -295,6 +295,12 @@ class OrchestratorDaemon:
         through to ``main_orchestrator._main_body(..., mode=mode)`` and recorded
         on the ``RunRecord``.
         """
+        # Self-gated, read-only (see its own docstring) -- called here too so
+        # an on-demand-only deployment (settings.ORCHESTRATOR_INTERVAL_SECONDS
+        # <= 0, where _timer_loop parks on an untimed wait and never gets a
+        # periodic chance to check) still detects a stall the moment anyone
+        # triggers or polls a run.
+        self.maybe_alert_on_pipeline_stall()
         with self._lock:
             if self._current_run_id is not None:
                 return TriggerResult(
@@ -857,6 +863,55 @@ class OrchestratorDaemon:
                 "next tick.", type(exc).__name__, exc_info=True,
             )
 
+    def maybe_alert_on_pipeline_stall(self) -> None:
+        """Read-only stall watchdog for a wedged pipeline cycle.
+
+        2026-08 fix: a real incident showed a cycle can wedge in a single
+        stage (an unbounded synchronous call blocking a background thread
+        forever -- see docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md)
+        with NOTHING surfacing that fact. ``_run_one_cycle`` runs on its own
+        thread, separate from this one, so the daemon's Control/Pilots APIs
+        stay fully responsive throughout a wedge -- which is exactly why it
+        went unnoticed for 2.5 days: nothing else looked broken.
+
+        Deliberately alert-only, gated on ``settings.PIPELINE_STALL_ALERT_ENABLED``
+        (default True): this never cancels the wedged cycle or restarts this
+        process. Forcibly killing a mid-flight cycle risks corrupting partial
+        state, and this process also hosts the Control/Pilots APIs the webapp
+        depends on -- turning every future stall into a guaranteed outage
+        would trade one problem for a worse one. ``observability.alerts.send_alert``'s
+        own ``dedup_key``/``settings.ALERT_DEDUP_WINDOW_SECONDS`` mechanism
+        means a persisting stall re-fires as a periodic reminder rather than
+        going silent forever after the first alert.
+
+        Called unconditionally from both ``_timer_loop`` per-wake spots
+        (self-gates internally, matching ``maybe_update_circuit_breaker``'s
+        own contract) AND from ``trigger_run`` -- ``settings.ORCHESTRATOR_INTERVAL_SECONDS``
+        defaults to 0 (on-demand only), where ``_timer_loop`` parks on an
+        untimed wait and would otherwise never get a periodic chance to check.
+        """
+        if not settings.PIPELINE_STALL_ALERT_ENABLED:
+            return
+        try:
+            state = read_progress()
+            if state is None or state.state != "running":
+                return
+            age = state.age_seconds()
+            if age < settings.PIPELINE_STALL_ALERT_SECONDS:
+                return
+            from observability.alerts import send_alert
+            send_alert(
+                "WARNING",
+                f"Pipeline cycle {state.run_id!r} has been stuck in stage "
+                f"'{state.stage}' ({state.symbols_done}/{state.symbols_total} "
+                f"symbols) for {age:.0f}s with no progress update -- it may be "
+                "wedged on an unbounded blocking call. See "
+                "docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.",
+                dedup_key="pipeline_stall",
+            )
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6, this check must never break the caller
+            logger.warning("maybe_alert_on_pipeline_stall: unexpected failure", exc_info=True)
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -883,6 +938,9 @@ class OrchestratorDaemon:
             # see its own docstring. Called unconditionally here so it is a
             # true no-op, not merely "never invoked," when the flag is off.
             self.maybe_update_circuit_breaker()
+            # Same "called unconditionally, self-gates internally" contract --
+            # see maybe_alert_on_pipeline_stall's own docstring.
+            self.maybe_alert_on_pipeline_stall()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -897,6 +955,7 @@ class OrchestratorDaemon:
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
             self.maybe_update_circuit_breaker()
+            self.maybe_alert_on_pipeline_stall()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(

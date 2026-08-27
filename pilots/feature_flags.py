@@ -109,6 +109,7 @@ DIAGNOSTIC_FLAG_REASONS: dict[str, str] = {
     "MARKET_DATA_LATENCY_TRACKING_ENABLED": "Tracks and surfaces real-time market data feed latency.",
     "SENTIMENT_INDEX_ENABLED": "Computes composite sentiment index from news and reviews.",
     "EDGAR_FULLTEXT_ENABLED": "Enables full-text ingestion of 10-K/10-Q SEC filings.",
+    "PIPELINE_STALL_ALERT_ENABLED": "Fires a WARNING alert if a pipeline cycle stops updating progress.json while state='running' -- read-only, never cancels a run or restarts the daemon.",
 }
 
 # The unified set of all feature-flag keys exposed in the Feature Flags
