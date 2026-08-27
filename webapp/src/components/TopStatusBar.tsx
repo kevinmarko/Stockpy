@@ -30,7 +30,7 @@ export function TopStatusBar() {
   const [reason, setReason] = useState("");
   
   const [showJobsModal, setShowJobsModal] = useState(false);
-  const { activeJobs, reload: reloadJobs } = useJobStatus();
+  const { jobs, activeJobs, reload: reloadJobs } = useJobStatus();
 
   const { safetyTelemetryEnabled, autoRefreshIntervalMs } = useAutoRefresh();
 
@@ -202,8 +202,8 @@ export function TopStatusBar() {
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
             <span style={{ color: "var(--text-muted)" }}>Jobs:</span>
             <div 
-              onClick={() => { if (activeJobs.length > 0) setShowJobsModal(true); }}
-              style={{ cursor: activeJobs.length > 0 ? "pointer" : "default" }}
+              onClick={() => setShowJobsModal(true)}
+              style={{ cursor: "pointer" }}
             >
               <Chip 
                 tone={activeJobs.length > 0 ? "caution" : "muted"}
@@ -294,20 +294,26 @@ export function TopStatusBar() {
       {showJobsModal && (
         <Modal ariaLabel="Active Jobs" onClose={() => setShowJobsModal(false)}>
           <div style={{ padding: "var(--s-4)", width: "min(90vw, 500px)" }}>
-            <h3 style={{ margin: "0 0 var(--s-3)", color: "var(--text-primary)" }}>Active Jobs</h3>
-            {activeJobs.length === 0 ? (
-              <p style={{ color: "var(--text-secondary)" }}>No active jobs.</p>
+            <h3 style={{ margin: "0 0 var(--s-3)", color: "var(--text-primary)" }}>Recent Jobs</h3>
+            {jobs.length === 0 ? (
+              <p style={{ color: "var(--text-secondary)" }}>No recent jobs.</p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-                {activeJobs.map((job) => (
+                {jobs.map((job) => (
                   <div key={job.job_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
                     <div>
-                      <div style={{ fontWeight: 600 }}>{job.command_name || job.job_type}</div>
-                      <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+                        <div style={{ fontWeight: 600 }}>{job.command_name || job.job_type}</div>
+                        <Chip 
+                          tone={job.status === "running" ? "caution" : job.status === "success" ? "growth" : "decline"}
+                          label={job.status.toUpperCase() + (job.status !== "running" && job.exit_code != null ? ` (${job.exit_code})` : "")}
+                        />
+                      </div>
+                      <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)", marginTop: "4px" }}>
                         ID: {job.job_id} • Started {timeAgo(job.created_at)}
                       </div>
                     </div>
-                    {job.cancellable && (
+                    {job.cancellable && job.is_running && (
                       <button 
                         className="btn btn-sm" 
                         onClick={async () => {

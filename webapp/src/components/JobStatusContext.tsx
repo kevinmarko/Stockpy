@@ -7,13 +7,13 @@ import type { JobsListResponse } from "../api/types";
 
 export function JobStatusProvider({ children }: { children: React.ReactNode }) {
   const { data, loading, error, reload } = useApi<JobsListResponse>(
-    () => api.listJobs(true),
+    () => api.listJobs(false, 20),
     []
   );
 
   usePoll(reload, 3000, true);
 
-  const activeJobs = useMemo(() => data?.jobs || [], [data]);
+  const activeJobs = useMemo(() => (data?.jobs || []).filter(j => j.is_running), [data]);
 
   const value = useMemo<JobStatusState>(() => {
     return {
