@@ -108,6 +108,20 @@ class JobRecord:
             return None
         return self.handle.returncode()
 
+    @property
+    def is_running(self) -> bool:
+        """Null-safe replacement for ``rec.handle.is_running()`` -- a job in the
+        "starting" window (handle not yet assigned by start_job's post-lock launch
+        step) is not running yet, not an error condition. Every read endpoint in
+        api/control_api.py (GET /jobs, GET /jobs/{id}, GET /jobs/{id}/stream) MUST
+        go through this property instead of touching ``.handle`` directly -- a
+        direct ``rec.handle.is_running()`` call raises AttributeError on None and
+        is not caught by install_redacting_exception_handler (HTTPException-only),
+        surfacing as a raw 500 to a client polling mid-launch."""
+        if self.handle is None:
+            return False
+        return self.handle.is_running()
+
 
 class JobManager:
     """Manages active and historical background jobs launched via HTTP."""

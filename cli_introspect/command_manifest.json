@@ -763,7 +763,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_job_status_visibility/output",
+          "default": "/Users/kevinlee/Stockpy-live/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -799,7 +799,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_job_status_visibility/output",
+          "default": "/Users/kevinlee/Stockpy-live/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
