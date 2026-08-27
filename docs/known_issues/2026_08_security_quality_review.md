@@ -231,6 +231,44 @@ A full codebase sweep across `api/` for unredacted `str(exc)` or `f"...{exc}..."
 
 Verified with 32 unit regression tests in `tests/test_security_audit_fixes.py`.
 
+## 6. Alert #91 (2026-08-27 follow-up) — `py/command-line-injection` in `launch_train_meta_labelers`
+
+A fresh CodeQL scan of `main` (commit `2deb0365`, "Global job-status
+visibility in the Pilots PWA" — [PR #917](https://github.com/kevinmarko/Stockpy/pull/917))
+opened a new alert of the same rule already triaged as alert #11 above:
+[alert #91](https://github.com/kevinmarko/Stockpy/security/code-scanning/91),
+flagging `gui/orchestrator_runner.py`'s `launch_train_meta_labelers`
+(`subprocess.Popen(cmd, ...)`), with the taint source traced to
+`api/control_api.py`'s `POST /jobs` handler — an operator (or anyone holding
+the command token) can `POST /jobs` with `job_type="train_meta"` and an
+arbitrary `params.get("signal")`, which `api/_jobs.py:254` passes straight
+into `launch_train_meta_labelers(signal=...)`.
+
+Reviewed: **false positive, already mitigated**, same class as alert #11.
+`launch_train_meta_labelers` already validated `signal` against the
+hardcoded, exact-match `ml.meta_bootstrap.META_LABELED_SIGNAL_IDS` allowlist
+(`("timeseries_momentum", "cross_sectional_momentum")`) — raising
+`ValueError` on anything else — *before* appending it to the `cmd` list, and
+`Popen` is called with a list and no `shell=True`. CodeQL's
+`py/command-line-injection` query does not model an `if x not in
+ALLOWLIST_TUPLE: raise` guard as a sanitizer, so it still flags the call
+despite the input being fully controlled. Rather than leave this
+undocumented, the fix applied the exact same treatment as alert #11: an
+explanatory comment plus a `# codeql[py/command-line-injection]` suppression
+annotation directly on the `Popen` call in
+`gui/orchestrator_runner.py::launch_train_meta_labelers`, so the next CodeQL
+scan (and the next reviewer) can see the reasoning inline rather than
+re-litigating it. Added adversarial-input regression coverage —
+`tests/test_security_audit_fixes.py::TestLaunchTrainMetaLabelersInputValidation`
+(shell metacharacters, an injected CLI flag, a leading-dash flag-injection
+attempt, path traversal, and a case-mismatched near-miss all assert
+`ValueError`; a real allowlist member still launches correctly) — mirroring
+`TestLaunchValidationInputValidation`'s existing coverage for alert #11.
+
+Once this fix merges, alert #91 should be dismissed in the GitHub Security
+tab as "used in tests" / reviewed-and-mitigated, consistent with how #21/#22
+were handled.
+
 ## Related
 
 - [`react_router_dom_ghsa_jjmj_open_redirect.md`](react_router_dom_ghsa_jjmj_open_redirect.md),

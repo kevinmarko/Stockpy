@@ -15,7 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gui.orchestrator_runner import launch_validation_run
+from gui.orchestrator_runner import launch_train_meta_labelers, launch_validation_run
+from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS
 from pilots.prompt_registry import get_prompt_body
 from pilots.run_status import parse_crontab_status
 from prompt_registry.cache import CacheManager, _sanitize_id
@@ -103,6 +104,68 @@ class TestLaunchValidationInputValidation:
             assert "2020-01-01" in cmd
             assert "--end" in cmd
             assert "2024-12-31" in cmd
+
+
+# ===========================================================================
+# 1b. Command Injection & Input Validation (launch_train_meta_labelers,
+#     CodeQL alert #91 -- api/_jobs.py's `POST /jobs` with
+#     job_type="train_meta" passes an operator-supplied `params["signal"]`
+#     straight through to this launcher's `signal` kwarg)
+# ===========================================================================
+
+class TestLaunchTrainMetaLabelersInputValidation:
+    """`signal` must be exact-match allowlisted against META_LABELED_SIGNAL_IDS
+    before it can reach the `subprocess.Popen` argv list -- an arbitrary
+    string (shell metacharacters, an injected CLI flag, path traversal, ...)
+    must always raise ValueError instead of ever being spawned."""
+
+    @pytest.mark.parametrize(
+        "bad_signal",
+        [
+            "timeseries_momentum; rm -rf /",
+            "timeseries_momentum && echo pwned",
+            "`id`",
+            "$(malicious)",
+            "signal|pipe",
+            "--injected-cli-flag",
+            "-x",
+            "../../etc/passwd",
+            "not_a_real_signal",
+            "TIMESERIES_MOMENTUM",  # case-sensitive: must not fuzzy-match
+        ],
+    )
+    def test_invalid_signal_raises(self, bad_signal: str) -> None:
+        with pytest.raises(ValueError, match="Invalid signal identifier"):
+            launch_train_meta_labelers(signal=bad_signal)
+
+    def test_valid_signal_succeeds_with_mocked_popen(self) -> None:
+        with patch("gui.orchestrator_runner.subprocess.Popen") as mock_popen, \
+             patch("gui.orchestrator_runner.open", create=True):
+            mock_proc = MagicMock()
+            mock_proc.pid = 12345
+            mock_popen.return_value = mock_proc
+
+            handle = launch_train_meta_labelers(signal="timeseries_momentum")
+            assert handle.pid == 12345
+            assert handle.mode == "train_meta"
+            cmd = mock_popen.call_args[0][0]
+            assert cmd[cmd.index("--signal") + 1] == "timeseries_momentum"
+            # Sanity: the allowlist itself must still contain what this test
+            # relies on, so a future edit to META_LABELED_SIGNAL_IDS can't
+            # silently make this assertion vacuous.
+            assert "timeseries_momentum" in META_LABELED_SIGNAL_IDS
+
+    def test_no_signal_succeeds_with_mocked_popen(self) -> None:
+        with patch("gui.orchestrator_runner.subprocess.Popen") as mock_popen, \
+             patch("gui.orchestrator_runner.open", create=True):
+            mock_proc = MagicMock()
+            mock_proc.pid = 12346
+            mock_popen.return_value = mock_proc
+
+            handle = launch_train_meta_labelers()
+            assert handle.mode == "train_meta"
+            cmd = mock_popen.call_args[0][0]
+            assert "--signal" not in cmd
 
 
 # ===========================================================================
