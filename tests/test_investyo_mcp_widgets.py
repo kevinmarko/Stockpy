@@ -814,7 +814,24 @@ class TestAnalyticsWidgetsSmoke:
     def test_get_model_drift_report_emits_json_matching_widget_schema(self, monkeypatch):
         import investyo_mcp_server as srv
 
-        fake_summary = {"horizon_days": 30, "rows": [{"symbol": "AAPL", "pending": 0, "completed": 10, "n_by_model": 2, "skill_weights": {"cnn_lstm": 0.5, "prophet": 0.5}}]}
+        # n_by_model is itself a dict of {model_name: observation_count} per
+        # pilots/observability.py::forecast_skill_by_symbol_summary (stats.get("n_by_model", {})),
+        # never a bare int -- mirror the real shape here, not just the field name.
+        fake_summary = {
+            "horizon_days": 30,
+            "window_days": 90,
+            "min_obs": 5,
+            "reason": None,
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "pending": 0,
+                    "completed": 10,
+                    "n_by_model": {"cnn_lstm": 6, "prophet": 4},
+                    "skill_weights": {"cnn_lstm": 0.5, "prophet": 0.5},
+                }
+            ],
+        }
         monkeypatch.setattr(srv, "_load_state_snapshot", lambda: {})
         monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda snapshot: fake_summary)
 
@@ -822,19 +839,36 @@ class TestAnalyticsWidgetsSmoke:
         assert "```json" in result
         payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
         assert "rows" in payload
-        assert payload["rows"][0]["symbol"] == "AAPL"
-        assert payload["rows"][0]["pending"] == 0
         assert payload["horizon_days"] == 30
+        row = payload["rows"][0]
+        assert row["symbol"] == "AAPL"
+        assert row["pending"] == 0
+        assert row["completed"] == 10
+        assert row["skill_weights"] == {"cnn_lstm": 0.5, "prophet": 0.5}
+        assert row["n_by_model"] == {"cnn_lstm": 6, "prophet": 4}
+        # The real payload has no drift/decay signal at all (no such field is
+        # ever computed by forecast_skill_by_symbol_summary) -- assert its
+        # absence so a future regression that reintroduces a fabricated
+        # drift_detected/decay_pct key is caught here.
+        assert "drift_detected" not in row
+        assert "decay_pct" not in row
 
-    def test_get_model_drift_report_fires_alert_on_synthetic_injected_drift(self, monkeypatch):
-        """Known-bad test: check that it handles the real schema with pending/completed outputs."""
+    def test_get_model_drift_report_multi_symbol_skill_weights_roundtrip(self, monkeypatch):
+        """Renamed from a stale "fires_alert_on_synthetic_injected_drift" test: the
+        real payload has no drift_detected/alert-firing signal at all (see
+        pilots.observability.forecast_skill_by_symbol_summary's actual return shape),
+        so this now verifies the one thing the real payload genuinely carries across
+        multiple symbols -- per-symbol pending/completed counts and skill_weights."""
         import investyo_mcp_server as srv
 
         fake_summary = {
             "horizon_days": 30,
+            "window_days": 90,
+            "min_obs": 5,
+            "reason": None,
             "rows": [
-                {"symbol": "TSLA", "pending": 5, "completed": 20, "n_by_model": 1, "skill_weights": {"cnn_lstm": 1.0}},
-                {"symbol": "NVDA", "pending": 0, "completed": 15, "n_by_model": 1, "skill_weights": {"prophet": 1.0}},
+                {"symbol": "TSLA", "pending": 5, "completed": 20, "n_by_model": {"cnn_lstm": 20}, "skill_weights": {"cnn_lstm": 1.0}},
+                {"symbol": "NVDA", "pending": 0, "completed": 15, "n_by_model": {"prophet": 15}, "skill_weights": {"prophet": 1.0}},
             ]
         }
         monkeypatch.setattr(srv, "_load_state_snapshot", lambda: {})
@@ -844,8 +878,13 @@ class TestAnalyticsWidgetsSmoke:
         assert "```json" in result
         payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
         assert len(payload["rows"]) == 2
+        assert payload["rows"][0]["symbol"] == "TSLA"
         assert payload["rows"][0]["pending"] == 5
+        assert payload["rows"][0]["completed"] == 20
         assert payload["rows"][0]["skill_weights"]["cnn_lstm"] == 1.0
+        assert payload["rows"][1]["symbol"] == "NVDA"
+        assert payload["rows"][1]["pending"] == 0
+        assert payload["rows"][1]["skill_weights"]["prophet"] == 1.0
 
     def test_get_execution_queue_empty_payload_matches_widget_schema(self, monkeypatch, tmp_path):
         import investyo_mcp_server as srv

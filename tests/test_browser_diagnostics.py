@@ -5,10 +5,13 @@ Tests for browser_diagnostics.py -- real headless-browser diagnostics for
 the MCP DevTools widget tools, gated behind settings.BROWSER_DIAGNOSTICS_ENABLED
 and requiring the optional `playwright` package (requirements-optional.txt).
 
-Playwright IS installed in this environment (unlike torch/tensorflow/faiss
-elsewhere in this repo's test suite) -- PLAYWRIGHT_AVAILABLE is genuinely True
-here, so the real end-to-end tests run rather than skip. Two tiers of
-coverage:
+Playwright is NOT installed in this sandbox by default (same situation as
+torch/tensorflow/faiss elsewhere in this repo's test suite) -- PLAYWRIGHT_AVAILABLE
+is genuinely False here, so TestCaptureRealBrowser below skips cleanly via
+@pytest.mark.skipif rather than erroring. On an operator machine that has run
+`pip install playwright && playwright install chromium` (requirements-optional.txt),
+PLAYWRIGHT_AVAILABLE is True and those real end-to-end tests run instead. Two
+tiers of coverage:
 
 1. Pure-logic tests (`_rate`, `_route_slug`, `compare_against_baseline`'s
    Pillow/numpy pixel-diff math) run unconditionally -- no browser needed.

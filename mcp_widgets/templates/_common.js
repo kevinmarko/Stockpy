@@ -1166,7 +1166,7 @@ function renderPitMatrix(container, payload) {
 }
 
 function renderModelDiagnostics(container, payload) {
-  if (!payload) return;
+    if (!payload) return;
     const wrapper = document.createElement("div");
     wrapper.className = "model-diagnostics-panel";
     
@@ -1267,7 +1267,7 @@ function renderStrategyTuner(container, payload, app) {
     input.oninput = () => {
       valDisplay.textContent = input.value;
       state[s.id] = Number(input.value);
-      scheduleRecompute();
+      if (liveCapable) scheduleRecompute();
     };
 
     row.appendChild(label);

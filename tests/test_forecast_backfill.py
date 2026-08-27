@@ -744,6 +744,31 @@ def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):
     assert data["horizons"] == [10, 30, 60, 90]
 
 
+def test_forecast_backfill_api_endpoint_degrades_honestly_on_corrupt_summary_file(monkeypatch, tmp_path):
+    """Regression: a corrupt/malformed agentic_forecast_summary.json must never
+    500 this endpoint (CONSTRAINT #6) -- the webapp's ForecastBackfillScreen
+    (useApi()'s error branch) hides the "Run Backfill" controls behind a bare
+    Retry button once `error` is set, which would just hit the same corrupt
+    file forever with no way to self-heal via a fresh run. It must also NOT be
+    reported as "not_run" (CONSTRAINT #4 -- the file genuinely exists, it's
+    just unreadable), so the status must be a distinct, honest value."""
+    from fastapi.testclient import TestClient
+    from api.pilots_api import app
+
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    summary_file = tmp_path / "agentic_forecast_summary.json"
+    summary_file.write_text("{not valid json,,,")
+    monkeypatch.setattr("settings.settings.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr("settings.settings.STATE_API_TOKEN", None)
+
+    res = client.get("/pilots/forecast_backfill")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] not in ("not_run", "completed")
+    assert data["metrics"] == {}
+
+
 def test_forecast_backfill_run_endpoint_rejects_invalid_horizons(monkeypatch):
     """POST /pilots/forecast_backfill/run's `horizons` reaches a model
     filename that gets opened for writing -- must 422 (Pydantic validation),

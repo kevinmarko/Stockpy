@@ -606,14 +606,14 @@ def _pr_resolve_source(reg, prompt_id: str):
             versions = cache.list_versions(prompt_id)  # newest-first
             if versions:
                 return versions[0], "cache"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to list cached versions for {prompt_id}: {e}", exc_info=True)
     try:
         from prompt_registry.cache import read_baseline
         if read_baseline(prompt_id) is not None:
             return "baseline", "baseline"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to read baseline for {prompt_id}: {e}", exc_info=True)
     return "—", "unknown"
 
 
@@ -1277,7 +1277,7 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
             "period": period,
             "starting_value": start_val,
             "final_value": final_val,
-            "total_return": round(total_ret, 4),
+            "total_return": round(total_ret, 4) if total_ret is not None else None,
             "sharpe": round(sharpe, 2) if sharpe is not None else None,
             "max_drawdown": round(max_dd, 4) if max_dd is not None else None,
             "deployable": (sharpe is not None and sharpe >= 1.0 and (max_dd is None or max_dd <= 0.25)),

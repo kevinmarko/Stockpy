@@ -49,6 +49,13 @@ try:
 
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
+    # `sync_playwright` must still exist as a module-level name even when the
+    # import fails -- tests monkeypatch it (`monkeypatch.setattr(bd,
+    # "sync_playwright", ...)`) to inject a fake Playwright context without a
+    # real browser installed, which requires the attribute to already exist.
+    # PLAYWRIGHT_AVAILABLE remains the sole gate `capture_page_diagnostics`
+    # checks -- this placeholder is never called when it's False.
+    sync_playwright = None  # type: ignore[assignment]
     PLAYWRIGHT_AVAILABLE = False
 
 

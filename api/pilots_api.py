@@ -1085,8 +1085,29 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
             with open(summary_path, "r") as f:
                 return json.load(f)
         except Exception as exc:
+            # Dead-letter (CONSTRAINT #6): a corrupt/malformed summary file must
+            # never 500 this GET -- the webapp's ForecastBackfillScreen has no
+            # route to trigger a fresh run once useApi()'s error branch takes
+            # over (it hides the "Run Backfill" controls behind an ErrorState
+            # with only a Retry button, which would just hit this same corrupt
+            # file forever). Degrade to an honest, DISTINCT status instead of
+            # silently reporting "not_run" (that would be a CONSTRAINT #4
+            # fabrication -- the file DID run, it's just unreadable now) so the
+            # operator can still see the screen and kick off a new run, which
+            # overwrites and self-heals the corrupt file.
             logger.error(f"Failed to read agentic_forecast_summary.json: {exc}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Corrupt forecast summary file")
+            return {
+                "status": "error",
+                "timestamp": None,
+                "horizons": getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90]),
+                "metrics": {},
+                "tickers": settings.DEFAULT_TICKERS,
+                "message": (
+                    "The forecast backfill summary file exists but could not be "
+                    "read (corrupt or malformed JSON) -- see server logs. Run "
+                    "the backfill again to regenerate it."
+                ),
+            }
 
     return {
         "status": "not_run",
