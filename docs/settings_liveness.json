@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 329,
+    "live_safe": 331,
     "no_op": 3,
     "restart_required": 105,
-    "total": 437
+    "total": 439
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3187,
+      "line": 3209,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4293,
+      "line": 4315,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4398,
+      "line": 4420,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 432,
+  "files_scanned": 433,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -170,6 +170,8 @@
     "BROKERAGE_REFRESH_ENABLED",
     "BROKER_BACKEND",
     "BROKER_TRADE_INGEST_ENABLED",
+    "BROWSER_DIAGNOSTICS_ENABLED",
+    "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS",
     "CACHE_LONG_SHORT_ENABLED",
     "CACHE_LONG_SHORT_MIN_CORRELATION",
     "CACHE_LONG_SHORT_PROXY_CANDIDATES",
@@ -478,13 +480,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 862,
+    "attr": 870,
     "factory_param": 4,
-    "getattr_const": 372,
+    "getattr_const": 373,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 256,
+    "attr": 258,
     "factory_param": 4,
     "getattr_const": 209,
     "os_environ": 18
@@ -1611,7 +1613,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4775",
+        "site": "api/pilots_api.py:4797",
         "via": []
       }
     ],
@@ -1622,7 +1624,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4774",
+        "site": "api/pilots_api.py:4796",
         "via": []
       }
     ],
@@ -1633,7 +1635,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4944",
+        "site": "api/pilots_api.py:4966",
         "via": []
       },
       {
@@ -1708,7 +1710,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4916",
+        "site": "api/pilots_api.py:4938",
         "via": []
       },
       {
@@ -2458,7 +2460,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5909",
+        "site": "investyo_mcp_server.py:6061",
         "via": []
       }
     ],
@@ -2469,7 +2471,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:26",
+        "site": "investyo_mcp_server.py:29",
         "via": []
       },
       {
@@ -2478,7 +2480,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5861",
+        "site": "investyo_mcp_server.py:6013",
         "via": []
       }
     ],
@@ -2489,7 +2491,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:34",
+        "site": "investyo_mcp_server.py:37",
         "via": []
       },
       {
@@ -2498,7 +2500,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:46",
+        "site": "investyo_mcp_server.py:49",
         "via": []
       },
       {
@@ -2507,7 +2509,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:47",
+        "site": "investyo_mcp_server.py:50",
         "via": []
       }
     ],
@@ -2518,7 +2520,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:5869",
+        "site": "investyo_mcp_server.py:6021",
         "via": []
       }
     ],
@@ -2644,6 +2646,15 @@
       }
     ],
     "OUTPUT_DIR": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "browser_diagnostics.py:96",
+        "via": []
+      },
       {
         "discarded": false,
         "form": "attr",
@@ -3189,7 +3200,7 @@
     "init_body": 7,
     "init_self_assign": 51,
     "method_self_assign": 4,
-    "module_level": 78,
+    "module_level": 79,
     "os_environ": 25
   },
   "restart_required_via_name_literal_only": [
