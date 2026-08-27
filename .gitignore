@@ -59,6 +59,16 @@ venv/
 *.db
 *.db-shm
 *.db-wal
+# Ad-hoc DB backup/archive snapshots an operator or agent makes by hand before
+# a migration/risky change (e.g. quant_platform.db.bak_20260823_082443,
+# quant_platform.db.pre-migration-2026-08-13.archived[-shm|-wal]) — these fall
+# through the *.db*/*.db-shm/*.db-wal patterns above because the filename
+# doesn't end in those exact suffixes. Never committed; same reasoning as the
+# live DB files themselves.
+*.db.bak_*
+*.archived
+*.archived-shm
+*.archived-wal
 *.html
 *.json
 *.jsonl
@@ -117,6 +127,8 @@ data/universe_cache.parquet
 
 # Scratch files
 scratch_*.py
+scratch.py
+scratch[0-9]*.py
 combined_code.*
 pip install*.md
 
