@@ -71,7 +71,8 @@
       settings-census artifacts the 3 new settings fields made stale
       (`scripts/settings_liveness.py --write`,
       `scripts/measure_settings_census.py --write`). `ruff check . --select=F821,F822,F823,E9` clean.
-- [ ] Open PR against `main` from `fix-unbounded-timeout-sweep` (a fresh
+- [x] Opened PR against `main` from `fix-unbounded-timeout-sweep` (a fresh
       branch off `main`, distinct from the already-merged
       `claude/data-pipeline-refresh-e7ccf7` FRED-fix branch) with these
-      `.claude/unbounded_timeout_sweep_*` artifacts committed.
+      `.claude/unbounded_timeout_sweep_*` artifacts committed --
+      [PR #921](https://github.com/kevinmarko/Stockpy/pull/921).
