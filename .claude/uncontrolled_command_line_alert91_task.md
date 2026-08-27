@@ -26,5 +26,5 @@
       passed.
 - [x] Copy plan/task/walkthrough artifacts into `.claude/` with a
       branch-scoped, unique filename prefix (`uncontrolled_command_line_alert91_*`).
-- [ ] Push branch, open PR.
+- [x] Push branch, open PR (https://github.com/kevinmarko/Stockpy/pull/920).
 - [ ] After merge: sync local `main` checkout per CLAUDE.md's post-merge step.
