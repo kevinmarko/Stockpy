@@ -178,6 +178,14 @@ mcp_widgets/build/node_modules/
 # output) — the blanket `*.html` rule above would otherwise swallow them too.
 !mcp_widgets/templates/*.html
 
+# Real DOM tests for mcp_widgets/templates/_common.js (mcp_widgets/tests/),
+# a separate npm project from mcp_widgets/build/ — same npm-artifact/manifest
+# split as above: node_modules never committed, package.json/package-lock.json
+# always are (negation after `*.json`, last-match-wins).
+mcp_widgets/tests/node_modules/
+!mcp_widgets/tests/package.json
+!mcp_widgets/tests/package-lock.json
+
 # Claude Code transient agent worktrees (scratch, never commit)
 .claude/worktrees/
 
