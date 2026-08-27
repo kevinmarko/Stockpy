@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-24T18:46:23.538095+00:00",
-  "command_count": 13,
+  "generated_at": "2026-08-27T17:55:37.987172+00:00",
+  "command_count": 17,
   "dead_letters": [],
   "commands": [
     {
@@ -763,7 +763,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/output",
+          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_job_status_visibility/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -799,7 +799,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/output",
+          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_job_status_visibility/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -889,6 +889,176 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "backfill_edgar_fundamentals.py",
+      "invocation": "python scripts/backfill_edgar_fundamentals.py",
+      "aliases": [],
+      "description": null,
+      "options": [
+        {
+          "name": "--tickers",
+          "aliases": [
+            "--tickers"
+          ],
+          "description": "Comma separated list of tickers, or 'all' for the operator's tracked universe (held \u222a watchlists \u222a DEFAULT_TICKERS).",
+          "default": null,
+          "choices": null,
+          "required": true,
+          "arg_kind": "required",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--since",
+          "aliases": [
+            "--since"
+          ],
+          "description": "YYYY-MM-DD cutoff",
+          "default": "2015-01-01",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "backfill_news_history.py",
+      "invocation": "python scripts/backfill_news_history.py",
+      "aliases": [],
+      "description": "\nscripts/backfill_news_history.py\n=================================\nBackfills ``HistoricalStore``'s ``news_history`` table -- the daily\nper-symbol sentiment series the webapp's Sentiment Dynamics screen charts\nvia ``GET /data/sentiment/{symbol}/history`` -- using REAL historical\nheadlines and REAL historical earnings dates, scored with the exact same\nFinBERT/lexicon + earnings-proximity methodology\n``signals/news_catalyst.py``'s live ``NewsCatalystSignal.pre_compute()``\nuses.\n\nProvider-agnostic (FMP-first, Finnhub-fallback) -- 2026-08\n------------------------------------------------------------\nFMP is the PRIMARY provider when ``settings.FMP_NEWS_ENABLED`` +\n``FMP_API_KEY`` are set (``data.fmp_client.stock_news`` / paginated,\n``data.fmp_feeds_company.fetch_earnings_rows``); Finnhub\n(``FINNHUB_API_KEY``) is the fallback, used automatically when FMP is\nunconfigured or returns nothing for a symbol. Both providers are wrapped\nin the SAME real-historical-data contract described below -- see\n``_fetch_headlines``/``_fetch_headlines_fmp`` and\n``_fetch_earnings_dates``/``_fetch_earnings_dates_fmp``.\n\nWhy this is honest, not a hindsight shortcut\n---------------------------------------------\n``news_history``'s own DDL comment (``data/historical_store.py``) documents\nit as \"forward-archive only\" -- the live pipeline has only been writing to\nit since 2026-07, so a fresh install has just weeks of real depth. But both\nproviders' company-news and earnings-calendar endpoints accept arbitrary\nhistorical date ranges and return genuinely real records: headlines that\nwere actually published on that date, and earnings dates that were\nactually scheduled/reported. Scoring that real historical text with the\nplatform's existing deterministic FinBERT/lexicon classifier is not\nfabricating point-in-time data (CONSTRAINT #4) -- it is applying a fixed\nfunction to real historical records, exactly the reasoning\n``scripts/backfill_sentiment_history.py``'s module docstring already\ndocuments for its own (separate) ``sentiment_ingestion_audit`` backfill.\n\nRows written here use ``source=\"finbert_backfill\"`` (not the live\npipeline's ``\"finbert\"``) so a FUTURE point-in-time backtest built on this\ntable can filter out backfilled rows if same-day-computed provenance turns\nout to matter -- today's display chart doesn't care about provenance and\nshows both.\n\nReal depth: FMP >= 6 months, Finnhub free tier caps at ~3 months\n--------------------------------------------------------------------\nVerified live 2026-08 against a real FMP key: ``/news/stock`` returns\ngenuinely real articles at least 6 months back, with working date-window +\npage/limit pagination (bounded by ``settings.FMP_NEWS_MAX_PAGES`` -- see\n``_fetch_headlines_fmp``). Finnhub is more limited:\n``settings.NEWS_LOOKBACK_DAYS``'s own description says it plainly: \"the\nfree Finnhub tier provides ~3 months of history.\" Requesting further back\nthan that does not error -- Finnhub just returns nothing for the older\nportion of the range. With the default ``--months 6``, an operator on the\nFinnhub-only fallback path should expect the most recent ~3 months to\ngenuinely fill in and the older ~3 months to archive as honest ``NaN``\ngaps (``HistoricalStore.get_news_sentiment_history()``'s documented\ncontract -- a real \"no data\" day, never a fabricated 0.0). This script does\nnot attempt to paper over either cap; it reports what the active provider\nactually returned so the operator isn't misled about coverage.\n\nOne call (or a short, bounded page loop) per symbol, not per day\n----------------------------------------------------------------------\nUnlike ``scripts/backfill_sentiment_history.py``'s GDELT windowing (needed\nbecause GDELT's ``artlist`` mode caps at 250 records per 7-day call), this\nscript issues one wide-range fetch per symbol per provider -- an FMP page\nloop bounded by ``FMP_NEWS_MAX_PAGES``, or exactly ONE Finnhub\n``company_news``/``earnings_calendar`` call pair on the fallback path --\nmirroring ``signals/news_catalyst.py``'s existing\n``fetch_company_news``/``fetch_next_earnings`` helpers and\n``data/sentiment_sources.py``'s ``FinnhubSentimentSource``/\n``FMPNewsSource``, all of which already fetch an arbitrarily wide date\nrange with no per-day chunking. Each historical trading day's score is\nthen reconstructed LOCALLY from the one already-fetched, already-scored\nheadline list by replaying ``NewsCatalystSignal.pre_compute()``'s trailing\n``NEWS_LOOKBACK_DAYS``-day window average + earnings-proximity multiplier\nfor that day instead of \"as of now\" -- so a 6-month, 33-symbol backfill\ncosts a small, bounded number of provider calls total, not thousands.\n\nSequential by design\n---------------------\nMirrors ``scripts/backfill_sentiment_history.py``'s reasoning: a one-time,\noperator-invoked backfill is not a latency-sensitive path, and the shared\nFinBERT pipeline / ``finbert_score_cache`` DB session are simplest to reuse\nsingle-threaded rather than made thread-safe for a use case that doesn't\nneed it.\n",
+      "options": [
+        {
+          "name": "--tickers",
+          "aliases": [
+            "--tickers"
+          ],
+          "description": "Comma-separated tickers, or 'all' for the operator's tracked universe (held \u222a watchlists \u222a DEFAULT_TICKERS).",
+          "default": "all",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--months",
+          "aliases": [
+            "--months"
+          ],
+          "description": "How many months back to backfill (default: 6). See module docstring: with FMP as the provider this covers real history (verified live 2026-08: >=6 months); Finnhub's free tier only has ~3 months, with the remainder archiving as honest NaN gaps.",
+          "default": 6.0,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "backfill_news_history_from_audit.py",
+      "invocation": "python scripts/backfill_news_history_from_audit.py",
+      "aliases": [],
+      "description": "\nscripts/backfill_news_history_from_audit.py\n=============================================\nBackfills ``HistoricalStore``'s ``news_history`` table (the daily\nper-symbol series the webapp's Sentiment Dynamics screen charts) from the\nplatform's FREE multi-source sentiment pipeline's own historical archive --\n``sentiment_ingestion_audit`` (GDELT / SEC EDGAR / Reddit / Google News,\npopulated by ``scripts/backfill_sentiment_history.py``) -- rather than a\npaid/keyed source.\n\nPrerequisite\n------------\nRun ``scripts/backfill_sentiment_history.py`` FIRST to populate\n``sentiment_ingestion_audit`` with real historical documents. No API key\nis required for the gdelt/edgar/google_news sources (Reddit needs\n``REDDIT_CLIENT_ID``/``REDDIT_CLIENT_SECRET``; Finnhub is optional and can\nbe dropped)::\n\n    python3 scripts/backfill_sentiment_history.py --months 6 \\\n        --sources gdelt,edgar,reddit,google_news\n\nThis script then does a SECOND pass over the same date range: pure local DB\naggregation, zero network calls, zero API keys required. For each trading\nday, it calls ``HistoricalStore.get_sentiment_aggregate_by_symbol()`` --\nthe exact same read ``signals.news_catalyst.NewsCatalystSignal.pre_compute()``\nalready runs live every cycle -- to compute that day's credibility-weighted\nsentiment aggregate per symbol from whatever real documents are already\narchived, and writes the result into ``news_history``.\n\nWhy this is honest, not a hindsight shortcut\n---------------------------------------------\nThe ``credibility_weight``/``final_weighted_score`` values already stored\nin ``sentiment_ingestion_audit`` were computed by ``signals/credibility.py``\nat ingestion time from each document's OWN metadata (source type, and for\nReddit, author state AT INGESTION TIME -- see\n``scripts/backfill_sentiment_history.py``'s own Reddit caveat). This script\nperforms no new scoring of its own -- it only re-runs the SAME aggregation\nquery the live pipeline already runs every cycle, against real historical\ndocuments. A trading day with zero archived documents (GDELT was\nrate-limited that day, EDGAR had nothing, etc.) archives as an honest\n``NaN`` gap in ``news_history``, never a fabricated neutral score\n(CONSTRAINT #4).\n\nComplements, does not replace, scripts/backfill_news_history.py\n------------------------------------------------------------------\nThat script backfills the SAME ``news_history`` table from Finnhub headline\nsentiment specifically (requires ``FINNHUB_API_KEY``). THIS script\nbackfills it from the free multi-source credibility-weighted aggregate\ninstead. Running both is fine -- ``news_history``'s primary key is\n``(symbol, as_of)``, so for a given symbol+day whichever backfill runs LAST\nwins that row; there is no blending across separate script invocations\n(``signals/news_catalyst.py``'s LIVE pipeline blend, by contrast, DOES\nblend both within a single cycle -- see ``NewsCatalystSignal.\n_build_archive_scores``). An operator with no Finnhub key still gets real\n``news_history`` coverage entirely from free sources via this script alone.\n",
+      "options": [
+        {
+          "name": "--tickers",
+          "aliases": [
+            "--tickers"
+          ],
+          "description": "Comma-separated tickers, or 'all' for the operator's tracked universe (held \u222a watchlists \u222a DEFAULT_TICKERS).",
+          "default": "all",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--months",
+          "aliases": [
+            "--months"
+          ],
+          "description": "How many months back to aggregate (default: 6). Only days already covered by sentiment_ingestion_audit (see scripts/backfill_sentiment_history.py) produce a real value; the rest archive as honest NaN gaps.",
+          "default": 6.0,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "backfill_sentiment_history.py",
+      "invocation": "python scripts/backfill_sentiment_history.py",
+      "aliases": [],
+      "description": "\nscripts/backfill_sentiment_history.py\n======================================\nCLI backfill script that pulls HISTORICAL sentiment documents from the\nsources with genuine point-in-time archives (GDELT, SEC EDGAR, Finnhub,\nReddit) into ``sentiment_ingestion_audit`` -- so the credibility-weighted\nsentiment signal's point-in-time archive doesn't have to wait for calendar\ntime alone before ``settings.SENTIMENT_PIT_MIN_MONTHS`` of real depth exists.\n\nWhy this is honest, not a hindsight shortcut\n---------------------------------------------\nGDELT article tone, EDGAR filing dates, and Finnhub headlines are all\nGENUINELY historical records -- GDELT's tone score was computed at or near\npublish time (not reconstructed today), a filing's date is permanent fact,\nand Finnhub's ``company_news`` API accepts arbitrary historical date ranges.\nBackfilling these is not fabricating point-in-time data (CONSTRAINT #4); it\nis ingesting real historical records that already existed. All three are\npolicy-trusted institutional sources (``credibility_weight=1.0`` regardless\nof when they're scored -- see ``signals/credibility.py``'s\n``_INSTITUTIONAL_SOURCES``), so backfilling them introduces no credibility\nbias at all.\n\nYahoo RSS is EXCLUDED from the default backfill set: it is a live feed with\nno historical archive to query at all (see ``YahooRSSSource``'s docstring)\n-- passing ``--sources yahoo_rss`` explicitly is harmless but will\ncontribute zero documents for every symbol, every time.\n\nReddit carries a real, documented caveat (not hidden): its posts ARE\ngenuinely searchable historically, but a backfilled post's credibility\nsub-scores (``S_authority``, from author follower count) can only ever\nreflect the author's CURRENT account state -- Reddit's API has no way to\nanswer \"what was this account's standing 5 months ago.\" This is included in\nthe default backfill set anyway (an explicit operator choice), but\n``HistoricalStore.get_sentiment_archive_depth_by_source()`` lets a future\nvalidation gate weigh institutional depth separately from Reddit's, rather\nthan one blended number that would overstate confidence in the weaker\ncomponent.\n\nGDELT throttling shapes what a run can achieve\n---------------------------------------------------------------\nGDELT is queried in 7-day windows (its ``artlist`` mode caps at 250 records\nper call), so ``--months 6`` is roughly 26 GDELT requests PER SYMBOL. Before\nthe shared limiter in ``data/sentiment_sources.py``, those went out\nback-to-back and GDELT answered HTTP 429 to substantially all of them: a run\nagainst a 33-symbol universe on 2026-07-29 archived zero GDELT documents\nwhile logging one warning per window.\n\nTwo consequences for anyone running this script now:\n\n* ``--max-seconds-per-symbol`` has to cover the throttle, not just the\n  network. At the default ``settings.GDELT_MIN_REQUEST_INTERVAL_SECONDS``\n  (5 s) a 6-month GDELT backfill needs ~130 s of spacing per symbol on top of\n  request time, so the 300 s default is workable but not generous. Raise it\n  before lowering the interval.\n* A throttled run ends up with a PARTIAL range, by design. Once the\n  limiter's cooldown opens, ``GDELTSource`` abandons that symbol's remaining\n  windows instead of grinding through certain-to-fail requests \u2014 which is\n  what leaves wall-clock for EDGAR/Finnhub/Reddit. The per-source depth\n  report printed at the end (and\n  ``HistoricalStore.get_sentiment_archive_depth_by_source()``) is the honest\n  record of what was actually archived; re-run to extend it.\n\nSequential by design\n---------------------\nUnlike ``scripts/backfill_edgar_fundamentals.py`` (which parallelizes across\nsymbols via a ``ThreadPoolExecutor``), this script processes symbols\nSEQUENTIALLY. ``CompositeSentimentSource``'s per-cycle document budget /\ncircuit breaker / wall-clock deadline are plain instance attributes with no\nlocking (they're designed for a single-threaded per-cycle loop, not\nconcurrent access) -- sharing one instance across worker threads would race\non that state. A one-time, operator-invoked backfill is not a latency-\nsensitive path, so sequential execution is the correct, simpler tradeoff\nhere rather than adding thread-safety to a component that doesn't need it\nfor its actual (live, single-threaded) use case.\n",
+      "options": [
+        {
+          "name": "--tickers",
+          "aliases": [
+            "--tickers"
+          ],
+          "description": "Comma-separated tickers, or 'all' for the operator's tracked universe (held \u222a watchlists \u222a DEFAULT_TICKERS).",
+          "default": "all",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--months",
+          "aliases": [
+            "--months"
+          ],
+          "description": "How many months back to backfill (default: 5).",
+          "default": 5.0,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--sources",
+          "aliases": [
+            "--sources"
+          ],
+          "description": "Comma-separated source names to backfill (default excludes yahoo_rss -- it has no historical archive; see module docstring).",
+          "default": "gdelt,edgar,finnhub,reddit",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--max-seconds-per-symbol",
+          "aliases": [
+            "--max-seconds-per-symbol"
+          ],
+          "description": "Wall-clock budget per symbol for this run, overriding settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE (whose 60s default is sized for a live per-cycle refresh, not a real multi-month historical backfill).",
+          "default": 300.0,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
         }
       ],
       "positionals": [],

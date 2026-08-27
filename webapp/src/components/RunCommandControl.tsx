@@ -3,6 +3,7 @@ import toast from "react-hot-toast";
 import { api } from "../api/client";
 import { usePoll } from "../hooks/usePoll";
 import type { CommandSpec, CommandJobParams, JobRecord } from "../api/types";
+import { JobConflictError } from "../api/types";
 import { highStakesReason, DISALLOWED_EXECUTE_COMMANDS } from "../commandParse";
 import { Button } from "./ui";
 import { Modal } from "./Modal";
@@ -99,16 +100,28 @@ export function RunCommandControl({
         </div>
       );
     } catch (err: any) {
-      const message = err?.message ?? String(err);
-      setError(message);
-      toast.error(
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>{label} failed to launch</span>
-          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
-            {message}
-          </span>
-        </div>
-      );
+      if (err instanceof JobConflictError) {
+        setError(`A command is already running (Job ID: ${err.existingJobId})`);
+        toast.error(
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Already running</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+              Command '{err.commandName}' is already active (job {err.existingJobId}). Wait for it to finish or cancel it.
+            </span>
+          </div>
+        );
+      } else {
+        const message = err?.message ?? String(err);
+        setError(message);
+        toast.error(
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>{label} failed to launch</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+              {message}
+            </span>
+          </div>
+        );
+      }
     }
   };
 

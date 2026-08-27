@@ -597,7 +597,7 @@ class JobCreateRequest(BaseModel):
 )
 def create_job(body: JobCreateRequest) -> Dict[str, Any]:
     """Launch a background process job (preflight, pytest, validation, verify, gravity, advisory, orchestrator)."""
-    from api._jobs import JobType, job_manager
+    from api._jobs import JobConflictError, JobType, job_manager
 
     try:
         jtype = JobType(body.job_type)
@@ -606,6 +606,16 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
 
     try:
         rec = job_manager.start_job(jtype, body.params)
+    except JobConflictError as err:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": str(err),
+                "job_id": err.existing_job_id,
+                "job_type": err.existing_job_type,
+                "command_name": err.existing_command_name
+            }
+        ) from err
     except RuntimeError as err:
         raise HTTPException(status_code=409, detail=redact_line(str(err))) from err
     except ValueError as err:
@@ -643,6 +653,39 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
         "cancellable": rec.cancellable,
         "command_name": rec.command_name,
         "created_at": rec.created_at,
+    }
+
+
+@app.get(
+    "/jobs",
+    dependencies=[Depends(require_read_token), Depends(_require_jobs_api_enabled)],
+)
+def list_jobs(active_only: bool = False, limit: int = 50) -> Dict[str, Any]:
+    """List background jobs, ordered newest first."""
+    from api._jobs import job_manager
+
+    limit = max(1, min(limit, 200))
+    jobs = job_manager.list_jobs()
+    
+    if active_only:
+        jobs = [j for j in jobs if j.handle.is_running()]
+        
+    jobs = jobs[:limit]
+    
+    return {
+        "jobs": [
+            {
+                "job_id": rec.job_id,
+                "job_type": rec.job_type.value,
+                "status": rec.status(),
+                "exit_code": rec.exit_code(),
+                "is_running": rec.handle.is_running(),
+                "cancellable": rec.cancellable,
+                "command_name": rec.command_name,
+                "created_at": rec.created_at,
+            }
+            for rec in jobs
+        ]
     }
 
 

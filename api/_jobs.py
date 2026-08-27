@@ -41,6 +41,14 @@ from settings import settings
 logger = logging.getLogger(__name__)
 
 
+class JobConflictError(RuntimeError):
+    def __init__(self, message: str, existing_job_id: str, existing_job_type: str, existing_command_name: str | None = None):
+        super().__init__(message)
+        self.existing_job_id = existing_job_id
+        self.existing_job_type = existing_job_type
+        self.existing_command_name = existing_command_name
+
+
 class JobType(str, enum.Enum):
     PREFLIGHT = "preflight"
     PYTEST = "pytest"
@@ -129,13 +137,19 @@ class JobManager:
                     continue
                 if job_type == JobType.COMMAND:
                     if rec.job_type == JobType.COMMAND and rec.command_name == command_name:
-                        raise RuntimeError(
-                            f"Command '{command_name}' is already running (ID: {rec.job_id})"
+                        raise JobConflictError(
+                            f"Command '{command_name}' is already running (ID: {rec.job_id})",
+                            existing_job_id=rec.job_id,
+                            existing_job_type=rec.job_type.value,
+                            existing_command_name=rec.command_name,
                         )
                 elif (rec.single_flight_key or rec.job_type.value) == (single_flight_key or job_type.value):
-                    raise RuntimeError(
+                    raise JobConflictError(
                         f"Job of type '{job_type.value}' conflicts with already-running "
-                        f"job '{rec.job_type.value}' (ID: {rec.job_id})"
+                        f"job '{rec.job_type.value}' (ID: {rec.job_id})",
+                        existing_job_id=rec.job_id,
+                        existing_job_type=rec.job_type.value,
+                        existing_command_name=rec.command_name,
                     )
 
             if job_type == JobType.PREFLIGHT:
@@ -205,6 +219,10 @@ class JobManager:
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         return self._jobs.get(job_id)
+
+    def list_jobs(self) -> List[JobRecord]:
+        with self._lock:
+            return sorted(self._jobs.values(), key=lambda r: r.created_at, reverse=True)
 
     def cancel_job(self, job_id: str) -> bool:
         """Returns True once the process is confirmed stopped -- including

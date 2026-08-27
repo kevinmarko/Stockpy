@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { ModelRow, ObservabilitySummary, Thresholds } from "../api/types";
+import { JobConflictError } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useTrainingStatus } from "../hooks/useTrainingStatus";
@@ -306,14 +307,18 @@ export function Models() {
           clearTrainingJob(m.name, job.job_id);
         }, 10 * 60 * 1000);
       }
-    } catch (e) {
-      const msg =
-        e instanceof ApiError && e.status === 409
-          ? "Another training job is already running."
-          : e instanceof Error
-            ? e.message
-            : "Failed to start the training job.";
-      setRetrainErrors((prev) => ({ ...prev, [m.name]: msg }));
+    } catch (err: any) {
+      if (err instanceof JobConflictError) {
+        setRetrainErrors((prev) => ({ 
+          ...prev, 
+          [m.name]: `Training job already running (ID: ${err.existingJobId})` 
+        }));
+      } else {
+        setRetrainErrors((prev) => ({
+          ...prev,
+          [m.name]: String(err?.message || err)
+        }));
+      }
     } finally {
       setSubmitting((prev) => ({ ...prev, [m.name]: false }));
     }

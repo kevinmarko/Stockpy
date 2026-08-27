@@ -1511,3 +1511,103 @@ def test_fake_daemon_mirrors_orchestrator_daemon_member_kinds():
     assert loaded.last_result == "rec"
     with pytest.raises(TypeError):
         loaded.is_running()  # the production bug, faithfully reproduced by the fake
+
+
+def test_list_jobs_returns_all_newest_first(monkeypatch):
+    from api._jobs import job_manager, JobType, JobRecord
+    class FakeH:
+        def is_running(self): return True
+        def returncode(self): return None
+        
+    job_manager._jobs.clear()
+    
+    r1 = JobRecord(job_id="j1", job_type=JobType.PREFLIGHT, handle=FakeH(), command_name=None, single_flight_key=None)
+    r2 = JobRecord(job_id="j2", job_type=JobType.PYTEST, handle=FakeH(), command_name=None, single_flight_key=None)
+    
+    # ensure created_at ordering
+    r1.created_at = "2020-01-01T00:00:00Z"
+    r2.created_at = "2020-01-02T00:00:00Z"
+    
+    job_manager._jobs["j1"] = r1
+    job_manager._jobs["j2"] = r2
+    
+    with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+         mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+        resp = client.get("/jobs", headers={"Authorization": "Bearer cmd-tok"})
+        
+    assert resp.status_code == 200
+    jobs = resp.json()["jobs"]
+    assert len(jobs) == 2
+    assert jobs[0]["job_id"] == "j2"
+    assert jobs[1]["job_id"] == "j1"
+
+def test_list_jobs_active_only(monkeypatch):
+    from api._jobs import job_manager, JobType, JobRecord
+    class FakeH:
+        def __init__(self, r): self._r = r
+        def is_running(self): return self._r
+        def returncode(self): return 0 if not self._r else None
+        
+    job_manager._jobs.clear()
+    r1 = JobRecord(job_id="j1", job_type=JobType.PREFLIGHT, handle=FakeH(True), command_name=None, single_flight_key=None)
+    r2 = JobRecord(job_id="j2", job_type=JobType.PYTEST, handle=FakeH(False), command_name=None, single_flight_key=None)
+    
+    job_manager._jobs["j1"] = r1
+    job_manager._jobs["j2"] = r2
+    
+    with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+         mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+        resp = client.get("/jobs?active_only=true", headers={"Authorization": "Bearer cmd-tok"})
+        
+    assert resp.status_code == 200
+    jobs = resp.json()["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["job_id"] == "j1"
+
+def test_list_jobs_limit_clamps(monkeypatch):
+    from api._jobs import job_manager, JobType, JobRecord
+    class FakeH:
+        def is_running(self): return True
+        def returncode(self): return None
+    
+    job_manager._jobs.clear()
+    for i in range(5):
+        job_manager._jobs[f"j{i}"] = JobRecord(job_id=f"j{i}", job_type=JobType.PREFLIGHT, handle=FakeH(), command_name=None, single_flight_key=None)
+        
+    with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+         mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+        resp = client.get("/jobs?limit=2", headers={"Authorization": "Bearer cmd-tok"})
+        assert len(resp.json()["jobs"]) == 2
+
+def test_post_jobs_conflict_returns_structured_409(monkeypatch):
+    from api._jobs import job_manager, JobType, JobRecord
+    class FakeH:
+        def is_running(self): return True
+        def returncode(self): return None
+    
+    job_manager._jobs.clear()
+    monkeypatch.setattr("api._jobs.launch_preflight", lambda: FakeH())
+    
+    j1 = job_manager.start_job(JobType.PREFLIGHT, {})
+    
+    with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+         mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+        resp = client.post("/jobs", json={"job_type": "preflight"}, headers={"Authorization": "Bearer cmd-tok"})
+        
+    assert resp.status_code == 409
+    data = resp.json()
+    assert data["detail"]["job_id"] == j1.job_id
+    assert data["detail"]["job_type"] == JobType.PREFLIGHT.value
+
+def test_get_jobs_respects_gating():
+    # If JOBS_API_ENABLED=False, it should be 403
+    with mock.patch.object(settings, "JOBS_API_ENABLED", False), \
+         mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+        resp = client.get("/jobs", headers={"Authorization": "Bearer cmd-tok"})
+        assert resp.status_code == 403
+        
+    # If STATE_API_TOKEN is set, request without token should be 401
+    with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+         mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+        resp = client.get("/jobs")
+        assert resp.status_code == 401
