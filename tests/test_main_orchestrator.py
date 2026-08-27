@@ -60,6 +60,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -380,6 +381,61 @@ class TestFetchAllDataAsyncDeadLetter:
             fetch_all_data_async(de, ["AAPL"])
         )
         assert macro_raw == {} and fund_raw == {} and tech_raw == {}
+
+    def test_macro_fetch_hang_isolated_dict_fallback_within_bounded_time(self, monkeypatch):
+        """2026-08 fix: a sub-fetch that HANGS (never raises, never returns)
+        must degrade to the same empty-dict dead-letter sentinel as a raising
+        one, within a bounded time -- not block fetch_all_data_async forever.
+        This is the actual incident: none of the three sub-fetches had ANY
+        timeout, so a stalled FRED connection (fetch_macro_raw, in the real
+        case) wedged the whole pipeline cycle indefinitely. See
+        docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
+
+        Uses a BOUNDED real sleep (not an unset threading.Event().wait()) --
+        an unbounded blocked worker thread can hang pytest/interpreter
+        shutdown via concurrent.futures.thread's atexit join.
+
+        Deliberately uses a manually-managed event loop (run_until_complete),
+        NOT asyncio.run(): asyncio.wait_for's cancellation on timeout cannot
+        actually interrupt a thread already blocked inside the hung
+        synchronous call (concurrent.futures.Future.cancel() is a no-op once
+        running) -- the thread keeps sleeping in the background regardless.
+        asyncio.run() additionally calls shutdown_default_executor(), which
+        BLOCKS until every such orphaned thread finishes -- that's a real,
+        disclosed, bounded-cost side effect of the fix (see
+        _bounded_fred_timeout's docstring / the known-issues doc), not a bug
+        in fetch_all_data_async itself, so it must not be what this test
+        measures. plain loop.close() does not wait for it, isolating the
+        assertion to what actually matters: fetch_all_data_async returns
+        promptly once its own timeout fires.
+        """
+        monkeypatch.setattr(mo.settings, "DATA_FETCH_TASK_TIMEOUT_SECONDS", 0.05)
+        de = MockDataEngine()
+
+        def _hang():
+            time.sleep(0.3)
+            return {"VIXCLS": 15.0}
+
+        monkeypatch.setattr(de, "fetch_macro_raw", _hang)
+
+        loop = asyncio.new_event_loop()
+        try:
+            started = time.monotonic()
+            macro_raw, fund_raw, tech_raw = loop.run_until_complete(
+                fetch_all_data_async(de, ["AAPL"])
+            )
+            elapsed = time.monotonic() - started
+        finally:
+            loop.close()
+
+        # Bounded by the (tiny, monkeypatched) timeout, not the sleep duration.
+        assert elapsed < 0.2
+        assert macro_raw == {}
+        assert isinstance(macro_raw, dict)
+        # The other two sub-fetches, unaffected by macro's hang, succeed normally.
+        assert isinstance(fund_raw, dict) and fund_raw
+        assert isinstance(tech_raw, dict) and tech_raw
+        assert "AAPL" in tech_raw
 
 
 # ===========================================================================

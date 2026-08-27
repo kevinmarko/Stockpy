@@ -178,6 +178,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ORCHESTRATOR_INTERVAL_SECONDS",
     # Gate automatic pipeline runs to extended market hours.
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
+    # Read-only pipeline-stall watchdog (desktop/daemon_runtime.py's
+    # maybe_alert_on_pipeline_stall). Non-secret; a GUI bug here can only
+    # change whether/how soon a WARNING alert fires -- it never cancels a
+    # run, restarts the daemon, or bypasses any write gate.
+    "PIPELINE_STALL_ALERT_ENABLED",
+    "PIPELINE_STALL_ALERT_SECONDS",
     # Cross-process settings hot-reload for the persistent orchestrator
     # daemon (desktop/orchestrator_daemon.py). Non-secret operational
     # tunables; a GUI bug here can only change how often/whether the daemon
@@ -358,6 +364,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
     "ETF_TRANSMISSION_COV_INFLATION",
     "ETF_TRANSMISSION_COV_WINDOW_DAYS",
+    # FRED (data_engine.py). Non-secret timeout tunable -- FRED_API_KEY itself
+    # is in SECRET_KEYS. fredapi has no timeout of its own; this is scoped via
+    # socket.setdefaulttimeout() around each call (see _bounded_fred_timeout).
+    "FRED_REQUEST_TIMEOUT_SECONDS",
     # Financial Modeling Prep (data/fmp_client.py + its consumers). All 27 keys
     # below are non-secret operational tunables; the credential itself
     # (FMP_API_KEY) is in SECRET_KEYS — CONSTRAINT #3, never GUI-writable.
@@ -419,6 +429,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ADVISORY_MAX_CONCURRENCY",
     "FORECAST_MAX_CONCURRENCY",
     "DATA_FETCH_MAX_CONCURRENCY",
+    # Per-sub-fetch timeout bounding fetch_all_data_async()'s three concurrent
+    # tasks -- see docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
+    "DATA_FETCH_TASK_TIMEOUT_SECONDS",
     # Historical persistence & DB controls
     "HISTORICAL_STORE_ENABLED",
     "BARS_BACKFILL_DAYS",

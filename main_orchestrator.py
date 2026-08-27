@@ -247,17 +247,32 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     using asyncio.gather to avoid blocking the event loop.
     """
     telemetry.info(f"Initiating concurrent data fetching for {len(tickers)} tickers...")
-    
-    macro_task = asyncio.to_thread(de.fetch_macro_raw)
-    fund_task = asyncio.to_thread(de.fetch_fundamentals_raw, tickers)
+
+    # Each sub-fetch is individually bounded (2026-08 fix): a real incident
+    # showed none of these three had ANY timeout, so a single stalled
+    # synchronous call (a hung FRED connection via fetch_macro_raw, in the
+    # confirmed case -- see docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md)
+    # blocked this entire function -- and therefore the whole pipeline cycle --
+    # forever, with nothing else re-triggering a fresh cycle. asyncio.wait_for
+    # raises TimeoutError on expiry, which the existing per-task
+    # isinstance(x, Exception) dead-letter handling below already treats
+    # identically to any other raised exception (TimeoutError is an
+    # OSError -> Exception subclass) -- no new fallback logic needed.
+    _timeout = settings.DATA_FETCH_TASK_TIMEOUT_SECONDS
+    macro_task = asyncio.wait_for(asyncio.to_thread(de.fetch_macro_raw), timeout=_timeout)
+    fund_task = asyncio.wait_for(asyncio.to_thread(de.fetch_fundamentals_raw, tickers), timeout=_timeout)
     # Routes through HistoricalStore's incremental top-up (2026-07) instead of
     # a full 2-year yfinance re-pull every cycle for the whole universe --
     # main.py's _fetch_bars_for_universe() already used HistoricalStore; this
     # closed the one remaining tech-bars call site that bypassed it.
-    tech_task = asyncio.to_thread(de.fetch_technical_raw_cached, list(set(tickers + ["SPY"])))
-    
+    tech_task = asyncio.wait_for(
+        asyncio.to_thread(de.fetch_technical_raw_cached, list(set(tickers + ["SPY"]))),
+        timeout=_timeout,
+    )
+
     # return_exceptions=True + per-task dead-letter isolation below: one
-    # sub-fetch raising must never take down the other two, and each
+    # sub-fetch raising (including a timeout, now that each task above is
+    # individually bounded) must never take down the other two, and each
     # fallback sentinel matches that sub-fetch's OWN real return type
     # (macro_raw/fund_raw/tech_raw are all Dict[str, Any]-shaped per
     # DataEngine's own type hints -- NOT pd.DataFrame(), which would satisfy
@@ -265,19 +280,26 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     # .items()/`in`/json.dumps() for any other consumer).
     results = await asyncio.gather(macro_task, fund_task, tech_task, return_exceptions=True)
 
+    def _describe(exc: Exception) -> str:
+        # A bare TimeoutError() stringifies to "" -- useless for triage --
+        # so name the actual timeout value instead of the generic message.
+        if isinstance(exc, TimeoutError):
+            return f"timed out after {_timeout}s (settings.DATA_FETCH_TASK_TIMEOUT_SECONDS)"
+        return str(exc)
+
     macro_raw = results[0]
     if isinstance(macro_raw, Exception):
-        telemetry.warning(f"Macro data fetch failed (dead-letter): {macro_raw}")
+        telemetry.warning(f"Macro data fetch failed (dead-letter): {_describe(macro_raw)}")
         macro_raw = {}
 
     fund_raw = results[1]
     if isinstance(fund_raw, Exception):
-        telemetry.warning(f"Fundamentals data fetch failed (dead-letter): {fund_raw}")
+        telemetry.warning(f"Fundamentals data fetch failed (dead-letter): {_describe(fund_raw)}")
         fund_raw = {}
 
     tech_raw = results[2]
     if isinstance(tech_raw, Exception):
-        telemetry.warning(f"Technical pricing data fetch failed (dead-letter): {tech_raw}")
+        telemetry.warning(f"Technical pricing data fetch failed (dead-letter): {_describe(tech_raw)}")
         tech_raw = {}
 
     telemetry.info("Data fetching completed successfully (with dead-letter isolation).")
