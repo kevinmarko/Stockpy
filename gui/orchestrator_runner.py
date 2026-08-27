@@ -950,7 +950,25 @@ def launch_train_meta_labelers(signal: Optional[str] = None) -> RunHandle:
     )
     log_file.flush()
 
+    # `cmd` is built entirely from validated components: `sys.executable` and
+    # fixed literal flags, plus `signal` itself -- which, above, must exactly
+    # match one entry of the hardcoded `META_LABELED_SIGNAL_IDS` tuple
+    # ("timeseries_momentum" / "cross_sectional_momentum") or the function
+    # raises `ValueError` before `cmd` is ever built, let alone passed to
+    # `Popen`. There is no code path from an arbitrary caller-supplied string
+    # (e.g. `POST /jobs` with `job_type="train_meta"`,
+    # `params={"signal": ...}` -- see api/_jobs.py's `launch_train_meta_labelers(
+    # signal=params.get("signal"))` call) to an unvalidated argv entry.
+    # `subprocess.Popen` is also called with a list and no `shell=True`, so
+    # there is no shell to interpret metacharacters even if one slipped
+    # through. See tests/test_security_audit_fixes.py::
+    # TestLaunchTrainMetaLabelersInputValidation for the adversarial-input
+    # regression coverage. CodeQL's py/command-line-injection query does not
+    # model this exact-match allowlist check as a sanitizer, so it still
+    # flags this call (alert #91) despite the input being fully controlled --
+    # reviewed false positive, same class as alert #11 above.
     popen = subprocess.Popen(
+        # codeql[py/command-line-injection]
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
