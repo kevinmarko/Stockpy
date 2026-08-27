@@ -456,6 +456,31 @@ class TestStrategyOptionsEndpoints:
         assert body["settled_count"] == 1
         assert body["settled"][0]["cash_settlement"] == 500.0
 
+    @patch("data.paper_account_store.PaperAccountStore.settle_expired_options")
+    @patch("data.market_data.get_provider")
+    def test_paper_broker_settle_expired_endpoint_degrades_when_provider_construction_fails(
+        self, mock_get_provider, mock_settle
+    ):
+        """Regression: post_paper_broker_settle_expired's `except Exception: engine =
+        None` branch (added logging in the 2026-08 mcp-widget-contracts fix) must still
+        let the endpoint succeed rather than crashing -- PaperAccountStore.settle_expired_options
+        tolerates market_provider=None by skipping mark-to-market pricing for expired
+        contracts honestly (CONSTRAINT #4/#6), it does not raise."""
+        mock_get_provider.side_effect = RuntimeError("boom: provider construction failed")
+        mock_settle.return_value = []
+
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/paper-broker/settle-expired",
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["settled_count"] == 0
+        # The failed engine construction must degrade to market_provider=None
+        # rather than propagating the exception or silently fabricating a provider.
+        mock_settle.assert_called_once_with(market_provider=None)
+
 
 class TestManageExitsEndpoint:
     @patch("pilots.paper_broker.manage_position_exits")

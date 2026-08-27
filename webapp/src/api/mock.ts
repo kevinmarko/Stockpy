@@ -7,7 +7,7 @@
  *  - `value-quality` has curve:null ("no backtest series yet"), never a fake line.
  */
 
-import { ApiError, ForecastBackfillConflictError } from "./types";
+import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -11822,11 +11822,44 @@ export const mockApi = {
       }
     }
 
-    const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
     const commandName =
       job_type === "command" && typeof params?.command === "string"
         ? params.command
         : null;
+    const singleFlightKey =
+      job_type === "train_lgbm" || job_type === "train_meta" ? "train" : null;
+
+    for (const [id, rec] of Object.entries(_mockJobs)) {
+      const elapsedMs = Date.now() - rec.startedAt;
+      const isRunning = !rec.cancelled && elapsedMs < 30000;
+      if (!isRunning) continue;
+
+      if (job_type === "command") {
+        if (rec.jobType === "command" && rec.commandName === commandName) {
+          throw new JobConflictError(
+            `Command '${commandName}' is already running (ID: ${id})`,
+            id,
+            rec.jobType,
+            rec.commandName
+          );
+        }
+      } else {
+        const recKey =
+          rec.jobType === "train_lgbm" || rec.jobType === "train_meta"
+            ? "train"
+            : null;
+        if ((recKey || rec.jobType) === (singleFlightKey || job_type)) {
+          throw new JobConflictError(
+            `Job of type '${job_type}' conflicts with already-running job '${rec.jobType}' (ID: ${id})`,
+            id,
+            rec.jobType,
+            rec.commandName
+          );
+        }
+      }
+    }
+
+    const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
     const createdAt = new Date().toISOString();
     _mockJobs[job_id] = {
       jobType: job_type,
@@ -11848,6 +11881,41 @@ export const mockApi = {
     );
   },
 
+  async listJobs(activeOnly?: boolean, limit?: number): Promise<JobsListResponse> {
+    const jobs = Object.entries(_mockJobs).map(([job_id, job]) => {
+      const cancellable = job.jobType !== "orchestrator";
+      const status = job.cancelled
+        ? "cancelled"
+        : Date.now() - job.startedAt < 30000
+          ? "running"
+          : "success";
+      return {
+        job_id,
+        job_type: job.jobType as any,
+        status,
+        exit_code: status === "running" ? null : status === "cancelled" ? -15 : 0,
+        is_running: status === "running",
+        cancellable,
+        command_name: job.commandName,
+        created_at: job.createdAt,
+      } as JobRecord;
+    });
+
+    let filtered = jobs;
+    if (activeOnly) {
+      filtered = filtered.filter((j) => j.is_running);
+    }
+    
+    // sort newest first
+    filtered.sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime());
+    
+    if (limit) {
+      filtered = filtered.slice(0, limit);
+    }
+
+    return delay({ jobs: filtered }, 200);
+  },
+
   async getJobStatus(job_id: string): Promise<JobRecord> {
     const job = _mockJobs[job_id];
     // A believable "running for a couple seconds, then done" lifecycle, so
@@ -11859,7 +11927,7 @@ export const mockApi = {
       ? "success"
       : job.cancelled
         ? "cancelled"
-        : Date.now() - job.startedAt < 2000
+        : Date.now() - job.startedAt < 30000
           ? "running"
           : "success";
     return delay(

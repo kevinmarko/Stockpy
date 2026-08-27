@@ -5754,3 +5754,21 @@ export interface CircuitBreakerStatusResponse {
 
 
 
+
+export class JobConflictError extends ApiError {
+  existingJobId: string | null;
+  existingJobType: string | null;
+  commandName: string | null;
+  
+  constructor(message: string, existingJobId: string | null, existingJobType: string | null, commandName: string | null) {
+    super(message, 409);
+    this.name = "JobConflictError";
+    this.existingJobId = existingJobId;
+    this.existingJobType = existingJobType;
+    this.commandName = commandName;
+  }
+}
+
+export interface JobsListResponse {
+  jobs: JobRecord[];
+}

@@ -8,7 +8,7 @@
  */
 
 import { mockApi, MOCK_META } from "./mock";
-import { ApiError, ForecastBackfillConflictError } from "./types";
+import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
   AgenticDiscovery,
@@ -1045,11 +1045,58 @@ const liveApi = {
     }),
   exportRlhfSft: () => http<RlhfSftExportResult>("/rlhf/export-sft", { method: "POST" }),
   // ---- Job Execution & Streaming ----
-  createJob: (job_type: string, params?: Record<string, unknown>) =>
-    http<JobRecord>("/jobs", {
-      method: "POST",
-      body: JSON.stringify({ job_type, params }),
-    }),
+  createJob: async (job_type: string, params?: Record<string, unknown>): Promise<JobRecord> => {
+    const path = "/jobs";
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
+
+    const base = baseFor(path);
+    let resp: Response;
+    try {
+      resp = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ job_type, params }),
+      });
+    } catch {
+      throw new ApiError(
+        `Network error reaching the API at ${base}. Is the owning service running?`,
+        0
+      );
+    }
+
+    let body: { detail?: unknown } | null = null;
+    try {
+      body = await resp.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    if (resp.status === 409) {
+      const detail = body?.detail as { detail?: string; job_id?: string; job_type?: string; command_name?: string } | undefined;
+      throw new JobConflictError(
+        detail?.detail ?? `Job of type ${job_type} is already running.`,
+        detail?.job_id ?? null,
+        detail?.job_type ?? null,
+        detail?.command_name ?? null
+      );
+    }
+    if (!resp.ok) {
+      const detailStr = typeof body?.detail === "string" ? body.detail : undefined;
+      throw new ApiError(detailStr ?? `${resp.status} ${resp.statusText}`, resp.status);
+    }
+    return body as unknown as JobRecord;
+  },
+  listJobs: (activeOnly?: boolean, limit?: number) => {
+    const params = new URLSearchParams();
+    if (activeOnly) params.append("active_only", "true");
+    if (limit) params.append("limit", limit.toString());
+    const qs = params.toString();
+    return http<JobsListResponse>(`/jobs${qs ? "?" + qs : ""}`);
+  },
   getJobStatus: (job_id: string) => http<JobRecord>(`/jobs/${job_id}`),
   cancelJob: (job_id: string) =>
     http<{ job_id: string; cancelled: boolean }>(`/jobs/${job_id}/cancel`, {

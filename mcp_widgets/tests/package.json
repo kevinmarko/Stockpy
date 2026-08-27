@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "description": "Real DOM tests for mcp_widgets/templates/_common.js's render functions, using Node's built-in test runner + jsdom. Separate npm project from mcp_widgets/build/ (that one vendors the ext-apps bundle; this one only tests _common.js) so a dependency bump in either never forces a lockfile change in the other.",
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  },
+  "scripts": {
+    "test": "node --test render.test.mjs"
+  }
+}

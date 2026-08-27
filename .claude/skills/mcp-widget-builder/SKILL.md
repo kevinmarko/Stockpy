@@ -11,14 +11,6 @@ description: >-
   contract when the one-time npm build hasn't been run.
 ---
 
-<!--
-  Ported from this repo's Claude Code sibling skill (`.claude/skills/mcp-widget-builder/SKILL.md`)
-  to Antigravity's skill format. Frontmatter and body content are carried over verbatim --
-  Antigravity's own `google-antigravity-sdk` skill and this repo's existing `.agents/skills/supabase`
-  skill both use the same minimal `name` + `description` frontmatter shape Claude's SKILL.md already
-  used here, so no restructuring was required for this port beyond this note.
--->
-
 # Building an MCP widget (Apps SDK)
 
 **Note on staleness**: widget templates are actively being built out in this
