@@ -1935,6 +1935,44 @@ def check_prompt_registry_signing_key_configured() -> CheckResult:
 # matters for reporting clarity: credentials checks first, then runtime state,
 # then business-logic gates.  Order is also what ``run_checks``'s ``skip``
 # matching relies on (strip ``check_`` prefix → name).
+def check_feature_drift() -> CheckResult:
+    """WARNING-ONLY: run PSI drift detection on model features if enabled.
+    """
+    name = "feature_drift"
+    try:
+        from settings import settings
+        if not getattr(settings, "FEATURE_DRIFT_PSI_ENABLED", False):
+            return CheckResult(
+                name, True,
+                "FEATURE_DRIFT_PSI_ENABLED=False (check skipped)",
+                warning=True,
+            )
+
+        from validation.covariate_drift import check_and_alert_feature_drift
+        import pandas as pd
+        import sqlite3
+        
+        try:
+            with sqlite3.connect("quant_platform.db") as conn:
+                df = pd.read_sql("SELECT * FROM signals ORDER BY generated_at DESC LIMIT 500", conn)
+        except Exception:
+            return CheckResult(name, True, "Could not load signals from DB", warning=True)
+            
+        columns_to_check = ["sma_20_close", "macd", "rsi_14", "bb_width"]
+        results = check_and_alert_feature_drift(df, columns_to_check)
+        
+        drifts = [r.feature for r in results if r.drift_detected]
+        if drifts:
+            return CheckResult(
+                name, True,
+                f"PSI drift detected in features: {drifts}",
+                warning=True,
+            )
+            
+        return CheckResult(name, True, "No feature drift detected", warning=False)
+    except Exception as e:
+        return CheckResult(name, True, f"Error running feature drift check: {e}", warning=True)
+
 ALL_CHECKS = [
     check_fred_key_configured,
     check_key_rotation_recent,
@@ -1962,6 +2000,7 @@ ALL_CHECKS = [
     check_validation_reports,
     check_no_unexpected_risk_blocks,
     check_calibration_drift,
+    check_feature_drift,
     check_alert_channels_reachable,
     check_prompt_registry_signing_key_configured,
 ]

@@ -54,6 +54,8 @@ _REGISTRY_HEADER = """\
 # n_train:         number of training samples in the most recent run
 # notes:           any caveats, data limitations, or scope restrictions
 # deployable:      true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+# owner:           team or person responsible for the model
+# materiality_tier: experimental, non_material, or material
 #
 # Provenance fields (optional; captured for reproducibility — never affect `deployable`)
 # ----------------------------------------------------------------------------------------

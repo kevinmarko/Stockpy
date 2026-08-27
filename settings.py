@@ -2156,6 +2156,12 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Feature Drift PSI Detection ---
+    FEATURE_DRIFT_PSI_ENABLED: bool = Field(
+        default=False,
+        description="Enable Population Stability Index check for feature drift.",
+    )
+
     # --- LGBM ranker native MultiIndex CPCV (ml/lgbm_ranker.py) ---
     LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED: bool = Field(
         default=False,
