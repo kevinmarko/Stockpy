@@ -704,6 +704,24 @@ class Settings(BaseSettings):
             "read-only (e.g. ETF_HOLDINGS_ENABLED, SECTOR_HEAT_ENABLED)."
         ),
     )
+    BROWSER_DIAGNOSTICS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables genuine Chromium-based headless captures (browser_diagnostics.py) "
+            "for MCP webapp introspection tools (inspect_webapp_screen, audit_webapp_vitals, "
+            "compare_screen_snapshots). Requires a separate `playwright install chromium` "
+            "step by the operator. When False (the default) or when playwright is missing, "
+            "those tools degrade cleanly to their existing HTTP-only or mocked fallbacks."
+        ),
+    )
+    BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS: float = Field(
+        default=15.0,
+        description=(
+            "Maximum wall-clock time allowed for a headless Chromium capture before it "
+            "is dead-lettered and degraded to the fallback path. Protects the API "
+            "event loop from hanging on a stalled DOM."
+        ),
+    )
     EXCURSION_INTRADAY_ENABLED: bool = Field(
         default=False,
         description=(

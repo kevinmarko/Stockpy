@@ -761,6 +761,7 @@ function renderDevToolsInspector(container, payload) {
 }
 
 function renderLighthouseScorecard(container, payload) {
+  if (!payload) return;
   const wrapper = document.createElement("div");
   wrapper.className = "lighthouse-scorecard";
 
@@ -768,20 +769,27 @@ function renderLighthouseScorecard(container, payload) {
   const scoresGrid = document.createElement("div");
   scoresGrid.className = "score-gauges-grid";
 
-  const scores = payload.scores || { performance: 90, accessibility: 95, bestPractices: 100, seo: 90 };
-  for (const [key, val] of Object.entries(scores)) {
+  const scores = payload.scores || {};
+  const scoreKeys = ["performance", "accessibility", "bestPractices", "seo"];
+  for (const key of scoreKeys) {
+    const val = scores[key];
     const card = document.createElement("div");
     card.className = "score-gauge-card";
 
     const circle = document.createElement("div");
-    const num = Number(val) || 0;
-    const ratingClass = num >= 90 ? "score-good" : num >= 50 ? "score-avg" : "score-poor";
-    circle.className = `gauge-circle ${ratingClass}`;
-    circle.textContent = String(num);
+    if (val == null) {
+      circle.className = "gauge-circle score-unmeasured";
+      circle.textContent = "—";
+    } else {
+      const num = Number(val);
+      const ratingClass = num >= 90 ? "score-good" : num >= 50 ? "score-avg" : "score-poor";
+      circle.className = `gauge-circle ${ratingClass}`;
+      circle.textContent = String(num);
+    }
 
     const label = document.createElement("div");
     label.className = "gauge-label";
-    label.textContent = key.replace(/([A-Z])/g, " $1");
+    label.textContent = key.replace(/([A-Z])/g, " $1").replace(/^./, str => str.toUpperCase());
 
     card.appendChild(circle);
     card.appendChild(label);
@@ -798,8 +806,14 @@ function renderLighthouseScorecard(container, payload) {
   const vitalsGrid = document.createElement("div");
   vitalsGrid.className = "vitals-grid";
 
-  const vitals = payload.vitals || { lcp: "0.8s", cls: "0.01", fcp: "0.6s", ttfb: "95ms" };
-  for (const [vName, vVal] of Object.entries(vitals)) {
+  const vitals = payload.vitals || {};
+  const ratings = payload.vitals_rating || {};
+  const vitalKeys = ["ttfb_ms", "fcp_ms", "lcp_ms", "cls"];
+  
+  for (const vName of vitalKeys) {
+    const vVal = vitals[vName];
+    if (vVal == null) continue;
+    
     const vCard = document.createElement("div");
     vCard.className = "vital-card";
 
@@ -812,8 +826,14 @@ function renderLighthouseScorecard(container, payload) {
     valEl.textContent = String(vVal);
 
     const rateEl = document.createElement("div");
-    rateEl.className = "vital-rating good";
-    rateEl.textContent = "● Good";
+    const r = ratings[vName];
+    if (r) {
+      rateEl.className = "vital-rating " + (r.toLowerCase() === "good" ? "good" : r.toLowerCase() === "poor" ? "poor" : "avg");
+      rateEl.textContent = "● " + r;
+    } else {
+      rateEl.className = "vital-rating";
+      rateEl.textContent = "● Unrated";
+    }
 
     vCard.appendChild(nameEl);
     vCard.appendChild(valEl);
@@ -827,6 +847,7 @@ function renderLighthouseScorecard(container, payload) {
 }
 
 function renderBacktestTearSheet(container, payload) {
+  if (!payload) return;
   const wrapper = document.createElement("div");
   wrapper.className = "backtest-tearsheet";
 
@@ -848,8 +869,8 @@ function renderBacktestTearSheet(container, payload) {
     ["Sharpe", fmtMetric(payload.sharpe)],
     ["DSR", fmtMetric(payload.dsr)],
     ["PBO", fmtMetric(payload.pbo)],
-    ["Max DD", fmtMetric(payload.max_drawdown != null ? (payload.max_drawdown * 100).toFixed(1) + "%" : null)],
-    ["Total Return", fmtMetric(payload.total_return != null ? (payload.total_return * 100).toFixed(1) + "%" : null)],
+    ["Max DD", payload.max_drawdown != null ? (payload.max_drawdown * 100).toFixed(1) + "%" : "—"],
+    ["Total Return", payload.total_return != null ? (payload.total_return * 100).toFixed(1) + "%" : "—"],
   ];
   for (const [label, val] of stats) {
     const cell = document.createElement("div");
@@ -916,6 +937,7 @@ function renderBacktestTearSheet(container, payload) {
 }
 
 function renderMacroRegimeRadar(container, payload) {
+  if (!payload) return;
   const wrapper = document.createElement("div");
   wrapper.className = "macro-radar-panel";
 
@@ -926,8 +948,16 @@ function renderMacroRegimeRadar(container, payload) {
   header.appendChild(title);
 
   const killBadge = document.createElement("span");
-  killBadge.className = "badge " + (payload.kill_switch_active ? "badge-decline" : "badge-growth");
-  killBadge.textContent = payload.kill_switch_active ? "Kill Switch Active" : "Normal Operation";
+  if (payload.kill_switch_active == null) {
+    killBadge.className = "badge badge-caution";
+    killBadge.textContent = "Kill Switch Unknown";
+  } else if (payload.kill_switch_active === true) {
+    killBadge.className = "badge badge-decline";
+    killBadge.textContent = "Kill Switch Active";
+  } else {
+    killBadge.className = "badge badge-growth";
+    killBadge.textContent = "Normal Operation";
+  }
   header.appendChild(killBadge);
   wrapper.appendChild(header);
 
@@ -937,7 +967,7 @@ function renderMacroRegimeRadar(container, payload) {
   const indicators = [
     ["VIX", fmtMetric(payload.vix)],
     ["Sahm Rule", fmtMetric(payload.sahm_rule)],
-    ["HY OAS", payload.high_yield_oas != null ? payload.high_yield_oas.toFixed(2) + "%" : "—"],
+    ["HY OAS", payload.high_yield_oas != null ? Number(payload.high_yield_oas).toFixed(2) + "%" : "—"],
     ["Yield Curve (10Y-2Y)", fmtMetric(payload.yield_curve)],
   ];
   for (const [label, val] of indicators) {
@@ -1004,14 +1034,24 @@ function renderOrderTicket(container, payload) {
 }
 
 function renderVisualDiff(container, payload) {
+  if (!payload) return;
   const wrapper = document.createElement("div");
   wrapper.className = "visual-diff-panel";
 
   const header = document.createElement("div");
   header.className = "inspector-header";
+  let badgeHtml;
+  if (payload.baseline_established) {
+    badgeHtml = `<span class="badge badge-growth">🆕 Baseline Established</span>`;
+  } else if (payload.match) {
+    badgeHtml = `<span class="badge badge-growth">100% Match</span>`;
+  } else {
+    badgeHtml = `<span class="badge badge-caution">Visual Diff Detected</span>`;
+  }
+  
   header.innerHTML = `
     <span class="inspector-route">${payload.route || "/"}</span>
-    <span class="badge ${payload.match ? "badge-growth" : "badge-caution"}">${payload.match ? "100% Match" : "Visual Diff Detected"}</span>
+    ${badgeHtml}
   `;
   wrapper.appendChild(header);
 
@@ -1086,6 +1126,7 @@ function renderNetworkTrace(container, payload) {
 }
 
 function renderPitMatrix(container, payload) {
+  if (!payload) return;
   const wrapper = document.createElement("div");
   wrapper.className = "pit-matrix-panel";
 
@@ -1109,9 +1150,9 @@ function renderPitMatrix(container, payload) {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><strong>${r.symbol || r.Symbol || "—"}</strong></td>
-        <td>${r.rows || r.Rows || r.count || "—"}</td>
-        <td>${r.earliest || r.Earliest_Date || "—"}</td>
-        <td>${r.latest || r.Latest_Date || "—"}</td>
+        <td>${r.pit_rows ?? r.rows ?? r.Rows ?? r.count ?? "—"}</td>
+        <td>${r.earliest_report_date ?? r.earliest ?? r.Earliest_Date ?? "—"}</td>
+        <td>${r.latest_report_date ?? r.latest ?? r.Latest_Date ?? "—"}</td>
         <td class="pit-safe-cell">✅ 45d Lag Respected</td>
       `;
       tbody.appendChild(tr);
@@ -1125,12 +1166,14 @@ function renderPitMatrix(container, payload) {
 }
 
 function renderModelDiagnostics(container, payload) {
+    if (!payload) return;
     const wrapper = document.createElement("div");
     wrapper.className = "model-diagnostics-panel";
     
     const header = document.createElement("div");
     header.className = "detail-header";
-    header.innerHTML = `<strong>Forecast Model Skill Decay & Drift Report</strong><span class="badge ${payload.drift_detected ? "badge-decline" : "badge-growth"}">${payload.drift_detected ? "Drift Warning" : "Healthy Calibration"}</span>`;
+    const horizon = payload.horizon_days ? `${payload.horizon_days}d` : "30d";
+    header.innerHTML = `<strong>Forecast Model Skill Decay & Drift Report</strong><span class="badge badge-caution">Horizon: ${horizon}</span>`;
     wrapper.appendChild(header);
     
     const rows = payload.rows || [];
@@ -1143,21 +1186,25 @@ function renderModelDiagnostics(container, payload) {
     } else {
         const table = document.createElement("table");
         table.className = "table";
-        table.innerHTML = `<thead><tr><th>Symbol</th><th>Horizon</th><th>Skill Decay (%)</th><th>RMSE Inv</th><th>Status</th></tr></thead>`;
+        table.innerHTML = `<thead><tr><th>Symbol</th><th>Pending</th><th>Completed</th><th>Skill Weights</th></tr></thead>`;
         
         const tbody = document.createElement("tbody");
         
         for (const r of rows) {
             const tr = document.createElement("tr");
-            const decay = r.decay_pct ?? r.decay;
-            const isWarn = typeof decay === "number" && decay > 15;
+            
+            let weightsStr = "—";
+            if (r.skill_weights) {
+                weightsStr = Object.entries(r.skill_weights)
+                    .map(([model, weight]) => `${model}: ${fmtMetric(weight)}`)
+                    .join(", ");
+            }
             
             tr.innerHTML = `
                 <td><strong>${r.symbol || "—"}</strong></td>
-                <td>${r.horizon_days ? r.horizon_days + "d" : "30d"}</td>
-                <td style="color:${isWarn ? "var(--decline)" : "var(--text-primary)"};">${typeof decay === "number" ? decay.toFixed(1) + "%" : "—"}</td>
-                <td>${fmtMetric(r.inverse_rmse ?? r.skill_score)}</td>
-                <td><span class="badge ${isWarn ? "badge-caution" : "badge-growth"}">${isWarn ? "Drifting" : "Calibrated"}</span></td>
+                <td>${r.pending ?? "—"}</td>
+                <td>${r.completed ?? "—"}</td>
+                <td>${weightsStr}</td>
             `;
             
             tbody.appendChild(tr);
@@ -1172,19 +1219,31 @@ function renderModelDiagnostics(container, payload) {
 }
 
 function renderStrategyTuner(container, payload, app) {
+  if (!payload) return;
   const wrapper = document.createElement("div");
   wrapper.className = "strategy-tuner-panel";
 
   const header = document.createElement("div");
   header.className = "detail-header";
-  header.innerHTML = `<strong>Strategy Parameter Sensitivity: ${payload.strategy_name || "Strategy"}</strong><span class="badge badge-growth">Live Sensitivity</span>`;
+  const liveCapable = !!(app && typeof app.callServerTool === "function");
+  header.innerHTML = `<strong>Strategy Parameter Sensitivity: ${payload.strategy_name || "Strategy"}</strong><span class="badge badge-growth">${liveCapable ? "Live Sensitivity" : "Sensitivity Snapshot"}</span>`;
   wrapper.appendChild(header);
 
+  // Current parameter state -- seeded from the initial tool result, updated
+  // as the operator drags each slider.
+  const state = {
+    strategy_name: payload.strategy_name || "rsi2_mean_reversion",
+    rsi_lower: payload.rsi_lower || 25,
+    rsi_upper: payload.rsi_upper || 75,
+    sma_window: payload.sma_window || 50,
+    stop_loss: payload.stop_loss || 5,
+  };
+
   const sliders = [
-    { id: "rsi_lower", label: "RSI Oversold Level", min: 10, max: 40, val: payload.rsi_lower || 25 },
-    { id: "rsi_upper", label: "RSI Overbought Level", min: 60, max: 90, val: payload.rsi_upper || 75 },
-    { id: "sma_window", label: "Trend SMA Window", min: 20, max: 200, val: payload.sma_window || 50 },
-    { id: "stop_loss", label: "Stop Loss (%)", min: 1, max: 15, val: payload.stop_loss || 5 },
+    { id: "rsi_lower", label: "RSI Oversold Level", min: 10, max: 40, val: state.rsi_lower },
+    { id: "rsi_upper", label: "RSI Overbought Level", min: 60, max: 90, val: state.rsi_upper },
+    { id: "sma_window", label: "Trend SMA Window", min: 20, max: 200, val: state.sma_window },
+    { id: "stop_loss", label: "Stop Loss (%)", min: 1, max: 15, val: state.stop_loss },
   ];
 
   for (const s of sliders) {
@@ -1207,6 +1266,8 @@ function renderStrategyTuner(container, payload, app) {
 
     input.oninput = () => {
       valDisplay.textContent = input.value;
+      state[s.id] = Number(input.value);
+      if (liveCapable) scheduleRecompute();
     };
 
     row.appendChild(label);
@@ -1218,12 +1279,68 @@ function renderStrategyTuner(container, payload, app) {
   const statRow = document.createElement("div");
   statRow.className = "stat-row";
   statRow.style.marginTop = "8px";
-  statRow.innerHTML = `
-    <div><div class="stat-label">Estimated Sharpe</div><div class="stat-value" style="color:var(--growth);">1.42</div></div>
-    <div><div class="stat-label">Estimated MaxDD</div><div class="stat-value">12.4%</div></div>
-    <div><div class="stat-label">Win Rate</div><div class="stat-value">64.5%</div></div>
-  `;
   wrapper.appendChild(statRow);
+
+  const statusLine = document.createElement("div");
+  statusLine.className = "tuner-status-line";
+  statusLine.style.cssText = "margin-top:6px; font-size:11px; color:var(--text-muted);";
+  wrapper.appendChild(statusLine);
+
+  function renderStats(p, opts) {
+    opts = opts || {};
+    const sharpeVal = typeof p.simulated_sharpe === "number" ? p.simulated_sharpe.toFixed(2) : "—";
+    const maxDdVal = typeof p.simulated_max_dd_pct === "number" ? p.simulated_max_dd_pct.toFixed(1) + "%" : "—";
+    const winRateVal = typeof p.simulated_win_rate_pct === "number" ? p.simulated_win_rate_pct.toFixed(1) + "%" : "—";
+    statRow.style.opacity = opts.pending ? "0.5" : "1";
+    statRow.innerHTML = `
+      <div><div class="stat-label">Estimated Sharpe</div><div class="stat-value" style="color:var(--growth);">${sharpeVal}</div></div>
+      <div><div class="stat-label">Estimated MaxDD</div><div class="stat-value">${maxDdVal}</div></div>
+      <div><div class="stat-label">Win Rate</div><div class="stat-value">${winRateVal}</div></div>
+    `;
+  }
+  let lastGoodPayload = payload;
+  renderStats(lastGoodPayload);
+
+  if (!liveCapable) {
+    statusLine.textContent = "Host does not support live tool re-invocation from this widget -- sliders show values only.";
+    container.appendChild(wrapper);
+    return wrapper;
+  }
+
+  // Debounced live recompute: re-invokes tune_strategy_parameters with the
+  // current slider state via the ext-apps SDK's callServerTool
+  let debounceTimer = null;
+  let requestSeq = 0;
+  function scheduleRecompute() {
+    statusLine.textContent = "Recalculating…";
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(runRecompute, 350);
+  }
+
+  async function runRecompute() {
+    const mySeq = ++requestSeq;
+    renderStats(lastGoodPayload, { pending: true });
+    try {
+      const result = await app.callServerTool({
+        name: "tune_strategy_parameters",
+        arguments: { ...state },
+      });
+      if (mySeq !== requestSeq) return; // a newer slider drag superseded this call
+      const fresh = extractJsonPayload(result?.content?.[0]?.text);
+      if (fresh) {
+        lastGoodPayload = fresh;
+        renderStats(lastGoodPayload);
+        statusLine.textContent = "";
+      } else {
+        renderStats(lastGoodPayload);
+        statusLine.textContent = "No response from tune_strategy_parameters.";
+      }
+    } catch (err) {
+      if (mySeq !== requestSeq) return;
+      renderStats(lastGoodPayload);
+      statusLine.textContent = "Error: " + err.message;
+    }
+  }
 
   container.appendChild(wrapper);
   return wrapper;

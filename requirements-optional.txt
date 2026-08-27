@@ -105,3 +105,22 @@ pytrends>=4.9.2
 # never a fabricated value (CONSTRAINT #4) -- exactly like the CNN-LSTM/
 # FinBERT/RAG paths above without their own optional dependency.
 sentence-transformers>=2.2
+
+# playwright powers browser_diagnostics.py's real headless-Chromium captures
+# (console/page errors, Core Web Vitals, DOM node count, screenshots) for the
+# DevTools widget tools in investyo_mcp_server.py (inspect_webapp_screen,
+# audit_webapp_vitals, compare_screen_snapshots). After installing this package
+# you must ALSO download its Chromium binary:
+#   ./.venv/bin/playwright install chromium
+# (a separate ~180MB download this pip install alone does not perform). Kept
+# out of requirements.txt for the same reason as every other entry in this
+# file: it is a heavy (~40MB package + ~180MB browser), opt-in, local-only
+# capability, and CI should stay lean. Without it (or with the browser not
+# installed), browser_diagnostics.py's lazy `import playwright` degrades to a
+# graceful `{"available": False, "reason": ...}` -- never raises, never a
+# fabricated screenshot/vitals value (CONSTRAINT #4/#6) -- exactly like the
+# CNN-LSTM/FinBERT/RAG/pytrends paths above without their own optional
+# dependency, and the three MCP tools above fall back to their existing
+# HTTP-reachability-only behavior. Also gated by settings.BROWSER_DIAGNOSTICS_ENABLED
+# (default False) -- installing the package alone does not turn this on.
+playwright>=1.40
