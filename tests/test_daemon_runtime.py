@@ -15,6 +15,7 @@ import pathlib
 import signal
 import threading
 import time
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
@@ -27,6 +28,9 @@ from desktop.daemon_runtime import (
     TriggerOutcome,
 )
 from desktop.run_history_store import RunHistoryStore
+from observability.alerts import reset_dedup_state
+from reporting.progress import ProgressState
+from settings import settings
 from tests._db_isolation import redirect_class_to_memory_db
 
 
@@ -1643,3 +1647,117 @@ class TestMaybeUpdateCircuitBreaker:
             (99_500.0 - 100_000.0) / (90.0 / 60.0), rel=0.02
         )
         assert update_calls[0]["account_equity"] == pytest.approx(99_500.0)
+
+
+def _fake_progress(*, state: str, age_seconds: float, run_id: str = "run-1", stage: str = "data") -> ProgressState:
+    """Build a ProgressState whose age_seconds() reports the given value,
+    regardless of wall-clock skew -- computed from `datetime.now()` at
+    construction time so a slow test machine can't flake this."""
+    updated_at = datetime.now(timezone.utc)
+    # ProgressState.age_seconds() is `now() - updated_at`; back-date updated_at
+    # by the requested amount so age_seconds() reports it immediately after.
+    from datetime import timedelta
+    updated_at = updated_at - timedelta(seconds=age_seconds)
+    return ProgressState(
+        run_id=run_id, state=state, stage=stage, stage_index=0, stage_total=6,
+        symbols_done=0, symbols_total=30, percent=0.0, message="",
+        started_at=updated_at, updated_at=updated_at,
+    )
+
+
+class TestMaybeAlertOnPipelineStall:
+    """2026-08 fix: desktop/daemon_runtime.py::OrchestratorDaemon.maybe_alert_on_pipeline_stall
+    -- read-only stall watchdog added after a real incident where a pipeline
+    cycle wedged for 2.5 days with nothing surfacing that fact. See
+    docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_alert_dedup(self):
+        # Alert dedup state is process-global -- one test's dedup_key usage
+        # must never suppress another's (see observability/alerts.py's own
+        # reset_dedup_state() docstring).
+        reset_dedup_state()
+        yield
+        reset_dedup_state()
+
+    def test_disabled_flag_never_alerts_regardless_of_staleness(self, monkeypatch):
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_ENABLED", False)
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_SECONDS", 60)
+        monkeypatch.setattr(
+            daemon_runtime, "read_progress",
+            lambda: _fake_progress(state="running", age_seconds=9999),
+        )
+        with mock.patch("observability.alerts.send_alert") as fake_send:
+            d = OrchestratorDaemon()
+            d.maybe_alert_on_pipeline_stall()
+        fake_send.assert_not_called()
+
+    def test_no_progress_file_never_alerts(self, monkeypatch):
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_ENABLED", True)
+        monkeypatch.setattr(daemon_runtime, "read_progress", lambda: None)
+        with mock.patch("observability.alerts.send_alert") as fake_send:
+            d = OrchestratorDaemon()
+            d.maybe_alert_on_pipeline_stall()
+        fake_send.assert_not_called()
+
+    def test_fresh_running_state_never_alerts(self, monkeypatch):
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_ENABLED", True)
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_SECONDS", 1800)
+        monkeypatch.setattr(
+            daemon_runtime, "read_progress",
+            lambda: _fake_progress(state="running", age_seconds=5.0),
+        )
+        with mock.patch("observability.alerts.send_alert") as fake_send:
+            d = OrchestratorDaemon()
+            d.maybe_alert_on_pipeline_stall()
+        fake_send.assert_not_called()
+
+    def test_completed_state_never_alerts_regardless_of_staleness(self, monkeypatch):
+        # A long-completed run's last progress.json is naturally "stale" by
+        # this metric -- state != "running" is what makes that fine.
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_ENABLED", True)
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_SECONDS", 60)
+        monkeypatch.setattr(
+            daemon_runtime, "read_progress",
+            lambda: _fake_progress(state="succeeded", age_seconds=99999),
+        )
+        with mock.patch("observability.alerts.send_alert") as fake_send:
+            d = OrchestratorDaemon()
+            d.maybe_alert_on_pipeline_stall()
+        fake_send.assert_not_called()
+
+    def test_stale_running_state_past_threshold_alerts_once(self, monkeypatch):
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_ENABLED", True)
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_SECONDS", 60)
+        monkeypatch.setattr(
+            daemon_runtime, "read_progress",
+            lambda: _fake_progress(state="running", age_seconds=120.0, stage="data"),
+        )
+        with mock.patch("observability.alerts.send_alert") as fake_send:
+            d = OrchestratorDaemon()
+            d.maybe_alert_on_pipeline_stall()
+        fake_send.assert_called_once()
+        _args, kwargs = fake_send.call_args
+        assert kwargs.get("dedup_key") == "pipeline_stall"
+        assert fake_send.call_args[0][0] == "WARNING"
+        assert "data" in fake_send.call_args[0][1]
+
+    def test_repeated_calls_within_dedup_window_alert_only_once(self, monkeypatch):
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_ENABLED", True)
+        monkeypatch.setattr(settings, "PIPELINE_STALL_ALERT_SECONDS", 60)
+        monkeypatch.setattr(settings, "ALERT_DEDUP_WINDOW_SECONDS", 900)
+        monkeypatch.setattr(
+            daemon_runtime, "read_progress",
+            lambda: _fake_progress(state="running", age_seconds=120.0),
+        )
+        d = OrchestratorDaemon()
+        # send_alert's own dedup mechanism (dedup_key="pipeline_stall") is
+        # exercised for real here -- only the per-channel dispatch is mocked
+        # -- so this proves the two layers actually compose, not just that
+        # each was correct in isolation.
+        with mock.patch("observability.alerts._active_channels", return_value=["console"]), \
+             mock.patch("observability.alerts._send_console") as fake_console:
+            d.maybe_alert_on_pipeline_stall()
+            d.maybe_alert_on_pipeline_stall()
+        assert fake_console.call_count == 1
