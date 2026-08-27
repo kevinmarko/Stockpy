@@ -27,4 +27,13 @@
 - [x] Copy plan/task/walkthrough artifacts into `.claude/` with a
       branch-scoped, unique filename prefix (`uncontrolled_command_line_alert91_*`).
 - [x] Push branch, open PR (https://github.com/kevinmarko/Stockpy/pull/920).
+- [x] CI: `test (offline suite)` failed
+      (`tests/test_settings_liveness.py::TestCommittedArtifactIsFresh::
+      test_committed_json_matches_a_fresh_run`) -- the alert-#91 comment
+      block shifted `gui/orchestrator_runner.py` line numbers, staling one
+      recorded site in the committed `docs/settings_liveness.json`.
+      Regenerated via `python3 scripts/settings_liveness.py --write` and
+      pushed. (Branch had also been fast-forwarded with a `main` merge
+      commit in between by the repo owner's git client; second regen run
+      on top of that merged state, same single-line fix.)
 - [ ] After merge: sync local `main` checkout per CLAUDE.md's post-merge step.
