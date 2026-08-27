@@ -50,5 +50,6 @@
       settings-census artifacts the 4 new settings fields made stale
       (`scripts/settings_liveness.py --write`,
       `scripts/measure_settings_census.py --write`). `ruff check . --select=F821,F822,F823,E9` clean.
-- [ ] Open PR against `main` from `claude/data-pipeline-refresh-e7ccf7` with
-      these `.claude/data_pipeline_stall_fix_*` artifacts committed.
+- [x] Opened PR against `main` from `claude/data-pipeline-refresh-e7ccf7` with
+      these `.claude/data_pipeline_stall_fix_*` artifacts committed —
+      [PR #916](https://github.com/kevinmarko/Stockpy/pull/916).
