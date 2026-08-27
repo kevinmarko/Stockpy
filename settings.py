@@ -180,6 +180,23 @@ class Settings(BaseSettings):
     FRED_API_KEY: str = Field(
         default="", description="FRED API key. Required for live macroeconomic data."
     )
+    FRED_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=10.0,
+        description=(
+            "Per-request socket timeout (seconds), scoped narrowly via "
+            "socket.setdefaulttimeout() around DataEngine's fredapi calls "
+            "(fetch_macro_raw_detailed/fetch_macro_history) -- "
+            "fredapi.Fred.get_series() calls a bare urlopen() with no timeout "
+            "parameter and no session-injection hook (confirmed against the "
+            "installed library source), so a stalled FRED connection used to "
+            "block forever with no way to recover (see "
+            "docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md). "
+            "Mirrors FMP_TIMEOUT_SECONDS' per-request scope, NOT "
+            "FMP_MAX_SECONDS_PER_CYCLE's whole-cycle budget -- "
+            "fetch_macro_history() issues 8 series calls, so its worst case is "
+            "8x this value."
+        ),
+    )
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
@@ -2365,6 +2382,30 @@ class Settings(BaseSettings):
             "by symbol regardless of value."
         ),
     )
+    # Per-sub-fetch bound for main_orchestrator.py::fetch_all_data_async()'s three
+    # concurrent asyncio.to_thread() tasks (macro/fundamentals/technical). Added
+    # 2026-08 after a real incident: none of the three had ANY timeout, and a
+    # stalled FRED connection (via DataEngine.fetch_macro_raw()) blocked the
+    # entire "data" pipeline stage -- and therefore the whole cycle -- forever,
+    # with nothing else re-triggering a fresh cycle. See
+    # docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md. A timeout
+    # here is caught by the SAME existing per-task dead-letter isinstance(x,
+    # Exception) handling already used for a raised exception (TimeoutError is
+    # an Exception subclass) -- no new fallback logic needed.
+    DATA_FETCH_TASK_TIMEOUT_SECONDS: float = Field(
+        default=180.0,
+        description=(
+            "Per-sub-fetch timeout (seconds) for each of the three concurrent "
+            "tasks in fetch_all_data_async() (macro/fundamentals/technical). "
+            "On expiry that ONE sub-fetch degrades to its existing empty-dict "
+            "dead-letter sentinel (matching a raised exception's handling "
+            "exactly) rather than blocking the cycle forever. Grounded in "
+            "FMP_MAX_SECONDS_PER_CYCLE (120.0, the fundamentals/technical "
+            "path's own internal FMP wall-clock budget) plus headroom for the "
+            "yfinance fallback path, while staying well below any hang that "
+            "should be treated as abnormal."
+        ),
+    )
     # Worker threads for the SEC EDGAR backfill's per-ticker companyfacts fetch
     # (scripts/backfill_edgar_fundamentals.py). Defaults to 4, LOWER than the
     # DATA_FETCH sibling above, because this is a MEMORY knob, NOT a rate-limit
@@ -2396,6 +2437,45 @@ class Settings(BaseSettings):
             "Seconds between automatic orchestrator daemon cycles. 0 = "
             "on-demand only (no internal timer). Overridable via the "
             "daemon entrypoint's --interval flag."
+        ),
+    )
+    # Read-only stall watchdog, added 2026-08 after a real incident: a pipeline
+    # cycle wedged in the "data" stage (unbounded FRED call, see
+    # DATA_FETCH_TASK_TIMEOUT_SECONDS / FRED_REQUEST_TIMEOUT_SECONDS above and
+    # docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md) for 2.5
+    # days with nothing surfacing that fact -- the daemon's Control/Pilots APIs
+    # stayed responsive throughout (they run on a separate thread from the
+    # cycle), so nothing looked obviously broken until an operator happened to
+    # ask. Deliberately alert-only, never auto-restart/auto-cancel: forcibly
+    # killing a mid-flight cycle risks corrupting partial state, and this same
+    # process hosts the APIs the webapp depends on -- trading a silent hang for
+    # a guaranteed outage on every future stall would be a regression, not a
+    # fix. Defaults to True (a deliberate deviation from this repo's usual
+    # "new instrumentation defaults off" convention): this is pure read-only
+    # alerting with zero external blast radius when no webhook/email channel is
+    # configured (observability.alerts._active_channels() always includes
+    # "console"), it targets a proven, costly incident, and it never mutates
+    # anything.
+    PIPELINE_STALL_ALERT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Enable OrchestratorDaemon.maybe_alert_on_pipeline_stall(), which "
+            "fires a WARNING (via observability.alerts.send_alert, "
+            "dedup_key='pipeline_stall') whenever output/progress.json reports "
+            "state='running' with no update for longer than "
+            "PIPELINE_STALL_ALERT_SECONDS. Read-only -- never restarts the "
+            "daemon or cancels the wedged cycle."
+        ),
+    )
+    PIPELINE_STALL_ALERT_SECONDS: int = Field(
+        default=1800,
+        description=(
+            "Threshold (seconds) of no progress.json update while "
+            "state='running' before the stall alert fires. Set well above "
+            "DATA_FETCH_TASK_TIMEOUT_SECONDS's worst case and any legitimate "
+            "single pipeline-stage duration -- 1800s (30 min) is two orders of "
+            "magnitude below the multi-hour/multi-day hang this was added to "
+            "catch."
         ),
     )
     # Cutover flag for the persistent orchestrator daemon (desktop/
