@@ -10,6 +10,8 @@ It provides both the live DataEngine and the deterministic MockDataEngine.
 
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+import socket
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -23,6 +25,34 @@ from settings import settings
 # Configure module-level logger
 logger = logging.getLogger("Data_Engine")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+@contextmanager
+def _bounded_fred_timeout(seconds: float):
+    """Bounds every socket opened inside the ``with`` block to ``seconds``.
+
+    2026-08 fix: ``fredapi.Fred.get_series()`` calls a bare ``urlopen(url)``
+    with no timeout parameter and no session-injection hook anywhere in the
+    class (confirmed against the installed library source) -- a stalled FRED
+    connection used to block forever, wedging the entire pipeline cycle (see
+    docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md).
+    ``socket.setdefaulttimeout()`` scoped as narrowly as possible around the
+    call is the only lever available short of vendoring fredapi.
+
+    Process-global, not thread-local: the previous default is always restored
+    in ``finally``, even on exception, so this can only ever ADD a bound to a
+    call that had none -- every other network call in this codebase that
+    matters already sets its own explicit ``timeout=`` (FMP, GDELT) rather
+    than depending on the socket default, so the narrow window where another
+    thread opens an unrelated socket during this block (and would inherit
+    this same bound) has no observed downside.
+    """
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(seconds)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(previous)
 
 
 # =============================================================================
@@ -156,22 +186,25 @@ class DataEngine(IDataProvider):
             logger.warning("FRED API not initialized. Returning baseline defaults.")
         else:
             try:
-                # Yield Curve, OAS Corporate Spread, Unemployment, VIX
-                t10y2y = self.fred.get_series('T10Y2Y', limit=1).iloc[-1]
-                oas = self.fred.get_series('BAMLH0A0HYM2', limit=1).iloc[-1]
-                unrate = self.fred.get_series('UNRATE', limit=1).iloc[-1]
-                try:
-                    vix = self.fred.get_series('VIXCLS', limit=5).dropna().iloc[-1]
-                except Exception:
-                    # A narrower, silent VIX-only sub-fallback INSIDE an
-                    # otherwise-successful FRED read: T10Y2Y/OAS/UNRATE are
-                    # real, but VIX -- the single most load-bearing field for
-                    # MacroEconomicDTO.killSwitch (vix > 30.0 fires it
-                    # directly, no HMM agreement needed) -- is fabricated.
-                    # Tracked below via vix_fabricated so this doesn't read
-                    # as a fully-healthy fetch.
-                    vix = 15.0
-                    vix_fabricated = True
+                # Yield Curve, OAS Corporate Spread, Unemployment, VIX.
+                # Bounded (2026-08): fredapi has no per-call timeout of its
+                # own -- see _bounded_fred_timeout's docstring.
+                with _bounded_fred_timeout(settings.FRED_REQUEST_TIMEOUT_SECONDS):
+                    t10y2y = self.fred.get_series('T10Y2Y', limit=1).iloc[-1]
+                    oas = self.fred.get_series('BAMLH0A0HYM2', limit=1).iloc[-1]
+                    unrate = self.fred.get_series('UNRATE', limit=1).iloc[-1]
+                    try:
+                        vix = self.fred.get_series('VIXCLS', limit=5).dropna().iloc[-1]
+                    except Exception:
+                        # A narrower, silent VIX-only sub-fallback INSIDE an
+                        # otherwise-successful FRED read: T10Y2Y/OAS/UNRATE are
+                        # real, but VIX -- the single most load-bearing field for
+                        # MacroEconomicDTO.killSwitch (vix > 30.0 fires it
+                        # directly, no HMM agreement needed) -- is fabricated.
+                        # Tracked below via vix_fabricated so this doesn't read
+                        # as a fully-healthy fetch.
+                        vix = 15.0
+                        vix_fabricated = True
                 fred_result = {
                     'T10Y2Y': float(t10y2y),
                     'BAMLH0A0HYM2': float(oas),
@@ -292,14 +325,19 @@ class DataEngine(IDataProvider):
             return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
         try:
-            vix_series = self.fred.get_series('VIXCLS').rename('VIXCLS')
-            yield_curve_series = self.fred.get_series('T10Y2Y').rename('T10Y2Y')
-            credit_spread_series = self.fred.get_series('BAMLH0A0HYM2').rename('BAMLH0A0HYM2')
-            baa_spread_series = self.fred.get_series('BAA10Y').rename('BAA10Y')
-            unrate_series = self.fred.get_series('UNRATE').rename('UNRATE')
-            t10yie_series = self.fred.get_series('T10YIE').rename('T10YIE')
-            bamlc0a0cm_series = self.fred.get_series('BAMLC0A0CM').rename('BAMLC0A0CM')
-            fedfunds_series = self.fred.get_series('FEDFUNDS').rename('FEDFUNDS')
+            # Bounded (2026-08), per-call: fredapi has no timeout of its own --
+            # see _bounded_fred_timeout's docstring. 8 series calls here, so
+            # worst case is 8x settings.FRED_REQUEST_TIMEOUT_SECONDS, not a
+            # whole-function budget.
+            with _bounded_fred_timeout(settings.FRED_REQUEST_TIMEOUT_SECONDS):
+                vix_series = self.fred.get_series('VIXCLS').rename('VIXCLS')
+                yield_curve_series = self.fred.get_series('T10Y2Y').rename('T10Y2Y')
+                credit_spread_series = self.fred.get_series('BAMLH0A0HYM2').rename('BAMLH0A0HYM2')
+                baa_spread_series = self.fred.get_series('BAA10Y').rename('BAA10Y')
+                unrate_series = self.fred.get_series('UNRATE').rename('UNRATE')
+                t10yie_series = self.fred.get_series('T10YIE').rename('T10YIE')
+                bamlc0a0cm_series = self.fred.get_series('BAMLC0A0CM').rename('BAMLC0A0CM')
+                fedfunds_series = self.fred.get_series('FEDFUNDS').rename('FEDFUNDS')
             history_df = pd.concat(
                 [
                     vix_series,
