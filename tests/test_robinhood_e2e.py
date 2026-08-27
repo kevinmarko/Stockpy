@@ -751,6 +751,7 @@ class TestSkillMdInvariantsPinned:
             "Preview before place, always.",
             "Never place in `review` mode.",
             "One explicit human confirmation per placed order",
+            "No auto/batch placement.",
             "Honor the kill switch",
             "immediately before each",
             "Agentic account only.",

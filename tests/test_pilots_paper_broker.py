@@ -2917,18 +2917,48 @@ def strategy(df: pd.DataFrame) -> pd.Series:
     return pos
 """
 
+    @staticmethod
+    def _make_bars_store(n_rows: int):
+        """A minimal fake HistoricalStore whose get_bars() returns a
+        controlled, deterministic OHLCV DataFrame of exactly n_rows rows --
+        used to isolate this endpoint's <50-row branch logic from whatever
+        market data happens (or doesn't happen) to already be cached in
+        whichever environment the test suite runs in."""
+        idx = pd.date_range("2024-01-02", periods=n_rows, freq="B")
+        rng = np.random.default_rng(42)
+        close = 400.0 + np.cumsum(rng.normal(0.05, 1.5, size=n_rows))
+
+        class _Store:
+            def get_bars(self, symbol, *args, **kwargs):
+                return pd.DataFrame(
+                    {
+                        "Open": close,
+                        "High": close * 1.005,
+                        "Low": close * 0.995,
+                        "Close": close,
+                        "Volume": np.full(n_rows, 50_000_000),
+                    },
+                    index=idx,
+                )
+
+        return _Store()
+
     def test_backtest_success(self):
+        """Isolated: mocks HistoricalStore to return a controlled >=50-row
+        fixture rather than depending on ambient real market data being
+        cached wherever this test happens to run."""
         payload = {
             "code": self._SAMPLE_STRATEGY,
             "symbol": "SPY",
             "cost_bps": 5.0,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
-            resp = _client.post(
-                "/pilots/ai/research/backtest",
-                json=payload,
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
+            with patch.object(pilots_api, "HistoricalStore", return_value=self._make_bars_store(120)):
+                resp = _client.post(
+                    "/pilots/ai/research/backtest",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
         assert resp.status_code == 200
         body = resp.json()
         assert "is_deployable" in body
@@ -2943,6 +2973,48 @@ def strategy(df: pd.DataFrame) -> pd.Series:
         assert "sharpe_gate" in body["gate_evaluations"]
         assert "max_dd_gate" in body["gate_evaluations"]
         assert body["strategy_id"] == "SPY"
+
+    def test_backtest_falls_back_to_synthetic_data_when_bars_insufficient(self):
+        """Isolated, controlled version of the <50-row synthetic-fallback
+        path -- this test's outcome is deterministic regardless of what
+        market data is or isn't cached wherever it runs."""
+        payload = {"code": self._SAMPLE_STRATEGY, "symbol": "SPY", "cost_bps": 5.0}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            with patch.object(pilots_api, "HistoricalStore", return_value=self._make_bars_store(10)):
+                resp = _client.post(
+                    "/pilots/ai/research/backtest",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data_source"] == "synthetic_demo_data"
+        assert body["is_synthetic_data"] is True
+        assert body["is_deployable"] is False
+
+    def test_backtest_falls_back_to_synthetic_data_when_bars_fetch_raises(self):
+        """Same fallback path, triggered by a raising HistoricalStore
+        instead of a too-short DataFrame -- api/pilots_api.py's own
+        try/except around HistoricalStore().get_bars(sym) converts either
+        failure mode into the same <50-row branch, so both must be covered
+        independently rather than assuming one implies the other."""
+        class _BoomStore:
+            def get_bars(self, symbol, *args, **kwargs):
+                raise RuntimeError("simulated DB outage")
+
+        payload = {"code": self._SAMPLE_STRATEGY, "symbol": "SPY", "cost_bps": 5.0}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            with patch.object(pilots_api, "HistoricalStore", return_value=_BoomStore()):
+                resp = _client.post(
+                    "/pilots/ai/research/backtest",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data_source"] == "synthetic_demo_data"
+        assert body["is_synthetic_data"] is True
+        assert body["is_deployable"] is False
 
     def test_backtest_empty_code_400(self):
         payload = {"code": "   ", "symbol": "SPY"}

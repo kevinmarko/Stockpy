@@ -23,6 +23,13 @@ export function buildApiRuntimeCaching(baseUrls: string[]): RuntimeCaching[] {
           !url.pathname.endsWith("/stream")
         );
       },
+      // NetworkFirst, deliberately NOT StaleWhileRevalidate: this app
+      // displays live quotes/positions/portfolio values, and SWR would
+      // serve a stale cached financial figure as the FIRST paint on every
+      // load, which risks reading as fresh data. NetworkFirst (with a
+      // short networkTimeoutSeconds below) prefers live data whenever the
+      // network is up and only falls back to cache on a genuine failure
+      // or timeout.
       handler: "NetworkFirst",
       options: {
         cacheName: "api-cache",
