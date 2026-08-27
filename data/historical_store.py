@@ -2098,11 +2098,24 @@ class HistoricalStore:
         """
         now_ts = self._now_utc_iso()
         rows = []
-        for ts, row in macro_df.iterrows():
-            date_str = pd.Timestamp(ts).strftime("%Y-%m-%d")
-            for col in macro_df.columns:
-                val = row[col]
-                db_val = None if (isinstance(val, float) and math.isnan(val)) else float(val)
+
+        # F-03 FIX: Replace iterrows() with vectorized column-wise extraction
+        # (similar to _upsert_bars) for a ~10x speedup on large macro DataFrames.
+        # DatetimeIndex.strftime() does NOT raise on a NaT entry the way the
+        # old per-element pd.Timestamp(ts).strftime() did -- it silently
+        # yields float("nan") instead, which would otherwise flow all the
+        # way into the DB as a NULL/garbage date. Fail fast here instead, matching
+        # the previous per-row behavior.
+        if pd.isna(macro_df.index).any():
+            raise ValueError("NaTType does not support strftime")
+        dates = pd.to_datetime(macro_df.index).strftime("%Y-%m-%d").tolist()
+        for col in macro_df.columns:
+            for date_str, val in zip(dates, macro_df[col].to_numpy()):
+                # _float_or_none() (not a bare isinstance(val, float) check) so a
+                # NaN in a narrower-than-float64 column (e.g. float32) -- which
+                # iterrows() used to upcast to float64 before this NaN check ever
+                # ran -- still stores as NULL instead of a literal NaN.
+                db_val = _float_or_none(val)
                 rows.append((col, date_str, db_val, source, now_ts))
 
         if not rows:
@@ -3439,20 +3452,31 @@ class HistoricalStore:
                 aggregated_source_credibility=("credibility_weight", "mean"),
             )
             result: Dict[str, Dict[str, float]] = {}
-            for symbol, row in grouped.iterrows():
-                weight_sum = row["summed_credibility_weight"]
-                if pd.notna(weight_sum) and weight_sum > 1e-12:
+
+            # F-03 FIX: Replace iterrows() with itertuples() for a significant
+            # speedup when processing many symbols, without the parallel
+            # same-length .to_numpy() arrays' positional-indexing bookkeeping
+            # (grouped's columns -- summed_final_weighted_score,
+            # summed_credibility_weight, bot_activity_ratio,
+            # aggregated_source_credibility -- are all valid Python
+            # identifiers, so itertuples() carries none of the "Adj Close"
+            # column-name risk _upsert_bars avoids it for elsewhere).
+            for row in grouped.itertuples():
+                weight_sum = row.summed_credibility_weight
+                if not pd.isna(weight_sum) and weight_sum > 1e-12:
                     credibility_weighted_sentiment = float(
-                        row["summed_final_weighted_score"] / weight_sum
+                        row.summed_final_weighted_score / weight_sum
                     )
                 else:
                     credibility_weighted_sentiment = float("nan")
-                result[str(symbol)] = {
+
+                agg_cred = row.aggregated_source_credibility
+
+                result[str(row.Index)] = {
                     "credibility_weighted_sentiment": credibility_weighted_sentiment,
-                    "bot_activity_ratio": float(row["bot_activity_ratio"]),
+                    "bot_activity_ratio": float(row.bot_activity_ratio),
                     "aggregated_source_credibility": (
-                        float(row["aggregated_source_credibility"])
-                        if pd.notna(row["aggregated_source_credibility"]) else float("nan")
+                        float(agg_cred) if not pd.isna(agg_cred) else float("nan")
                     ),
                 }
             return result
@@ -3521,9 +3545,18 @@ class HistoricalStore:
                 mean_score=("final_weighted_score", "mean"),
             )
             result: Dict[str, Dict[str, Dict[str, float]]] = {}
-            for (symbol, trading_day, source_class), row in grouped.iterrows():
-                by_day = result.setdefault(str(symbol), {}).setdefault(
-                    str(trading_day),
+
+            # F-03 FIX: Replace iterrows() with itertuples() for a significant
+            # speedup when processing many symbols and days, without the
+            # parallel same-length .to_numpy() arrays' positional-indexing
+            # bookkeeping ("count"/"mean_score" are both valid Python
+            # identifiers and don't collide with namedtuple's own count()/
+            # index() methods -- itertuples() assigns them as real fields).
+            for row in grouped.itertuples():
+                sym, day, src_class = (str(v) for v in row.Index)
+
+                by_day = result.setdefault(sym, {}).setdefault(
+                    day,
                     {
                         "news_count": float("nan"),
                         "news_mean_score": float("nan"),
@@ -3531,9 +3564,11 @@ class HistoricalStore:
                         "comment_mean_score": float("nan"),
                     },
                 )
-                by_day[f"{source_class}_count"] = float(row["count"])
-                by_day[f"{source_class}_mean_score"] = (
-                    float(row["mean_score"]) if pd.notna(row["mean_score"]) else float("nan")
+                by_day[f"{src_class}_count"] = float(row.count)
+
+                m_score = row.mean_score
+                by_day[f"{src_class}_mean_score"] = (
+                    float(m_score) if pd.notna(m_score) else float("nan")
                 )
             # A class with zero ingested rows for a day that WAS observed
             # (the other class has rows) is a genuine zero count, not an
