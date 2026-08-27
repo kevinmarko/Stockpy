@@ -28,3 +28,5 @@
   - **pairs/simulation.py** — event-driven Backtrader backtest runner for pairs.
   - **signals/pairs_trading.py** — pairs trading signal generator.
   - **signals/options_flow_sentiment.py** — `OptionsFlowSentimentSignal(SignalModule)`: evaluates net directional options order flow sentiment from live dashboard columns, `SignalContext`, or persisted UOA records. Normalized score in `[-1.0, +1.0]` with dynamic confidence (0.85 on active directional flow, 0.5 on neutral, 0.0 on missing data). Default weight in `settings.SIGNAL_WEIGHTS` is `10.0`.
+
+- **validation/covariate_drift.py** — Implements Population Stability Index (PSI) to detect feature drift between recent vs historical symbol data. Gated by `FEATURE_DRIFT_PSI_ENABLED` in `settings.py` and run optionally in `scripts/preflight_check.py::check_feature_drift()`.

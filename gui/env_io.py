@@ -119,6 +119,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
     # Meta-labeling
     "META_LABEL_MIN_CONFIDENCE",
+    # Input-feature (PSI) drift detection (validation/covariate_drift.py,
+    # scripts/preflight_check.py). Non-secret, warning-only diagnostic flag
+    # -- carries no credential.
+    "FEATURE_DRIFT_PSI_ENABLED",
     "FORECAST_BACKFILL_HORIZONS",
     "FORECAST_BACKFILL_LOOKBACK_YEARS",
     "FORECAST_BACKFILL_MOMENTUM_WINDOW",

@@ -1935,6 +1935,94 @@ def check_prompt_registry_signing_key_configured() -> CheckResult:
 # matters for reporting clarity: credentials checks first, then runtime state,
 # then business-logic gates.  Order is also what ``run_checks``'s ``skip``
 # matching relies on (strip ``check_`` prefix → name).
+def check_feature_drift() -> CheckResult:
+    """WARNING-ONLY: run PSI drift detection on a real, causally-computed
+    technical feature (RSI(2), matching ``processing_engine.py``'s own
+    ``ta.rsi(df['Close'], length=2)`` computation) over a fixed reference
+    symbol's price history.
+
+    Gated on ``settings.FEATURE_DRIFT_PSI_ENABLED`` (default ``False``) --
+    when disabled this returns a plain PASS with no warning flag, so
+    ``preflight_check.py``'s output is byte-identical to before this check
+    existed, matching the disabled-branch precedent set by
+    ``check_prompt_registry_signing_key_configured`` above (a bare PASS,
+    not a ``warning=True`` "check skipped" line every existing deployment
+    would otherwise see for a feature it never opted into).
+
+    Reads bars via ``data.historical_store.HistoricalStore`` (readonly) --
+    this is the codebase's one DB-access path that already resolves
+    ``settings.LOCAL_DATA_ROOT`` correctly. A hand-rolled
+    ``sqlite3.connect("quant_platform.db")`` bare relative-path literal (an
+    earlier version of this function had exactly that, querying a "signals"
+    table with lowercase columns that don't exist anywhere in this schema --
+    a confirmed recurring bug class, see CLAUDE.md's ``LOCAL_DATA_ROOT``
+    section) would silently miss the real DB and never actually check
+    anything.
+
+    Never blocking -- drift detection is a soft statistical signal, not a
+    go/no-go gate (mirrors ``check_calibration_drift``'s own framing).
+    Degrades to a warning-only PASS on any missing/insufficient data or
+    exception rather than failing the whole preflight gate.
+    """
+    name = "feature_drift"
+    try:
+        from settings import settings
+        if not getattr(settings, "FEATURE_DRIFT_PSI_ENABLED", False):
+            return CheckResult(
+                name, True,
+                "FEATURE_DRIFT_PSI_ENABLED=False -- feature-drift check inactive",
+            )
+
+        from validation.covariate_drift import check_and_alert_feature_drift
+        import pandas_ta as ta
+        from data.historical_store import HistoricalStore
+
+        reference_symbol = "SPY"
+        try:
+            bars = HistoricalStore(readonly=True).get_bars(reference_symbol, lookback_days=150)
+        except Exception as exc:
+            return CheckResult(
+                name, True,
+                f"Could not load {reference_symbol} bar history for feature-drift check: {exc}",
+                warning=True,
+            )
+
+        if bars is None or bars.empty or "Close" not in bars.columns:
+            return CheckResult(
+                name, True,
+                f"Insufficient {reference_symbol} price history for feature-drift check "
+                "(expected on a fresh deployment/sandbox with no market-data network access).",
+                warning=True,
+            )
+
+        bars = bars.copy()
+        bars["RSI_2"] = ta.rsi(bars["Close"], length=2)
+
+        results = check_and_alert_feature_drift(bars, ["RSI_2"])
+        drifted = [r for r in results if r.drift_detected]
+        if drifted:
+            detail = ", ".join(
+                f"{r.feature} (PSI={r.psi:.4f})" if r.psi is not None else r.feature
+                for r in drifted
+            )
+            return CheckResult(
+                name, True,
+                f"⚠️  Feature drift detected on {reference_symbol}: {detail}. "
+                "Consider re-running validation/harness.py for affected strategies.",
+                warning=True,
+            )
+        return CheckResult(
+            name, True,
+            f"No feature drift detected across {len(results)} tracked feature(s) on {reference_symbol}.",
+        )
+    except Exception as exc:
+        return CheckResult(
+            name, True,
+            f"⚠️  feature_drift check could not run ({exc}) -- treating as insufficient "
+            "data rather than a failure.",
+            warning=True,
+        )
+
 ALL_CHECKS = [
     check_fred_key_configured,
     check_key_rotation_recent,
@@ -1962,6 +2050,7 @@ ALL_CHECKS = [
     check_validation_reports,
     check_no_unexpected_risk_blocks,
     check_calibration_drift,
+    check_feature_drift,
     check_alert_channels_reachable,
     check_prompt_registry_signing_key_configured,
 ]

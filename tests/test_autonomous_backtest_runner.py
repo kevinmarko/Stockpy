@@ -389,6 +389,73 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
         assert result.gate_evaluations["max_dd_gate"] is True
         assert result.gate_evaluations["pbo_gate"] is True
 
+    def test_synthetic_data_source_forces_not_deployable_even_when_all_gates_pass(self):
+        """The load-bearing proof test for the fabricated-OHLCV fix: a
+        strategy engineered to genuinely pass ALL FOUR deployability gates
+        (via deliberately loosened thresholds, since achieving DSR > 0.95
+        against the real default threshold isn't reliably reachable from a
+        single synthetic seed) must still report is_deployable=False when
+        run with a non-"real_historical_bars" data_source -- proving the
+        fail-closed override in run() actually FIRES, rather than merely
+        happening to already be False for an unrelated reason (as every
+        other test in this class incidentally is, e.g.
+        test_deployable_strategy_passes_all_gates never actually clears the
+        DSR gate at the real DSR_MIN=0.95 threshold)."""
+        runner = AutonomousBacktestRunner(
+            n_splits=6,
+            n_test_splits=2,
+            cost_bps=2.0,
+            # Deliberately loosened so every gate passes cleanly -- this test
+            # is about the data_source override, not about hitting the real
+            # production thresholds (that's test_deployable_strategy_passes_all_gates's
+            # job, and it doesn't fully succeed at it either -- see above).
+            pbo_max=1.0,
+            dsr_min=-999.0,
+            net_sharpe_min=-999.0,
+            max_drawdown_max=1.0,
+        )
+        df = runner.generate_synthetic_ohlcv(n_bars=600, mu=0.0012, sigma=0.008, regime="bull", seed=101)
+
+        code = """
+import numpy as np
+import pandas as pd
+
+def generate_signals(df: pd.DataFrame) -> pd.Series:
+    close = df['Close']
+    sma_fast = close.rolling(10).mean()
+    sma_slow = close.rolling(30).mean()
+    pos = (sma_fast > sma_slow).astype(float)
+    return pos
+"""
+        # Sanity precondition: confirm this scenario genuinely clears all 4
+        # gates when honestly labeled real data -- if this ever regresses
+        # (e.g. a future change to CPCV/DSR math), the test should fail HERE
+        # with a clear message, not silently pass for the wrong reason below.
+        real_result = runner.run(code, df, strategy_id="TrendSMA_Bull", data_source="real_historical_bars")
+        assert real_result.gate_evaluations == {
+            "pbo_gate": True, "dsr_gate": True, "sharpe_gate": True, "max_dd_gate": True,
+        }, f"Precondition failed -- fixture no longer passes all 4 gates: {real_result.gate_evaluations}"
+        assert real_result.is_deployable is True
+
+        # The actual proof: identical strategy/data/thresholds, only the
+        # data_source label changes -- the override must force this closed.
+        synthetic_result = runner.run(code, df, strategy_id="TrendSMA_Bull", data_source="synthetic_demo_data")
+        assert synthetic_result.gate_evaluations == real_result.gate_evaluations  # gates themselves are unaffected
+        assert synthetic_result.is_deployable is False
+        assert synthetic_result.is_synthetic_data is True
+        assert synthetic_result.data_source == "synthetic_demo_data"
+        assert any(
+            "NOT DEPLOYABLE" in r and "synthetic_demo_data" in r
+            for r in synthetic_result.failure_reasons
+        ), f"Expected an explicit synthetic-data failure reason, got: {synthetic_result.failure_reasons}"
+
+        # And the default ("unknown") data_source -- a caller that forgets
+        # to pass one -- must ALSO fail closed (allowlist, not denylist).
+        default_result = runner.run(code, df, strategy_id="TrendSMA_Bull")
+        assert default_result.data_source == "unknown"
+        assert default_result.is_synthetic_data is True
+        assert default_result.is_deployable is False
+
     def test_failing_strategy_triggers_gate_failures(self):
         runner = AutonomousBacktestRunner(
             n_splits=6,
