@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
 
 # Import type-safe data transfer containers
-from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO, RobinhoodPositionDTO
+from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO, RobinhoodPositionDTO, ExecutionRangeParameters
 from settings import settings
 from sizing.kelly import (
     estimate_win_rate_and_payoff,
@@ -33,7 +33,7 @@ from sizing.position_sizer import size_position
 logger = logging.getLogger(__name__)
 
 
-def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, chandelier_long: float, chandelier_short: float, graham_val: float = 0.0) -> str:
+def apply_tactical_ranges(signal: str, params: ExecutionRangeParameters) -> str:
     """
     Uses the Chandelier Exit to define dynamic, trailing Actionable Advice ranges.
     """
@@ -41,39 +41,39 @@ def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, ch
 
     if signal in ["STRONG BUY", "BUY"]:
         # Standard ATR-based entry zone for pullbacks
-        support = current_price - (1.5 * safe_atr)
-        resistance = current_price - (0.5 * safe_atr)
-        if graham_val > 0 and resistance > graham_val:
-            resistance = graham_val
+        support = params.current_price - (1.5 * params.safe_atr)
+        resistance = params.current_price - (0.5 * params.safe_atr)
+        if params.graham_val > 0 and resistance > params.graham_val:
+            resistance = params.graham_val
         # A large ATR relative to current_price can drive support (or even
         # resistance) negative even when support <= resistance still holds
         # numerically (e.g. current_price=5.0, safe_atr=12.0) — the existing
         # support > resistance guard alone doesn't catch that case, so also
         # floor on a negative support using the same fallback pair.
         if support > resistance or support < 0:
-            support = current_price * 0.95
-            resistance = current_price
+            support = params.current_price * 0.95
+            resistance = params.current_price
         tactical_range = f"Buy Zone: ${support:.2f} - ${resistance:.2f}"
 
     elif signal == "HOLD":
         # Uses Chandelier Exit for dynamic trailing
         # Instead of static boundaries, we anchor to the Chandelier Long value
-        support = chandelier_long if chandelier_long > 0 else current_price - (2.0 * safe_atr)
+        support = params.chandelier_long if params.chandelier_long > 0 else params.current_price - (2.0 * params.safe_atr)
         # Same floor as the Buy Zone above: a large ATR relative to
         # current_price can drive the ATR-derived support negative.
         if support < 0:
-            support = current_price * 0.95
-        resistance = current_price + (2.0 * safe_atr)
+            support = params.current_price * 0.95
+        resistance = params.current_price + (2.0 * params.safe_atr)
         tactical_range = f"Hold Range: ${support:.2f} - ${resistance:.2f}"
 
     else: # RISK REDUCE / AVOID
         # Tighten stops aggressively
-        trim_point = current_price + (0.5 * safe_atr)
+        trim_point = params.current_price + (0.5 * params.safe_atr)
         # Hard stop tied directly to Chandelier Short for bearish trades, or Chandelier Long failure
         # A stale chandelier_long can sit above current_price (e.g. a price that
         # dropped hard since the trailing high was set); clamp so the stop never
         # sits above where the position could actually be exited.
-        stop_loss = max(0.01, min(chandelier_long, current_price)) if chandelier_long > 0 else max(0.01, current_price - (1.0 * safe_atr))
+        stop_loss = max(0.01, min(params.chandelier_long, params.current_price)) if params.chandelier_long > 0 else max(0.01, params.current_price - (1.0 * params.safe_atr))
         tactical_range = f"Trim @ ${trim_point:.2f} | Stop @ ${stop_loss:.2f}"
 
     return tactical_range
@@ -81,11 +81,7 @@ def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, ch
 
 def apply_sell_side_range(
     signal: str,
-    current_price: float,
-    safe_atr: float,
-    chandelier_long: float,
-    chandelier_short: float,
-    forecast_price: float = 0.0,
+    params: ExecutionRangeParameters,
 ) -> str:
     """Compute the dedicated sell-side execution range.
 
@@ -133,21 +129,9 @@ def apply_sell_side_range(
     signal :
         One of ``"STRONG BUY"``, ``"BUY"``, ``"HOLD"``, ``"RISK REDUCE"``.
         Unknown signals fall through to the RISK REDUCE branch (fail-closed).
-    current_price :
-        Latest close from the per-ticker ``MarketBarDTO``.
-    safe_atr :
-        Already-fallback-protected ATR (caller computes
-        ``atr if atr > 0 else current_price * 0.02`` before passing in).
-    chandelier_long :
-        Per-ticker Chandelier Exit for long positions
-        (``technical_options_engine.py``). ``0.0`` indicates unavailable.
-    chandelier_short :
-        Currently unused; kept in the signature for symmetry with
-        ``apply_tactical_ranges`` so both helpers have identical call sites.
-    forecast_price :
-        ``Forecast_30`` from ``forecasting_engine.py``. ``0.0`` means
-        "no forecast available" — in that case the take-profit upper bound
-        falls back to the pure ATR-derived level (never fabricated).
+    params :
+        Context variables combined in ExecutionRangeParameters. Contains:
+        current_price, safe_atr, chandelier_long, chandelier_short, graham_val, forecast_price.
 
     Returns
     -------
@@ -157,18 +141,18 @@ def apply_sell_side_range(
         ``"Sell Now @ market | Stop @ $STOP"`` (exit / avoid).
     """
     if signal in ("STRONG BUY", "BUY", "HOLD"):
-        take_profit_lo = current_price + (1.5 * safe_atr)
-        atr_resistance = current_price + (3.0 * safe_atr)
+        take_profit_lo = params.current_price + (1.5 * params.safe_atr)
+        atr_resistance = params.current_price + (3.0 * params.safe_atr)
         # forecast_price wins ONLY when it represents real upside above the
         # ATR-derived resistance; never fabricated when forecast is missing (0.0)
-        take_profit_hi = max(atr_resistance, forecast_price) if forecast_price > 0 else atr_resistance
+        take_profit_hi = max(atr_resistance, params.forecast_price) if params.forecast_price > 0 else atr_resistance
 
-        if chandelier_long > 0:
+        if params.chandelier_long > 0:
             # Clamp: a stale chandelier_long above current_price is not a
             # sane trailing stop for a resting sell order.
-            trailing_stop = min(chandelier_long, current_price)
+            trailing_stop = min(params.chandelier_long, params.current_price)
         else:
-            trailing_stop = max(0.01, current_price - (2.5 * safe_atr))
+            trailing_stop = max(0.01, params.current_price - (2.5 * params.safe_atr))
 
         return (
             f"Sell Zone: ${take_profit_lo:.2f} - ${take_profit_hi:.2f} "
@@ -176,12 +160,12 @@ def apply_sell_side_range(
         )
 
     # RISK REDUCE / AVOID / unknown — fail-closed to immediate-exit instruction
-    if chandelier_long > 0:
+    if params.chandelier_long > 0:
         # Clamp: a stale chandelier_long above current_price is not a sane
         # exit stop for a market-now sell.
-        stop_loss = min(chandelier_long, current_price)
+        stop_loss = min(params.chandelier_long, params.current_price)
     else:
-        stop_loss = max(0.01, current_price - (1.0 * safe_atr))
+        stop_loss = max(0.01, params.current_price - (1.0 * params.safe_atr))
     return f"Sell Now @ market | Stop @ ${stop_loss:.2f}"
 
 
@@ -406,19 +390,25 @@ class StrategyEngine:
         # PHASE 6: MULTI-TIER TACTICAL RANGES (Buy, Hold, Exit)
         # ---------------------------------------------------------------------
         safe_atr = atr if atr > 0 else (current_price * 0.02)
-        tactical_range = apply_tactical_ranges(
-            signal, current_price, safe_atr, chandelier_long, chandelier_short, graham_val
+
+        range_params = ExecutionRangeParameters(
+            current_price=current_price,
+            safe_atr=safe_atr,
+            chandelier_long=chandelier_long,
+            chandelier_short=chandelier_short,
+            graham_val=graham_val,
+            forecast_price=forecast_price
         )
+
+        tactical_range = apply_tactical_ranges(signal, range_params)
+
         # Dedicated sell-side range — populated for EVERY signal regardless of
         # buy/hold/reduce action so a position manager always has explicit
         # take-profit + trailing-stop levels (vs. the single-corridor
         # ``tactical_range`` which only emits a sell hint on RISK REDUCE).
         # Surfaced as ``sellRange`` in the return dict, COLUMN_SCHEMA,
         # dashboard_df, JSON payload, state snapshot, and the HTML report.
-        sell_side_range = apply_sell_side_range(
-            signal, current_price, safe_atr, chandelier_long, chandelier_short,
-            forecast_price=forecast_price,
-        )
+        sell_side_range = apply_sell_side_range(signal, range_params)
 
         # ---------------------------------------------------------------------
         # PHASE 7 & 8: OPTIONS & SIZING
