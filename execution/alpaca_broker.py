@@ -185,6 +185,12 @@ class AlpacaBroker(BrokerBase):
             secret_key=self._secret_key,
             paper=self._paper,
         )
+        # 2026-08 fix: TradingClient exposes no timeout of its own (confirmed
+        # against alpaca-py's installed source) -- every self._client.X(...)
+        # call below used to be able to block forever on a stalled
+        # connection. See data/alpaca_http.py's module docstring.
+        from data.alpaca_http import mount_timeout_adapter
+        mount_timeout_adapter(self._client._session, settings.ALPACA_REQUEST_TIMEOUT_SECONDS)
         mode = "PAPER" if self._paper else "LIVE"
         logger.info("AlpacaBroker initialised in %s mode", mode)
 

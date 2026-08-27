@@ -224,10 +224,19 @@ class AlpacaProvider(MarketDataProvider):
         """Lazily import alpaca-py and construct the data client."""
         try:
             from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
-            return StockHistoricalDataClient(
+            client = StockHistoricalDataClient(
                 api_key=self._api_key,
                 secret_key=self._secret_key,
             )
+            # 2026-08 fix: StockHistoricalDataClient subclasses the same
+            # alpaca-py RESTClient as execution/alpaca_broker.py's
+            # TradingClient, which exposes no timeout of its own (confirmed
+            # against the installed source) -- get_latest_quote/
+            # get_intraday_bars below used to be able to block forever on a
+            # stalled connection. See data/alpaca_http.py's module docstring.
+            from data.alpaca_http import mount_timeout_adapter
+            mount_timeout_adapter(client._session, settings.ALPACA_REQUEST_TIMEOUT_SECONDS)
+            return client
         except ImportError as exc:
             raise ImportError(
                 "alpaca-py is required for AlpacaProvider.  "

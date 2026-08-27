@@ -808,6 +808,7 @@ def check_env_not_committed() -> CheckResult:
             cwd=str(_REPO_ROOT),
             capture_output=True,
             text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             # Exit 0 means git found .env in the index — it is tracked.
@@ -818,6 +819,8 @@ def check_env_not_committed() -> CheckResult:
             )
     except FileNotFoundError:
         pass  # git not available — cannot determine tracking status; skip sub-check
+    except subprocess.TimeoutExpired:
+        pass  # git hung — cannot determine tracking status; skip sub-check rather than block preflight
     return CheckResult(name, True, ".env exists and is not git-tracked")
 
 

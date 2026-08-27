@@ -200,6 +200,25 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+    ALPACA_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=15.0,
+        description=(
+            "Per-request HTTP timeout (seconds) for every alpaca-py REST call "
+            "(execution/alpaca_broker.py::AlpacaBroker and "
+            "data/market_data.py::AlpacaProvider). Neither alpaca-py's "
+            "RESTClient constructor nor its per-call kwargs expose a timeout "
+            "parameter -- confirmed against the installed library source, "
+            "RESTClient._one_request()'s self._session.request(...) call "
+            "never receives a 'timeout' key, so a stalled connection used to "
+            "block forever (worse than the FRED incident this mirrors: these "
+            "calls run synchronously on the calling coroutine's own event "
+            "loop, not even offloaded to a background thread). Applied via "
+            "data/alpaca_http.py::mount_timeout_adapter(), which mounts a "
+            "custom requests.HTTPAdapter on the RESTClient's own "
+            "self._session -- the only lever available short of vendoring "
+            "alpaca-py. See docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md."
+        ),
+    )
 
     FMP_PAPER_STARTING_CASH: float = Field(
         default=100000.0,
@@ -2430,6 +2449,32 @@ class Settings(BaseSettings):
             "should be treated as abnormal."
         ),
     )
+    # Structural backstop for pipeline/runner.py::AsyncPipelineRunner.run()'s
+    # generic `await asyncio.to_thread(step.run, ctx)` dispatch -- added
+    # 2026-08 as a follow-up to the FRED-timeout incident: this exact call
+    # site was named in that incident as one of two independently-unbounded
+    # paths, but the landed fix bounded FRED itself (data_engine.py), not
+    # this generic dispatcher. A future step that makes an unbounded call
+    # (the same mistake that caused the original incident) would otherwise
+    # reproduce the identical symptom with nothing to catch it.
+    PIPELINE_STEP_TIMEOUT_SECONDS: float = Field(
+        default=900.0,
+        description=(
+            "Per-step timeout (seconds) for AsyncPipelineRunner.run()'s "
+            "synchronous-step dispatch (pipeline/runner.py). On expiry the "
+            "step raises TimeoutError, which propagates exactly like any "
+            "other step exception already does (this runner deliberately "
+            "does not wrap steps in a blanket try/except -- see its own "
+            "module docstring). Generous enough for the heaviest step "
+            "(forecasting across many tickers, which can itself invoke the "
+            "CNN-LSTM subprocess pool's own per-ticker bound via a "
+            "ThreadPoolExecutor), and well below "
+            "PIPELINE_STALL_ALERT_SECONDS (1800s) so this fires and lets the "
+            "daemon reschedule the next cycle before the stall alert would "
+            "even need to trigger. See "
+            "docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md."
+        ),
+    )
     # Worker threads for the SEC EDGAR backfill's per-ticker companyfacts fetch
     # (scripts/backfill_edgar_fundamentals.py). Defaults to 4, LOWER than the
     # DATA_FETCH sibling above, because this is a MEMORY knob, NOT a rate-limit
@@ -4282,6 +4327,30 @@ class Settings(BaseSettings):
             "LLM_COMMENTARY_ALERT_PROVIDER is set to 'gemini' (also used for "
             "chart-pattern vision and Gemini Live chat).  Unset → that job's LLM disabled, "
             "template fallback kicks in."
+        ),
+    )
+    AI_CHAT_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        description=(
+            "Client-level request timeout (seconds) for the interactive AI "
+            "chat endpoints (POST /api/chat's Gemini/Anthropic/OpenAI/local "
+            "branches, and /ws/chat/live's Gemini Live client). None of "
+            "these previously passed an explicit timeout -- Anthropic/OpenAI "
+            "inherit their SDK's 10-minute default, and google-genai's own "
+            "default is confirmed (by reading _api_client.py directly) to be "
+            "NO TIMEOUT AT ALL when unset, the same unbounded-blocking-call "
+            "pattern as the FRED incident this mirrors. 120s is deliberately "
+            "larger than LLM_COMMENTARY_TIMEOUT_SECONDS/OPAL_RESEARCH_TIMEOUT_SECONDS "
+            "(short, non-streaming alert/rationale text) since this covers a "
+            "streaming interactive chat response -- httpx's Timeout (which "
+            "all three SDKs build on) applies its read-timeout PER CHUNK for "
+            "a streaming call, not as a hard end-to-end cutoff, so this "
+            "bounds 'how long we wait for the next token', not total "
+            "conversation length. Both chat endpoints are interactive, "
+            "user-initiated, and run on a separate FastAPI process from the "
+            "orchestrator daemon -- a stall here is a resource-leak/bad-UX "
+            "risk on that API process, not a silent multi-day pipeline "
+            "outage. See docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md."
         ),
     )
     GEMINI_LIVE_CHAT_ENABLED: bool = Field(

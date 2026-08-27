@@ -1855,6 +1855,34 @@ class TestRunPlatformTests:
         assert "Test suite failed" in result
         assert "AssertionError" in result
 
+    def test_subprocess_run_called_with_900_second_timeout(self, monkeypatch):
+        """2026-08 structural-timeout fix: run_platform_tests() must never
+        block forever on a hung/runaway pytest invocation -- confirm the
+        bounded 900s timeout is actually threaded into the subprocess.run
+        call, not just documented."""
+        captured = {}
+
+        def _mock_run(*a, **k):
+            captured.update(k)
+            return SimpleNamespace(stdout="5 passed", returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", _mock_run)
+        srv.run_platform_tests()
+
+        assert captured.get("timeout") == 900
+
+    def test_timeout_expired_degrades_to_message_instead_of_raising(self, monkeypatch):
+        """A subprocess.TimeoutExpired (the suite genuinely hung past the
+        900s bound) must degrade to an honest message, not propagate and
+        crash the MCP tool call."""
+        def _raise(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="pytest", timeout=900)
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        result = srv.run_platform_tests()
+
+        assert result == "Test suite timed out after 900 seconds."
+
 
 class TestRunBugHunter:
     def test_success(self, monkeypatch):

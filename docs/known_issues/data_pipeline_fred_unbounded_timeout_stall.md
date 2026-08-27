@@ -158,3 +158,134 @@ comprehensive audit is a reasonable, separate follow-up.
 `HistoricalStore.get_macro()` is also called directly from live HTTP request
 handlers in `api/pilots_api.py`/`api/data_api.py` — Fix B protects those for
 free (it's scoped at the `data_engine.py` layer), no separate change needed.
+
+## Follow-up: comprehensive unbounded-timeout sweep (2026-08-27)
+
+### Status
+**Fixed** (this follow-up PR). The scope boundary above disclosed that no
+full audit of the rest of the codebase had been performed for the same bug
+class — unbounded blocking calls with no timeout — and that the read-only
+stall alert (Fix C) existed specifically to catch whatever that audit would
+have found. That audit has now been performed: three parallel agent passes
+covering (1) every `subprocess.run`/`subprocess.Popen` call site, (2) every
+`ThreadPoolExecutor`/`ProcessPoolExecutor`/`multiprocessing` wait, and (3)
+every LLM SDK client construction site. Four real gaps were found and fixed;
+one is disclosed and deliberately deferred.
+
+### What was audited, and what was already safe
+The sweep also re-verified, against real code rather than docstrings, that
+several already-hardened external clients genuinely have the timeout
+protection this codebase's documentation claims:
+- **FMP** (`data/fmp_client.py`) — `FMP_TIMEOUT_SECONDS` is passed on every
+  `requests.get(...)` call, backed by retries and a cooldown circuit breaker.
+- **GDELT** (`data/sentiment_sources.py::_gdelt_get`) — explicit read
+  timeouts, a shared rate limiter, and a consecutive-failure cooldown
+  circuit breaker (see CLAUDE.md's "Shared GDELT rate limiter" bullet).
+- **EDGAR** (`data/edgar_fundamentals.py`) — its own throttle/`_http_get`
+  wrapper sets an explicit timeout on every SEC request.
+- **Robinhood device-approval login worker** (`data/robinhood_login.py`/
+  `data/robinhood_login_worker.py`) — already a killable, deadline-enforced
+  subprocess (`RH_LOGIN_DEADLINE_SECONDS`/`RH_LOGIN_GRACE_SECONDS`/
+  `RH_LOGIN_STARTUP_SECONDS`) specifically because `robin_stocks`' own
+  device-approval loop has no timeout of its own — this was the correct
+  prior fix for that hazard and needed no further change here.
+- **CNN-LSTM subprocess pool** (`cnn_lstm_process_pool.py`) — already bounds
+  every dispatch with `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS`.
+- **yfinance** — the installed library sets its own internal HTTP timeout by
+  default (confirmed against the installed source, not assumed), so the
+  yfinance fallback paths in `data/market_data.py` were not a gap.
+
+### What was found and fixed
+
+**Fix 1 — `execution/alpaca_broker.py` + `data/market_data.py`'s
+`AlpacaProvider` (the most serious finding).** `alpaca-py`'s `RESTClient`
+(the base class of both `TradingClient` and `StockHistoricalDataClient`) has
+**no timeout anywhere** — confirmed by reading the installed library source
+(`alpaca/common/rest.py`): a bare `requests.Session()` with no `timeout` key
+ever passed to `_one_request()`. This is worse in **kind**, not blast
+radius, than the FRED bug: `AlpacaBroker`'s methods (`submit_order`,
+`cancel_order`, `get_open_positions`, `get_account`, `get_orders`) call
+`self._client.X(...)` directly and synchronously inside `async def`
+methods — not even offloaded via `asyncio.to_thread` — so a stalled
+connection freezes that cycle's own dedicated event loop directly, rather
+than merely a background thread within it (the blast radius still matches
+the FRED bug: per `desktop/daemon_runtime.py`'s per-cycle-own-event-loop
+architecture, only that one cycle's thread hangs — the daemon's Control/
+Pilots APIs on their own separate event loops stay responsive). Reachable
+from `BrokerExecutionStep`, a live daemon-cycle step, whenever Alpaca is the
+active broker/data provider — including the live order-submission path.
+
+Fixed via a new shared module, `data/alpaca_http.py`, exporting
+`mount_timeout_adapter(session, timeout_seconds)` — it mounts a
+`_TimeoutHTTPAdapter(requests.adapters.HTTPAdapter)` on the client's own
+`self._session` attribute, since alpaca-py's constructor exposes no timeout
+parameter to pass through and neither client class accepts one per-call
+either. Called from both `AlpacaBroker.__init__` and
+`AlpacaProvider._build_client()`. New setting
+`settings.ALPACA_REQUEST_TIMEOUT_SECONDS` (default 15.0). Deliberately NOT
+converting `AlpacaBroker`'s methods to `asyncio.to_thread` — a larger,
+separate refactor — since the session-level timeout alone eliminates the
+"hangs forever" risk; the disclosed lesser residual is "blocks the event
+loop for up to 15s" instead of indefinitely.
+
+**Fix 2 — `pipeline/runner.py::AsyncPipelineRunner.run()` structural
+per-step timeout.** This exact call site
+(`await asyncio.to_thread(step.run, ctx)`) was named in the original FRED
+incident write-up above as one of two independently-unbounded paths, but
+the landed fix bounded FRED itself (`data_engine.py`), not this generic
+dispatcher — see the "Scope boundary" section above, which said so
+explicitly. Now wrapped in
+`asyncio.wait_for(..., timeout=settings.PIPELINE_STEP_TIMEOUT_SECONDS)`
+(new setting, default 900.0 / 15 min — well below `PIPELINE_STALL_ALERT_SECONDS`'s
+1800s, so this fires and lets the daemon reschedule the next cycle before
+the stall alert would even need to trigger). A timeout propagates as a
+`TimeoutError` exactly like any other step exception already would — this
+runner deliberately never wraps steps in a blanket try/except, per its own
+module docstring.
+
+**Fix 3 — three trivial one-line timeout additions.** All previously-
+unbounded `subprocess.run` calls found by the audit; all LOW blast radius
+since none block a shared service, only strand one background job/check:
+- `investyo_mcp_server.py::run_platform_tests()` — added `timeout=900`
+  (matching its sibling tool calls in the same file) plus a new
+  `except subprocess.TimeoutExpired` branch.
+- `scripts/preflight_check.py`'s `.env`-not-tracked check — added
+  `timeout=10` to its `git ls-files --error-unmatch .env` call plus a new
+  `except subprocess.TimeoutExpired: pass` branch (degrades to "not
+  tracked" rather than blocking the whole preflight run).
+- `"Gravity AI Review Suite.py"`'s check #14 (the `import llm,
+  llm.status_store, sys; ...` sentinel/SDK-reach subprocess check) — added
+  `timeout=120` plus `except subprocess.TimeoutExpired: no_sdk = False`.
+
+**Fix 4 — LLM chat endpoint timeouts (`api/data_api.py`'s `POST /api/chat`,
+`api/ws_api.py`'s `/ws/chat/live`).** 5 client-construction sites (Gemini
+×2, Anthropic, OpenAI, local/OpenAI-compatible) had no explicit timeout —
+confirmed by reading the installed SDK source directly:
+`google-genai`'s own default is **no timeout at all** when unset (traced to
+`_api_client.py`'s `max_allowed_time = float('inf')`), and Anthropic/OpenAI
+silently inherit their SDK's 10-minute default. New setting
+`settings.AI_CHAT_TIMEOUT_SECONDS` (default 120.0 — larger than the
+existing short, non-streaming `LLM_COMMENTARY_TIMEOUT_SECONDS`/
+`OPAL_RESEARCH_TIMEOUT_SECONDS` since this covers a streaming interactive
+chat response; httpx's `Timeout`, which all three SDKs build on, applies
+its read-timeout PER CHUNK for a streaming call rather than as a hard
+end-to-end cutoff, so this bounds "how long we wait for the next token,"
+not total conversation length) is now passed explicitly at all 5 sites.
+Both endpoints are interactive, user-initiated, and run on a separate
+FastAPI process from the orchestrator daemon — a stall there is a
+resource-leak/bad-UX risk on that API process, not a silent multi-day
+pipeline outage like the original FRED bug.
+
+### Deliberately deferred, not fixed
+`api/ws_api.py`'s `client_to_gemini()` function's
+`await websocket.receive_text()` call has no idle timeout — an idle browser
+client can leak one asyncio task pair plus one OS socket to Gemini
+indefinitely. This is a session-lifecycle/UX design decision (when should an
+idle voice/chat session actually be torn down?), not a one-line bound, and
+was deliberately left as a documented follow-up rather than bolted on under
+time pressure.
+
+Tests: `tests/test_alpaca_http.py`, extended `tests/test_alpaca_broker.py`,
+extended `tests/test_market_data.py`, `tests/test_pipeline_runner.py`,
+extended `tests/test_investyo_mcp_server.py` and
+`tests/test_preflight.py`, plus extended chat-endpoint tests.

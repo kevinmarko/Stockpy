@@ -76,6 +76,7 @@ class AsyncPipelineRunner:
 
     async def run(self, ctx: "RunContext", progress: Optional["ProgressReporter"] = None) -> None:
         import asyncio
+        from settings import settings
         ctx.progress = progress
         for step in self._steps:
             if step.should_skip(ctx):
@@ -86,9 +87,21 @@ class AsyncPipelineRunner:
                 continue
             if progress is not None:
                 progress.start_stage(step.name, symbols_total=len(ctx.symbols))
-            
+
             if asyncio.iscoroutinefunction(step.run):
                 await step.run(ctx)
             else:
-                await asyncio.to_thread(step.run, ctx)
+                # 2026-08 fix: this dispatch was named in the FRED-timeout
+                # incident as one of two independently-unbounded call paths
+                # reaching that bug, but the landed fix bounded FRED itself
+                # (data_engine.py), not this generic dispatcher -- a future
+                # step making an unbounded call would reproduce the same
+                # symptom with nothing to catch it. A TimeoutError here
+                # propagates exactly like any other step exception already
+                # does (this runner deliberately never wraps steps in a
+                # blanket try/except -- see this module's own docstring).
+                await asyncio.wait_for(
+                    asyncio.to_thread(step.run, ctx),
+                    timeout=settings.PIPELINE_STEP_TIMEOUT_SECONDS,
+                )
 

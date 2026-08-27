@@ -324,6 +324,84 @@ class TestAlpacaProvider:
 
 
 # ---------------------------------------------------------------------------
+# 3b. AlpacaProvider._build_client() -- 2026-08 HTTP-timeout-hardening fix.
+# ---------------------------------------------------------------------------
+# StockHistoricalDataClient subclasses the same alpaca-py RESTClient as
+# execution/alpaca_broker.py's TradingClient, which exposes no timeout of
+# its own (confirmed against the installed source) -- get_latest_quote /
+# get_intraday_bars used to be able to block forever on a stalled
+# connection. See data/alpaca_http.py's module docstring and
+# tests/test_alpaca_http.py for full coverage of the adapter itself; these
+# tests are spy assertions on the actual _build_client() call, not a
+# re-statement of the docstring's claim.
+#
+# mount_timeout_adapter is imported LOCALLY inside _build_client()
+# (``from data.alpaca_http import mount_timeout_adapter``), so it must be
+# patched at its DEFINITION site (data.alpaca_http.mount_timeout_adapter) --
+# verified empirically before writing these tests: patching
+# data.alpaca_http.mount_timeout_adapter before constructing AlpacaProvider()
+# does intercept the call, since the local ``from X import Y`` re-resolves
+# X.Y at the moment _build_client() actually runs.
+# ---------------------------------------------------------------------------
+
+class TestAlpacaProviderBuildClientTimeoutWiring:
+    def test_build_client_mounts_timeout_adapter_on_real_client_session(self):
+        from settings import settings
+
+        fake_client = MagicMock()
+        with patch(
+            "alpaca.data.historical.StockHistoricalDataClient",
+            return_value=fake_client,
+        ), patch("data.alpaca_http.mount_timeout_adapter") as _mount:
+            from data.market_data import AlpacaProvider
+            provider = AlpacaProvider(api_key="k", secret_key="s")
+
+        assert provider._client is fake_client
+        _mount.assert_called_once_with(
+            fake_client._session, settings.ALPACA_REQUEST_TIMEOUT_SECONDS
+        )
+
+    def test_build_client_honors_a_monkeypatched_timeout_setting(self, monkeypatch):
+        from settings import settings
+        monkeypatch.setattr(settings, "ALPACA_REQUEST_TIMEOUT_SECONDS", 42.0)
+
+        fake_client = MagicMock()
+        with patch(
+            "alpaca.data.historical.StockHistoricalDataClient",
+            return_value=fake_client,
+        ), patch("data.alpaca_http.mount_timeout_adapter") as _mount:
+            from data.market_data import AlpacaProvider
+            AlpacaProvider(api_key="k", secret_key="s")
+
+        _mount.assert_called_once_with(fake_client._session, 42.0)
+
+    def test_build_client_mount_runs_for_real_against_the_client_session(self):
+        """Unpatched mount_timeout_adapter: the real function must run
+        synchronously inside _build_client() and mount a genuine
+        _TimeoutHTTPAdapter on both schemes of the client's own session --
+        not merely be scheduled or a no-op."""
+        from settings import settings
+        from data.alpaca_http import _TimeoutHTTPAdapter
+
+        fake_client = MagicMock()
+        with patch(
+            "alpaca.data.historical.StockHistoricalDataClient",
+            return_value=fake_client,
+        ):
+            from data.market_data import AlpacaProvider
+            AlpacaProvider(api_key="k", secret_key="s")
+
+        session = fake_client._session  # a MagicMock (fake_client is a MagicMock)
+        assert session.mount.call_count == 2
+        schemes = {call.args[0] for call in session.mount.call_args_list}
+        assert schemes == {"https://", "http://"}
+        for call in session.mount.call_args_list:
+            adapter = call.args[1]
+            assert isinstance(adapter, _TimeoutHTTPAdapter)
+            assert adapter._timeout == settings.ALPACA_REQUEST_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
 # 4. YFinanceProvider
 # ---------------------------------------------------------------------------
 

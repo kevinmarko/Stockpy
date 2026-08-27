@@ -24,6 +24,12 @@ Covers:
    - Thought event emitted to client
    - Result formatted into types.FunctionResponse and sent via session.send_tool_response
    - Unknown tools and tool exceptions handled gracefully without crashing
+
+4. Client-level timeout wiring (settings.AI_CHAT_TIMEOUT_SECONDS, 2026-08
+   fix -- see TestLiveChatTimeoutWiring below): the genai.Client(...)
+   constructed for this endpoint must pass an explicit http_options
+   timeout, since google-genai's own default is confirmed to be NO TIMEOUT
+   AT ALL when unset.
 """
 
 import asyncio
@@ -147,6 +153,81 @@ class TestLoopbackOnlyFailOpen:
             msg = ws.receive_json()
             assert msg["type"] == "error"
             assert "GEMINI_API_KEY" in msg["message"]
+
+
+class TestLiveChatTimeoutWiring:
+    """Covers the 2026-08 fix for settings.AI_CHAT_TIMEOUT_SECONDS: the
+    Gemini Live client (client = genai.Client(api_key=..., http_options=...))
+    must pass an explicit http_options timeout, since google-genai's own
+    default is confirmed (by reading _api_client.py directly) to be NO
+    TIMEOUT AT ALL when unset -- see
+    docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md and
+    settings.AI_CHAT_TIMEOUT_SECONDS's own docstring.
+
+    Uses unittest.mock.patch.object(genai, "Client", ...) exactly like
+    TestLiveChatSession below (a real MagicMock spy, so call_args records
+    the actual kwargs passed) with a distinct test value (42.0, vs. the
+    real 120.0 default) to prove the call site reads the live setting
+    rather than a hardcoded literal.
+    """
+
+    def test_live_chat_client_receives_configured_timeout(self, monkeypatch):
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", "real-key-mocked")
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
+        monkeypatch.setattr(settings, "AI_CHAT_TIMEOUT_SECONDS", 42.0)
+
+        class _FakeAsyncGen:
+            def __init__(self, items):
+                self._items = list(items)
+                self._idx = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self._idx < len(self._items):
+                    item = self._items[self._idx]
+                    self._idx += 1
+                    return item
+                while True:
+                    await asyncio.sleep(0.1)
+
+        class _FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+            async def send_realtime_input(self, **kwargs):
+                pass
+
+            def receive(self):
+                return _FakeAsyncGen([])
+
+        class _FakeLive:
+            @staticmethod
+            def connect(model, config):
+                return _FakeSession()
+
+        class _FakeAio:
+            live = _FakeLive()
+
+        class _FakeClient:
+            aio = _FakeAio()
+
+        from google import genai
+        with patch.object(genai, "Client", return_value=_FakeClient()) as mock_client_ctor:
+            with client.websocket_connect("/ws/chat/live") as ws:
+                connected = ws.receive_json()
+                assert connected["type"] == "connected"
+
+        mock_client_ctor.assert_called_once()
+        call_kwargs = mock_client_ctor.call_args.kwargs
+        assert call_kwargs["api_key"] == "real-key-mocked"
+        http_options = call_kwargs["http_options"]
+        assert http_options.timeout == 42000
+        assert http_options.timeout == int(settings.AI_CHAT_TIMEOUT_SECONDS * 1000)
 
 
 class TestLiveChatSession:
