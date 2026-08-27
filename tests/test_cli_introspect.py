@@ -148,3 +148,15 @@ def test_capture_command_dead_letters_on_failure(tmp_path: Path):
 
 def test_capture_command_dead_letters_on_missing_target():
     assert capture_command("module", "no.such.module.xyz", "missing", "python -m nope") is None
+
+@pytest.mark.parametrize("script_name", [
+    "scripts/backfill_edgar_fundamentals.py",
+    "scripts/backfill_news_history.py",
+    "scripts/backfill_news_history_from_audit.py",
+    "scripts/backfill_sentiment_history.py",
+])
+def test_backfill_scripts_introspect_cleanly(script_name: str):
+    """The four backfill scripts must parse cleanly and not dead-letter."""
+    spec = capture_command("path", script_name, script_name, f"python {script_name}")
+    assert spec is not None, f"{script_name} failed to introspect (dead-lettered)"
+    assert "--tickers" in {o["name"] for o in spec.get("options", [])}

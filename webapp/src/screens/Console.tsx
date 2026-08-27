@@ -9,6 +9,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "../components/AutoRefreshContext";
 import type { JobRecord, ObservabilitySummary } from "../api/types";
+import { JobConflictError } from "../api/types";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
 
@@ -144,6 +145,14 @@ export function Console() {
     setJobHistory((prev) => {
       const idx = prev.findIndex((j) => j.job_id === job.job_id);
       if (idx >= 0) {
+        const existing = prev[idx];
+        if (
+          existing.status === job.status &&
+          existing.exit_code === job.exit_code &&
+          existing.is_running === job.is_running
+        ) {
+          return prev;
+        }
         const next = [...prev];
         next[idx] = job;
         return next;
@@ -205,14 +214,25 @@ export function Console() {
         </div>
       );
     } catch (err: any) {
-      toast.error(
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Job {jobType} failed to launch</span>
-          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
-            {err?.message ?? String(err)}
-          </span>
-        </div>
-      );
+      if (err instanceof JobConflictError) {
+        toast.error(
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Already running</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+              Job {jobType} is already active (job {err.existingJobId}). Wait for it to finish or cancel it.
+            </span>
+          </div>
+        );
+      } else {
+        toast.error(
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Job {jobType} failed to launch</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+              {err?.message ?? String(err)}
+            </span>
+          </div>
+        );
+      }
     } finally {
       setLoading(false);
     }
