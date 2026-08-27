@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 331,
+    "live_safe": 333,
     "no_op": 3,
-    "restart_required": 105,
-    "total": 439
+    "restart_required": 106,
+    "total": 442
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 433,
+  "files_scanned": 434,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -147,6 +147,7 @@
     "AGENTIC_MAX_CANDIDATES",
     "AI_CHAT_DEFAULT_MODEL",
     "AI_CHAT_DEFAULT_PROVIDER",
+    "AI_CHAT_TIMEOUT_SECONDS",
     "AI_GENERATION_API_ENABLED",
     "ALERT_DEDUP_WINDOW_SECONDS",
     "ALERT_FILE_PATH",
@@ -378,6 +379,7 @@
     "PILOTS_TOP_N",
     "PIPELINE_STALL_ALERT_ENABLED",
     "PIPELINE_STALL_ALERT_SECONDS",
+    "PIPELINE_STEP_TIMEOUT_SECONDS",
     "PIT_CAPTURE_ENABLED",
     "PROGRESS_POLL_SECONDS",
     "PROMPT_CACHE_DIR",
@@ -480,13 +482,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 870,
+    "attr": 878,
     "factory_param": 4,
     "getattr_const": 373,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 258,
+    "attr": 261,
     "factory_param": 4,
     "getattr_const": 209,
     "os_environ": 18
@@ -610,9 +612,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1894",
+        "site": "data/market_data.py:1903",
         "via": [
-          1799
+          1808
         ]
       },
       {
@@ -636,6 +638,28 @@
         "via": []
       }
     ],
+    "ALPACA_REQUEST_TIMEOUT_SECONDS": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "indirect_init_helper_d1"
+        ],
+        "site": "data/market_data.py:238",
+        "via": [
+          221
+        ]
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_body"
+        ],
+        "site": "execution/alpaca_broker.py:193",
+        "via": []
+      }
+    ],
     "ALPACA_SECRET_KEY": [
       {
         "discarded": false,
@@ -643,9 +667,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1895",
+        "site": "data/market_data.py:1904",
         "via": [
-          1799
+          1808
         ]
       },
       {
@@ -1655,7 +1679,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1470",
+        "site": "data/market_data.py:1479",
         "via": []
       },
       {
@@ -1664,7 +1688,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1504",
+        "site": "data/market_data.py:1513",
         "via": []
       }
     ],
@@ -1675,7 +1699,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1811",
+        "site": "data/market_data.py:1820",
         "via": []
       },
       {
@@ -1684,9 +1708,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1848",
+        "site": "data/market_data.py:1857",
         "via": [
-          1786
+          1795
         ]
       }
     ],
@@ -1697,9 +1721,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1859",
+        "site": "data/market_data.py:1868",
         "via": [
-          1786
+          1795
         ]
       }
     ],
@@ -1743,7 +1767,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:979",
+        "site": "data/market_data.py:988",
         "via": []
       }
     ],
@@ -1919,7 +1943,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1464",
+        "site": "data/market_data.py:1473",
         "via": []
       },
       {
@@ -1928,7 +1952,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1499",
+        "site": "data/market_data.py:1508",
         "via": []
       },
       {
@@ -1937,7 +1961,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1783",
+        "site": "data/market_data.py:1792",
         "via": []
       },
       {
@@ -1946,7 +1970,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2326",
+        "site": "data/market_data.py:2335",
         "via": []
       }
     ],
@@ -1957,7 +1981,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1347",
+        "site": "data/market_data.py:1356",
         "via": []
       },
       {
@@ -1966,7 +1990,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1467",
+        "site": "data/market_data.py:1476",
         "via": []
       },
       {
@@ -1975,7 +1999,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1500",
+        "site": "data/market_data.py:1509",
         "via": []
       },
       {
@@ -1984,7 +2008,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1784",
+        "site": "data/market_data.py:1793",
         "via": []
       },
       {
@@ -1993,7 +2017,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2327",
+        "site": "data/market_data.py:2336",
         "via": []
       }
     ],
@@ -2004,7 +2028,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1809",
+        "site": "data/market_data.py:1818",
         "via": []
       }
     ],
@@ -2242,7 +2266,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1776",
+        "site": "data/market_data.py:1785",
         "via": []
       },
       {
@@ -2251,7 +2275,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2115",
+        "site": "data/market_data.py:2124",
         "via": []
       }
     ],
@@ -2262,9 +2286,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1839",
+        "site": "data/market_data.py:1848",
         "via": [
-          1786
+          1795
         ]
       }
     ],
@@ -2275,7 +2299,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1771",
+        "site": "data/market_data.py:1780",
         "via": []
       }
     ],
@@ -2460,7 +2484,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6061",
+        "site": "investyo_mcp_server.py:6064",
         "via": []
       }
     ],
@@ -2480,7 +2504,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6013",
+        "site": "investyo_mcp_server.py:6016",
         "via": []
       }
     ],
@@ -2520,7 +2544,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6021",
+        "site": "investyo_mcp_server.py:6024",
         "via": []
       }
     ],
@@ -3196,8 +3220,8 @@
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
-    "indirect_init_helper_d1": 12,
-    "init_body": 7,
+    "indirect_init_helper_d1": 13,
+    "init_body": 8,
     "init_self_assign": 51,
     "method_self_assign": 4,
     "module_level": 79,

@@ -14612,11 +14612,19 @@ class GravityAIAuditor:
                 "'strategy_engine','forecasting_engine','main_orchestrator'} & set(sys.modules);"
                 "assert not bad, bad"
             )
-            _proc = _subprocess.run(
-                [_sys.executable, "-c", _code], cwd=str(repo_root),
-                capture_output=True, text=True,
-            )
-            no_sdk = _proc.returncode == 0
+            try:
+                _proc = _subprocess.run(
+                    [_sys.executable, "-c", _code], cwd=str(repo_root),
+                    capture_output=True, text=True,
+                    timeout=120,
+                )
+                no_sdk = _proc.returncode == 0
+            except _subprocess.TimeoutExpired:
+                # 2026-08 fix: this call previously had no timeout at all
+                # (see docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md's
+                # follow-up sweep) -- a hang here now fails this ONE check
+                # rather than blocking forever.
+                no_sdk = False
             c14 = no_key and no_fp and no_sdk
             audit["checks"].append({
                 "check": "status_store: no key material or fingerprint persisted/returned + import llm pulls no SDK",

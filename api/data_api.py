@@ -2073,7 +2073,15 @@ async def chat_endpoint(req: ChatMessageRequest):
                 yield _sse("THOUGHT", f"Routing to Gemini ({model_name})...")
                 from google import genai
                 from google.genai import types
-                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                # 2026-08 fix: google-genai's own default is NO TIMEOUT AT
+                # ALL when unset (confirmed against the installed SDK
+                # source) -- see settings.AI_CHAT_TIMEOUT_SECONDS.
+                client = genai.Client(
+                    api_key=settings.GEMINI_API_KEY,
+                    http_options=types.HttpOptions(
+                        timeout=int(settings.AI_CHAT_TIMEOUT_SECONDS * 1000)
+                    ),
+                )
 
                 contents = []
                 if req.context:
@@ -2119,7 +2127,12 @@ async def chat_endpoint(req: ChatMessageRequest):
                 model_name = req.model or "claude-3-5-sonnet-20241022"
                 yield _sse("THOUGHT", f"Routing to Claude ({model_name})...")
                 import anthropic
-                client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                # 2026-08 fix: previously inherited the SDK's 10-minute
+                # default -- see settings.AI_CHAT_TIMEOUT_SECONDS.
+                client = anthropic.Anthropic(
+                    api_key=settings.ANTHROPIC_API_KEY,
+                    timeout=settings.AI_CHAT_TIMEOUT_SECONDS,
+                )
 
                 messages = []
                 for msg in (req.history or []):
@@ -2154,7 +2167,12 @@ async def chat_endpoint(req: ChatMessageRequest):
                 model_name = req.model or "gpt-4o"
                 yield _sse("THOUGHT", f"Routing to OpenAI ({model_name})...")
                 import openai
-                client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                # 2026-08 fix: previously inherited the SDK's 10-minute
+                # default -- see settings.AI_CHAT_TIMEOUT_SECONDS.
+                client = openai.AsyncOpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    timeout=settings.AI_CHAT_TIMEOUT_SECONDS,
+                )
 
                 messages = []
                 if req.context:
@@ -2186,7 +2204,16 @@ async def chat_endpoint(req: ChatMessageRequest):
 
                 yield _sse("THOUGHT", f"Routing to Local LLM ({model_name} at {base_url})...")
                 import openai
-                client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
+                # 2026-08 fix: previously inherited the SDK's 10-minute
+                # default -- a self-hosted/local endpoint is arguably MORE
+                # likely to hang (stuck model load, OOM, no upstream
+                # monitoring) than a hosted SaaS API. See
+                # settings.AI_CHAT_TIMEOUT_SECONDS.
+                client = openai.AsyncOpenAI(
+                    base_url=base_url,
+                    api_key=api_key,
+                    timeout=settings.AI_CHAT_TIMEOUT_SECONDS,
+                )
 
                 messages = []
                 if req.context:

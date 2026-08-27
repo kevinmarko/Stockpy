@@ -1011,11 +1011,14 @@ def run_platform_tests() -> str:
             ["pytest"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            timeout=900,
         )
         return f"Test suite passed successfully:\n{result.stdout}"
     except subprocess.CalledProcessError as e:
         return f"Test suite failed:\nStandard Output:\n{e.stdout}\nError Output:\n{e.stderr}"
+    except subprocess.TimeoutExpired:
+        return "Test suite timed out after 900 seconds."
     except FileNotFoundError:
         return "Error: pytest is not installed or not found in PATH."
 

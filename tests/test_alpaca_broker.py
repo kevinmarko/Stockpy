@@ -51,6 +51,7 @@ from execution.broker_base import (
     OrderStatus,
     OrderType,
 )
+from settings import settings
 
 
 # ---------------------------------------------------------------------------
@@ -335,3 +336,69 @@ class TestConstruction:
         # The SDK client was constructed with paper=True.
         _, kwargs = _TC.call_args
         assert kwargs.get("paper") is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-08 fix: __init__ mounts a default HTTP timeout onto TradingClient's
+# underlying requests.Session (data/alpaca_http.py) -- neither TradingClient
+# nor its per-call kwargs expose a timeout of their own (confirmed against
+# the installed alpaca-py source), so a stalled connection used to be able
+# to block AlpacaBroker's calls forever. See data/alpaca_http.py's module
+# docstring and tests/test_alpaca_http.py for full coverage of the adapter
+# itself. These tests are spy assertions on the actual __init__ call, not a
+# re-statement of the docstring's claim.
+#
+# mount_timeout_adapter is imported LOCALLY inside AlpacaBroker.__init__
+# (``from data.alpaca_http import mount_timeout_adapter``), so it must be
+# patched at its DEFINITION site (data.alpaca_http.mount_timeout_adapter),
+# not at execution.alpaca_broker.mount_timeout_adapter (no such module-level
+# name exists there to patch) -- verified empirically before writing these
+# tests: patching data.alpaca_http.mount_timeout_adapter before constructing
+# AlpacaBroker() does intercept the call, since the local ``from X import Y``
+# re-resolves X.Y at the moment __init__ actually runs.
+# ---------------------------------------------------------------------------
+
+class TestMountTimeoutAdapterWiring:
+    def test_init_calls_mount_timeout_adapter_with_client_session_and_setting(self):
+        with mock.patch("alpaca.trading.client.TradingClient") as _TC, \
+                mock.patch("data.alpaca_http.mount_timeout_adapter") as _mount:
+            AlpacaBroker(api_key="k", secret_key="s", paper=True)
+
+        fake_client = _TC.return_value
+        _mount.assert_called_once_with(
+            fake_client._session, settings.ALPACA_REQUEST_TIMEOUT_SECONDS
+        )
+
+    def test_init_honors_a_monkeypatched_timeout_setting(self, monkeypatch):
+        monkeypatch.setattr(settings, "ALPACA_REQUEST_TIMEOUT_SECONDS", 42.0)
+
+        with mock.patch("alpaca.trading.client.TradingClient") as _TC, \
+                mock.patch("data.alpaca_http.mount_timeout_adapter") as _mount:
+            AlpacaBroker(api_key="k", secret_key="s", paper=True)
+
+        fake_client = _TC.return_value
+        _mount.assert_called_once_with(fake_client._session, 42.0)
+
+    def test_mount_timeout_adapter_is_called_before_broker_init_returns(self):
+        """The mount call happens synchronously inside __init__ -- by the
+        time the constructor returns, the adapter must already be mounted on
+        the real (unmocked) session object, not merely scheduled."""
+        with mock.patch("alpaca.trading.client.TradingClient") as _TC:
+            broker = AlpacaBroker(api_key="k", secret_key="s", paper=True)
+
+        session = broker._client._session
+        # mount_timeout_adapter ran for real here (not patched out), so the
+        # session's adapters are genuine _TimeoutHTTPAdapter instances.
+        from data.alpaca_http import _TimeoutHTTPAdapter
+
+        assert isinstance(session.mount.call_args_list, list)  # a MagicMock session
+        # broker._client is a MagicMock (TradingClient patched wholesale), so
+        # session is also a MagicMock -- assert mount() was invoked twice
+        # (https:// and http://) with a real _TimeoutHTTPAdapter each time.
+        assert session.mount.call_count == 2
+        schemes = {call.args[0] for call in session.mount.call_args_list}
+        assert schemes == {"https://", "http://"}
+        for call in session.mount.call_args_list:
+            adapter = call.args[1]
+            assert isinstance(adapter, _TimeoutHTTPAdapter)
+            assert adapter._timeout == settings.ALPACA_REQUEST_TIMEOUT_SECONDS

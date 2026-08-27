@@ -188,6 +188,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # run, restarts the daemon, or bypasses any write gate.
     "PIPELINE_STALL_ALERT_ENABLED",
     "PIPELINE_STALL_ALERT_SECONDS",
+    # Structural per-step timeout for AsyncPipelineRunner.run() (pipeline/runner.py).
+    # Non-secret; a GUI bug here can only change how soon a wedged step fails.
+    "PIPELINE_STEP_TIMEOUT_SECONDS",
     # Cross-process settings hot-reload for the persistent orchestrator
     # daemon (desktop/orchestrator_daemon.py). Non-secret operational
     # tunables; a GUI bug here can only change how often/whether the daemon
@@ -233,6 +236,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
     # secret: the broker keys themselves are SECRET_KEYS.
     "ALPACA_PAPER",
+    # Per-request HTTP timeout for alpaca-py REST calls (execution/alpaca_broker.py,
+    # data/market_data.py's AlpacaProvider). Non-secret; a GUI bug here can
+    # only change how soon a stalled Alpaca call is given up on.
+    "ALPACA_REQUEST_TIMEOUT_SECONDS",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     "MARKET_DATA_BARS_TTL_SECONDS",
@@ -318,6 +325,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "OPAL_RESEARCH_PROVIDER",            # "openai" | "gemini" | "none"
     "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o" or "gemini-2.5-flash"
     # Gemini Live & Chat model tunables (non-secret). GEMINI_API_KEY is in SECRET_KEYS.
+    # Client-level request timeout for the interactive AI chat endpoints
+    # (POST /api/chat, /ws/chat/live). Non-secret; a GUI bug here can only
+    # change how soon a stalled provider call is given up on.
+    "AI_CHAT_TIMEOUT_SECONDS",
     "GEMINI_LIVE_CHAT_ENABLED",
     "GEMINI_LIVE_CHAT_MODEL",
     "GEMINI_LIVE_VOICE_NAME",

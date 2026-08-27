@@ -355,7 +355,22 @@ async def ws_live_chat_endpoint(
         # Lazy import grounding tools from data_api
         from api.data_api import _CHAT_TOOLS
 
-        client = genai.Client(api_key=gemini_key)
+        # 2026-08 fix: google-genai's own default is NO TIMEOUT AT ALL when
+        # unset (confirmed against the installed SDK source) -- see
+        # settings.AI_CHAT_TIMEOUT_SECONDS. Note: client.aio.live.connect()
+        # doesn't accept a per-call http_options override (confirmed against
+        # the SDK source), so this bounds only what the client-level default
+        # covers for the Live/WS handshake -- a separate, disclosed gap
+        # (client_to_gemini()'s receive_text() has no idle timeout, so an
+        # idle browser client can leak this session indefinitely) is a
+        # deliberately deferred follow-up; see
+        # docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
+        client = genai.Client(
+            api_key=gemini_key,
+            http_options=types.HttpOptions(
+                timeout=int(settings.AI_CHAT_TIMEOUT_SECONDS * 1000)
+            ),
+        )
         model_name = getattr(settings, "GEMINI_LIVE_CHAT_MODEL", "gemini-3.1-flash-live-preview")
         voice_name = getattr(settings, "GEMINI_LIVE_VOICE_NAME", "Aoede")
 

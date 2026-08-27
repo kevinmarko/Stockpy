@@ -40,6 +40,15 @@ Phase 6) fixed by using `next(it, SENTINEL)` instead of bare `next(it)`.
 `TestIterBlocking` exercises the fixed function directly, in well under a
 second, rather than relying on `TestContextField`'s full HTTP-round-trip
 tests (which only catch a regression here via a 180s pytest-timeout hang).
+
+Also covers the 2026-08 settings.AI_CHAT_TIMEOUT_SECONDS fix (see
+`TestAIChatTimeoutWiring` and the timeout assertions added to
+`TestMultiProviderRouting`'s OpenAI/local tests): every LLM SDK client
+constructed inside the Gemini/Anthropic/OpenAI/local provider branches now
+passes an explicit client-level timeout, since google-genai's own default
+is confirmed to be NO TIMEOUT AT ALL when unset and Anthropic/OpenAI both
+otherwise inherit their SDK's 10-minute default -- see
+docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
 """
 from __future__ import annotations
 
@@ -129,9 +138,14 @@ class TestExceptionSanitization:
                 self.role = role
                 self.parts = parts
 
+        class _FakeHttpOptions:
+            def __init__(self, **kwargs):
+                self.timeout = kwargs.get("timeout")
+
         class _FakeTypesModule:
             Content = _FakeContent
             Part = _FakePart
+            HttpOptions = _FakeHttpOptions
 
         class _FakeModels:
             @staticmethod
@@ -143,7 +157,7 @@ class TestExceptionSanitization:
 
         class _FakeGenaiModule:
             @staticmethod
-            def Client(api_key):
+            def Client(**kwargs):
                 return _FakeClient()
 
         import sys
@@ -169,8 +183,12 @@ def _fake_google_genai_module(monkeypatch, captured):
     """Installs a fake `google.genai` (+ `.types`) module pair into
     sys.modules so `from google import genai` / `from google.genai import
     types` inside chat_endpoint resolve to test doubles, and records the
-    kwargs passed to `generate_content_stream` into `captured['kwargs']`.
-    Mirrors TestExceptionSanitization's fake-module technique above."""
+    kwargs passed to `generate_content_stream` into `captured['kwargs']`,
+    plus the kwargs passed to `genai.Client(...)` itself into
+    `captured['client_kwargs']` (used by TestAIChatTimeoutWiring below to
+    assert the AI_CHAT_TIMEOUT_SECONDS-derived http_options is threaded
+    through). Mirrors TestExceptionSanitization's fake-module technique
+    above."""
     import sys
     import types as _std_types
 
@@ -188,10 +206,15 @@ def _fake_google_genai_module(monkeypatch, captured):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
+    class _FakeHttpOptions:
+        def __init__(self, **kwargs):
+            self.timeout = kwargs.get("timeout")
+
     class _FakeTypesModule:
         Content = _FakeContent
         Part = _FakePart
         GenerateContentConfig = _FakeGenerateContentConfig
+        HttpOptions = _FakeHttpOptions
 
     class _FakeModels:
         @staticmethod
@@ -204,7 +227,8 @@ def _fake_google_genai_module(monkeypatch, captured):
 
     class _FakeGenaiModule:
         @staticmethod
-        def Client(api_key):
+        def Client(**kwargs):
+            captured["client_kwargs"] = kwargs
             return _FakeClient()
 
     fake_google_genai_pkg = _std_types.ModuleType("google.genai")
@@ -220,7 +244,9 @@ def _fake_google_genai_module(monkeypatch, captured):
 def _fake_anthropic_module(monkeypatch, captured):
     """Installs a fake `anthropic` module into sys.modules recording the
     kwargs passed to `client.messages.stream(...)` into
-    `captured['kwargs']`."""
+    `captured['kwargs']`, plus the kwargs passed to `anthropic.Anthropic(...)`
+    itself into `captured['client_kwargs']` (used by
+    TestAIChatTimeoutWiring below)."""
     import sys
     import types as _std_types
 
@@ -241,8 +267,12 @@ def _fake_anthropic_module(monkeypatch, captured):
     class _FakeAnthropicClient:
         messages = _FakeMessages()
 
+    def _fake_anthropic_constructor(**kwargs):
+        captured["client_kwargs"] = kwargs
+        return _FakeAnthropicClient()
+
     fake_anthropic_module = _std_types.ModuleType("anthropic")
-    fake_anthropic_module.Anthropic = lambda api_key: _FakeAnthropicClient()
+    fake_anthropic_module.Anthropic = _fake_anthropic_constructor
 
     monkeypatch.setitem(sys.modules, "anthropic", fake_anthropic_module)
 
@@ -333,6 +363,52 @@ class TestContextField:
         assert "system" not in captured["kwargs"]
 
 
+class TestAIChatTimeoutWiring:
+    """Covers the 2026-08 fix for settings.AI_CHAT_TIMEOUT_SECONDS: every
+    LLM SDK client constructed inside chat_endpoint's provider branches must
+    pass an explicit timeout, since google-genai's own default is NO
+    TIMEOUT AT ALL when unset, and Anthropic/OpenAI both otherwise inherit
+    their SDK's 10-minute default -- see
+    docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md and
+    settings.AI_CHAT_TIMEOUT_SECONDS's own docstring.
+
+    Each test monkeypatches AI_CHAT_TIMEOUT_SECONDS to a value (42.0)
+    distinct from the real default (120.0) and asserts the captured
+    client-construction kwargs reflect that overridden value -- proving the
+    call site reads the live setting rather than a hardcoded literal.
+    """
+
+    def test_gemini_client_receives_configured_timeout(self, monkeypatch):
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(settings, "AI_CHAT_TIMEOUT_SECONDS", 42.0)
+        captured: dict = {}
+        _fake_google_genai_module(monkeypatch, captured)
+
+        with _post_chat() as resp:
+            b"".join(resp.iter_bytes())
+
+        client_kwargs = captured["client_kwargs"]
+        assert client_kwargs["api_key"] == "fake-key"
+        http_options = client_kwargs["http_options"]
+        assert http_options.timeout == 42000
+        assert http_options.timeout == int(settings.AI_CHAT_TIMEOUT_SECONDS * 1000)
+
+    def test_anthropic_client_receives_configured_timeout(self, monkeypatch):
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+        monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "fake-key")
+        monkeypatch.setattr(settings, "AI_CHAT_TIMEOUT_SECONDS", 42.0)
+        captured: dict = {}
+        _fake_anthropic_module(monkeypatch, captured)
+
+        with _post_chat() as resp:
+            b"".join(resp.iter_bytes())
+
+        client_kwargs = captured["client_kwargs"]
+        assert client_kwargs["api_key"] == "fake-key"
+        assert client_kwargs["timeout"] == 42.0
+        assert client_kwargs["timeout"] == settings.AI_CHAT_TIMEOUT_SECONDS
+
+
 class TestIterBlocking:
     """Direct, isolated regression coverage for `_iter_blocking` -- see the
     module docstring for the full StopIteration/run_in_executor hazard this
@@ -402,6 +478,11 @@ class TestMultiProviderRouting:
     def test_openai_routing_invokes_openai_client(self, monkeypatch):
         monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", True)
         monkeypatch.setattr(settings, "OPENAI_API_KEY", "fake-openai-key")
+        # Distinct from the real 120.0 default -- proves the client
+        # construction below reads the live setting, not a hardcoded
+        # literal. See TestAIChatTimeoutWiring's docstring for the same
+        # convention applied to the Gemini/Anthropic branches.
+        monkeypatch.setattr(settings, "AI_CHAT_TIMEOUT_SECONDS", 42.0)
 
         captured = {}
 
@@ -441,10 +522,16 @@ class TestMultiProviderRouting:
             assert "Hello from OpenAI" in raw
             assert captured["kwargs"]["model"] == "o3-mini"
             assert any(m["role"] == "system" and "Test context" in m["content"] for m in captured["kwargs"]["messages"])
+            assert captured["client_kwargs"]["timeout"] == 42.0
+            assert captured["client_kwargs"]["timeout"] == settings.AI_CHAT_TIMEOUT_SECONDS
 
     def test_local_routing_uses_configured_base_url(self, monkeypatch):
         monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", True)
         monkeypatch.setattr(settings, "LOCAL_LLM_BASE_URL", "http://localhost:11434/v1")
+        # Distinct from the real 120.0 default -- proves the client
+        # construction below reads the live setting, not a hardcoded
+        # literal (see TestAIChatTimeoutWiring's docstring).
+        monkeypatch.setattr(settings, "AI_CHAT_TIMEOUT_SECONDS", 42.0)
 
         captured = {}
 
@@ -488,6 +575,8 @@ class TestMultiProviderRouting:
             assert "Hello from DeepSeek" in raw
             assert captured["client_kwargs"]["base_url"] == "http://localhost:11434/v1"
             assert captured["kwargs"]["model"] == "deepseek-r1"
+            assert captured["client_kwargs"]["timeout"] == 42.0
+            assert captured["client_kwargs"]["timeout"] == settings.AI_CHAT_TIMEOUT_SECONDS
 
     def test_local_routing_ignores_client_supplied_base_url(self, monkeypatch):
         """Security regression test: a request body cannot redirect the

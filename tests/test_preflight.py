@@ -890,6 +890,87 @@ class TestValidationStalenessOnlyFlag:
 
 
 # ---------------------------------------------------------------------------
+# env_not_committed
+# ---------------------------------------------------------------------------
+
+class TestEnvNotCommitted:
+    """Verify check_env_not_committed.
+
+    The check locates ``.env`` at ``_REPO_ROOT / ".env"`` (same convention
+    as check_env_no_duplicate_keys below) and shells out to
+    ``git ls-files --error-unmatch .env`` to determine whether it's tracked.
+    ``subprocess.run`` is patched directly (the function does ``import
+    subprocess`` locally inside its body, which still binds the same module
+    object ``unittest.mock.patch("subprocess.run", ...)`` patches).
+    """
+
+    def _write_env(self, tmp_path) -> None:
+        (tmp_path / ".env").write_text("FRED_API_KEY=abc\n", encoding="utf-8")
+
+    def test_missing_env_fails(self, tmp_path):
+        """No .env at all -> FAIL (not this check's job to skip silently)."""
+        from scripts.preflight_check import check_env_not_committed
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_not_committed()
+        assert r.passed is False
+        assert ".env file not found" in r.reason
+
+    def test_tracked_env_fails(self, tmp_path):
+        """git ls-files exit 0 (found in index) -> FAIL, tracked."""
+        from scripts.preflight_check import check_env_not_committed
+        self._write_env(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0)):
+            r = check_env_not_committed()
+        assert r.passed is False
+        assert "tracked by git" in r.reason
+
+    def test_untracked_env_passes(self, tmp_path):
+        """git ls-files nonzero exit (not found in index) -> PASS."""
+        from scripts.preflight_check import check_env_not_committed
+        self._write_env(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("subprocess.run", return_value=MagicMock(returncode=1)):
+            r = check_env_not_committed()
+        assert r.passed is True
+        assert "not git-tracked" in r.reason
+
+    def test_git_not_found_degrades_to_passed(self, tmp_path):
+        """git missing from PATH -> skip sub-check silently, still PASS."""
+        from scripts.preflight_check import check_env_not_committed
+        self._write_env(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("subprocess.run", side_effect=FileNotFoundError("git not found")):
+            r = check_env_not_committed()
+        assert r.passed is True
+        assert "not git-tracked" in r.reason
+
+    def test_git_timeout_degrades_to_passed_not_committed_check(self, tmp_path):
+        """2026-08 structural-timeout fix: a hung `git ls-files` call (now
+        bounded at timeout=10) must degrade to the same 'skip sub-check,
+        still PASS' fallback as the pre-existing FileNotFoundError branch,
+        never raise/block preflight."""
+        import subprocess
+        from scripts.preflight_check import check_env_not_committed
+        self._write_env(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)):
+            r = check_env_not_committed()
+        assert r.passed is True
+        assert "not git-tracked" in r.reason
+
+    def test_subprocess_run_called_with_10_second_timeout(self, tmp_path):
+        """Confirm the bounded 10s timeout is actually threaded into the
+        subprocess.run call, not just documented."""
+        from scripts.preflight_check import check_env_not_committed
+        self._write_env(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path), \
+             patch("subprocess.run", return_value=MagicMock(returncode=1)) as mock_run:
+            check_env_not_committed()
+        assert mock_run.call_args.kwargs.get("timeout") == 10
+
+
+# ---------------------------------------------------------------------------
 # env_no_duplicate_keys
 # ---------------------------------------------------------------------------
 
