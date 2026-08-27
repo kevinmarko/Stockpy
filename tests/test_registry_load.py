@@ -21,7 +21,7 @@ import yaml
 
 
 _REGISTRY_PATH = Path(__file__).parent.parent / "ml" / "registry.yaml"
-_REQUIRED_MODEL_FIELDS = {"role", "path", "trained_date", "cpcv_dsr", "pbo", "deployable", "notes"}
+_REQUIRED_MODEL_FIELDS = {"role", "owner", "materiality_tier", "path", "trained_date", "cpcv_dsr", "pbo", "deployable", "notes"}
 
 
 # ---------------------------------------------------------------------------
@@ -433,4 +433,34 @@ def test_update_model_metrics_explicit_path_error_propagates(tmp_path, monkeypat
 
     with pytest.raises(PermissionError):
         reg_io.update_model_metrics("lgbm_ranker", path=valid_reg, trained_date="2026-08-15")
+
+
+def test_load_registry_round_trips_owner_and_materiality_tier(tmp_path, monkeypatch):
+    from ml.registry_io import load_registry, update_model_metrics
+    from settings import settings
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    data = load_registry()
+    for model_id, spec in data["models"].items():
+        assert "owner" in spec, f"owner missing in {model_id}"
+        assert "materiality_tier" in spec, f"materiality_tier missing in {model_id}"
+        
+    # Test that update_model_metrics doesn't drop them
+    valid_reg = tmp_path / "reg.yaml"
+    valid_reg.write_text("models:\n  test_model:\n    role: test\n    owner: TBD\n    materiality_tier: experimental\n    trained_date: '2026-08-01'\n", encoding="utf-8")
+    
+    updated = update_model_metrics("test_model", path=valid_reg, trained_date="2026-08-15")
+    assert "owner" in updated
+    assert updated["owner"] == "TBD"
+    assert "materiality_tier" in updated
+    assert updated["materiality_tier"] == "experimental"
+
+    # Reload to ensure it round-tripped to disk
+    reloaded = load_registry(path=valid_reg)
+    assert reloaded["models"]["test_model"]["owner"] == "TBD"
+    assert reloaded["models"]["test_model"]["materiality_tier"] == "experimental"
 

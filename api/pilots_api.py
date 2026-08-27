@@ -8029,6 +8029,9 @@ def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, 
 
     if ohlcv_df is None or len(ohlcv_df) < 50:
         ohlcv_df = AutonomousBacktestRunner.generate_synthetic_ohlcv(500, regime="bull", seed=42)
+        data_source = "synthetic_demo_data"
+    else:
+        data_source = "real_historical_bars"
 
     cost = req.transaction_cost_bps if req.transaction_cost_bps is not None else req.cost_bps
     cost_val = float(cost) if cost is not None else 5.0
@@ -8039,6 +8042,7 @@ def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, 
         ohlcv_df=ohlcv_df,
         strategy_id=req.strategy_id or sym,
         apply_trend_gate=bool(req.apply_trend_gate),
+        data_source=data_source,
     )
 
     return result.to_dict()

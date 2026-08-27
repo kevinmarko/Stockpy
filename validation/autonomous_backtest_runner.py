@@ -426,6 +426,8 @@ class AutonomousBacktestResult:
     n_paths: int
     n_observations: int
     execution_time_seconds: float
+    data_source: str = "unknown"
+    is_synthetic_data: bool = False
     cpcv_mean_oos_sharpe: float = 0.0
     cpcv_mean_oos_max_dd: float = 0.0
     cpcv_mean_oos_sortino: float = 0.0
@@ -442,6 +444,8 @@ class AutonomousBacktestResult:
         return {
             "strategy_id": self.strategy_id,
             "is_deployable": self.is_deployable,
+            "data_source": self.data_source,
+            "is_synthetic_data": self.is_synthetic_data,
             "sharpe_ratio": round(self.sharpe_ratio, 4) if not np.isnan(self.sharpe_ratio) else None,
             "sortino_ratio": round(self.sortino_ratio, 4) if not np.isnan(self.sortino_ratio) else None,
             "max_drawdown": round(self.max_drawdown, 4) if not np.isnan(self.max_drawdown) else None,
@@ -1011,6 +1015,7 @@ class AutonomousBacktestRunner:
         metadata: Optional[Dict[str, Any]] = None,
         regime_series: Optional[pd.Series] = None,
         apply_trend_gate: bool = False,
+        data_source: str = "unknown",
     ) -> AutonomousBacktestResult:
         """
         Full autonomous validation execution:
@@ -1055,6 +1060,8 @@ class AutonomousBacktestRunner:
                 n_paths=0,
                 n_observations=len(ohlcv_df) if ohlcv_df is not None else 0,
                 execution_time_seconds=exec_time,
+                data_source=data_source,
+                is_synthetic_data=data_source != "real_historical_bars",
                 metadata=meta,
                 error=str(exc),
             )
@@ -1136,6 +1143,15 @@ class AutonomousBacktestRunner:
             failure_reasons.append(f"Regime Stability Score {regime_stability:.2f} failed multi-regime consistency test")
 
         is_deployable = bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass and passes_stability)
+        
+        is_synthetic = data_source != "real_historical_bars"
+        if is_synthetic and is_deployable:
+            is_deployable = False
+            failure_reasons.append(
+                f"NOT DEPLOYABLE: backtest ran on data_source={data_source!r} "
+                "-- a synthetic-data run can never certify real-market deployability."
+            )
+
         exec_time = time.time() - start_time
 
         return AutonomousBacktestResult(
@@ -1157,6 +1173,8 @@ class AutonomousBacktestRunner:
             n_paths=cpcv_res.get("n_paths", 0),
             n_observations=len(ohlcv_df),
             execution_time_seconds=exec_time,
+            data_source=data_source,
+            is_synthetic_data=is_synthetic,
             cpcv_mean_oos_sharpe=cpcv_res.get("mean_oos_sharpe", 0.0),
             cpcv_mean_oos_max_dd=cpcv_res.get("mean_oos_max_dd", 0.0),
             cpcv_mean_oos_sortino=cpcv_res.get("mean_oos_sortino", 0.0),
