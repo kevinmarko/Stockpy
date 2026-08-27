@@ -2085,6 +2085,33 @@ class TestRemainingSubprocessToolsArgv:
         srv.run_validation_harness(name, "2020-01-01", "2021-01-01")
         assert "--strategies" not in captured["cmd"]
 
+    def test_run_validation_harness_json_last_line_fenced(self, monkeypatch):
+        # Real scripts.refresh_validations --json output: table, then one JSON line at the end
+        mock_stdout = "Some table header\nSome table row\n" + '{"real_json": true, "pbo": 0.1}'
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **k: SimpleNamespace(stdout=mock_stdout, returncode=0)
+        )
+        result = srv.run_validation_harness("my_strat", "2020-01-01", "2021-01-01")
+        # Should fence only the JSON part
+        assert "Some table header\nSome table row\n\n```json\n" in result
+        assert '{"real_json": true, "pbo": 0.1}\n```' in result
+
+    def test_run_validation_harness_invalid_json_last_line_unfenced(self, monkeypatch):
+        # If the last line isn't valid JSON, it should not crash and just return plain text
+        mock_stdout = "Some table header\nSome table row\nNot JSON at all"
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **k: SimpleNamespace(stdout=mock_stdout, returncode=0)
+        )
+        result = srv.run_validation_harness("my_strat", "2020-01-01", "2021-01-01")
+        # Should NOT fence anything
+        assert "```json" not in result
+        assert "Not JSON at all" in result
+
+
     def test_compare_strategies(self, monkeypatch):
         calls = []
 
