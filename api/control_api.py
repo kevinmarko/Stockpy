@@ -597,7 +597,7 @@ class JobCreateRequest(BaseModel):
 )
 def create_job(body: JobCreateRequest) -> Dict[str, Any]:
     """Launch a background process job (preflight, pytest, validation, verify, gravity, advisory, orchestrator)."""
-    from api._jobs import JobType, job_manager
+    from api._jobs import JobConflictError, JobType, job_manager
 
     try:
         jtype = JobType(body.job_type)
@@ -606,6 +606,16 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
 
     try:
         rec = job_manager.start_job(jtype, body.params)
+    except JobConflictError as err:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": str(err),
+                "job_id": err.existing_job_id,
+                "job_type": err.existing_job_type,
+                "command_name": err.existing_command_name
+            }
+        ) from err
     except RuntimeError as err:
         raise HTTPException(status_code=409, detail=redact_line(str(err))) from err
     except ValueError as err:
@@ -647,6 +657,43 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
 
 
 @app.get(
+    "/jobs",
+    dependencies=[Depends(require_read_token), Depends(_require_jobs_api_enabled)],
+)
+def list_jobs(active_only: bool = False, limit: int = 50) -> Dict[str, Any]:
+    """List background jobs, ordered newest first."""
+    from api._jobs import job_manager
+
+    limit = max(1, min(limit, 200))
+    jobs = job_manager.list_jobs()
+    
+    if active_only:
+        # rec.is_running (NOT rec.handle.is_running()) -- a job still in its
+        # post-lock "starting" window (JobManager.start_job placed the record
+        # before launching the subprocess) has handle=None, and a direct
+        # .handle.is_running() call would raise AttributeError there.
+        jobs = [j for j in jobs if j.is_running]
+
+    jobs = jobs[:limit]
+
+    return {
+        "jobs": [
+            {
+                "job_id": rec.job_id,
+                "job_type": rec.job_type.value,
+                "status": rec.status(),
+                "exit_code": rec.exit_code(),
+                "is_running": rec.is_running,
+                "cancellable": rec.cancellable,
+                "command_name": rec.command_name,
+                "created_at": rec.created_at,
+            }
+            for rec in jobs
+        ]
+    }
+
+
+@app.get(
     "/jobs/{job_id}",
     dependencies=[Depends(require_read_token), Depends(_require_jobs_api_enabled)],
 )
@@ -663,7 +710,7 @@ def get_job_status(job_id: str) -> Dict[str, Any]:
         "job_type": rec.job_type.value,
         "status": rec.status(),
         "exit_code": rec.exit_code(),
-        "is_running": rec.handle.is_running(),
+        "is_running": rec.is_running,
         "cancellable": rec.cancellable,
         "command_name": rec.command_name,
         "created_at": rec.created_at,
@@ -692,6 +739,15 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
 
 _SSE_HEARTBEAT_SECONDS = 15.0
 _SSE_POLL_SECONDS = 0.5
+# JobManager.start_job places a JobRecord (handle=None) under its lock, releases
+# the lock, then launches the actual subprocess and sets handle afterward -- a
+# real, intentional window (not blocking the event loop on Popen). A stream
+# request landing in that window waits here rather than crashing; bounded so a
+# genuinely-stuck launch (e.g. launch_manifest_command raising after the record
+# was already inserted -- caught by start_job's own cleanup, but a caller that
+# already opened this endpoint mid-launch has no way to know that happened)
+# ends the stream with an honest error instead of hanging forever.
+_JOB_START_WAIT_SECONDS = 30.0
 
 
 @app.get(
@@ -724,7 +780,12 @@ def stream_job_logs(
     if not rec:
         raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}")
 
-    log_path = rec.handle.log_path
+    # rec.handle can legitimately be None here -- JobManager.start_job inserts
+    # the JobRecord before launching the subprocess (see _JOB_START_WAIT_SECONDS
+    # above). log_path resolution is deferred into the async generator below
+    # (which can wait) rather than resolved here (which can't) so a stream
+    # request opened right after a launch doesn't AttributeError before the
+    # StreamingResponse is even returned.
 
     resume_offset = offset
     if last_event_id:
@@ -757,6 +818,26 @@ def stream_job_logs(
             return -1
 
     async def log_event_generator():
+        # Wait out the "starting" window (handle not yet assigned) rather than
+        # crashing on rec.handle.log_path -- bounded so a launch that never
+        # actually gets a handle (start_job's own except-block already cleaned
+        # up self._jobs in that case, but a caller already streaming has no
+        # other way to find out) ends the connection with an honest error
+        # instead of hanging forever.
+        wait_deadline = _time.monotonic() + _JOB_START_WAIT_SECONDS
+        while rec.handle is None:
+            if _time.monotonic() >= wait_deadline:
+                yield (
+                    "event: end\n"
+                    f"data: Job {job_id} did not start within "
+                    f"{_JOB_START_WAIT_SECONDS:.0f}s\n\n"
+                )
+                return
+            yield ": waiting-for-job-start\n\n"
+            await asyncio.sleep(_SSE_POLL_SECONDS)
+
+        log_path = rec.handle.log_path
+
         current_offset = max(0, resume_offset)
         last_sent = _time.monotonic()
         while True:
@@ -771,7 +852,7 @@ def stream_job_logs(
                     current_offset = new_offset
                     sent_any = True
 
-            if not rec.handle.is_running():
+            if not rec.is_running and current_offset >= size:
                 # Stream final lines if any and stop
                 yield f"event: end\ndata: Job completed with exit code {rec.exit_code()}\n\n"
                 # getattr-guarded for the same reason as create_job's

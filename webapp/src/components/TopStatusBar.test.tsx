@@ -14,6 +14,7 @@ import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { ToastProvider } from "./ToastProvider";
 import { DensityProvider } from "./DensityContext";
 import { ExecutionModeProvider } from "./ExecutionModeContext";
+import { JobStatusProvider } from "./JobStatusContext";
 import { ThemeProvider } from "../context/ThemeContext";
 import { api } from "../api/client";
 import {
@@ -25,7 +26,7 @@ import {
   mockStrategyPnlEmpty,
   mockSystemTelemetryUnavailable,
 } from "../api/mock";
-import type { AutomationStatus, ObservabilitySummary } from "../api/types";
+import type { AutomationStatus, JobRecord, ObservabilitySummary } from "../api/types";
 
 function renderBar() {
   return render(
@@ -33,7 +34,9 @@ function renderBar() {
       <ToastProvider>
         <DensityProvider>
           <ExecutionModeProvider>
-            <TopStatusBar />
+            <JobStatusProvider>
+              <TopStatusBar />
+            </JobStatusProvider>
           </ExecutionModeProvider>
         </DensityProvider>
       </ToastProvider>
@@ -51,13 +54,29 @@ function renderBarWithAutoRefresh() {
         <DensityProvider>
           <AutoRefreshProvider>
             <ExecutionModeProvider>
-              <TopStatusBar />
+              <JobStatusProvider>
+                <TopStatusBar />
+              </JobStatusProvider>
             </ExecutionModeProvider>
           </AutoRefreshProvider>
         </DensityProvider>
       </ToastProvider>
     </ThemeProvider>
   );
+}
+
+function job(overrides: Partial<JobRecord> = {}): JobRecord {
+  return {
+    job_id: "job-abc123",
+    job_type: "command",
+    status: "running",
+    exit_code: null,
+    is_running: true,
+    cancellable: true,
+    command_name: "backfill_news_history_from_audit.py",
+    created_at: "2026-08-27T12:00:00+00:00",
+    ...overrides,
+  };
 }
 
 function automationStatus(overrides: Partial<AutomationStatus> = {}): AutomationStatus {
@@ -152,6 +171,13 @@ function observabilitySummary(overrides: Partial<ObservabilitySummary> = {}): Ob
 }
 
 describe("TopStatusBar", () => {
+  beforeEach(() => {
+    // Default: no jobs running. JobStatusProvider fetches this on mount
+    // regardless of which test is running, so every pre-existing test in
+    // this describe block needs a default mock or it hits the real
+    // liveApi/mockApi listJobs implementation.
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [] });
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it("renders daemon-alive as Live and shows the real snapshot age, not a fabricated 'Live' forever", async () => {
@@ -219,11 +245,59 @@ describe("TopStatusBar", () => {
     const resetButton = await screen.findByRole("button", { name: /Reset Kill Switch/ });
     expect(resetButton).toBeDisabled();
   });
+
+  it("shows 'idle' when GET /jobs reports nothing running, and the modal says so too", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce(automationStatus());
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(observabilitySummary());
+    // beforeEach already mocks listJobs -> { jobs: [] }
+    renderBar();
+    const chip = await screen.findByText("idle");
+
+    await user.click(chip);
+    expect(await screen.findByText("No recent jobs.")).toBeInTheDocument();
+  });
+
+  it("shows 'N running' and lists the real job in the modal when a job is active", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce(automationStatus());
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(observabilitySummary());
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [job()] });
+
+    renderBar();
+    const chip = await screen.findByText("1 running");
+
+    await user.click(chip);
+    expect(await screen.findByText("backfill_news_history_from_audit.py")).toBeInTheDocument();
+    expect(screen.getByText(/job-abc123/)).toBeInTheDocument();
+  });
+
+  it("the modal's Cancel button calls cancelJob and reloads the job list", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce(automationStatus());
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(observabilitySummary());
+    const listJobsSpy = vi
+      .spyOn(api, "listJobs")
+      .mockResolvedValueOnce({ jobs: [job()] })
+      .mockResolvedValue({ jobs: [job({ status: "cancelled", is_running: false, exit_code: -15 })] });
+    const cancelSpy = vi.spyOn(api, "cancelJob").mockResolvedValueOnce({ job_id: "job-abc123", cancelled: true });
+
+    renderBar();
+    const chip = await screen.findByText("1 running");
+    await user.click(chip);
+
+    const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    await user.click(cancelButton);
+
+    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith("job-abc123"));
+    await waitFor(() => expect(listJobsSpy).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe("TopStatusBar — auto-refresh wiring", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [] });
     vi.useFakeTimers();
   });
 

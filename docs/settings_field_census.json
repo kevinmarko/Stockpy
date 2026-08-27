@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "fd5e8ce3d973cdf4e213cfd16b842bace46197a9",
+    "git_commit": "4b2cf791f7e74efba3a2b56f67baac17b89c4444",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3600,7 +3600,7 @@
           "route": "/jobs/{job_id}/cancel",
           "method": "POST",
           "function": "cancel_job",
-          "line": 677,
+          "line": 724,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -4353,7 +4353,7 @@
       "sites": [
         {
           "file": "Gravity AI Review Suite.py",
-          "line": 2733,
+          "line": 2734,
           "expr": "getattr(_rh_settings, _MISSING_ATTR, None)"
         },
         {
@@ -4883,7 +4883,7 @@
       {
         "field": "PROMPT_REGISTRY_REFRESH_SECONDS",
         "name_literal_sites": [
-          "Gravity AI Review Suite.py:11070"
+          "Gravity AI Review Suite.py:11072"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true

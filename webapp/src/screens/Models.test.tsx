@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Models } from "./Models";
 import { api, ApiError } from "../api/client";
+import { JobConflictError } from "../api/types";
 import type { JobRecord, ModelRow } from "../api/types";
 import { __resetThresholdsCache } from "../help/thresholds";
 
@@ -261,6 +262,23 @@ describe("Models screen (real mock API)", () => {
     fireEvent.click(within(card).getByText("Retrain Now"));
     expect(
       await within(card).findByText("Another training job is already running.")
+    ).toBeInTheDocument();
+  });
+
+  it("a JobConflictError from createJob names the existing job in the inline error, not the generic 409 message -- covers a double-click or a second tab's Retrain Now", async () => {
+    vi.spyOn(api, "createJob").mockRejectedValueOnce(
+      new JobConflictError(
+        "Job of type 'train_lgbm' conflicts with already-running job 'train_lgbm' (ID: job-existing-1)",
+        "job-existing-1",
+        "train_lgbm",
+        null
+      )
+    );
+    renderModels();
+    const card = (await screen.findByText("lgbm_ranker")).closest("section")!;
+    fireEvent.click(within(card).getByText("Retrain Now"));
+    expect(
+      await within(card).findByText("Training job already running (ID: job-existing-1)")
     ).toBeInTheDocument();
   });
 

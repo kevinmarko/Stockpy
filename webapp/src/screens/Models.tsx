@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
 import type { ModelRow, ObservabilitySummary, Thresholds } from "../api/types";
+import { JobConflictError } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useTrainingStatus } from "../hooks/useTrainingStatus";
@@ -306,14 +307,29 @@ export function Models() {
           clearTrainingJob(m.name, job.job_id);
         }, 10 * 60 * 1000);
       }
-    } catch (e) {
-      const msg =
-        e instanceof ApiError && e.status === 409
-          ? "Another training job is already running."
-          : e instanceof Error
-            ? e.message
-            : "Failed to start the training job.";
-      setRetrainErrors((prev) => ({ ...prev, [m.name]: msg }));
+    } catch (err: any) {
+      if (err instanceof JobConflictError) {
+        setRetrainErrors((prev) => ({
+          ...prev,
+          [m.name]: `Training job already running (ID: ${err.existingJobId})`
+        }));
+      } else {
+        // Audit fix: this branch previously fell straight to
+        // String(err?.message || err) for EVERY non-JobConflictError case,
+        // silently dropping the friendly "Another training job is already
+        // running." message a plain ApiError(409) used to get (e.g. a 409
+        // from a path that doesn't go through JobManager.start_job's
+        // JobConflictError at all) -- regression-tested by the pre-existing
+        // "shows a clear inline error... when createJob 409s" test, which
+        // this restores to passing.
+        const msg =
+          err instanceof ApiError && err.status === 409
+            ? "Another training job is already running."
+            : err instanceof Error
+              ? err.message
+              : "Failed to start the training job.";
+        setRetrainErrors((prev) => ({ ...prev, [m.name]: msg }));
+      }
     } finally {
       setSubmitting((prev) => ({ ...prev, [m.name]: false }));
     }

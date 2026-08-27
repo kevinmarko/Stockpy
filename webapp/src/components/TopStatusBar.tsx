@@ -11,7 +11,9 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
 import { computeMarketSession } from "../marketSession";
 import { useExecutionMode } from "../hooks/useExecutionMode";
+import { useJobStatus } from "../hooks/useJobStatus";
 import { Chip } from "./ui";
+import { timeAgo } from "../format";
 import type { ObservabilitySummary } from "../api/types";
 
 const AUTOMATION_POLL_MS = 30_000;
@@ -26,6 +28,9 @@ export function TopStatusBar() {
   const [marketSession, setMarketSession] = useState(() => computeMarketSession(new Date()));
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
   const [reason, setReason] = useState("");
+  
+  const [showJobsModal, setShowJobsModal] = useState(false);
+  const { jobs, activeJobs, reload: reloadJobs } = useJobStatus();
 
   const { safetyTelemetryEnabled, autoRefreshIntervalMs } = useAutoRefresh();
 
@@ -194,6 +199,19 @@ export function TopStatusBar() {
             )}
           </div>
 
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+            <span style={{ color: "var(--text-muted)" }}>Jobs:</span>
+            <div 
+              onClick={() => setShowJobsModal(true)}
+              style={{ cursor: "pointer" }}
+            >
+              <Chip 
+                tone={activeJobs.length > 0 ? "caution" : "muted"}
+                label={activeJobs.length === 0 ? "idle" : `${activeJobs.length} running`}
+              />
+            </div>
+          </div>
+
           {/* Market Session — pure client-side clock, real ET time */}
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
             <span style={{ color: "var(--text-muted)" }}>Session:</span>
@@ -268,6 +286,54 @@ export function TopStatusBar() {
               >
                 {busy ? "Working…" : killSwitchActive ? "Reset Kill Switch" : "Trip Kill Switch"}
               </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showJobsModal && (
+        <Modal ariaLabel="Active Jobs" onClose={() => setShowJobsModal(false)}>
+          <div style={{ padding: "var(--s-4)", width: "min(90vw, 500px)" }}>
+            <h3 style={{ margin: "0 0 var(--s-3)", color: "var(--text-primary)" }}>Recent Jobs</h3>
+            {jobs.length === 0 ? (
+              <p style={{ color: "var(--text-secondary)" }}>No recent jobs.</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+                {jobs.map((job) => (
+                  <div key={job.job_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+                        <div style={{ fontWeight: 600 }}>{job.command_name || job.job_type}</div>
+                        <Chip 
+                          tone={job.status === "running" ? "caution" : job.status === "success" ? "growth" : "decline"}
+                          label={job.status.toUpperCase() + (job.status !== "running" && job.exit_code != null ? ` (${job.exit_code})` : "")}
+                        />
+                      </div>
+                      <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)", marginTop: "4px" }}>
+                        ID: {job.job_id} • Started {timeAgo(job.created_at)}
+                      </div>
+                    </div>
+                    {job.cancellable && job.is_running && (
+                      <button 
+                        className="btn btn-sm" 
+                        onClick={async () => {
+                          try {
+                            await api.cancelJob(job.job_id);
+                            reloadJobs();
+                          } catch (e) {
+                            toast.error("Failed to cancel job.");
+                          }
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: "var(--s-4)", textAlign: "right" }}>
+              <button className="btn btn-ghost" onClick={() => setShowJobsModal(false)}>Close</button>
             </div>
           </div>
         </Modal>
