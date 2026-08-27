@@ -5460,6 +5460,8 @@ export interface AutonomousBacktestRequest {
 export interface AutonomousBacktestResponse {
   strategy_id: string;
   is_deployable: boolean;
+  data_source: string;
+  is_synthetic_data: boolean;
   // The backend (validation/autonomous_backtest_runner.py's to_dict()) emits
   // `null` for every one of these whenever the underlying float is NaN --
   // both on the AST-compile-failure path (sharpe_ratio/sortino_ratio/

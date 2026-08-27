@@ -14635,6 +14635,8 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
       return delay<AutonomousBacktestResponse>({
         strategy_id: request.strategy_id || "candidate_alpha_01",
         is_deployable: false,
+        data_source: "real_historical_bars",
+        is_synthetic_data: false,
         sharpe_ratio: 0,
         sortino_ratio: 0,
         max_drawdown: 1.0,
@@ -14683,6 +14685,8 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
     return delay<AutonomousBacktestResponse>({
       strategy_id: request.strategy_id || `alpha_${Math.random().toString(36).substring(2, 8)}`,
       is_deployable: true,
+      data_source: "real_historical_bars",
+      is_synthetic_data: false,
       sharpe_ratio: 1.84,
       sortino_ratio: 2.52,
       max_drawdown: 0.118,

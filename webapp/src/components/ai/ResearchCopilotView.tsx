@@ -726,7 +726,23 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
                 {backtestResult.is_deployable ? "🚀 DEPLOYABLE (ALL GATES PASSED)" : "⛔ GATED (FAILED GATES)"}
               </div>
 
-              {backtestResult.is_deployable && onDeployStrategy && (
+              {backtestResult.is_synthetic_data && (
+                <div
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: 14,
+                    fontSize: "0.8rem",
+                    fontWeight: 800,
+                    background: "rgba(245, 158, 11, 0.15)",
+                    color: "#f59e0b",
+                    border: "1px solid rgba(245, 158, 11, 0.4)",
+                  }}
+                >
+                  ⚠️ SYNTHETIC DATA FALLBACK
+                </div>
+              )}
+
+              {backtestResult.is_deployable && !backtestResult.is_synthetic_data && onDeployStrategy && (
                 <button
                   onClick={() => onDeployStrategy(backtestResult.strategy_id)}
                   style={{

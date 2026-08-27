@@ -2933,6 +2933,8 @@ def strategy(df: pd.DataFrame) -> pd.Series:
         body = resp.json()
         assert "is_deployable" in body
         assert "sharpe_ratio" in body
+        assert body["data_source"] == "real_historical_bars"
+        assert body["is_synthetic_data"] is False
         assert "pbo" in body
         assert "dsr" in body
         assert "gate_evaluations" in body

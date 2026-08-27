@@ -66,6 +66,8 @@ describe("ResearchCopilotView", () => {
     vi.mocked(api.runAutonomousBacktest).mockResolvedValueOnce({
       strategy_id: "syn_test_123",
       is_deployable: true,
+      data_source: "real_historical_bars",
+      is_synthetic_data: false,
       sharpe_ratio: 1.85,
       sortino_ratio: 2.6,
       max_drawdown: 0.11,
@@ -176,6 +178,8 @@ describe("ResearchCopilotView", () => {
     vi.mocked(api.runAutonomousBacktest).mockResolvedValueOnce({
       strategy_id: "syn_regime_test",
       is_deployable: true,
+      data_source: "real_historical_bars",
+      is_synthetic_data: false,
       sharpe_ratio: 1.75,
       sortino_ratio: 2.3,
       max_drawdown: 0.12,
@@ -309,5 +313,54 @@ describe("ResearchCopilotView", () => {
     await Promise.resolve().then(() => Promise.resolve());
     expect(screen.getByText("Copy Code")).toBeInTheDocument();
     expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+  });
+});
+
+
+describe("Synthetic Data Banner", () => {
+  it("renders the synthetic data banner and hides the deploy button", async () => {
+    vi.mocked(api.runAutonomousBacktest).mockResolvedValueOnce({
+      strategy_id: "synthetic_strat",
+      is_deployable: true, 
+      data_source: "synthetic_demo_data",
+      is_synthetic_data: true,
+      sharpe_ratio: 1.5,
+      sortino_ratio: 2.0,
+      max_drawdown: 0.1,
+      pbo: 0.1,
+      dsr: 0.99,
+      turnover: 0.05,
+      annualized_return: 0.15,
+      cumulative_return: 0.5,
+      win_rate: 0.6,
+      calmar_ratio: 1.5,
+      volatility: 0.1,
+      gate_evaluations: {},
+      failure_reasons: [],
+      n_paths: 1,
+      n_observations: 100,
+      execution_time_seconds: 1.0,
+      cpcv_mean_oos_sharpe: 1.5,
+      cpcv_mean_oos_max_dd: 0.1,
+      cpcv_mean_oos_sortino: 2.0,
+      regime_breakdown: {},
+      regime_stability_score: 1.0,
+      passes_regime_stability: true,
+    });
+
+    const { getByText, queryByText, getByRole } = render(
+      <ResearchCopilotView
+        onDeployStrategy={vi.fn()}
+      />
+    );
+
+    const button = getByRole("button", { name: /Run AI Backtest/i });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getByText(/SYNTHETIC DATA FALLBACK/i)).toBeInTheDocument();
+    });
+
+    expect(queryByText(/Deploy to Paper Broker/i)).not.toBeInTheDocument();
   });
 });
