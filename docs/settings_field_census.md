@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `8e5a25a33c9ccd70ff024fc9627173f66c3f34dd`
+- Measured at commit: `0b5fbfeba06e9942b321fab640b01e1bb4e08ea2`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,13 +14,13 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **432**
+`len(Settings.model_fields)` = **436**
 
 | Annotation | Count |
 |---|---|
-| `bool` | 126 |
-| `int` | 106 |
-| `float` | 88 |
+| `bool` | 127 |
+| `int` | 107 |
+| `float` | 90 |
 | `Optional[str]` | 50 |
 | `str` | 47 |
 | `list[str]` | 8 |
@@ -32,7 +32,7 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 | `dict[str, str]` | 1 |
 | `list[int]` | 1 |
 
-Fields whose name ends in `_ENABLED`: **113**
+Fields whose name ends in `_ENABLED`: **114**
 
 Distinct `dict[...]` shapes: **4**
 
@@ -55,7 +55,7 @@ A future kind-derivation switch needs an explicit branch for each of these:
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 380 | 380 | 0 duplicate entries (clean) |
+| `ALLOWED_KEYS` | 384 | 384 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 46 | 45 | 1 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
 | `EXCLUDED_FROM_GUI` | 9 | 9 | frozenset; third classification bucket |
@@ -69,7 +69,7 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 | Bucket | Count | Definition |
 |---|---|---|
 | `SECRET` | 43 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 380 | in `env_io.ALLOWED_KEYS` |
+| `IN_ALLOWED_KEYS` | 384 | in `env_io.ALLOWED_KEYS` |
 | `UNCLASSIFIED` | 9 | in neither |
 
 Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
@@ -78,15 +78,15 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
-| `ALERT_FILE_PATH` | L1673 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5079 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4313 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L4138 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LOCAL_DATA_ROOT` | L1926 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
-| `OUTPUT_DIR` | L1943 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4465 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L1956 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L4023 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `ALERT_FILE_PATH` | L1690 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
+| `GCLOUD_BIN` | L5159 | yes | Path to the gcloud binary for environment integrations. |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4393 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L4218 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L1943 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L1960 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4545 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L1973 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L4103 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -128,17 +128,17 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 | Field | Marker site(s) | In `ALLOWED_KEYS` now | In `SECRET_KEYS` | Claim holds |
 |---|---|---|---|---|
-| `FMP_API_KEY` | `settings.py:809` | no | yes | yes |
-| `FOLLOW_API_TOKEN` | `settings.py:447` | no | yes | yes |
-| `JULES_API_KEY` | `settings.py:617` | no | yes | yes |
-| `MCP_HTTP_BEARER_TOKEN` | `settings.py:461` | no | yes | yes |
-| `MCP_OAUTH_PASSWORD` | `settings.py:509` | no | yes | yes |
-| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:428` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4430` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4438` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4422` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4414` | no | yes | yes |
-| `STATE_API_TOKEN` | `settings.py:420` | no | yes | yes |
+| `FMP_API_KEY` | `settings.py:826` | no | yes | yes |
+| `FOLLOW_API_TOKEN` | `settings.py:464` | no | yes | yes |
+| `JULES_API_KEY` | `settings.py:634` | no | yes | yes |
+| `MCP_HTTP_BEARER_TOKEN` | `settings.py:478` | no | yes | yes |
+| `MCP_OAUTH_PASSWORD` | `settings.py:526` | no | yes | yes |
+| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:445` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4510` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4518` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4502` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4494` | no | yes | yes |
+| `STATE_API_TOKEN` | `settings.py:437` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
@@ -230,12 +230,12 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 772 | 249 |
+| (a) `settings.KEY` | 777 | 253 |
 | (b) `getattr(settings, "KEY", default)` | 371 | 208 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
-Fields reached by at least one form: **423** of 432.
+Fields reached by at least one form: **427** of 436.
 
 ### Fields with NO statically-attributable read — **9**
 
@@ -252,7 +252,7 @@ referenced by name somewhere and is probably read dynamically.
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4916`, `gui/panels/settings_manager.py:162` | likely read dynamically |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11070` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11072` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1427`, `pilots/feature_flags.py:49` | likely read dynamically |
 
@@ -443,7 +443,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 
 | Site | Expression |
 |---|---|
-| `Gravity AI Review Suite.py:2733` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
+| `Gravity AI Review Suite.py:2734` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:177` | `getattr(settings, flag_name, False)` |
