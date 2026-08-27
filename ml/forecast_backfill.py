@@ -437,6 +437,16 @@ class AgenticForecastBackfiller:
             context = make_context()
             module.pre_compute(universe_df, context)
 
+            # NOTE: kept as a plain iterrows() loop, not a to_dict('records')-based
+            # rewrite. That rewrite still allocated a fresh pd.Series per row (the
+            # same per-row cost iterrows() already pays), plus the added upfront
+            # cost of materializing to_dict('records') for the whole group -- no
+            # real speedup -- while introducing a silent-data-loss risk if `group`
+            # ever gains two identically-named columns (to_dict('records') keeps
+            # only the last value per duplicate key; a Series slice does not). A
+            # genuine fix here needs SignalModule.compute()'s pd.Series-typed
+            # contract to accept a Mapping instead, not another row-construction
+            # swap.
             for idx, row in group.iterrows():
                 ticker = idx[1]  # self.data's index is (Date, Ticker)
                 row_with_symbol = row.copy()

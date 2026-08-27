@@ -13,3 +13,7 @@
 ## 2024-03-20 - Time-bomb test fix
 **Learning:** `test_gate_on_broadcasts_upcoming_event` failed because it used hardcoded dates (e.g., 2026-08-20). The production code filters out past events (`ev_date >= today_str`). When the CI test runner advanced past 2026-08-20, the test failed.
 **Action:** When mocking calendar feeds, generate dates relative to `datetime.now()` (e.g. `now + timedelta(days=1)`) rather than hardcoding static future dates to prevent tests from expiring.
+
+## 2024-03-21 - Vectorizing iterrows in Pandas loops
+**Learning:** Replaced `.iterrows()` in `data/historical_store.py` (which iterates over DataFrame rows yielding pd.Series objects) with vectorized array extractions (`df["col"].to_numpy()`) or iterating over `df.to_dict('records')`. The performance gain is substantial (from O(N*cols) with high constant factor down to near instantaneous) because Pandas object creation overhead inside a Python loop is eliminated.
+**Action:** Never use `.iterrows()` when looping over thousands of rows. For building dictionaries or lists row-by-row, use `.to_dict('records')` or extract `.to_numpy()` columns and use a simple `zip()` or integer index loop.
