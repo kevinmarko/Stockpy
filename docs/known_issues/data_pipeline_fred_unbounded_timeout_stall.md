@@ -341,3 +341,91 @@ daemon still recovers; it only accepts a wider window of legitimate slowness
 under concurrent load before doing so. Test:
 `tests/test_pipeline_runner.py::TestAsyncPipelineRunnerStepTimeout::test_default_timeout_setting_is_generous`
 updated to pin the new 1800.0 default.
+
+## Follow-up 3: ProcessingStep/calculate_fundamental_metrics unbounded fundamentals loop (2026-08-28)
+
+### Status
+**Fixed** (this PR). A second, independently-discovered stall LOCATION in the
+same pipeline, this time pinned to the "processing" stage rather than "data"
+— confirmed live via a debug session that watched the actual daemon process
+hang in real time, and corroborated by the prior 5 failed runs in
+`pipeline_runs` DB history, all showing the identical ~1199s duration (from
+"Routing data through Computational Core (Processing)..." to the failure) with
+zero variance.
+
+### Symptom
+The hang consistently landed in the "processing" stage, not "data" — the
+initial data-fetch stage completed and dead-lettered correctly per its
+existing `DATA_FETCH_TASK_TIMEOUT_SECONDS` (180s) bound (see the two
+sections above); the actual stall was downstream of that, inside
+`ProcessingStep`'s fundamentals-refresh loop, with dead silence in the logs
+for the full ~1199s (no per-ticker progress line) — consistent with a
+blocked/very-slow synchronous network call rather than an active,
+log-producing retry loop.
+
+### Relationship to Follow-up 2 above
+Follow-up 2(b) diagnosed the SAME two runs referenced there (`26259a60`,
+`09c649aa`) as legitimate slowness from resource contention (a concurrent
+`refresh_validations.py` CPCV backtest plus `backfill_sentiment_history.py`
+sharing the daemon's own rate-limited FMP/GDELT/EDGAR budget), not a hang,
+and fixed it by widening `PIPELINE_STEP_TIMEOUT_SECONDS` to tolerate that
+window. That diagnosis and this one are not in tension — they describe two
+different layers of the same incident. Follow-up 2 explains *why* the
+provider calls that cycle were unusually slow (shared-budget contention);
+this section identifies *where* that slowness had nowhere to be bounded once
+it started (`ProcessingEngine.calculate_fundamental_metrics()`'s per-ticker
+loop had no aggregate deadline of its own, unlike the earlier "data" stage's
+`DATA_FETCH_TASK_TIMEOUT_SECONDS`-bounded fetch). Widening the outer step
+timeout alone leaves that structural gap in place: under worse contention
+(or a genuine provider outage, not just contention), the same loop could
+still consume the entire widened 1800s budget with nothing degrading it
+sooner. This fix closes that gap independently of why any given cycle's
+provider calls are slow.
+
+This is also a genuinely new gap the 2026-08-27 comprehensive sweep did not
+cover. That sweep's clearance of yfinance/FMP/GDELT/EDGAR was about
+individual HTTP-call-level timeout bounding on each request; it never
+audited an *aggregate* per-ticker, per-cycle loop for a cumulative unbounded
+duration, and `processing_engine.py`/`HistoricalStore.get_fundamentals()`
+was not examined or mentioned anywhere in that pass.
+
+### Root cause and fix
+`ProcessingEngine.calculate_fundamental_metrics()` (`processing_engine.py`)
+loops over every ticker in the universe and calls
+`HistoricalStore.get_fundamentals(ticker, provider=...)` for each — a live
+network call, per ticker, with no aggregate deadline bounding the whole
+loop. A single slow/stalled provider response, multiplied across a 30+
+symbol universe, was enough to wedge the entire "processing" stage.
+
+Fixed via a new setting, `settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE`
+(float, default `60.0`). `calculate_fundamental_metrics()` now computes
+`_fund_deadline = time.monotonic() + PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE`
+once, before the per-ticker loop starts. Once that deadline passes, the live
+`HistoricalStore.get_fundamentals()` refresh is skipped — for that ticker and
+every remaining ticker in the cycle, sticky, never resetting mid-cycle —
+logging one WARNING the first time the deadline trips (not once per skipped
+ticker). A ticker whose refresh is skipped this way still produces a normal
+result using DTO-only fundamentals rather than the live-refreshed values —
+nothing is dropped from the dashboard and nothing raises, matching this
+codebase's CONSTRAINT #6 dead-letter-resilience convention.
+
+### Deliberately deferred, not fixed
+The broader timeout-coverage gap in the pipeline's inner runner remains
+open, disclosed rather than silently left unmentioned. The outer
+`AsyncPipelineRunner`'s `PIPELINE_STEP_TIMEOUT_SECONDS` bound
+(`pipeline/runner.py`) only wraps *synchronous* steps dispatched via
+`asyncio.to_thread` (gated on `asyncio.iscoroutinefunction`).
+`RunPipelineStep`'s own separate, synchronous `PipelineRunner` built inside
+`main_orchestrator.py::run_pipeline()` — `OptionsAnalysisStep →
+ProcessingStep → ForecastingStep → StrategyEvalStep` — has no per-substep
+timeout mechanism of its own at all, so before this fix, a hang inside any
+one of those four steps was only ever caught by the outer ~1800s ceiling
+(raised from 900s per Follow-up 2 above), with no way to tell which inner
+step had actually stalled. This PR closes the one concrete, proven cause
+(the fundamentals loop specifically) and deliberately does not add a
+general per-substep bound to that inner runner or wrap its steps in the
+outer timeout — left as future, separately-scoped follow-up work,
+consistent with this doc's own pattern of incremental rounds.
+
+Tests: `tests/test_processing_engine.py::TestCalculateFundamentalMetrics`
+(new deadline-bound tests, proven against a real `time.sleep()`-based fake).
