@@ -17,3 +17,7 @@
 ## 2024-03-21 - Vectorizing iterrows in Pandas loops
 **Learning:** Replaced `.iterrows()` in `data/historical_store.py` (which iterates over DataFrame rows yielding pd.Series objects) with vectorized array extractions (`df["col"].to_numpy()`) or iterating over `df.to_dict('records')`. The performance gain is substantial (from O(N*cols) with high constant factor down to near instantaneous) because Pandas object creation overhead inside a Python loop is eliminated.
 **Action:** Never use `.iterrows()` when looping over thousands of rows. For building dictionaries or lists row-by-row, use `.to_dict('records')` or extract `.to_numpy()` columns and use a simple `zip()` or integer index loop.
+
+## 2024-03-21 - Removed iterrows loops in universe engine
+**Learning:** Replaced `.iterrows()` in `universe_engine.py` with `to_dict('records')`. Converting the dataframe to a list of dicts first prevents Pandas from having to create a new Series object for each row inside the loop. The `.iterrows()` overhead is particularly high for dataframes with mixed types like the historical index components table.
+**Action:** When updating old iteration blocks like `.iterrows()` to `to_dict('records')`, remember that the variable in the loop is a dictionary not a Series. `row.to_dict()` and `row.get("col")` vs `row["col"]` need to be addressed.
