@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `1bd3927040704a6d5ee13306c4e74031ee5e8dd7`
+- Measured at commit: `b14532b29fd0dd887b785ab6817af69e7238eda7`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -55,7 +55,7 @@ A future kind-derivation switch needs an explicit branch for each of these:
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 390 | 390 | 0 duplicate entries (clean) |
+| `ALLOWED_KEYS` | 391 | 391 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 46 | 45 | 1 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
 | `EXCLUDED_FROM_GUI` | 9 | 9 | frozenset; third classification bucket |
@@ -69,10 +69,10 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 | Bucket | Count | Definition |
 |---|---|---|
 | `SECRET` | 43 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 390 | in `env_io.ALLOWED_KEYS` |
-| `UNCLASSIFIED` | 10 | in neither |
+| `IN_ALLOWED_KEYS` | 391 | in `env_io.ALLOWED_KEYS` |
+| `UNCLASSIFIED` | 9 | in neither |
 
-Of the 10 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **1** are accounted for nowhere.
+Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
 
 ### Every `UNCLASSIFIED` field
 
@@ -84,7 +84,6 @@ Of the 10 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_
 | `LLM_COMMENTARY_CACHE_PATH` | L4334 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
 | `LOCAL_DATA_ROOT` | L1980 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
 | `OUTPUT_DIR` | L1997 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE` | L2504 | **no** | Hard wall-clock ceiling (seconds) for ProcessingEngine.calculate_fundamental_metrics()'s per-ticker HistoricalStore.get_fundamentals() refresh loop. A single unreachable/slow fundamentals provider ... |
 | `PROMPT_CACHE_DIR` | L4685 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
 | `SYNC_WATCHLIST_FILES` | L2010 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
 | `WATCH_RULES_FILE` | L4219 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |

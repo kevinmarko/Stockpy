@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "1bd3927040704a6d5ee13306c4e74031ee5e8dd7",
+    "git_commit": "b14532b29fd0dd887b785ab6817af69e7238eda7",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -1044,8 +1044,8 @@
     }
   },
   "env_io_lists": {
-    "allowed_keys_len": 390,
-    "allowed_keys_unique_len": 390,
+    "allowed_keys_len": 391,
+    "allowed_keys_unique_len": 391,
     "allowed_keys_duplicates": {},
     "allowed_keys_duplicate_total_extra": 0,
     "secret_keys_len": 46,
@@ -1107,8 +1107,8 @@
   "partition": {
     "counts": {
       "SECRET": 43,
-      "IN_ALLOWED_KEYS": 390,
-      "UNCLASSIFIED": 10
+      "IN_ALLOWED_KEYS": 391,
+      "UNCLASSIFIED": 9
     },
     "secret": [
       "ALERT_EMAIL_FROM",
@@ -1450,6 +1450,7 @@
       "PIPELINE_STALL_ALERT_SECONDS",
       "PIPELINE_STEP_TIMEOUT_SECONDS",
       "PIT_CAPTURE_ENABLED",
+      "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
       "PROGRESS_POLL_SECONDS",
       "PROMPT_CACHE_KEEP_VERSIONS",
       "PROMPT_MAX_CHARS",
@@ -1554,7 +1555,6 @@
       "LLM_COMMENTARY_CACHE_PATH",
       "LOCAL_DATA_ROOT",
       "OUTPUT_DIR",
-      "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
       "PROMPT_CACHE_DIR",
       "SYNC_WATCHLIST_FILES",
       "WATCH_RULES_FILE"
@@ -1597,12 +1597,6 @@
         "description": "Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset."
       },
       {
-        "field": "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
-        "in_excluded_from_gui": false,
-        "settings_py_line": 2504,
-        "description": "Hard wall-clock ceiling (seconds) for ProcessingEngine.calculate_fundamental_metrics()'s per-ticker HistoricalStore.get_fundamentals() refresh loop. A single unreachable/slow fundamentals provider ..."
-      },
-      {
         "field": "PROMPT_CACHE_DIR",
         "in_excluded_from_gui": true,
         "settings_py_line": 4685,
@@ -1632,9 +1626,7 @@
       "SYNC_WATCHLIST_FILES",
       "WATCH_RULES_FILE"
     ],
-    "unclassified_not_covered_anywhere": [
-      "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE"
-    ]
+    "unclassified_not_covered_anywhere": []
   },
   "secret_sanity": {
     "phantom_secret_keys": [
