@@ -28,6 +28,15 @@
 # are skipped (logged at DEBUG), reconciliation never raises (returns an
 # error-shaped report with ok=False on any failure), and the atomic-append helper
 # swallows write failures rather than crashing a best-effort caller.
+#
+# Reviewed false positive (stockpy_codebase_auditor `orphaned_module`, 2026-08):
+# this module has no in-repo Python caller by design — its producer is the
+# external `robinhood-execution` Claude Code skill (appends
+# output/execution_receipts.jsonl directly, not via a Python import), and it
+# is exercised by tests/test_receipts_store.py and tests/test_robinhood_e2e.py.
+# Not dead code; simply not yet wired to an in-repo CLI/API reader. Wiring one
+# up is a deliberate follow-on decision, not something to bolt on silently
+# here.
 # =============================================================================
 
 from __future__ import annotations

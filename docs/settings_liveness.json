@@ -613,9 +613,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1903",
+        "site": "data/market_data.py:1984",
         "via": [
-          1808
+          1889
         ]
       },
       {
@@ -646,9 +646,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:238",
+        "site": "data/market_data.py:262",
         "via": [
-          221
+          245
         ]
       },
       {
@@ -668,9 +668,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1904",
+        "site": "data/market_data.py:1985",
         "via": [
-          1808
+          1889
         ]
       },
       {
@@ -811,7 +811,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/__init__.py:87",
+        "site": "gui/panels/__init__.py:96",
         "via": []
       },
       {
@@ -1680,7 +1680,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1479",
+        "site": "data/market_data.py:1560",
         "via": []
       },
       {
@@ -1689,7 +1689,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1513",
+        "site": "data/market_data.py:1594",
         "via": []
       }
     ],
@@ -1700,7 +1700,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1820",
+        "site": "data/market_data.py:1901",
         "via": []
       },
       {
@@ -1709,9 +1709,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1857",
+        "site": "data/market_data.py:1938",
         "via": [
-          1795
+          1876
         ]
       }
     ],
@@ -1722,9 +1722,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1868",
+        "site": "data/market_data.py:1949",
         "via": [
-          1795
+          1876
         ]
       }
     ],
@@ -1768,7 +1768,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:988",
+        "site": "data/market_data.py:1012",
         "via": []
       }
     ],
@@ -1944,7 +1944,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1473",
+        "site": "data/market_data.py:1554",
         "via": []
       },
       {
@@ -1953,7 +1953,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1508",
+        "site": "data/market_data.py:1589",
         "via": []
       },
       {
@@ -1962,7 +1962,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1792",
+        "site": "data/market_data.py:1873",
         "via": []
       },
       {
@@ -1971,7 +1971,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2335",
+        "site": "data/market_data.py:2463",
         "via": []
       }
     ],
@@ -1982,7 +1982,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1356",
+        "site": "data/market_data.py:1437",
         "via": []
       },
       {
@@ -1991,7 +1991,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1476",
+        "site": "data/market_data.py:1557",
         "via": []
       },
       {
@@ -2000,7 +2000,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1509",
+        "site": "data/market_data.py:1590",
         "via": []
       },
       {
@@ -2009,7 +2009,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1793",
+        "site": "data/market_data.py:1874",
         "via": []
       },
       {
@@ -2018,7 +2018,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2336",
+        "site": "data/market_data.py:2464",
         "via": []
       }
     ],
@@ -2029,7 +2029,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1818",
+        "site": "data/market_data.py:1899",
         "via": []
       }
     ],
@@ -2267,7 +2267,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1785",
+        "site": "data/market_data.py:1866",
         "via": []
       },
       {
@@ -2276,7 +2276,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2124",
+        "site": "data/market_data.py:2252",
         "via": []
       }
     ],
@@ -2287,9 +2287,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1848",
+        "site": "data/market_data.py:1929",
         "via": [
-          1795
+          1876
         ]
       }
     ],
@@ -2300,7 +2300,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1780",
+        "site": "data/market_data.py:1861",
         "via": []
       }
     ],

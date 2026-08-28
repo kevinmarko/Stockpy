@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `27fcd7c8d43f166539b6d13f4d0390f5384dba44`
+- Measured at commit: `20c422450a586fb2e05e0e9265f90fd2a4083350`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -217,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **435** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **434** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -254,7 +254,7 @@ referenced by name somewhere and is probably read dynamically.
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11072` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1427`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1422`, `pilots/feature_flags.py:49` | likely read dynamically |
 
 ### Fields reachable ONLY via form (b) or (d), never via (a) — **175**
 

@@ -92,6 +92,19 @@ class _FakeProvider:
             raise MarketDataError(f"no quote for {symbol}")
         return q
 
+    def get_quotes_batch(self, symbols):
+        """Mirrors MarketDataProvider's real ABC default (a per-symbol
+        get_latest_quote loop, dead-lettering a failure) -- this fake is not
+        a real subclass of the ABC, so it doesn't inherit that default and
+        needs its own copy to stay a faithful stand-in."""
+        out = {}
+        for sym in symbols:
+            try:
+                out[sym] = self.get_latest_quote(sym)
+            except Exception:
+                continue
+        return out
+
 
 def _quote(symbol="AAPL", price=190.0, bid=189.9, ask=190.1, stale=True):
     return SimpleNamespace(
@@ -496,7 +509,7 @@ def test_put_universe_writes_default_tickers(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_quotes_loops_per_symbol_dead_letters_bad(monkeypatch):
+def test_quotes_batch_dead_letters_bad_symbol(monkeypatch):
     provider = _FakeProvider(quotes={"AAPL": _quote("AAPL", price=190.0)})
     monkeypatch.setattr(data_api, "get_provider", lambda: provider)
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
