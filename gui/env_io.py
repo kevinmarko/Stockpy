@@ -449,10 +449,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # Per-sub-fetch timeout bounding fetch_all_data_async()'s three concurrent
     # tasks -- see docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
     "DATA_FETCH_TASK_TIMEOUT_SECONDS",
-    # Wall-clock ceiling on ProcessingEngine.calculate_fundamental_metrics()'s
-    # per-ticker HistoricalStore.get_fundamentals() refresh loop -- see the same
-    # known-issues doc's "Follow-up 3" section.
-    "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
     # Historical persistence & DB controls
     "HISTORICAL_STORE_ENABLED",
     "BARS_BACKFILL_DAYS",

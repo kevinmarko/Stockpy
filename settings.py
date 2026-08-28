@@ -2492,30 +2492,6 @@ class Settings(BaseSettings):
             "window of legitimate slowness before doing so."
         ),
     )
-    # Wall-clock ceiling (seconds) for ProcessingEngine.calculate_fundamental_metrics()'s
-    # per-ticker HistoricalStore.get_fundamentals() refresh loop -- added 2026-08 after a
-    # real incident: unlike DATA_FETCH_TASK_TIMEOUT_SECONDS above (which bounds
-    # DataEngine.fetch_all_data_async()'s three CONCURRENT sub-fetches), this loop is
-    # SEQUENTIAL and per-ticker, so a single unreachable/slow fundamentals provider (FMP or
-    # yfinance, depending on FUNDAMENTALS_SOURCE) stacks its own per-call timeout+retry cost
-    # across every remaining ticker with nothing capping the total -- confirmed live to hang
-    # the whole pipeline cycle for ~1199s. See
-    # docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md.
-    PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE: float = Field(
-        default=60.0,
-        description=(
-            "Hard wall-clock ceiling (seconds) for ProcessingEngine."
-            "calculate_fundamental_metrics()'s per-ticker HistoricalStore.get_fundamentals() "
-            "refresh loop. A single unreachable/slow fundamentals provider (FMP or "
-            "yfinance, depending on FUNDAMENTALS_SOURCE) can otherwise stack its own "
-            "per-call timeout+retry cost across every remaining ticker with no overall "
-            "ceiling -- confirmed live to hang the whole pipeline cycle for ~1199s. Once "
-            "this budget elapses, the live refresh is skipped for the rest of the cycle "
-            "(each remaining ticker falls back to its existing DTO-only fundamentals, "
-            "dead-letter resilience per CONSTRAINT #6) rather than blocking indefinitely. "
-            "See docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md."
-        ),
-    )
     # Worker threads for the SEC EDGAR backfill's per-ticker companyfacts fetch
     # (scripts/backfill_edgar_fundamentals.py). Defaults to 4, LOWER than the
     # DATA_FETCH sibling above, because this is a MEMORY knob, NOT a rate-limit

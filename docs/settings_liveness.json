@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 334,
+    "live_safe": 333,
     "no_op": 3,
     "restart_required": 106,
-    "total": 443
+    "total": 442
   },
   "dynamic_sites": [
     {
@@ -381,7 +381,6 @@
     "PIPELINE_STALL_ALERT_SECONDS",
     "PIPELINE_STEP_TIMEOUT_SECONDS",
     "PIT_CAPTURE_ENABLED",
-    "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
     "PROGRESS_POLL_SECONDS",
     "PROMPT_CACHE_DIR",
     "PROMPT_CACHE_KEEP_VERSIONS",
@@ -483,13 +482,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 880,
+    "attr": 878,
     "factory_param": 4,
     "getattr_const": 373,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 262,
+    "attr": 261,
     "factory_param": 4,
     "getattr_const": 209,
     "os_environ": 18
@@ -2311,7 +2310,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "processing_engine.py:38",
+        "site": "processing_engine.py:37",
         "via": []
       }
     ],
@@ -2990,7 +2989,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "processing_engine.py:39",
+        "site": "processing_engine.py:38",
         "via": []
       }
     ],
@@ -3001,7 +3000,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "processing_engine.py:37",
+        "site": "processing_engine.py:36",
         "via": []
       },
       {

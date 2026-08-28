@@ -5,13 +5,13 @@ This module scrapes Wikipedia to reconstruct the historical S&P 500 index consti
 accounting for additions and deletions, to detect and report survivorship bias.
 """
 
-import argparse
-import logging
 import os
+import logging
+import argparse
 from datetime import date, datetime, timedelta
-from typing import Any
-
+from typing import List, Tuple, Dict, Any, Optional
 import pandas as pd
+import numpy as np
 import requests
 
 from settings import settings
@@ -20,9 +20,7 @@ from settings import settings
 logger = logging.getLogger("Universe_Engine")
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
@@ -42,19 +40,17 @@ _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH = os.path.join(str(settings.LOCAL_DATA_ROOT), "universe_cache.parquet")
 DELISTED_PATH = os.path.join(_MODULE_DIR, "data", "delisted_tickers.csv")
 
-
-def clean_ticker(ticker: Any) -> str | None:
+def clean_ticker(ticker: Any) -> Optional[str]:
     """Clean and standardize a ticker symbol for yfinance compatibility."""
     if pd.isna(ticker) or not isinstance(ticker, str):
         return None
     # Remove footnotes like [6], [a] or any extra spaces
-    cleaned = ticker.split("[")[0].strip().upper()
+    cleaned = ticker.split('[')[0].strip().upper()
     # Replace dot with hyphen for yfinance (e.g. BRK.B -> BRK-B)
-    cleaned = cleaned.replace(".", "-")
+    cleaned = cleaned.replace('.', '-')
     return cleaned if cleaned else None
 
-
-def _parse_current_constituents(tables: list[pd.DataFrame]) -> list[str]:
+def _parse_current_constituents(tables: List[pd.DataFrame]) -> List[str]:
     """Extract current S&P 500 tickers from Wikipedia's first table. Raises
     ValueError on a page-shape change -- the caller decides whether to fall
     back to a stale cache."""
@@ -68,15 +64,13 @@ def _parse_current_constituents(tables: list[pd.DataFrame]) -> list[str]:
             symbol_col = col
             break
     if not symbol_col:
-        raise ValueError(
-            "Could not find Symbol/Ticker column in Wikipedia current table."
-        )
+        raise ValueError("Could not find Symbol/Ticker column in Wikipedia current table.")
 
     current_tickers = [clean_ticker(t) for t in current_df[symbol_col].dropna()]
     return [t for t in current_tickers if t]
 
 
-def _parse_wikipedia_changes_table(tables: list[pd.DataFrame]) -> list[dict[str, Any]]:
+def _parse_wikipedia_changes_table(tables: List[pd.DataFrame]) -> List[Dict[str, Any]]:
     """Extract historical addition/removal change records from Wikipedia's
     second table ("Selected changes to the list of S&P 500 components").
     Raises ValueError if that table is missing or its shape has changed
@@ -103,12 +97,10 @@ def _parse_wikipedia_changes_table(tables: list[pd.DataFrame]) -> list[dict[str,
             removed_col = col
 
     if not date_col or not added_col or not removed_col:
-        raise ValueError(
-            "Could not identify Date, Added Ticker, or Removed Ticker columns in changes table."
-        )
+        raise ValueError("Could not identify Date, Added Ticker, or Removed Ticker columns in changes table.")
 
-    records: list[dict[str, Any]] = []
-    for row in changes_df.to_dict("records"):
+    records: List[Dict[str, Any]] = []
+    for row in changes_df.to_dict('records'):
         try:
             raw_date = row[date_col]
             if pd.isna(raw_date):
@@ -117,15 +109,13 @@ def _parse_wikipedia_changes_table(tables: list[pd.DataFrame]) -> list[dict[str,
             added = clean_ticker(row[added_col])
             removed = clean_ticker(row[removed_col])
             if added or removed:
-                records.append(
-                    {
-                        "type": "change",
-                        "date": parsed_date,
-                        "added_ticker": added,
-                        "removed_ticker": removed,
-                        "_provider": "wikipedia",
-                    }
-                )
+                records.append({
+                    "type": "change",
+                    "date": parsed_date,
+                    "added_ticker": added,
+                    "removed_ticker": removed,
+                    "_provider": "wikipedia",
+                })
         except Exception as ex:
             logger.warning(f"Skipping malformed change row: {row} due to: {ex}")
 
@@ -174,14 +164,9 @@ def fetch_and_cache_universe() -> pd.DataFrame:
         # usable returned" and always falls through to Wikipedia.
         try:
             from data.fmp_universe import fetch_sp500_changes_via_fmp
-
             change_records = fetch_sp500_changes_via_fmp()
-        except (
-            Exception
-        ) as fmp_exc:  # pragma: no cover -- defensive, dispatcher already guards itself
-            logger.debug(
-                f"FMP universe dispatch failed, falling back to Wikipedia: {fmp_exc}"
-            )
+        except Exception as fmp_exc:  # pragma: no cover -- defensive, dispatcher already guards itself
+            logger.debug(f"FMP universe dispatch failed, falling back to Wikipedia: {fmp_exc}")
             change_records = []
 
         if not change_records:
@@ -209,19 +194,17 @@ def fetch_and_cache_universe() -> pd.DataFrame:
         raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
 
     # Convert to combined schema
-    records: list[dict[str, Any]] = []
+    records: List[Dict[str, Any]] = []
     # Add current tickers
     today_str = datetime.now().strftime("%Y-%m-%d")
     for t in current_tickers:
-        records.append(
-            {
-                "type": "current",
-                "date": today_str,
-                "added_ticker": t,
-                "removed_ticker": None,
-                "_provider": "wikipedia",
-            }
-        )
+        records.append({
+            "type": "current",
+            "date": today_str,
+            "added_ticker": t,
+            "removed_ticker": None,
+            "_provider": "wikipedia",
+        })
 
     # Add historical changes (already shaped by _parse_wikipedia_changes_table
     # or fetch_sp500_changes_via_fmp)
@@ -234,7 +217,6 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     combined_df.to_parquet(CACHE_PATH, index=False)
     logger.info(f"Successfully cached universe data to {CACHE_PATH}")
     return combined_df
-
 
 def load_universe_data() -> pd.DataFrame:
     """Loads S&P 500 data from cache, refreshing it if it's older than a week."""
@@ -249,17 +231,14 @@ def load_universe_data() -> pd.DataFrame:
         try:
             return fetch_and_cache_universe()
         except Exception as e:
-            logger.error(
-                f"Failed to refresh cache, attempting to read existing cache: {e}"
-            )
+            logger.error(f"Failed to refresh cache, attempting to read existing cache: {e}")
             if os.path.exists(CACHE_PATH):
                 return pd.read_parquet(CACHE_PATH)
             raise e
     else:
         return pd.read_parquet(CACHE_PATH)
 
-
-def get_sp500_constituents(as_of_date: date) -> list[str]:
+def get_sp500_constituents(as_of_date: date) -> List[str]:
     """Reconstruct S&P 500 constituents for a given date by walking changes backward."""
     df = load_universe_data()
 
@@ -272,10 +251,10 @@ def get_sp500_constituents(as_of_date: date) -> list[str]:
 
     target_date = as_of_date
     if isinstance(target_date, datetime):
-        target_date = target_date.date()
+         target_date = target_date.date()
 
     # Walk backward from today's list
-    for row in changes_sorted.to_dict("records"):
+    for row in changes_sorted.to_dict('records'):
         change_date = row["date_parsed"]
         if change_date > target_date:
             added = row["added_ticker"]
@@ -290,13 +269,10 @@ def get_sp500_constituents(as_of_date: date) -> list[str]:
 
     return sorted(list(current_tickers))
 
-
 def get_delisted_tickers() -> pd.DataFrame:
     """Read delisted tickers from the local seed CSV file."""
     if not os.path.exists(DELISTED_PATH):
-        logger.warning(
-            f"Delisted tickers file {DELISTED_PATH} not found. Returning empty DataFrame."
-        )
+        logger.warning(f"Delisted tickers file {DELISTED_PATH} not found. Returning empty DataFrame.")
         return pd.DataFrame(columns=["ticker", "company", "delisting_date", "reason"])
 
     df = pd.read_csv(DELISTED_PATH)
@@ -304,10 +280,10 @@ def get_delisted_tickers() -> pd.DataFrame:
     df["delisting_date"] = pd.to_datetime(df["delisting_date"]).dt.date
     return df
 
-
 def get_universe_with_survivorship_warning(
-    as_of_date: date, include_delisted: bool = True
-) -> tuple[list[str], dict[str, Any]]:
+    as_of_date: date,
+    include_delisted: bool = True
+) -> Tuple[List[str], Dict[str, Any]]:
     """Returns the S&P 500 constituents at as_of_date and computes a bias report."""
     constituents = get_sp500_constituents(as_of_date)
 
@@ -319,11 +295,11 @@ def get_universe_with_survivorship_warning(
     delisted_df = get_delisted_tickers()
     target_date = as_of_date
     if isinstance(target_date, datetime):
-        target_date = target_date.date()
+         target_date = target_date.date()
 
     delisted_in_period = delisted_df[
-        (delisted_df["delisting_date"] >= target_date)
-        & (delisted_df["delisting_date"] <= date.today())
+        (delisted_df["delisting_date"] >= target_date) &
+        (delisted_df["delisting_date"] <= date.today())
     ]
     n_delisted_in_period = len(delisted_in_period)
 
@@ -335,7 +311,7 @@ def get_universe_with_survivorship_warning(
         "n_current": n_current,
         "n_at_date": n_at_date,
         "n_delisted_in_period": n_delisted_in_period,
-        "estimated_bias_pct": round(estimated_bias_pct, 2),
+        "estimated_bias_pct": round(estimated_bias_pct, 2)
     }
 
     # If include_delisted is requested, we can optionally merge active constituents
@@ -343,35 +319,25 @@ def get_universe_with_survivorship_warning(
     # We will keep constituents as the point-in-time active set.
     return constituents, bias_report
 
-
-def print_survivorship_bias_warning(bias_report: dict[str, Any]) -> None:
+def print_survivorship_bias_warning(bias_report: Dict[str, Any]) -> None:
     """Print the institutional-grade survivorship bias warning."""
     print("=" * 80)
-    print(
-        " WARNING — SURVIVORSHIP BIAS: Free-data backtests systematically overstate returns"
-    )
-    print(
-        " by ~0.5-1.5%/year on US equities and far more on small-caps/emerging markets."
-    )
+    print(" WARNING — SURVIVORSHIP BIAS: Free-data backtests systematically overstate returns")
+    print(" by ~0.5-1.5%/year on US equities and far more on small-caps/emerging markets.")
     print(" Treat results accordingly.")
     print("-" * 80)
-    print(" Bias Report Details:")
+    print(f" Bias Report Details:")
     print(f"   - Current S&P 500 constituents: {bias_report['n_current']}")
     print(f"   - Constituents at target date:  {bias_report['n_at_date']}")
     print(f"   - Delisted tickers in period:  {bias_report['n_delisted_in_period']}")
     print(f"   - Estimated annualized bias:    {bias_report['estimated_bias_pct']}%")
     print("=" * 80)
 
-
 def main() -> None:
     """CLI entrypoint for universe engine."""
     parser = argparse.ArgumentParser(description="InvestYo S&P 500 Universe Loader")
-    parser.add_argument(
-        "--date", type=str, default=None, help="As-of date in YYYY-MM-DD format"
-    )
-    parser.add_argument(
-        "--report", action="store_true", help="Print survivorship bias report"
-    )
+    parser.add_argument("--date", type=str, default=None, help="As-of date in YYYY-MM-DD format")
+    parser.add_argument("--report", action="store_true", help="Print survivorship bias report")
     args = parser.parse_args()
 
     as_of = date.today()
@@ -382,14 +348,11 @@ def main() -> None:
 
     if args.report:
         print_survivorship_bias_warning(bias_report)
-        print(
-            f"\nPoint-in-Time Universe for {as_of} contains {len(constituents)} tickers:"
-        )
+        print(f"\nPoint-in-Time Universe for {as_of} contains {len(constituents)} tickers:")
         print(", ".join(constituents[:25]) + " ...")
     else:
         for ticker in constituents:
             print(ticker)
-
 
 if __name__ == "__main__":
     main()

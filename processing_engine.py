@@ -16,7 +16,6 @@ except ImportError:
 
 import logging
 import math
-import time
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -384,9 +383,6 @@ class ProcessingEngine:
                     "falling back to direct DTO path. Error: %s", _exc,
                 )
 
-        _fund_deadline = time.monotonic() + float(settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE)
-        _fund_budget_logged = False
-
         results = {}
         for ticker, dto in fund_dtos.items():
             if not dto:
@@ -401,53 +397,41 @@ class ProcessingEngine:
                 # values onto the existing DTO attributes.  The DTO remains the
                 # authoritative object; we only supplement missing or stale fields.
                 if _hist_store is not None and info:
-                    if time.monotonic() >= _fund_deadline:
-                        if not _fund_budget_logged:
-                            logging.warning(
-                                "ProcessingEngine.calculate_fundamental_metrics: "
-                                "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE (%.0fs) exceeded "
-                                "at ticker %s -- skipping live HistoricalStore refresh for this "
-                                "and any remaining tickers this cycle (DTO-only fundamentals "
-                                "used instead).",
-                                settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE, ticker,
-                            )
-                            _fund_budget_logged = True
-                    else:
-                        try:
-                            # Pass the provider extracted from data.market_data so the
-                            # inner fallback in get_fundamentals can reach the network.
-                            from data.market_data import get_provider as _get_provider
-                            _provider = _get_provider()
-                            _typed = _hist_store.get_fundamentals(
-                                ticker,
-                                max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS,
-                                provider=_provider,
-                            )
-                            # Overlay typed values onto the raw info dict so that
-                            # downstream processing_engine code (which reads from `info`
-                            # and `dto.*`) still works unchanged.
-                            if _typed:
-                                _key_remap = {
-                                    "pe_ratio":         "trailingPE",
-                                    "pb_ratio":         "priceToBook",
-                                    "roe":              "returnOnEquity",
-                                    "dividend_yield":   "dividendYield",
-                                    "market_cap":       "marketCap",
-                                    "eps":              "trailingEps",
-                                    "operating_margin": "operatingMargins",
-                                    # debt_to_equity: stored as decimal; info uses percent
-                                }
-                                for typed_col, raw_key in _key_remap.items():
-                                    typed_val = _typed.get(typed_col)
-                                    if typed_val is not None and not (
-                                        isinstance(typed_val, float) and math.isnan(typed_val)
-                                    ):
-                                        info.setdefault(raw_key, typed_val)
-                        except Exception as _exc:
-                            logging.debug(
-                                "ProcessingEngine[%s]: HistoricalStore fundamentals "
-                                "overlay failed: %s (continuing with DTO).", ticker, _exc,
-                            )
+                    try:
+                        # Pass the provider extracted from data.market_data so the
+                        # inner fallback in get_fundamentals can reach the network.
+                        from data.market_data import get_provider as _get_provider
+                        _provider = _get_provider()
+                        _typed = _hist_store.get_fundamentals(
+                            ticker,
+                            max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS,
+                            provider=_provider,
+                        )
+                        # Overlay typed values onto the raw info dict so that
+                        # downstream processing_engine code (which reads from `info`
+                        # and `dto.*`) still works unchanged.
+                        if _typed:
+                            _key_remap = {
+                                "pe_ratio":         "trailingPE",
+                                "pb_ratio":         "priceToBook",
+                                "roe":              "returnOnEquity",
+                                "dividend_yield":   "dividendYield",
+                                "market_cap":       "marketCap",
+                                "eps":              "trailingEps",
+                                "operating_margin": "operatingMargins",
+                                # debt_to_equity: stored as decimal; info uses percent
+                            }
+                            for typed_col, raw_key in _key_remap.items():
+                                typed_val = _typed.get(typed_col)
+                                if typed_val is not None and not (
+                                    isinstance(typed_val, float) and math.isnan(typed_val)
+                                ):
+                                    info.setdefault(raw_key, typed_val)
+                    except Exception as _exc:
+                        logging.debug(
+                            "ProcessingEngine[%s]: HistoricalStore fundamentals "
+                            "overlay failed: %s (continuing with DTO).", ticker, _exc,
+                        )
                 price = float(
                     info.get('regularMarketPrice')
                     or info.get('previousClose')
