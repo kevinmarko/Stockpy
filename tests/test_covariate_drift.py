@@ -24,9 +24,9 @@ def test_compute_psi_shifted_distributions():
     assert psi >= PSI_ALERT_THRESHOLD
 
 def test_compute_psi_degrades_gracefully():
-    # Empty series
-    assert compute_psi(pd.Series(dtype=float), pd.Series(dtype=float)) == 0.0
-    
+    # Empty series: PSI is uncomputable, not "confirmed no drift"
+    assert np.isnan(compute_psi(pd.Series(dtype=float), pd.Series(dtype=float)))
+
     # Single value
     ref = pd.Series([1.0, 1.0, 1.0])
     curr = pd.Series([1.0, 1.0])
