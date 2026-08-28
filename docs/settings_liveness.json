@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 334,
+    "live_safe": 336,
     "no_op": 3,
     "restart_required": 106,
-    "total": 443
+    "total": 445
   },
   "dynamic_sites": [
     {
@@ -197,6 +197,8 @@
     "DISCORD_WEBHOOK_URL",
     "DUAL_MOMENTUM_RISKY_ASSETS",
     "DUAL_MOMENTUM_SAFE_ASSET",
+    "EDGAR_COOLDOWN_SECONDS",
+    "EDGAR_COOLDOWN_THRESHOLD",
     "EDGAR_FULLTEXT_ENABLED",
     "EDGAR_MAX_CONCURRENCY",
     "EDGAR_USER_AGENT",
@@ -483,15 +485,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 880,
+    "attr": 881,
     "factory_param": 4,
-    "getattr_const": 373,
+    "getattr_const": 375,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 262,
     "factory_param": 4,
-    "getattr_const": 209,
+    "getattr_const": 211,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -3080,7 +3082,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/sentiment_sources.py:1932",
+        "site": "data/sentiment_sources.py:1962",
         "via": []
       }
     ],
@@ -3091,9 +3093,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/sentiment_sources.py:1902",
+        "site": "data/sentiment_sources.py:1932",
         "via": [
-          1891
+          1921
         ]
       }
     ],

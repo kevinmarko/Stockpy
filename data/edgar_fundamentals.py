@@ -71,7 +71,94 @@ def _throttle():
     from data.cross_process_throttle import wait_turn
     wait_turn(_edgar_throttle_state_path(), _REQUEST_DELAY)
 
+# Cooldown/circuit-breaker state -- see docs/module_efficiency_redundancy_audit.md's
+# F8: this fetcher had the in-process/cross-process spacing throttle above
+# but no breaker at all, unlike its siblings in data/fmp_client.py and
+# data/sentiment_sources.py (GDELT). Mirrors both of those exactly, scoped
+# to a state-check-and-bookkeeping addition around _http_get's existing
+# single-attempt call -- deliberately NOT also adding a retry loop, which
+# would be a materially bigger behavior change to a function two existing
+# callers (get_cik, fetch_companyfacts) already wrap in their own
+# degrade-gracefully except blocks.
+_edgar_consecutive_failures = 0
+_edgar_cooldown_until = 0.0
+_edgar_cooldown_logged = False
+
+
+class EdgarUnavailable(Exception):
+    """Raised internally when an EDGAR request was skipped because the
+    cooldown is open. Named for the CONDITION (the host is not serving us),
+    matching data/sentiment_sources.py::GDELTUnavailable's convention.
+    Callers' existing broad ``except Exception`` blocks (get_cik,
+    fetch_companyfacts) already catch this and degrade to None/{}
+    (CONSTRAINT #6) -- it never needs special-casing at the call sites."""
+
+
+def reset_edgar_rate_limiter() -> None:
+    """Clear the breaker's state (consecutive-failure count, cooldown). For
+    tests; never needed on the normal path. Does NOT reset the spacing
+    throttle's _last_request_time -- that has its own established reset
+    convention via _throttle_lock, and no existing test needed it reset."""
+    global _edgar_consecutive_failures, _edgar_cooldown_until, _edgar_cooldown_logged
+    with _throttle_lock:
+        _edgar_consecutive_failures = 0
+        _edgar_cooldown_until = 0.0
+        _edgar_cooldown_logged = False
+
+
+def _edgar_in_cooldown() -> bool:
+    """True when the breaker is inside a post-failure cooldown, so the
+    caller must skip the request entirely rather than issue one that will
+    almost certainly fail. Mirrors data/fmp_client.py::_fmp_in_cooldown."""
+    global _edgar_cooldown_logged
+    with _throttle_lock:
+        if _edgar_cooldown_until <= 0.0:
+            return False
+        remaining = _edgar_cooldown_until - time.monotonic()
+        if remaining <= 0:
+            return False
+        if not _edgar_cooldown_logged:
+            logger.warning(
+                "EDGAR cooldown active for another %.0fs after %d consecutive "
+                "failed requests (429/5xx); skipping EDGAR calls until it "
+                "expires (every other data source is unaffected).",
+                remaining, _edgar_consecutive_failures,
+            )
+            _edgar_cooldown_logged = True
+        return True
+
+
+def _edgar_note_failure(threshold: int, cooldown_seconds: float) -> None:
+    """Record one failed request -- a 429 or a 5xx. Opens the cooldown once
+    ``threshold`` CONSECUTIVE ones have been seen. Mirrors
+    data/fmp_client.py::_fmp_note_failure."""
+    global _edgar_consecutive_failures, _edgar_cooldown_until, _edgar_cooldown_logged
+    with _throttle_lock:
+        _edgar_consecutive_failures += 1
+        if threshold > 0 and _edgar_consecutive_failures >= threshold:
+            _edgar_cooldown_until = time.monotonic() + max(0.0, cooldown_seconds)
+            _edgar_cooldown_logged = False
+
+
+def _edgar_note_answered() -> None:
+    """Record that the host gave us a response, clearing the
+    consecutive-failure run and any open cooldown. Mirrors
+    data/fmp_client.py::_fmp_note_answered."""
+    global _edgar_consecutive_failures, _edgar_cooldown_until, _edgar_cooldown_logged
+    with _throttle_lock:
+        _edgar_consecutive_failures = 0
+        _edgar_cooldown_until = 0.0
+        _edgar_cooldown_logged = False
+
+
 def _http_get(url: str) -> bytes:
+    if _edgar_in_cooldown():
+        raise EdgarUnavailable("EDGAR cooldown is open; request skipped.")
+
+    from settings import settings as _settings
+    threshold = int(getattr(_settings, "EDGAR_COOLDOWN_THRESHOLD", 3))
+    cooldown_seconds = float(getattr(_settings, "EDGAR_COOLDOWN_SECONDS", 300.0))
+
     _throttle()
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -79,9 +166,19 @@ def _http_get(url: str) -> bytes:
         # (fixed https:// base + resolved CIK/accession), never raw external
         # input.
         with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
-            return response.read()
+            result = response.read()
+        _edgar_note_answered()
+        return result
     except urllib.error.HTTPError as exc:
         logger.warning("HTTP %d for %s", exc.code, url)
+        if exc.code == 429 or 500 <= exc.code < 600:
+            _edgar_note_failure(threshold, cooldown_seconds)
+        else:
+            # A definite non-retriable answer (403, 404, ...) -- clears the
+            # breaker the same way a 200 does, matching
+            # _fmp_note_answered's documented reasoning: "we are not
+            # allowed"/"that doesn't exist" is not evidence the HOST is down.
+            _edgar_note_answered()
         raise
 
 _CIK_OVERRIDES = {

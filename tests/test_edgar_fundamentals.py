@@ -5,6 +5,7 @@ import pytest
 
 from data import edgar_fundamentals
 from data.yahoo_fundamentals import compute_fundamentals
+from settings import settings
 from tests.test_yahoo_fundamentals import base_kwargs as _yahoo_base_kwargs
 
 @pytest.fixture
@@ -297,6 +298,133 @@ class TestThreadSafety:
         # this is looser than a single-lock throttle would need); a broken
         # throttle produces ~0 gaps, an order of magnitude below this floor.
         assert all(g >= 0.04 * 0.6 for g in gaps), gaps
+
+
+class TestCooldownCircuitBreaker:
+    """New for F8 (docs/module_efficiency_redundancy_audit.md): EDGAR
+    previously had the spacing throttle but no cooldown/circuit-breaker at
+    all, unlike its FMP/GDELT siblings. Mirrors
+    tests/test_fmp_client.py's TestCooldown class conventions."""
+
+    def _http_error(self, code):
+        import urllib.error
+        return urllib.error.HTTPError(
+            url="https://x.test/y", code=code, msg="err", hdrs=None, fp=None
+        )
+
+    def test_first_call_is_not_in_cooldown(self, reset_edgar_state):
+        assert edgar_fundamentals._edgar_in_cooldown() is False
+
+    def test_consecutive_429s_open_the_cooldown(self, monkeypatch, reset_edgar_state):
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_THRESHOLD", 3)
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_SECONDS", 300.0)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.0)
+
+        def _fake_urlopen(req, timeout=10):
+            raise self._http_error(429)
+
+        monkeypatch.setattr(edgar_fundamentals.urllib.request, "urlopen", _fake_urlopen)
+
+        for _ in range(3):
+            with pytest.raises(Exception):
+                edgar_fundamentals._http_get("https://x.test/y")
+
+        assert edgar_fundamentals._edgar_in_cooldown() is True
+
+    def test_cooldown_skips_the_request_entirely(self, monkeypatch, reset_edgar_state):
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_THRESHOLD", 1)
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_SECONDS", 300.0)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.0)
+
+        calls = {"n": 0}
+
+        def _fake_urlopen(req, timeout=10):
+            calls["n"] += 1
+            raise self._http_error(429)
+
+        monkeypatch.setattr(edgar_fundamentals.urllib.request, "urlopen", _fake_urlopen)
+
+        with pytest.raises(Exception):
+            edgar_fundamentals._http_get("https://x.test/y")
+        assert calls["n"] == 1
+
+        # Cooldown is now open (threshold=1) -- the next call must be
+        # skipped WITHOUT reaching urlopen at all.
+        with pytest.raises(edgar_fundamentals.EdgarUnavailable):
+            edgar_fundamentals._http_get("https://x.test/y")
+        assert calls["n"] == 1, "urlopen must not be called while the cooldown is open"
+
+    def test_a_success_clears_the_consecutive_count(self, monkeypatch, reset_edgar_state):
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_THRESHOLD", 3)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.0)
+
+        class _FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        responses = [self._http_error(429), self._http_error(429), _FakeResp()]
+
+        def _fake_urlopen(req, timeout=10):
+            resp = responses.pop(0)
+            if isinstance(resp, Exception):
+                raise resp
+            return resp
+
+        monkeypatch.setattr(edgar_fundamentals.urllib.request, "urlopen", _fake_urlopen)
+
+        with pytest.raises(Exception):
+            edgar_fundamentals._http_get("https://x.test/y")
+        with pytest.raises(Exception):
+            edgar_fundamentals._http_get("https://x.test/y")
+        edgar_fundamentals._http_get("https://x.test/y")  # succeeds
+
+        assert edgar_fundamentals._edgar_consecutive_failures == 0
+        assert edgar_fundamentals._edgar_in_cooldown() is False
+
+    def test_a_404_clears_the_breaker_not_treated_as_host_failure(self, monkeypatch, reset_edgar_state):
+        """Mirrors data/fmp_client.py::_fmp_note_answered's documented
+        reasoning: 'that ticker doesn't exist' answers the request just as
+        squarely as a 200 -- it must not count toward the cooldown."""
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_THRESHOLD", 1)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.0)
+
+        def _fake_urlopen(req, timeout=10):
+            raise self._http_error(404)
+
+        monkeypatch.setattr(edgar_fundamentals.urllib.request, "urlopen", _fake_urlopen)
+
+        with pytest.raises(Exception):
+            edgar_fundamentals._http_get("https://x.test/y")
+
+        assert edgar_fundamentals._edgar_in_cooldown() is False
+
+    def test_get_cik_degrades_gracefully_when_cooldown_open(self, monkeypatch, reset_edgar_state):
+        """The two real call sites (get_cik, fetch_companyfacts) already
+        wrap _http_get in a broad except -- confirm EdgarUnavailable is
+        caught by that existing degrade-to-None path with no special
+        casing needed."""
+        monkeypatch.setattr(settings, "EDGAR_COOLDOWN_THRESHOLD", 1)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.0)
+        edgar_fundamentals._edgar_cooldown_until = edgar_fundamentals.time.monotonic() + 300.0
+
+        assert edgar_fundamentals.get_cik("AAPL") is None
+
+    def test_reset_edgar_rate_limiter_clears_state(self, reset_edgar_state):
+        edgar_fundamentals._edgar_consecutive_failures = 5
+        edgar_fundamentals._edgar_cooldown_until = edgar_fundamentals.time.monotonic() + 300.0
+        edgar_fundamentals._edgar_cooldown_logged = True
+
+        edgar_fundamentals.reset_edgar_rate_limiter()
+
+        assert edgar_fundamentals._edgar_consecutive_failures == 0
+        assert edgar_fundamentals._edgar_cooldown_until == 0.0
+        assert edgar_fundamentals._edgar_cooldown_logged is False
 
     def test_cik_cache_fetched_once_under_concurrency(self, monkeypatch, reset_edgar_state):
         """W threads racing into get_cik with an empty cache trigger exactly ONE
