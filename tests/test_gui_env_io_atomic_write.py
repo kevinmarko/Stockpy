@@ -22,7 +22,7 @@ from unittest import mock
 import pytest
 from dotenv import dotenv_values
 
-from gui import env_io
+import env_io
 
 
 @pytest.fixture()

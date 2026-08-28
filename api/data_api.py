@@ -626,11 +626,11 @@ def get_universe() -> Dict[str, Any]:
 def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
     """Replace the configured universe.
 
-    Writes ``DEFAULT_TICKERS`` via ``gui.env_io.write_setting`` — the
+    Writes ``DEFAULT_TICKERS`` via ``env_io.write_setting`` — the
     allowlist-bounded env writer. (``WATCHLIST`` is intentionally NOT in
     ``ALLOWED_KEYS``, so ``DEFAULT_TICKERS`` is the correct, writable key.)
     """
-    from gui.env_io import write_setting
+    from env_io import write_setting
 
     symbols = [s.strip().upper() for s in watchlist if s and s.strip()]
     try:

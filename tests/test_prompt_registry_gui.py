@@ -525,9 +525,16 @@ class TestRollbackPath:
         rolled = reg.rollback(_KNOWN_ID)
         assert rolled is not None, "rollback must succeed with 2 versions"
 
-        with unittest.mock.patch("gui.env_io.write_setting") as mock_write:
+        with unittest.mock.patch("env_io.write_setting") as mock_write:
             pins_dict = dict(sorted(reg._pins.items()))
-            from gui.env_io import write_setting
+            # Import from the real env_io module directly, not the gui/env_io.py
+            # shim -- the shim's own `write_setting` name was bound once, via
+            # `from env_io import *`, at shim MODULE LOAD time, so it holds a
+            # stale reference to the unpatched function regardless of when this
+            # `from gui.env_io import write_setting` statement itself executes;
+            # patching env_io.write_setting only swaps the attribute on the real
+            # module's own namespace, which importing via the shim never re-reads.
+            from env_io import write_setting
             write_setting("PROMPT_REGISTRY_PINS", pins_dict)
             mock_write.assert_called_once_with("PROMPT_REGISTRY_PINS", pins_dict)
             key, val = mock_write.call_args[0]
@@ -568,7 +575,7 @@ class TestPinWriteEncoding:
         STRING instead of a dict — exactly the silent-discard bug
         PromptRegistry._build_registry_from_settings()'s isinstance(pins, dict)
         check would hit."""
-        import gui.env_io as env_io_mod
+        import env_io as env_io_mod
         env_file = tmp_path / ".env"
         env_file.write_text("", encoding="utf-8")
         monkeypatch.setattr(env_io_mod, "ENV_PATH", env_file)

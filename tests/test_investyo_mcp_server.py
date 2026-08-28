@@ -1345,7 +1345,7 @@ class TestUpdateUniverseTickers:
     """
 
     def _redirect_env(self, monkeypatch, tmp_path):
-        import gui.env_io as env_io
+        import env_io
 
         env_file = tmp_path / ".env"
         monkeypatch.setattr(env_io, "ENV_PATH", env_file)
@@ -4653,7 +4653,7 @@ class TestPinRegistryPrompt:
         assert "custom.test.prompt" not in reg._pins
 
     def test_valid_version_sets_pin_and_writes_env(self, monkeypatch, tmp_path):
-        import gui.env_io as env_io
+        import env_io
 
         reg = _pr_make_registry(tmp_path)
         reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
@@ -4676,7 +4676,7 @@ class TestPinRegistryPrompt:
         keys, that pre-encodes the value TWICE, writing a JSON string literal
         wrapping the real dict rather than the dict itself. This tool must
         pass the dict straight through instead."""
-        import gui.env_io as env_io
+        import env_io
 
         reg = _pr_make_registry(tmp_path)
         reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
@@ -4694,7 +4694,7 @@ class TestPinRegistryPrompt:
         assert isinstance(captured["PROMPT_REGISTRY_PINS"], dict)
 
     def test_env_write_failure_degrades_to_in_memory_pin(self, monkeypatch, tmp_path):
-        import gui.env_io as env_io
+        import env_io
 
         reg = _pr_make_registry(tmp_path)
         reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
@@ -4731,7 +4731,7 @@ class TestRollbackRegistryPrompt:
         assert "Cannot roll back" in result
 
     def test_rollback_success_writes_env(self, monkeypatch, tmp_path):
-        import gui.env_io as env_io
+        import env_io
         import time as _time
 
         reg = _pr_make_registry(tmp_path)
