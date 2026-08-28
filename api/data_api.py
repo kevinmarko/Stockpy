@@ -59,7 +59,7 @@ _load_dotenv(ENV_PATH, override=False)
 from api.auth import require_read_token as require_token, require_write_token
 from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from data.historical_store import HistoricalStore
-from data.market_data import MarketDataError, get_provider
+from data.market_data import get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import async_sync_now, build_sync_report
 from data_engine import DataEngine
@@ -645,25 +645,20 @@ def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
 def get_quotes(symbols: str) -> Dict[str, Any]:
     """Latest quotes for a comma-separated symbol list.
 
-    There is no batch ``get_quotes`` on the provider — the real accessor is
-    ``get_latest_quote(symbol) -> Quote`` (raises ``MarketDataError`` on
-    failure). We loop per symbol with per-symbol dead-lettering so one bad
-    ticker never drops the whole batch; failed symbols are simply omitted.
+    Uses ``MarketDataProvider.get_quotes_batch()`` (F6, docs/
+    module_efficiency_redundancy_audit.md) -- one batched call when the
+    active provider supports it (FMPProvider's real ``/batch-quote``
+    override), instead of N individual ``/quote`` requests. Same
+    dead-letter contract as before: a symbol that fails to resolve is
+    simply absent from the response, never raises.
     """
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not sym_list:
         return {}
     provider = get_provider()
+    quotes = provider.get_quotes_batch(sym_list)
     out: Dict[str, Any] = {}
-    for sym in sym_list:
-        try:
-            q = provider.get_latest_quote(sym)
-        except MarketDataError as exc:
-            logger.info("data_api: quote unavailable for %s: %s", sym, exc)
-            continue
-        except Exception as exc:  # defensive dead-letter
-            logger.warning("data_api: quote error for %s: %s", sym, exc)
-            continue
+    for sym, q in quotes.items():
         out[sym] = _clean_nan(
             {
                 "symbol": q.symbol,

@@ -23,6 +23,7 @@ All network I/O is monkeypatched.  The suite verifies:
 """
 
 import importlib
+import math
 import os
 import sys
 import time
@@ -2308,3 +2309,251 @@ class TestCompositeProviderGenuineDefaultRouting:
             out = cp.get_latest_quote("AAPL")
         assert out.source == "yfinance"
         fmp_get_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_quotes_batch -- F6, docs/module_efficiency_redundancy_audit.md
+# ---------------------------------------------------------------------------
+
+
+class TestMarketDataProviderGetQuotesBatchDefault:
+    """The ABC's default per-symbol-loop implementation -- exercised via
+    YFinanceProvider (which does not override get_quotes_batch), proving
+    every non-FMP provider gets correct (if unbatched) behavior for free."""
+
+    def test_resolves_every_symbol_via_get_latest_quote(self, monkeypatch):
+        from data.market_data import YFinanceProvider
+
+        provider = YFinanceProvider()
+        calls = []
+
+        def _fake_get_latest_quote(self, symbol):
+            calls.append(symbol)
+            return _make_fake_quote(symbol.upper(), "yfinance")
+
+        monkeypatch.setattr(YFinanceProvider, "get_latest_quote", _fake_get_latest_quote)
+
+        result = provider.get_quotes_batch(["aapl", "MSFT"])
+
+        assert sorted(calls) == ["MSFT", "aapl"]
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+        assert result["AAPL"].source == "yfinance"
+
+    def test_a_failing_symbol_is_dead_lettered_not_raised(self, monkeypatch):
+        from data.market_data import YFinanceProvider, MarketDataError
+
+        provider = YFinanceProvider()
+
+        def _fake_get_latest_quote(self, symbol):
+            if symbol.upper() == "BAD":
+                raise MarketDataError("no data")
+            return _make_fake_quote(symbol.upper(), "yfinance")
+
+        monkeypatch.setattr(YFinanceProvider, "get_latest_quote", _fake_get_latest_quote)
+
+        result = provider.get_quotes_batch(["AAPL", "BAD", "MSFT"])
+
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+
+    def test_empty_input_returns_empty_dict_without_calling_get_latest_quote(self, monkeypatch):
+        from data.market_data import YFinanceProvider
+
+        provider = YFinanceProvider()
+        monkeypatch.setattr(
+            YFinanceProvider, "get_latest_quote",
+            lambda self, symbol: (_ for _ in ()).throw(AssertionError("must not be called")),
+        )
+        assert provider.get_quotes_batch([]) == {}
+
+
+class TestFMPProviderGetQuotesBatch:
+    """FMPProvider's real override -- one call to fmp_client.batch_quote()
+    instead of N calls to fmp_client.quote()."""
+
+    def test_resolves_all_symbols_via_one_batch_quote_call(self, monkeypatch):
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        calls = []
+
+        def _fake_batch_quote(symbols):
+            calls.append(list(symbols))
+            return [
+                {"symbol": "AAPL", "price": 150.25, "timestamp": 1700000000},
+                {"symbol": "MSFT", "price": 300.5, "timestamp": 1700000000},
+            ]
+
+        monkeypatch.setattr("data.fmp_client.batch_quote", _fake_batch_quote)
+
+        result = provider.get_quotes_batch(["AAPL", "MSFT"])
+
+        assert len(calls) == 1
+        assert calls[0] == ["AAPL", "MSFT"]
+        assert result["AAPL"].price == pytest.approx(150.25)
+        assert result["MSFT"].price == pytest.approx(300.5)
+        assert result["AAPL"].source == provider.SOURCE
+        assert math.isnan(result["AAPL"].bid)
+        assert math.isnan(result["AAPL"].ask)
+
+    def test_a_symbol_missing_from_the_response_is_absent_not_fabricated(self, monkeypatch):
+        """CONSTRAINT #4: FMP returning fewer rows than requested symbols
+        (e.g. one delisted ticker) must not fabricate a quote for it."""
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        monkeypatch.setattr(
+            "data.fmp_client.batch_quote",
+            lambda symbols: [{"symbol": "AAPL", "price": 150.0, "timestamp": 1700000000}],
+        )
+
+        result = provider.get_quotes_batch(["AAPL", "DELISTEDCO"])
+
+        assert set(result.keys()) == {"AAPL"}
+
+    def test_a_row_with_no_price_is_excluded(self, monkeypatch):
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        monkeypatch.setattr(
+            "data.fmp_client.batch_quote",
+            lambda symbols: [{"symbol": "AAPL", "price": None}],
+        )
+
+        assert provider.get_quotes_batch(["AAPL"]) == {}
+
+    def test_a_total_request_failure_degrades_to_an_empty_dict_not_a_raise(self, monkeypatch):
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+
+        def _boom(symbols):
+            raise RuntimeError("FMP is down")
+
+        monkeypatch.setattr("data.fmp_client.batch_quote", _boom)
+
+        result = provider.get_quotes_batch(["AAPL", "MSFT"])
+        assert result == {}
+
+    def test_empty_input_returns_empty_dict_without_a_network_call(self, monkeypatch):
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        monkeypatch.setattr(
+            "data.fmp_client.batch_quote",
+            lambda symbols: (_ for _ in ()).throw(AssertionError("must not be called")),
+        )
+        assert provider.get_quotes_batch([]) == {}
+
+
+class TestCompositeProviderGetQuotesBatch:
+    """CompositeProvider's override -- cache-first per symbol, then one
+    delegated batch call to the effective quote provider for the misses."""
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    def test_cache_hits_never_reach_the_underlying_provider(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+        cached_quote = _make_fake_quote("AAPL", "yfinance")
+        cp._cache.put(cached_quote)
+
+        with patch.object(
+            YFinanceProvider, "get_quotes_batch",
+            side_effect=AssertionError("must not be called -- AAPL is cached"),
+        ):
+            result = cp.get_quotes_batch(["AAPL"])
+
+        assert result["AAPL"] is cached_quote
+
+    def test_cache_misses_are_batched_in_one_delegated_call(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+
+        calls = []
+
+        def _fake_batch(symbols):
+            calls.append(list(symbols))
+            return {s: _make_fake_quote(s, "yfinance") for s in symbols}
+
+        with patch.object(YFinanceProvider, "get_quotes_batch", side_effect=_fake_batch):
+            result = cp.get_quotes_batch(["AAPL", "MSFT"])
+
+        assert len(calls) == 1
+        assert set(calls[0]) == {"AAPL", "MSFT"}
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+
+    def test_fetched_quotes_are_written_back_to_the_cache(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+
+        fresh_quote = _make_fake_quote("AAPL", "yfinance")
+        with patch.object(
+            YFinanceProvider, "get_quotes_batch", return_value={"AAPL": fresh_quote}
+        ):
+            cp.get_quotes_batch(["AAPL"])
+
+        assert cp._cache.get("AAPL") is fresh_quote
+
+    def test_mixed_cache_hit_and_miss_only_batches_the_miss(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+        cached_quote = _make_fake_quote("AAPL", "yfinance")
+        cp._cache.put(cached_quote)
+
+        calls = []
+
+        def _fake_batch(symbols):
+            calls.append(list(symbols))
+            return {s: _make_fake_quote(s, "yfinance") for s in symbols}
+
+        with patch.object(YFinanceProvider, "get_quotes_batch", side_effect=_fake_batch):
+            result = cp.get_quotes_batch(["AAPL", "MSFT"])
+
+        assert calls == [["MSFT"]]
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+        assert result["AAPL"] is cached_quote
+
+    def test_fmp_active_delegates_to_fmp_providers_real_batch_override(self):
+        """The actual efficiency win this method exists for: when FMP is the
+        active provider, the batch call reaches FMPProvider.get_quotes_batch
+        (one /batch-quote request), not N /quote requests."""
+        from data.market_data import CompositeProvider, FMPProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="test-key", FMP_QUOTES_ENABLED=True,
+        ):
+            cp = CompositeProvider()
+
+        batch_calls = []
+
+        def _fake_fmp_batch(symbols):
+            batch_calls.append(list(symbols))
+            return {s: _make_fake_quote(s, "fmp") for s in symbols}
+
+        with patch.object(FMPProvider, "get_quotes_batch", side_effect=_fake_fmp_batch):
+            result = cp.get_quotes_batch(["AAPL", "MSFT"])
+
+        assert len(batch_calls) == 1
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+        assert all(q.source == "fmp" for q in result.values())
+
+    def test_empty_input_returns_empty_dict(self):
+        from data.market_data import CompositeProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+        assert cp.get_quotes_batch([]) == {}
