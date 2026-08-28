@@ -2458,7 +2458,7 @@ class Settings(BaseSettings):
     # (the same mistake that caused the original incident) would otherwise
     # reproduce the identical symptom with nothing to catch it.
     PIPELINE_STEP_TIMEOUT_SECONDS: float = Field(
-        default=900.0,
+        default=1800.0,
         description=(
             "Per-step timeout (seconds) for AsyncPipelineRunner.run()'s "
             "synchronous-step dispatch (pipeline/runner.py). On expiry the "
@@ -2469,10 +2469,27 @@ class Settings(BaseSettings):
             "(forecasting across many tickers, which can itself invoke the "
             "CNN-LSTM subprocess pool's own per-ticker bound via a "
             "ThreadPoolExecutor), and well below "
-            "PIPELINE_STALL_ALERT_SECONDS (1800s) so this fires and lets the "
+            "PIPELINE_STALL_ALERT_SECONDS (3600s) so this fires and lets the "
             "daemon reschedule the next cycle before the stall alert would "
             "even need to trigger. See "
-            "docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md."
+            "docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md. "
+            "Raised from the original 900.0 on 2026-08-27 (same day as "
+            "introduction): the very first two live daemon cycles after "
+            "deploy both legitimately exceeded 900s (~1380s each, per "
+            "pipeline_runs.duration_seconds) and were killed by this guard "
+            "-- not a hang, but the 'Computational Core (Processing)' step "
+            "genuinely running long while contending with concurrent "
+            "operator-launched jobs (a multi-strategy refresh_validations.py "
+            "CPCV backtest and a GDELT/EDGAR/FMP-throttled "
+            "backfill_sentiment_history.py run) sharing this machine's CPU "
+            "and the same rate-limited external APIs. Historical successful "
+            "full cycles typically ran 250-340s total under normal (no "
+            "contention) conditions, so 1800s leaves headroom for this kind "
+            "of contention without approaching PIPELINE_STALL_ALERT_SECONDS. "
+            "This does not relax the original hang protection -- a step "
+            "that is genuinely wedged (not merely contended) still gets "
+            "killed and the daemon still recovers; it only accepts a wider "
+            "window of legitimate slowness before doing so."
         ),
     )
     # Wall-clock ceiling (seconds) for ProcessingEngine.calculate_fundamental_metrics()'s
@@ -2561,14 +2578,20 @@ class Settings(BaseSettings):
         ),
     )
     PIPELINE_STALL_ALERT_SECONDS: int = Field(
-        default=1800,
+        default=3600,
         description=(
             "Threshold (seconds) of no progress.json update while "
             "state='running' before the stall alert fires. Set well above "
             "DATA_FETCH_TASK_TIMEOUT_SECONDS's worst case and any legitimate "
-            "single pipeline-stage duration -- 1800s (30 min) is two orders of "
-            "magnitude below the multi-hour/multi-day hang this was added to "
-            "catch."
+            "single pipeline-stage duration -- still two orders of magnitude "
+            "below the multi-hour/multi-day hang this was added to catch. "
+            "Raised from the original 1800 to 3600 on 2026-08-27, in lockstep "
+            "with PIPELINE_STEP_TIMEOUT_SECONDS's 900->1800 bump (see that "
+            "field's own description for the incident that prompted it) -- "
+            "kept at exactly 2x PIPELINE_STEP_TIMEOUT_SECONDS to preserve "
+            "the original design margin: the per-step timeout should always "
+            "fire, and let the daemon reschedule, well before this stall "
+            "alert would ever need to."
         ),
     )
     # Cutover flag for the persistent orchestrator daemon (desktop/
