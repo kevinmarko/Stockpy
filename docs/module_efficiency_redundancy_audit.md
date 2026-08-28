@@ -117,47 +117,63 @@ of `options_risk.py:28`, not an import.
 
 Repro: `grep -n "_OPTION_SYM_RE = re.compile" pilots/options_risk.py pilots/realtime_risk_streamer.py pilots/options_gex.py`.
 
-## F4 — Black-Scholes: canonical pricer exists and is widely reused; 3 real holdouts, one numeric divergence
+## F4 — Black-Scholes: canonical pricer exists and is widely reused; 3 real holdouts, one
+divergence investigated and RESOLVED (kept as-is — the canonical function has the bug, not the copy)
 
 `pilots/options_risk.py::calculate_black_scholes_greeks` (line 50) is genuinely canonical, reused by
 `scenario_matrix.py:30` (a **module-level** import — not lazy, unlike the rest), `zero_dte_engine.py:1237-1238`,
 `volatility_surface.py:82/104/125`, `gamma_scalper.py:86,88`, `options_sor.py:191,193`,
 `vol_mispricing.py:275,278`, `dispersion_trading.py:177,181` (all six of these via lazy in-function imports).
 
-Genuine remaining copies:
+Genuine remaining copies (not yet migrated — see the remediation plan's Status section):
 
 - `pilots/multi_leg_pricing.py:54-127` — `calculate_black_scholes_leg_greeks`, near-verbatim copy (no
   drift found)
 - `pilots/realtime_risk_streamer.py:123-191` — `compute_black_scholes_unit_greeks`, own copy + the
-  duplicated regex above
-- `pilots/options_gex.py:208-259` — own `_norm_pdf`/`_get_risk_free_rate`/
-  `calculate_black_scholes_gamma`, and **drifted**
+  duplicated regex fixed in F3 above (`realtime_risk_streamer.py`'s own regex copy was NOT touched by
+  that fix — it still needs migrating to import the canonical one, tracked here)
 - `pilots/dispersion_trading.py:138-165` — own `calculate_straddle_vega`, inconsistent with
   `calculate_option_price()` a few lines below in the same file, which delegates correctly
 
-**Correction to the original finding — the divergence direction was reported backwards.** Reading
-both implementations directly:
+**`options_gex.py`'s `vol_sqrt_t` divergence — investigated by attempting the fix, not just re-reading
+the code, and resolved in the opposite direction from what the original finding assumed.** Two prior
+drafts of this section disagreed with each other about which function's behavior was "correct" without
+either one actually testing it. The real answer, confirmed empirically:
 
-- Canonical (`pilots/options_risk.py:134-136`): `vol_sqrt_t = sigma * np.sqrt(t_years)`; if that's
-  below `_DEGENERATE_THRESHOLD`, it is **clamped** to the threshold and the Greek calculation
-  continues with the floored value.
-- `options_gex.py`'s own copy (lines 247-249): the same check **early-returns `0.0`** instead of
-  clamping.
+- Canonical (`pilots/options_risk.py:134-136`): when `vol_sqrt_t = sigma * sqrt(t_years)` falls below
+  `_DEGENERATE_THRESHOLD`, it is **clamped** to the threshold and the Greek calculation continues.
+- `options_gex.py::calculate_black_scholes_gamma` (lines 247-249): the same check **early-returns
+  `0.0`** instead of clamping.
 
-The original draft said the opposite (claimed the canonical version clamps-and-continues while
-`options_gex.py`'s copy early-returns — that part was actually right; what was backwards was an
-earlier internal draft of this sentence, corrected here). The net effect stands either way: for
-tiny-but-nonzero `sigma·√t`, `options_gex.py` silently returns a `0.0` Gamma where the canonical
-pricer would return a (small, floored) nonzero value — a real, live numeric divergence between the
-two functions, not a stylistic difference.
+Making `options_gex.py` match the canonical clamp-and-continue behavior was the obvious-looking fix —
+and it is wrong. Tested directly: `calculate_black_scholes_greeks(spot=100, strike=100, t_years=1e-11,
+sigma=1e-7, option_type="call")` — an ATM contract with a genuinely negligible but nonzero
+`vol_sqrt_t` — returns `gamma ≈ 3.6e9`. That is not a meaningful floored value; it's a spurious
+multi-billion-dollar-scale number produced by dividing by a clamped denominator on the edge of float
+precision. `options_gex.py`'s `return 0.0` avoids this entirely, and is the safer behavior for a
+function that feeds a **portfolio-wide dealer-GEX aggregate**, where one spurious value would dominate
+and invalidate the whole sum.
+
+**Decision, now implemented**: `options_gex.py` keeps its `return 0.0`, documented inline with the
+empirical finding and pinned by two regression tests
+(`test_black_scholes_gamma_tiny_vol_sqrt_t_returns_zero_not_a_spurious_blowup` and
+`test_black_scholes_gamma_confirms_canonical_functions_own_blowup_for_context` — the latter a
+permanent witness so a future change to the canonical function's own guard doesn't silently
+invalidate this reasoning). `pilots/options_risk.py`'s own clamp-and-continue behavior was
+**deliberately left unchanged** — it has 7+ reuse sites, and fixing its numerical guard is a
+real, separate, and non-trivial task that deserves its own dedicated, carefully-tested PR, not a
+byproduct of an "align the duplicate" cleanup. Filed as a genuine (if narrow — the input shape needed
+to trigger it is extreme) latent bug in the canonical function itself, not closed here.
 
 `_get_risk_free_rate()` / a `0.045` default rate constant is separately redeclared in `options_gex.py`
 (`DEFAULT_RISK_FREE_RATE`, lines 99/208), `vol_mispricing.py` (`DEFAULT_RISK_FREE_RATE`, lines
 77/254), and `volatility_surface.py` (named `_DEFAULT_RFR` there, lines 56/64 — a naming
 inconsistency on top of the repetition). All three agree on the value 0.045 — repetition, not drift.
 
-Repro: `sed -n '130,140p' pilots/options_risk.py; sed -n '245,250p' pilots/options_gex.py` to compare
-the `vol_sqrt_t` handling directly.
+Repro: `sed -n '130,140p' pilots/options_risk.py; sed -n '240,265p' pilots/options_gex.py` to compare
+the `vol_sqrt_t` handling directly; run
+`tests/test_options_gex.py::test_black_scholes_gamma_confirms_canonical_functions_own_blowup_for_context`
+to reproduce the canonical function's own spurious-value behavior on demand.
 
 ## F5 — N+1 database queries in the per-cycle pipeline, with the batched fix already written
 
@@ -561,8 +577,14 @@ the outset: hot production paths, the pilots/ options desk, the data/store layer
 parity, and dead code across the same surface.
 
 **Remediation in progress** (see `.claude/module_efficiency_audit_remediation_plan.md`):
-- PR 1 (F1, vectorization guard blind spot + CLAUDE.md correction) — merged/open, see the plan doc.
-- PR 3 (F5, N+1 query in the symbol-rating diagnostic columns) — merged/open, see the plan doc.
+- PR 1 (F1, vectorization guard blind spot + CLAUDE.md correction) — open, see the plan doc.
+- PR 3 (F5, N+1 query in the symbol-rating diagnostic columns) — open, see the plan doc.
 - PR 6 (F7) — **withdrawn**, not a real bug; see F7's corrected writeup above.
-- PRs 2, 4, 5, 8, 9, 10 — not yet started.
+- PR 7 (F8, rate-limiter parity for GDELT/EDGAR) — open, see the plan doc.
+- PR 9 (F11, shared atomic-write helper) — open, see the plan doc.
+- PR 4 (F3/F4) — **partially done**: the regex fix (F3) and the `vol_sqrt_t` divergence
+  investigation (F4, resolved by KEEPING `options_gex.py`'s behavior — see F4's corrected writeup
+  above) are open; migrating the two remaining Black-Scholes copies
+  (`multi_leg_pricing.py`, `realtime_risk_streamer.py`) to the canonical pricer is not yet done.
+- PRs 2, 5, 8, 10 — not yet started.
 - PR 11 — spike, not started, per the plan's own "do not start before PRs 1–10 land".

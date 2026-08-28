@@ -14,7 +14,7 @@ and rules out batching `LGBMRankerSignal` specifically (tempting after F1, but i
 
 ---
 
-**PR 1 — Close the vectorization guard's blind spot (F1).** Add `.apply(axis=1)` to
+**PR 1 — OPEN ([#928](https://github.com/kevinmarko/Stockpy/pull/928)).** Close the vectorization guard's blind spot (F1). Add `.apply(axis=1)` to
 `_BANNED_METHODS` in `tests/test_no_iterrows_in_core_engines.py`, with the 7 current offenders
 (`MultifactorSignal`, `CrossSectionalMomentumSignal`, `MacroRegimeSignal`, `LGBMRankerSignal`,
 `NewsCatalystSignal`, `RegimeMultiplierSignal`, `SectorNeutralQualitySignal`) added to
@@ -34,21 +34,35 @@ its own commit with an explicit note on what downstream consumers now see. `engi
 advisory-path code — treat as report-only unless the user approves, since it currently leaks NaN and
 fixing that is a real behavior change.
 
-**PR 3 — Fix the N+1 in the per-cycle pipeline (F5).** Replace `_apply_symbol_rating_columns`'s
+**PR 3 — OPEN ([#929](https://github.com/kevinmarko/Stockpy/pull/929)).** Fix the N+1 in the per-cycle pipeline (F5). Replace `_apply_symbol_rating_columns`'s
 per-ticker `.map()` (`pipeline/production_steps.py:627`) with the existing batched
 `get_excluded_symbols()` (`rating/symbol_rating_store.py:209`), and vectorize line 636's
 `dashboard_df.apply(_excluded, axis=1)`. Self-contained, diagnostic-column-only, no trading logic.
 Confirmed untouched by any recent PR, so no merge-conflict risk with in-flight work. Highest measured
 win per unit of risk.
 
-**PR 4 — Consolidate the 3 Black-Scholes holdouts and the regex (F3, F4).** Fix the
-`options_gex.py` regex drift first as its own commit — it is a correctness bug, not a refactor. Then
-resolve the `vol_sqrt_t` clamp-vs-early-return divergence (`options_gex.py` early-returns `0.0` where
-the canonical `options_risk.py` clamps and continues) as a deliberate, disclosed decision — not
-silently — before touching anything else in that file, since it changes a live Gamma value for
-tiny-but-nonzero `σ√t`. Then migrate `multi_leg_pricing.py`, `realtime_risk_streamer.py`,
-`options_gex.py` one file per commit, each asserting numeric equality against the prior
-implementation on a seeded grid before deletion.
+**PR 4 — PARTIALLY DONE.** "Consolidate the Black-Scholes holdouts and the regex (F3, F4)". Two
+parts landed: (1) the `options_gex.py` regex drift (F3) — fixed, `$` is now required, matching the
+canonical pattern exactly, with 4 new regression tests including a direct parity check against
+`options_risk.py`'s own regex object. (2) The `vol_sqrt_t` clamp-vs-early-return divergence (F4) —
+investigated by attempting the "obvious" fix and testing it empirically first, which reversed the
+original finding's direction: the canonical `options_risk.py` clamp-and-continue path produces a
+spurious ~3.6e9 gamma for a genuinely negligible-but-nonzero `vol_sqrt_t` input, while
+`options_gex.py`'s `return 0.0` avoids it. Decision: `options_gex.py`'s behavior is KEPT, documented
+inline, and pinned by two regression tests (one of which is a permanent witness for the canonical
+function's own spurious-value behavior, so a future change there doesn't silently break this
+reasoning). `options_risk.py`'s own numerical guard was deliberately left unfixed — real, narrow bug,
+but it has 7+ reuse sites and deserves its own dedicated PR.
+
+**Not yet done**: migrating `pilots/multi_leg_pricing.py::calculate_black_scholes_leg_greeks` and
+`pilots/realtime_risk_streamer.py::compute_black_scholes_unit_greeks` (both near-verbatim copies of
+the canonical pricer, no drift found in either) to import `options_risk.py`'s function instead, one
+file per commit, each asserting numeric equality against the prior implementation on a seeded grid
+before deletion — including `realtime_risk_streamer.py`'s own duplicated symbol regex, unaffected by
+F3's fix since that PR only touched `options_gex.py`'s copy. `pilots/dispersion_trading.py`'s
+`calculate_straddle_vega` (inconsistent with the correctly-delegating `calculate_option_price()` a
+few lines below it in the same file) is also still open. Continue this PR (or open a follow-up) for
+these three remaining migrations.
 
 **PR 5 — Add `get_quotes_batch` to the provider ABC (F6).** The loops exist because
 `MarketDataProvider`'s ABC has no batch method — `api/data_api.py`'s own docstring concedes this.
@@ -69,7 +83,7 @@ those mocks, not a mechanical no-op as originally scoped. See F7's corrected wri
 `docs/module_efficiency_redundancy_audit.md` for the full reasoning. No PR is scheduled for this
 finding without a much larger, separately-scoped test-mocking redesign.
 
-**PR 7 — Rate-limiter parity (F8).** Add `data/cross_process_throttle.wait_turn` to the GDELT
+**PR 7 — OPEN ([#930](https://github.com/kevinmarko/Stockpy/pull/930)).** Rate-limiter parity (F8). Add `data/cross_process_throttle.wait_turn` to the GDELT
 throttle in `sentiment_sources.py`; add a cooldown/circuit-breaker state machine to
 `edgar_fundamentals.py` matching the `_fmp_cooldown_until`/`_fmp_consecutive_failures` pattern already
 in `fmp_client.py`. Both are pure additions of protection that a sibling module already has — no
@@ -90,7 +104,7 @@ turns a recurring incident class into a CI failure. Small stores first; `data/hi
 `forecast_tracker.py`) is already fixed as of this audit — confirm the new structural test also
 passes against that already-fixed state rather than re-fixing it.
 
-**PR 9 — Shared atomic-write helper (F11).** One `atomic_write_json()` with pid/tid-scoped temp
+**PR 9 — OPEN ([#931](https://github.com/kevinmarko/Stockpy/pull/931)).** Shared atomic-write helper (F11). One `atomic_write_json()` with pid/tid-scoped temp
 names, matching `runtime_flags_writer.py:473`'s existing race-safe pattern. Migrate the two
 byte-identical `reporting/pairs_snapshot.py:105` / `reporting/options_snapshot.py:67` copies first
 (both currently use collision-prone `path.with_suffix(".tmp")`, not pid-scoped).
