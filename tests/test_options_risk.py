@@ -14,6 +14,27 @@ from pilots.options_risk import (
 )
 
 
+def _batch_from_single(single_fn):
+    """Converts a get_latest_quote-style `fn(symbol) -> quote_or_None` (the
+    shape every mock in this file used before calculate_portfolio_greeks
+    was migrated to batched quote resolution, F6, docs/
+    module_efficiency_redundancy_audit.md) into a get_quotes_batch-style
+    `fn(symbols) -> {symbol: quote}` dict, matching the real ABC default's
+    own per-symbol dead-letter contract -- a symbol whose single_fn call
+    returns None or raises is simply absent from the result."""
+    def _batch(symbols):
+        out = {}
+        for sym in symbols:
+            try:
+                q = single_fn(sym)
+            except Exception:
+                continue
+            if q is not None:
+                out[sym] = q
+        return out
+    return _batch
+
+
 def test_parse_option_symbol():
     res_call = parse_option_symbol("AAPL 2026-09-18 $150.00 CALL")
     assert res_call is not None
@@ -101,7 +122,7 @@ def test_calculate_portfolio_greeks_multi_leg_spread():
 
     mock_provider = MagicMock()
     mock_quote = MagicMock(price=150.0)
-    mock_provider.get_latest_quote.return_value = mock_quote
+    mock_provider.get_quotes_batch.side_effect = lambda symbols: {s: mock_quote for s in symbols}
 
     greeks = calculate_portfolio_greeks(store=store, market_provider=mock_provider, spy_spot=500.0)
 
@@ -184,7 +205,9 @@ def test_calculate_portfolio_greeks_missing_data_exclusion():
 
     mock_provider = MagicMock()
     # AAPL has quote, UNRESOLVABLE_SYM returns None
-    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=150.0) if sym == "AAPL" else None
+    mock_provider.get_quotes_batch.side_effect = _batch_from_single(
+        lambda sym: MagicMock(price=150.0) if sym == "AAPL" else None
+    )
 
     greeks = calculate_portfolio_greeks(positions=[pos1, pos2], market_provider=mock_provider)
 
@@ -240,7 +263,9 @@ def test_calculate_portfolio_greeks_per_symbol_beta():
     # Long 100 shares of NVDA (beta = 1.8), spot = $100 -> dollar delta = $10,000, beta dollar delta = $18,000
     pos_nvda = PaperPosition(symbol="NVDA", qty=100.0, avg_entry_price=100.0)
     mock_provider = MagicMock()
-    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=100.0) if sym == "NVDA" else (MagicMock(price=500.0) if sym == "SPY" else None)
+    mock_provider.get_quotes_batch.side_effect = _batch_from_single(
+        lambda sym: MagicMock(price=100.0) if sym == "NVDA" else (MagicMock(price=500.0) if sym == "SPY" else None)
+    )
 
     from unittest.mock import patch
     with patch("pilots.options_risk._resolve_symbol_beta", side_effect=lambda sym: (1.8, True) if sym == "NVDA" else (1.0, True)):
@@ -262,7 +287,9 @@ def test_beta_weighted_delta_spy_calculation(monkeypatch):
     pos_tsla = PaperPosition(symbol="TSLA", qty=50.0, avg_entry_price=200.0)   # Dollar Delta = 10,000 * 2.0 = 20,000
 
     mock_provider = MagicMock()
-    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=150.0 if sym == "AAPL" else 200.0)
+    mock_provider.get_quotes_batch.side_effect = _batch_from_single(
+        lambda sym: MagicMock(price=150.0 if sym == "AAPL" else 200.0)
+    )
 
     # SPY Spot = 500.0
     # Expected Beta Dollar Delta = 18,000 + 20,000 = 38,000
@@ -334,8 +361,10 @@ def test_calculate_portfolio_greeks_resolves_real_spy_quote_when_not_held():
     mock_provider = MagicMock()
     # Deliberately a real, non-$500 SPY price so a lingering $500.0
     # fabrication anywhere in the calc would be caught.
-    mock_provider.get_latest_quote.side_effect = lambda sym: (
-        MagicMock(price=150.0) if sym == "AAPL" else (MagicMock(price=642.17) if sym == "SPY" else None)
+    mock_provider.get_quotes_batch.side_effect = _batch_from_single(
+        lambda sym: (
+            MagicMock(price=150.0) if sym == "AAPL" else (MagicMock(price=642.17) if sym == "SPY" else None)
+        )
     )
 
     from unittest.mock import patch
@@ -357,7 +386,9 @@ def test_calculate_portfolio_greeks_refuses_to_fabricate_spy_spot_when_unresolva
     pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)
     mock_provider = MagicMock()
     # AAPL resolves; SPY does not (simulates a total market-data outage for SPY).
-    mock_provider.get_latest_quote.side_effect = lambda sym: MagicMock(price=150.0) if sym == "AAPL" else None
+    mock_provider.get_quotes_batch.side_effect = _batch_from_single(
+        lambda sym: MagicMock(price=150.0) if sym == "AAPL" else None
+    )
 
     from unittest.mock import patch
     with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)):
@@ -375,9 +406,11 @@ def test_calculate_portfolio_greeks_surfaces_estimated_beta_symbols():
     pos_aapl = PaperPosition(symbol="AAPL", qty=100.0, avg_entry_price=150.0)
     pos_unknown = PaperPosition(symbol="UNKNOWNCO", qty=10.0, avg_entry_price=50.0)
     mock_provider = MagicMock()
-    mock_provider.get_latest_quote.side_effect = lambda sym: (
-        MagicMock(price=150.0) if sym == "AAPL"
-        else (MagicMock(price=50.0) if sym == "UNKNOWNCO" else MagicMock(price=500.0))
+    mock_provider.get_quotes_batch.side_effect = _batch_from_single(
+        lambda sym: (
+            MagicMock(price=150.0) if sym == "AAPL"
+            else (MagicMock(price=50.0) if sym == "UNKNOWNCO" else MagicMock(price=500.0))
+        )
     )
 
     from unittest.mock import patch

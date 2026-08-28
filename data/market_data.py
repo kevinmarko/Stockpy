@@ -184,6 +184,30 @@ class MarketDataProvider(ABC):
         source is misconfigured or unavailable.
         """
 
+    def get_quotes_batch(self, symbols: List[str]) -> Dict[str, Quote]:
+        """Return a ``{symbol: Quote}`` map for every symbol that resolved
+        successfully. A symbol that fails (bad ticker, transient error) is
+        simply ABSENT from the result -- never raises, matching the
+        per-symbol dead-lettering every caller of this method already did by
+        hand before this method existed (F6, docs/module_efficiency_redundancy_audit.md).
+
+        Default implementation: loops over ``get_latest_quote`` one symbol
+        at a time -- the exact N-HTTP-calls pattern this method exists to
+        let a batching-capable provider override. Concrete providers with a
+        real batch endpoint (see ``FMPProvider.get_quotes_batch``) SHOULD
+        override this for a genuine efficiency win; every other provider
+        (Alpaca, yfinance) inherits this default and is unaffected --
+        deliberately NOT abstract, so no existing provider subclass breaks
+        by not implementing it.
+        """
+        out: Dict[str, Quote] = {}
+        for sym in symbols:
+            try:
+                out[sym.upper()] = self.get_latest_quote(sym)
+            except Exception:  # noqa: BLE001 -- dead-letter per symbol, CONSTRAINT #6
+                continue
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Alpaca provider
@@ -1038,6 +1062,63 @@ class FMPProvider(MarketDataProvider):
         except Exception as exc:  # noqa: BLE001 — converted to MarketDataError below
             logger.error("FMPProvider.get_latest_quote(%s) failed: %s", symbol, exc)
             raise MarketDataError(f"FMP quote fetch failed for {symbol}: {exc}") from exc
+
+    def get_quotes_batch(self, symbols: List[str]) -> Dict[str, Quote]:
+        """Override of the ABC's per-symbol-loop default (F6, docs/
+        module_efficiency_redundancy_audit.md): resolves ALL symbols via ONE
+        call to ``fmp_client.batch_quote()`` (the ``/batch-quote`` endpoint —
+        already the correct-usage precedent in
+        ``data/paper_account_store.py::_resolve_position_prices``) instead of
+        N individual ``/quote`` requests.
+
+        Same never-raises, dead-letter-per-symbol contract as the ABC
+        default: a symbol absent from FMP's response, or with no usable
+        ``price``, is simply absent from the returned dict. A total request
+        failure (network error, FMP cooldown open) degrades to an EMPTY
+        dict for the whole batch rather than falling back to N individual
+        calls -- the batch endpoint failing is itself informative (FMP is
+        down for everyone), and retrying via N single-symbol calls against
+        the same unavailable host would just reproduce the N+1 cost this
+        method exists to avoid.
+
+        ``bid``/``ask`` are always ``float('nan')`` and ``is_stale`` is
+        ``not self.IS_REALTIME`` -- identical to ``get_latest_quote``'s own
+        documented Starter-plan limitations, since ``/batch-quote`` carries
+        the same fields as ``/quote``.
+        """
+        if not symbols:
+            return {}
+        out: Dict[str, Quote] = {}
+        try:
+            from data import fmp_client
+
+            payload = fmp_client.batch_quote(list(symbols))
+            rows = payload if isinstance(payload, list) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sym = str(row.get("symbol") or "").upper().strip()
+                price = row.get("price")
+                if not sym or price is None:
+                    continue
+                try:
+                    price_f = float(price)
+                except (TypeError, ValueError):
+                    continue
+                timestamp = _fmp_quote_timestamp_to_datetime(row.get("timestamp"))
+                out[sym] = Quote(
+                    symbol=sym,
+                    price=price_f,
+                    bid=float("nan"),
+                    ask=float("nan"),
+                    timestamp=timestamp,
+                    is_stale=not self.IS_REALTIME,
+                    source=self.SOURCE,
+                )
+        except Exception as exc:  # noqa: BLE001 -- dead-letter the whole batch, CONSTRAINT #6
+            logger.error("FMPProvider.get_quotes_batch(%s) failed: %s", symbols, exc)
+            return {}
+        return out
 
     def get_intraday_bars(
         self, symbol: str, lookback_days: int = 252, interval: str = "1d"
@@ -2095,6 +2176,53 @@ class CompositeProvider(MarketDataProvider):
             logger.debug("CompositeProvider: latency sample write failed (non-critical): %s", exc)
 
         return quote
+
+    def get_quotes_batch(self, symbols: List[str]) -> Dict[str, Quote]:
+        """Bulk quote resolution for a whole symbol universe in as few
+        network round-trips as possible (F6, docs/
+        module_efficiency_redundancy_audit.md).
+
+        Cache-first per symbol (the same TTL cache ``get_latest_quote`` uses
+        — a symbol already fetched this cycle costs nothing here either),
+        then ONE delegated batch call for every cache miss via
+        ``self._effective_quote_provider.get_quotes_batch(...)`` — which
+        resolves to ``FMPProvider``'s real ``/batch-quote`` override when FMP
+        is the active provider, or the ABC's per-symbol-loop default
+        otherwise (Alpaca/yfinance — no worse than today's manual loop, but
+        centralized instead of re-implemented at every call site).
+
+        Disclosed scope boundary, not a silent gap: unlike
+        ``get_latest_quote``, this method does NOT consult the
+        WebSocket-delivered-quote fast path (``data/market_data_ws.py``) and
+        does NOT record per-symbol latency samples. Both are tied to
+        single-symbol *display-freshness* semantics (a live single-quote
+        view wanting the freshest possible tick); this method's callers
+        (portfolio-wide risk/scenario calculations resolving spot prices for
+        many tickers at once) do not need microsecond WS freshness, and
+        instrumenting a bulk fetch with N synthetic per-symbol latency
+        samples would misrepresent what was actually N/batch_size real
+        network calls, not N real ones.
+        """
+        if not symbols:
+            return {}
+        upper_symbols = [s.upper() for s in symbols]
+        out: Dict[str, Quote] = {}
+        missing: List[str] = []
+        for sym in upper_symbols:
+            cached = self._cache.get(sym)
+            if cached is not None:
+                out[sym] = cached
+            else:
+                missing.append(sym)
+
+        if missing:
+            provider = self._effective_quote_provider
+            fetched = provider.get_quotes_batch(missing)
+            for sym, quote in fetched.items():
+                self._cache.put(quote)
+                out[sym.upper()] = quote
+
+        return out
 
     def get_intraday_bars(
         self, symbol: str, lookback_days: int = 252, interval: str = "1d"
