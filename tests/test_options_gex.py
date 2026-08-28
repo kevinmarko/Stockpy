@@ -16,6 +16,7 @@ Tests:
 import ast
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 import pytest
 import numpy as np
@@ -23,6 +24,7 @@ import pandas as pd
 
 from pilots.options_gex import (
     DEFAULT_CONCENTRATION_THRESHOLD_PCT,
+    _OPTION_SYM_RE,
     DEFAULT_PIN_RISK_THRESHOLD_PCT,
     DEFAULT_SEARCH_RANGE_PCT,
     GexAnalysisResult,
@@ -573,6 +575,72 @@ def test_get_options_gex_profile_resolves_real_gex_from_yfinance_shaped_chain(mo
     assert result["put_wall_strike"] is not None
     assert result["net_gex"] != 0.0
     assert len(result["strikes"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# 7b. Option-symbol regex parity fix (F3, docs/module_efficiency_redundancy_audit.md)
+# ---------------------------------------------------------------------------
+#
+# _OPTION_SYM_RE previously made the `$` optional, diverging from the SAME
+# nominal "standardized option leg symbol" format's canonical regex in
+# pilots/options_risk.py and pilots/realtime_risk_streamer.py (both require
+# `$`). A symbol lacking `$` parsed successfully here and returned None in
+# both siblings -- a real behavioral fork this fix closes.
+
+def test_symbol_regex_fallback_parses_the_dollar_bearing_standard_format():
+    """The happy path this fallback exists for: strike/type absent as
+    structured fields, recovered from the standardized symbol string."""
+    raw_list = [
+        {
+            "symbol": "AAPL 2026-09-18 $150.00 CALL",
+            "expirationDate": "2026-09-18",
+            "openInterest": 100,
+            "impliedVolatility": 0.25,
+        }
+    ]
+    records = _normalize_chain_data(raw_list, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(records) == 1
+    assert records[0]["strike"] == pytest.approx(150.0)
+    assert records[0]["option_type"] == "CALL"
+
+def test_symbol_regex_no_longer_accepts_a_dollar_less_standard_format_string():
+    """The actual regression this PR fixes: a symbol in the SAME nominal
+    shape but missing `$` must now be rejected by _OPTION_SYM_RE (matching
+    options_risk.py/realtime_risk_streamer.py), not silently accepted.
+    Confirmed via the regex object directly -- _normalize_chain_data would
+    otherwise also fall through to _OCC_SYM_RE, which could coincidentally
+    match a differently-shaped string and mask this assertion."""
+    m = _OPTION_SYM_RE.match("AAPL 2026-09-18 150.00 CALL")
+    assert m is None
+
+def test_symbol_regex_matches_options_risk_pys_canonical_pattern_exactly():
+    """Direct parity check against the sibling module's own canonical
+    regex -- both must agree on every input, not just the one hand-picked
+    example above."""
+    from pilots.options_risk import _OPTION_SYM_RE as canonical_re
+
+    dollar_form = "AAPL 2026-09-18 $150.00 CALL"
+    no_dollar_form = "AAPL 2026-09-18 150.00 CALL"
+
+    assert bool(_OPTION_SYM_RE.match(dollar_form)) == bool(canonical_re.match(dollar_form)) == True
+    assert bool(_OPTION_SYM_RE.match(no_dollar_form)) == bool(canonical_re.match(no_dollar_form)) == False
+
+def test_occ_format_symbol_still_parses_via_the_separate_occ_regex():
+    """The no-`$` OCC ticker format (a genuinely different shape) must
+    still work via _OCC_SYM_RE -- this fix narrows _OPTION_SYM_RE only,
+    it does not narrow OCC-format support."""
+    raw_list = [
+        {
+            "symbol": "AAPL240119C00150000",
+            "expirationDate": "2024-01-19",
+            "openInterest": 50,
+            "impliedVolatility": 0.30,
+        }
+    ]
+    records = _normalize_chain_data(raw_list, now=datetime(2019, 1, 1, tzinfo=timezone.utc))
+    assert len(records) == 1
+    assert records[0]["strike"] == pytest.approx(150.0)
+    assert records[0]["option_type"] == "CALL"
 
 
 # ---------------------------------------------------------------------------

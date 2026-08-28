@@ -263,8 +263,18 @@ def calculate_black_scholes_gamma(
 # Chain Normalization & Parsing
 # ---------------------------------------------------------------------------
 
+# Matches the SAME standardized option leg symbol format documented by
+# pilots/options_risk.py::_OPTION_SYM_RE ("AAPL 2026-09-18 $150.00 CALL")
+# and pilots/realtime_risk_streamer.py's copy of the same regex -- the `$`
+# is REQUIRED, not optional. It was optional here until this fix (F3,
+# docs/module_efficiency_redundancy_audit.md): a symbol string lacking `$`
+# parsed successfully in this file and returned None in the two siblings --
+# a real behavioral fork on the same nominal format, not a deliberate
+# looser grammar for a different data source (the no-`$` OCC ticker format
+# is a genuinely different shape, already handled separately by
+# _OCC_SYM_RE below).
 _OPTION_SYM_RE = re.compile(
-    r"^(?P<ticker>[A-Z0-9]+)\s+(?P<exp>\d{4}-\d{2}-\d{2})\s+\$?(?P<strike>\d+(?:\.\d+)?)\s+(?P<type>CALL|PUT)$",
+    r"^(?P<ticker>[A-Z0-9]+)\s+(?P<exp>\d{4}-\d{2}-\d{2})\s+\$(?P<strike>\d+(?:\.\d+)?)\s+(?P<type>CALL|PUT)$",
     re.IGNORECASE,
 )
 _OCC_SYM_RE = re.compile(
