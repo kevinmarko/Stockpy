@@ -1,0 +1,166 @@
+# Module Efficiency Audit — Remediation Plan
+
+Companion to [`docs/module_efficiency_redundancy_audit.md`](../docs/module_efficiency_redundancy_audit.md).
+That document has the full file:line evidence, drift/correction notes, and severity reasoning for
+every finding (F1-F15) referenced below — read it before starting any PR here.
+
+Ordered by (safety value ÷ risk). Every PR here is runtime logic and takes its own branch + PR;
+nothing in this list goes directly to `main`.
+
+**Out of scope for remediation, report-only per the agreed risk posture:** `signals/`, `sizing/`,
+`execution/`, `validation/`. A "harmless" dedup in sizing or signal math can silently move live
+position sizing on a real capital account. This rules out F10 (statistics consolidation) entirely,
+and rules out batching `LGBMRankerSignal` specifically (tempting after F1, but it's trading logic).
+
+---
+
+**PR 1 — OPEN ([#928](https://github.com/kevinmarko/Stockpy/pull/928)).** Close the vectorization guard's blind spot (F1). Add `.apply(axis=1)` to
+`_BANNED_METHODS` in `tests/test_no_iterrows_in_core_engines.py`, with the 7 current offenders
+(`MultifactorSignal`, `CrossSectionalMomentumSignal`, `MacroRegimeSignal`, `LGBMRankerSignal`,
+`NewsCatalystSignal`, `RegimeMultiplierSignal`, `SectorNeutralQualitySignal`) added to
+`ALLOWED_EXCEPTIONS` so CI stays green. Correct the `CLAUDE.md:353` /`AGENTS.md` vectorization claim
+in the same PR (the `sync_agent_docs.sh` hook mirrors the two files automatically) — and correct it
+accurately: per the audit, none of the 7 modules do genuinely expensive per-row work (the two-phase
+`pre_compute`/`compute` pattern already makes 5 of them cheap dict lookups; the other 2 are trivial
+conditionals), so the corrected doc language should describe this as a debt-visibility gap, not an
+active performance emergency. No runtime behavior changes.
+
+**PR 2 — Unify `_safe_float` (F2).** One shared helper with explicit NaN *and* inf filtering.
+Migrate the 6 `Optional[float]`-returning copies first (`reporting/state_snapshot.py`'s
+`_safe_float_or_none`, `pilots/vol_mispricing.py`, `api/pilots_api.py`, `data/fmp_feeds_company.py`,
+`validation/validation_history_store.py`, plus updating call sites). `data/fmp_feeds_market.py`'s
+NaN-returning copy and `engine/advisory.py:1882`'s no-filter copy each change behavior, so each gets
+its own commit with an explicit note on what downstream consumers now see. `engine/advisory.py` is
+advisory-path code — treat as report-only unless the user approves, since it currently leaks NaN and
+fixing that is a real behavior change.
+
+**PR 3 — OPEN ([#929](https://github.com/kevinmarko/Stockpy/pull/929)).** Fix the N+1 in the per-cycle pipeline (F5). Replace `_apply_symbol_rating_columns`'s
+per-ticker `.map()` (`pipeline/production_steps.py:627`) with the existing batched
+`get_excluded_symbols()` (`rating/symbol_rating_store.py:209`), and vectorize line 636's
+`dashboard_df.apply(_excluded, axis=1)`. Self-contained, diagnostic-column-only, no trading logic.
+Confirmed untouched by any recent PR, so no merge-conflict risk with in-flight work. Highest measured
+win per unit of risk.
+
+**PR 4 — PARTIALLY DONE.** "Consolidate the Black-Scholes holdouts and the regex (F3, F4)". Two
+parts landed: (1) the `options_gex.py` regex drift (F3) — fixed, `$` is now required, matching the
+canonical pattern exactly, with 4 new regression tests including a direct parity check against
+`options_risk.py`'s own regex object. (2) The `vol_sqrt_t` clamp-vs-early-return divergence (F4) —
+investigated by attempting the "obvious" fix and testing it empirically first, which reversed the
+original finding's direction: the canonical `options_risk.py` clamp-and-continue path produces a
+spurious ~3.6e9 gamma for a genuinely negligible-but-nonzero `vol_sqrt_t` input, while
+`options_gex.py`'s `return 0.0` avoids it. Decision: `options_gex.py`'s behavior is KEPT, documented
+inline, and pinned by two regression tests (one of which is a permanent witness for the canonical
+function's own spurious-value behavior, so a future change there doesn't silently break this
+reasoning). `options_risk.py`'s own numerical guard was deliberately left unfixed — real, narrow bug,
+but it has 7+ reuse sites and deserves its own dedicated PR.
+
+**Not yet done**: migrating `pilots/multi_leg_pricing.py::calculate_black_scholes_leg_greeks` and
+`pilots/realtime_risk_streamer.py::compute_black_scholes_unit_greeks` (both near-verbatim copies of
+the canonical pricer, no drift found in either) to import `options_risk.py`'s function instead, one
+file per commit, each asserting numeric equality against the prior implementation on a seeded grid
+before deletion — including `realtime_risk_streamer.py`'s own duplicated symbol regex, unaffected by
+F3's fix since that PR only touched `options_gex.py`'s copy. `pilots/dispersion_trading.py`'s
+`calculate_straddle_vega` (inconsistent with the correctly-delegating `calculate_option_price()` a
+few lines below it in the same file) is also still open. Continue this PR (or open a follow-up) for
+these three remaining migrations.
+
+**PR 5 — Add `get_quotes_batch` to the provider ABC (F6).** The loops exist because
+`MarketDataProvider`'s ABC has no batch method — `api/data_api.py`'s own docstring concedes this.
+Add it, default-implement it as the current loop so no provider breaks, override it for FMP via the
+existing `fmp_client.batch_quote()`, then migrate call sites (`api/data_api.py:645`,
+`pilots/options_risk.py:421`, `pilots/scenario_matrix.py:400`, `data/paper_account_store.py`'s
+`settle_expired_options`, `pilots/dispersion_trading.py:779-808`, `evaluation_engine.py:1114` via the
+existing `data/historical_store.py:1039` `get_bars_bulk()`). Fixes the cause, not the instances.
+Confirmed none of these sites were touched by the recent unbounded-blocking-call sweep, so this PR
+starts from a clean, unaffected baseline.
+
+**PR 6 — WITHDRAWN.** Originally "Guard `api/metrics_api.py` (F7)". Re-verified while
+attempting implementation, not just re-read: `api/metrics_api.py`'s own module docstring explicitly
+permits the heavy imports this PR proposed to guard against (unlike `pilots_api.py`, which the
+existing guard is deliberately scoped to), and `tests/test_metrics_api.py` monkeypatches these
+engines at the module level 56 times — a lazy-import migration would silently bypass every one of
+those mocks, not a mechanical no-op as originally scoped. See F7's corrected writeup in
+`docs/module_efficiency_redundancy_audit.md` for the full reasoning. No PR is scheduled for this
+finding without a much larger, separately-scoped test-mocking redesign.
+
+**PR 7 — OPEN ([#930](https://github.com/kevinmarko/Stockpy/pull/930)).** Rate-limiter parity (F8). Add `data/cross_process_throttle.wait_turn` to the GDELT
+throttle in `sentiment_sources.py`; add a cooldown/circuit-breaker state machine to
+`edgar_fundamentals.py` matching the `_fmp_cooldown_until`/`_fmp_consecutive_failures` pattern already
+in `fmp_client.py`. Both are pure additions of protection that a sibling module already has — no
+existing behavior changes, only new failure-mode coverage.
+
+**PR 8 — Shared store base + a structural test guard (F9).** Extract the ~9-line `__init__` block
+duplicated across 10 stores (correcting the tenth site's citation: `execution/live_trade_proposals_store.py`'s
+real `__init__` is at line 102, not 53). Separately extract the PRAGMA-probe migration wrapper
+duplicated at `transactions_store.py:68`, `data/historical_store.py:924`/`947` (3 sites, not 5 — the
+`execution_audit_store.py`/`paper_account_store.py` sites use a deliberately different
+Postgres-portable try/except-`ALTER` idiom per `execution_audit_store.py`'s own docstring; leave that
+second idiom as-is unless a separate decision is made to standardize on one). The load-bearing half is
+**not** the dedup: add a test enumerating every `*_store.py` that fails if a store's default DB
+resolution bypasses `db_config.resolve_database_url()` or has no autouse isolation fixture — this
+turns a recurring incident class into a CI failure. Small stores first; `data/historical_store.py`
+(the `_ensure_tables()` outlier, confirmed deliberate) last or never. Note: the CWD-relative
+`db_path` bug this PR was originally partly motivated by (`historical_store.py`,
+`forecast_tracker.py`) is already fixed as of this audit — confirm the new structural test also
+passes against that already-fixed state rather than re-fixing it.
+
+**PR 9 — OPEN ([#931](https://github.com/kevinmarko/Stockpy/pull/931)).** Shared atomic-write helper (F11). One `atomic_write_json()` with pid/tid-scoped temp
+names, matching `runtime_flags_writer.py:473`'s existing race-safe pattern. Migrate the two
+byte-identical `reporting/pairs_snapshot.py:105` / `reporting/options_snapshot.py:67` copies first
+(both currently use collision-prone `path.with_suffix(".tmp")`, not pid-scoped).
+
+**PR 10 — Relocate `gui/env_io.py` (F13).** Move to top-level `env_io.py`, leaving a re-export shim
+so the frozen GUI keeps working. The confirmed live-code call sites to update are narrower than first
+thought: `runtime_flags_writer.py:189` and `conftest.py:140` only (the audit corrected two other
+citations — `alerting.py` and `diagnostics_and_visuals.py` import different `gui.*` submodules
+entirely, never `env_io`). Mechanical, but touches the credential-write allowlist — own PR, careful
+diff read regardless of the narrower blast radius.
+
+**PR 11 (spike) — Generate mock fixtures from the live schema (F12).** The only fix addressing the
+root cause. FastAPI already emits an OpenAPI schema for all 173 routes (current count, up from 165 at
+audit time — re-confirm the count when this spike starts); generate `types.ts` or at minimum a
+parity-checking test from it, so a backend response-model change fails CI instead of surfacing as a
+blank screen. Largest and least certain — scope as a spike, do not start before PRs 1–10 land.
+
+---
+
+Explicitly **not** scheduled: splitting `api/pilots_api.py` into `APIRouter`s (`CLAUDE.md` records the
+single-file layout as deliberate); `Gravity AI Review Suite.py`; the F10 statistics consolidation
+(including the newly-noted fifth Sortino implementation inside `validation/metrics.py` itself) and any
+`signals/`/`sizing/`/`execution/`/`validation/` changes — report-only per the agreed risk posture,
+including batching `LGBMRankerSignal`, which the audit found isn't actually the cost driver F1
+originally claimed, and which sits squarely in trading logic regardless.
+
+**PR 12 — Dead-code removal pass (F15).** Two real deletions once independently re-confirmed dead at
+the time this PR starts: `ml/drl_market_maker_ppo.py` (644 lines, only `tests/test_drl_market_maker_ppo.py`
+imports it) and `validation/walk_forward.py` (431 lines, only `tests/test_walk_forward.py` imports
+it — note its own file also exercises 2 of the 4 dead margin wrappers below, so removing it first
+changes what "dead" means for the wrappers). Do not delete `execution/overnight_guardrails.py` —
+its own docstring discloses the missing wiring as a deliberate, open decision needing explicit
+operator sign-off, not an oversight; leave it and this PR alone. Smaller items in the same pass:
+delete `validation/regime_diagnostics.py::select_optimal_model` and the 4 backtest-margin wrapper
+functions in `validation/options_selling_backtest.py` (both `validation/` — report-only per the
+agreed risk posture, so scope this half of the PR as report-only too unless the user approves code
+changes there); remove the 3 gate-nothing settings fields (`OPTIONS_EARNINGS_CRUSH_ENABLED`,
+`PROMPT_MAX_CHARS`, `SENTIMENT_PIT_MIN_MONTHS`) from `settings.py` and `gui/env_io.py`'s
+`ALLOWED_KEYS` together, in one commit, since removing one without the other reintroduces a drift
+gap of the same shape as F2; delete the 7 dead API endpoints and 3 dead `client.ts` methods together
+per pair (a route and its wrapper are one unit — deleting one without the other just moves the dead
+code); leave `threeDisposal.ts`'s 6 unused functions and the 3 unused `execution/` exception/enum
+types alone (CLAUDE.md already calls the former cosmetic; the latter reads as forward-declared API
+surface, not an accident). Re-run each finding's grep from the audit doc before deleting anything —
+a module confirmed dead when F15 was written may have gained a caller since.
+
+## Verification
+
+Per-PR verification is specified inline above. The recurring requirement, unchanged from the original
+plan: **PRs 2 and 4 must prove numeric/behavioral equality on a seeded fixture before deleting any
+implementation**, matching this repo's precedent for the ETF-transmission flag-off parity proof.
+
+Before starting each PR, re-run that finding's repro command from the audit doc — the codebase moves
+fast enough (3 unrelated PRs landed between the original audit draft and this write-up alone) that a
+line number or count cited here may have already drifted again by the time work starts.
+
+## Status
+
+F15 landed; PR 12 above is its removal pass, sized to what F15 found.
