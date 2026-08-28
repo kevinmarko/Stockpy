@@ -289,3 +289,72 @@ Tests: `tests/test_alpaca_http.py`, extended `tests/test_alpaca_broker.py`,
 extended `tests/test_market_data.py`, `tests/test_pipeline_runner.py`,
 extended `tests/test_investyo_mcp_server.py` and
 `tests/test_preflight.py`, plus extended chat-endpoint tests.
+
+## Follow-up: ProcessingStep/calculate_fundamental_metrics unbounded fundamentals loop (2026-08-28)
+
+### Status
+**Fixed** (this PR). A second, independently-discovered stall in the same
+pipeline, this time in the "processing" stage rather than "data" — confirmed
+live via a debug session that watched the actual daemon process hang in real
+time, and corroborated by the prior 5 failed runs in `pipeline_runs` DB
+history, all showing the identical ~1199s duration with zero variance.
+
+### Symptom
+The hang consistently landed in the "processing" stage, not "data" — the
+initial data-fetch stage completed and dead-lettered correctly per its
+existing `DATA_FETCH_TASK_TIMEOUT_SECONDS` (180s) bound (see the two
+sections above); the actual stall was downstream of that, inside
+`ProcessingStep`'s fundamentals-refresh loop, with dead silence in the logs
+for the full ~1199s (no per-ticker progress line) — consistent with a single
+blocked synchronous network call rather than an active retry loop.
+
+### Relationship to the 2026-08-27 sweep above
+This is a genuinely new gap the prior follow-up sweep did not cover. That
+sweep's clearance of yfinance/FMP/GDELT/EDGAR was about individual
+HTTP-call-level timeout bounding on each request; it never audited an
+*aggregate* per-ticker, per-cycle loop for a cumulative unbounded duration,
+and `processing_engine.py`/`HistoricalStore.get_fundamentals()` was not
+examined or mentioned anywhere in that pass.
+
+### Root cause and fix
+`ProcessingEngine.calculate_fundamental_metrics()` (`processing_engine.py`)
+loops over every ticker in the universe and calls
+`HistoricalStore.get_fundamentals(ticker, provider=...)` for each — a live
+network call, per ticker, with no per-call timeout and, the actual gap, no
+aggregate deadline bounding the whole loop. A single slow/stalled provider
+response, multiplied across a 30+ symbol universe, was enough to wedge the
+entire "processing" stage — confirmed as the actual cause of the ~1199s
+hang, not the earlier "data" stage.
+
+Fixed via a new setting, `settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE`
+(float, default `60.0`). `calculate_fundamental_metrics()` now computes
+`_fund_deadline = time.monotonic() + PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE`
+once, before the per-ticker loop starts. Once that deadline passes, the live
+`HistoricalStore.get_fundamentals()` refresh is skipped — for that ticker and
+every remaining ticker in the cycle, sticky, never resetting mid-cycle —
+logging one WARNING the first time the deadline trips (not once per skipped
+ticker). A ticker whose refresh is skipped this way still produces a normal
+result using DTO-only fundamentals rather than the live-refreshed values —
+nothing is dropped from the dashboard and nothing raises, matching this
+codebase's CONSTRAINT #6 dead-letter-resilience convention.
+
+### Deliberately deferred, not fixed
+The broader timeout-coverage gap in the pipeline's inner runner remains
+open, disclosed rather than silently left unmentioned. The outer
+`AsyncPipelineRunner`'s `PIPELINE_STEP_TIMEOUT_SECONDS` bound
+(`pipeline/runner.py`) only wraps *synchronous* steps dispatched via
+`asyncio.to_thread` (gated on `asyncio.iscoroutinefunction`).
+`RunPipelineStep`'s own separate, synchronous `PipelineRunner` built inside
+`main_orchestrator.py::run_pipeline()` — `OptionsAnalysisStep →
+ProcessingStep → ForecastingStep → StrategyEvalStep` — has no per-substep
+timeout mechanism of its own at all, so before this fix, a hang inside any
+one of those four steps was only ever caught by the outer ~900s ceiling,
+with no way to tell which inner step had actually stalled. This PR closes
+the one concrete, proven cause (the fundamentals loop specifically) and
+deliberately does not add a general per-substep bound to that inner runner
+or wrap its steps in the outer timeout — left as future, separately-scoped
+follow-up work, consistent with this doc's own pattern of incremental
+rounds.
+
+Tests: `tests/test_processing_engine.py::TestCalculateFundamentalMetrics`
+(new deadline-bound tests).
