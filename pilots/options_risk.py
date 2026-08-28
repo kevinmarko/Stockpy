@@ -418,14 +418,22 @@ def calculate_portfolio_greeks(
             market_provider = None
 
     if market_provider is not None:
+        # Batched (F6, docs/module_efficiency_redundancy_audit.md): one
+        # get_quotes_batch() call for the whole distinct-ticker set instead
+        # of N get_latest_quote() calls. Same per-ticker None-on-failure
+        # contract as the prior loop -- get_quotes_batch() already
+        # dead-letters a symbol that failed to resolve, so a ticker simply
+        # absent from the result maps to None here exactly as an exception
+        # from the old per-ticker try/except did.
+        try:
+            quotes = market_provider.get_quotes_batch(list(distinct_tickers))
+        except Exception:
+            quotes = {}
         for t in distinct_tickers:
-            try:
-                quote = market_provider.get_latest_quote(t)
-                if quote and getattr(quote, "price", 0) and float(quote.price) > 0:
-                    spot_map[t] = float(quote.price)
-                else:
-                    spot_map[t] = None
-            except Exception:
+            quote = quotes.get(t.upper())
+            if quote and getattr(quote, "price", 0) and float(quote.price) > 0:
+                spot_map[t] = float(quote.price)
+            else:
                 spot_map[t] = None
 
     # Resolve SPY spot -- a caller-supplied value always wins; otherwise use
