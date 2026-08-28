@@ -60,14 +60,14 @@ existing `data/historical_store.py:1039` `get_bars_bulk()`). Fixes the cause, no
 Confirmed none of these sites were touched by the recent unbounded-blocking-call sweep, so this PR
 starts from a clean, unaffected baseline.
 
-**PR 6 — Guard `api/metrics_api.py` (F7).** Extend the existing heavy-import AST guard
-(`tests/test_pilots_api.py`'s `test_pilots_api_never_imports_heavy_engines`) to cover
-`api/metrics_api.py`, then move the four imports (`processing_engine`, `forecasting_engine`,
-`technical_options_engine`, `sentiment_risk_engine`) into function bodies — the lazy-import pattern
-this repo already uses widely (see F4's reuse call sites). Since all four engines are genuinely used
-at runtime here (unlike a typical "accidental heavy import" case), this PR is pure mechanical
-lazy-loading, not a behavior change — verify `tests/test_metrics_api.py` still passes with its
-existing mocks after the move.
+**PR 6 — WITHDRAWN.** Originally "Guard `api/metrics_api.py` (F7)". Re-verified while
+attempting implementation, not just re-read: `api/metrics_api.py`'s own module docstring explicitly
+permits the heavy imports this PR proposed to guard against (unlike `pilots_api.py`, which the
+existing guard is deliberately scoped to), and `tests/test_metrics_api.py` monkeypatches these
+engines at the module level 56 times — a lazy-import migration would silently bypass every one of
+those mocks, not a mechanical no-op as originally scoped. See F7's corrected writeup in
+`docs/module_efficiency_redundancy_audit.md` for the full reasoning. No PR is scheduled for this
+finding without a much larger, separately-scoped test-mocking redesign.
 
 **PR 7 — Rate-limiter parity (F8).** Add `data/cross_process_throttle.wait_turn` to the GDELT
 throttle in `sentiment_sources.py`; add a cooldown/circuit-breaker state machine to

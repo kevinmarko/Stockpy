@@ -212,29 +212,49 @@ and the recent sweep neither fixed the pattern nor added per-call bounding to it
 
 Repro: `sed -n '644,678p' api/data_api.py`; `grep -n "get_bars_bulk\|def _get_bars" data/historical_store.py evaluation_engine.py`.
 
-## F7 — `api/metrics_api.py` is the one API module outside the heavy-import guard
+## F7 — CORRECTED, downgraded to non-actionable: `api/metrics_api.py`'s heavy imports are
+deliberate, documented design, not an oversight
 
-`tests/test_pilots_api.py:2124-2164` (`test_pilots_api_never_imports_heavy_engines`) AST-parses
-`api/pilots_api.py` and asserts it never imports `{processing_engine, strategy_engine,
-forecasting_engine, macro_engine, technical_options_engine, main_orchestrator, desktop}`.
-`api/metrics_api.py` has no analogous guard and imports at module scope, lines 52-55:
-`processing_engine`, `forecasting_engine`, `technical_options_engine`, and `sentiment_risk_engine`
-(the fourth import wasn't in the original finding) — transitively pulling TensorFlow/Keras (guarded
-by `try/except ImportError` but still eagerly attempted at import time, `forecasting_engine.py:36-38`),
-statsmodels, sklearn (`:45-47`), and scipy (`technical_options_engine.py:17-18`) at import time.
-`api/data_api.py` and `api/ws_api.py` were checked and remain clean. Cost is process startup and
-pytest collection, not per-request.
+**This finding was materially wrong in its original framing and its remediation plan (PR 6) has
+been withdrawn — see below.** Re-verified while attempting to implement PR 6, not just re-read:
+`api/metrics_api.py`'s own module docstring (lines 18-19) states explicitly: *"This module MAY
+import the heavy calculation engines (unlike `state_api.py` / `control_api.py`, which are
+AST-guarded against exactly that)."* `tests/test_pilots_api.py:2124-2164`
+(`test_pilots_api_never_imports_heavy_engines`)'s own docstring confirms the guard's scope is
+deliberately `api/pilots_api.py`-only, for a reason specific to that module: `pilots_api.py` is
+architected to stay thin and reach the pipeline only through lightweight `pilots.*` helpers or
+loopback HTTP, never the heavy engines directly. `api/metrics_api.py` is a genuinely different
+service with a genuinely different purpose (per its own docstring: "exposing computed indicators,
+forecasts, options directives, and signal breakdowns" — it IS the service that runs these
+computations on demand for the webapp). This is a real, intentional architectural split between two
+standalone FastAPI processes, not an inconsistency.
 
-**Context the original finding didn't include:** all four heavy engines imported by `metrics_api.py`
-are genuinely used at runtime (`ProcessingEngine()` at lines 175/425, `ForecastingEngine()` at 211,
-`build_premium_directive()` at 250, `SentimentRiskEngine()` at 311) — `tests/test_metrics_api.py`'s
-docstring explicitly frames these as real dependencies, mocked only for test determinism. This is
-less "an accidental duplicate import" and more "the one API module whose functionality genuinely
-needs the heavy engines, and which lacks the guard that would at least document that tradeoff and
-catch any *further* accidental heavy imports." The cold-start/memory cost on that standalone
-port-8604 process is real regardless of intent.
+**The original PR 6 plan ("extend the AST guard to cover `api/metrics_api.py`, then lazy-import the
+four engines... pure mechanical lazy-loading, not a behavior change") is wrong on both halves.**
+Extending the guard would assert something false about this module's own documented design.
+Lazy-importing is not mechanical either: `tests/test_metrics_api.py` monkeypatches these engines at
+the MODULE level 56 times (e.g. `monkeypatch.setattr(metrics_api, "ForecastingEngine", _FakeFE)`,
+`monkeypatch.setattr(metrics_api, "build_premium_directive", _fake_directive)`) — a lazy
+`from forecasting_engine import ForecastingEngine` inside each endpoint function would silently
+bypass every one of those mocks (the lazy import re-resolves the REAL class from
+`forecasting_engine` each call, never seeing the module-level patch), turning ~10+ tests that
+believe they're testing against a fake into tests that silently exercise the real heavy engine.
+Making the migration actually safe would mean rewriting the test suite's mocking strategy to patch
+at the *source* module instead — a materially bigger and riskier change than "mechanical", confirmed
+only by attempting the implementation, not by re-reading the code a third time.
 
-Repro: `sed -n '2124,2164p' tests/test_pilots_api.py`; `grep -n "^from\|^import" api/metrics_api.py | sed -n '1,20p'`.
+**What remains genuinely true and low-severity:** the four heavy imports do cost real process-startup
+time/memory on the standalone port-8604 service, and on `tests/test_metrics_api.py`'s pytest
+collection — confirmed nothing else imports `api.metrics_api` in production, so that is the entire
+blast radius. If this cost is ever worth paying down, the correct fix is NOT a guard (that would be
+false to this module's design) and NOT a naive lazy-import (that breaks the test suite's mocking) —
+it would need a redesigned test-mocking strategy alongside the migration, scoped as its own
+dedicated PR, not a one-line "F7" cleanup. Downgraded from "PR 6, mechanical" to "documented,
+non-actionable without a larger redesign" — no PR is scheduled for this finding.
+
+Repro: `sed -n '1,20p' api/metrics_api.py` (the module docstring); `sed -n '2100,2124p'
+tests/test_pilots_api.py` (the guard's own documented pilots_api.py-only scope);
+`grep -c 'monkeypatch.setattr(metrics_api' tests/test_metrics_api.py` (56).
 
 ## F8 — Rate limiting: fixed in 2 of 3 places
 
@@ -539,3 +559,10 @@ example, `execution/fix_recovery.py`, is already deleted per CLAUDE.md's changel
 F15 (dead-code sweep) landed and is folded in above. This audit now covers everything scoped at
 the outset: hot production paths, the pilots/ options desk, the data/store layer, webapp mock/live
 parity, and dead code across the same surface.
+
+**Remediation in progress** (see `.claude/module_efficiency_audit_remediation_plan.md`):
+- PR 1 (F1, vectorization guard blind spot + CLAUDE.md correction) — merged/open, see the plan doc.
+- PR 3 (F5, N+1 query in the symbol-rating diagnostic columns) — merged/open, see the plan doc.
+- PR 6 (F7) — **withdrawn**, not a real bug; see F7's corrected writeup above.
+- PRs 2, 4, 5, 8, 9, 10 — not yet started.
+- PR 11 — spike, not started, per the plan's own "do not start before PRs 1–10 land".
