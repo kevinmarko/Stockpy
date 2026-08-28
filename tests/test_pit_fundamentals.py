@@ -356,3 +356,82 @@ class TestHistoricalStoreIntegration:
         result = audit_from_historical_store(store, "IBM", "2024-02-01")
         assert result.verdict == "UNVERIFIABLE"
         assert result.report_date is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regression: PIT row COUNT never explains a run_pit_audit verdict
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestVerdictIsIndependentOfPitRowCount:
+    """Reproduces (and pins down) the JPM PIT-coverage investigation finding:
+    ``run_pit_audit`` was reported UNVERIFIABLE for JPM at decision_date
+    2024-06-15, with the row-count anomaly (JPM: 135 edgar-sourced PIT rows
+    vs. ~47-54 for every comparable ticker) suspected as a possible cause or
+    correlate.
+
+    It is neither. ``audit_from_historical_store`` always audits the single
+    NEWEST ``fundamentals_history`` row by ``as_of`` (see its own docstring),
+    never one selected via ``decision_date`` or influenced by how many older
+    PIT rows exist underneath it. A symbol with abundant real PIT history
+    (many ``upsert_fundamentals_pit`` rows, mirroring JPM's edgar backfill)
+    and a symbol with almost none (mirroring AAPL) produce the IDENTICAL
+    UNVERIFIABLE verdict once a newer, non-PIT snapshot (the daily
+    ``_upsert_fundamentals`` writer -- e.g. an ``fmp``/live-quote-style
+    payload with no ``mostRecentQuarter``-equivalent field) lands on top.
+    This is expected, symbol-agnostic, fail-closed behavior, not a
+    JPM-specific defect -- so a fix for the row-count bug (see
+    ``scripts/backfill_edgar_fundamentals.py::get_all_filed_dates``) must
+    NOT be expected to change ``run_pit_audit``'s verdict, and no change to
+    ``REPORT_DATE_KEYS``/``_extract_report_date`` is warranted either.
+    """
+
+    def _make_store(self, tmp_path, name):
+        from data.historical_store import HistoricalStore
+        return HistoricalStore(db_path=str(tmp_path / name))
+
+    def _seed_rich_pit_history(self, store, symbol, n_rows=40):
+        """Many legitimate, distinct-report_date PIT rows (mirrors a
+        heavily-backfilled symbol like JPM)."""
+        for year in range(2015, 2015 + n_rows // 4):
+            for month in (2, 5, 8, 11):
+                report_date = f"{year}-{month:02d}-15"
+                store.upsert_fundamentals_pit(
+                    symbol,
+                    {"pe_ratio": 15.0, "eps": 2.0},
+                    {"pe_ratio": 15.0, "eps": 2.0},
+                    report_date=report_date,
+                    source="edgar",
+                )
+
+    def test_rich_and_sparse_pit_history_both_unverifiable_under_newer_snapshot(
+        self, tmp_path,
+    ):
+        store_many = self._make_store(tmp_path, "many_rows.db")
+        store_few = self._make_store(tmp_path, "few_rows.db")
+
+        # "JPM-like": dozens of real PIT rows.
+        self._seed_rich_pit_history(store_many, "MANYROW", n_rows=40)
+        # "AAPL-like": a single real PIT row.
+        store_few.upsert_fundamentals_pit(
+            "FEWROW",
+            {"pe_ratio": 15.0, "eps": 2.0},
+            {"pe_ratio": 15.0, "eps": 2.0},
+            report_date="2024-01-25",
+            source="edgar",
+        )
+
+        # Both then get a NEWER daily snapshot with no recoverable report
+        # date at all -- the shape of the live ``_fakemarket``/``fmp`` rows
+        # observed shadowing real PIT history in production.
+        no_date_raw = {"forwardPE": 20.0, "priceToBook": 3.0}
+        store_many._upsert_fundamentals("MANYROW", {"pe_ratio": 20.0}, no_date_raw, source="fmp")
+        store_few._upsert_fundamentals("FEWROW", {"pe_ratio": 20.0}, no_date_raw, source="fmp")
+
+        result_many = audit_from_historical_store(store_many, "MANYROW", "2024-06-15")
+        result_few = audit_from_historical_store(store_few, "FEWROW", "2024-06-15")
+
+        assert result_many.verdict == "UNVERIFIABLE"
+        assert result_few.verdict == "UNVERIFIABLE"
+        assert result_many.verdict == result_few.verdict
+        assert result_many.report_date is None
+        assert result_few.report_date is None
