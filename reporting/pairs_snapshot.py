@@ -27,16 +27,15 @@ Invariants:
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from reporting.atomic_write import atomic_write_json
 from settings import settings
 from validation.thresholds import (
     PAIRS_ENTRY_Z_SCORE,
@@ -100,13 +99,6 @@ def _align_closes(series_by_symbol: Dict[str, pd.Series]) -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.DataFrame(frame).dropna(how="any")
     return df
-
-
-def _atomic_write(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def write_pairs_snapshot(
@@ -208,7 +200,7 @@ def write_pairs_snapshot(
     out_dir = Path(output_dir) if output_dir is not None else settings.OUTPUT_DIR
     path = out_dir / PAIRS_FILENAME
     try:
-        _atomic_write(path, payload)
+        atomic_write_json(path, payload)
         logger.info("Wrote pairs radar (%d pairs) → %s", len(pairs_out), path)
         return str(path)
     except Exception as exc:  # noqa: BLE001
