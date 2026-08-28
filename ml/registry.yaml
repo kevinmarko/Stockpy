@@ -30,7 +30,11 @@
 #                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
 #                  deployable gate)
 # cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
-#                  SAME DSR-selected strategy (never read by the deployable gate)
+#                  SAME DSR-selected strategy (never read by the deployable gate). Null for
+#                  meta_labeler_* roles: their CPCV returns are discrete per-event R-multiples
+#                  (see scripts/train_meta_labelers.py::compute_cpcv_metrics), not compoundable
+#                  fractional-of-capital returns, so a compounded-equity-curve drawdown is not a
+#                  meaningful statistic for them.
 
 models:
   lgbm_ranker:
@@ -134,7 +138,7 @@ models:
     - vol_ewma
     - primary_score
     cpcv_mean_oos_sharpe: -0.7316701244983145
-    cpcv_mean_oos_max_dd: 1.0
+    cpcv_mean_oos_max_dd: null
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
     owner: "TBD"
@@ -173,7 +177,7 @@ models:
     - vol_ewma
     - primary_score
     cpcv_mean_oos_sharpe: 0.29665292976939
-    cpcv_mean_oos_max_dd: 1.0
+    cpcv_mean_oos_max_dd: null
   options_meta_labeler:
     role: options_meta_labeler
     owner: "TBD"
