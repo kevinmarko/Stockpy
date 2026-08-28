@@ -246,6 +246,23 @@ def calculate_black_scholes_gamma(
     rate = _get_risk_free_rate(r)
     vol_sqrt_t = sigma * math.sqrt(t_years)
     if vol_sqrt_t <= _DEGENERATE_THRESHOLD:
+        # DELIBERATE DIVERGENCE from pilots/options_risk.py::calculate_black_scholes_greeks
+        # -- investigated and kept, not an unnoticed drift (docs/
+        # module_efficiency_redundancy_audit.md's F4). options_risk.py
+        # instead CLAMPS vol_sqrt_t to _DEGENERATE_THRESHOLD and continues
+        # computing d1/gamma. Empirically, that clamp-and-continue path can
+        # produce a spuriously enormous gamma in this same edge case -- e.g.
+        # spot=strike=100, t_years=1e-11, sigma=1e-7 (an ATM contract with a
+        # genuinely negligible vol_sqrt_t) returns gamma ~ 3.6e9, not a
+        # meaningful number. Returning 0.0 here is the numerically safer
+        # choice for a gamma-exposure aggregate (this function feeds
+        # portfolio-wide dealer GEX sums, where one spurious multi-billion
+        # value would dominate and invalidate the whole aggregate), even
+        # though it makes this function's degenerate-input floor slightly
+        # more conservative than the canonical Greeks calculator's. The
+        # canonical function's own clamp-and-continue behavior is NOT
+        # changed here -- it has 7+ reuse sites and any fix there needs its
+        # own dedicated, carefully-tested PR, out of scope for this one.
         return 0.0
 
     try:

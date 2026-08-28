@@ -81,6 +81,39 @@ def test_black_scholes_gamma_degenerate_guards():
 # 2. Net GEX Evaluation at Candidate Spot Prices
 # ---------------------------------------------------------------------------
 
+
+
+def test_black_scholes_gamma_tiny_vol_sqrt_t_returns_zero_not_a_spurious_blowup():
+    """Deliberate divergence from pilots/options_risk.py::calculate_black_scholes_greeks
+    (F4, docs/module_efficiency_redundancy_audit.md), investigated and kept
+    -- not an unnoticed drift. The canonical function instead clamps
+    vol_sqrt_t and continues, which empirically produces a spuriously
+    enormous gamma (~3.6e9) for this exact input shape. This function must
+    return a bounded 0.0 instead, since it feeds a portfolio-wide GEX
+    aggregate where one spurious multi-billion value would dominate the sum."""
+    gamma = calculate_black_scholes_gamma(
+        spot=100.0, strike=100.0, t_years=1e-11, sigma=1e-7
+    )
+    assert gamma == 0.0
+
+def test_black_scholes_gamma_confirms_canonical_functions_own_blowup_for_context():
+    """Not a test of options_gex.py -- documents, as a permanent regression
+    witness, exactly the spurious-blowup behavior in
+    pilots/options_risk.py::calculate_black_scholes_greeks that justifies
+    keeping this file's own return-0.0 behavior above. If this assertion
+    ever starts failing, the canonical function's own numerical guard has
+    changed and this file's documented deliberate-divergence comment (see
+    calculate_black_scholes_gamma's vol_sqrt_t guard) should be re-reviewed."""
+    from pilots.options_risk import calculate_black_scholes_greeks
+
+    result = calculate_black_scholes_greeks(
+        spot=100.0, strike=100.0, t_years=1e-11, sigma=1e-7, option_type="call"
+    )
+    assert result["gamma"] > 1e6, (
+        "expected the canonical function's clamp-and-continue path to still "
+        "produce a spuriously large gamma for this input; if this no longer "
+        "holds, re-review whether options_gex.py should now match it"
+    )
 def test_compute_total_net_gex_at_spot_call_vs_put():
     # 1 Call contract: strike 500, OI 100
     call_chain = [{
