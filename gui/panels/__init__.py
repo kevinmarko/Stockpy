@@ -9,6 +9,15 @@ Sub-modules extracted so far
 -----------------------------
 - ``_shared.py``  — shared file-backed loaders, constants, and utility helpers
   (extracted 2026-06-29).  Future extractions add more sub-modules here.
+
+Reviewed false positive (stockpy_codebase_auditor ``circular_dependency``,
+2026-08): the re-export chain above trips the auditor's cycle detector as
+"gui.panels -> gui.panels.ai_control_center -> ... -> gui.panels" because
+every ``from gui.panels.<submodule> import X`` here creates an implicit
+submodule<->parent-package edge — inherent to any package ``__init__.py``
+that re-exports its submodules for backward compatibility (exactly the
+stated purpose above), not a real import cycle with import-time side
+effects.
 """
 
 from __future__ import annotations

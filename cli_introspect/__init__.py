@@ -28,6 +28,14 @@ from .schema import (
     CommandSpec,
     OptionSpec,
 )
+# Reviewed false positive (stockpy_codebase_auditor `circular_dependency`,
+# 2026-08): this re-export trips the auditor's cycle detector as
+# "cli_introspect -> cli_introspect.introspect -> cli_introspect" because any
+# `from .submodule import X` in a package's __init__.py creates an implicit
+# submodule<->parent edge — inherent to Python packages, not a real cycle.
+# introspect.py itself only imports from .schema (never from this package)
+# and its own docstring states it is "Pure and side-effect-free", so there is
+# no import-time side effect for the cycle to matter for.
 from .introspect import walk_parser
 
 __all__ = [
