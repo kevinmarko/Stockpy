@@ -1,3 +1,16 @@
+"""Covariate/feature drift detection via the Population Stability Index (PSI).
+
+Compares a reference window of a feature's distribution against a recent
+window (see ``adapt_symbol_history_to_windows``), buckets both by the
+reference's own quantiles, and computes PSI = sum((curr% - ref%) * ln(curr% /
+ref%)) per bucket. ``check_and_alert_feature_drift`` is the intended entry
+point: it treats an insufficient-data window as an explicit
+``PSIResult(psi=None, drift_detected=False, details="Insufficient data")``
+rather than a fabricated PSI value, and fires ``send_alert_fn`` whenever PSI
+crosses ``PSI_ALERT_THRESHOLD`` (0.25, the standard PSI "moderate shift"
+cutoff) or is infinite (a bucket losing all reference mass).
+"""
+
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
