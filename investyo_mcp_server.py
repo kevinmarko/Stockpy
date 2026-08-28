@@ -5166,7 +5166,13 @@ def get_model_drift_report() -> str:
         for r in rows:
             sym = r.get("symbol", "—")
             decay = r.get("decay_pct")
-            decay_str = f"{decay:.1f}%" if isinstance(decay, (int, float)) else "—"
+            if isinstance(decay, (int, float)):
+                decay_str = f"{decay:.1f}%"
+            else:
+                # Never fabricate a number (CONSTRAINT #4) -- surface the
+                # honest reason forecast_skill_by_symbol_summary gave instead
+                # of a bare dash when one is available.
+                decay_str = f"— ({r.get('decay_reason')})" if r.get("decay_reason") else "—"
             md_lines.append(f"- **{sym}**: Skill decay = {decay_str}")
 
         md_lines.append("\n```json")
