@@ -3046,6 +3046,80 @@ class TestGetModelRegistryStatus:
         assert "STALE" in result
         assert "❌ NOT DEPLOYABLE" in result
 
+    def test_zero_sample_model_not_evaluated_not_fabricated(self, monkeypatch, tmp_path):
+        """CONSTRAINT #4 regression: a model trained on 0 samples must render an
+        honest "not evaluated" reason instead of a fabricated numeric PBO/DSR
+        (the historical options_meta_labeler registry bug: cpcv_dsr=0.0,
+        pbo=1.0, n_train=0 -- indistinguishable from a real CPCV run that
+        genuinely failed the deployability gate)."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ml").mkdir()
+        recent = datetime.now().strftime("%Y-%m-%d")
+        (tmp_path / "ml" / "registry.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "models": {
+                        "options_meta_labeler": {
+                            "role": "options_meta_labeler",
+                            "trained_date": recent,
+                            "cpcv_dsr": None,
+                            "pbo": None,
+                            "n_train": 0,
+                            "deployable": False,
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = srv.get_model_registry_status()
+
+        assert "options_meta_labeler" in result
+        # No fabricated numeric PBO/DSR anywhere in the output.
+        assert "CPCV DSR**: 0.0" not in result
+        assert "PBO**: 1.0" not in result
+        # An honest reason instead, and NOT the same "NOT DEPLOYABLE" wording
+        # used for a real CPCV run that failed the gate -- "no data yet" and
+        # "evaluated and failed" must not read the same.
+        assert "NOT EVALUATED" in result
+        assert "0 training samples" in result
+        assert "❌ NOT DEPLOYABLE" not in result
+        assert "Training Samples**: 0" in result
+
+    def test_evaluated_and_failed_keeps_numeric_metrics(self, monkeypatch, tmp_path):
+        """A genuine CPCV run that failed the gate (real numbers, deployable=False)
+        must still render its actual PBO/DSR -- it must NOT be relabeled "not
+        evaluated", which would hide a real failure behind the same message
+        used for no-data-yet."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ml").mkdir()
+        recent = datetime.now().strftime("%Y-%m-%d")
+        (tmp_path / "ml" / "registry.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "models": {
+                        "meta_labeler_timeseries_momentum": {
+                            "role": "meta_labeler",
+                            "trained_date": recent,
+                            "cpcv_dsr": 0.10,
+                            "pbo": 0.80,
+                            "n_train": 500,
+                            "deployable": False,
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = srv.get_model_registry_status()
+
+        assert "CPCV DSR**: 0.1" in result
+        assert "PBO**: 0.8" in result
+        assert "❌ NOT DEPLOYABLE" in result
+        assert "NOT EVALUATED" not in result
+
     def test_list_shaped_registry_with_stale_model(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ml").mkdir()

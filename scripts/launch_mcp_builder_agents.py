@@ -1,3 +1,13 @@
+"""Launch five parallel Antigravity builder agents, one per InvestYo MCP tool.
+
+Each agent runs in its own git worktree (``/Users/kevinlee/Stockpy-live-agent{1..5}``)
+with an isolated ``LocalAgentConfig`` app-data dir, is pointed at the
+``stockpy-quant-integrity`` skill plus the relevant ``AGENTS.md`` section, and is
+given a scoped prompt (tool to build, branch name, PR-artifact slug, and any
+math/sizing/threshold constraints to respect). This is an operator-invoked,
+local orchestration script — it is not imported by any other module.
+"""
+
 import asyncio
 import sys
 from pathlib import Path

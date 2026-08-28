@@ -398,13 +398,21 @@ def evaluate_scenario_matrix(
             provider = get_provider()
             if provider:
                 distinct_tickers = {p["ticker"] for p in parsed_positions if p["ticker"]}
+                # Batched (F6, docs/module_efficiency_redundancy_audit.md):
+                # one get_quotes_batch() call for the whole distinct-ticker
+                # set instead of N get_latest_quote() calls. Same
+                # skip-on-failure contract -- get_quotes_batch() already
+                # dead-letters a symbol that failed to resolve, so it's
+                # simply absent from spot_map here exactly as a caught
+                # exception left it absent before.
+                try:
+                    quotes = provider.get_quotes_batch(list(distinct_tickers))
+                except Exception:
+                    quotes = {}
                 for t in distinct_tickers:
-                    try:
-                        quote = provider.get_latest_quote(t)
-                        if quote and getattr(quote, "price", 0) and float(quote.price) > 0:
-                            spot_map[t] = float(quote.price)
-                    except Exception:
-                        pass
+                    quote = quotes.get(t.upper())
+                    if quote and getattr(quote, "price", 0) and float(quote.price) > 0:
+                        spot_map[t] = float(quote.price)
         except Exception:
             pass
 
