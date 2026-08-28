@@ -14,14 +14,18 @@ calculate_fundamental_metrics, compile_dashboard, and a lookahead
 perturbation proof for calculate_momentum_metrics's shift-based ROC columns.
 """
 
+import logging
 import math
+import time
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest import mock
 
 from dto_models import FundamentalDataDTO, MacroEconomicDTO
 from processing_engine import ProcessingEngine
+from settings import settings
 
 try:
     from tests.lookahead_check import verify_no_lookahead
@@ -85,6 +89,22 @@ def _fund_dto(
         **(extra_info or {}),
     }
     return dto
+
+
+def _slow_historical_store(sleep_seconds: float = 0.2) -> mock.Mock:
+    """A fake HistoricalStore instance whose get_fundamentals() does a REAL
+    time.sleep() before returning an empty typed dict -- proof, not
+    assumption, that a caller's timeout bound is real (mirrors
+    tests/test_data_engine_macro_history.py's _BlackHoleServer-based FRED
+    timeout tests: a mock that returns instantly could never expose a
+    missing time budget)."""
+    def _get_fundamentals(ticker, max_age_days=None, provider=None):
+        time.sleep(sleep_seconds)
+        return {}
+
+    fake_store = mock.Mock()
+    fake_store.get_fundamentals = mock.Mock(side_effect=_get_fundamentals)
+    return fake_store
 
 
 @pytest.fixture
@@ -497,6 +517,106 @@ class TestCalculateFundamentalMetrics:
              mock.patch("data.historical_store.HistoricalStore", side_effect=RuntimeError("db down")):
             result = engine.calculate_fundamental_metrics({"AAPL": dto})
         assert "AAPL" in result
+
+    def test_historical_store_budget_bounds_the_loop_and_preserves_all_tickers(
+        self, engine
+    ):
+        """Structural timeout fix: PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE
+        bounds the per-ticker HistoricalStore.get_fundamentals() loop. Proven
+        with a REAL time.sleep() in the fake (not an instantly-returning
+        mock) so this test cannot pass merely because the mock happens to be
+        fast -- mirrors tests/test_data_engine_macro_history.py's
+        genuinely-bounds-a-real-blocking-call idiom. A tiny budget (0.05s,
+        smaller than one 0.2s sleep) must be exhausted well before all 5
+        tickers are processed, and CONSTRAINT #6 dead-letter resilience means
+        every ticker must still land in the result via the DTO-only
+        fallback -- nothing silently dropped just because its live refresh
+        was skipped."""
+        tickers = [f"T{i}" for i in range(5)]
+        dtos = {t: _fund_dto(ticker=t) for t in tickers}
+        fake_store = _slow_historical_store(sleep_seconds=0.2)
+
+        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", True), \
+             mock.patch(
+                 "settings.settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
+                 0.05,
+             ), \
+             mock.patch(
+                 "data.historical_store.HistoricalStore", return_value=fake_store
+             ), \
+             mock.patch("data.market_data.get_provider", return_value=mock.Mock()):
+            started = time.monotonic()
+            result = engine.calculate_fundamental_metrics(dtos)
+            elapsed = time.monotonic() - started
+
+        # Well under 5 * 0.2s = 1.0s -- proves the loop stopped calling the
+        # slow fake long before it would have processed all 5 tickers.
+        assert elapsed < 1.0
+        assert set(result.keys()) == set(tickers)
+        assert fake_store.get_fundamentals.call_count < 5
+
+    def test_historical_store_budget_logs_exactly_one_warning(self, engine, caplog):
+        """The deadline is exceeded on every ticker from (at latest) the 2nd
+        one onward, but the sticky 'already logged' flag must keep the
+        warning to exactly one emission, not one per skipped ticker."""
+        tickers = [f"T{i}" for i in range(5)]
+        dtos = {t: _fund_dto(ticker=t) for t in tickers}
+        fake_store = _slow_historical_store(sleep_seconds=0.2)
+
+        caplog.set_level(logging.WARNING)
+        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", True), \
+             mock.patch(
+                 "settings.settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
+                 0.05,
+             ), \
+             mock.patch(
+                 "data.historical_store.HistoricalStore", return_value=fake_store
+             ), \
+             mock.patch("data.market_data.get_provider", return_value=mock.Mock()):
+            engine.calculate_fundamental_metrics(dtos)
+
+        budget_records = [
+            r for r in caplog.records
+            if "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE" in r.message
+        ]
+        assert len(budget_records) == 1
+        assert budget_records[0].levelno == logging.WARNING
+
+    def test_processing_fundamentals_max_seconds_per_cycle_default(self):
+        """Pin the documented production default (60.0s) so a future,
+        unintentional edit to settings.py can't silently shrink/grow the
+        bound without a test noticing -- mirrors
+        tests/test_pipeline_runner.py::test_default_timeout_setting_is_generous's
+        exact-pin style for the sibling PIPELINE_STEP_TIMEOUT_SECONDS
+        setting."""
+        assert settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE == 60.0
+
+    def test_historical_store_fast_path_is_unaffected_by_the_new_budget(
+        self, engine, caplog
+    ):
+        """Regression guard: with the default (generous, un-mocked) budget in
+        effect and a get_fundamentals() that returns instantly, results must
+        come back exactly as before this fix, with zero spurious budget
+        warnings logged."""
+        dto = _fund_dto()
+        fake_store = mock.Mock()
+        fake_store.get_fundamentals = mock.Mock(return_value={})
+
+        caplog.set_level(logging.WARNING)
+        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", True), \
+             mock.patch(
+                 "data.historical_store.HistoricalStore", return_value=fake_store
+             ), \
+             mock.patch("data.market_data.get_provider", return_value=mock.Mock()):
+            result = engine.calculate_fundamental_metrics({"AAPL": dto})
+
+        assert "AAPL" in result
+        assert fake_store.get_fundamentals.call_count == 1
+        budget_records = [
+            r for r in caplog.records
+            if "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE" in r.message
+        ]
+        assert not budget_records
 
 
 # ============================================================================
