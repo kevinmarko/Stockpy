@@ -266,7 +266,10 @@ class TestAsyncPipelineRunnerStepTimeout:
         assert ctx._log == ["fast", "async_after", "sync_after"]  # type: ignore[attr-defined]
 
     def test_default_timeout_setting_is_generous(self) -> None:
-        """Pin the documented production default (900s) so a future,
-        unintentional edit to settings.py can't silently shrink the
-        production timeout without a test noticing."""
-        assert settings.PIPELINE_STEP_TIMEOUT_SECONDS == 900.0
+        """Pin the documented production default (1800s, raised from the
+        original 900s on 2026-08-27 after real daemon cycles legitimately
+        exceeded 900s under concurrent-job contention -- see settings.py's
+        PIPELINE_STEP_TIMEOUT_SECONDS field description for the incident)
+        so a future, unintentional edit to settings.py can't silently
+        shrink the production timeout without a test noticing."""
+        assert settings.PIPELINE_STEP_TIMEOUT_SECONDS == 1800.0

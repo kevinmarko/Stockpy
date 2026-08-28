@@ -289,3 +289,55 @@ Tests: `tests/test_alpaca_http.py`, extended `tests/test_alpaca_broker.py`,
 extended `tests/test_market_data.py`, `tests/test_pipeline_runner.py`,
 extended `tests/test_investyo_mcp_server.py` and
 `tests/test_preflight.py`, plus extended chat-endpoint tests.
+
+## Follow-up 2 (2026-08-27, same day): two more failure modes surfaced live, both closed
+
+Deploying the fix above onto the live operator daemon surfaced two further
+issues in quick succession, both observed on the real running system (not
+just in tests):
+
+**(a) Stale in-memory `Settings` singleton, not a code defect.** The very
+first cycle after this fix's `PIPELINE_STEP_TIMEOUT_SECONDS` field was added
+failed with `unexpected: 'Settings' object has no attribute
+'PIPELINE_STEP_TIMEOUT_SECONDS'`. An 8-agent parallel investigation (settings.py
+field-definition audit, `pipeline/runner.py` usage/import-pattern audit, a
+duplicate/stale-`Settings()`-construction sweep, a settings-registry/census
+consistency audit, targeted pytest verification, a live-process diagnostic,
+git-history forensics, and a codebase-wide sweep for the same missing-attribute
+bug class elsewhere) all independently confirmed the on-disk code was already
+correct and internally consistent everywhere — field and usage land in the
+same atomic commit (`f96a3908`, PR #921) on every branch/worktree checked, and
+no other latent `settings.X` gap exists anywhere in the codebase (794 access
+sites checked). The actual cause: a long-lived orchestrator daemon process had
+already constructed its `Settings()` singleton in memory *before* this commit
+was pulled — Python does not hot-reload an already-imported module, so the
+in-memory object genuinely lacked the new field even after the file on disk
+was updated. No code change was needed for this half; the daemon process was
+independently restarted, after which the error stopped recurring.
+
+**(b) `PIPELINE_STEP_TIMEOUT_SECONDS`'s original 900s default was too tight
+under real contention — raised to 1800s.** After the restart above, the next
+two live cycles (`26259a60`, `09c649aa`) both failed again, this time with a
+genuine `TimeoutError` from the *new* guard firing as designed — not a hang.
+Both failed at ~1380s wall-clock, well past the 900s per-step budget, while
+the "Computational Core (Processing)" step was running. Historical successful
+full cycles (measured from `pipeline_runs.duration_seconds`, four days
+earlier) typically completed in 250-340s total under normal conditions — so
+900s should have been generous. Root cause: at the exact time of both
+failures, two heavy operator-launched jobs were running concurrently on the
+same machine — a `scripts.refresh_validations` CPCV backtest (21 years, 6
+options strategies, CPU-heavy) and `scripts/backfill_sentiment_history.py
+--sources gdelt,edgar,finnhub,reddit` (shares the daemon's own rate-limited
+FMP/GDELT/EDGAR budgets) — starving the daemon's own cycle of both CPU and
+API throughput. This is the same class of shared-resource contention already
+documented for concurrent `refresh_validations.py` runs across worktrees;
+here it happened within a single machine between the daemon and manually
+launched jobs. `PIPELINE_STEP_TIMEOUT_SECONDS` was raised 900.0 → 1800.0, and
+`PIPELINE_STALL_ALERT_SECONDS` raised 1800 → 3600 in lockstep to preserve the
+original 2x safety-margin ratio between the two (see both fields' own
+descriptions in `settings.py`). This does not relax hang protection — a step
+that is genuinely wedged, not merely contended, is still killed and the
+daemon still recovers; it only accepts a wider window of legitimate slowness
+under concurrent load before doing so. Test:
+`tests/test_pipeline_runner.py::TestAsyncPipelineRunnerStepTimeout::test_default_timeout_setting_is_generous`
+updated to pin the new 1800.0 default.
