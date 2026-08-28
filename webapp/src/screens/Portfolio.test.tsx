@@ -4,7 +4,7 @@
  * an unavailable account snapshot renders the honest error state rather than
  * a fabricated $0 portfolio.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -173,7 +173,13 @@ describe("Portfolio screen (real mock API)", () => {
     renderPortfolio();
     const checkbox = await screen.findByTestId("buying-power-overlay-checkbox");
     expect(checkbox).not.toBeChecked();
-    expect(checkbox).not.toBeDisabled();
+    // The checkbox mounts immediately, disabled by default, while the
+    // equity-curve query is still in flight (its disabled= is derived from
+    // equity.data, a separate async fetch from the one findByTestId above
+    // waited on) -- wait for that fetch to resolve and the checkbox to
+    // reflect the real (non-empty) mock curve data, rather than asserting
+    // against a still-loading first render.
+    await waitFor(() => expect(checkbox).not.toBeDisabled());
     await userEvent.click(checkbox);
     expect(checkbox).toBeChecked();
     // Data exists, so the "no history" caption must not show once toggled on.
