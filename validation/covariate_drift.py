@@ -6,9 +6,12 @@ reference's own quantiles, and computes PSI = sum((curr% - ref%) * ln(curr% /
 ref%)) per bucket. ``check_and_alert_feature_drift`` is the intended entry
 point: it treats an insufficient-data window as an explicit
 ``PSIResult(psi=None, drift_detected=False, details="Insufficient data")``
-rather than a fabricated PSI value, and fires ``send_alert_fn`` whenever PSI
-crosses ``PSI_ALERT_THRESHOLD`` (0.25, the standard PSI "moderate shift"
-cutoff) or is infinite (a bucket losing all reference mass).
+rather than a fabricated PSI value, does the same
+(``details="PSI computation failed"``) if ``compute_psi`` itself returns NaN
+(fail closed — an uncomputable PSI is never reported as "confirmed no
+drift"), and fires ``send_alert_fn`` whenever PSI crosses
+``PSI_ALERT_THRESHOLD`` (0.25, the standard PSI "moderate shift" cutoff) or
+is infinite (a bucket losing all reference mass).
 """
 
 import numpy as np
@@ -104,7 +107,18 @@ def check_and_alert_feature_drift(df: pd.DataFrame, columns: Sequence[str], send
             continue
             
         psi = compute_psi(ref, curr)
-        
+
+        if np.isnan(psi):
+            # Fail closed: an uncomputable PSI is not "confirmed no drift" and
+            # must not be reported as within normal range (CONSTRAINT #4/#6).
+            results.append(PSIResult(
+                drift_detected=False,
+                psi=None,
+                feature=col,
+                details="PSI computation failed"
+            ))
+            continue
+
         if np.isinf(psi) or psi >= PSI_ALERT_THRESHOLD:
             msg = f"Feature drift detected for {col}: PSI = {psi:.4f}" if not np.isinf(psi) else f"Feature drift detected for {col}: infinite PSI"
             results.append(PSIResult(
