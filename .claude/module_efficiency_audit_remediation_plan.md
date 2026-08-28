@@ -2,7 +2,7 @@
 
 Companion to [`docs/module_efficiency_redundancy_audit.md`](../docs/module_efficiency_redundancy_audit.md).
 That document has the full file:line evidence, drift/correction notes, and severity reasoning for
-every finding (F1-F14) referenced below — read it before starting any PR here.
+every finding (F1-F15) referenced below — read it before starting any PR here.
 
 Ordered by (safety value ÷ risk). Every PR here is runtime logic and takes its own branch + PR;
 nothing in this list goes directly to `main`.
@@ -117,6 +117,26 @@ single-file layout as deliberate); `Gravity AI Review Suite.py`; the F10 statist
 including batching `LGBMRankerSignal`, which the audit found isn't actually the cost driver F1
 originally claimed, and which sits squarely in trading logic regardless.
 
+**PR 12 — Dead-code removal pass (F15).** Two real deletions once independently re-confirmed dead at
+the time this PR starts: `ml/drl_market_maker_ppo.py` (644 lines, only `tests/test_drl_market_maker_ppo.py`
+imports it) and `validation/walk_forward.py` (431 lines, only `tests/test_walk_forward.py` imports
+it — note its own file also exercises 2 of the 4 dead margin wrappers below, so removing it first
+changes what "dead" means for the wrappers). Do not delete `execution/overnight_guardrails.py` —
+its own docstring discloses the missing wiring as a deliberate, open decision needing explicit
+operator sign-off, not an oversight; leave it and this PR alone. Smaller items in the same pass:
+delete `validation/regime_diagnostics.py::select_optimal_model` and the 4 backtest-margin wrapper
+functions in `validation/options_selling_backtest.py` (both `validation/` — report-only per the
+agreed risk posture, so scope this half of the PR as report-only too unless the user approves code
+changes there); remove the 3 gate-nothing settings fields (`OPTIONS_EARNINGS_CRUSH_ENABLED`,
+`PROMPT_MAX_CHARS`, `SENTIMENT_PIT_MIN_MONTHS`) from `settings.py` and `gui/env_io.py`'s
+`ALLOWED_KEYS` together, in one commit, since removing one without the other reintroduces a drift
+gap of the same shape as F2; delete the 7 dead API endpoints and 3 dead `client.ts` methods together
+per pair (a route and its wrapper are one unit — deleting one without the other just moves the dead
+code); leave `threeDisposal.ts`'s 6 unused functions and the 3 unused `execution/` exception/enum
+types alone (CLAUDE.md already calls the former cosmetic; the latter reads as forward-declared API
+surface, not an accident). Re-run each finding's grep from the audit doc before deleting anything —
+a module confirmed dead when F15 was written may have gained a caller since.
+
 ## Verification
 
 Per-PR verification is specified inline above. The recurring requirement, unchanged from the original
@@ -127,7 +147,6 @@ Before starting each PR, re-run that finding's repro command from the audit doc 
 fast enough (3 unrelated PRs landed between the original audit draft and this write-up alone) that a
 line number or count cited here may have already drifted again by the time work starts.
 
-## Open item
+## Status
 
-F15 (dead-code sweep) has not landed — see the audit doc's "Open item" section. Add a PR-12 removal
-pass here once it does, sized to what it finds.
+F15 landed; PR 12 above is its removal pass, sized to what F15 found.

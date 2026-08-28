@@ -405,6 +405,116 @@ Repro: `wc -l gui/env_io.py`; `grep -n env_io runtime_flags_writer.py conftest.p
   distinct `gui` submodules (an AST-parsed recount; originally estimated at ~30 import sites).
   Inventory only; no action proposed.
 
+## F15 — Dead code: two orphaned modules, several smaller cases, all independently re-verified
+
+A fourth background agent swept `pilots/`, `ml/`, `validation/`, `execution/`, `sizing/`, `risk/`,
+`signals/`, `data/`, and the webapp for code with no production caller, checking dynamic-dispatch
+registries (`pilots/catalog.py`, `signals/registry.py`, `STRATEGY_REGISTRY`) before calling anything
+dead. Every finding below was re-verified independently with a targeted grep before inclusion; one
+finding from the agent's own report (a "gui.env_io" false positive already caught by F13) is omitted
+here as duplicate.
+
+**`ml/drl_market_maker_ppo.py` (644 lines) — entire module, zero production callers.** A real
+actor-critic PPO agent (hand-derived backprop, gradient-checked in its own test) for the
+market-maker pilot. Only `tests/test_drl_market_maker_ppo.py` imports it — confirmed, `grep -rn
+drl_market_maker_ppo` returns exactly those two files. The live endpoint
+`POST /pilots/options/market-maker/train` still calls the older `ml.drl_market_maker.train_market_maker_policy`
+(a 2-parameter hill-climb); the PPO trainer was never wired in. This matches CLAUDE.md's own
+2026-08-19 entry, which already discloses it as "not yet wired to any API endpoint, webapp screen,
+or STRATEGY_REGISTRY entry."
+
+**`validation/walk_forward.py` (431 lines) — entire module superseded by an inline
+reimplementation.** A full walk-forward engine (`WalkForwardWindow`, `run_walk_forward_analysis`,
+WFE ratio per Pardo 2008), imported only by `tests/test_walk_forward.py` — confirmed. The actual
+deployability gate, `validation/harness.py`, computes its own `walk_forward_60_40`/`70_30`/`80_20`
+Sharpe values inline without ever importing this module. A parallel, simpler implementation shipped
+instead and this one was left orphaned. Report-only per the agreed risk posture (`validation/`), but
+worth flagging: two walk-forward implementations existing side by side, one live and one dead, is
+exactly the kind of drift risk this audit exists to surface.
+
+**`execution/overnight_guardrails.py` (55 lines) — `OvernightGuardrails`, deliberately unwired, not
+accidentally dead.** Confirmed: `grep -rn OvernightGuardrails` returns exactly one hit, the class
+definition itself — no caller, no test. But its own module docstring already discloses this as an
+intentional, open decision, not an oversight: *"NOT YET WIRED INTO THE LIVE ORDER PATH... nothing in
+execution/risk_gate.py::PreTradeRiskGate or execution/order_manager.py calls it... needs an explicit
+operator decision on where in the pipeline it should run... not a silent wire-up as part of an
+unrelated bug-fix pass."* Listed here for completeness, not as a removal or wiring candidate —
+`execution/` is report-only per the agreed risk posture, and this module's own comment already asks
+for exactly the kind of explicit operator decision this audit isn't the venue for.
+
+**`validation/regime_diagnostics.py::select_optimal_model` (~40 lines, line 255).** AIC/BIC
+model-selection wrapper. Confirmed zero references anywhere — not production, not tests
+(`grep -rn select_optimal_model` returns only its own definition).
+
+**Three settings fields that gate nothing** — confirmed via direct grep, each appears only in
+comments/docstrings that say "settings.X" as prose, plus a `gui/env_io.py` `ALLOWED_KEYS` listing
+(making each user-editable in a settings UI despite controlling nothing):
+`OPTIONS_EARNINGS_CRUSH_ENABLED` (`settings.py:334` — the earnings_crush pilot itself is fully
+wired, but this specific flag is never consulted by it), `PROMPT_MAX_CHARS` (`settings.py:4677` —
+`prompt_registry/guardrails.py` documents it as the source of `_DEFAULT_MAX_CHARS` three times but
+hardcodes the constant instead of reading the setting), `SENTIMENT_PIT_MIN_MONTHS`
+(`settings.py:2934` — referenced in six comments across three files, actually read by none of
+them).
+
+**Seven API endpoints with no caller anywhere in `webapp/src`, `investyo_mcp_server.py`, or
+`scripts/`** — confirmed via grep against `webapp/src/screens` and `webapp/src/components`
+specifically (not just "any file"), since a route can have a client.ts wrapper with no screen
+caller:
+`GET /pilots/options/multi-leg/price` and `GET /pilots/options/multi-leg/validate`
+(`api/pilots_api.py:6424,6459` — no `client.ts` wrapper exists at all, so the gap is upstream of the
+webapp layer); `POST /pilots/options/market-maker/train` (`:6837` — self-documented in
+`docs/architecture/ml-and-reports.md` as backend-only); `GET /pilots/options/vol-surface/3d-mesh`
+(`:8057` — has a full `client.ts`/`types.ts`/`mock.ts` wrapper, `getVolSurface3DMesh`, but zero
+callers in `screens` or `components`, confirmed); `GET /metrics/technicals/{symbol}` and
+`GET /metrics/signals/registry` (`api/metrics_api.py:162,361` — sibling metrics endpoints have
+wrappers and callers, these two have neither); `GET /data/account` (`api/data_api.py:727`); and
+`GET /api/queue` (`api/pilots_api.py:2235`, a documented alias for `GET /execution-queue` that
+`client.ts` never calls — exists only for the test suite).
+
+**Three `webapp/src/api/client.ts` methods with no caller in any screen or component** — confirmed:
+`routeFixOrder` (`client.ts:735` — `FixGatewayStatusRadar.tsx`, the only FIX-related screen, calls
+only `getFixSessionStatus`/`reconnectFixSession`), `getVolSurface3DMesh` (`:1404` — see above),
+`getCronStatus` (`:774`). All three have full `mock.ts` parity implementations, so the mock/live
+parity test suite (F12) passes on them without ever being exercised by real UI code — this is a
+second, distinct symptom of F12's root cause: a hand-maintained mock can carry fixtures for an
+endpoint nothing calls, and there is nothing that would catch that either.
+
+**`webapp/src/components/charts/threeDisposal.ts` — 6 of 7 exported functions dead, one live.**
+CLAUDE.md's own 2026-08 note already discloses this: `VolSurface3D.tsx`/`LobDepth3D.tsx` render via
+Canvas 2D, not true Three.js/WebGL, so `disposeThreeScene`/`disposeThreeMesh`/`disposeThreeGeometry`/
+`disposeThreeMaterial`/`disposeThreeTexture`/`disposeWebGLRenderer` have nothing to dispose and are
+exercised only by their own component tests, never by the components in production use. Only
+`disposeCanvas` is genuinely called. Listed for completeness; CLAUDE.md already calls this
+"cosmetic, not a bug."
+
+**Four backtest-margin wrapper functions in `validation/options_selling_backtest.py`, ~8 lines
+each (lines 1465, 1483, 1492, 1501).** `simulate_call_credit_spread_with_margin`,
+`simulate_call_debit_spread_with_margin`, `simulate_put_debit_spread_with_margin`,
+`simulate_covered_call_with_margin` — confirmed exactly one hit each (their own definitions). Two
+sibling wrappers in the same file, `simulate_put_credit_spread_with_margin` and
+`simulate_vrp_iron_condor_with_margin`, are genuinely exercised by `tests/test_walk_forward.py`
+(itself dead per this section — see above, a second-order dead-code chain worth noting). Reads as 4
+of 6 parallel wrappers never finished being wired into a caller. `validation/` — report-only.
+
+**Three unused exception/enum types in `execution/`, confirmed exactly one hit each (their own
+definition):** `FixSequenceError` (`execution/fix_gateway.py:172`), `FailoverTriggerReason`
+(`execution/multi_broker_gateway.py:104`), `OrderRoutingFailedError` (`:139`). These read as
+forward-declared API surface for the FIX/multi-broker gateways rather than accidental orphans, but
+meet the same "defined, never referenced" bar as everything else in this section. `execution/` —
+report-only.
+
+**Two never-invoked test-reset singletons, ~4 lines each:** `data/attention_sources.py:359
+reset_attention_source()` and `data/market_data.py:2593 reset_options_provider()`. Confirmed no
+caller anywhere, including tests — their sibling `get_*` singleton getters are live in production.
+Standard test-isolation seams that were written defensively and never wired into a fixture's
+teardown. Low-severity; flagged for a future test-suite pass, not a removal candidate on its own.
+
+**Categories checked with no findings:** no commented-out code blocks of 15+ lines found across
+`pilots/`, `ml/`, `validation/`, `execution/`, `sizing/`, `risk/`, `signals/`, `data/`, `api/`,
+`engine/`, `desktop/`, `pipeline/`, `scripts/`; no TODO/FIXME referencing already-shipped work; no
+second unimported implementation of an already-shipped webapp screen/component (the historical
+example, `execution/fix_recovery.py`, is already deleted per CLAUDE.md's changelog).
+
 ## Checked and found clean (worth recording so the next audit skips them)
 
 - `api/auth.py` (178 lines) is genuinely centralized — a single module
@@ -424,11 +534,8 @@ Repro: `wc -l gui/env_io.py`; `grep -n env_io runtime_flags_writer.py conftest.p
   lightweight heuristic grep (`pd.concat(` near `for` blocks), not an exhaustive pass. Treat as "no
   contradicting evidence found," not a fully verified clean bill.
 
-## Open item
+## Status
 
-A third background agent tasked with a dead-code sweep (test-only modules, uncalled endpoints, unread
-settings flags) had not reported by the time this audit was finalized, and no completed output for it
-was found anywhere in this repo's worktrees at time of writing. Findings F1–F14 above are
-independently verified and stand alone. When the dead-code results land, fold them into this report
-as an **F15** section, and add a PR-12 removal pass to the remediation roadmap if the volume justifies
-one.
+F15 (dead-code sweep) landed and is folded in above. This audit now covers everything scoped at
+the outset: hot production paths, the pilots/ options desk, the data/store layer, webapp mock/live
+parity, and dead code across the same surface.
