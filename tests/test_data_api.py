@@ -561,7 +561,7 @@ def test_sync_report(monkeypatch):
     monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
-        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": [], "generated_at": "x"}),
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": [], "generated_at": "x"}),
     )
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/sync-report")
@@ -575,7 +575,7 @@ def test_sync_report_tolerates_missing_snapshot(monkeypatch):
     def _fetch(force=False):
         raise RuntimeError("no robinhood creds")
 
-    def _build(snap):
+    def _build(snap, **kwargs):
         called["snap"] = snap
         return SimpleNamespace(to_dict=lambda: {"symbols": []})
 
@@ -616,7 +616,7 @@ def test_sync_report_includes_rating_fields(monkeypatch):
     monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
-        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
     )
     monkeypatch.setattr(
         "rating.symbol_rating_store.SymbolRatingStore", _FakeRatingStore,
@@ -648,7 +648,7 @@ def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
     monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
-        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
     )
 
     def _boom(*args, **kwargs):

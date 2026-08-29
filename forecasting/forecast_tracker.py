@@ -552,6 +552,22 @@ class ForecastTracker:
             )
             return []
 
+    def get_covered_symbols(self, horizon_days: Optional[int] = None) -> list[str]:
+        """Returns a list of symbols that have at least one forecast recorded."""
+        conn = self._get_conn()
+        try:
+            if horizon_days is not None:
+                cur = conn.execute(
+                    "SELECT DISTINCT symbol FROM forecasts WHERE horizon_days = ?",
+                    (horizon_days,)
+                )
+            else:
+                cur = conn.execute("SELECT DISTINCT symbol FROM forecasts")
+            return [row[0] for row in cur.fetchall()]
+        finally:
+            if not self.readonly:
+                conn.close()
+
     def pending_count(self, symbol: str, horizon_days: int) -> int:
         """Return the number of un-actualized forecast rows for a symbol+horizon.
 

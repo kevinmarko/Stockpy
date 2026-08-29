@@ -1,0 +1,4 @@
+- [x] Fetch covered symbols from ForecastTracker
+- [x] Pass forecast_symbols to build_sync_report
+- [x] Enforce deployability gate on option pilot endpoints
+- [x] Update broken tests

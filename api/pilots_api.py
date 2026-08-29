@@ -5669,12 +5669,14 @@ class EarningsCrushExecuteRequest(BaseModel):
     limit_price: Optional[float] = Field(default=None, gt=0.0)
     dry_run: bool = False
     is_live: bool = False
+    override_deployability_gate: bool = False
 
 class DispersionExecuteRequest(BaseModel):
     index_symbol: str = Field(default="QQQ", min_length=1, max_length=10)
     basket: Optional[Dict[str, Any]] = None
     dry_run: bool = False
     is_live: bool = False
+    override_deployability_gate: bool = False
 
 class ZeroDteExecuteRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=10)
@@ -5687,6 +5689,7 @@ class ZeroDteExecuteRequest(BaseModel):
     profit_target_pct: Optional[float] = Field(default=0.75, ge=0.01, le=5.0)
     dry_run: bool = False
     is_live: bool = False
+    override_deployability_gate: bool = False
 
 
 class VolMispricingExecuteRequest(BaseModel):
@@ -6221,6 +6224,13 @@ OPTIONS_DESK_DEPLOYABILITY_GATES = {
 )
 def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Dict[str, Any]:
     """Executes an earnings crush multi-leg trade in the paper broker with honest deployability gate status."""
+    gate = OPTIONS_DESK_DEPLOYABILITY_GATES["earnings_crush"]
+    if gate["gate_status"] == "UNGATEABLE_DATA_GAP" and not body.override_deployability_gate:
+        return {
+            "ok": False,
+            "blocked": True,
+            "message": "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute."
+        }
     from pilots.earnings_crush import execute_earnings_crush_trade
     res = execute_earnings_crush_trade(
         symbol=body.symbol,
@@ -6504,6 +6514,13 @@ def get_options_dispersion_opportunities(
 )
 def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
     """Executes a vega-neutral dispersion basket into the paper broker with honest deployability gate status."""
+    gate = OPTIONS_DESK_DEPLOYABILITY_GATES["dispersion_trading"]
+    if gate["gate_status"] == "UNGATEABLE_DATA_GAP" and not body.override_deployability_gate:
+        return {
+            "ok": False,
+            "blocked": True,
+            "message": "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute."
+        }
     from pilots.dispersion_trading import execute_dispersion_trade
     try:
         res = execute_dispersion_trade(
