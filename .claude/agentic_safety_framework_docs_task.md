@@ -1,0 +1,7 @@
+- [x] Check Jules config and API key
+- [x] Draft `AGENTIC_TRADING_SAFETY_FRAMEWORK.md` locally
+- [x] Add entries to `docs/README.md` and `CLAUDE.md`
+- [x] Run Phase 3 Audit using 5 subagents
+- [x] Fix the incorrect Robinhood login citation (`api/auth.py` -> `api/_rh_login.py`)
+- [x] Commit changes
+- [x] Push to origin and open PR
