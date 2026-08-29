@@ -772,12 +772,14 @@ launch, with no obvious local error.
    resolves to nothing — or, worse, to a *different* interpreter that lacks the required
    packages (e.g. Apple's stub `/usr/bin/python3` instead of the project's `.venv`) — and the
    process exits before completing the MCP handshake.
-2. **Remote `.env` permission trap** (`investyo` only, the `gcloud compute ssh`-tunneled server).
-   The adapter's remote command must `cd /opt/investyo` before `sudo -u investyo ...` — `sudo`
-   does not change the working directory, and the SSH login user's home directory (the default
-   remote cwd) is typically mode `750` and unreadable by the `investyo` service user. Without the
-   `cd`, FastMCP's pydantic-settings crashes reading `.env` with `PermissionError: [Errno 13]
-   Permission denied: '.env'`.
+2. **Remote `.env` permission trap** (`investyo` only, whether reached via `gcloud compute ssh`
+   — `INVESTYO_REMOTE_MODE=gcp`, the default — or a plain `ssh` to any other host —
+   `INVESTYO_REMOTE_MODE=ssh`, e.g. a home Raspberry Pi or an Oracle Cloud/Hetzner/DigitalOcean
+   VPS provisioned via `deploy/setup_vps.sh`). The adapter's remote command must `cd /opt/investyo`
+   before `sudo -u investyo ...` — `sudo` does not change the working directory, and the SSH login
+   user's home directory (the default remote cwd) is typically mode `750` and unreadable by the
+   `investyo` service user. Without the `cd`, FastMCP's pydantic-settings crashes reading `.env`
+   with `PermissionError: [Errno 13] Permission denied: '.env'`.
 
 **Operator action**:
 
