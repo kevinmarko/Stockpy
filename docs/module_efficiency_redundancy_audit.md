@@ -103,6 +103,20 @@ other six docstrings explicitly cite.
 
 Repro: `grep -n "_safe_float" <each file>` then read each function body directly.
 
+**Remediation status (PR 2)**: `numeric_utils.safe_float` is now the canonical implementation for the
+4 copies confirmed behaviorally compatible (`state_snapshot.py`, `vol_mispricing.py`, `pilots_api.py`,
+`fmp_feeds_company.py`). `engine/advisory.py` and `validation/validation_history_store.py` stay
+untouched, report-only per the agreed risk posture. `fmp_feeds_market.py`'s NaN-returning copy was
+investigated and deliberately deferred — folding it into the shared helper surfaced a genuine,
+previously-undocumented bug independent of this finding: `fetch_realized_volatility`'s NaN output for
+a bad `hv_10`/`hv_30`/`hv_90` value silently passes the `hv_30 is not None` gate used by
+`pilots/unusual_options_flow.py` and `pilots/options_alerts.py`, leaking a bad historical-vol reading
+into live IV-vs-HV comparisons undetected — while a *different* line in the same file
+(`fetch_insider_trade_statistics`'s `total_disposed == total_disposed` self-comparison idiom) actively
+depends on the current NaN-not-None behavior and would break if changed without a matching fix. See
+`.claude/module_efficiency_audit_remediation_plan.md`'s PR 2 entry and `numeric_utils.py`'s own
+docstring for the full reasoning; scoped as its own dedicated follow-up.
+
 ## F3 — Option-symbol regex drift: one parser accepts strings the others reject
 
 Byte-verified (line numbers drifted by 1 from the original draft):

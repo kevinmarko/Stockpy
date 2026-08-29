@@ -113,6 +113,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from api._redact import install_redacting_exception_handler, redact_line
+from numeric_utils import safe_float as _safe_float
 
 from dotenv import load_dotenv as _load_dotenv
 
@@ -2104,13 +2105,6 @@ def get_thresholds() -> Dict[str, float]:
         "agentic_max_candidates": float(settings.AGENTIC_MAX_CANDIDATES),
         "retrain_window_days": float(MODEL_RETRAIN_WINDOW_DAYS),
     }
-
-
-def _safe_float(value: float) -> Optional[float]:
-    """NaN is a legitimate internal signal (unparsable timestamp) but is not
-    valid JSON — coerce to ``None`` (CONSTRAINT #4: never fabricate a number,
-    but also never emit a token the frontend's JSON parser can't read)."""
-    return None if value != value else value  # NaN != NaN
 
 
 @app.get("/execution-queue", dependencies=[Depends(require_read_token)])
