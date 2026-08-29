@@ -362,6 +362,40 @@ class."
 
 Repro: `grep -n "def __init__" <file>` per store; `grep -n "resolve_database_url" data/historical_store.py forecasting/forecast_tracker.py`.
 
+**Remediation status (PR 8)**: the load-bearing half — the structural CI guard — is DONE:
+`tests/test_store_isolation_contract.py`, auto-discovering every `*_store.py` file by glob and
+enforcing (1) every store is classified SQL-backed-via-`db_config` or explicitly exempted with a
+reason, (2) every SQL-backed store's `__init__` statically resolves via `resolve_database_url()` and
+never defaults a url-shaped parameter to a hardcoded literal, and (3) every direct, implicit
+construction of a store class anywhere under `tests/` is protected by a `conftest.py` autouse fixture
+or file-local isolation evidence — plus a regression guard on the five currently-known `conftest.py`
+fixtures. Passes clean against the current codebase (verified non-vacuous via a throwaway script
+exercising the guard's own detection logic directly against synthetic hand-crafted violations).
+
+**The `__init__` dedup this section's title promises ("foundation is shared, `__init__` wiring is
+not") was investigated and deliberately NOT done — a real architectural conflict, not a shortcut.**
+Every existing `conftest.py` isolation fixture (`_isolate_validation_runs_db_in_tests`,
+`_isolate_execution_audit_db_in_tests`, `_isolate_broker_fills_db_in_tests`,
+`_isolate_paper_and_transactions_db_in_tests`) — and, by construction, PR 8's own new structural
+guard — depends on `monkeypatch.setattr(<store's own module>, "resolve_database_url", ...)`, which
+only works because each store's `__init__` calls the bare name `resolve_database_url()`, resolved via
+Python name lookup against the *function's own* `__globals__` (the store's own module, where
+`from db_config import resolve_database_url` bound it locally). Moving that call into a shared base
+class defined anywhere else would relocate the lookup to the base's `__globals__`, silently defeating
+the monkeypatch for every migrated store — confirmed not merely theoretical:
+`tests/test_investyo_mcp_server.py` and `tests/test_paper_account_store.py` both construct
+`TransactionsStore()`/`PaperAccountStore()` bare, relying entirely on
+`_isolate_paper_and_transactions_db_in_tests`'s module-level patch to keep them off the real DB. A
+working fix exists (dynamically resolving `resolve_database_url` via
+`sys.modules[type(self).__module__]` instead of a bare name) but was rejected as trading ~80 lines of
+easily-greppable duplication for metaprogramming that actively conflicts with this very file's own
+stated design value (`db_config.py`'s docstring: "grep this name to enumerate every consumer"). See
+`.claude/module_efficiency_audit_remediation_plan.md`'s PR 8 entry for the full reasoning, including
+the confirmed-identical `__init__` bodies across 9 of the 10 originally-cited stores. The PRAGMA-probe
+migration-wrapper dedup (`transactions_store.py:68`, `data/historical_store.py:924`/`947`) was
+correspondingly not attempted either, per the plan's own instruction not to let it block the
+structural guard.
+
 ## F10 — Statistics: 4 Sharpe, 3-4 Sortino, 2 Calmar implementations, coordinated by comments
 
 `validation/metrics.py:144` is canonical for the harness path (`sharpe_ratio`). Independent
