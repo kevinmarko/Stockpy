@@ -621,19 +621,38 @@ def _apply_symbol_rating_columns(dashboard_df: pd.DataFrame) -> None:
     store = SymbolRatingStore(readonly=True)
     threshold = settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES
 
-    def _cycles(symbol: str) -> float:
-        return float(store.get_consecutive_bad_cycles(symbol))
+    # Vectorized (F5 fix, docs/module_efficiency_redundancy_audit.md): this
+    # used to be a dashboard_df['Symbol'].map(_cycles) closure calling
+    # get_consecutive_bad_cycles(symbol) once per ticker -- one SELECT +
+    # one session open/close per row, every pipeline cycle, purely for a
+    # diagnostic display column. get_consecutive_bad_cycles_bulk() issues
+    # exactly ONE query for the whole universe (the same windowed-query
+    # technique get_excluded_symbols already used for the real auto-drop
+    # decision), matching this function's own docstring, which already
+    # promised "0"/no-history and "read failed" are behaviorally identical
+    # here -- a missing dict key defaults to 0.0 via fillna, same floor
+    # get_consecutive_bad_cycles itself returns for either case.
+    symbols_upper = dashboard_df['Symbol'].astype(str).str.upper()
+    cycles_by_symbol = store.get_consecutive_bad_cycles_bulk(symbols_upper.unique().tolist())
+    dashboard_df['Symbol_Rating_Consecutive_Bad_Cycles'] = (
+        symbols_upper.map(cycles_by_symbol).astype(float).fillna(0.0)
+    )
 
-    dashboard_df['Symbol_Rating_Consecutive_Bad_Cycles'] = dashboard_df['Symbol'].map(_cycles)
-
-    def _excluded(row: pd.Series) -> str:
-        is_held = float(row.get("Robinhood Shares", 0.0) or 0.0) > 0
-        if is_held:
-            return "No"
-        cycles = row.get('Symbol_Rating_Consecutive_Bad_Cycles', 0.0)
-        return "Yes" if (pd.notna(cycles) and float(cycles) >= threshold) else "No"
-
-    dashboard_df['Symbol_Rating_Excluded'] = dashboard_df.apply(_excluded, axis=1)
+    # Vectorized (was dashboard_df.apply(_excluded, axis=1)). NaN-safe by
+    # construction: pandas' `NaN > 0` and `NaN.notna()`-guarded comparisons
+    # both evaluate False the same way the original per-row `float(x) or 0.0`
+    # / `pd.notna(cycles)` guards did -- no behavior change, see the PR
+    # description for the full equivalence argument.
+    shares_col = (
+        dashboard_df["Robinhood Shares"]
+        if "Robinhood Shares" in dashboard_df.columns
+        else pd.Series(0.0, index=dashboard_df.index)
+    )
+    is_held = pd.to_numeric(shares_col, errors="coerce").fillna(0.0) > 0
+    cycles = dashboard_df['Symbol_Rating_Consecutive_Bad_Cycles']
+    dashboard_df['Symbol_Rating_Excluded'] = np.where(
+        is_held, "No", np.where(cycles >= threshold, "Yes", "No")
+    )
 
 
 def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
