@@ -1068,6 +1068,14 @@ export function __resetMockDataUniverse() {
   MOCK_DATA_UNIVERSE = ["AAPL", "MSFT", "JNJ", "AGNC"];
 }
 
+// Mock stand-in for a `watchlist.txt`/`WATCHLIST` env watchlist -- deliberately
+// NARROWER than MOCK_DATA_UNIVERSE so the mock demonstrates, honestly, the
+// exact "DEFAULT_TICKERS is configured but is not the effective per-cycle
+// universe" case that `docs/known_issues/universe_count_reporting_mismatch.md`
+// documents: `data.portfolio_sync.compute_tracked_universe()` uses
+// DEFAULT_TICKERS only as a fallback when watchlist/discovery are both empty.
+const MOCK_ACTIVE_WATCHLIST: string[] = ["AAPL", "MSFT"];
+
 // ---- Mock symbol-rating state (rating.symbol_rating_store.SymbolRatingStore) ----
 // A module-level mutable map — same pattern as MOCK_DATA_UNIVERSE above — so
 // reincludeSymbol() behaves like a real read-modify-write within a session:
@@ -10786,9 +10794,27 @@ export const mockApi = {
   },
 
   async getDataUniverse(): Promise<UniverseListResponse> {
+    const isFallback = MOCK_ACTIVE_WATCHLIST.length === 0;
+    const effective = isFallback
+      ? [...MOCK_DATA_UNIVERSE].sort()
+      : [...MOCK_ACTIVE_WATCHLIST].sort();
+    const note = isFallback
+      ? `DEFAULT_TICKERS (${MOCK_DATA_UNIVERSE.length} symbol(s)) is very likely the effective ` +
+        "per-cycle universe right now (no watchlist/discovery symbols configured), " +
+        "though held Robinhood positions -- not reflected here -- are unioned on " +
+        "top of it at run time and are never suppressed by it."
+      : `DEFAULT_TICKERS (${MOCK_DATA_UNIVERSE.length} symbol(s)) is NOT the effective per-cycle ` +
+        `universe: ${effective.length} symbol(s) from your watchlist/discovery ` +
+        "take precedence, and DEFAULT_TICKERS is not consulted at all this cycle. " +
+        "Held Robinhood positions (not reflected here) may add further symbols on " +
+        "top of this.";
     return delay<UniverseListResponse>({
       symbols: [...MOCK_DATA_UNIVERSE],
       count: MOCK_DATA_UNIVERSE.length,
+      effective_symbols: effective,
+      effective_count: effective.length,
+      default_tickers_is_fallback: isFallback,
+      note,
     });
   },
 

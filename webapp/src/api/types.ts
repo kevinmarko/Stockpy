@@ -530,10 +530,23 @@ export interface RecommendationsResponse {
  * from the pilots `UniverseResponse` (which decorates each symbol with an
  * advisory action for autocomplete). This is what the Data Explorer's
  * add/remove control reads and PUTs back.
+ *
+ * `symbols`/`count` are DEFAULT_TICKERS as configured -- NOT necessarily what
+ * the pipeline evaluates each cycle (see
+ * `docs/known_issues/universe_count_reporting_mismatch.md`).
+ * `effective_symbols`/`effective_count`/`default_tickers_is_fallback`/`note`
+ * report a conservative (held-positions-excluded) preview of the REAL
+ * fallback-only selection `data.portfolio_sync.compute_tracked_universe()`
+ * makes: DEFAULT_TICKERS drives the pipeline only when watchlist/discovery
+ * are both empty. Optional so an older mock/backend pairing still typechecks.
  */
 export interface UniverseListResponse {
   symbols: string[];
   count: number;
+  effective_symbols?: string[];
+  effective_count?: number;
+  default_tickers_is_fallback?: boolean;
+  note?: string;
 }
 
 /**

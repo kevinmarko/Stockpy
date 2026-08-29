@@ -466,10 +466,101 @@ def test_sentiment_history_store_error_degrades_to_empty_not_500(monkeypatch):
 
 def test_get_universe_reads_default_tickers():
     with mock.patch.object(settings, "STATE_API_TOKEN", None), \
-         mock.patch.object(settings, "DEFAULT_TICKERS", ["AAPL", "MSFT"]):
+         mock.patch.object(settings, "DEFAULT_TICKERS", ["AAPL", "MSFT"]), \
+         mock.patch("data.portfolio_sync.load_env_watchlist", return_value=[]), \
+         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}):
         resp = client.get("/data/universe")
     assert resp.status_code == 200
-    assert resp.json() == {"symbols": ["AAPL", "MSFT"], "count": 2}
+    body = resp.json()
+    assert body["symbols"] == ["AAPL", "MSFT"]
+    assert body["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /data/universe -- the DEFAULT_TICKERS-vs-effective-universe reporting
+# fix (docs/known_issues/universe_count_reporting_mismatch.md). Before this
+# fix, `count` was the ONLY number this endpoint reported, and it was
+# `len(settings.DEFAULT_TICKERS)` regardless of whether DEFAULT_TICKERS was
+# actually driving the daemon's per-cycle universe (it is a fallback,
+# consulted only when `data.portfolio_sync.compute_tracked_universe()`'s
+# held ∪ watchlist ∪ discovered union is completely empty) -- an operator
+# with a wide DEFAULT_TICKERS list and a narrow watchlist.txt saw this
+# endpoint report the wide count while the daemon evaluated only the narrow
+# one, with nothing anywhere surfacing the mismatch.
+# ---------------------------------------------------------------------------
+
+
+def test_get_universe_reports_default_tickers_as_fallback_when_no_watchlist_or_discovery():
+    """No watchlist/discovery configured -> DEFAULT_TICKERS genuinely is the
+    (very likely) effective per-cycle universe -- matches
+    ``compute_tracked_universe()``'s own fallback-only semantics exactly."""
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "DEFAULT_TICKERS", ["AAPL", "MSFT", "IBM"]), \
+         mock.patch("data.portfolio_sync.load_env_watchlist", return_value=[]), \
+         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}):
+        resp = client.get("/data/universe")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbols"] == ["AAPL", "MSFT", "IBM"]
+    assert body["count"] == 3
+    assert body["default_tickers_is_fallback"] is True
+    assert sorted(body["effective_symbols"]) == ["AAPL", "IBM", "MSFT"]
+    assert body["effective_count"] == 3
+    assert "effective per-cycle universe" in body["note"]
+
+
+def test_get_universe_reports_default_tickers_not_effective_when_watchlist_present():
+    """A real 'wide DEFAULT_TICKERS, narrow watchlist' scenario -- the exact
+    shape of the original operator-reported symptom -- must be surfaced
+    honestly: DEFAULT_TICKERS's count is still returned (unchanged), but
+    ``default_tickers_is_fallback`` is False and ``effective_count`` reports
+    the SMALL number the daemon is really evaluating."""
+    wide_default = [f"SYM{i}" for i in range(430)]
+    narrow_watchlist = [f"WL{i}" for i in range(26)]
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "DEFAULT_TICKERS", wide_default), \
+         mock.patch("data.portfolio_sync.load_env_watchlist", return_value=narrow_watchlist), \
+         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}):
+        resp = client.get("/data/universe")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 430
+    assert body["default_tickers_is_fallback"] is False
+    assert body["effective_count"] == 26
+    assert sorted(body["effective_symbols"]) == sorted(narrow_watchlist)
+    assert "NOT the effective per-cycle universe" in body["note"]
+
+
+def test_get_universe_effective_universe_includes_discovery_candidates():
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "DEFAULT_TICKERS", ["SPY"]), \
+         mock.patch("data.portfolio_sync.load_env_watchlist", return_value=[]), \
+         mock.patch(
+             "pilots.discovery.discovery",
+             return_value={"candidates": [{"symbol": "nvda"}, {"symbol": "tsla"}]},
+         ):
+        resp = client.get("/data/universe")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["default_tickers_is_fallback"] is False
+    assert sorted(body["effective_symbols"]) == ["NVDA", "TSLA"]
+
+
+def test_get_universe_diagnostic_reads_never_500_on_failure():
+    """A watchlist-read or discovery-read failure must degrade the new
+    diagnostic fields, never crash the whole endpoint (CONSTRAINT #6)."""
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "DEFAULT_TICKERS", ["AAPL"]), \
+         mock.patch("data.portfolio_sync.load_env_watchlist", side_effect=RuntimeError("boom")), \
+         mock.patch("pilots.discovery.discovery", side_effect=RuntimeError("boom")):
+        resp = client.get("/data/universe")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbols"] == ["AAPL"]
+    assert body["count"] == 1
+    # Both cheap reads failed -> treated as empty, so DEFAULT_TICKERS still
+    # degrades to being reported as the (best-guess) fallback.
+    assert body["default_tickers_is_fallback"] is True
 
 
 def test_put_universe_requires_token_even_when_unset(monkeypatch):

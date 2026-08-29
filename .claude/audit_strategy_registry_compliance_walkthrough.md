@@ -117,7 +117,93 @@ correct half of the original change and this same-day correction. The invariant 
 protected by
 `tests/test_pilots_api.py::TestStrategyHealth::test_pilot_without_backtest_is_honest_never_fabricated`.
 
-## 4. Universe re-alignment claim — corrected, not resolved
+## 4. Universe re-alignment claim — RESOLVED in this pass (2026-08-29 follow-up)
+
+**Update: this section previously ended on "not conclusively resolved." A
+follow-up pass has since confirmed a single dominant, reproducible cause and
+fixed it. The original "corrected, not resolved" writeup is kept below for
+the historical record, followed by what this later pass found and did.**
+
+The follow-up pass re-read every narrowing point in the real per-cycle path
+end to end — `data.portfolio_sync.compute_tracked_universe()`,
+`main_orchestrator.fetch_all_data_async()`'s per-sub-fetch timeout,
+`HistoricalStore.get_bars_bulk()`'s per-symbol dead-lettering,
+`processing_engine.compile_dashboard()`'s key union, and
+`ForecastingStep._forecast_one`'s price==0 skip — and reproduced a candidate
+root cause directly against the real code rather than reasoning about it in
+the abstract:
+
+```python
+from data.portfolio_sync import compute_tracked_universe
+
+default_430 = [f"SYM{i}" for i in range(430)]
+watchlist_26 = [f"WL{i}" for i in range(26)]
+
+compute_tracked_universe(watchlist=watchlist_26, default_tickers=default_430)
+# -> 26 symbols. DEFAULT_TICKERS (430) is never consulted, because
+#    held ∪ watchlist ∪ discovered is already non-empty.
+```
+
+This reproduces the operator's exact 430-vs-26 split precisely. **Confirmed
+dominant cause**: `GET /data/universe`'s `count` field
+(`len(settings.DEFAULT_TICKERS)`) and `compute_tracked_universe()`'s real
+per-cycle output were always answering two different questions, and nothing
+anywhere surfaced that they could diverge — this is a **reporting bug**, not
+a data-loss bug. Nothing in the pipeline was ever "losing" symbols; the
+daemon was correctly evaluating its real ~26-symbol universe the whole time,
+while a separate screen honestly (but misleadingly) reported an unrelated
+config list's length as if it were the same thing. The webapp's own
+`SettingsUniverse.tsx` copy made this actively worse by asserting "Manage the
+active symbols that the pipeline processes on each run," which is false
+whenever a watchlist/discovery is configured.
+
+Every OTHER narrowing point checked in this pass either cannot produce a
+partial drop at this scale (the per-sub-fetch timeout dead-letters an entire
+fetch to `{}`, never a partial subset) or is a genuine per-symbol
+narrowing mechanism (`HistoricalStore.get_bars_bulk()`'s per-symbol
+dead-lettering on a provider rate-limit/circuit-breaker) that remains
+**plausible but unconfirmed** — reproducing it needs live network access and
+a real large-universe operator run, neither available in this sandbox.
+
+**Fixed in this pass:**
+
+- `GET /data/universe` (`api/data_api.py`) now also returns
+  `effective_symbols`/`effective_count` (a cheap, network-free preview of
+  `compute_tracked_universe()`'s real fallback decision — no live
+  broker/provider call), `default_tickers_is_fallback`, and a plain-English
+  `note`. `symbols`/`count` are unchanged for backward compatibility.
+- `webapp/src/screens/SettingsUniverse.tsx`'s copy was corrected to state the
+  list is a fallback, not "the active symbols the pipeline processes."
+- `webapp/src/components/UniverseManager.tsx` now renders a visible warning
+  `Notice` when `default_tickers_is_fallback` is `false`.
+- `data.portfolio_sync.compute_tracked_universe()` itself was **not**
+  changed — its fallback-only semantics are correct, intentional, already
+  tested, and documented in CLAUDE.md; the bug was entirely on the reporting
+  side.
+- A permanent `universe_funnel` per-cycle diagnostic was added to
+  `pipeline/production_steps.py` (`AsyncDataFetchStep`/`ProcessingStep`/
+  `ForecastingStep`), threaded into `state_snapshot.json`, plus a `WARNING`
+  log (`_warn_on_universe_funnel_drop`) whenever any single stage drops more
+  than 50% of its input symbols. This closes the gap left by the
+  unconfirmed `get_bars_bulk` mechanism above: the NEXT time a large
+  universe narrows unexpectedly, the per-stage counts in
+  `state_snapshot.json` (or the WARNING log itself) will show exactly which
+  stage did it, instead of requiring a fresh investigation from scratch.
+- Full write-up: `docs/known_issues/universe_count_reporting_mismatch.md`
+  (indexed in `docs/known_issues/README.md`).
+- Regression tests: `tests/test_data_api.py` (backend, including the exact
+  430/26 reproduction as a test case), `webapp/src/components/UniverseManager.test.tsx`
+  (frontend notice rendering).
+
+**What is still genuinely unknown, honestly**: whether the unconfirmed
+`get_bars_bulk` per-symbol dead-lettering mechanism has ever actually
+contributed to a real operator's narrowed universe. It was not observed in
+this pass (no live network access in this sandbox), it was not ruled out
+either, and the new instrumentation exists specifically so that question can
+be answered with evidence the next time it's live-reproducible, rather than
+asserted either way from static analysis.
+
+### Original (superseded) "not conclusively resolved" writeup, kept for the record
 
 The branch's implementation plan originally claimed: *"Proved disconnect was a
 hallucinated bug based on a regex match"* and *"Verified `main.py::_build_universe`
@@ -192,7 +278,7 @@ their `watchlist.txt`/held-positions/discovery state at the time — a follow-up
 task, not something this pass can certify from static analysis alone. Do not
 re-assert "hallucinated bug, no action needed" without that live confirmation.
 
-## 5. Final verification (this pass)
+## 5. Final verification (prior pass)
 
 Ran the following against this worktree (HEAD `13c1c196`), with
 `NUMBA_CACHE_DIR` pointed at a writable temp dir to work around this sandbox's
@@ -213,6 +299,53 @@ warnings from this sandboxed worktree).
 `git status --porcelain` is clean (no uncommitted changes, no stray files) as of
 commit `13c1c196`.
 
+## 6. Final verification for the 2026-08-29 universe-reporting fix
+
+Ran, against this worktree (HEAD `42e519c5` plus the uncommitted changes from
+section 4's follow-up), with `NUMBA_CACHE_DIR` pointed at a writable temp dir
+(same pre-existing sandbox workaround as section 5 above):
+
+```
+pytest tests/test_data_api.py tests/test_portfolio_sync.py \
+       tests/test_state_snapshot_parity.py tests/test_main_orchestrator.py \
+       tests/test_production_steps_universe.py \
+       tests/test_production_steps_forecast_columns.py \
+       tests/test_production_steps_fund_dtos_dead_letter.py \
+       tests/test_production_steps_sector_heat.py \
+       tests/test_production_steps_sector_selection.py \
+       tests/test_production_steps_symbol_rating.py \
+       tests/test_production_steps_options_columns.py \
+       tests/test_production_steps_etf_transmission.py \
+       tests/test_production_steps_etf_transmission_multiplier.py \
+       tests/test_production_steps_broker_gate.py \
+       tests/test_production_steps_edge_ratio_notes.py \
+       tests/test_production_steps_fmp_stubs.py \
+       tests/test_production_steps_etf_transmission_portfolio.py -q
+```
+
+Result: **304 passed, 0 failed**. `python3 -m ruff check . --select=F821,F822,F823,E9`
+(this repo's actual genuine-bug lint gate, per `.claude/commands/verify.md` —
+NOT a full default-ruleset `ruff check`, which flags hundreds of
+pre-existing style findings unrelated to this change) also passed clean.
+
+**Honest limitation, disclosed rather than skipped silently**: the webapp
+changes (`webapp/src/api/types.ts`, `webapp/src/api/mock.ts`,
+`webapp/src/components/UniverseManager.tsx`,
+`webapp/src/screens/SettingsUniverse.tsx`, and the new
+`UniverseManager.test.tsx` case) could **not** be executed in this sandbox.
+`npm install` and even a plain `mkdir`/`ln -s` inside this worktree both fail
+with an OS-level `EPERM` ("operation not permitted") regardless of the bash
+tool's sandbox-disable flag — this worktree's filesystem does not allow new
+directories to be created via a subprocess, even though the Edit/Write tools
+themselves can create and modify tracked files normally (confirmed: creating
+`node_modules/` via `npm install` and via a bare `mkdir test_dir_check` both
+fail identically; `pytest`'s own `.pytest_cache` directory-creation warning
+in every Python test run above is the same restriction, non-fatal there
+since it's cache-only). The TypeScript changes were verified by careful
+manual review of the diff (type shapes, JSX structure, existing test
+patterns) rather than by `npm run typecheck`/`vitest`, and that gap is
+disclosed here rather than asserted as tested.
+
 ## What is NOT claimed here
 
 - **Not claimed**: "Verified by an independent Execution Auditor that no live
@@ -224,6 +357,24 @@ commit `13c1c196`.
   occurred." This is also false — a real fabrication-risk regression (section 3)
   was introduced in this same branch's work and had to be found and fixed
   separately. It has been removed from this document.
-- **Not claimed**: that the universe re-alignment question is resolved. See
-  section 4 — it is a documented, honest open question with a bounded-effort
-  investigation on record, not a closed item.
+- **Superseded claim**: "that the universe re-alignment question is resolved"
+  used to be listed here as NOT claimed. As of section 4's 2026-08-29
+  follow-up, the DEFAULT_TICKERS-vs-effective-universe reporting mismatch
+  **is** resolved — reproduced exactly, fixed, and regression-tested. What
+  remains genuinely open (also stated plainly, not glossed over) is whether
+  `HistoricalStore.get_bars_bulk()`'s per-symbol dead-lettering on a live
+  provider rate-limit/circuit-breaker has ever independently contributed to a
+  narrowed universe — a real, code-confirmed mechanism that was neither
+  observed nor ruled out in this sandbox (no live network access), now
+  covered by the new `universe_funnel` diagnostic instead of being left
+  undiagnosable.
+- **Not claimed**: that the webapp changes in section 4's follow-up
+  (`UniverseManager.tsx`, `SettingsUniverse.tsx`, `types.ts`, `mock.ts`, and
+  the new `UniverseManager.test.tsx` case) were verified by running
+  `npm run typecheck`/`vitest`. This sandbox could not create a
+  `node_modules` directory in this worktree at all (`npm install` and even a
+  bare `mkdir` both failed with an OS-level `EPERM`, independent of the bash
+  tool's sandbox-disable flag) — see section 6 for the full detail. Those
+  changes were verified by manual review only; the Python side (the actual
+  bug fix, its regression tests, and the new instrumentation) was fully
+  executed and passed (304/304, see section 6).
