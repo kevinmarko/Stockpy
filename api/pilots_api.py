@@ -113,6 +113,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from api._redact import install_redacting_exception_handler, redact_line
+from numeric_utils import safe_float as _safe_float
 
 from dotenv import load_dotenv as _load_dotenv
 
@@ -231,9 +232,13 @@ import gui.daemon_client as daemon_client
 # The interval WRITE (PUT /automation/schedule/interval) goes through the same
 # allowlist-bounded .env writer the GUI Settings tab uses — NOT a bespoke file
 # write — so it inherits the exact same ALLOWED_KEYS/SECRET_KEYS enforcement
-# (CONSTRAINT #3) with zero new code. gui/env_io.py's own imports are stdlib +
-# dotenv only (see this file's gui-import-inertness test's sibling reasoning).
-import gui.env_io as env_io
+# (CONSTRAINT #3) with zero new code. env_io.py (relocated from gui/env_io.py
+# to the repo root -- F13, docs/module_efficiency_redundancy_audit.md,
+# since this is exactly the kind of production dependency that had no
+# business living inside the decommissioned gui/ package) has imports that
+# are stdlib + dotenv only (see this file's gui-import-inertness test's
+# sibling reasoning).
+import env_io
 from reporting.progress import read_progress
 
 # Brokerage-connect credential intake — read-only verification + the dedicated,
@@ -2104,13 +2109,6 @@ def get_thresholds() -> Dict[str, float]:
         "agentic_max_candidates": float(settings.AGENTIC_MAX_CANDIDATES),
         "retrain_window_days": float(MODEL_RETRAIN_WINDOW_DAYS),
     }
-
-
-def _safe_float(value: float) -> Optional[float]:
-    """NaN is a legitimate internal signal (unparsable timestamp) but is not
-    valid JSON — coerce to ``None`` (CONSTRAINT #4: never fabricate a number,
-    but also never emit a token the frontend's JSON parser can't read)."""
-    return None if value != value else value  # NaN != NaN
 
 
 @app.get("/execution-queue", dependencies=[Depends(require_read_token)])

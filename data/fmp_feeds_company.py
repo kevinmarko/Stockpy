@@ -68,23 +68,9 @@ from typing import Any, Dict, List, Optional
 
 from data import fmp_client
 from data.fmp_client import FMPUnavailable
+from numeric_utils import safe_float as _safe_float
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_float(value: Any) -> Optional[float]:
-    """Best-effort float coercion. ``None`` — never ``0.0`` (CONSTRAINT #4) —
-    when *value* is ``None``, non-finite, or not coercible to ``float``.
-    A genuine ``0`` in the payload correctly round-trips to ``0.0``."""
-    if value is None:
-        return None
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    if out != out or out in (float("inf"), float("-inf")):  # NaN / +-inf guard
-        return None
-    return out
 
 
 def _first_record(payload: Any) -> Dict[str, Any]:

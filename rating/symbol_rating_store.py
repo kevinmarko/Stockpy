@@ -297,6 +297,82 @@ class SymbolRatingStore:
             logger.warning("SymbolRatingStore.get_excluded_symbols: %s", exc)
             return set()
 
+    def get_consecutive_bad_cycles_bulk(
+        self, symbols: Iterable[str],
+    ) -> "dict[str, int]":
+        """Bulk sibling of ``get_consecutive_bad_cycles`` -- the same
+        consecutive-BAD-streak count, per symbol, for an entire universe in
+        ONE query instead of one query per symbol.
+
+        Added for the diagnostic ``Symbol_Rating_Consecutive_Bad_Cycles``
+        dashboard/report column (``pipeline/production_steps.py``), which
+        previously called ``get_consecutive_bad_cycles`` once per ticker via
+        ``dashboard_df['Symbol'].map(...)`` -- an N+1 query pattern (one
+        SELECT + one session open/close per ticker, every pipeline cycle)
+        that ``get_excluded_symbols`` already avoided for the auto-drop
+        decision via the same windowed-query technique used here. See
+        docs/module_efficiency_redundancy_audit.md's F5.
+
+        Unlike ``get_excluded_symbols``, this does NOT filter by
+        ``is_held`` or by a threshold -- it returns the raw count for every
+        requested symbol that has any rating history, so the caller can
+        still distinguish "0 bad cycles" from "no history at all" if it
+        ever needs to (today's caller treats both as 0, matching
+        ``get_consecutive_bad_cycles``'s own per-symbol default).
+
+        A symbol with no rating history is simply absent from the returned
+        dict -- the caller is expected to default a missing key to 0, the
+        same floor ``get_consecutive_bad_cycles`` returns for "no history".
+        Degrades to ``{}`` -- never raises -- on any DB read failure
+        (CONSTRAINT #6), matching every other method on this class.
+        """
+        symbols_filter = {str(s).upper() for s in symbols}
+        if not symbols_filter:
+            return {}
+        try:
+            session = self.Session()
+            try:
+                rank = (
+                    func.row_number()
+                    .over(
+                        partition_by=SymbolRatingEvent.symbol,
+                        order_by=SymbolRatingEvent.id.desc(),
+                    )
+                    .label("rn")
+                )
+                ranked_query = session.query(
+                    SymbolRatingEvent.symbol,
+                    SymbolRatingEvent.tier,
+                    rank,
+                ).filter(SymbolRatingEvent.symbol.in_(symbols_filter))
+                ranked = ranked_query.subquery()
+
+                capped_rows = (
+                    session.query(ranked.c.symbol, ranked.c.tier)
+                    .filter(ranked.c.rn <= _MAX_STREAK_SCAN_ROWS)
+                    .order_by(ranked.c.symbol, ranked.c.rn)
+                    .all()
+                )
+
+                grouped_rows: dict = defaultdict(list)
+                for symbol, tier in capped_rows:
+                    grouped_rows[symbol].append(tier)
+
+                counts: "dict[str, int]" = {}
+                for symbol, tiers in grouped_rows.items():
+                    consecutive = 0
+                    for tier in tiers:
+                        if tier != "BAD":
+                            break
+                        consecutive += 1
+                    counts[symbol] = consecutive
+                return counts
+            finally:
+                session.close()
+        except Exception as exc:  # noqa: BLE001 - dead-letter: DB errors degrade to {} (fail open)
+            logger.warning("SymbolRatingStore.get_consecutive_bad_cycles_bulk: %s", exc)
+            return {}
+
     def reinclude(self, symbol: str) -> None:
         """Manual-override escape hatch: immediately break a symbol's
         consecutive-BAD streak without deleting its rating history.

@@ -91,7 +91,7 @@ Seven copies, no shared implementation, and they disagree on what "bad input" me
 | `reporting/state_snapshot.py:31` (named `_safe_float_or_none`) | `None` | not checked | `Optional[float]` |
 | `pilots/vol_mispricing.py:364` | `None` | not checked | `Optional[float]` |
 | `api/pilots_api.py:2109` | `None` | not checked; no `float()` cast at all | `Optional[float]` |
-| `data/fmp_feeds_market.py:73` | **`float('nan')`** | not checked | `float` (never `None`) |
+| `data/fmp_feeds_market.py:73` (pre-migration) | **`float('nan')`** | not checked | `float` (never `None`) |
 | `data/fmp_feeds_company.py:75` | `None` | `None` | `Optional[float]` |
 | `engine/advisory.py:1882` | **not checked — NaN passes through unchanged** | not checked | `float` |
 | `validation/validation_history_store.py:177` | `None` | `None` | `Optional[float]` |
@@ -102,6 +102,22 @@ never filters NaN, in the advisory engine, violating this repo's own CONSTRAINT 
 other six docstrings explicitly cite.
 
 Repro: `grep -n "_safe_float" <each file>` then read each function body directly.
+
+**Remediation status (PR 2)**: `numeric_utils.safe_float` is now the canonical implementation for 5 of
+the 7 copies. The first pass covered the 4 confirmed behaviorally compatible on their own
+(`state_snapshot.py`, `vol_mispricing.py`, `pilots_api.py`, `fmp_feeds_company.py`). `fmp_feeds_market.py`'s
+NaN-returning copy — the one genuinely risky migration, deferred out of that first pass — is now also
+migrated, in a follow-up commit with two disclosed companion fixes required to make the migration safe:
+`fetch_realized_volatility`'s happy path now returns `None` (not NaN) for a missing/unparseable
+`hv_10`/`hv_30`/`hv_90` value, matching its own exception-path fallback and no longer silently passing
+the `hv_30 is not None` gate `pilots/unusual_options_flow.py` and `pilots/options_alerts.py` depend on;
+and `fetch_insider_stats`'s `total_disposed == total_disposed` self-comparison idiom (which depended on
+the old NaN-not-None contract) is now an explicit `is not None` check on BOTH operands of the ratio
+division, since `total_acquired` can independently be `None` too under the new contract. `engine/advisory.py`
+and `validation/validation_history_store.py` stay untouched, report-only per the agreed risk posture — the
+2 copies still not migrated. See `.claude/module_efficiency_audit_remediation_plan.md`'s PR 2 entry,
+`numeric_utils.py`'s own docstring, and `data/fmp_feeds_market.py`'s own module docstring for the full
+reasoning; `tests/test_fmp_feeds_market.py` carries the regression coverage.
 
 ## F3 — Option-symbol regex drift: one parser accepts strings the others reject
 
@@ -117,6 +133,11 @@ of `options_risk.py:28`, not an import.
 
 Repro: `grep -n "_OPTION_SYM_RE = re.compile" pilots/options_risk.py pilots/realtime_risk_streamer.py pilots/options_gex.py`.
 
+**Remediation status**: `options_gex.py`'s regex fixed (see F4's `vol_sqrt_t` section below for the
+full writeup — same PR). `realtime_risk_streamer.py`'s byte-identical duplicate is now gone —
+`parse_option_symbol` is a direct re-export of `options_risk.py`'s function (confirmed dependency-light
+and behaviorally identical for every reachable input; see F4's remediation status below).
+
 ## F4 — Black-Scholes: canonical pricer exists and is widely reused; 3 real holdouts, one
 divergence investigated and RESOLVED (kept as-is — the canonical function has the bug, not the copy)
 
@@ -125,15 +146,18 @@ divergence investigated and RESOLVED (kept as-is — the canonical function has 
 `volatility_surface.py:82/104/125`, `gamma_scalper.py:86,88`, `options_sor.py:191,193`,
 `vol_mispricing.py:275,278`, `dispersion_trading.py:177,181` (all six of these via lazy in-function imports).
 
-Genuine remaining copies (not yet migrated — see the remediation plan's Status section):
-
-- `pilots/multi_leg_pricing.py:54-127` — `calculate_black_scholes_leg_greeks`, near-verbatim copy (no
-  drift found)
-- `pilots/realtime_risk_streamer.py:123-191` — `compute_black_scholes_unit_greeks`, own copy + the
-  duplicated regex fixed in F3 above (`realtime_risk_streamer.py`'s own regex copy was NOT touched by
-  that fix — it still needs migrating to import the canonical one, tracked here)
-- `pilots/dispersion_trading.py:138-165` — own `calculate_straddle_vega`, inconsistent with
-  `calculate_option_price()` a few lines below in the same file, which delegates correctly
+**Remaining three copies — now migrated** (branch `migrate-bs-pricer-holdouts`, see the remediation
+plan's PR 4 entry for the full per-file detail): `pilots/multi_leg_pricing.py::calculate_black_scholes_leg_greeks`,
+`pilots/realtime_risk_streamer.py::compute_black_scholes_unit_greeks` + `parse_option_symbol`, and
+`pilots/dispersion_trading.py::calculate_straddle_vega` all now delegate to the canonical function,
+each proven numerically equivalent on a seeded grid before landing. One genuine, strictly-additive
+behavior fix found along the way: `multi_leg_pricing.py`'s old copy compared `option_type` without
+case normalization, silently mis-routing an uppercase `"CALL"` to the put branch — the canonical
+function's normalization closes that. The `dispersion_trading.py` migration was investigated before
+being assumed safe: vega's formula does not divide by `vol_sqrt_t` the way gamma's denominator does,
+so it does not share the spurious-blowup failure mode documented below for gamma — confirmed
+empirically at the exact reproduction inputs that produce the canonical function's ~3.6e9 gamma
+(canonical `vega_raw` there is a sane `0.000114`).
 
 **`options_gex.py`'s `vol_sqrt_t` divergence — investigated by attempting the fix, not just re-reading
 the code, and resolved in the opposite direction from what the original finding assumed.** Two prior
@@ -201,13 +225,14 @@ fully current.
 Repro: `grep -n "_apply_symbol_rating_columns\|def _cycles\|dashboard_df.apply" pipeline/production_steps.py`;
 `sed -n '186,207p' rating/symbol_rating_store.py`.
 
-## F6 — N+1 network calls where a batch endpoint exists
+## F6 — N+1 network calls where a batch endpoint exists — FIXED, all 6 call sites migrated
 
-`MarketDataProvider`'s ABC exposes only per-symbol `get_latest_quote()`, so every caller loops:
+`MarketDataProvider`'s ABC originally exposed only per-symbol `get_latest_quote()`, so every caller
+looped:
 
-- `api/data_api.py:645-678` (`get_quotes()`) — its own docstring concedes *"We loop per symbol… There
+- `api/data_api.py:645-678` (`get_quotes()`) — its own docstring conceded *"We loop per symbol… There
   is no batch `get_quotes` on the provider"* — a documented limitation of the abstraction, not an
-  oversight of an available method on the same interface (`fmp_client.batch_quote()` is a separate,
+  oversight of an available method on the same interface (`fmp_client.batch_quote()` was a separate,
   lower-level FMP-specific function not exposed through the `CompositeProvider` abstraction this call
   site uses)
 - `pilots/options_risk.py:421-428`, `pilots/scenario_matrix.py:400-406` — per-request loops
@@ -217,16 +242,47 @@ Repro: `grep -n "_apply_symbol_rating_columns\|def _cycles\|dashboard_df.apply" 
 - `pilots/dispersion_trading.py:779-808` — 3 separate per-constituent loops: quote, IV resolution, and
   serial `get_bars()`
 
-`evaluation_engine.py:1114-1129` similarly fetches bars serially per symbol (line 1174, memoized
+`evaluation_engine.py:1114-1129` similarly fetched bars serially per symbol (line 1174, memoized
 per-symbol but not batched across distinct symbols) though `data/historical_store.py:1039` provides
 `get_bars_bulk()` — reachable from the live `GET /calibration/summary`.
 
-Confirmed via `git show --stat f96a3908` (the recent unbounded-blocking-call sweep) that it touches
-`api/data_api.py` only in the unrelated `chat_endpoint` LLM-client construction path, and none of the
-other files in this finding at all — every site above is still exactly as N+1 as originally found,
-and the recent sweep neither fixed the pattern nor added per-call bounding to it.
+**Fixed in two passes.** `MarketDataProvider.get_quotes_batch()` (ABC method, default
+per-symbol-loop implementation so no existing provider subclass breaks, real `FMPProvider` override
+via `fmp_client.batch_quote()`) landed first (PR #935, hardened in #942), and `api/data_api.py`,
+`pilots/options_risk.py`, and `pilots/scenario_matrix.py` were migrated to it in that same work. This
+audit's remediation PR 5 closed the three remaining call sites:
 
-Repro: `sed -n '644,678p' api/data_api.py`; `grep -n "get_bars_bulk\|def _get_bars" data/historical_store.py evaluation_engine.py`.
+- `data/paper_account_store.py::settle_expired_options` — restructured into two passes: parse every
+  open position and collect the distinct set of underlyings actually expired, then ONE
+  `get_quotes_batch()` call resolves all of them, then the settlement loop looks up each position's
+  spot from that pre-fetched dict. A symbol absent from the batch result (unresolvable, or a total
+  batch failure) leaves that position open with the same `WARNING` log the original per-position
+  `try/except` produced — never a fabricated intrinsic-value settlement (CONSTRAINT #4).
+- `pilots/dispersion_trading.py::_source_real_dispersion_inputs` — the spot-price loop (index +
+  every constituent, previously one `pilots.price_provider.get_current_price()` call per symbol) now
+  resolves via one `data.market_data.get_provider().get_quotes_batch()` call. The IV-resolution loop
+  (a different data source — the options chain) and the realized-correlation bars loop were
+  deliberately left untouched, out of scope for this specific migration.
+- `evaluation_engine.py::recommendation_tracking_report` — added a prewarm step, before the
+  per-signal loop, that resolves every distinct symbol across `buy_entries` via one
+  `HistoricalStore.get_bars_bulk()` call; the loop's own per-symbol lazy-fetch (`_get_bars()`) is kept
+  intact as the fallback for any symbol missing from the bulk result, so the final outcome is
+  identical to the pre-migration behavior either way. A real test gap was found and closed in the
+  same pass: the `_FakeHistoricalStore` fixture used across `tests/test_recommendation_tracking.py`
+  had no `get_bars_bulk()` method, so the pre-existing 28-test suite was silently exercising the
+  `AttributeError`-fallback path rather than real batching — fixed by adding a genuine
+  `get_bars_bulk()` to the fixture.
+
+Verified: `tests/test_paper_account_store.py` (44 passed, 2 new regression tests for the
+batch-failure and partial-coverage dead-letter paths), `tests/test_dispersion_trading.py` (18 passed,
+3 new), `tests/test_recommendation_tracking.py` (31 passed, 3 new), plus
+`tests/test_evaluation_engine.py`/`tests/test_pilots_calibration.py`/`tests/test_pilots_paper_broker.py`/
+`tests/test_market_data.py` unaffected. `ruff check . --select=F821,F822,F823,E9` clean.
+
+Repro (pre-fix state, still reproducible on `git show fe683ebc:evaluation_engine.py` /
+pre-PR-5 `data/paper_account_store.py` / `pilots/dispersion_trading.py`): `sed -n '644,678p'
+api/data_api.py`; `grep -n "get_bars_bulk\|def _get_bars" data/historical_store.py
+evaluation_engine.py`.
 
 ## F7 — CORRECTED, downgraded to non-actionable: `api/metrics_api.py`'s heavy imports are
 deliberate, documented design, not an oversight
@@ -337,6 +393,40 @@ the operator's real `quant_platform.db`. `CLAUDE.md` already calls this "a confi
 class."
 
 Repro: `grep -n "def __init__" <file>` per store; `grep -n "resolve_database_url" data/historical_store.py forecasting/forecast_tracker.py`.
+
+**Remediation status (PR 8)**: the load-bearing half — the structural CI guard — is DONE:
+`tests/test_store_isolation_contract.py`, auto-discovering every `*_store.py` file by glob and
+enforcing (1) every store is classified SQL-backed-via-`db_config` or explicitly exempted with a
+reason, (2) every SQL-backed store's `__init__` statically resolves via `resolve_database_url()` and
+never defaults a url-shaped parameter to a hardcoded literal, and (3) every direct, implicit
+construction of a store class anywhere under `tests/` is protected by a `conftest.py` autouse fixture
+or file-local isolation evidence — plus a regression guard on the five currently-known `conftest.py`
+fixtures. Passes clean against the current codebase (verified non-vacuous via a throwaway script
+exercising the guard's own detection logic directly against synthetic hand-crafted violations).
+
+**The `__init__` dedup this section's title promises ("foundation is shared, `__init__` wiring is
+not") was investigated and deliberately NOT done — a real architectural conflict, not a shortcut.**
+Every existing `conftest.py` isolation fixture (`_isolate_validation_runs_db_in_tests`,
+`_isolate_execution_audit_db_in_tests`, `_isolate_broker_fills_db_in_tests`,
+`_isolate_paper_and_transactions_db_in_tests`) — and, by construction, PR 8's own new structural
+guard — depends on `monkeypatch.setattr(<store's own module>, "resolve_database_url", ...)`, which
+only works because each store's `__init__` calls the bare name `resolve_database_url()`, resolved via
+Python name lookup against the *function's own* `__globals__` (the store's own module, where
+`from db_config import resolve_database_url` bound it locally). Moving that call into a shared base
+class defined anywhere else would relocate the lookup to the base's `__globals__`, silently defeating
+the monkeypatch for every migrated store — confirmed not merely theoretical:
+`tests/test_investyo_mcp_server.py` and `tests/test_paper_account_store.py` both construct
+`TransactionsStore()`/`PaperAccountStore()` bare, relying entirely on
+`_isolate_paper_and_transactions_db_in_tests`'s module-level patch to keep them off the real DB. A
+working fix exists (dynamically resolving `resolve_database_url` via
+`sys.modules[type(self).__module__]` instead of a bare name) but was rejected as trading ~80 lines of
+easily-greppable duplication for metaprogramming that actively conflicts with this very file's own
+stated design value (`db_config.py`'s docstring: "grep this name to enumerate every consumer"). See
+`.claude/module_efficiency_audit_remediation_plan.md`'s PR 8 entry for the full reasoning, including
+the confirmed-identical `__init__` bodies across 9 of the 10 originally-cited stores. The PRAGMA-probe
+migration-wrapper dedup (`transactions_store.py:68`, `data/historical_store.py:924`/`947`) was
+correspondingly not attempted either, per the plan's own instruction not to let it block the
+structural guard.
 
 ## F10 — Statistics: 4 Sharpe, 3-4 Sortino, 2 Calmar implementations, coordinated by comments
 

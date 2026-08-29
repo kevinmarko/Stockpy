@@ -114,13 +114,27 @@ class _FakeStore:
 
 
 class _FakeHistoricalStore:
-    """Minimal HistoricalStore stub backed by a symbol→DataFrame map."""
+    """Minimal HistoricalStore stub backed by a symbol→DataFrame map.
+
+    Implements get_bars_bulk() the same way the real HistoricalStore does
+    (every requested symbol is present in the result, real bars or an
+    empty DataFrame -- get_bars() itself never raises on a genuine miss,
+    F6, docs/module_efficiency_redundancy_audit.md), so tests using this
+    fixture exercise recommendation_tracking_report's real batched-prewarm
+    path instead of silently falling back to the pre-migration per-symbol
+    path via an AttributeError.
+    """
 
     def __init__(self, bars: Dict[str, pd.DataFrame]) -> None:
         self._bars = bars
+        self.bulk_calls: List[List[str]] = []
 
     def get_bars(self, symbol: str, lookback_days: int = 504) -> pd.DataFrame:
         return self._bars.get(symbol.upper(), pd.DataFrame())
+
+    def get_bars_bulk(self, symbols: List[str], lookback_days: int = 504) -> Dict[str, pd.DataFrame]:
+        self.bulk_calls.append(list(symbols))
+        return {sym.upper(): self.get_bars(sym, lookback_days) for sym in symbols}
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +648,118 @@ class TestDeadLetterResilience:
         # Should not raise (the bad entry is skipped)
         result = recommendation_tracking_report(log_path=p)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# TestBatchedBarsPrewarm (F6, docs/module_efficiency_redundancy_audit.md)
+# ---------------------------------------------------------------------------
+
+class TestBatchedBarsPrewarm:
+    """recommendation_tracking_report used to call historical_store.get_bars()
+    once per distinct symbol, serially, the first time each was seen in the
+    per-entry loop. It now prewarms the per-symbol cache with ONE
+    get_bars_bulk() call over every distinct symbol across buy_entries
+    before that loop runs.
+    """
+
+    def _write(self, path: Path, entries: List[DecisionEntry]) -> None:
+        import json
+        from dataclasses import asdict
+
+        with open(path, "w") as fh:
+            for entry in entries:
+                fh.write(json.dumps(asdict(entry)) + "\n")
+
+    def test_one_bulk_call_covers_every_distinct_symbol(self, tmp_path: Path) -> None:
+        entries = [
+            _make_entry(symbol="AAPL", signal_action="BUY", days_ago=40),
+            _make_entry(symbol="MSFT", signal_action="BUY", days_ago=45),
+            # A repeat of AAPL must not add a second distinct symbol to the
+            # batch -- same dedup behavior the old per-symbol _bars_cache
+            # already gave the loop.
+            _make_entry(symbol="AAPL", signal_action="BUY", days_ago=50),
+        ]
+        self._write(tmp_path / "log.jsonl", entries)
+
+        hs = _FakeHistoricalStore({"AAPL": _make_bars("AAPL"), "MSFT": _make_bars("MSFT")})
+
+        result = recommendation_tracking_report(
+            log_path=tmp_path / "log.jsonl",
+            historical_store=hs,
+        )
+
+        assert result["n_signals"] == 3
+        # Exactly one batched call, covering both distinct symbols.
+        assert len(hs.bulk_calls) == 1
+        assert set(hs.bulk_calls[0]) == {"AAPL", "MSFT"}
+        # Model returns are still computed correctly off the prewarmed bars.
+        assert not math.isnan(result["model_return_30d"])
+
+    def test_symbol_missing_from_bulk_response_falls_back_to_individual_fetch(
+        self, tmp_path: Path
+    ) -> None:
+        """A get_bars_bulk() result that (contrary to the real
+        HistoricalStore, which always returns every requested key) omits a
+        requested symbol must not silently lose that signal -- _get_bars()
+        still lazily retries it individually, matching the pre-migration
+        per-symbol behavior for that one symbol exactly.
+        """
+        entries = [
+            _make_entry(symbol="AAPL", signal_action="BUY", days_ago=40),
+            _make_entry(symbol="MSFT", signal_action="BUY", days_ago=45),
+        ]
+        self._write(tmp_path / "log.jsonl", entries)
+
+        aapl_bars = _make_bars("AAPL")
+        msft_bars = _make_bars("MSFT")
+
+        class PartialBulkStore:
+            def get_bars(self, symbol: str, lookback_days: int = 504) -> pd.DataFrame:
+                return {"AAPL": aapl_bars, "MSFT": msft_bars}.get(symbol.upper(), pd.DataFrame())
+
+            def get_bars_bulk(self, symbols, lookback_days: int = 504):
+                # MSFT deliberately absent -- forces _get_bars()'s
+                # individual-fetch fallback for that one symbol.
+                return {"AAPL": aapl_bars}
+
+        result = recommendation_tracking_report(
+            log_path=tmp_path / "log.jsonl",
+            historical_store=PartialBulkStore(),
+        )
+
+        assert result["n_signals"] == 2
+        # Both signals still produced a real (non-NaN) model return -- MSFT's
+        # bars were recovered via the individual fallback, not lost.
+        rows = result["rows"]
+        assert len(rows) == 2
+        for row in rows:
+            assert not math.isnan(row["model_return"])
+
+    def test_bulk_call_raising_degrades_to_individual_fetch(self, tmp_path: Path) -> None:
+        """A total get_bars_bulk() failure (e.g. a real HistoricalStore
+        implementation detail this fixture doesn't have to know about) must
+        not abort the report -- the prewarm step's own try/except degrades
+        to logging a WARNING, and the per-symbol loop below still resolves
+        bars individually (CONSTRAINT #6)."""
+        entry = _make_entry(symbol="AAPL", signal_action="BUY", days_ago=40)
+        self._write(tmp_path / "log.jsonl", [entry])
+
+        aapl_bars = _make_bars("AAPL")
+
+        class RaisingBulkStore:
+            def get_bars(self, symbol: str, lookback_days: int = 504) -> pd.DataFrame:
+                return aapl_bars if symbol.upper() == "AAPL" else pd.DataFrame()
+
+            def get_bars_bulk(self, symbols, lookback_days: int = 504):
+                raise RuntimeError("bulk fetch outage")
+
+        result = recommendation_tracking_report(
+            log_path=tmp_path / "log.jsonl",
+            historical_store=RaisingBulkStore(),
+        )
+
+        assert result["n_signals"] == 1
+        assert not math.isnan(result["model_return_30d"])
 
 
 # ---------------------------------------------------------------------------

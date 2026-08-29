@@ -171,6 +171,40 @@ class TestFetchInsiderStats:
         ratio = rows[0]["acquired_disposed_ratio"]
         assert ratio != ratio  # NaN
 
+    def test_ratio_is_nan_not_a_crash_when_total_acquired_is_unparseable(self, fmp_settings):
+        """Regression for the F2 dedup migration: `_safe_float` now returns
+        `None` (not NaN) for an unparseable value, so `total_acquired` can
+        legitimately be `None` while `total_disposed` is a valid positive
+        float. The ratio-derivation idiom must guard BOTH operands -- a
+        `None / float` would raise `TypeError` if only `total_disposed`
+        were guarded."""
+        payload = [{
+            "symbol": "AAPL", "year": 2026, "quarter": 1,
+            "totalAcquired": "not-a-number", "totalDisposed": 12000.0,
+        }]
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=payload)):
+            rows = fetch_insider_stats("AAPL")  # must not raise
+        assert rows[0]["total_acquired"] is None
+        assert rows[0]["total_disposed"] == pytest.approx(12000.0)
+        ratio = rows[0]["acquired_disposed_ratio"]
+        assert ratio != ratio  # NaN, never a fabricated ratio
+
+    def test_row_fields_are_none_not_nan_for_unparseable_totals(self, fmp_settings):
+        """`total_acquired`/`total_disposed` themselves must reflect the new
+        None-on-bad-value contract (not the pre-migration NaN-on-bad-value
+        one) so the row dict stays internally consistent with the module's
+        other Optional[float] fields."""
+        payload = [{
+            "symbol": "AAPL", "year": 2026, "quarter": 1,
+            "totalAcquired": None, "totalDisposed": "garbage",
+        }]
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=payload)):
+            rows = fetch_insider_stats("AAPL")
+        assert rows[0]["total_acquired"] is None
+        assert rows[0]["total_disposed"] is None
+        ratio = rows[0]["acquired_disposed_ratio"]
+        assert ratio != ratio  # NaN, never a fabricated ratio
+
     def test_vendor_ratio_is_preferred_over_the_derived_one(self, fmp_settings):
         payload = [{
             "symbol": "AAPL", "year": 2026, "quarter": 1,
@@ -333,15 +367,29 @@ class TestFetchRealizedVolatility:
             out = fetch_realized_volatility("MSFT")
         assert out["hv_30"] == pytest.approx(0.27)
 
-    def test_empty_payload_degrades_to_all_nan_never_raises(self, fmp_settings):
-        """This module's own ``_safe_float`` (unlike fmp_feeds_company.py's)
-        returns NaN, not None, for an absent field -- matches the value the
-        `Realized_Vol_30D` diagnostic column stores everywhere else."""
+    def test_empty_payload_degrades_to_all_none_never_raises(self, fmp_settings):
+        """``fetch_realized_volatility``'s numeric coercion now delegates to
+        ``numeric_utils.safe_float``, which returns ``None`` (never
+        ``float('nan')``) for a missing/unparseable value -- matching this
+        function's own exception-path fallback below, and matching the
+        `hv_30 is not None` gate real downstream consumers
+        (``pilots/unusual_options_flow.py``, ``pilots/options_alerts.py``)
+        depend on to distinguish "measured" from "not reported". Before this
+        fix, an empty vendor response silently passed that gate as NaN."""
         with patch("data.fmp_client.requests.get", return_value=_resp(payload=[])):
             out = fetch_realized_volatility("NEWCO")
-        assert out["hv_10"] != out["hv_10"]  # NaN
-        assert out["hv_30"] != out["hv_30"]
-        assert out["hv_90"] != out["hv_90"]
+        assert out == {"hv_10": None, "hv_30": None, "hv_90": None}
+
+    def test_unparseable_value_degrades_to_none_not_nan(self, fmp_settings):
+        """A field the vendor reported but with a non-numeric value must
+        degrade the same way an absent field does -- None, not NaN -- so a
+        downstream `hv_30 is not None` gate cannot be silently fooled."""
+        payload = [{"stdDev10d": "not-a-number", "standardDeviation": 0.22, "stdDev90d": None}]
+        with patch("data.fmp_client.requests.get", return_value=_resp(payload=payload)):
+            out = fetch_realized_volatility("AAPL")
+        assert out["hv_10"] is None
+        assert out["hv_30"] == pytest.approx(0.22)
+        assert out["hv_90"] is None
 
     def test_total_failure_no_api_key_degrades_to_none_never_raises(self, monkeypatch):
         monkeypatch.setattr(settings, "FMP_API_KEY", None)

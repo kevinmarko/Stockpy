@@ -81,7 +81,7 @@ def test_dry_run_write_true(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DRY_RUN=false\n", encoding="utf-8")
 
-    with mock.patch("gui.env_io.ENV_PATH", env_file):
+    with mock.patch("env_io.ENV_PATH", env_file):
         from gui import env_io
         env_io.write_setting("DRY_RUN", "true")
         result = env_io.read_settings()
@@ -92,7 +92,7 @@ def test_dry_run_write_false(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DRY_RUN=true\n", encoding="utf-8")
 
-    with mock.patch("gui.env_io.ENV_PATH", env_file):
+    with mock.patch("env_io.ENV_PATH", env_file):
         from gui import env_io
         env_io.write_setting("DRY_RUN", "false")
         result = env_io.read_settings()

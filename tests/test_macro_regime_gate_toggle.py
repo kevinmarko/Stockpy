@@ -230,11 +230,11 @@ class TestEnvIoMacroGateKey:
     """The GUI must be able to write MACRO_REGIME_GATE_ENABLED."""
 
     def test_allowed_keys_contains_macro_regime_gate(self):
-        from gui import env_io
+        import env_io
         assert "MACRO_REGIME_GATE_ENABLED" in env_io.ALLOWED_KEYS
 
     def test_write_true_roundtrip(self, tmp_path, monkeypatch):
-        from gui import env_io
+        import env_io
         env_file = tmp_path / ".env"
         env_file.write_text("MACRO_REGIME_GATE_ENABLED=false\n", encoding="utf-8")
         monkeypatch.setattr(env_io, "ENV_PATH", env_file)
@@ -242,7 +242,7 @@ class TestEnvIoMacroGateKey:
         assert env_io.get_value("MACRO_REGIME_GATE_ENABLED") == "true"
 
     def test_write_false_roundtrip(self, tmp_path, monkeypatch):
-        from gui import env_io
+        import env_io
         env_file = tmp_path / ".env"
         env_file.write_text("MACRO_REGIME_GATE_ENABLED=true\n", encoding="utf-8")
         monkeypatch.setattr(env_io, "ENV_PATH", env_file)
@@ -250,5 +250,5 @@ class TestEnvIoMacroGateKey:
         assert env_io.get_value("MACRO_REGIME_GATE_ENABLED") == "false"
 
     def test_macro_gate_key_not_classified_as_secret(self):
-        from gui import env_io
+        import env_io
         assert env_io.is_secret("MACRO_REGIME_GATE_ENABLED") is False

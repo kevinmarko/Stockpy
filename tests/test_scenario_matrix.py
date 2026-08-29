@@ -14,10 +14,13 @@ Tests:
 9. Missing quote / symbol handling (graceful exclusion, populated missing_data_symbols).
 10. 2D slice extraction helper (get_2d_scenario_slice).
 11. AST import safety (never imports heavy engines).
+12. spot_map auto-resolution via MarketDataProvider.get_quotes_batch() (F6), including
+    partial-batch failure.
 """
 import ast
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 import pytest
 
 from pilots.scenario_matrix import (
@@ -248,6 +251,55 @@ def test_evaluate_scenario_matrix_missing_data_handling():
     assert "UNKNOWN_TICKER" in res["missing_data_symbols"]
     # AAPL still priced accurately
     assert res["baseline"]["portfolio_market_value"] == 1500.0
+
+
+def test_evaluate_scenario_matrix_auto_resolve_batch_partial_failure():
+    """spot_map=None auto-resolves via MarketDataProvider.get_quotes_batch()
+    (F6, docs/module_efficiency_redundancy_audit.md). A symbol the batch
+    call doesn't return data for must be simply absent from the resolved
+    spot_map -- the same contract the prior per-ticker get_latest_quote()
+    loop had (a caught exception left a ticker absent, never fabricated) --
+    not silently dropped from the position set or given a fabricated price."""
+    positions = [
+        {"symbol": "AAPL", "qty": 10, "avg_entry_price": 150.0},
+        {"symbol": "UNRESOLVABLE_SYM", "qty": 50, "avg_entry_price": 10.0},
+    ]
+
+    def _batch(symbols):
+        # AAPL resolves; UNRESOLVABLE_SYM is absent from the batch response
+        # entirely, exactly as the real ABC/FMP implementations dead-letter
+        # a symbol they couldn't price.
+        return {"AAPL": MagicMock(price=150.0)}
+
+    mock_provider = MagicMock()
+    mock_provider.get_quotes_batch.side_effect = _batch
+
+    with patch("data.market_data.get_provider", return_value=mock_provider):
+        res = evaluate_scenario_matrix(positions=positions, spot_map=None)
+
+    mock_provider.get_quotes_batch.assert_called_once()
+    called_symbols = set(mock_provider.get_quotes_batch.call_args[0][0])
+    assert called_symbols == {"AAPL", "UNRESOLVABLE_SYM"}
+    assert "UNRESOLVABLE_SYM" in res["missing_data_symbols"]
+    # AAPL still auto-resolved and priced accurately from the batch result
+    assert res["baseline"]["portfolio_market_value"] == 1500.0
+
+
+def test_evaluate_scenario_matrix_auto_resolve_batch_total_failure():
+    """A whole-batch get_quotes_batch() failure (e.g. a provider outage)
+    must degrade every auto-resolved ticker to missing, never raise --
+    mirrors the identical whole-batch try/except already covered for
+    pilots/options_risk.py's migration."""
+    positions = [{"symbol": "AAPL", "qty": 10, "avg_entry_price": 150.0}]
+
+    mock_provider = MagicMock()
+    mock_provider.get_quotes_batch.side_effect = RuntimeError("provider unreachable")
+
+    with patch("data.market_data.get_provider", return_value=mock_provider):
+        res = evaluate_scenario_matrix(positions=positions, spot_map=None)
+
+    assert "AAPL" in res["missing_data_symbols"]
+    assert res["baseline"]["portfolio_market_value"] == 0.0
 
 
 def test_volatility_and_spot_lower_bounds():

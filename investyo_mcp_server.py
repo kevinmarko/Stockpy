@@ -817,7 +817,7 @@ def pin_registry_prompt(prompt_id: str, version: str) -> str:
     reg._pins[prompt_id] = version
 
     try:
-        from gui import env_io
+        import env_io
         # Pass the dict directly (NOT a pre-json.dumps'd string) -- env_io's
         # write_setting() JSON-encodes JSON-classified keys itself; passing an
         # already-encoded string here would double-encode it.
@@ -862,7 +862,7 @@ def rollback_registry_prompt(prompt_id: str) -> str:
         )
 
     try:
-        from gui import env_io
+        import env_io
         pins = dict(sorted(reg._pins.items()))
         env_io.write_setting("PROMPT_REGISTRY_PINS", pins)
         return f"Rolled back {prompt_id!r} -> {previous!r}. Saved to .env; effective on next launch."
@@ -1591,7 +1591,7 @@ def update_universe_tickers(action: str, symbol: str) -> str:
         symbol: The ticker symbol to modify (e.g. TSLA).
     """
     import json
-    from gui import env_io
+    import env_io
 
     symbol_upper = symbol.upper().strip()
     action_lower = action.lower().strip()
