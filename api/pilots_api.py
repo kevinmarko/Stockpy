@@ -232,9 +232,13 @@ import gui.daemon_client as daemon_client
 # The interval WRITE (PUT /automation/schedule/interval) goes through the same
 # allowlist-bounded .env writer the GUI Settings tab uses — NOT a bespoke file
 # write — so it inherits the exact same ALLOWED_KEYS/SECRET_KEYS enforcement
-# (CONSTRAINT #3) with zero new code. gui/env_io.py's own imports are stdlib +
-# dotenv only (see this file's gui-import-inertness test's sibling reasoning).
-import gui.env_io as env_io
+# (CONSTRAINT #3) with zero new code. env_io.py (relocated from gui/env_io.py
+# to the repo root -- F13, docs/module_efficiency_redundancy_audit.md,
+# since this is exactly the kind of production dependency that had no
+# business living inside the decommissioned gui/ package) has imports that
+# are stdlib + dotenv only (see this file's gui-import-inertness test's
+# sibling reasoning).
+import env_io
 from reporting.progress import read_progress
 
 # Brokerage-connect credential intake — read-only verification + the dedicated,

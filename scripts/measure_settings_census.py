@@ -6,7 +6,8 @@ Reproducible census of ``settings.Settings`` and its write-gate surface.
 Why this exists
 ----------------
 The settings layer (a pydantic-settings singleton in ``settings.py``) and its
-GUI-writable allowlist (``gui/env_io.py``) are the substrate for an in-progress
+GUI-writable allowlist (``env_io.py``, relocated from ``gui/env_io.py`` -- F13,
+docs/module_efficiency_redundancy_audit.md) are the substrate for an in-progress
 settings hot-reload effort.  Several prior rounds of analysis were done by hand
 against commits that were stale by the time anyone acted on them, and were
 repeatedly found wrong on re-measurement.  This script exists so that the
@@ -14,7 +15,7 @@ numbers are *derived*, never transcribed: it emits a machine-readable
 ``docs/settings_field_census.json`` and a generated
 ``docs/settings_field_census.md`` from a single pass over the live tree.
 
-Everything it does is read-only.  It imports ``settings`` and ``gui.env_io``
+Everything it does is read-only.  It imports ``settings`` and ``env_io``
 for their real runtime values (field set, allowlists) and uses ``ast`` — never
 a text grep — for every source-level question, because this codebase binds the
 settings singleton under at least two dozen distinct local names
@@ -26,7 +27,7 @@ went wrong.
 What it measures
 ----------------
 1. Field-type breakdown of ``Settings.model_fields`` (+ ``_ENABLED`` count).
-2. ``gui/env_io.py`` list sizes, including duplicate detection in
+2. ``env_io.py`` list sizes, including duplicate detection in
    ``ALLOWED_KEYS`` (a known, still-unfixed bug — reported, never fixed here).
 3. The SECRET / IN_ALLOWED_KEYS / UNCLASSIFIED partition over every field.
 4. ``SECRET_KEYS`` sanity: phantom entries, plus a credential-shaped-name
@@ -144,7 +145,10 @@ _HAND_SET_PATTERNS = [
     re.compile(r"deliberately\s+(?:NOT\s+)?(?:excluded\s+from|in)\b[^.;]{0,80}ALLOWED_KEYS",
                re.IGNORECASE),
     re.compile(r"deliberately\s+NOT\s+in\b[^.;]{0,80}ALLOWED_KEYS", re.IGNORECASE),
-    re.compile(r"not\s+in\s+(?:gui/env_io\.py'?s?\s+)?ALLOWED_KEYS", re.IGNORECASE),
+    # Matches both the pre- and post-relocation forms (F13, docs/
+    # module_efficiency_redundancy_audit.md moved gui/env_io.py to env_io.py)
+    # -- some settings.py field docstrings may still say the old form.
+    re.compile(r"not\s+in\s+(?:(?:gui/)?env_io\.py'?s?\s+)?ALLOWED_KEYS", re.IGNORECASE),
     re.compile(r"never\s+allowlisted", re.IGNORECASE),
 ]
 
@@ -1001,9 +1005,12 @@ def collect_read_forms(model_fields: Dict[str, Any]) -> Dict[str, Any]:
     unparseable: List[Dict[str, str]] = []
     per_file_alias_summary: Dict[str, List[str]] = {}
     name_literal_sites: Dict[str, List[str]] = defaultdict(list)
-    # settings.py and gui/env_io.py mention every field name by construction;
-    # counting them would drown the signal.
-    _literal_scan_skip = {"settings.py", "gui/env_io.py"}
+    # settings.py and env_io.py mention every field name by construction;
+    # counting them would drown the signal. (env_io.py was relocated from
+    # gui/env_io.py -- F13, docs/module_efficiency_redundancy_audit.md --
+    # the literal ALLOWED_KEYS/SECRET_KEYS tuples now live at the new path;
+    # gui/env_io.py is a re-export shim containing no field-name literals.)
+    _literal_scan_skip = {"settings.py", "env_io.py"}
 
     for path in files:
         rel = str(path.relative_to(_REPO_ROOT))
@@ -1112,7 +1119,7 @@ def collect_census() -> Dict[str, Any]:
     # Project imports are deliberately function-local: this keeps module scope
     # importable without bootstrap() having run (see module docstring).
     from settings import Settings
-    from gui import env_io
+    import env_io
 
     model_fields = dict(Settings.model_fields)
 
@@ -1206,7 +1213,7 @@ def print_summary(data: Dict[str, Any]) -> None:
             p(f"      ! {n} :: {ft['label_by_field'][n]}")
     p(f"  fields ending in _ENABLED ......... {ft['enabled_suffix_count']}")
 
-    p("\n[2] gui/env_io.py LISTS")
+    p("\n[2] env_io.py LISTS")
     p(f"  ALLOWED_KEYS ...................... {el['allowed_keys_len']} "
       f"(unique {el['allowed_keys_unique_len']}, "
       f"{el['allowed_keys_duplicate_total_extra']} duplicate entries)")
@@ -1393,7 +1400,7 @@ def render_markdown(data: Dict[str, Any]) -> str:
     a("")
 
     # 2
-    a("## 2. `gui/env_io.py` list sizes")
+    a("## 2. `env_io.py` list sizes")
     a("")
     a(_md_table(
         ["Name", "len()", "len(set())", "Note"],

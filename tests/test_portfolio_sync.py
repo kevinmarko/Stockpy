@@ -362,7 +362,7 @@ def test_async_sync_now_dry_run_skips_env_write(monkeypatch, tmp_path):
     """``persist_default_tickers=False`` must NOT touch gui.env_io."""
     import data.market_data as md
     from data import portfolio_sync as ps
-    from gui import env_io
+    import env_io
     from settings import settings
 
     # See test_build_sync_report_happy_path's comment above -- pin so a real
@@ -403,7 +403,7 @@ def test_async_sync_now_persist_swallows_env_io_failure(monkeypatch, tmp_path):
     """A failing env_io.write_setting must NOT propagate (CONSTRAINT #6)."""
     import data.market_data as md
     from data import portfolio_sync as ps
-    from gui import env_io
+    import env_io
     from settings import settings
 
     # See test_build_sync_report_happy_path's comment above.
