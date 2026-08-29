@@ -142,20 +142,93 @@ throttle in `sentiment_sources.py`; add a cooldown/circuit-breaker state machine
 in `fmp_client.py`. Both are pure additions of protection that a sibling module already has — no
 existing behavior changes, only new failure-mode coverage.
 
-**PR 8 — Shared store base + a structural test guard (F9).** Extract the ~9-line `__init__` block
-duplicated across 10 stores (correcting the tenth site's citation: `execution/live_trade_proposals_store.py`'s
-real `__init__` is at line 102, not 53). Separately extract the PRAGMA-probe migration wrapper
-duplicated at `transactions_store.py:68`, `data/historical_store.py:924`/`947` (3 sites, not 5 — the
-`execution_audit_store.py`/`paper_account_store.py` sites use a deliberately different
-Postgres-portable try/except-`ALTER` idiom per `execution_audit_store.py`'s own docstring; leave that
-second idiom as-is unless a separate decision is made to standardize on one). The load-bearing half is
-**not** the dedup: add a test enumerating every `*_store.py` that fails if a store's default DB
-resolution bypasses `db_config.resolve_database_url()` or has no autouse isolation fixture — this
-turns a recurring incident class into a CI failure. Small stores first; `data/historical_store.py`
-(the `_ensure_tables()` outlier, confirmed deliberate) last or never. Note: the CWD-relative
-`db_path` bug this PR was originally partly motivated by (`historical_store.py`,
-`forecast_tracker.py`) is already fixed as of this audit — confirm the new structural test also
-passes against that already-fixed state rather than re-fixing it.
+**PR 8 — DONE, scoped down from the original plan (F9).** Structural test guard landed;
+the `__init__` dedup was investigated and deliberately NOT done — see below for why.
+
+**The load-bearing half (the structural guard) shipped as planned:**
+`tests/test_store_isolation_contract.py`, auto-discovering every `*_store.py` file via glob (mirrors
+`tests/test_pilots_strategy_matrix.py`'s `pilots/*.py` auto-discovery — a new store file is picked up
+the next time this test runs, no hand-maintained list to forget). Four properties, all AST-based
+(not regex-over-source, after a first draft flagged `tests/_db_isolation.py`'s own docstring — which
+merely *describes* the isolation pattern in prose — as a false-positive "unguarded construction";
+switching from `re.finditer` to real `ast.Call` node matching eliminated the whole class of
+docstring/comment false positives): (1) every `*_store.py` file is either auto-detected as
+SQLAlchemy/`db_config`-backed or explicitly listed in `NON_SQL_STORES` with a documented reason
+(`cache/cache_store.py`'s deliberately-separate cache DB; `execution/receipts_store.py`,
+`llm/status_store.py`, `pilots/follows_store.py`, `pilots/scan_config_store.py`'s JSON/JSONL files —
+none of these route through `db_config` because none of them are SQL at all); (2) every real store
+class's (name ends `Store`, not `_Offline...`) `__init__` is statically checked to never default a
+`db_url`/`db_path`/`sqlite_path` parameter to a hardcoded string literal (the exact CWD-relative
+`db_path` bug class, already fixed once in `historical_store.py`/`forecast_tracker.py` per this
+audit's own "Now fixed" note) and to actually call `resolve_database_url()` somewhere in its body;
+(3) every DIRECT, implicit (no explicit url override) construction of a store class anywhere under
+`tests/` is required to be protected — either by a `conftest.py` autouse fixture (parsed textually
+from the existing `_isolate_*_db_in_tests` pattern: `import X.Y as alias` + `monkeypatch.setattr(alias,
+"resolve_database_url", ...)`) or by file-local evidence in the same test file
+(`tests/_db_isolation.py`'s `redirect_class_to_memory_db`/`make_memory_db_init`, a
+`settings.DATABASE_URL` patch, or a `mock.patch`/`monkeypatch.setattr` targeting the class's own
+dotted import path — all three patterns already in active use somewhere in this suite, discovered by
+re-auditing every non-`conftest.py`-covered store's actual production call sites by hand before
+writing the check); (4) a regression guard that the five currently-known `conftest.py` fixtures
+(`validation_history_store`, `execution_audit_store`, `broker_fills_store`, `paper_account_store`,
+`transactions_store`) stay registered. Verified genuinely load-bearing, not just decorative, via a
+throwaway sanity script exercising the guard's own helper functions directly: it correctly flags a
+hardcoded literal `db_url` default, correctly flags a missing `resolve_database_url()` call, correctly
+flags a real bare `SomeStore()` construction in a test file, and correctly does NOT flag the same
+class name appearing in a docstring or an explicit `db_url="sqlite:///:memory:"` override. Passes
+clean against the current, un-refactored codebase (4/4 tests). Honest scope boundary stated in the
+module's own docstring: property 3 only catches a *direct, literal* construction call inside a
+`tests/*.py` file — it does not perform call-graph/reachability analysis into production code, so it
+cannot prove a deeply-nested production function reachable only via a test that never names the store
+class by name is safe. Every store NOT flagged as needing isolation was individually hand-audited
+(2026-08-29, this PR) by tracing its production call sites and confirming the only currently-reachable
+test paths either keep the gating settings flag at its coded-safe default (restored every test by
+`conftest.py`'s `_clean_settings_between_tests`) or explicitly monkeypatch the store class — a
+point-in-time fact, not a guarantee, which is exactly why the guard exists: to catch the *next* test
+that reaches one of these classes carelessly.
+
+**The `__init__` dedup was investigated and deliberately skipped — not "not attempted," but a real
+architectural conflict discovered during investigation.** Confirmed (re-verified against current line
+numbers, some drift from the original audit): 9 of the 10 originally-cited stores share a
+byte-for-byte-identical `__init__` body
+(`db_url = db_url or resolve_database_url(); ... Base.metadata.create_all(self.engine) ...`) —
+`sizing/cap_audit_store.py`, `data/sector_correlation_store.py`, `desktop/run_history_store.py`,
+`validation/validation_history_store.py`, `transactions_store.py`, `data/broker_fills_store.py`,
+`data/cache_long_short_store.py`, `mcp_oauth_store.py`, `rlhf_calibration_store.py`,
+`rating/symbol_rating_store.py` — plus `data/execution_audit_store.py` (near-identical, one extra
+`sqlite_path` convenience kwarg) and `execution/live_trade_proposals_store.py` (confirmed: real
+`__init__` is at line 102, not 53 — lines 53/63 are two sibling exception classes'
+`__init__`s, correctly excluded by the guard's "class name ends in `Store`" filter). The blocker: every
+existing `conftest.py` isolation fixture (and, by design, this PR's own new structural guard) works by
+`monkeypatch.setattr(<store's own module>, "resolve_database_url", ...)` — replacing the name in THAT
+MODULE's namespace, which only works because each store's `__init__` calls the bare name
+`resolve_database_url()`, resolved via Python's normal name lookup against the *function's own*
+`__globals__` (i.e. the store's own module, where `from db_config import resolve_database_url` bound
+it locally). Moving that call into a shared base class defined anywhere else (`db_config.py` or a new
+module) would relocate the lookup to the BASE's `__globals__` — silently defeating
+`monkeypatch.setattr(<store_module>, "resolve_database_url", ...)` for every migrated store, for both
+current and future tests, with no error (the patched name would simply never be read). Confirmed this
+isn't merely theoretical for the tests that exist today: `tests/test_investyo_mcp_server.py` and
+`tests/test_paper_account_store.py` both construct `TransactionsStore()`/`PaperAccountStore()` bare
+(no `db_url=`), relying entirely on `conftest.py`'s `_isolate_paper_and_transactions_db_in_tests`
+fixture's module-level patch — proof the pattern is load-bearing today, not just a theoretical future
+risk. A working-but-clever fix exists (dynamically resolving `resolve_database_url` via
+`sys.modules[type(self).__module__]` instead of a bare name lookup) but was rejected: it trades an
+~9-line, fully mechanical, easily-greppable duplication for metaprogramming that actively conflicts
+with `db_config.py`'s own stated design value ("grep this name to enumerate every consumer") and would
+make "what does `resolve_database_url` resolve to for store X" require tracing indirection instead of
+a single grep. Given the real risk (silently breaking an established, load-bearing test-isolation
+mechanism for zero currently-failing test — a regression that would only surface the next time
+someone tries to isolate a migrated store and can't figure out why their monkeypatch has no effect)
+against the modest reward (~80 lines of duplication removed), this PR leaves all `__init__` bodies
+untouched. The PRAGMA-probe migration-wrapper dedup (`transactions_store.py:68`,
+`data/historical_store.py:924`/`947`) was correspondingly not attempted either, per the plan's own
+"do not let it block landing the structural test guard" instruction — it's lower priority than the
+`__init__` dedup it was contingent on, and the guard is the actually load-bearing deliverable.
+`data/historical_store.py` (the `_ensure_tables()` outlier, confirmed deliberate) was left untouched
+throughout, exactly as planned, and is included in the structural guard's enumeration like every other
+store (its `__init__` already correctly calls `resolve_database_url()`, so it passes property 2
+without any changes).
 
 **PR 9 — OPEN ([#931](https://github.com/kevinmarko/Stockpy/pull/931)).** Shared atomic-write helper (F11). One `atomic_write_json()` with pid/tid-scoped temp
 names, matching `runtime_flags_writer.py:473`'s existing race-safe pattern. Migrate the two
