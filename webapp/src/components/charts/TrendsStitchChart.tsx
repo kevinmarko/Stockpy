@@ -1,0 +1,96 @@
+import React, { useMemo } from 'react';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts';
+
+export interface TrendsCurve {
+  name: string;
+  data: [number, number][]; // timestamp ms, value
+}
+
+interface TrendsStitchChartProps {
+  rawCurves: TrendsCurve[];
+  stitchedCurve: TrendsCurve;
+}
+
+export const TrendsStitchChart: React.FC<TrendsStitchChartProps> = ({ rawCurves, stitchedCurve }) => {
+  const chartData = useMemo(() => {
+    const map = new Map<number, any>();
+    
+    rawCurves.forEach(curve => {
+      curve.data.forEach(([ts, val]) => {
+        if (!map.has(ts)) {
+          map.set(ts, { timestamp: ts });
+        }
+        map.get(ts)[curve.name] = val;
+      });
+    });
+    
+    stitchedCurve.data.forEach(([ts, val]) => {
+      if (!map.has(ts)) {
+        map.set(ts, { timestamp: ts });
+      }
+      map.get(ts)[stitchedCurve.name] = val;
+    });
+    
+    return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
+  }, [rawCurves, stitchedCurve]);
+
+  const dateFormatter = (tickItem: number) => {
+    return new Date(tickItem).toLocaleDateString();
+  };
+
+  return (
+    <div className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-4 shadow-sm h-[400px]">
+        <LineChart width={800} height={350} data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+          <XAxis 
+            dataKey="timestamp" 
+            tickFormatter={dateFormatter} 
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            stroke="#a1a1aa"
+            tick={{ fill: '#a1a1aa', fontSize: 12, fontFamily: '"JetBrains Mono", monospace' }}
+          />
+          <YAxis 
+            stroke="#a1a1aa" 
+            tick={{ fill: '#a1a1aa', fontSize: 12, fontFamily: '"JetBrains Mono", monospace' }}
+          />
+          <Tooltip 
+            labelFormatter={dateFormatter}
+            contentStyle={{ backgroundColor: '#18181b', borderColor: '#27272a', color: '#f4f4f5', fontFamily: '"DM Sans", sans-serif' }}
+            itemStyle={{ color: '#e4e4e7', fontFamily: '"DM Sans", sans-serif' }}
+          />
+          <Legend wrapperStyle={{ paddingTop: '10px', fontFamily: '"DM Sans", sans-serif', color: '#e4e4e7' }} />
+          
+          {rawCurves.map((curve) => (
+            <Line
+              key={curve.name}
+              type="monotone"
+              dataKey={curve.name}
+              stroke="#a1a1aa"
+              strokeDasharray="5 5"
+              strokeOpacity={0.4}
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={false}
+            />
+          ))}
+          
+          <Line
+            type="monotone"
+            dataKey={stitchedCurve.name}
+            stroke="#3b82f6"
+            strokeWidth={3}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+    </div>
+  );
+};

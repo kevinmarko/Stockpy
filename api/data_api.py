@@ -2327,3 +2327,15 @@ async def get_circuit_breaker_status():
         "reason": None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+@app.get("/data/trends/stitch-demo", dependencies=[Depends(require_token)])
+def get_trends_stitch_demo() -> Dict[str, Any]:
+    """
+    Returns an explicit 501 Not Implemented for live mode. 
+    Live fetching of Google Trends SVI curves is not yet wired to this demo route.
+    To view the stitching demonstration, run the Pilots PWA in Mock mode (VITE_USE_MOCK=true).
+    """
+    raise HTTPException(
+        status_code=501, 
+        detail="Live SVI fetching not implemented. Use mock mode to view the demo."
+    )
