@@ -3190,6 +3190,33 @@ class Settings(BaseSettings):
             "rather than send a non-compliant request that risks an IP block."
         ),
     )
+    EDGAR_COOLDOWN_THRESHOLD: int = Field(
+        default=3,
+        description=(
+            "Consecutive FAILED data/edgar_fundamentals.py requests -- a "
+            "429/5xx HTTPError -- after which EDGAR calls (get_cik, "
+            "fetch_companyfacts) are SKIPPED outright for "
+            "EDGAR_COOLDOWN_SECONDS, mirroring "
+            "GDELT_COOLDOWN_THRESHOLD/FMP_COOLDOWN_THRESHOLD's pattern -- "
+            "this fetcher previously had the in-process/cross-process "
+            "spacing throttle but no breaker at all (docs/"
+            "module_efficiency_redundancy_audit.md's F8), so an "
+            "already-throttled or blocked IP could turn a backfill into "
+            "hours of certain-to-fail requests. A single served response "
+            "(any status code -- get_cik/fetch_companyfacts already degrade "
+            "gracefully on a non-2xx via their existing broad except) clears "
+            "the count and any open cooldown. 0 disables the cooldown, "
+            "reproducing the pre-breaker behavior exactly."
+        ),
+    )
+    EDGAR_COOLDOWN_SECONDS: float = Field(
+        default=300.0,
+        description=(
+            "How long the EDGAR cooldown stays open once "
+            "EDGAR_COOLDOWN_THRESHOLD consecutive failed requests have been "
+            "seen. Matches GDELT_COOLDOWN_SECONDS's default."
+        ),
+    )
     SENTIMENT_MAX_DOCUMENTS_PER_CYCLE: int = Field(
         default=2000,
         description=(

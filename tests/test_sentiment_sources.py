@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+import data.sentiment_sources as sentiment_sources_mod
 from data.sentiment_sources import (
     CompositeSentimentSource,
     EdgarSource,
@@ -155,6 +156,63 @@ class TestYahooRSSSource:
         with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("timeout")):
             docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
         assert docs == []
+
+
+class TestGdeltCrossProcessThrottle:
+    """New for F8 (docs/module_efficiency_redundancy_audit.md): the GDELT
+    throttle previously spaced requests only within THIS process; the other
+    two sibling throttles (data/fmp_client.py, data/edgar_fundamentals.py)
+    already layered cross_process_throttle.wait_turn on top for
+    multi-worktree protection. Mirrors tests/test_fmp_client.py's
+    `client_settings` fixture conventions -- state path redirected to
+    tmp_path so this test never touches the real machine-shared
+    LOCAL_DATA_ROOT/rate_limits/gdelt.state."""
+
+    def test_wait_turn_is_called_when_interval_is_nonzero(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            sentiment_sources_mod,
+            "_gdelt_throttle_state_path_override",
+            tmp_path / "gdelt.state",
+        )
+        calls = []
+        monkeypatch.setattr(
+            "data.cross_process_throttle.wait_turn",
+            lambda path, interval: calls.append((path, interval)),
+        )
+
+        sentiment_sources_mod._gdelt_throttle(0.01)
+
+        assert len(calls) == 1
+        assert calls[0][0] == tmp_path / "gdelt.state"
+        assert calls[0][1] == 0.01
+
+    def test_wait_turn_is_not_called_when_interval_is_zero(self, monkeypatch, tmp_path):
+        """The conftest-wide default -- confirms the fast path (root
+        conftest.py's _no_gdelt_throttle_in_tests zeroes this for every other
+        test in the suite) never pays the cross-process syscall cost."""
+        monkeypatch.setattr(
+            sentiment_sources_mod,
+            "_gdelt_throttle_state_path_override",
+            tmp_path / "gdelt.state",
+        )
+        calls = []
+        monkeypatch.setattr(
+            "data.cross_process_throttle.wait_turn",
+            lambda path, interval: calls.append((path, interval)),
+        )
+
+        sentiment_sources_mod._gdelt_throttle(0.0)
+
+        assert calls == []
+
+    def test_state_path_resolves_under_local_data_root_by_default(self):
+        """Without an override, the path is settings.LOCAL_DATA_ROOT-anchored
+        -- mirrors data/fmp_client.py::_fmp_throttle_state_path /
+        data/edgar_fundamentals.py::_edgar_throttle_state_path exactly."""
+        assert sentiment_sources_mod._gdelt_throttle_state_path_override is None
+        path = sentiment_sources_mod._gdelt_throttle_state_path()
+        assert path.name == "gdelt.state"
+        assert path.parent.name == "rate_limits"
 
 
 class TestGDELTSource:
