@@ -614,7 +614,12 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "symbols":
         allowed = allowed | {"data", "datetime", "pilots"}
     if module_name == "multi_leg_pricing":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "scipy"}
+        # calculate_black_scholes_leg_greeks (F4, module_efficiency_
+        # redundancy_audit.md) now delegates to pilots.options_risk's
+        # canonical pricer instead of its own near-verbatim copy -- scipy is
+        # no longer directly imported here (that math now lives solely in
+        # options_risk.py).
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
     if module_name == "earnings_crush":
         allowed = allowed | {"data", "datetime", "execution", "numpy", "pandas", "pilots", "uuid"}
     if module_name == "har_volatility":
@@ -664,7 +669,12 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # auto-discovery now actually checks it. datetime only.
         allowed = allowed | {"datetime"}
     if module_name == "realtime_risk_streamer":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "re", "scipy"}
+        # compute_black_scholes_unit_greeks / parse_option_symbol (F3/F4,
+        # module_efficiency_redundancy_audit.md) now delegate to
+        # pilots.options_risk's canonical pricer + symbol regex instead of
+        # near-verbatim copies -- re/scipy/math/settings are no longer
+        # directly imported here.
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 

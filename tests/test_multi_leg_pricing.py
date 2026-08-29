@@ -20,6 +20,7 @@ from pilots.multi_leg_pricing import (
     price_multi_leg_structure,
     validate_multi_leg_structure,
 )
+from pilots.options_risk import calculate_black_scholes_greeks
 
 
 # ===========================================================================
@@ -86,6 +87,36 @@ def test_black_scholes_non_positive_inputs():
     res = calculate_black_scholes_leg_greeks(spot=0.0, strike=100.0, t_years=0.1, sigma=0.2)
     assert res["price"] == 0.0
     assert res["delta"] == 0.0
+
+
+def test_black_scholes_leg_greeks_delegates_to_canonical_pricer():
+    """F4 dedup (docs/module_efficiency_redundancy_audit.md):
+    calculate_black_scholes_leg_greeks now delegates to
+    pilots.options_risk.calculate_black_scholes_greeks instead of carrying
+    its own near-verbatim copy. Seeded grid across standard, 0DTE, and
+    degenerate-vol inputs proves this module's 5-key return contract
+    (price/delta/gamma/theta_daily/vega_1pct) is byte-identical to a subset
+    of the canonical function's own return dict, not merely "close" --
+    matching this repo's precedent of proving numeric equivalence before a
+    migration lands (see the ETF-transmission flag-off parity proof)."""
+    grid = [
+        # (spot, strike, t_years, sigma, option_type)
+        (100.0, 100.0, 0.25, 0.20, "call"),
+        (100.0, 100.0, 0.25, 0.20, "put"),
+        (150.0, 95.0, 1.0, 0.35, "call"),
+        (50.0, 60.0, 0.5, 0.50, "put"),
+        (100.0, 100.0, 0.0, 0.20, "call"),  # 0DTE
+        (100.0, 95.0, 0.1, 0.0, "call"),  # degenerate sigma
+        (0.0, 100.0, 0.1, 0.2, "call"),  # non-positive spot
+    ]
+    for spot, strike, t_years, sigma, option_type in grid:
+        leg_result = calculate_black_scholes_leg_greeks(spot, strike, t_years, sigma, option_type)
+        canonical_result = calculate_black_scholes_greeks(spot, strike, t_years, sigma, option_type)
+        for key in ("price", "delta", "gamma", "theta_daily", "vega_1pct"):
+            assert leg_result[key] == pytest.approx(canonical_result[key], abs=1e-12), (
+                f"{key} diverged for spot={spot} strike={strike} t_years={t_years} "
+                f"sigma={sigma} option_type={option_type}"
+            )
 
 
 # ===========================================================================
