@@ -895,6 +895,11 @@ class TestEarningsCrushEndpoints:
                     "strategy": "Iron Condor",
                     "contracts": 1,
                     "dry_run": False,
+                    # earnings_crush is an UNGATEABLE_DATA_GAP strategy -- execution is
+                    # blocked by default (see CLAUDE.md's "Reversed 2026-08-29" note);
+                    # this test exercises real fill wiring, not the gate itself, so it
+                    # opts in explicitly like an operator taking deliberate responsibility.
+                    "override_deployability_gate": True,
                 },
                 headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
@@ -927,7 +932,10 @@ class TestEarningsCrushEndpoints:
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(
                 "/pilots/options/earnings-crush/execute",
-                json={"symbol": "NVDA", "is_live": True},
+                # override_deployability_gate=True so this reaches the advisory-only
+                # guard inside execute_earnings_crush_trade rather than being blocked
+                # earlier by the (independent, both-enforced) deployability gate.
+                json={"symbol": "NVDA", "is_live": True, "override_deployability_gate": True},
                 headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
             )
         assert resp.status_code == 200
@@ -1588,6 +1596,10 @@ class TestOptionsDispersionEndpoints:
         payload = {
             "index_symbol": "QQQ",
             "dry_run": True,
+            # dispersion_trading is an UNGATEABLE_DATA_GAP strategy -- blocked by
+            # default (see CLAUDE.md's "Reversed 2026-08-29" note); this test
+            # exercises the real dry-run preview, not the gate, so it opts in.
+            "override_deployability_gate": True,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(
@@ -1606,6 +1618,9 @@ class TestOptionsDispersionEndpoints:
         payload = {
             "index_symbol": "QQQ",
             "is_live": True,
+            # override so this reaches the advisory-only guard rather than the
+            # (independent, both-enforced) deployability gate.
+            "override_deployability_gate": True,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(
@@ -1628,6 +1643,7 @@ class TestOptionsDispersionEndpoints:
             "index_symbol": "QQQ",
             "dry_run": False,
             "is_live": False,
+            "override_deployability_gate": True,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(
@@ -1732,6 +1748,10 @@ class TestOptionsZeroDteEndpoints:
             "strike": 560.0,
             "contracts": 2,
             "dry_run": True,
+            # zero_dte_engine is an UNGATEABLE_DATA_GAP strategy -- blocked by
+            # default (see CLAUDE.md's "Reversed 2026-08-29" note); this test
+            # exercises the real dry-run preview, not the gate, so it opts in.
+            "override_deployability_gate": True,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(
@@ -1754,6 +1774,9 @@ class TestOptionsZeroDteEndpoints:
             "option_type": "PUT",
             "strike": 555.0,
             "is_live": True,
+            # override so this reaches the advisory-only guard rather than the
+            # (independent, both-enforced) deployability gate.
+            "override_deployability_gate": True,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(
@@ -1772,7 +1795,6 @@ class TestOptionsZeroDteEndpoints:
         mock_store.apply_multi_leg_fill.return_value = True
 
         payload = {
-
             "symbol": "SPY",
             "option_type": "CALL",
             "strike": 560.0,
@@ -1780,6 +1802,7 @@ class TestOptionsZeroDteEndpoints:
             "limit_price": 2.25,
             "dry_run": False,
             "is_live": False,
+            "override_deployability_gate": True,
         }
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
             resp = _client.post(

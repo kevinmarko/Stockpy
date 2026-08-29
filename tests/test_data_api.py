@@ -587,6 +587,75 @@ def test_sync_report_tolerates_missing_snapshot(monkeypatch):
     assert called["snap"] is None  # degraded to None, still built a report
 
 
+def test_sync_report_forecast_available_reflects_real_forecast_tracker(monkeypatch, tmp_path):
+    """End-to-end regression test: real ForecastTracker (temp SQLite DB) +
+    real (unmocked) build_sync_report, only the account snapshot and the
+    market-data provider are faked. A held symbol with a real, recent
+    forecast row must come back forecast_available=True in the actual HTTP
+    response; a held symbol with none must come back False.
+
+    This is the regression test for the 2026-08 bug where
+    ForecastTracker.get_covered_symbols() queried a nonexistent 'forecasts'
+    table and referenced a nonexistent self.readonly attribute in its
+    finally block -- both errors were silently swallowed by
+    get_sync_report()'s bare except Exception, so forecast_symbols was
+    ALWAYS [] and forecast_available was ALWAYS False for every symbol
+    regardless of real forecast coverage. A test that only mocks
+    build_sync_report (like test_sync_report above) cannot catch this --
+    the bug lives entirely in the ForecastTracker call this test does NOT
+    mock.
+    """
+    import forecasting.forecast_tracker as ft_mod
+    from forecasting.forecast_tracker import MODEL_ARIMA
+
+    db_path = str(tmp_path / "forecast_test.db")
+    seed_tracker = ft_mod.ForecastTracker(db_path=db_path)
+    seed_tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
+    # MSFT deliberately gets no forecast rows at all.
+
+    class _TempDbTracker(ft_mod.ForecastTracker):
+        """Stands in for the real ForecastTracker but always resolves to this
+        test's isolated temp DB -- get_sync_report() constructs it with no
+        arguments (`ForecastTracker()`), so the default db_path must be
+        overridden here rather than passed at the call site."""
+
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("db_path", db_path)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(ft_mod, "ForecastTracker", _TempDbTracker)
+
+    held = {
+        "AAPL": SimpleNamespace(
+            symbol="AAPL", quantity=10.0, average_cost=150.0,
+            current_price=175.0, market_value=1_750.0, unrealized_pl=250.0,
+        ),
+        "MSFT": SimpleNamespace(
+            symbol="MSFT", quantity=5.0, average_cost=300.0,
+            current_price=320.0, market_value=1_600.0, unrealized_pl=100.0,
+        ),
+    }
+    fake_snapshot = SimpleNamespace(positions=held)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: fake_snapshot)
+
+    # Skip the market-data probe entirely (irrelevant to this test) by making
+    # get_provider() fail -- build_sync_report degrades that to
+    # CoverageStatus.UNKNOWN for every symbol rather than raising.
+    import data.market_data as md
+    monkeypatch.setattr(
+        md, "get_provider",
+        lambda: (_ for _ in ()).throw(RuntimeError("no market-data provider in test")),
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/sync-report")
+
+    assert resp.status_code == 200
+    body = resp.json()["symbols"]
+    assert body["AAPL"]["forecast_available"] is True
+    assert body["MSFT"]["forecast_available"] is False
+
+
 # ---------------------------------------------------------------------------
 # GET /data/sync-report -- symbol-rating enrichment (rating_consecutive_bad_cycles /
 # rating_excluded, sourced from rating.symbol_rating_store.SymbolRatingStore)

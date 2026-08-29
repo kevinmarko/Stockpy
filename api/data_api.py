@@ -710,7 +710,8 @@ def get_sync_report() -> Dict[str, Any]:
     try:
         from forecasting.forecast_tracker import ForecastTracker
         forecast_symbols = ForecastTracker().get_covered_symbols(horizon_days=30)
-    except Exception:
+    except Exception as exc:
+        logger.warning("data_api: forecast coverage lookup failed, degrading to none: %s", exc)
         forecast_symbols = []
 
     try:

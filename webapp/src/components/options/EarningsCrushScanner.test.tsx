@@ -127,7 +127,7 @@ describe("EarningsCrushScanner", () => {
     fireEvent.click(tradeButtons[0]);
 
     await waitFor(() => {
-      expect(api.executeEarningsCrushTrade).toHaveBeenCalledWith(mockCandidatesResponse.candidates[0]);
+      expect(api.executeEarningsCrushTrade).toHaveBeenCalledWith(mockCandidatesResponse.candidates[0], false);
       expect(onTradeMock).toHaveBeenCalledWith(
         expect.objectContaining({
           ok: true,
@@ -137,6 +137,59 @@ describe("EarningsCrushScanner", () => {
     });
 
     expect(await screen.findByText(/Successfully executed Earnings Crush Iron Condor on NVDA/i)).toBeInTheDocument();
+  });
+
+  it("shows an override affordance when blocked by the deployability gate, and executes on confirmed override", async () => {
+    const onTradeMock = vi.fn();
+    vi.mocked(api.executeEarningsCrushTrade).mockResolvedValueOnce({
+      ok: false,
+      blocked: true,
+      message:
+        "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<EarningsCrushScanner onTradeExecuted={onTradeMock} />);
+
+    const tradeButtons = await screen.findAllByRole("button", { name: /⚡ Trade Crush Spread/i });
+    fireEvent.click(tradeButtons[0]);
+
+    expect(await screen.findByText(/UNGATEABLE_DATA_GAP/i)).toBeInTheDocument();
+    expect(api.executeEarningsCrushTrade).toHaveBeenNthCalledWith(1, mockCandidatesResponse.candidates[0], false);
+
+    const overrideBtn = await screen.findByRole("button", { name: /⚠️ Override & Execute/i });
+    fireEvent.click(overrideBtn);
+    expect(confirmSpy).toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(api.executeEarningsCrushTrade).toHaveBeenNthCalledWith(2, mockCandidatesResponse.candidates[0], true);
+      expect(onTradeMock).toHaveBeenCalledWith(expect.objectContaining({ ok: true, symbol: "NVDA" }));
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not execute when the override confirmation dialog is declined", async () => {
+    vi.mocked(api.executeEarningsCrushTrade).mockResolvedValueOnce({
+      ok: false,
+      blocked: true,
+      message:
+        "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<EarningsCrushScanner />);
+
+    const tradeButtons = await screen.findAllByRole("button", { name: /⚡ Trade Crush Spread/i });
+    fireEvent.click(tradeButtons[0]);
+
+    const overrideBtn = await screen.findByRole("button", { name: /⚠️ Override & Execute/i });
+    fireEvent.click(overrideBtn);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(api.executeEarningsCrushTrade).toHaveBeenCalledTimes(1);
+
+    confirmSpy.mockRestore();
   });
 
   it("calls onClose when close button clicked", async () => {

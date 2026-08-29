@@ -485,6 +485,86 @@ class TestCountHelpers:
 
 
 # ---------------------------------------------------------------------------
+# get_covered_symbols
+# ---------------------------------------------------------------------------
+
+class TestGetCoveredSymbols:
+    """Regression coverage for ``get_covered_symbols`` (added in PR
+    #fix-known-open-gaps to feed ``data.portfolio_sync.build_sync_report``'s
+    ``forecast_available`` field). The as-shipped version queried a
+    nonexistent ``forecasts`` table and referenced a nonexistent
+    ``self.readonly`` attribute in its ``finally`` block, so it always raised
+    -- silently swallowed by every real caller's blanket ``except Exception``
+    -- meaning ``forecast_available`` was unconditionally False regardless of
+    real forecast coverage. These tests exercise the real (unmocked) SQLite
+    path end-to-end so a regression of either bug fails loudly.
+    """
+
+    def test_returns_symbol_with_recent_forecast(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
+        assert tracker.get_covered_symbols(horizon_days=30) == ["AAPL"]
+
+    def test_excludes_symbol_with_no_forecast(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
+        # MSFT was never forecast at all -- must not appear.
+        result = tracker.get_covered_symbols(horizon_days=30)
+        assert "MSFT" not in result
+
+    def test_filters_by_horizon_days(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        now = datetime.now(timezone.utc)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, now)
+        tracker.record_forecasts("GOOG", 10, {MODEL_ARIMA: 100.0}, now)
+        assert tracker.get_covered_symbols(horizon_days=30) == ["AAPL"]
+        assert tracker.get_covered_symbols(horizon_days=10) == ["GOOG"]
+        assert sorted(tracker.get_covered_symbols(horizon_days=None)) == ["AAPL", "GOOG"]
+
+    def test_default_recency_window_excludes_stale_symbol(self, tmp_path):
+        """A symbol forecast once, long ago, and never again must NOT read as
+        'covered' forever -- that would misrepresent the TRUE ACTIVE forecast
+        universe. Default window_days=7 must exclude a 40-day-old forecast."""
+        tracker = _make_tracker(tmp_path)
+        now = datetime.now(timezone.utc)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, now)
+        tracker.record_forecasts("MSFT", 30, {MODEL_ARIMA: 300.0}, now - timedelta(days=40))
+        result = tracker.get_covered_symbols(horizon_days=30)
+        assert result == ["AAPL"]
+        assert "MSFT" not in result
+
+    def test_window_days_none_restores_all_time_scan(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        now = datetime.now(timezone.utc)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, now)
+        tracker.record_forecasts("MSFT", 30, {MODEL_ARIMA: 300.0}, now - timedelta(days=40))
+        result = tracker.get_covered_symbols(horizon_days=30, window_days=None)
+        assert sorted(result) == ["AAPL", "MSFT"]
+
+    def test_returns_empty_list_when_no_forecasts_exist(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        assert tracker.get_covered_symbols(horizon_days=30) == []
+
+    def test_returns_empty_list_on_db_error(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker._db_path = "/nonexistent/path/db.sqlite"
+        # Must degrade to [] (CONSTRAINT #6), never raise.
+        assert tracker.get_covered_symbols(horizon_days=30) == []
+
+    def test_shared_connection_still_usable_after_call(self, tmp_path):
+        """The as-shipped version closed the tracker's cached connection
+        without resetting ``self._conn``, breaking every subsequent call on
+        the same instance. A write after a get_covered_symbols() call must
+        still succeed."""
+        tracker = _make_tracker(tmp_path)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
+        tracker.get_covered_symbols(horizon_days=30)
+        # Must not raise sqlite3.ProgrammingError: Cannot operate on a closed database.
+        tracker.record_forecasts("TSLA", 30, {MODEL_ARIMA: 900.0}, datetime.now(timezone.utc))
+        assert sorted(tracker.get_covered_symbols(horizon_days=30)) == ["AAPL", "TSLA"]
+
+
+# ---------------------------------------------------------------------------
 # ForecastingEngine integration
 # ---------------------------------------------------------------------------
 
