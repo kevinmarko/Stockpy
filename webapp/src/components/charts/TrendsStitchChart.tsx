@@ -42,13 +42,15 @@ export const TrendsStitchChart: React.FC<TrendsStitchChartProps> = ({ rawCurves,
     return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
   }, [rawCurves, stitchedCurve]);
 
-  const dateFormatter = (tickItem: number) => {
+  const dateFormatter = (tickItem: any) => {
+    if (!tickItem) return '';
     return new Date(tickItem).toLocaleDateString();
   };
 
   return (
     <div className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-4 shadow-sm h-[400px]">
-        <LineChart width={800} height={350} data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
           <XAxis 
             dataKey="timestamp" 
             tickFormatter={dateFormatter} 
@@ -91,6 +93,7 @@ export const TrendsStitchChart: React.FC<TrendsStitchChartProps> = ({ rawCurves,
             isAnimationActive={false}
           />
         </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 };
