@@ -3,18 +3,21 @@
 Covers: the pure historical-headline/earnings parsing helpers
 (_fetch_headlines/_fetch_earnings_dates/_next_earnings_on), the per-symbol
 trailing-window reconstruction (_backfill_symbol — honest NaN vs real-score
-days, [-1, 1] clipping), and main()'s dead-letter resilience / no-client
-guard. The repo-root import shim and the empty-universe guard are covered by
-tests/test_backfill_scripts_invocation.py, shared with
-backfill_news_history_from_audit.py's byte-identical versions of both tests.
+days, [-1, 1] clipping), main()'s dead-letter resilience and empty-universe/
+no-client guards, and the repo-root import shim (mirrors
+tests/test_backfill_sentiment_history.py's identical TestInvocationForms).
 """
 
 import math
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 from scripts import backfill_news_history as backfill
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestFetchHeadlines:
@@ -188,9 +191,12 @@ class TestBackfillSymbol:
 
 
 class TestMainGuards:
-    # test_empty_universe_logs_error_and_returns lives in
-    # tests/test_backfill_scripts_invocation.py (shared, byte-identical
-    # with backfill_news_history_from_audit.py's version of this test).
+    def test_empty_universe_logs_error_and_returns(self, caplog):
+        with mock.patch.object(backfill, "resolve_universe", return_value=[]):
+            with mock.patch.object(sys, "argv", ["backfill_news_history.py"]):
+                with caplog.at_level("ERROR"):
+                    backfill.main()  # must not raise
+        assert any("empty universe" in r.message for r in caplog.records)
 
     def test_no_finnhub_client_logs_error_and_returns(self, caplog):
         with mock.patch.object(backfill, "resolve_universe", return_value=["AAPL"]):
@@ -233,7 +239,21 @@ class TestMainGuards:
             scores_arg = call.args[0]
             assert scores_arg.keys() == {"AAPL"}
 
-# TestInvocationForms (direct-path `--help` invocation) lives in
-# tests/test_backfill_scripts_invocation.py, shared with
-# backfill_news_history_from_audit.py's and backfill_sentiment_history.py's
-# byte-identical versions of this test.
+
+class TestInvocationForms:
+    """Direct-path invocation (`python scripts/backfill_news_history.py`)
+    must not die with ModuleNotFoundError -- mirrors
+    test_backfill_sentiment_history.py's identical regression test for the
+    repo-root sys.path shim."""
+
+    def test_direct_path_invocation_imports_cleanly(self):
+        result = subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "scripts" / "backfill_news_history.py"), "--help"],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "ModuleNotFoundError" not in result.stderr
+        assert "--months" in result.stdout

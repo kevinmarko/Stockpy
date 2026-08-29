@@ -752,9 +752,30 @@ class TestCORS:
         assert "PUT" in allow_methods
 
 
-# TestCORSLanTailscale (the LAN/Tailscale-origin reflection contract) lives
-# in tests/test_cors_lan_tailscale_contract.py, shared byte-for-byte with
-# data_api/metrics_api/pilots_api/state_api's identical versions of this test.
+class TestCORSLanTailscale:
+    """LAN/Tailscale origins are allowed via api.cors.LAN_TAILSCALE_ORIGIN_REGEX
+    (additive to the explicit CORS_ALLOWED_ORIGINS list above), scoped to the
+    Pilots PWA dev server's port (5173)."""
+
+    def test_lan_origin_is_reflected(self):
+        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5173"})
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == "http://192.168.1.42:5173"
+
+    def test_tailscale_range_origin_is_reflected(self):
+        resp = client.get("/health", headers={"Origin": "http://100.101.102.5:5173"})
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == "http://100.101.102.5:5173"
+
+    def test_lan_origin_wrong_port_not_reflected(self):
+        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5174"})
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") != "http://192.168.1.42:5174"
+
+    def test_public_ip_not_reflected(self):
+        resp = client.get("/health", headers={"Origin": "http://8.8.8.8:5173"})
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") != "http://8.8.8.8:5173"
 
 
 # ---------------------------------------------------------------------------

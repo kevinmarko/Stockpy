@@ -1581,13 +1581,7 @@ class Settings(BaseSettings):
     )
     SENTRY_DSN: Optional[str] = Field(
         default=None,
-        description=(
-            "The Sentry project DSN. SECRET — never GUI-writable, never "
-            "logged (env_io.py's SECRET_KEYS), same treatment as "
-            "ALERT_WEBHOOK_URL/DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL. Empty/"
-            "unset is a safe no-op even when SENTRY_ENABLED=True — no "
-            "sentry_sdk import is attempted without it."
-        ),
+        description="The Sentry project DSN. Write-capable credential.",
     )
     SENTRY_ENVIRONMENT: str = Field(
         default="development",

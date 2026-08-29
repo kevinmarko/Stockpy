@@ -2,15 +2,19 @@
 
 Covers: per-day aggregation (_backfill_day — real data, empty day,
 tickers-filtering, dead-letter resilience on both the read and write
-sides), and main()'s empty-audit guard. The empty-universe guard and the
-repo-root import shim are covered by tests/test_backfill_scripts_invocation.py,
-shared with backfill_news_history.py's byte-identical versions of both tests.
+sides), main()'s empty-universe/empty-audit guards, and the repo-root
+import shim (mirrors tests/test_backfill_sentiment_history.py's identical
+TestInvocationForms).
 """
 
+import subprocess
 import sys
+from pathlib import Path
 from unittest import mock
 
 from scripts import backfill_news_history_from_audit as backfill
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestBackfillDay:
@@ -71,9 +75,12 @@ class TestBackfillDay:
 
 
 class TestMainGuards:
-    # test_empty_universe_logs_error_and_returns lives in
-    # tests/test_backfill_scripts_invocation.py (shared, byte-identical
-    # with backfill_news_history.py's version of this test).
+    def test_empty_universe_logs_error_and_returns(self, caplog):
+        with mock.patch.object(backfill, "resolve_universe", return_value=[]):
+            with mock.patch.object(sys, "argv", ["backfill_news_history_from_audit.py"]):
+                with caplog.at_level("ERROR"):
+                    backfill.main()  # must not raise
+        assert any("empty universe" in r.message for r in caplog.records)
 
     def test_empty_audit_table_logs_actionable_error(self, caplog):
         with mock.patch.object(backfill, "resolve_universe", return_value=["AAPL"]):
@@ -103,7 +110,21 @@ class TestMainGuards:
         assert mock_store.get_sentiment_aggregate_by_symbol.call_count > 0
         assert mock_store.save_news_sentiment.call_count == mock_store.get_sentiment_aggregate_by_symbol.call_count
 
-# TestInvocationForms (direct-path `--help` invocation) lives in
-# tests/test_backfill_scripts_invocation.py, shared with
-# backfill_news_history.py's and backfill_sentiment_history.py's
-# byte-identical versions of this test.
+
+class TestInvocationForms:
+    """Direct-path invocation (`python scripts/backfill_news_history_from_audit.py`)
+    must not die with ModuleNotFoundError -- mirrors
+    test_backfill_sentiment_history.py's identical regression test for the
+    repo-root sys.path shim."""
+
+    def test_direct_path_invocation_imports_cleanly(self):
+        result = subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "scripts" / "backfill_news_history_from_audit.py"), "--help"],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "ModuleNotFoundError" not in result.stderr
+        assert "--months" in result.stdout
