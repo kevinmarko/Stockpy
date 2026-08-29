@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 341,
+    "live_safe": 337,
     "no_op": 0,
     "restart_required": 108,
-    "total": 449
+    "total": 445
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 439,
+  "files_scanned": 438,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -453,10 +453,6 @@
     "SENTIMENT_LLM_VERIFICATION_PROVIDER",
     "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
     "SENTIMENT_SOCIAL_BLEND_WEIGHT",
-    "SENTRY_DSN",
-    "SENTRY_ENABLED",
-    "SENTRY_ENVIRONMENT",
-    "SENTRY_TRACES_SAMPLE_RATE",
     "SIZING_CAP_ALERT_ENABLED",
     "SIZING_CAP_ALERT_THRESHOLD_PCT",
     "SIZING_CAP_AUDIT_ENABLED",
@@ -486,13 +482,13 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 887,
+    "attr": 882,
     "factory_param": 4,
     "getattr_const": 372,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 266,
+    "attr": 262,
     "factory_param": 4,
     "getattr_const": 211,
     "os_environ": 18
@@ -1699,7 +1695,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:922",
+        "site": "env_io.py:914",
         "via": []
       },
       {
@@ -2725,7 +2721,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "desktop/orchestrator_daemon.py:610",
+        "site": "desktop/orchestrator_daemon.py:607",
         "via": []
       }
     ],
