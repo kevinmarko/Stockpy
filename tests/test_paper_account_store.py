@@ -308,6 +308,13 @@ def test_settle_expired_options(store):
         def get_latest_quote(self, ticker):
             return MockQuote()
 
+        def get_quotes_batch(self, symbols):
+            # Mirrors MarketDataProvider.get_quotes_batch()'s real contract
+            # (settle_expired_options was migrated to call this instead of
+            # get_latest_quote() per symbol -- F6,
+            # docs/module_efficiency_redundancy_audit.md).
+            return {s.upper(): MockQuote() for s in symbols}
+
     # Settle with current date in 2024 (past expiration)
     settled = store.settle_expired_options(
         market_provider=MockMarketProvider(),
@@ -327,6 +334,97 @@ def test_settle_expired_options(store):
 
     # All positions should now be closed
     assert len(store.get_open_positions()) == 0
+
+
+def test_settle_expired_options_batch_quote_failure_skips_all_without_fabricating(store):
+    """F6 regression (docs/module_efficiency_redundancy_audit.md): the old
+    per-position loop caught a get_latest_quote() exception per symbol and
+    left that one position open (never fabricating spot=strike, CONSTRAINT
+    #4). The migrated get_quotes_batch() call must degrade the same way on
+    a total batch failure -- every expired position stays open rather than
+    the whole call raising or fabricating a settlement.
+    """
+    from datetime import date
+
+    store.apply_fill(
+        client_order_id="expired_call_order_2",
+        symbol="AAPL 2023-01-20 $150.00 CALL",
+        side="buy",
+        qty=1.0,
+        fill_price=5.0,
+        status="FILLED",
+    )
+
+    class RaisingMarketProvider:
+        def get_latest_quote(self, ticker):
+            raise RuntimeError("market data outage")
+
+        def get_quotes_batch(self, symbols):
+            raise RuntimeError("market data outage")
+
+    settled = store.settle_expired_options(
+        market_provider=RaisingMarketProvider(),
+        current_date=date(2024, 1, 1),
+    )
+
+    assert settled == []
+    # Position stays open -- never force-settled at a fabricated intrinsic.
+    assert len(store.get_open_positions()) == 1
+
+
+def test_settle_expired_options_batch_partial_coverage_settles_only_resolved_tickers(store):
+    """A get_quotes_batch() result missing one of the requested tickers
+    (F6's documented dead-letter-per-symbol contract) must settle only the
+    tickers it actually resolved, leaving the unresolved one's position
+    open -- exactly like the old per-position try/except skipping just the
+    one ticker whose get_latest_quote() call failed.
+    """
+    from datetime import date
+
+    store.apply_fill(
+        client_order_id="expired_call_aapl",
+        symbol="AAPL 2023-01-20 $150.00 CALL",
+        side="buy",
+        qty=1.0,
+        fill_price=5.0,
+        status="FILLED",
+    )
+    store.apply_fill(
+        client_order_id="expired_call_msft",
+        symbol="MSFT 2023-01-20 $150.00 CALL",
+        side="buy",
+        qty=1.0,
+        fill_price=5.0,
+        status="FILLED",
+    )
+
+    class MockQuote:
+        def __init__(self, price):
+            self.price = price
+
+    class PartialMarketProvider:
+        def get_latest_quote(self, ticker):
+            if ticker == "AAPL":
+                return MockQuote(160.0)
+            raise RuntimeError("no quote for this ticker")
+
+        def get_quotes_batch(self, symbols):
+            # MSFT deliberately absent -- mirrors get_quotes_batch()'s real
+            # dead-letter contract (a symbol that failed to resolve is
+            # simply absent from the returned dict, never raises).
+            return {"AAPL": MockQuote(160.0)}
+
+    settled = store.settle_expired_options(
+        market_provider=PartialMarketProvider(),
+        current_date=date(2024, 1, 1),
+    )
+
+    assert len(settled) == 1
+    assert settled[0]["ticker"] == "AAPL"
+
+    open_symbols = {p.symbol for p in store.get_open_positions()}
+    assert "MSFT 2023-01-20 $150.00 CALL" in open_symbols
+    assert "AAPL 2023-01-20 $150.00 CALL" not in open_symbols
 
 
 def test_apply_fill_reject_zero_price(store):
@@ -542,6 +640,13 @@ def test_settle_expired_options_profit_matches_cash_credit(store):
         class MockMarketProvider:
             def get_latest_quote(self, ticker):
                 return MockQuote()
+
+            def get_quotes_batch(self, symbols):
+                # Mirrors MarketDataProvider.get_quotes_batch()'s real
+                # contract (settle_expired_options was migrated to call
+                # this instead of get_latest_quote() per symbol -- F6,
+                # docs/module_efficiency_redundancy_audit.md).
+                return {s.upper(): MockQuote() for s in symbols}
 
         from datetime import date
         settled = store.settle_expired_options(
