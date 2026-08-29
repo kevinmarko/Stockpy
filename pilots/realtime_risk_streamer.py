@@ -12,8 +12,10 @@ Computes sub-second incremental and aggregate portfolio risk metrics:
 - Beta-weighted SPY Delta
 
 Invariants & Constraints:
-- AST Boundary: Pure dependency-light module (stdlib + numpy + scipy + settings).
-  Never imports heavy engines (processing_engine, data_engine).
+- AST Boundary: Pure dependency-light module (stdlib + numpy + settings, plus
+  pilots.options_risk -- the canonical Black-Scholes pricer + option-symbol
+  parser, F3/F4 dedup, see module_efficiency_redundancy_audit.md). Never
+  imports heavy engines (processing_engine, data_engine).
 - Constraint #4 (Honesty): Never fabricates missing quotes or Greeks. Unresolvable
   positions are omitted from aggregate sums and reported in missing_positions.
 - Degenerate-std & 0DTE guards: Enforces < 1e-12 denominator guards and exact
@@ -23,24 +25,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-import math
-import re
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
-from scipy.stats import norm
 
-from settings import settings
+from pilots.options_risk import calculate_black_scholes_greeks, parse_option_symbol
 
 
 _DEGENERATE_THRESHOLD = 1e-12
-_TRADING_DAYS_PER_YEAR = 252.0
-
-# Regex matching standard option symbols: AAPL 2026-09-18 $150.00 CALL
-_OPTION_SYM_RE = re.compile(
-    r"^(?P<ticker>[A-Z0-9]+)\s+(?P<exp>\d{4}-\d{2}-\d{2})\s+\$(?P<strike>\d+(?:\.\d+)?)\s+(?P<type>CALL|PUT)$",
-    re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -105,19 +97,13 @@ class PortfolioRiskGreeks:
         }
 
 
-def parse_option_symbol(symbol: str) -> Optional[Dict[str, Any]]:
-    """Parses a standardized option leg symbol string into components."""
-    if not symbol:
-        return None
-    m = _OPTION_SYM_RE.match(symbol.strip())
-    if not m:
-        return None
-    return {
-        "ticker": m.group("ticker").upper(),
-        "expiration": m.group("exp"),
-        "strike": float(m.group("strike")),
-        "option_type": m.group("type").lower(),
-    }
+# parse_option_symbol is imported directly from pilots.options_risk above --
+# byte-identical regex and logic (F3, module_efficiency_redundancy_audit.md),
+# confirmed by inspection: this module's own former copy's `if not symbol:
+# return None` guard was dead code (both real call sites in this file
+# already normalize `symbol`/`sym` to a non-empty string via
+# `str(x.get("symbol", "")).strip()` + an `if not X: continue/return None`
+# check before ever calling this function).
 
 
 def compute_black_scholes_unit_greeks(
@@ -128,64 +114,25 @@ def compute_black_scholes_unit_greeks(
     option_type: str = "call",
     r: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Computes unit per-share Black-Scholes Greeks with degenerate-input and 0DTE guards."""
-    if r is None:
-        r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
+    """Computes unit per-share Black-Scholes Greeks with degenerate-input and
+    0DTE guards.
 
-    opt_type = str(option_type or "call").lower().strip()
-
-    if spot <= 0 or strike <= 0:
-        return {
-            "delta": 0.0,
-            "gamma": 0.0,
-            "theta_daily": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    # 0DTE / Expiration fallback: when T <= 1e-12, intrinsic delta applies, other Greeks decay to 0
-    if t_years <= _DEGENERATE_THRESHOLD:
-        delta = 1.0 if (opt_type == "call" and spot > strike) else (-1.0 if (opt_type == "put" and spot < strike) else 0.0)
-        return {
-            "delta": float(delta),
-            "gamma": 0.0,
-            "theta_daily": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    # Missing or degenerate volatility guard
-    if sigma <= _DEGENERATE_THRESHOLD or np.isnan(sigma):
-        delta = 1.0 if (opt_type == "call" and spot > strike) else (-1.0 if (opt_type == "put" and spot < strike) else 0.0)
-        return {
-            "delta": float(delta),
-            "gamma": 0.0,
-            "theta_daily": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    vol_sqrt_t = sigma * np.sqrt(t_years)
-    if vol_sqrt_t < _DEGENERATE_THRESHOLD:
-        vol_sqrt_t = _DEGENERATE_THRESHOLD
-
-    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-    discount = math.exp(-r * t_years)
-
-    if opt_type == "call":
-        delta = float(norm.cdf(d1))
-        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) - r * strike * discount * norm.cdf(d2)
-    else:
-        delta = float(norm.cdf(d1) - 1.0)
-        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) + r * strike * discount * norm.cdf(-d2)
-
-    denom_gamma = spot * vol_sqrt_t
-    gamma = float(norm.pdf(d1) / denom_gamma) if denom_gamma >= _DEGENERATE_THRESHOLD else 0.0
-    raw_vega = float(spot * norm.pdf(d1) * np.sqrt(t_years))
-
+    Delegates to pilots.options_risk.calculate_black_scholes_greeks (F4,
+    module_efficiency_redundancy_audit.md) -- this was a near-verbatim copy
+    of that canonical implementation (byte-for-byte identical formulas and
+    option_type normalization), confirmed via a seeded numeric-equivalence
+    grid before this migration (tests/test_realtime_risk_streamer.py).
+    Returns only this function's original 4-key subset (`delta`, `gamma`,
+    `theta_daily`, `vega_1pct`) of the canonical function's return dict, to
+    keep this function's own narrower, documented contract unchanged for
+    its callers.
+    """
+    full = calculate_black_scholes_greeks(spot, strike, t_years, sigma, option_type, r)
     return {
-        "delta": delta,
-        "gamma": gamma,
-        "theta_daily": float(theta_annual / _TRADING_DAYS_PER_YEAR),
-        "vega_1pct": float(raw_vega / 100.0),
+        "delta": full["delta"],
+        "gamma": full["gamma"],
+        "theta_daily": full["theta_daily"],
+        "vega_1pct": full["vega_1pct"],
     }
 
 

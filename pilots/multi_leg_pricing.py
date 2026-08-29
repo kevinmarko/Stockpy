@@ -7,24 +7,25 @@ option structures (Vertical Spreads, Iron Condors, Straddles, Strangles,
 Calendar Spreads, Butterflies, and Custom Leg Combinations).
 
 Invariants:
-- AST Safety: Strict (stdlib, math, numpy, scipy.stats, pandas only; no heavy engines).
+- AST Safety: stdlib, math, numpy, scipy.stats, pandas, plus
+  ``pilots.options_risk`` (the canonical Black-Scholes pricer, F4 dedup --
+  see ``calculate_black_scholes_leg_greeks``'s own docstring below; no
+  heavy engines).
 - Numerical Guards: 0DTE intrinsic fallback (T <= 1e-12), volatility clipping (sigma <= 1e-12).
 - Zero Lookahead: Calculations are pure instantaneous analytical pricing functions.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
-from scipy.stats import norm
 
+from pilots.options_risk import calculate_black_scholes_greeks
 from settings import settings
 
-_DEGENERATE_THRESHOLD = 1e-12
 TRADING_DAYS_PER_YEAR = 252.0
 
 
@@ -59,70 +60,34 @@ def calculate_black_scholes_leg_greeks(
     option_type: str = "call",
     r: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Calculates Black-Scholes analytical price and per-share Greeks for a single leg."""
-    if r is None:
-        r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
+    """Calculates Black-Scholes analytical price and per-share Greeks for a
+    single leg.
 
-    if spot <= 0 or strike <= 0:
-        return {"price": 0.0, "delta": 0.0, "gamma": 0.0, "theta_daily": 0.0, "vega_1pct": 0.0}
-
-    # 0DTE / Expiration fallback: when T <= 1e-12, intrinsic value applies
-    if t_years <= _DEGENERATE_THRESHOLD:
-        if option_type == "call":
-            price = max(0.0, spot - strike)
-            delta = 1.0 if spot > strike else 0.0
-        else:
-            price = max(0.0, strike - spot)
-            delta = -1.0 if spot < strike else 0.0
-        return {
-            "price": float(price),
-            "delta": float(delta),
-            "gamma": 0.0,
-            "theta_daily": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    # Degenerate or near-zero volatility guard
-    if sigma <= _DEGENERATE_THRESHOLD or np.isnan(sigma):
-        price = max(0.0, spot - strike) if option_type == "call" else max(0.0, strike - spot)
-        delta = 1.0 if (option_type == "call" and spot > strike) else (-1.0 if (option_type == "put" and spot < strike) else 0.0)
-        return {
-            "price": float(price),
-            "delta": float(delta),
-            "gamma": 0.0,
-            "theta_daily": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    vol_sqrt_t = sigma * np.sqrt(t_years)
-    if vol_sqrt_t < _DEGENERATE_THRESHOLD:
-        vol_sqrt_t = _DEGENERATE_THRESHOLD
-
-    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    if option_type == "call":
-        price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-        delta = float(norm.cdf(d1))
-        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) - r * strike * math.exp(-r * t_years) * norm.cdf(d2)
-    else:
-        price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
-        delta = float(norm.cdf(d1) - 1.0)
-        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) + r * strike * math.exp(-r * t_years) * norm.cdf(-d2)
-
-    denom_gamma = spot * vol_sqrt_t
-    gamma = float(norm.pdf(d1) / denom_gamma) if denom_gamma >= _DEGENERATE_THRESHOLD else 0.0
-    raw_vega = float(spot * norm.pdf(d1) * np.sqrt(t_years))
-    vega_1pct = raw_vega / 100.0
-    theta_daily = float(theta_annual / TRADING_DAYS_PER_YEAR)
-
-    return {
-        "price": max(0.0, float(price)),
-        "delta": float(delta),
-        "gamma": float(gamma),
-        "theta_daily": float(theta_daily),
-        "vega_1pct": float(vega_1pct),
-    }
+    Delegates to ``pilots.options_risk.calculate_black_scholes_greeks`` (F4,
+    docs/module_efficiency_redundancy_audit.md) -- this was a near-verbatim
+    copy of that canonical implementation, byte-for-byte identical on every
+    formula (d1/d2/price/delta/theta/gamma/vega and all degenerate-input
+    guards), confirmed via a seeded numeric-equivalence grid before this
+    migration (tests/test_multi_leg_pricing.py). Returns a superset of this
+    function's original 5-key contract (``price``, ``delta``, ``gamma``,
+    ``theta_daily``, ``vega_1pct`` all still present with identical values)
+    plus the canonical function's extra fields (``theta_annual``, ``vega``,
+    ``vega_raw``, ``rho``, ``rho_1pct``, ``rho_raw``, ``intrinsic``,
+    ``extrinsic``) -- a caller reading only the original 5 keys is
+    unaffected. One behavioral improvement, strictly additive: the canonical
+    function normalizes ``option_type`` case/whitespace
+    (``str(option_type or "call").lower().strip()``) before comparing to
+    ``"call"``/``"put"``, where this copy compared the raw string directly --
+    an uppercase ``"CALL"`` previously fell through to the put branch here.
+    """
+    return calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=r,
+    )
 
 
 def parse_dte_to_years(expiration_str: Optional[str], as_of_date: Optional[Union[str, date, datetime]] = None) -> float:

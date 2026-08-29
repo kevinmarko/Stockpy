@@ -133,6 +133,11 @@ of `options_risk.py:28`, not an import.
 
 Repro: `grep -n "_OPTION_SYM_RE = re.compile" pilots/options_risk.py pilots/realtime_risk_streamer.py pilots/options_gex.py`.
 
+**Remediation status**: `options_gex.py`'s regex fixed (see F4's `vol_sqrt_t` section below for the
+full writeup — same PR). `realtime_risk_streamer.py`'s byte-identical duplicate is now gone —
+`parse_option_symbol` is a direct re-export of `options_risk.py`'s function (confirmed dependency-light
+and behaviorally identical for every reachable input; see F4's remediation status below).
+
 ## F4 — Black-Scholes: canonical pricer exists and is widely reused; 3 real holdouts, one
 divergence investigated and RESOLVED (kept as-is — the canonical function has the bug, not the copy)
 
@@ -141,15 +146,18 @@ divergence investigated and RESOLVED (kept as-is — the canonical function has 
 `volatility_surface.py:82/104/125`, `gamma_scalper.py:86,88`, `options_sor.py:191,193`,
 `vol_mispricing.py:275,278`, `dispersion_trading.py:177,181` (all six of these via lazy in-function imports).
 
-Genuine remaining copies (not yet migrated — see the remediation plan's Status section):
-
-- `pilots/multi_leg_pricing.py:54-127` — `calculate_black_scholes_leg_greeks`, near-verbatim copy (no
-  drift found)
-- `pilots/realtime_risk_streamer.py:123-191` — `compute_black_scholes_unit_greeks`, own copy + the
-  duplicated regex fixed in F3 above (`realtime_risk_streamer.py`'s own regex copy was NOT touched by
-  that fix — it still needs migrating to import the canonical one, tracked here)
-- `pilots/dispersion_trading.py:138-165` — own `calculate_straddle_vega`, inconsistent with
-  `calculate_option_price()` a few lines below in the same file, which delegates correctly
+**Remaining three copies — now migrated** (branch `migrate-bs-pricer-holdouts`, see the remediation
+plan's PR 4 entry for the full per-file detail): `pilots/multi_leg_pricing.py::calculate_black_scholes_leg_greeks`,
+`pilots/realtime_risk_streamer.py::compute_black_scholes_unit_greeks` + `parse_option_symbol`, and
+`pilots/dispersion_trading.py::calculate_straddle_vega` all now delegate to the canonical function,
+each proven numerically equivalent on a seeded grid before landing. One genuine, strictly-additive
+behavior fix found along the way: `multi_leg_pricing.py`'s old copy compared `option_type` without
+case normalization, silently mis-routing an uppercase `"CALL"` to the put branch — the canonical
+function's normalization closes that. The `dispersion_trading.py` migration was investigated before
+being assumed safe: vega's formula does not divide by `vol_sqrt_t` the way gamma's denominator does,
+so it does not share the spurious-blowup failure mode documented below for gamma — confirmed
+empirically at the exact reproduction inputs that produce the canonical function's ~3.6e9 gamma
+(canonical `vega_raw` there is a sane `0.000114`).
 
 **`options_gex.py`'s `vol_sqrt_t` divergence — investigated by attempting the fix, not just re-reading
 the code, and resolved in the opposite direction from what the original finding assumed.** Two prior
