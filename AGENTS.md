@@ -110,6 +110,7 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | `docs/test_coverage_analysis.md` | Test-coverage audit — suite inventory, module-level gap table, and prioritized roadmap for improving test coverage |
 | `docs/BUG_HUNTING_PROCESS.md` | Bug hunting SOP, 4-tier severity model, 5-phase workflow, domain checklists, and verification tooling guide |
 | `docs/VALIDATION_STRATEGY_FIX_LOG.md` | Dated rollup of `STRATEGY_REGISTRY` deployability-gate fix attempts (`scripts/refresh_validations.py`) — before/after PBO/DSR/Sharpe/MaxDD per strategy, the causal lever used, and (for strategies that stayed honestly `deployable=False`) the measured, evidence-backed reason why. Cross-references the fixing PR and each strategy's `docs/signals/<name>.md` **Backtest Validation** section |
+| `docs/AGENTIC_TRADING_SAFETY_FRAMEWORK.md` | Capability map, guardrail status, and structural gaps for the agentic trading surface |
 
 ## Frontend strategy: web app only — desktop app decommissioned
 
