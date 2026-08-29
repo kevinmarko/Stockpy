@@ -36,7 +36,6 @@ import pytest
 
 from scripts import backfill_news_history
 from scripts import backfill_news_history_from_audit
-from scripts import backfill_sentiment_history
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
