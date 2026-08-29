@@ -405,7 +405,27 @@ PILOTS: List[Pilot] = [
         # table (data/historical_store.py) -- this accumulates real history going
         # forward but does NOT unblock a backtest today; validation_strategy_id
         # stays None until enough real history exists (roughly 6-12+ months).
-        validation_strategy_id="news_catalyst",
+        #
+        # NOTE (2026-08-29 correction): a prior change briefly set this to
+        # "news_catalyst", pointing it at STRATEGY_REGISTRY's own
+        # `news_catalyst` entry -- an UNGATEABLE_DATA_GAP sentinel adapter
+        # that unconditionally raises RuntimeError (see
+        # scripts/refresh_validations.py). That entry exists so the harness
+        # recognizes the name and fails cleanly if ever invoked explicitly,
+        # but it is NOT a real, gateable backtest -- linking a Pilot to it
+        # would make GET /strategy/health report `deployable=False` with a
+        # `report_date` and a full (all-None-valued) `gates` breakdown once
+        # `refresh_validations.py` ever runs for this name, presenting a
+        # structural "cannot be gated" sentinel as if it were an actual,
+        # completed (failed) deployability-gate evaluation. None of the
+        # other UNGATEABLE_DATA_GAP entries (earnings_crush,
+        # dispersion_trading, zero_dte_engine, gamma_scalper,
+        # regime_multiplier, forecast_alignment) are wired to a Pilot's
+        # validation_strategy_id for exactly this reason. Reverted --
+        # `validation_strategy_id=None` is the correct, honest state per
+        # CONSTRAINT #4, protected by
+        # tests/test_pilots_api.py::TestStrategyHealth::test_pilot_without_backtest_is_honest_never_fabricated.
+        validation_strategy_id=None,
     ),
     Pilot(
         id="forecast-aligned",
