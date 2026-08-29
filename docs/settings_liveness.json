@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 337,
-    "no_op": 3,
-    "restart_required": 105,
+    "live_safe": 336,
+    "no_op": 0,
+    "restart_required": 109,
     "total": 445
   },
   "dynamic_sites": [
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3203,
+      "line": 3207,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4309,
+      "line": 4313,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4414,
+      "line": 4418,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 436,
+  "files_scanned": 437,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -466,7 +466,6 @@
     "STRATEGY_WRITES_ENABLED",
     "SYMBOL_RATING_AUTO_DROP_ENABLED",
     "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
-    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
     "SYMBOL_RATING_ENABLED",
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
@@ -479,11 +478,7 @@
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
     "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
-  "no_op": [
-    "OPTIONS_EARNINGS_CRUSH_ENABLED",
-    "PROMPT_MAX_CHARS",
-    "SENTIMENT_PIT_MIN_MONTHS"
-  ],
+  "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
     "attr": 882,
@@ -764,7 +759,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:326",
+        "site": "api/pilots_api.py:330",
         "via": []
       },
       {
@@ -1641,7 +1636,16 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4791",
+        "site": "api/pilots_api.py:4795",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:538",
         "via": []
       }
     ],
@@ -1652,7 +1656,16 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4790",
+        "site": "api/pilots_api.py:4794",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:537",
         "via": []
       }
     ],
@@ -1663,7 +1676,25 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4960",
+        "site": "api/pilots_api.py:4964",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:384",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:914",
         "via": []
       },
       {
@@ -1738,7 +1769,16 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4932",
+        "site": "api/pilots_api.py:4936",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:443",
         "via": []
       },
       {
@@ -1782,7 +1822,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:636",
+        "site": "api/pilots_api.py:640",
         "via": []
       }
     ],
@@ -2607,6 +2647,17 @@
         "via": []
       }
     ],
+    "OPTIONS_EARNINGS_CRUSH_ENABLED": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:720",
+        "via": []
+      }
+    ],
     "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE": [
       {
         "discarded": false,
@@ -2920,6 +2971,17 @@
         "via": []
       }
     ],
+    "PROMPT_MAX_CHARS": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:620",
+        "via": []
+      }
+    ],
     "PROMPT_REGISTRY_REFRESH_SECONDS": [
       {
         "discarded": false,
@@ -2928,6 +2990,15 @@
           "dynamic_name_literal_unattributable"
         ],
         "site": "Gravity AI Review Suite.py:11072",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:621",
         "via": []
       }
     ],
@@ -3087,6 +3158,17 @@
         "via": []
       }
     ],
+    "SENTIMENT_PIT_MIN_MONTHS": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:507",
+        "via": []
+      }
+    ],
     "SENTIMENT_SOURCES": [
       {
         "discarded": false,
@@ -3138,7 +3220,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:631",
+        "site": "api/pilots_api.py:635",
         "via": []
       },
       {
@@ -3148,6 +3230,17 @@
           "module_level"
         ],
         "site": "api/state_api.py:94",
+        "via": []
+      }
+    ],
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "closure_value"
+        ],
+        "site": "pipeline/production_steps.py:622",
         "via": []
       }
     ],
@@ -3208,10 +3301,11 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
+    "closure_value": 1,
     "cross_module_init_helper": 85,
     "decorator_arg": 13,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 7,
+    "dynamic_name_literal_unattributable": 16,
     "indirect_init_helper_d1": 13,
     "init_body": 8,
     "init_self_assign": 51,
@@ -3224,7 +3318,10 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
-    "PROMPT_REGISTRY_REFRESH_SECONDS"
+    "OPTIONS_EARNINGS_CRUSH_ENABLED",
+    "PROMPT_MAX_CHARS",
+    "PROMPT_REGISTRY_REFRESH_SECONDS",
+    "SENTIMENT_PIT_MIN_MONTHS"
   ],
   "status": "ok"
 }

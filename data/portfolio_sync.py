@@ -928,7 +928,7 @@ async def async_sync_now(
 
     if persist_default_tickers:
         try:
-            from gui.env_io import write_setting
+            from env_io import write_setting
 
             # Only the symbols we actually probed (or pre-classified) — sorted
             # for diff-friendliness. Recently-closed retention symbols

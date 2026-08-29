@@ -199,7 +199,7 @@ class TestEnvIoAllowlist:
 @pytest.fixture()
 def temp_env(tmp_path, monkeypatch):
     """Point env_io at an isolated temp .env (mirrors tests/test_gui_env_io.py)."""
-    from gui import env_io
+    import env_io
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -211,7 +211,7 @@ def temp_env(tmp_path, monkeypatch):
 
 
 def test_sector_forecast_configs_json_roundtrip(temp_env):
-    from gui import env_io
+    import env_io
 
     configs = {"Technology": {"days": 30, "model": "MC"}, "Energy": {"days": 60, "model": "ARIMA"}}
     env_io.write_setting("SECTOR_FORECAST_CONFIGS", configs)
@@ -220,14 +220,14 @@ def test_sector_forecast_configs_json_roundtrip(temp_env):
 
 
 def test_sector_forecast_config_path_scalar_roundtrip(temp_env):
-    from gui import env_io
+    import env_io
 
     env_io.write_setting("SECTOR_FORECAST_CONFIG_PATH", "forecasting/custom_configs.json")
     assert env_io.get_value("SECTOR_FORECAST_CONFIG_PATH") == "forecasting/custom_configs.json"
 
 
 def test_write_many_includes_both_new_keys(temp_env):
-    from gui import env_io
+    import env_io
 
     written = env_io.write_many(
         {

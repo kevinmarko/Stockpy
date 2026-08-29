@@ -29,11 +29,11 @@ sync
 
 pin <id> <version>
     Pin a specific cached / remote version as the preferred one.  Writes to
-    ``.env`` via ``gui.env_io`` (CONSTRAINT #3 — only allowlisted keys).
+    ``.env`` via ``env_io`` (CONSTRAINT #3 — only allowlisted keys).
 
 rollback <id>
     Point the in-memory pin to the previous cached version and persist via
-    ``gui.env_io``.
+    ``env_io``.
 
 diff <id> <vA> <vB>
     Unified diff between two versions.  Use ``baseline`` as a version keyword
@@ -241,15 +241,15 @@ def cmd_pin(reg: PromptRegistry, prompt_id: str, version: str) -> int:
     # Update the in-memory pin
     reg._pins[prompt_id] = version
 
-    # Persist to .env via gui.env_io (allowlist-bounded)
+    # Persist to .env via env_io (allowlist-bounded)
     try:
-        from gui.env_io import write_setting  # noqa: PLC0415
+        from env_io import write_setting  # noqa: PLC0415
         pins_dict = dict(sorted(reg._pins.items()))
         write_setting("PROMPT_REGISTRY_PINS", pins_dict)
         print(f"Pinned {prompt_id!r} → {version!r}  (saved to .env).")
     except Exception as exc:
         # The in-memory pin is live; PROMPT_REGISTRY_PINS is already present in
-        # gui/env_io.py's ALLOWED_KEYS, so a write failure here means something
+        # env_io.py's ALLOWED_KEYS, so a write failure here means something
         # else went wrong (e.g. a non-writable .env file), not a missing
         # allowlist entry.
         print(
@@ -277,9 +277,9 @@ def cmd_rollback(reg: PromptRegistry, prompt_id: str) -> int:
         )
         return 1
 
-    # Persist to .env via gui.env_io
+    # Persist to .env via env_io
     try:
-        from gui.env_io import write_setting  # noqa: PLC0415
+        from env_io import write_setting  # noqa: PLC0415
         pins_dict = dict(sorted(reg._pins.items()))
         write_setting("PROMPT_REGISTRY_PINS", pins_dict)
         print(f"Rolled back {prompt_id!r} → {previous!r}  (saved to .env).")

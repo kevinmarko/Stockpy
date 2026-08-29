@@ -74,7 +74,7 @@ are identical anyway, so the only thing at stake is whether a subsequent store
 edit is allowed to move it.
 
 ``.env`` is parsed with ``dotenv_values()``, which reads without mutating
-``os.environ`` — the same read-only idiom ``gui/env_io.py::_raw_env`` already
+``os.environ`` — the same read-only idiom ``env_io.py::_raw_env`` already
 uses. Comparison is case-insensitive because ``Settings.model_config`` sets
 ``case_sensitive=False``.
 
@@ -137,7 +137,7 @@ Module constraints
   rejected value into the log.
 
 Known gap, deliberately left to the writer task: this module does not refuse
-``gui/env_io.py::SECRET_KEYS`` fields. It cannot import that set (``gui.env_io``
+``env_io.py::SECRET_KEYS`` fields. It cannot import that set (``env_io.py``
 imports ``settings``), and duplicating an 80-key credential list into a leaf
 module is a drift hazard worse than the gap. Refusing to WRITE a secret into
 the store belongs in the writer, which has no such import restriction.

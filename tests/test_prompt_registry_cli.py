@@ -335,7 +335,7 @@ class TestPinCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting") as mock_write:
+        with unittest.mock.patch("env_io.write_setting") as mock_write:
             rc = main(["pin", _KNOWN_ID, "1.0.0"])
 
         assert rc == 0
@@ -348,7 +348,7 @@ class TestPinCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting"):
+        with unittest.mock.patch("env_io.write_setting"):
             main(["pin", _KNOWN_ID, "1.0.0"])
 
         assert reg._pins.get(_KNOWN_ID) == "1.0.0"
@@ -359,7 +359,7 @@ class TestPinCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting") as mock_write:
+        with unittest.mock.patch("env_io.write_setting") as mock_write:
             main(["pin", _KNOWN_ID, "1.0.0"])
 
         mock_write.assert_called_once()
@@ -389,7 +389,7 @@ class TestPinCommand:
         _inject_registry(reg)
 
         with unittest.mock.patch(
-            "gui.env_io.write_setting",
+            "env_io.write_setting",
             side_effect=DisallowedKeyError("PROMPT_REGISTRY_PINS"),
         ):
             rc = main(["pin", _KNOWN_ID, "1.0.0"])
@@ -403,7 +403,7 @@ class TestPinCommand:
         reg = PromptRegistry(store=None, cache=CacheManager(tmp_path), enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting"):
+        with unittest.mock.patch("env_io.write_setting"):
             rc = main(["pin", _KNOWN_ID, "baseline"])
 
         assert rc == 0
@@ -425,7 +425,7 @@ class TestRollbackCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting"):
+        with unittest.mock.patch("env_io.write_setting"):
             rc = main(["rollback", _KNOWN_ID])
 
         assert rc == 0
@@ -436,7 +436,7 @@ class TestRollbackCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting"):
+        with unittest.mock.patch("env_io.write_setting"):
             main(["rollback", _KNOWN_ID])
 
         assert reg._pins.get(_KNOWN_ID) == "1.0.0"
@@ -447,7 +447,7 @@ class TestRollbackCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting"):
+        with unittest.mock.patch("env_io.write_setting"):
             main(["rollback", _KNOWN_ID])
 
         out = capsys.readouterr().out
@@ -475,7 +475,7 @@ class TestRollbackCommand:
         reg = PromptRegistry(store=None, cache=cache, enabled=True)
         _inject_registry(reg)
 
-        with unittest.mock.patch("gui.env_io.write_setting") as mock_write:
+        with unittest.mock.patch("env_io.write_setting") as mock_write:
             main(["rollback", _KNOWN_ID])
 
         mock_write.assert_called_once()

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from gui import env_io
+import env_io
 from gui.env_io import ALLOWED_KEYS, SECRET_KEYS, SecretWriteError, write_setting
 
 
