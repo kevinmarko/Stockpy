@@ -3824,21 +3824,25 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "copula_stat_arb": (_build_copula_stat_arb_adapter, 0.04, ["KO", "PEP"]),
     "aroon_trend": (_build_aroon_trend_adapter, 0.02, ["SPY"]),
 
-    "news_catalyst": (
-        _build_ungateable_adapter("Point-in-time news sentiment; not price-only backtestable."),
-        0.01,
-        ["SPY"],
-    ),
-    "regime_multiplier": (
-        _build_ungateable_adapter("A sizing multiplier only, not an independent alpha strategy capable of backing a Pilot."),
-        0.0,
-        ["SPY"],
-    ),
-    "forecast_alignment": (
-        _build_ungateable_adapter("External forecast target, not price-only. Covered by forecast_direction_arima_hw pilot proxy."),
-        0.0,
-        ["SPY"],
-    ),
+    # news_catalyst / regime_multiplier / forecast_alignment were briefly added
+    # here as _build_ungateable_adapter() stubs and removed again in the same
+    # PR that introduced this comment (2026-08 audit-branch cleanup): none of
+    # the three is an order-submitting Pilot the way earnings_crush/
+    # dispersion_trading/zero_dte_engine/gamma_scalper below are, so a
+    # permanently-erroring registry stub bought nothing and broke two real
+    # things instead -- (1) pilots/catalog.py's news-catalyst Pilot has an
+    # explicit, documented validation_strategy_id=None ("stays None until
+    # enough real history exists") that a stub entry silently contradicted,
+    # and (2) regime_multiplier/forecast_alignment's own reason strings
+    # ("not an independent alpha strategy capable of backing a Pilot" /
+    # "Covered by forecast_direction_arima_hw pilot proxy") are themselves
+    # arguments AGAINST registering them, not for it -- forecast_alignment's
+    # actual backtestable proxy is the already-registered
+    # forecast_direction_arima_hw entry above. See
+    # tests/test_pilots_api.py::TestStrategyHealth::
+    # test_pilot_without_backtest_is_honest_never_fabricated and
+    # tests/test_refresh_validations.py::TestRegistryStructure for the
+    # invariants this preserves.
     "earnings_crush": (
         _build_ungateable_adapter("No historical single-name IV exists in data layer to perform walk-forward validation."),
         0.01,

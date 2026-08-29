@@ -12,16 +12,28 @@ documents that a REAL full run (5yr x 52 weeks x 10 tickers) takes several
 minutes, which is why no test here exercises that full scope.
 
 One @pytest.mark.network integration test runs the adapter against real
-yfinance history through StrategyValidationHarness end-to-end -- asserting
-only that the report is well-formed, NEVER that deployable is True.
+FMP-sourced closes (via scripts.refresh_validations._download_closes --
+FMP-only since the 2026-08-21 yfinance-to-FMP migration, no yfinance
+fallback) through StrategyValidationHarness end-to-end -- asserting only
+that the report is well-formed, NEVER that deployable is True. That test
+restores a real FMP_API_KEY from the raw .env file for its own scope (the
+session-wide conftest.py autouse fixture blanks every SECRET_KEYS field,
+including FMP_API_KEY, for every test -- deliberate for test isolation, but
+it means this one test's live network call needs its own explicit,
+narrowly-scoped credential restoration) and skips honestly, rather than
+failing, when no real key is available in the raw .env at all.
 """
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from dotenv import dotenv_values
+
+import settings as settings_module
 
 from scripts.refresh_validations import (
     FORECAST_DIRECTION_HORIZON_DAYS,
@@ -266,17 +278,39 @@ class TestPerfSmoke:
 
 
 # ---------------------------------------------------------------------------
-# TestForecastDirectionIntegration -- real yfinance + real harness (opt-in)
+# TestForecastDirectionIntegration -- real FMP-sourced closes + real harness
+# (opt-in, network-marked)
 # ---------------------------------------------------------------------------
 
 class TestForecastDirectionIntegration:
     pytestmark = pytest.mark.network
 
-    def test_forecast_direction_runs_end_to_end(self) -> None:
-        """Real yfinance history (trimmed internally to 1yr via a short
+    def test_forecast_direction_runs_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Real FMP-sourced closes (trimmed internally to 1yr via a short
         --start/--end window to keep CI runtime bounded) through the real
         harness. Only asserts the report is well-formed -- NEVER that
-        deployable is True (CONSTRAINT #4)."""
+        deployable is True (CONSTRAINT #4).
+
+        ``_download_closes`` is FMP-only (no yfinance fallback -- see the
+        2026-08-21 migration in scripts/refresh_validations.py) and
+        conftest.py's session-wide autouse fixture deliberately blanks
+        ``settings.settings.FMP_API_KEY`` (an ``env_io.SECRET_KEYS`` member)
+        for every test, including this one, for isolation. Since this is the
+        one test in the suite whose entire job IS to exercise that live
+        network call, it restores a real key from the raw ``.env`` file
+        (bypassing the already-scrubbed settings singleton) for its own
+        scope only, and skips -- honestly, not a fabricated pass -- when no
+        real key is present anywhere (a credential-less CI/sandbox
+        environment genuinely cannot run this opt-in network test)."""
+        real_key = dotenv_values(settings_module.ENV_PATH).get("FMP_API_KEY") or ""
+        if not real_key:
+            pytest.skip(
+                "No real FMP_API_KEY in .env -- this network-marked test needs "
+                "live FMP credentials and cannot run in a credential-less "
+                "environment."
+            )
+        monkeypatch.setattr(settings_module.settings, "FMP_API_KEY", real_key)
+
         from execution.cost_model import TieredCostModel
         from validation.harness import StrategyValidationHarness
         from scripts.refresh_validations import _download_closes, _make_strategy_fn

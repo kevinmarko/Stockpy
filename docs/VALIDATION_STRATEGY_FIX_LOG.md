@@ -2679,3 +2679,35 @@ not merely assumed clean from the tests passing.
 - **Fix:** Added `news_catalyst` to `STRATEGY_REGISTRY` in `scripts/refresh_validations.py` as an explicit `UNGATEABLE_DATA_GAP` sentinel (raises `RuntimeError` unconditionally), matching the existing pattern for `earnings_crush`/`dispersion_trading`/`zero_dte_engine`/`gamma_scalper`/`regime_multiplier`/`forecast_alignment`. This half of the change is correct and unchanged.
 - **Correction (same day):** the original pass ALSO changed `pilots/catalog.py` to link `news-catalyst`'s `validation_strategy_id` to `"news_catalyst"` — this was wrong and has been reverted back to `validation_strategy_id=None`. None of the other UNGATEABLE_DATA_GAP entries are wired to a Pilot's `validation_strategy_id`, precisely because doing so makes `GET /strategy/health` (`pilots/strategy_health.py::pilot_strategy_health`) read the sentinel's dead-lettered summary (`{"deployable": False, "error": "UNGATEABLE_DATA_GAP: ...", "report_date": ...}`, written by `scripts/refresh_validations.py::_validate_single_strategy`'s generic except-Exception handler once `refresh_validations.py` is ever run for this name) and present it as a completed, failed deployability-gate evaluation — `deployable=False`, a real `report_date`, and a 4-entry `gates` list (all `value=None`/`passed=None`) — rather than the honest "no validated backtest for this pilot" / `deployable=None` / `gates=[]` shape CONSTRAINT #4 requires for a pilot that structurally cannot be backtested at all. Caught by `tests/test_pilots_api.py::TestStrategyHealth::test_pilot_without_backtest_is_honest_never_fabricated`, which asserts exactly this invariant.
 - **Reason:** As documented in `docs/signals/news_catalyst.md`, backtesting headline sentiment requires point-in-time news history which is structurally unavailable historically. Fabricating this data would violate CONSTRAINT #4. The adapter raises `RuntimeError` gracefully so the validation harness recognizes its ungateable status if ever explicitly invoked — but a Pilot with no real backtest must still report `validation_strategy_id=None`, not point at that sentinel.
+
+### 2026-08-29 `news_catalyst` / `regime_multiplier` / `forecast_alignment` — considered and reverted (full registry entries, not just the catalog.py link)
+A same-day pass on the `audit_strategy_registry_compliance` branch added `news_catalyst`,
+`regime_multiplier`, and `forecast_alignment` to `STRATEGY_REGISTRY` as
+`_build_ungateable_adapter` stubs (the entry above documents that half, plus the
+`pilots/catalog.py` correction). A subsequent full-suite test run on this same branch
+found this was itself scope creep beyond earnings_crush/dispersion_trading/zero_dte_engine/
+gamma_scalper/vol_mispricing/copula_stat_arb (the only strategies this branch's own stated
+scope ever named), and reverted all three registry entries outright:
+
+- `news-catalyst`'s Pilot entry already carries a deliberate, documented
+  `validation_strategy_id=None` (see the entry above) — keeping a `STRATEGY_REGISTRY` stub
+  for it bought nothing once the `catalog.py` link back to it was itself reverted; a stub
+  nobody points at just adds registry noise.
+- `regime_multiplier` and `forecast_alignment` are not `validation_strategy_id` targets for
+  any catalog Pilot at all (`forecast_alignment`'s actual backtestable proxy is the
+  already-registered `forecast_direction_arima_hw` entry) — their own reason strings ("not
+  an independent alpha strategy capable of backing a Pilot" / "Covered by
+  forecast_direction_arima_hw pilot proxy") are themselves arguments against registering
+  them, not for it. Both were also given `turnover=0.0`, failing
+  `tests/test_refresh_validations.py::TestRegistryStructure`'s `turnover > 0` invariant
+  outright — caught by a full `pytest tests/ -q` run, not by a targeted test file.
+
+Reverted in `scripts/refresh_validations.py` (the three `STRATEGY_REGISTRY` entries) and
+`cli_introspect/command_manifest.json` (hand-synced `strategy_registry` list, confirmed
+exact set-equality against the live registry via
+`tests/test_command_manifest_freshness.py`). `earnings_crush`/`dispersion_trading`/
+`zero_dte_engine`/`gamma_scalper`'s registrations were kept — those close a real,
+previously-documented gap (order-submitting options Pilots with zero registry state).
+See `.claude/skills/stockpy-quant-integrity/SKILL.md`'s "Is the strategy registry honest?"
+bullet for the corrected three-way distinction (unregistered vs. registered-but-
+ungateable-by-design vs. registered-with-a-measured-fail).
