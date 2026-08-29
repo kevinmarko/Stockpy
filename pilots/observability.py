@@ -180,7 +180,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from settings import settings
 
@@ -816,6 +816,129 @@ def _forecast_stats_by_symbol(
     return result
 
 
+def _skill_from_pooled_stats(n: int, mse: Optional[float], min_obs: int) -> Optional[float]:
+    """Raw (un-normalized) inverse-RMSE 'skill' score for one pooled
+    (all-models-combined) sub-window — the SAME formula piece
+    ``compute_skill_weights_from_stats`` uses per model
+    (``1.0 / max(rmse, _MIN_RMSE)``), reusing that module's own
+    ``_MIN_RMSE`` floor so the two never drift apart (see
+    ``compute_skill_weights_from_stats``'s docstring on the "three copies"
+    bug this codebase already hit once).
+
+    Deliberately NOT ``compute_skill_weights_from_stats`` itself: that
+    function normalizes across models to relative blend weights (a single
+    pooled entry would always normalize to 1.0, discarding the very
+    magnitude decay needs to compare across time). This returns the
+    pre-normalization absolute skill level instead.
+
+    Returns ``None`` (never a fabricated number, CONSTRAINT #4) when
+    ``n < min_obs`` — not enough completed, actualized forecasts in this
+    sub-window to trust its RMSE — or when ``mse`` is missing/negative."""
+    if n < min_obs or mse is None or mse < 0:
+        return None
+    from forecasting.forecast_tracker import _MIN_RMSE
+
+    rmse = math.sqrt(mse)
+    return 1.0 / max(rmse, _MIN_RMSE)
+
+
+def _forecast_decay_stats_by_symbol(
+    db_path: str, symbols: List[str], horizon_days: int, window_days: int, min_obs: int
+) -> Dict[str, Dict[str, Any]]:
+    """Per-symbol ``decay_pct``: how much a symbol's pooled (all-models)
+    forecast skill has degraded from an older baseline sub-window to the
+    most recent sub-window, both carved out of the same ``window_days``.
+
+    Split: the second half of ``window_days`` (most recent) is "recent"; the
+    first half is "baseline" — an even split of the SAME window the rest of
+    this module already uses, rather than a second independently-tunable
+    knob (product judgment call — see task write-up).
+
+    Pools across ALL models per sub-window (not per-model) — decay_pct is a
+    single symbol-level headline number; :func:`_forecast_stats_by_symbol`'s
+    ``skill_weights`` already carries the per-model breakdown alongside it.
+
+    ``decay_pct = (baseline_skill - recent_skill) / baseline_skill * 100``
+    using :func:`_skill_from_pooled_stats` for both — positive means skill is
+    degrading (recent RMSE worse than baseline), negative means it improved.
+    ``baseline_skill`` is always > 0 when not ``None`` (the ``_MIN_RMSE``
+    floor forbids a zero), so this never divides by zero.
+
+    Returns ``{symbol: {"decay_pct": float | None, "decay_reason": str | None}}``.
+    A symbol with insufficient completed forecasts in either sub-window gets
+    ``decay_pct: None`` with an honest ``decay_reason`` — never a fabricated
+    number (CONSTRAINT #4). Never raises (CONSTRAINT #6); any DB/query
+    failure degrades every requested symbol to that same honest ``None``."""
+    import sqlite3
+    from datetime import datetime, timedelta as _timedelta, timezone
+
+    from db_config import sqlite_readonly_uri
+
+    insufficient_reason = (
+        f"Fewer than {min_obs} completed forecasts in the recent and/or baseline "
+        f"half of the {window_days}d window — not enough history for a reliable "
+        "before/after comparison yet."
+    )
+    fallback = {sym: {"decay_pct": None, "decay_reason": insufficient_reason} for sym in symbols}
+
+    if not symbols:
+        return {}
+
+    try:
+        now = datetime.now(timezone.utc)
+        since_iso = (now - _timedelta(days=window_days)).isoformat()
+        mid_iso = (now - _timedelta(days=window_days / 2.0)).isoformat()
+
+        # See _forecast_stats_by_symbol's comment above on the Bandit B608
+        # false positive — same convention: only `placeholders` (derived
+        # from len(symbols), never symbol VALUES) is interpolated; every
+        # real value flows through parameterized `?` bindings.
+        placeholders = ",".join("?" for _ in symbols)
+        conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
+        try:
+            half_rows = conn.execute(
+                f"""SELECT symbol,
+                           CASE WHEN forecast_ts >= ? THEN 'recent' ELSE 'baseline' END AS half,
+                           COUNT(*) AS n,
+                           AVG(squared_error) AS mse
+                    FROM forecast_errors
+                    WHERE horizon_days = ?
+                      AND actual_price IS NOT NULL
+                      AND forecast_ts  >= ?
+                      AND symbol IN ({placeholders})
+                    GROUP BY symbol, half""",  # nosec B608
+                (mid_iso, horizon_days, since_iso, *symbols),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — dead-letter (missing DB file, etc.)
+        logger.debug("_forecast_decay_stats_by_symbol: bulk query failed: %s", exc)
+        return fallback
+
+    by_symbol: Dict[str, Dict[str, Tuple[int, Optional[float]]]] = {}
+    for sym, half, n, mse in half_rows:
+        by_symbol.setdefault(sym, {})[half] = (int(n), float(mse) if mse is not None else None)
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for sym in symbols:
+        halves = by_symbol.get(sym, {})
+        n_recent, mse_recent = halves.get("recent", (0, None))
+        n_baseline, mse_baseline = halves.get("baseline", (0, None))
+
+        recent_skill = _skill_from_pooled_stats(n_recent, mse_recent, min_obs)
+        baseline_skill = _skill_from_pooled_stats(n_baseline, mse_baseline, min_obs)
+
+        if recent_skill is None or baseline_skill is None:
+            result[sym] = {"decay_pct": None, "decay_reason": insufficient_reason}
+        else:
+            result[sym] = {
+                "decay_pct": (baseline_skill - recent_skill) / baseline_skill * 100.0,
+                "decay_reason": None,
+            }
+
+    return result
+
+
 def forecast_skill_by_symbol_summary(
     snapshot: Optional[dict],
     horizon_days: int = 30,
@@ -832,10 +955,19 @@ def forecast_skill_by_symbol_summary(
 
     Same ``window_days``/``min_obs`` defaults and the SAME cold-start/
     inverse-RMSE formula as the portfolio-wide section — see
-    :func:`_forecast_stats_by_symbol`. Never raises (CONSTRAINT #6); an empty
-    universe or a totally unavailable tracker both degrade to an empty
-    ``rows`` list plus an honest ``reason`` — never a table of fabricated
-    zeros (CONSTRAINT #4)."""
+    :func:`_forecast_stats_by_symbol`. Each row also carries a per-symbol
+    ``decay_pct`` (see :func:`_forecast_decay_stats_by_symbol`) — the
+    forecast-skill-decay signal ``investyo_mcp_server.py::get_model_drift_report``
+    reports; a symbol with too little history for a valid before/after split
+    gets ``decay_pct: None`` plus an honest ``decay_reason``, never a
+    fabricated percentage (CONSTRAINT #4). NOTE: :func:`portfolio_forecast_skill`
+    deliberately does NOT get a portfolio-wide decay figure — nothing
+    downstream consumes one today (only this per-symbol summary feeds
+    ``get_model_drift_report``); see the task write-up for that call.
+
+    Never raises (CONSTRAINT #6); an empty universe or a totally unavailable
+    tracker both degrade to an empty ``rows`` list plus an honest ``reason``
+    — never a table of fabricated zeros (CONSTRAINT #4)."""
     horizon = int(horizon_days)
     window = int(window_days) if window_days is not None else int(settings.FORECAST_SKILL_WINDOW_DAYS)
     min_o = int(min_obs) if min_obs is not None else int(settings.FORECAST_SKILL_MIN_OBS)
@@ -881,6 +1013,12 @@ def forecast_skill_by_symbol_summary(
         logger.debug("forecast_skill_by_symbol_summary: bulk query failed: %s", exc)
         stats_by_symbol = {}
 
+    try:
+        decay_by_symbol = _forecast_decay_stats_by_symbol(db_path, bounded_symbols, horizon, window, min_o)
+    except Exception as exc:  # noqa: BLE001 — dead-letter (missing DB file, etc.)
+        logger.debug("forecast_skill_by_symbol_summary: decay query failed: %s", exc)
+        decay_by_symbol = {}
+
     rows: List[Dict[str, Any]] = []
     any_history = False
     for sym in bounded_symbols:
@@ -894,6 +1032,13 @@ def forecast_skill_by_symbol_summary(
         completed = int(stats.get("completed", 0) or 0)
         if skill_weights or pending or completed:
             any_history = True
+        decay = decay_by_symbol.get(
+            sym,
+            {
+                "decay_pct": None,
+                "decay_reason": "No forecast history yet — run the pipeline to accumulate it.",
+            },
+        )
         rows.append(
             {
                 "symbol": sym,
@@ -901,6 +1046,8 @@ def forecast_skill_by_symbol_summary(
                 "completed": completed,
                 "skill_weights": skill_weights,
                 "n_by_model": stats.get("n_by_model", {}),
+                "decay_pct": _finite_or_none(decay.get("decay_pct")),
+                "decay_reason": decay.get("decay_reason"),
             }
         )
 
