@@ -1,20 +1,22 @@
 """Tests for scripts/backfill_sentiment_history.py.
 
 Covers: per-symbol dead-letter resilience (_process_one never raises),
-resolve_universe wiring, the yahoo_rss/reddit caveat warnings, and the
-settings overrides applied for the run. The repo-root import shim
-(direct-path subprocess invocation) is covered by
-tests/test_backfill_scripts_invocation.py, shared with
-backfill_news_history.py's and backfill_news_history_from_audit.py's
-byte-identical versions of that test.
+resolve_universe wiring, the yahoo_rss/reddit caveat warnings, the
+settings overrides applied for the run, and the repo-root import shim
+(direct-path subprocess invocation, mirroring
+tests/test_backfill_edgar_fundamentals.py's TestInvocationForms).
 """
 
+import subprocess
 import sys
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from scripts import backfill_sentiment_history as backfill
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestProcessOne:
@@ -136,7 +138,21 @@ class TestPrintDepthReport:
             backfill._print_depth_report(mock_store)
         assert any("gdelt" in r.message for r in caplog.records)
 
-# TestInvocationForms (direct-path `--help` invocation) lives in
-# tests/test_backfill_scripts_invocation.py, shared with
-# backfill_news_history.py's and backfill_news_history_from_audit.py's
-# byte-identical versions of this test.
+
+class TestInvocationForms:
+    """Direct-path invocation (`python scripts/backfill_sentiment_history.py`)
+    must not die with ModuleNotFoundError -- mirrors
+    test_backfill_edgar_fundamentals.py's identical regression test for the
+    repo-root sys.path shim."""
+
+    def test_direct_path_invocation_imports_cleanly(self):
+        result = subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "scripts" / "backfill_sentiment_history.py"), "--help"],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "ModuleNotFoundError" not in result.stderr
+        assert "--months" in result.stdout

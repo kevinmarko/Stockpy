@@ -22,25 +22,16 @@ Existing files checked to avoid duplication (their surfaces are NOT re-tested he
   - tests/test_recommendation_tracking.py        (recommendation_tracking_report, _price_at_or_before)
   - tests/test_no_fabricated_metrics.py          (evaluate_portfolio default injection / CoVaR default)
   - tests/test_evaluate_portfolio_zero_positions.py (zero-position BF fallback)
+  - tests/test_evaluation_no_history.py          (evaluate_portfolio MAE/MFE NaN, no history)
+  - tests/test_evaluation_with_history.py        (evaluate_portfolio excursions from data_provider)
 
-``TestEvaluatePortfolioNoHistory``/``TestEvaluatePortfolioWithHistory`` below
-were formerly their own one-test files (tests/test_evaluation_no_history.py,
-tests/test_evaluation_with_history.py) sitting next to this owning suite;
-folded in here as this file's docstring already promised to be the place
-evaluate_portfolio() coverage lives, per the redundancy audit that found
-them as pure file-count overhead (no coverage change).
-
-Fully offline. Pure-math methods need no DB; the DB-touching evaluate_portfolio
-tests reuse the verified redirect_class_to_memory_db() isolation pattern
-(TestEvaluatePortfolioWithHistory needs the DB pre-seeded with a real trade
-before evaluate_portfolio() constructs its own TransactionsStore, so it uses
-a direct engine/Session handoff instead — see that class's docstring).
+Fully offline. Pure-math methods need no DB; the single evaluate_portfolio test
+reuses the verified redirect_class_to_memory_db() isolation pattern.
 """
 
 from __future__ import annotations
 
 import math
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -645,135 +636,3 @@ class TestEvaluatePortfolioMalformedSymbol:
         result = ee.evaluate_portfolio(self._df())
         aapl_row = result[result["Symbol"] == "AAPL"]
         assert len(aapl_row) == 1
-
-
-# ===========================================================================
-# TestEvaluatePortfolioNoHistory
-# ===========================================================================
-# Formerly tests/test_evaluation_no_history.py. Uses this file's own
-# _patched_ee() helper (a fresh, genuinely EMPTY in-memory TransactionsStore
-# per construction) rather than that file's original hand-rolled
-# __init__ monkeypatch -- same isolation guarantee, less duplicated plumbing.
-
-class TestEvaluatePortfolioNoHistory:
-    def test_no_history_returns_nan(self):
-        ee = _patched_ee()
-        test_df = pd.DataFrame({
-            "Symbol": ["XYZ"],
-            "sector": ["Technology"],
-            "position_size": [10000.0],
-            "stop_loss_pct": [0.05],
-            "Relative_Strength": [0.0],
-        })
-        benchmark_df = pd.DataFrame({
-            "sector": ["Technology"],
-            "weight": [1.0],
-            "return": [0.02],
-        })
-
-        processed_df = ee.evaluate_portfolio(test_df, benchmark_df)
-
-        # MAE, MFE, and Edge Ratio are all NaN due to no real trade history.
-        assert np.isnan(processed_df.iloc[0]["MAE"])
-        assert np.isnan(processed_df.iloc[0]["MFE"])
-        assert np.isnan(processed_df.iloc[0]["Edge Ratio"])
-
-    def test_never_fabricates_from_single_bar_high_low(self):
-        """A row carrying scalar Entry_Price/High/Low but no real
-        TransactionsStore trade must still yield NaN MAE/MFE/Edge Ratio -- a
-        single day's High/Low is not a genuine intra-trade excursion path
-        (CONSTRAINT #4: never fabricate a plausible-looking value in place
-        of NaN when the real computation's inputs aren't available)."""
-        ee = _patched_ee()
-        test_df = pd.DataFrame({
-            "Symbol": ["XYZ"],
-            "sector": ["Technology"],
-            "position_size": [10000.0],
-            "stop_loss_pct": [0.05],
-            "Relative_Strength": [0.0],
-            "Entry_Price": [100.0],
-            "High": [160.0],
-            "Low": [90.0],
-        })
-        benchmark_df = pd.DataFrame({
-            "sector": ["Technology"],
-            "weight": [1.0],
-            "return": [0.02],
-        })
-
-        processed_df = ee.evaluate_portfolio(test_df, benchmark_df)
-
-        assert np.isnan(processed_df.iloc[0]["MAE"])
-        assert np.isnan(processed_df.iloc[0]["MFE"])
-        assert np.isnan(processed_df.iloc[0]["Edge Ratio"])
-
-
-# ===========================================================================
-# TestEvaluatePortfolioWithHistory
-# ===========================================================================
-# Formerly tests/test_evaluation_with_history.py. Needs the DB pre-seeded
-# with a real trade BEFORE evaluate_portfolio() constructs its own
-# TransactionsStore several frames deep, so redirect_class_to_memory_db()
-# (which forces a fresh, empty :memory: DB per construction) doesn't fit --
-# each :memory: connection is its own isolated database. Instead this class
-# points the constructor directly at the already-seeded store's engine/
-# Session, mirroring the original file's own pattern.
-
-class TestEvaluatePortfolioWithHistory:
-    def test_computes_excursions_from_real_trade_history(self):
-        store = transactions_store.TransactionsStore(db_url="sqlite:///:memory:")
-
-        entry_ts = datetime(2026, 6, 20, 9, 30, 0)
-        store.record_trade(
-            symbol="AAPL",
-            side="long",
-            entry_ts=entry_ts,
-            entry_price=100.0,
-            shares=50.0,
-        )
-
-        original_store_init = transactions_store.TransactionsStore.__init__
-
-        try:
-            def mock_init(self, db_url=None, *, readonly=False, **kwargs):
-                # Point every TransactionsStore() construction inside this
-                # block at the same prepared, write-capable in-memory
-                # engine regardless of db_url/readonly passed.
-                self.engine = store.engine
-                self.Session = store.Session
-            transactions_store.TransactionsStore.__init__ = mock_init
-
-            # High reaches 110 (+10%), Low drops to 95 (-5%) over the hold period.
-            date_range = pd.date_range(start="2026-06-20", end="2026-06-24", freq="D")
-            mock_history = pd.DataFrame({
-                "High": [100.0, 105.0, 110.0, 108.0, 104.0],
-                "Low": [100.0, 98.0, 95.0, 97.0, 101.0],
-                "Close": [100.0, 103.0, 107.0, 105.0, 103.0],
-            }, index=date_range)
-            mock_history.index = mock_history.index.tz_localize(None)
-            data_provider = {"AAPL": mock_history}
-
-            ee = EvaluationEngine()
-            test_df = pd.DataFrame({
-                "Symbol": ["AAPL"],
-                "sector": ["Technology"],
-                "position_size": [5000.0],
-                "stop_loss_pct": [0.05],
-                "Relative_Strength": [0.0],
-            })
-            benchmark_df = pd.DataFrame({
-                "sector": ["Technology"],
-                "weight": [1.0],
-                "return": [0.02],
-            })
-
-            processed_df = ee.evaluate_portfolio(test_df, benchmark_df, data_provider=data_provider)
-
-            # MAE: low of 95 -> (100 - 95)/100 = 0.05 (positive magnitude)
-            # MFE: high of 110 -> (110 - 100)/100 = 0.10
-            # Edge Ratio: MFE / MAE = 0.10 / 0.05 = 2.0
-            assert math.isclose(processed_df.iloc[0]["MAE"], 0.05, abs_tol=1e-3)
-            assert math.isclose(processed_df.iloc[0]["MFE"], 0.10, abs_tol=1e-3)
-            assert math.isclose(processed_df.iloc[0]["Edge Ratio"], 2.0, abs_tol=1e-3)
-        finally:
-            transactions_store.TransactionsStore.__init__ = original_store_init

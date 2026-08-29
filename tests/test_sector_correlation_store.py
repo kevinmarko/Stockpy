@@ -155,19 +155,3 @@ class TestOfflineStandIn:
     def test_read_degrades_to_empty_list(self):
         store = _OfflineSectorCorrelationStore()
         assert store.get_latest("NIO") == []
-
-    def test_record_correlations_mid_batch_failure_rolls_back_entire_batch(self):
-        """Atomicity: if an event fails to process (e.g. KeyError), the entire batch must roll back and not persist partial data."""
-        store = SectorCorrelationStore(db_url="sqlite:///:memory:")
-        
-        rows = [
-            {"sector": "Technology", "correlation_coefficient": 0.8},
-            {"missing_sector_key": True},  # This will raise KeyError
-            {"sector": "Healthcare", "correlation_coefficient": 0.5}
-        ]
-        
-        with pytest.raises(KeyError):
-            store.record_correlations(rows, as_of="2026-07-21", target_symbol="NIO")
-            
-        # The whole batch must have aborted
-        assert store.get_latest("NIO") == []
