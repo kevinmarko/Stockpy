@@ -5,3 +5,7 @@
 - [x] Fix the incorrect Robinhood login citation (`api/auth.py` -> `api/_rh_login.py`)
 - [x] Commit changes
 - [x] Push to origin and open PR
+- [x] Second audit round (Claude Code, 3 agents) against the opened PR: capability-map citations, deterministic-limits/settings values, known-issues completeness
+- [x] Independently spot-check the 3 agents' highest-impact findings against live code before applying (not taken on trust)
+- [x] Apply confirmed fixes: paper-book mis-citation, options-desk overstated status, macro-killswitch attribution, deterministic-limits ordering/omission (MAX_PORTFOLIO_GROSS), state-validation mischaracterization, I/O-filtering + model-alignment + observability completeness gaps
+- [x] Push corrected doc to update the same PR (no new PR opened)
