@@ -24,6 +24,7 @@ The load-bearing docs also listed in CLAUDE.md's "Key documentation files" table
 | [`GO_LIVE_CHECKLIST.md`](GO_LIVE_CHECKLIST.md) | Pre-live checklist (all automatable items covered by `preflight_check.py`) |
 | [`FEATURE_TIER_HISTORY.md`](FEATURE_TIER_HISTORY.md) | Detailed dated changelog for every Tier/Task/Scope feature shipped since 2026-06 |
 | [`test_coverage_analysis.md`](test_coverage_analysis.md) | Test-coverage audit — suite inventory, module-level gap table, prioritized roadmap |
+| [`AGENTIC_TRADING_SAFETY_FRAMEWORK.md`](AGENTIC_TRADING_SAFETY_FRAMEWORK.md) | Capability map, guardrail status, and structural gaps for the agentic trading surface |
 | [`BUG_HUNTING_PROCESS.md`](BUG_HUNTING_PROCESS.md) | Bug hunting SOP, 4-tier severity model, 5-phase workflow, domain checklists |
 | [`VALIDATION_STRATEGY_FIX_LOG.md`](VALIDATION_STRATEGY_FIX_LOG.md) | Dated rollup of `STRATEGY_REGISTRY` deployability-gate fix attempts |
 
