@@ -159,7 +159,8 @@ describe("ZeroDteDesk", () => {
           option_type: "CALL",
           strike: 547.0,
           contracts: 5,
-        })
+        }),
+        false
       );
       expect(onTradeMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -170,6 +171,67 @@ describe("ZeroDteDesk", () => {
     });
 
     expect(await screen.findByText(/Executed 5x SPY 547 CALL/i)).toBeInTheDocument();
+  });
+
+  it("shows an override affordance when blocked by the deployability gate, and executes on confirmed override", async () => {
+    const onTradeMock = vi.fn();
+    vi.mocked(api.executeZeroDteTrade).mockResolvedValueOnce({
+      ok: false,
+      blocked: true,
+      message:
+        "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ZeroDteDesk onTradeExecuted={onTradeMock} />);
+
+    const execBtn = await screen.findByRole("button", { name: /⚡ Trade 0DTE Breakout/i });
+    fireEvent.click(execBtn);
+
+    expect(await screen.findByText(/UNGATEABLE_DATA_GAP/i)).toBeInTheDocument();
+    expect(api.executeZeroDteTrade).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ symbol: "SPY" }),
+      false
+    );
+
+    const overrideBtn = await screen.findByRole("button", { name: /⚠️ Override & Execute/i });
+    fireEvent.click(overrideBtn);
+    expect(confirmSpy).toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(api.executeZeroDteTrade).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ symbol: "SPY" }),
+        true
+      );
+      expect(onTradeMock).toHaveBeenCalledWith(expect.objectContaining({ ok: true, symbol: "SPY" }));
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not execute when the override confirmation dialog is declined", async () => {
+    vi.mocked(api.executeZeroDteTrade).mockResolvedValueOnce({
+      ok: false,
+      blocked: true,
+      message:
+        "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<ZeroDteDesk />);
+
+    const execBtn = await screen.findByRole("button", { name: /⚡ Trade 0DTE Breakout/i });
+    fireEvent.click(execBtn);
+
+    const overrideBtn = await screen.findByRole("button", { name: /⚠️ Override & Execute/i });
+    fireEvent.click(overrideBtn);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(api.executeZeroDteTrade).toHaveBeenCalledTimes(1);
+
+    confirmSpy.mockRestore();
   });
 
   it("calls onClose when close button clicked", async () => {

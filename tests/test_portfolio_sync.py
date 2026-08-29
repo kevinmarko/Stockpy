@@ -276,6 +276,115 @@ def test_fresh_quote_still_classifies_full(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Forecast coverage — forecast_symbols → SymbolStatus.forecast_available
+#
+# Regression coverage for the api/data_api.py::get_sync_report() wiring that
+# threads ForecastTracker.get_covered_symbols() into build_sync_report()'s
+# forecast_symbols kwarg. build_sync_report() itself already supported this
+# parameter (added in the original Task 1.4 implementation), but it had ZERO
+# test coverage of its own -- every existing test either omits the kwarg
+# entirely or the caller-side tests in tests/test_data_api.py only assert the
+# mock was invoked with **kwargs, never that a real membership check happens.
+# ---------------------------------------------------------------------------
+
+
+def test_forecast_symbols_marks_covered_symbol_available(monkeypatch):
+    """A symbol present in forecast_symbols must report forecast_available=True."""
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+
+    held = {
+        "AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0),
+        "MSFT": _FakePosition("MSFT", 5, 300.0, 320.0, 1_600.0),
+    }
+    snap = _FakeSnapshot(positions=held)
+
+    client = _FakeRobinhoodClient(holdings=held, watchlists={})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: [])
+
+    provider = _FakeProvider(covered={"AAPL", "MSFT"}, has_funds={"AAPL", "MSFT"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+
+    report = ps.build_sync_report(snap, client=client, forecast_symbols=["AAPL"])
+
+    assert report.symbols["AAPL"].forecast_available is True
+    # MSFT is held and fully covered by market data, but has NO forecast --
+    # must NOT be marked available just because it's otherwise fully covered.
+    assert report.symbols["MSFT"].forecast_available is False
+
+
+def test_forecast_symbols_lookup_is_case_insensitive(monkeypatch):
+    """forecast_symbols may come back lowercase/mixed-case from an upstream
+    source -- build_sync_report must uppercase both sides before comparing."""
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+
+    held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
+    snap = _FakeSnapshot(positions=held)
+
+    client = _FakeRobinhoodClient(holdings=held, watchlists={})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: [])
+
+    provider = _FakeProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+
+    report = ps.build_sync_report(snap, client=client, forecast_symbols=["aapl"])
+
+    assert report.symbols["AAPL"].forecast_available is True
+
+
+def test_no_forecast_symbols_arg_defaults_every_symbol_to_unavailable(monkeypatch):
+    """Backward compatibility: every pre-existing caller of build_sync_report()
+    (investyo_mcp_server.py, gui/panels/live_inventory.py, this module's own
+    async_sync_now default-arg call, and most existing tests in this file)
+    never passes forecast_symbols at all. That call shape must keep working
+    unchanged -- forecast_symbols defaults to None, and every symbol degrades
+    to forecast_available=False (never raises, never fabricates True)."""
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+
+    held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
+    snap = _FakeSnapshot(positions=held)
+
+    client = _FakeRobinhoodClient(holdings=held, watchlists={})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: [])
+
+    provider = _FakeProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+
+    # No forecast_symbols kwarg at all -- must not raise (TypeError or
+    # otherwise) and must not fabricate forecast_available=True.
+    report = ps.build_sync_report(snap, client=client)
+
+    assert report.symbols["AAPL"].forecast_available is False
+
+
+def test_empty_forecast_symbols_list_marks_all_unavailable(monkeypatch):
+    """An explicit empty list (e.g. ForecastTracker.get_covered_symbols()
+    degrading to [] on a DB error) must behave identically to omitting the
+    kwarg -- every symbol forecast_available=False, never raises."""
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+
+    held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
+    snap = _FakeSnapshot(positions=held)
+
+    client = _FakeRobinhoodClient(holdings=held, watchlists={})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: [])
+
+    provider = _FakeProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+
+    report = ps.build_sync_report(snap, client=client, forecast_symbols=[])
+
+    assert report.symbols["AAPL"].forecast_available is False
+
+
+# ---------------------------------------------------------------------------
 # Coverage gaps — held but uncovered  →  EQUITY_ONLY (never dropped)
 # ---------------------------------------------------------------------------
 
