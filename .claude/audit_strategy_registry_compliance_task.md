@@ -1,0 +1,8 @@
+- [x] Dispatch 6 autonomous subagents
+- [x] Agent 1 fixes `main_orchestrator.py`
+- [x] Agent 4 deletes live trading LLM skills and endpoints
+- [x] Agent 3 confirms universe generation logic
+- [x] Agent A corrects docs for `earnings_crush` and `dispersion_trading`
+- [x] Agent B patches `api/pilots_api.py` to add `gamma_scalper` gate status
+- [x] Confirm test suite passing
+- [x] Prepare PR artifacts
