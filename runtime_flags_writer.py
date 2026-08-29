@@ -16,18 +16,18 @@ return a :class:`WriteResult`::
 Why this module is NOT a stdlib-only leaf (and :mod:`runtime_flags` is)
 --------------------------------------------------------------------------
 ``runtime_flags.py`` is imported BY ``settings.py``, so it can never import
-``settings``, ``gui.env_io``, or anything that does. That constraint left one
+``settings``, ``env_io``, or anything that does. That constraint left one
 documented hole, quoted from its own module docstring:
 
-    "this module does not refuse ``gui/env_io.py::SECRET_KEYS`` fields. It
-    cannot import that set (``gui.env_io`` imports ``settings``), and
+    "this module does not refuse ``env_io.py::SECRET_KEYS`` fields. It
+    cannot import that set (``env_io.py`` imports ``settings``), and
     duplicating an 80-key credential list into a leaf module is a drift hazard
     worse than the gap. Refusing to WRITE a secret into the store belongs in
     the writer, which has no such import restriction."
 
 This module closes exactly that hole. It is only ever called from
 request-handling code that runs long after ``settings.py`` has finished
-importing (an API endpoint), so it imports ``settings``, ``gui.env_io``,
+importing (an API endpoint), so it imports ``settings``, ``env_io``,
 ``settings_keysets``, and ``runtime_flags`` normally. **It must never be
 imported by ``settings.py`` or by ``runtime_flags.py``** — that would
 reintroduce the circular import the leaf constraint exists to prevent.
@@ -36,7 +36,7 @@ AST-enforced by ``tests/test_runtime_flags_writer.py::TestModuleWiring``.
 --------------------------------------------------------------------------
 The five refusal gates, in order
 --------------------------------------------------------------------------
-1. **Secrets** (``gui.env_io.SECRET_KEYS``). A credential must never be
+1. **Secrets** (``env_io.SECRET_KEYS``). A credential must never be
    persisted into a plaintext JSON file that the read path will happily load
    into a live process. This gate runs FIRST, before the "is it a real field"
    check — 38 of the 40 secret keys ARE real ``Settings`` fields, so ordering
@@ -72,7 +72,7 @@ The five refusal gates, in order
    ``Settings`` value that is not JSON-safe is ``OUTPUT_DIR`` (a ``PosixPath``),
    and that is already refused by gate 2.
 
-Not a gate, deliberately: ``gui.env_io.ALLOWED_KEYS``. That is the ``.env``
+Not a gate, deliberately: ``env_io.ALLOWED_KEYS``. That is the ``.env``
 writer's allowlist for a DIFFERENT mechanism (durable, next-launch, unaffected
 by ``BOOTSTRAP_KEYS``) — see ``settings_keysets.py``'s own "Relationship to the
 OTHER key sets" section. Also not a gate: ``settings_keysets.DANGEROUS_KEYS``.
@@ -111,7 +111,7 @@ cannot lose each other's keys**. This is the realistic case: FastAPI runs
 ``def`` handlers in a threadpool, so two near-simultaneous ``PUT``s from the
 PWA are genuinely concurrent threads in the daemon process. The file itself is
 replaced via a temp file + ``os.replace`` — the same write-then-rename idiom as
-``gui/env_io.py::write_many_atomic`` (which also uses ``os.replace``) and
+``env_io.py::write_many_atomic`` (which also uses ``os.replace``) and
 ``execution/kill_switch.py::activate`` (which uses ``Path.rename``) — so a
 concurrent READER never observes a partial file.
 
@@ -124,7 +124,7 @@ session, a CLI) that lands between our read and our ``os.replace`` is
 last-writer-wins and its key is lost. Closing that would need an OS-level lock
 plus stale-lock recovery, which is disproportionate for a single-operator
 artifact edited by hand a few times a day. This is the same residual limitation
-``gui/env_io.py::write_many_atomic`` documents for ``.env``, and is not made
+``env_io.py::write_many_atomic`` documents for ``.env``, and is not made
 worse here.
 
 --------------------------------------------------------------------------
@@ -186,7 +186,7 @@ from typing import Any, Iterable, Mapping, Optional
 import runtime_flags
 import settings as settings_module
 import settings_keysets
-from gui import env_io
+import env_io
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +286,7 @@ class WriteResult:
 def _resolved_store_path(path: Optional[Any] = None) -> Path:
     """The store file this call will write, with symlinks resolved.
 
-    ``resolve()`` matches ``gui/env_io.py::write_many_atomic``'s
+    ``resolve()`` matches ``env_io.py::write_many_atomic``'s
     ``ENV_PATH.resolve()`` — if the store is a symlink, the write must replace
     the file it points AT, not swap the link for a regular file (which would
     silently detach the operator's intended location).
@@ -474,7 +474,7 @@ def _quarantine(store: Path) -> Optional[Path]:
 def _atomic_write_json(store: Path, payload: Mapping[str, Any]) -> None:
     """Write ``payload`` to ``store`` via temp file + ``os.replace``.
 
-    Same write-then-rename idiom as ``gui/env_io.py::write_many_atomic``
+    Same write-then-rename idiom as ``env_io.py::write_many_atomic``
     (``os.replace``) and ``execution/kill_switch.py::activate``
     (``Path.rename``): a concurrent reader sees either the old file or the new
     one, never a half-written one. ``os.replace`` rather than ``Path.rename``
@@ -648,7 +648,7 @@ def write_override(
     ----------
     key:
         A ``Settings.model_fields`` name. Refused if it is a secret
-        (``gui.env_io.SECRET_KEYS``), a bootstrap key
+        (``env_io.SECRET_KEYS``), a bootstrap key
         (``settings_keysets.BOOTSTRAP_KEYS``), or not a real field.
     raw_value:
         Any JSON-expressible value. Coerced through the field's own validator,

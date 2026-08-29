@@ -76,7 +76,7 @@ def _field_default(model_cls: type, name: str) -> Any:
 # coded default cannot break a test that follows this codebase's own
 # established convention.
 _BOOL_FIELD_NAMES: tuple[str, ...] = ()
-# Every `gui.env_io.SECRET_KEYS` entry that is also a real `Settings` field --
+# Every `env_io.SECRET_KEYS` entry that is also a real `Settings` field --
 # the STRING-typed sibling of `_BOOL_FIELD_NAMES` above, computed once here and
 # reused by `_clean_settings_between_tests` below for the per-test reset.
 #
@@ -87,21 +87,22 @@ _BOOL_FIELD_NAMES: tuple[str, ...] = ()
 # string, matching the coded default) so they can assert "no credential
 # configured" behavior, or so a test-local monkeypatched value isn't shadowed
 # by a real one already sitting on the singleton before the test even sets
-# it up. `gui.env_io.SECRET_KEYS` is this codebase's own canonical list of
+# it up. `env_io.SECRET_KEYS` is this codebase's own canonical list of
 # which `Settings` fields are secrets (CONSTRAINT #3) -- reusing it here
 # instead of hand-picking fields avoids yet another hand-maintained allowlist
 # that only grows by discovering the next broken test (see
 # `_clean_settings_between_tests`'s docstring for that exact history with
 # booleans).
 #
-# `gui.env_io` is imported LAZILY here (not at conftest.py module top) even
-# though, as of this writing, it only imports `ENV_PATH` from `settings` (not
-# the `settings` singleton itself) and so has no live circular-import hazard
-# today -- keeping the import inside this try block, after `settings`/
-# `runtime_flags` have already fully imported, means a future change to
-# gui/env_io.py's own imports (e.g. importing the `settings` singleton
-# directly) can never turn into an import-order failure for every single test
-# file via conftest.py, only a caught-and-ignored no-op here.
+# `env_io` (relocated from `gui/env_io.py` to the repo root -- F13, docs/
+# module_efficiency_redundancy_audit.md) is imported LAZILY here (not at
+# conftest.py module top) even though, as of this writing, it only imports
+# `ENV_PATH` from `settings` (not the `settings` singleton itself) and so has
+# no live circular-import hazard today -- keeping the import inside this try
+# block, after `settings`/`runtime_flags` have already fully imported, means
+# a future change to env_io.py's own imports (e.g. importing the `settings`
+# singleton directly) can never turn into an import-order failure for every
+# single test file via conftest.py, only a caught-and-ignored no-op here.
 #
 # Two things this set deliberately is NOT allowed to include:
 #   1. A `SECRET_KEYS` entry that isn't a real `Settings.model_fields` name
@@ -134,10 +135,10 @@ try:
     )
     for field_name in _BOOL_FIELD_NAMES:
         setattr(settings, field_name, _field_default(type(settings), field_name))
-    # Now the secret-string half: gui.env_io.SECRET_KEYS intersected with real
+    # Now the secret-string half: env_io.SECRET_KEYS intersected with real
     # Settings fields, filtered to string-typed ones (see the block comment
     # above for why both filters are needed).
-    import gui.env_io as _env_io
+    import env_io as _env_io
     _model_fields = type(settings).model_fields
     _SECRET_STR_FIELD_NAMES = tuple(
         name
@@ -381,7 +382,7 @@ def _clean_settings_between_tests(monkeypatch: pytest.MonkeyPatch) -> None:
 
     ``_SECRET_STR_FIELD_NAMES`` (module-level, computed once alongside
     ``_BOOL_FIELD_NAMES`` above) extends this same per-test reset to every
-    string-typed ``gui.env_io.SECRET_KEYS`` field that is a real ``Settings``
+    string-typed ``env_io.SECRET_KEYS`` field that is a real ``Settings``
     field -- this operator's real ``.env`` sets real command tokens / API
     keys / paths that a test may assume are unset (the coded default, empty
     string) just as reliably as it sets stray booleans on. See that
