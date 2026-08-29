@@ -42,8 +42,8 @@ Grouped by component:
   - `LOCAL_LLM_BASE_URL: Optional[str] = Field(default="http://localhost:11434/v1", description="Base URL for OpenAI-compatible local open-source LLM server (Ollama, vLLM, LM Studio).")`
   - `LOCAL_LLM_MODEL: str = Field(default="llama3.3", description="Default model name for local LLM requests.")`
   - `LOCAL_LLM_API_KEY: Optional[str] = Field(default=None, description="Optional API key for local or self-hosted LLM server (e.g. OpenRouter / vLLM token).")`
-  - `AI_CHAT_DEFAULT_PROVIDER: str = Field(default="auto", description="Default AI chat provider: 'auto', 'gemini', 'anthropic', 'openai', 'local'.")`
-  - `AI_CHAT_DEFAULT_MODEL: Optional[str] = Field(default=None, description="Optional explicit override for default chat model across all providers.")`
+  - `AI_CHAT_DEFAULT_PROVIDER: str = Field(default="gemini", description="Default AI chat provider: 'gemini', 'anthropic', 'openai', 'local', or 'auto'.")`
+  - `AI_CHAT_DEFAULT_MODEL: Optional[str] = Field(default="gemini-2.5-flash", description="Optional explicit override for default chat model across all providers.")`
 - Register `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, `AI_CHAT_DEFAULT_PROVIDER`, and `AI_CHAT_DEFAULT_MODEL` in `ALLOWED_KEYS` in [`gui/env_io.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_gemini_live_audio/gui/env_io.py).
 
 ---
