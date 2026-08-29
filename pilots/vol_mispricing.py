@@ -46,6 +46,7 @@ import pandas as pd
 from scipy.optimize import brentq
 from scipy.stats import norm
 
+from numeric_utils import safe_float as _safe_float
 from pilots.har_volatility import get_har_volatility_forecast
 from settings import settings
 
@@ -359,17 +360,6 @@ def implied_volatility_from_price(
 # ---------------------------------------------------------------------------
 # Mispricing Math & Contract Extraction
 # ---------------------------------------------------------------------------
-
-
-def _safe_float(val: Any) -> Optional[float]:
-    """Safely converts val to float, guarding against methods, None, NaN, and unconvertible types."""
-    if val is None or callable(val):
-        return None
-    try:
-        f = float(val)
-        return f if not math.isnan(f) else None
-    except (ValueError, TypeError):
-        return None
 
 
 def _safe_int(val: Any) -> Optional[int]:

@@ -16,9 +16,9 @@ always render.
 from __future__ import annotations
 
 import logging
-import math
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from numeric_utils import safe_float as _safe_float_or_none
 from settings import settings
 
 if TYPE_CHECKING:
@@ -26,22 +26,6 @@ if TYPE_CHECKING:
     from dto_models import MacroEconomicDTO
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_float_or_none(val: Any) -> Optional[float]:
-    """Coerce *val* to float, or ``None`` when missing/NaN.
-
-    Mirrors ``main_orchestrator._safe_float_or_none`` so the advisory writer
-    emits a JSON ``null`` (never a fabricated ``0.0``) when a metric simply
-    isn't available for a ticker — CONSTRAINT #4. The GUI reader treats
-    ``null`` identically to a missing key, letting it distinguish "not
-    computed" from a genuine zero.
-    """
-    try:
-        f = float(val)
-        return None if math.isnan(f) else f
-    except (TypeError, ValueError):
-        return None
 
 
 def _rating_consecutive_cycles(symbol: str) -> Optional[int]:

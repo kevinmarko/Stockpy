@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3209,
+      "line": 3203,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4315,
+      "line": 4309,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4420,
+      "line": 4414,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -763,7 +763,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:325",
+        "site": "api/pilots_api.py:326",
         "via": []
       },
       {
@@ -1640,7 +1640,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4797",
+        "site": "api/pilots_api.py:4791",
         "via": []
       }
     ],
@@ -1651,7 +1651,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4796",
+        "site": "api/pilots_api.py:4790",
         "via": []
       }
     ],
@@ -1662,7 +1662,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4966",
+        "site": "api/pilots_api.py:4960",
         "via": []
       },
       {
@@ -1737,7 +1737,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4938",
+        "site": "api/pilots_api.py:4932",
         "via": []
       },
       {
@@ -1781,7 +1781,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:635",
+        "site": "api/pilots_api.py:636",
         "via": []
       }
     ],
@@ -3137,7 +3137,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:630",
+        "site": "api/pilots_api.py:631",
         "via": []
       },
       {
