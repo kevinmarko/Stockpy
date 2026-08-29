@@ -117,15 +117,39 @@ test file; `docs/settings_field_census.{json,md}`/`settings_liveness.json` regen
 shape changed). Full combined suite (147 tests across the 3 target files + the AST guard + the
 canonical pricer's own tests) passes; `ruff --select=F821,F822,F823,E9` clean.
 
-**PR 5 — Add `get_quotes_batch` to the provider ABC (F6).** The loops exist because
-`MarketDataProvider`'s ABC has no batch method — `api/data_api.py`'s own docstring concedes this.
-Add it, default-implement it as the current loop so no provider breaks, override it for FMP via the
-existing `fmp_client.batch_quote()`, then migrate call sites (`api/data_api.py:645`,
-`pilots/options_risk.py:421`, `pilots/scenario_matrix.py:400`, `data/paper_account_store.py`'s
-`settle_expired_options`, `pilots/dispersion_trading.py:779-808`, `evaluation_engine.py:1114` via the
-existing `data/historical_store.py:1039` `get_bars_bulk()`). Fixes the cause, not the instances.
-Confirmed none of these sites were touched by the recent unbounded-blocking-call sweep, so this PR
-starts from a clean, unaffected baseline.
+**PR 5 — DONE.** Add `get_quotes_batch` to the provider ABC (F6). The `MarketDataProvider.get_quotes_batch()`
+ABC method itself (default per-symbol-loop implementation + a real FMP `/batch-quote` override)
+landed in PR #935/#942 as a prerequisite; `api/data_api.py`, `pilots/options_risk.py`, and
+`pilots/scenario_matrix.py` were migrated to it in that same prior work. This PR closed the three
+remaining call sites named in the original plan. (1) `data/paper_account_store.py::settle_expired_options`
+— restructured into two passes (parse + collect the distinct expired-underlying set, then one
+`get_quotes_batch()` call, then settle) instead of one `get_latest_quote()` call per expired
+position; both existing tests' `MockMarketProvider` fixtures only implemented `get_latest_quote`
+(not part of the real ABC's contract, which always exposes `get_quotes_batch`) and needed updating,
+plus 2 new regression tests for the batch-failure and partial-coverage dead-letter paths.
+(2) `pilots/dispersion_trading.py::_source_real_dispersion_inputs` — the spot-price loop (index +
+every constituent, previously one `pilots.price_provider.get_current_price()` call per symbol) now
+resolves via one `get_provider().get_quotes_batch()` call; the IV-resolution loop (a different data
+source, the options chain) and the realized-correlation bars loop were deliberately left untouched,
+out of scope for this call site. No existing test exercised this function's internals directly (both
+callers monkeypatch the whole function), so 3 new regression tests were added. (3) `evaluation_engine.py::recommendation_tracking_report`
+— added a prewarm step, before the per-signal loop, that resolves every distinct symbol across
+`buy_entries` via one `HistoricalStore.get_bars_bulk()` call instead of the loop's original
+first-access-per-symbol serial `get_bars()` calls; `_get_bars()`'s own per-symbol lazy-fetch stays as
+the fallback for any symbol missing from the bulk result, so the outcome is identical either way. A
+real gap was found and closed here: the existing `_FakeHistoricalStore` test fixture had no
+`get_bars_bulk()` method, so the entire pre-existing 28-test suite was silently exercising the
+`AttributeError`-fallback path (i.e., testing the pre-migration behavior, not the new batched one) —
+fixed by adding a real `get_bars_bulk()` to the fixture (all 28 tests still pass against genuine
+batching) plus 3 new dedicated regression tests. All three migrations preserve the exact prior
+dead-letter/CONSTRAINT #4/#6 contract: a symbol absent from a batch result (unresolvable, or a total
+batch-call failure) produces the identical outcome the old per-symbol try/except produced for that
+symbol — never a fabricated value, never a raised exception. Verified:
+`tests/test_paper_account_store.py` (44 passed, 2 new), `tests/test_dispersion_trading.py` (18
+passed, 3 new), `tests/test_recommendation_tracking.py` (31 passed, 3 new),
+`tests/test_evaluation_engine.py` + `tests/test_pilots_calibration.py` + `tests/test_pilots_paper_broker.py`
++ `tests/test_market_data.py` (unaffected), `ruff check . --select=F821,F822,F823,E9` clean. No
+`settings.py` changes, so no settings-census/liveness regeneration was needed.
 
 **PR 6 — WITHDRAWN.** Originally "Guard `api/metrics_api.py` (F7)". Re-verified while
 attempting implementation, not just re-read: `api/metrics_api.py`'s own module docstring explicitly

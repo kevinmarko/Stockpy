@@ -752,10 +752,11 @@ def _source_real_dispersion_inputs(
     weights: Dict[str, float],
 ) -> Tuple[Dict[str, float], Dict[str, float], Optional[float]]:
     """
-    Best-effort sources real spot prices (`pilots.price_provider.get_current_price`), real ATM
-    implied vol from the options chain (`data.market_data.get_options_provider`), and a real
-    trailing realized-correlation estimate (`data.historical_store.HistoricalStore` daily bars
-    via `compute_realized_correlation_matrix`) for one index + its constituent universe.
+    Best-effort sources real spot prices (`data.market_data.get_provider().get_quotes_batch()`,
+    one batched call for the index + every constituent -- F6, docs/module_efficiency_redundancy_audit.md),
+    real ATM implied vol from the options chain (`data.market_data.get_options_provider`), and a
+    real trailing realized-correlation estimate (`data.historical_store.HistoricalStore` daily
+    bars via `compute_realized_correlation_matrix`) for one index + its constituent universe.
 
     Returns `(spot_map, iv_map, realized_correlation)` -- any symbol/value that couldn't be
     resolved from real data is simply absent/None (CONSTRAINT #4: never a fabricated stand-in).
@@ -766,9 +767,11 @@ def _source_real_dispersion_inputs(
     realized_corr: Optional[float] = None
 
     try:
-        from pilots.price_provider import get_current_price
-    except Exception:
-        get_current_price = None  # type: ignore[assignment]
+        from data.market_data import get_provider
+        market_provider = get_provider()
+    except Exception as exc:
+        logger.debug("MarketDataProvider unavailable for dispersion inputs: %s", exc)
+        market_provider = None
 
     try:
         from data.market_data import get_options_provider
@@ -784,14 +787,27 @@ def _source_real_dispersion_inputs(
         logger.debug("HistoricalStore unavailable for dispersion inputs: %s", exc)
         store = None
 
-    if get_current_price is not None:
-        idx_spot = get_current_price(idx_sym)
-        if idx_spot and idx_spot > 0:
-            spot_map[idx_sym] = idx_spot
-        for s in constituents:
-            s_spot = get_current_price(s)
-            if s_spot and s_spot > 0:
-                spot_map[s] = s_spot
+    if market_provider is not None:
+        # Batched (F6, docs/module_efficiency_redundancy_audit.md): one
+        # get_quotes_batch() call for the index + every constituent instead
+        # of a get_current_price()-per-symbol loop (each of which was its
+        # own get_latest_quote() network round-trip). Same
+        # never-raises/dead-letter-per-symbol contract as the prior loop --
+        # a symbol absent from the batch result (unresolvable, or a total
+        # batch failure) simply stays out of spot_map, exactly as
+        # get_current_price returning 0.0 on failure did.
+        all_symbols = [idx_sym] + list(constituents)
+        try:
+            quotes = market_provider.get_quotes_batch(all_symbols)
+        except Exception as exc:
+            logger.debug("get_quotes_batch failed for dispersion inputs: %s", exc)
+            quotes = {}
+        for sym in all_symbols:
+            quote = quotes.get(sym.upper())
+            if quote is not None:
+                price = getattr(quote, "price", None)
+                if price and float(price) > 0:
+                    spot_map[sym] = float(price)
 
     if idx_sym in spot_map:
         idx_iv = _resolve_atm_iv(options_provider, idx_sym, spot_map[idx_sym])

@@ -179,6 +179,103 @@ def test_compute_realized_correlation_matrix():
     assert -1.0 <= weighted_avg <= 1.0
 
 
+# ---------------------------------------------------------------------------
+# 1b. _source_real_dispersion_inputs -- batched quote resolution (F6)
+# ---------------------------------------------------------------------------
+
+class _FakeQuote:
+    def __init__(self, price):
+        self.price = price
+
+
+def test_source_real_dispersion_inputs_uses_one_batched_quote_call(monkeypatch):
+    """F6 regression (docs/module_efficiency_redundancy_audit.md):
+    _source_real_dispersion_inputs used to call get_current_price() once
+    per symbol (index + every constituent), each its own get_latest_quote()
+    network round-trip. It must now resolve spot_map via exactly ONE
+    get_quotes_batch() call covering the whole symbol set.
+    """
+    calls = []
+
+    class FakeProvider:
+        def get_quotes_batch(self, symbols):
+            calls.append(list(symbols))
+            return {s.upper(): _FakeQuote(100.0 + i) for i, s in enumerate(symbols)}
+
+    monkeypatch.setattr("data.market_data.get_provider", lambda: FakeProvider())
+    # Options provider / historical store are independently best-effort and
+    # not the subject of this test -- force them unavailable so only the
+    # spot_map path is exercised.
+    monkeypatch.setattr("data.market_data.get_options_provider", lambda: (_ for _ in ()).throw(RuntimeError("n/a")))
+    monkeypatch.setattr(
+        "data.historical_store.HistoricalStore",
+        lambda: (_ for _ in ()).throw(RuntimeError("n/a")),
+    )
+
+    constituents = ["AAPL", "MSFT"]
+    spot_map, iv_map, realized_corr = dispersion_trading._source_real_dispersion_inputs(
+        "SPY", constituents, {"AAPL": 0.5, "MSFT": 0.5},
+    )
+
+    # Exactly one batched call, covering the index + every constituent.
+    assert len(calls) == 1
+    assert set(calls[0]) == {"SPY", "AAPL", "MSFT"}
+
+    assert spot_map["SPY"] == 100.0
+    assert spot_map["AAPL"] == 101.0
+    assert spot_map["MSFT"] == 102.0
+
+
+def test_source_real_dispersion_inputs_skips_symbols_missing_from_batch(monkeypatch):
+    """A symbol absent from the get_quotes_batch() result (unresolvable, or
+    a total batch failure) must be simply absent from spot_map -- never a
+    fabricated price (CONSTRAINT #4) -- matching the old per-symbol
+    get_current_price() loop's degrade-to-0.0-then-skip behavior.
+    """
+    class PartialProvider:
+        def get_quotes_batch(self, symbols):
+            # MSFT deliberately absent from the response.
+            return {"SPY": _FakeQuote(500.0), "AAPL": _FakeQuote(200.0)}
+
+    monkeypatch.setattr("data.market_data.get_provider", lambda: PartialProvider())
+    monkeypatch.setattr("data.market_data.get_options_provider", lambda: (_ for _ in ()).throw(RuntimeError("n/a")))
+    monkeypatch.setattr(
+        "data.historical_store.HistoricalStore",
+        lambda: (_ for _ in ()).throw(RuntimeError("n/a")),
+    )
+
+    spot_map, _, _ = dispersion_trading._source_real_dispersion_inputs(
+        "SPY", ["AAPL", "MSFT"], {"AAPL": 0.5, "MSFT": 0.5},
+    )
+
+    assert spot_map == {"SPY": 500.0, "AAPL": 200.0}
+    assert "MSFT" not in spot_map
+
+
+def test_source_real_dispersion_inputs_batch_call_raising_degrades_to_empty_spot_map(monkeypatch):
+    """A total get_quotes_batch() failure (network error, provider outage)
+    must degrade to an empty spot_map, never raise out of
+    _source_real_dispersion_inputs (CONSTRAINT #6)."""
+    class RaisingProvider:
+        def get_quotes_batch(self, symbols):
+            raise RuntimeError("market data outage")
+
+    monkeypatch.setattr("data.market_data.get_provider", lambda: RaisingProvider())
+    monkeypatch.setattr("data.market_data.get_options_provider", lambda: (_ for _ in ()).throw(RuntimeError("n/a")))
+    monkeypatch.setattr(
+        "data.historical_store.HistoricalStore",
+        lambda: (_ for _ in ()).throw(RuntimeError("n/a")),
+    )
+
+    spot_map, iv_map, realized_corr = dispersion_trading._source_real_dispersion_inputs(
+        "SPY", ["AAPL", "MSFT"], {"AAPL": 0.5, "MSFT": 0.5},
+    )
+
+    assert spot_map == {}
+    assert iv_map == {}
+    assert realized_corr is None
+
+
 def test_evaluate_dispersion_opportunity():
     # When implied correlation >> realized correlation => Long Dispersion
     res_long = evaluate_dispersion_opportunity(
