@@ -124,6 +124,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 import requests
@@ -584,12 +585,38 @@ def reset_gdelt_rate_limiter() -> None:
         _gdelt_cooldown_logged = False
 
 
+# Cross-process state-file path, monkeypatchable so tests never touch the real
+# machine-shared LOCAL_DATA_ROOT (mirrors data/fmp_client.py's
+# `_fmp_throttle_state_path_override` / data/edgar_fundamentals.py's
+# `_edgar_throttle_state_path_override` -- see tests/test_fmp_client.py's
+# `client_settings` fixture for the pattern this one mirrors exactly).
+# `None` (the default) means "resolve from settings at call time".
+_gdelt_throttle_state_path_override: Optional[Path] = None
+
+
+def _gdelt_throttle_state_path() -> Path:
+    if _gdelt_throttle_state_path_override is not None:
+        return _gdelt_throttle_state_path_override
+    from settings import settings as _settings
+    return _settings.LOCAL_DATA_ROOT / "rate_limits" / "gdelt.state"
+
+
 def _gdelt_throttle(min_interval: float) -> None:
     """Space request ISSUANCE by at least ``min_interval`` seconds.
 
     The lock is deliberately held across the sleep (see the section comment
     above). ``time.monotonic`` — not ``time.time`` — so an NTP step cannot
     make the elapsed gap go negative and skip the delay.
+
+    This is the in-process layer only (threads within THIS process). A
+    second, cross-process layer follows -- see
+    data/cross_process_throttle.py's module docstring for why GDELT's
+    courtesy budget is per-account (i.e. per SOURCE IP), not per-process,
+    and why this repo's many concurrent git worktrees need both layers, not
+    just this one -- the same reasoning data/fmp_client.py and
+    data/edgar_fundamentals.py already apply to their own throttles
+    (docs/module_efficiency_redundancy_audit.md's F8: this GDELT throttle
+    was the one of the three missing this second layer).
     """
     global _gdelt_last_request_time
     if min_interval <= 0:
@@ -600,6 +627,9 @@ def _gdelt_throttle(min_interval: float) -> None:
         if elapsed < min_interval:
             time.sleep(min_interval - elapsed)
         _gdelt_last_request_time = time.monotonic()
+
+    from data.cross_process_throttle import wait_turn
+    wait_turn(_gdelt_throttle_state_path(), min_interval)
 
 
 def _gdelt_in_cooldown() -> bool:
