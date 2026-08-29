@@ -13581,7 +13581,12 @@ class GravityAIAuditor:
             t2 = (repo_root / "tests" / "test_advisory_llm_enrichment.py").exists()
             t3 = (repo_root / "tests" / "test_llm_commentary.py").exists()
             t4 = (repo_root / "tests" / "test_alert_dispatch_llm.py").exists()
-            t5 = (repo_root / "tests" / "test_gui_env_io_secret_llm_keys.py").exists()
+            # test_gui_env_io_secret_llm_keys.py was consolidated into
+            # test_gui_env_io_secrets.py (2026-08 redundancy audit) alongside
+            # the ntfy_topic/openai_key/control_center_keys secret-boundary
+            # tests it duplicated the template of; same ANTHROPIC_API_KEY/
+            # GEMINI_API_KEY coverage lives there now.
+            t5 = (repo_root / "tests" / "test_gui_env_io_secrets.py").exists()
             c8 = t1 and t2 and t3 and t4 and t5
             audit["checks"].append({
                 "check": "All five Tier-9 test files exist",
@@ -14209,7 +14214,9 @@ class GravityAIAuditor:
             t1 = (repo_root / "tests" / "test_openai_provider.py").exists()
             t2 = (repo_root / "tests" / "test_research_brief.py").exists()
             t3 = (repo_root / "tests" / "test_opal_pipeline_integration.py").exists()
-            t4 = (repo_root / "tests" / "test_gui_env_io_openai_key.py").exists()
+            # test_gui_env_io_openai_key.py was consolidated into
+            # test_gui_env_io_secrets.py (2026-08 redundancy audit).
+            t4 = (repo_root / "tests" / "test_gui_env_io_secrets.py").exists()
             t5 = (repo_root / "tests" / "test_opal_research_panel.py").exists()
             c10 = t1 and t2 and t3 and t4 and t5
             audit["checks"].append({
@@ -14271,7 +14278,9 @@ class GravityAIAuditor:
             ``not_built`` — confirming the Control Center needed NO change
             for this transition.
         10. Test files exist (``tests/test_ai_control_center.py``,
-            ``tests/test_gui_env_io_control_center_keys.py``).
+            ``tests/test_gui_env_io_secrets.py`` -- formerly
+            ``tests/test_gui_env_io_control_center_keys.py``, consolidated
+            in the 2026-08 redundancy audit).
         11. Flexible per-job routing — the ``claude_commentary`` row resolves
             ``ready`` off ``GEMINI_API_KEY`` when
             ``LLM_COMMENTARY_RATIONALE_PROVIDER=gemini``, and the
@@ -14479,7 +14488,9 @@ class GravityAIAuditor:
 
             # ── 10. test files exist ───────────────────────────────────────
             t1 = (repo_root / "tests" / "test_ai_control_center.py").exists()
-            t2 = (repo_root / "tests" / "test_gui_env_io_control_center_keys.py").exists()
+            # test_gui_env_io_control_center_keys.py was consolidated into
+            # test_gui_env_io_secrets.py (2026-08 redundancy audit).
+            t2 = (repo_root / "tests" / "test_gui_env_io_secrets.py").exists()
             c10 = t1 and t2
             audit["checks"].append({
                 "check": "Control Center test files exist",

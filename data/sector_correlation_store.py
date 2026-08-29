@@ -95,8 +95,8 @@ class SectorCorrelationStore:
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with session_scope(self.Session) as session:
-            for row in rows:
-                session.add(SectorCorrelation(
+            objects = [
+                SectorCorrelation(
                     as_of=str(as_of),
                     target_symbol=str(target_symbol).upper(),
                     sector=str(row["sector"]),
@@ -110,7 +110,10 @@ class SectorCorrelationStore:
                     embedder=row.get("embedder"),
                     pooling=row.get("pooling"),
                     computed_at=now,
-                ))
+                )
+                for row in rows
+            ]
+            session.add_all(objects)
 
     def get_latest(self, target_symbol: str) -> List[Dict[str, Any]]:
         """Most-recent ``as_of``'s full ranking for ``target_symbol``,
