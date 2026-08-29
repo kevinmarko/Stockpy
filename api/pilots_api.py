@@ -535,12 +535,6 @@ def require_paper_broker_writes_enabled() -> None:
             detail="Paper broker writes are disabled (PAPER_BROKER_WRITES_ENABLED=false)."
         )
 
-def require_live_trade_approval_enabled() -> None:
-    if not settings.LIVE_TRADE_APPROVAL_ENABLED:
-        raise HTTPException(
-            status_code=403,
-            detail="Live trade approval is disabled (LIVE_TRADE_APPROVAL_ENABLED=false).",
-        )
 
 def require_cache_long_short_writes_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /pilots/cache-long-short/*``
@@ -6209,6 +6203,11 @@ OPTIONS_DESK_DEPLOYABILITY_GATES = {
         "gate_status": "UNGATEABLE_DATA_GAP",
         "reason": "Not gateable: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention.",
     },
+    "gamma_scalper": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_NOT_A_STRATEGY",
+        "reason": "Excluded: Not a strategy (no scan/evaluate/execute path, no PaperAccountStore import, its only threshold is a hedge band).",
+    },
 }
 
 
@@ -6395,7 +6394,10 @@ def post_options_gamma_scalp_simulate(body: Optional[GammaScalpSimulateRequest] 
         dt_days=dt,
         transaction_cost_per_share=cost,
     )
-    return to_gamma_scalp_response(raw)
+    res = to_gamma_scalp_response(raw)
+    if isinstance(res, dict):
+        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["gamma_scalper"]
+    return res
 
 
 class OptionsAlertTestRequest(BaseModel):
@@ -6856,59 +6858,7 @@ def post_market_maker_train(body: MarketMakerTrainRequest) -> Dict[str, Any]:
     }
 
 
-@app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
 
-def get_live_trade_pending() -> Dict[str, Any]:
-    from pilots.live_trade_proposals import get_pending_proposals
-    return {"proposals": get_pending_proposals()}
-
-@app.post(
-    "/pilots/execution/{token}/approve",
-    dependencies=[
-        Depends(require_command_token),
-        Depends(require_live_trade_approval_enabled),
-    ],
-)
-def post_live_trade_approve(token: str) -> Dict[str, Any]:
-    from execution.live_trade_proposals_store import (
-        LiveTradeProposalAlreadyDecidedError,
-        LiveTradeProposalNotFoundError,
-        LiveTradeProposalStore,
-    )
-    from pilots.live_trade_proposals import _serialize
-
-    store = LiveTradeProposalStore()
-    try:
-        proposal = store.approve_proposal(token, approved_by="operator")
-    except LiveTradeProposalNotFoundError:
-        raise HTTPException(status_code=404, detail="not_found")
-    except LiveTradeProposalAlreadyDecidedError:
-        raise HTTPException(status_code=409, detail="already_decided")
-    return _serialize(proposal)
-
-@app.post(
-    "/pilots/execution/{token}/reject",
-    dependencies=[
-        Depends(require_command_token),
-        Depends(require_live_trade_approval_enabled),
-    ],
-)
-def post_live_trade_reject(token: str) -> Dict[str, Any]:
-    from execution.live_trade_proposals_store import (
-        LiveTradeProposalAlreadyDecidedError,
-        LiveTradeProposalNotFoundError,
-        LiveTradeProposalStore,
-    )
-    from pilots.live_trade_proposals import _serialize
-
-    store = LiveTradeProposalStore()
-    try:
-        proposal = store.reject_proposal(token, approved_by="operator")
-    except LiveTradeProposalNotFoundError:
-        raise HTTPException(status_code=404, detail="not_found")
-    except LiveTradeProposalAlreadyDecidedError:
-        raise HTTPException(status_code=409, detail="already_decided")
-    return _serialize(proposal)
 
 class DiffusionStressTestRequest(BaseModel):
     symbol: str

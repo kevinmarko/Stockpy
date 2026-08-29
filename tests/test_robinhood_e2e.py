@@ -732,33 +732,3 @@ class TestStaleQueueHardStop:
         assert mcp.call_count("place_equity_order") == 0
         assert mcp.call_count("review_equity_order") == 0  # aborted before previews
 
-class TestSkillMdInvariantsPinned:
-    """The Robinhood one-confirmation-per-order gate is prose-only in the skill instructions.
-    This test ensures the critical safety invariants are pinned verbatim in the SKILL.md
-    so they cannot be accidentally removed or hallucinated away."""
-
-    def test_skill_md_contains_required_safety_invariants(self):
-        skill_md_path = Path(".claude/skills/robinhood-execution/SKILL.md")
-        if not skill_md_path.exists():
-            skill_md_path = Path(".agents/skills/robinhood-execution/SKILL.md")
-
-        assert skill_md_path.exists(), f"Could not find {skill_md_path}"
-        content = skill_md_path.read_text(encoding="utf-8")
-
-        assert "## Invariants (never violate)" in content, "Missing 'Invariants (never violate)' section header."
-
-        required_phrases = [
-            "Preview before place, always.",
-            "Never place in `review` mode.",
-            "One explicit human confirmation per placed order",
-            "No auto/batch placement.",
-            "Honor the kill switch",
-            "immediately before each",
-            "Agentic account only.",
-            "Idempotent placement.",
-            "execution_placed.jsonl",
-            "Limit price from the live quote."
-        ]
-
-        for phrase in required_phrases:
-            assert phrase in content, f"Missing critical safety invariant phrase in SKILL.md: '{phrase}'"

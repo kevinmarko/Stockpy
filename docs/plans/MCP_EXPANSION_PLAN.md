@@ -212,7 +212,7 @@ per skill (what does it look like when this goes wrong, and what's the fix).
 
 ---
 
-## Phase 4 — Execution boundary — REVISED PLAN, ready for a fresh agent to build
+## Phase 4 — Execution boundary — SHIPPED
 
 > **Why this section was rewritten.** `broker_live_execution_mcp.py` (at the
 > time this section was written, still named `robinhood_execution_mcp.py` --

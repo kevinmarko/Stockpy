@@ -2673,3 +2673,8 @@ escape-hatch proof described above). Full `tests/test_train_lgbm.py` suite (24 t
 pass; the real machine-global `ml/registry.yaml` and repo-tracked `ml/registry.yaml` were
 directly diffed/inspected after each test run in this session to confirm zero pollution,
 not merely assumed clean from the tests passing.
+
+### 2026-08-29 `news_catalyst` UNGATEABLE_DATA_GAP Enforcement
+- **Before:** `news-catalyst` Pilot had `validation_strategy_id=None` but was missing an explicit UNGATEABLE_DATA_GAP exclusion entry in `STRATEGY_REGISTRY` (violating the expectation that all Pilots link to a recognized registry state).
+- **Fix:** Added `news_catalyst` to `STRATEGY_REGISTRY` in `scripts/refresh_validations.py` as an explicit `UNGATEABLE_DATA_GAP`. Updated `pilots/catalog.py` to link `news-catalyst` to `validation_strategy_id="news_catalyst"`.
+- **Reason:** As documented in `docs/signals/news_catalyst.md`, backtesting headline sentiment requires point-in-time news history which is structurally unavailable historically. Fabricating this data would violate CONSTRAINT #4. The adapter raises `RuntimeError` gracefully so the validation harness recognizes its ungateable status.

@@ -1311,6 +1311,24 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
     
     try:
         await _main_body(effective_dry_run, strict=strict)
+
+        # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
+        # Evaluated here so a standalone `python main_orchestrator.py` CLI run
+        # evaluates 0DTE hard stops, since the daemon's own _timer_loop
+        # handles it separately.
+        if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+            try:
+                from pilots.zero_dte_engine import manage_0dte_exits
+                _0dte_res = manage_0dte_exits()
+                if _0dte_res.get("executed_count", 0) > 0:
+                    telemetry.info(
+                        "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
+                        _0dte_res.get("evaluated_count", 0),
+                        _0dte_res.get("executed_count", 0),
+                        _0dte_res.get("failed_count", 0),
+                    )
+            except Exception as _0dte_exc:
+                telemetry.debug("0DTE exit lifecycle evaluation skipped: %s", _0dte_exc)
     finally:
         _hb_task.cancel()
         if _cls_task:
