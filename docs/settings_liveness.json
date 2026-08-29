@@ -2040,7 +2040,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "mcp_remote_adapter.py:19",
+        "site": "mcp_remote_adapter.py:47",
         "via": []
       }
     ],
