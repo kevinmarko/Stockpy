@@ -124,3 +124,11 @@ sentence-transformers>=2.2
 # HTTP-reachability-only behavior. Also gated by settings.BROWSER_DIAGNOSTICS_ENABLED
 # (default False) -- installing the package alone does not turn this on.
 playwright>=1.40
+
+# sentry-sdk activates the Sentry error tracking integration for unattended
+# background daemons. Kept out of requirements.txt to preserve CI leanness
+# since it's only needed for live, deployed usage. Without it, the
+# observability/sentry_integration.py file falls back gracefully, logs a
+# WARNING, and the daemon proceeds with startup -- the exact same degradation
+# pattern used for the machine learning modules above.
+sentry-sdk>=2.0.0
