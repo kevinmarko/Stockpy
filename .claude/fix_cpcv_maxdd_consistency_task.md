@@ -1,0 +1,16 @@
+- [x] Locate `cpcv_mean_oos_max_dd` computation path: `scripts/train_meta_labelers.py` → `validation/metrics.py::run_cpcv_evaluation` → `validation/stress_scenarios.py::compute_max_drawdown`.
+- [x] Reproduce offline (`force_synthetic=True`, no live data) and instrument `run_cpcv_evaluation` to inspect real per-fold returns/drawdowns for both flagged models.
+- [x] Confirm root cause: `_meta_gated_returns()`'s discrete `{-1,0,+1}` R-multiple-of-barrier-width outcomes are not compoundable fractional-of-capital returns; compounding them permanently zeroes "equity" on any single gated loss, pinning `mean_oos_max_dd` at exactly 1.0 in 15/15 OOS folds for both models regardless of true OOS Sharpe.
+- [x] Rule out a bug in the shared `compute_max_drawdown` / `run_cpcv_evaluation` functions themselves (verified still correct and needed as-is for `scripts/train_lgbm.py` and `validation/harness.py`'s genuine fractional-return callers).
+- [x] Fix root cause: `compute_cpcv_metrics` now reports `mean_oos_max_dd: None` instead of passing through the fabricated value (CONSTRAINT #4). `dsr`/`pbo`/`mean_oos_sharpe` untouched.
+- [x] Correct the two stale `ml/registry.yaml` entries (`1.0` → `null`) and expand the field-doc comment.
+- [x] Confirm `cpcv_mean_oos_max_dd` is provenance-only (never read by `compute_deployable`) — fix has no effect on `deployable`.
+- [x] Update `test_real_cpcv_populates_metrics_and_gate` for the new honest-`None` contract.
+- [x] Add `test_compute_cpcv_metrics_never_passes_through_a_fabricated_max_dd` synthetic regression test.
+- [x] Run targeted test suite — 52 passed (`tests/test_train_meta_labelers.py`, `tests/test_metrics_cpcv_oos_aggregates.py`, `tests/test_train_lgbm.py`).
+- [x] Sanity-sweep `ml/registry.yaml` for other suspiciously-exact drawdown values — only the two flagged entries were affected; `lgbm_ranker`'s `~0.0128` (genuine daily returns) is correctly non-round.
+- [x] Commit fix to `fix-cpcv-maxdd-consistency`.
+- [x] Rebase onto `origin/main` (~14 unrelated upstream commits) — no conflicts, diff unchanged, tests re-verified green.
+- [x] Push branch to `origin`.
+- [x] Add PR artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) and commit + push.
+- [ ] Open PR (`gh pr create --base main`), noting the non-conflicting `ml/registry.yaml` overlap with `fix-zero-sample-pbo-dsr` (different model entry: `options_meta_labeler`).

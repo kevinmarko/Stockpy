@@ -479,7 +479,7 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 880,
+    "attr": 881,
     "factory_param": 4,
     "getattr_const": 373,
     "os_environ": 25
@@ -2526,7 +2526,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6064",
+        "site": "investyo_mcp_server.py:6082",
         "via": []
       }
     ],
@@ -2546,7 +2546,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6016",
+        "site": "investyo_mcp_server.py:6034",
         "via": []
       }
     ],
@@ -2586,7 +2586,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6024",
+        "site": "investyo_mcp_server.py:6042",
         "via": []
       }
     ],

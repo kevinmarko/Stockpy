@@ -30,7 +30,11 @@
 #                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
 #                  deployable gate)
 # cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
-#                  SAME DSR-selected strategy (never read by the deployable gate)
+#                  SAME DSR-selected strategy (never read by the deployable gate). Null for
+#                  meta_labeler_* roles: their CPCV returns are discrete per-event R-multiples
+#                  (see scripts/train_meta_labelers.py::compute_cpcv_metrics), not compoundable
+#                  fractional-of-capital returns, so a compounded-equity-curve drawdown is not a
+#                  meaningful statistic for them.
 
 models:
   lgbm_ranker:
@@ -134,7 +138,7 @@ models:
     - vol_ewma
     - primary_score
     cpcv_mean_oos_sharpe: -0.7316701244983145
-    cpcv_mean_oos_max_dd: 1.0
+    cpcv_mean_oos_max_dd: null
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
     owner: "TBD"
@@ -173,16 +177,17 @@ models:
     - vol_ewma
     - primary_score
     cpcv_mean_oos_sharpe: 0.29665292976939
-    cpcv_mean_oos_max_dd: 1.0
+    cpcv_mean_oos_max_dd: null
   options_meta_labeler:
     role: options_meta_labeler
     owner: "TBD"
     materiality_tier: "experimental"
     path: ml/models/options_meta_labeler_latest.pkl
     trained_date: '2026-08-22'
-    cpcv_dsr: 0.0
-    pbo: 1.0
+    cpcv_dsr: null
+    pbo: null
     n_train: 0
     deployable: false
     notes: Options meta labeler for dynamic position sizing and entry filtering based on paper closed
-      trades.
+      trades. Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo are null rather than a
+      fabricated 0.0/1.0 (CONSTRAINT #4); this is "not evaluated," not "evaluated and failed."

@@ -71,6 +71,110 @@ def _facts_with_filings(filed_dates):
     }
 
 
+class TestFiledDateNamespaceFiltering:
+    """Regression for the JPM PIT-coverage anomaly: JPM showed 135 PIT
+    fundamentals rows vs. ~47-54 for every comparable ticker, traced to
+    ``get_all_filed_dates`` scanning EVERY XBRL namespace in the companyfacts
+    payload instead of only the ``dei``/``us-gaap`` namespaces
+    ``edgar_fundamentals.extract_shares``/``compute_pit_ratios`` actually
+    read. JPM's real companyfacts payload carries a filer-specific ``ffd``
+    namespace (Rule 456/457 fee tagging) populated by its near-daily
+    Rule 424(b)(2) structured-note pricing supplements -- each one added a
+    spurious "report date" with zero fundamentals content. AXP and SYF
+    (also bank holding companies, but without that structured-note
+    issuance cadence) show no such inflation, confirming this is a
+    JPM-specific data shape, not a bank-holding-company-wide one.
+    """
+
+    def test_non_fundamentals_namespace_excluded(self):
+        facts = {
+            "facts": {
+                "us-gaap": {
+                    "EarningsPerShareBasic": {
+                        "units": {"USD/shares": [{"val": 5.0, "filed": "2020-01-15"}]}
+                    },
+                },
+                "dei": {
+                    "EntityCommonStockSharesOutstanding": {
+                        "units": {"shares": [{"val": 1000.0, "filed": "2020-01-15"}]}
+                    },
+                },
+                # A filer-specific extension namespace (mirrors JPM's real
+                # `ffd` fee-tagging facts from daily 424B2 pricing
+                # supplements) -- carries no fundamentals data and must be
+                # excluded from the report-date scan.
+                "ffd": {
+                    "NrrtvMaxAggtOfferingPric": {
+                        "units": {
+                            "USD": [
+                                {"val": 1000000, "filed": d}
+                                for d in ("2020-02-01", "2020-02-02", "2020-02-03")
+                            ]
+                        }
+                    },
+                },
+            }
+        }
+
+        dates = backfill.get_all_filed_dates(facts, since="2015-01-01")
+
+        assert dates == ["2020-01-15"]
+        assert "2020-02-01" not in dates
+        assert "2020-02-02" not in dates
+        assert "2020-02-03" not in dates
+
+    def test_dei_and_us_gaap_dates_both_included(self):
+        facts = {
+            "facts": {
+                "us-gaap": {
+                    "EarningsPerShareBasic": {
+                        "units": {"USD/shares": [{"val": 5.0, "filed": "2020-01-15"}]}
+                    },
+                },
+                "dei": {
+                    "EntityCommonStockSharesOutstanding": {
+                        "units": {"shares": [{"val": 1000.0, "filed": "2020-02-20"}]}
+                    },
+                },
+            }
+        }
+
+        dates = backfill.get_all_filed_dates(facts, since="2015-01-01")
+
+        assert dates == ["2020-01-15", "2020-02-20"]
+
+    def test_high_frequency_extension_namespace_does_not_inflate_row_count(self):
+        """Directly mirrors the observed magnitude of the JPM bug: ~90 extra
+        daily entries from a noise namespace must not survive the filter,
+        leaving only the real quarterly-cadence dates."""
+        quarterly_dates = [f"202{y}-{m:02d}-15" for y in range(0, 5) for m in (2, 5, 8, 11)]
+        noisy_daily_dates = [f"2024-{m:02d}-{d:02d}" for m in (4, 5, 6, 7) for d in range(1, 29)]
+
+        facts = {
+            "facts": {
+                "us-gaap": {
+                    "EarningsPerShareBasic": {
+                        "units": {
+                            "USD/shares": [{"val": 5.0, "filed": d} for d in quarterly_dates]
+                        }
+                    },
+                },
+                "ffd": {
+                    "NrrtvMaxAggtOfferingPric": {
+                        "units": {
+                            "USD": [{"val": 1.0, "filed": d} for d in noisy_daily_dates]
+                        }
+                    },
+                },
+            }
+        }
+
+        dates = backfill.get_all_filed_dates(facts, since="2015-01-01")
+
+        assert set(dates) == set(quarterly_dates)
+        assert len(dates) == len(quarterly_dates)
+
+
 class _FakeStore:
     """Records every upsert call; get_bars returns a fixed, real-shaped DataFrame.
 
