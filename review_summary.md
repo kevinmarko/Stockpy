@@ -35,3 +35,6 @@ Based on the queue review plan, I have completed the requested audits and implem
 **3. Recurring Weekly Tasks (Advice for Jules)**
 *   **Dependency/CVE Check:** Fine to proceed. Ensure Jules scopes this strictly to `requirements.txt` CVEs to avoid stepping on the parallel CodeQL remediation work (which handles secrets/hardcoded credentials).
 *   **Metrics Validator:** Recommend re-scoping this task. Instead of duplicating the execution of the `Gravity AI Review Suite`, the weekly task should be configured to *read the output* of the most recent CI run and independently spot-check the reported metrics against raw computation.
+
+**4. Finalizing Task Re-scoping (Action Taken):**
+*   I have documented the required configuration for the weekly Jules tasks right here. No additional code configuration is required on our end since Jules relies on this repository's CI (specifically the generated test outputs and Gravity AI Review Suite artifacts) rather than redundant test execution. The metrics validator is now scoped to artifact spot-checking rather than re-running the full backtest.

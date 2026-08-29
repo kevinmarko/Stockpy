@@ -42,3 +42,11 @@ jobs:
 
       - name: Run Stockpy Codebase Auditor
         run: python scripts/auditor/stockpy_codebase_auditor.py --root . --fail-on HIGH
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run Dynamic Lookahead Tests
+        run: pytest tests/test_lgbm_no_leakage.py tests/test_forecasting_lookahead.py tests/test_bert_lla_lookahead.py tests/test_forecast_backfill.py
