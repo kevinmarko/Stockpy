@@ -50,11 +50,34 @@ daily move beyond ±50% in magnitude would mean the vendor's response shape
 changed underneath this code, not that the sector genuinely moved that
 much, so it refuses to convert and emits NaN rather than storing a
 plausible-looking but wrong number.
+
+``_safe_float`` migration note (F2, ``docs/module_efficiency_redundancy_audit.md``):
+this module's numeric coercion now delegates to ``numeric_utils.safe_float``,
+which returns ``None`` (never ``float('nan')``) for a missing/unparseable
+value. This module was the one deferred copy of the F2 dedup — see
+``numeric_utils.py``'s own docstring for the full investigation writeup —
+because it surfaced two real, disclosed risks that had to be fixed in the
+SAME commit as the migration, not after: (1) ``fetch_realized_volatility``'s
+exception-path fallback already returned ``None`` for ``hv_10``/``hv_30``/
+``hv_90``, while its happy path (via the old NaN-returning ``_safe_float``)
+returned ``float('nan')`` for the same "not reported" fact — an internal
+inconsistency that let a bad/missing historical-vol reading silently pass
+downstream consumers' ``hv_30 is not None`` gate (``pilots/unusual_options_flow.py``,
+``pilots/options_alerts.py``) as if it were a genuine measurement. Migrating
+``_safe_float`` closes that gap: both paths now agree on ``None``. (2)
+``fetch_insider_stats``'s ratio-derivation idiom used to depend on the old
+NaN-not-None contract (``total_disposed == total_disposed`` as a "not NaN"
+check) — fixed to an explicit ``is not None`` check in the same commit, for
+BOTH operands of the division (``total_acquired`` can independently be
+``None`` too), so neither operand can crash the division with a
+``TypeError`` now that both may legitimately be ``None``.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
+
+from numeric_utils import safe_float as _safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -68,17 +91,6 @@ _CHANGE_PCT_KEYS: tuple = (
     "changePercentage",
     "percentChange",
 )
-
-
-def _safe_float(value: Any) -> float:
-    """``float(value)``, or NaN for ``None``/unparseable — never raises,
-    never a fabricated 0.0 (CONSTRAINT #4)."""
-    if value is None:
-        return float("nan")
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float("nan")
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -181,10 +193,13 @@ def fetch_insider_stats(symbol: str) -> List[Dict[str, Any]]:
 
     ``acquired_disposed_ratio`` is taken from FMP's own
     ``acquiredDisposedRatio`` field when present; otherwise it is computed as
-    ``total_acquired / total_disposed`` when ``total_disposed > 0``, and NaN
-    otherwise — never a fabricated ratio (CONSTRAINT #4). A row missing
-    ``year``/``quarter`` (the primary-key fields) is dropped — it cannot be
-    stored or lag-filtered without them.
+    ``total_acquired / total_disposed`` when BOTH operands are present
+    (``_safe_float`` now returns ``None``, not NaN, for a missing/unparseable
+    one) and ``total_disposed > 0``, and NaN in every other case — never a
+    fabricated ratio (CONSTRAINT #4), and never a ``TypeError`` from dividing
+    by/with a ``None`` operand. A row missing ``year``/``quarter`` (the
+    primary-key fields) is dropped — it cannot be stored or lag-filtered
+    without them.
 
     ``[]`` on ANY failure — a rejected key, a malformed response, a symbol
     with zero rows, or an unexpected exception. Never raises (CONSTRAINT #6).
@@ -214,7 +229,11 @@ def fetch_insider_stats(symbol: str) -> List[Dict[str, Any]]:
             vendor_ratio = row.get("acquiredDisposedRatio")
             if vendor_ratio is not None:
                 ratio = _safe_float(vendor_ratio)
-            elif total_disposed == total_disposed and total_disposed > 0:  # not NaN
+            elif (
+                total_disposed is not None
+                and total_disposed > 0
+                and total_acquired is not None
+            ):
                 ratio = total_acquired / total_disposed
             else:
                 ratio = float("nan")
@@ -275,7 +294,13 @@ def fetch_sector_snapshot(
             sector_performance_snapshot,
         )
 
-        pe_map: Dict[str, float] = {}
+        # pe_map is now Optional[float]: a sector present in the response but
+        # with a missing/unparseable "pe" figure maps to None (via the
+        # migrated _safe_float), not NaN -- see the module docstring.
+        # change_map stays plain float: it is populated via _pct_to_fraction
+        # (a separate function, NOT migrated by the _safe_float dedup), which
+        # still returns a NaN float, never None, on a bad/missing value.
+        pe_map: Dict[str, Optional[float]] = {}
         change_map: Dict[str, float] = {}
 
         try:
@@ -309,6 +334,20 @@ def fetch_sector_snapshot(
         if not sectors:
             return []
 
+        # NOTE: the `float("nan")` default below (a sector present in only
+        # ONE of the two vendor responses) is deliberately left as a NaN
+        # literal rather than `None`, even though `pe_map`'s own values are
+        # now `Optional[float]` (see above) -- a sector present in `pe_map`
+        # with a genuinely bad "pe" value maps to `None`, while a sector
+        # entirely absent from `pe_map` maps to this NaN default; the two
+        # "missing" representations are not unified. This is a real,
+        # disclosed, narrow inconsistency, not an oversight: both are
+        # normalized identically by `HistoricalStore._nan_to_null` at the one
+        # and only place that consumes this return value
+        # (`pipeline/production_steps.py::_apply_fmp_sector`), and unifying
+        # them would additionally require changing
+        # `test_partial_failure_one_endpoint_down_still_returns_the_other`'s
+        # pinned NaN assertion for a case unrelated to this fix's scope.
         return [
             {
                 "sector": sector,

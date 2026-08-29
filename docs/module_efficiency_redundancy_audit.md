@@ -91,7 +91,7 @@ Seven copies, no shared implementation, and they disagree on what "bad input" me
 | `reporting/state_snapshot.py:31` (named `_safe_float_or_none`) | `None` | not checked | `Optional[float]` |
 | `pilots/vol_mispricing.py:364` | `None` | not checked | `Optional[float]` |
 | `api/pilots_api.py:2109` | `None` | not checked; no `float()` cast at all | `Optional[float]` |
-| `data/fmp_feeds_market.py:73` | **`float('nan')`** | not checked | `float` (never `None`) |
+| `data/fmp_feeds_market.py:73` (pre-migration) | **`float('nan')`** | not checked | `float` (never `None`) |
 | `data/fmp_feeds_company.py:75` | `None` | `None` | `Optional[float]` |
 | `engine/advisory.py:1882` | **not checked — NaN passes through unchanged** | not checked | `float` |
 | `validation/validation_history_store.py:177` | `None` | `None` | `Optional[float]` |
@@ -103,19 +103,21 @@ other six docstrings explicitly cite.
 
 Repro: `grep -n "_safe_float" <each file>` then read each function body directly.
 
-**Remediation status (PR 2)**: `numeric_utils.safe_float` is now the canonical implementation for the
-4 copies confirmed behaviorally compatible (`state_snapshot.py`, `vol_mispricing.py`, `pilots_api.py`,
-`fmp_feeds_company.py`). `engine/advisory.py` and `validation/validation_history_store.py` stay
-untouched, report-only per the agreed risk posture. `fmp_feeds_market.py`'s NaN-returning copy was
-investigated and deliberately deferred — folding it into the shared helper surfaced a genuine,
-previously-undocumented bug independent of this finding: `fetch_realized_volatility`'s NaN output for
-a bad `hv_10`/`hv_30`/`hv_90` value silently passes the `hv_30 is not None` gate used by
-`pilots/unusual_options_flow.py` and `pilots/options_alerts.py`, leaking a bad historical-vol reading
-into live IV-vs-HV comparisons undetected — while a *different* line in the same file
-(`fetch_insider_trade_statistics`'s `total_disposed == total_disposed` self-comparison idiom) actively
-depends on the current NaN-not-None behavior and would break if changed without a matching fix. See
-`.claude/module_efficiency_audit_remediation_plan.md`'s PR 2 entry and `numeric_utils.py`'s own
-docstring for the full reasoning; scoped as its own dedicated follow-up.
+**Remediation status (PR 2)**: `numeric_utils.safe_float` is now the canonical implementation for 5 of
+the 7 copies. The first pass covered the 4 confirmed behaviorally compatible on their own
+(`state_snapshot.py`, `vol_mispricing.py`, `pilots_api.py`, `fmp_feeds_company.py`). `fmp_feeds_market.py`'s
+NaN-returning copy — the one genuinely risky migration, deferred out of that first pass — is now also
+migrated, in a follow-up commit with two disclosed companion fixes required to make the migration safe:
+`fetch_realized_volatility`'s happy path now returns `None` (not NaN) for a missing/unparseable
+`hv_10`/`hv_30`/`hv_90` value, matching its own exception-path fallback and no longer silently passing
+the `hv_30 is not None` gate `pilots/unusual_options_flow.py` and `pilots/options_alerts.py` depend on;
+and `fetch_insider_stats`'s `total_disposed == total_disposed` self-comparison idiom (which depended on
+the old NaN-not-None contract) is now an explicit `is not None` check on BOTH operands of the ratio
+division, since `total_acquired` can independently be `None` too under the new contract. `engine/advisory.py`
+and `validation/validation_history_store.py` stay untouched, report-only per the agreed risk posture — the
+2 copies still not migrated. See `.claude/module_efficiency_audit_remediation_plan.md`'s PR 2 entry,
+`numeric_utils.py`'s own docstring, and `data/fmp_feeds_market.py`'s own module docstring for the full
+reasoning; `tests/test_fmp_feeds_market.py` carries the regression coverage.
 
 ## F3 — Option-symbol regex drift: one parser accepts strings the others reject
 

@@ -25,29 +25,39 @@ accurately: per the audit, none of the 7 modules do genuinely expensive per-row 
 conditionals), so the corrected doc language should describe this as a debt-visibility gap, not an
 active performance emergency. No runtime behavior changes.
 
-**PR 2 — OPEN ([branch: unify-safe-float-helper](https://github.com/kevinmarko/Stockpy/tree/unify-safe-float-helper)).**
+**PR 2 — OPEN ([branch: unify-safe-float-helper](https://github.com/kevinmarko/Stockpy/tree/unify-safe-float-helper)). 5 of 7 copies migrated.**
 Unify `_safe_float` (F2). New `numeric_utils.safe_float` (stdlib-only leaf, `None`/NaN/±inf all
-filtered, real `float()` cast) is now the single canonical implementation for 4 of the 7 original
-copies: `reporting/state_snapshot.py`'s `_safe_float_or_none`, `pilots/vol_mispricing.py`,
-`api/pilots_api.py`, `data/fmp_feeds_company.py` — each migrated to a one-line import alias, verified
-with the existing test suites plus a new dedicated `tests/test_numeric_utils.py`. `engine/advisory.py`
-and `validation/validation_history_store.py` are correctly left untouched (report-only per the agreed
-risk posture — `validation/` package, and advisory-path trading logic respectively).
+filtered, real `float()` cast) is now the single canonical implementation. First commit migrated the 4
+copies confirmed behaviorally compatible on their own: `reporting/state_snapshot.py`'s
+`_safe_float_or_none`, `pilots/vol_mispricing.py`, `api/pilots_api.py`, `data/fmp_feeds_company.py` —
+each migrated to a one-line import alias, verified with the existing test suites plus a new dedicated
+`tests/test_numeric_utils.py`.
 
-**Not migrated, investigated and deliberately deferred**: `data/fmp_feeds_market.py`'s own
-`_safe_float` (the one copy that returns `float('nan')`, never `None`, on a bad value). Investigation
-during PR 2 found this is genuinely risky to fold into the dedup, in *both* directions: (a)
-`fetch_insider_trade_statistics`'s `total_disposed == total_disposed and total_disposed > 0`
-NaN-self-comparison idiom depends on the current NaN-not-None behavior — migrating without also fixing
-this idiom to a `None` check would make `None == None` evaluate `True` and crash the following `> 0`
-comparison; (b) conversely, `fetch_realized_volatility`'s own exception-path fallback already returns
+**Follow-up commit, same PR: `data/fmp_feeds_market.py` migrated too**, with two required companion
+fixes landed in the same commit (this copy returned `float('nan')`, never `None`, on a bad value, and
+was deferred out of the first pass for exactly this reason — folding it in unguarded would have been
+genuinely risky in *both* directions): (a) `fetch_insider_stats`'s `total_disposed == total_disposed
+and total_disposed > 0` NaN-self-comparison idiom depended on the old NaN-not-None behavior — now an
+explicit `is not None` check, and on BOTH operands of the division (`total_acquired` can independently
+be `None` too under the new contract, which a `total_disposed`-only guard would have missed and left a
+live `TypeError` risk); (b) `fetch_realized_volatility`'s own exception-path fallback already returned
 `{"hv_10": None, "hv_30": None, "hv_90": None}` — inconsistent with its own happy-path NaN-returning
 `_safe_float` — and two real downstream consumers, `pilots/unusual_options_flow.py` and
-`pilots/options_alerts.py`, both gate on `hv_30 is not None`, a check a NaN value silently slips past,
-letting a bad historical-vol reading leak into the IV-vs-HV comparison undetected. This is a genuine,
-previously-undocumented bug independent of F2 — migrating the copy would fix it, but only if the (a)
-idiom is fixed in the same commit. Scoped as its own dedicated follow-up rather than folded into this
-pass; see `numeric_utils.py`'s own module docstring for the full pointer.
+`pilots/options_alerts.py`, both gate on `hv_30 is not None`, a check a NaN value silently slipped
+past, letting a bad historical-vol reading leak into the IV-vs-HV comparison undetected; migrating
+`_safe_float` closes this directly, both paths now agree on `None`. Verified: full
+`tests/test_fmp_feeds_market.py` (55 tests, including 4 new regression tests for both fixes) plus
+`tests/test_numeric_utils.py`/`tests/test_fmp_feeds_company.py`/`tests/test_production_steps_fmp_stubs.py`
+all pass; `tests/test_options_snapshot.py` has 11 pre-existing failures in this sandbox unrelated to
+this change (a `pandas_ta_classic`/numba cache-locator error against the system Python 3.14 framework
+install this worktree happened to run under, reproduced identically on the pre-migration baseline).
+See `numeric_utils.py`'s own module docstring and `data/fmp_feeds_market.py`'s own module docstring for
+the full reasoning.
+
+**Remaining, untouched, report-only per the agreed risk posture**: `engine/advisory.py:1882`'s
+no-filter copy (advisory-path trading logic; currently leaks NaN unfiltered, and fixing that is a real
+behavior change needing explicit user approval) and `validation/validation_history_store.py` (the
+`validation/` package).
 
 **PR 3 — OPEN ([#929](https://github.com/kevinmarko/Stockpy/pull/929)).** Fix the N+1 in the per-cycle pipeline (F5). Replace `_apply_symbol_rating_columns`'s
 per-ticker `.map()` (`pipeline/production_steps.py:627`) with the existing batched
