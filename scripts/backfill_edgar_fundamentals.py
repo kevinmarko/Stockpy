@@ -31,9 +31,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_all_filed_dates(facts: dict, since: str) -> list[str]:
-    """Extract all unique filed dates across all facts since the cutoff."""
+    """Extract all unique filed dates since the cutoff, from the SAME namespaces
+    ``edgar_fundamentals.extract_shares``/``compute_pit_ratios`` actually read
+    (``edgar_fundamentals.FUNDAMENTALS_NAMESPACES`` -- ``dei`` + ``us-gaap``).
+
+    Deliberately NOT every namespace in the payload: ``companyfacts`` can carry
+    filer-specific extension namespaces (e.g. the ``ffd`` fee-tagging namespace
+    JPMorgan Chase's near-daily Rule 424(b)(2) structured-note pricing
+    supplements populate) that carry no fundamentals data at all. Scanning
+    those inflated JPM's PIT fundamentals row count to ~3x every comparable
+    ticker's (one spurious "report date" per pricing supplement) before this
+    fix -- see ``FUNDAMENTALS_NAMESPACES``'s docstring for the full story.
+    """
     dates = set()
-    for namespace in facts.get("facts", {}).values():
+    for ns_name, namespace in facts.get("facts", {}).items():
+        if ns_name not in edgar_fundamentals.FUNDAMENTALS_NAMESPACES:
+            continue
         for fact in namespace.values():
             for unit_arr in fact.get("units", {}).values():
                 for point in unit_arr:
