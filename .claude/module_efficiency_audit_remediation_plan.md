@@ -66,7 +66,7 @@ per-ticker `.map()` (`pipeline/production_steps.py:627`) with the existing batch
 Confirmed untouched by any recent PR, so no merge-conflict risk with in-flight work. Highest measured
 win per unit of risk.
 
-**PR 4 — PARTIALLY DONE.** "Consolidate the Black-Scholes holdouts and the regex (F3, F4)". Two
+**PR 4 — DONE.** "Consolidate the Black-Scholes holdouts and the regex (F3, F4)". Two
 parts landed: (1) the `options_gex.py` regex drift (F3) — fixed, `$` is now required, matching the
 canonical pattern exactly, with 4 new regression tests including a direct parity check against
 `options_risk.py`'s own regex object. (2) The `vol_sqrt_t` clamp-vs-early-return divergence (F4) —
