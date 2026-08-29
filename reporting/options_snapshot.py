@@ -26,14 +26,13 @@ Invariants:
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from reporting.atomic_write import atomic_write_json
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -62,14 +61,6 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     return value
-
-
-def _atomic_write(path: Path, payload: Dict[str, Any]) -> None:
-    """Write-then-rename JSON (mirrors ``execution/kill_switch.py::activate``)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def write_options_matrix(
@@ -309,7 +300,7 @@ def write_options_matrix(
     out_dir = Path(output_dir) if output_dir is not None else settings.OUTPUT_DIR
     path = out_dir / OPTIONS_MATRIX_FILENAME
     try:
-        _atomic_write(path, payload)
+        atomic_write_json(path, payload)
         logger.info("Wrote options matrix (%d directives) → %s", len(directives), path)
         return str(path)
     except Exception as exc:  # noqa: BLE001 — write failure is non-fatal
