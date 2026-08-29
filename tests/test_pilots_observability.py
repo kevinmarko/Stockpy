@@ -641,6 +641,8 @@ class TestForecastSkillBySymbol:
             "completed": 0,
             "skill_weights": {},
             "n_by_model": {},
+            "decay_pct": None,
+            "decay_reason": mock.ANY,
         }
 
     def test_graduated_degrade_excludes_immature_model_per_symbol(self, tmp_path):

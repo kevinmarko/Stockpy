@@ -829,6 +829,8 @@ class TestAnalyticsWidgetsSmoke:
                     "completed": 10,
                     "n_by_model": {"cnn_lstm": 6, "prophet": 4},
                     "skill_weights": {"cnn_lstm": 0.5, "prophet": 0.5},
+                    "decay_pct": 8.3,
+                    "decay_reason": None,
                 }
             ],
         }
@@ -846,12 +848,15 @@ class TestAnalyticsWidgetsSmoke:
         assert row["completed"] == 10
         assert row["skill_weights"] == {"cnn_lstm": 0.5, "prophet": 0.5}
         assert row["n_by_model"] == {"cnn_lstm": 6, "prophet": 4}
-        # The real payload has no drift/decay signal at all (no such field is
-        # ever computed by forecast_skill_by_symbol_summary) -- assert its
-        # absence so a future regression that reintroduces a fabricated
-        # drift_detected/decay_pct key is caught here.
+        # decay_pct is now a real field computed by
+        # forecast_skill_by_symbol_summary (pilots/observability.py) -- the
+        # report must relay it verbatim, not drop or fabricate it.
+        assert row["decay_pct"] == 8.3
+        assert "8.3%" in result
+        # drift_detected is still not a real field anywhere in this payload --
+        # assert its absence so a future regression that reintroduces a
+        # fabricated drift_detected key is caught here.
         assert "drift_detected" not in row
-        assert "decay_pct" not in row
 
     def test_get_model_drift_report_multi_symbol_skill_weights_roundtrip(self, monkeypatch):
         """Renamed from a stale "fires_alert_on_synthetic_injected_drift" test: the
