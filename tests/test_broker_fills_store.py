@@ -329,3 +329,30 @@ class TestSizingIsolation:
                 if "broker_fills_store" in src:
                     offenders.append(str(path))
         assert offenders == [], f"broker_fills_store must never be imported by sizing/execution: {offenders}"
+
+def test_record_instrument_symbols_mid_batch_failure_rolls_back_entire_batch():
+    """Atomicity: if an event fails to process, the entire batch must roll back."""
+    store = BrokerFillsStore(db_url="sqlite:///:memory:")
+    
+    mapping = {
+        "url1": "AAPL",
+        123: "MSFT",  # Intentionally passing integer to potentially trigger error
+        "url3": "GOOG"
+    }
+    
+    # We mock something to fail or just pass an invalid mapping that raises during processing
+    # The dictionary iteration doesn't easily raise. Let's create an object that raises when .items() is processed?
+    # Or just mock existing.get
+    import pytest
+    class ExplodingStr:
+        def __str__(self):
+            raise ValueError("Boom")
+        def upper(self):
+            raise ValueError("Boom")
+            
+    mapping["url2"] = ExplodingStr()
+    
+    with pytest.raises(ValueError):
+        store.record_instrument_symbols(mapping)
+        
+    assert store.instrument_symbol_map() == {}
