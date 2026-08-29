@@ -530,6 +530,28 @@ def test_quotes_empty_symbols(monkeypatch):
     assert resp.json() == {}
 
 
+def test_quotes_batch_provider_outage_degrades_to_empty_not_500(monkeypatch):
+    """Before F6 (docs/module_efficiency_redundancy_audit.md), this endpoint
+    looped per symbol with its own try/except, so a total provider outage
+    could never surface past this endpoint as a 500 -- every symbol was
+    simply dropped one at a time. Migrating to a single
+    get_quotes_batch(sym_list) call collapsed that per-symbol try/except
+    into one call site; without an equivalent wrapper around it, a raising
+    provider now propagates straight through FastAPI as a 500 instead of
+    degrading to {} like every other failure mode this endpoint handles.
+    Regression guard for that gap."""
+
+    class _RaisingBatchProvider:
+        def get_quotes_batch(self, symbols):
+            raise MarketDataError("provider unreachable")
+
+    monkeypatch.setattr(data_api, "get_provider", lambda: _RaisingBatchProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/quotes?symbols=AAPL,NVDA")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
 # ---------------------------------------------------------------------------
 # GET /data/sync-report
 # ---------------------------------------------------------------------------
