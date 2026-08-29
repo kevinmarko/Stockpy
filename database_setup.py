@@ -5,22 +5,25 @@ Step 6: Transitions local flat-file storage to an institutional SQLite schema.
 Dynamically maps the COLUMN_SCHEMA definition from config.py to database fields.
 """
 
+import logging
 import os
 import sys
-import logging
-from sqlalchemy import text, inspect
+
 from sqlalchemy.orm import sessionmaker
 
 # Ensure the parent directory is in the path to import config
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import config
-from db_config import resolve_database_url, create_db_engine, session_scope, get_dbapi_connection
 from db_config import DEFAULT_DB_FILE as DB_FILE
+from db_config import (
+    create_db_engine,
+    get_dbapi_connection,
+    session_scope,
+)
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("DatabaseSetup")
 
@@ -31,7 +34,7 @@ PANDAS_TO_SQLITE_TYPES = {
     "number": "REAL",
     "currency": "REAL",
     "currency_large": "REAL",
-    "percent": "REAL"
+    "percent": "REAL",
 }
 
 
@@ -55,10 +58,10 @@ def initialize_database(db_file: str = DB_FILE):
     else:
         db_url = db_file
     logger.info(f"Connecting to database: {db_url}")
-    
+
     engine = create_db_engine(db_url)
     Session = sessionmaker(bind=engine)
-    
+
     try:
         with session_scope(Session) as session:
             # Retrieve the raw DBAPI connection for raw sqlite compatibility in setup/migration
@@ -135,14 +138,16 @@ def initialize_database(db_file: str = DB_FILE):
             # characterization pass. FOLLOW-UP DECISION NEEDED (flagged in
             # this PR's description): keep as dead-but-harmless schema,
             # wire up a real writer, or remove the table entirely.
-            logger.info("Generating 'DailySignals' table schema from config.COLUMN_SCHEMA...")
-            
+            logger.info(
+                "Generating 'DailySignals' table schema from config.COLUMN_SCHEMA..."
+            )
+
             # Base columns
             columns_sql = [
                 "id INTEGER PRIMARY KEY AUTOINCREMENT",
-                "timestamp TEXT DEFAULT CURRENT_TIMESTAMP"
+                "timestamp TEXT DEFAULT CURRENT_TIMESTAMP",
             ]
-            
+
             # Dynamically build columns based on config.py COLUMN_SCHEMA definitions
             for col in config.COLUMN_SCHEMA:
                 key = col["key"]
@@ -155,13 +160,13 @@ def initialize_database(db_file: str = DB_FILE):
                 {",\n            ".join(columns_sql)}
             );
             """
-            
+
             logger.debug(f"Executing SQL:\n{create_daily_signals_sql}")
             cursor.execute(create_daily_signals_sql)
 
             # F-07 FIX: Migrate schema — add any new COLUMN_SCHEMA columns missing from existing DB
             migrate_daily_signals_schema(cursor, dbapi_conn)
-            
+
             # 3. Create Transactions Table for standardized trade journaling
             logger.info("Initializing 'Transactions' table...")
             create_transactions_sql = """
@@ -181,15 +186,19 @@ def initialize_database(db_file: str = DB_FILE):
 
             # Indexes for high-frequency queries
             logger.info("Initializing performance indexes...")
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_signals_symbol_ts ON DailySignals ("Symbol", timestamp DESC);')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_ticker_date ON Transactions (ticker, execution_date DESC);')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_daily_signals_symbol_ts ON DailySignals ("Symbol", timestamp DESC);'
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_transactions_ticker_date ON Transactions (ticker, execution_date DESC);"
+            )
             logger.info("Performance indexes created successfully.")
     except Exception as e:
         # Unwrap SQLAlchemy OperationalError to raise raw sqlite3.OperationalError for tests
         if hasattr(e, "orig") and e.orig is not None:
             raise e.orig
         raise
-        
+
     logger.info("Database initialization complete.")
 
 
@@ -215,15 +224,25 @@ def migrate_daily_signals_schema(cursor, conn):
     cursor.execute("PRAGMA table_info(DailySignals);")
     existing_cols = {row[1] for row in cursor.fetchall()}  # row[1] = column name
 
-    added = []
+    cols_to_add = []
     for col in config.COLUMN_SCHEMA:
-        key      = col["key"]
+        key = col["key"]
         col_type = type_map(col["format"], key)
         if key not in existing_cols:
+            cols_to_add.append((key, col_type))
+
+    added = []
+    if cols_to_add:
+        cursor.execute("BEGIN TRANSACTION;")
+        for key, col_type in cols_to_add:
             try:
-                cursor.execute(f'ALTER TABLE DailySignals ADD COLUMN "{key}" {col_type};')
+                cursor.execute(
+                    f'ALTER TABLE DailySignals ADD COLUMN "{key}" {col_type};'
+                )
                 added.append(key)
-                logger.info(f"Migration: Added column '{key}' ({col_type}) to DailySignals.")
+                logger.info(
+                    f"Migration: Added column '{key}' ({col_type}) to DailySignals."
+                )
             except Exception as e:
                 logger.warning(f"Could not add column '{key}': {e}")
 
@@ -233,7 +252,9 @@ def migrate_daily_signals_schema(cursor, conn):
         except Exception as e:
             logger.error(f"Schema migration commit FAILED: {e}", exc_info=True)
         else:
-            logger.info(f"Schema migration complete. Added {len(added)} new columns: {added}")
+            logger.info(
+                f"Schema migration complete. Added {len(added)} new columns: {added}"
+            )
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")
 
@@ -254,7 +275,8 @@ def migrate_daily_signals_schema(cursor, conn):
                 "These are never dropped automatically (SQLite ALTER TABLE DROP COLUMN "
                 "is available since 3.35 but intentionally not used here to avoid "
                 "destructive migrations); review and drop manually if confirmed obsolete.",
-                len(orphaned), orphaned,
+                len(orphaned),
+                orphaned,
             )
     except Exception as e:
         # Detection is observability-only -- never let it block/fail the
