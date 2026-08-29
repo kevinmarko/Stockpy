@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 336,
+    "live_safe": 337,
     "no_op": 0,
-    "restart_required": 109,
+    "restart_required": 108,
     "total": 445
   },
   "dynamic_sites": [
@@ -466,6 +466,7 @@
     "STRATEGY_WRITES_ENABLED",
     "SYMBOL_RATING_AUTO_DROP_ENABLED",
     "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
     "SYMBOL_RATING_ENABLED",
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
@@ -3233,17 +3234,6 @@
         "via": []
       }
     ],
-    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "closure_value"
-        ],
-        "site": "pipeline/production_steps.py:622",
-        "via": []
-      }
-    ],
     "WATCHLIST": [
       {
         "discarded": false,
@@ -3301,7 +3291,6 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "closure_value": 1,
     "cross_module_init_helper": 85,
     "decorator_arg": 13,
     "default_arg": 2,

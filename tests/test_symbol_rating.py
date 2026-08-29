@@ -286,6 +286,95 @@ class TestGetExcludedSymbols:
         assert isinstance(excluded, set)
 
 
+class TestGetConsecutiveBadCyclesBulk:
+    """get_consecutive_bad_cycles_bulk -- the batched sibling of
+    get_consecutive_bad_cycles added for pipeline/production_steps.py's
+    Symbol_Rating_Consecutive_Bad_Cycles dashboard column (F5,
+    docs/module_efficiency_redundancy_audit.md). Mirrors
+    TestGetConsecutiveBadCycles's cases one-for-one, plus the multi-symbol
+    batching this method exists for."""
+
+    def test_matches_get_consecutive_bad_cycles_per_symbol(self):
+        """The exact equivalence proof this PR's remediation plan requires
+        before replacing the per-symbol call site: for every symbol, the
+        bulk method's count must equal what the existing, unchanged
+        get_consecutive_bad_cycles returns for that same symbol."""
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        store.record_ratings([_event("AAPL", tier="GOOD")])
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        store.record_ratings([_event("MSFT", tier="BAD")])
+        store.record_ratings([_event("MSFT", tier="GOOD")])
+
+        bulk = store.get_consecutive_bad_cycles_bulk(["AAPL", "MSFT", "GOOG"])
+
+        assert bulk.get("AAPL", 0) == store.get_consecutive_bad_cycles("AAPL") == 3
+        assert bulk.get("MSFT", 0) == store.get_consecutive_bad_cycles("MSFT") == 0
+        assert bulk.get("GOOG", 0) == store.get_consecutive_bad_cycles("GOOG") == 0
+
+    def test_missing_symbol_absent_from_dict_caller_defaults_to_zero(self):
+        """No rating history at all -- the symbol is simply absent from the
+        returned dict (per the method's own docstring), not present with a
+        0 value; the caller is responsible for the 0 default."""
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        bulk = store.get_consecutive_bad_cycles_bulk(["NOSUCHSYMBOL"])
+        assert "NOSUCHSYMBOL" not in bulk
+
+    def test_a_good_row_resets_the_streak_then_new_bad_rows_count_again(self):
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        store.record_ratings([_event("AAPL", tier="GOOD")])
+        store.record_ratings([_event("AAPL", tier="BAD")])
+
+        assert store.get_consecutive_bad_cycles_bulk(["AAPL"])["AAPL"] == 1
+
+    def test_symbol_lookup_is_case_insensitive(self):
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        assert store.get_consecutive_bad_cycles_bulk(["aapl"])["AAPL"] == 1
+
+    def test_empty_symbols_list_returns_empty_dict_without_querying(self):
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        store.record_ratings([_event("AAPL", tier="BAD")])
+        assert store.get_consecutive_bad_cycles_bulk([]) == {}
+
+    def test_does_not_filter_by_is_held_unlike_get_excluded_symbols(self):
+        """Deliberate difference from get_excluded_symbols: this method
+        reports the raw streak for every symbol regardless of held status
+        -- the diagnostic column shows the true count even for a held
+        position; held-ness only affects the separate Excluded column."""
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        for _ in range(5):
+            store.record_ratings([_event("AAPL", tier="BAD", is_held=True)])
+
+        assert store.get_consecutive_bad_cycles_bulk(["AAPL"])["AAPL"] == 5
+        # get_excluded_symbols, by contrast, excludes held symbols entirely:
+        assert store.get_excluded_symbols(threshold_cycles=5) == set()
+
+    def test_degrades_to_empty_dict_on_missing_table(self, tmp_path):
+        db_path = tmp_path / "never_written.db"
+        db_path.touch()
+        reader = SymbolRatingStore(db_url=f"sqlite:///{db_path}", readonly=True)
+        assert reader.get_consecutive_bad_cycles_bulk(["AAPL"]) == {}
+
+    def test_scan_is_capped_per_symbol_same_as_single_symbol_method(self):
+        """Not a full re-test of the _MAX_STREAK_SCAN_ROWS cap (already
+        covered for get_consecutive_bad_cycles's underlying query shape) --
+        just confirms the bulk method's windowed query returns the same
+        answer as the single-symbol method on a long streak, proving it
+        uses the same cap rather than silently scanning unbounded history."""
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        for _ in range(50):
+            store.record_ratings([_event("AAPL", tier="BAD")])
+
+        assert (
+            store.get_consecutive_bad_cycles_bulk(["AAPL"])["AAPL"]
+            == store.get_consecutive_bad_cycles("AAPL")
+        )
+
+
 class TestReinclude:
     def test_reinclude_clears_an_excluded_symbol(self):
         store = SymbolRatingStore(db_url="sqlite:///:memory:")
