@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 335,
+    "live_safe": 336,
     "no_op": 3,
-    "restart_required": 105,
-    "total": 443
+    "restart_required": 106,
+    "total": 445
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 434,
+  "files_scanned": 435,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -197,6 +197,8 @@
     "DISCORD_WEBHOOK_URL",
     "DUAL_MOMENTUM_RISKY_ASSETS",
     "DUAL_MOMENTUM_SAFE_ASSET",
+    "EDGAR_COOLDOWN_SECONDS",
+    "EDGAR_COOLDOWN_THRESHOLD",
     "EDGAR_FULLTEXT_ENABLED",
     "EDGAR_MAX_CONCURRENCY",
     "EDGAR_USER_AGENT",
@@ -464,7 +466,6 @@
     "STRATEGY_WRITES_ENABLED",
     "SYMBOL_RATING_AUTO_DROP_ENABLED",
     "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
-    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
     "SYMBOL_RATING_ENABLED",
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
@@ -484,15 +485,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 880,
+    "attr": 882,
     "factory_param": 4,
-    "getattr_const": 373,
+    "getattr_const": 375,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 262,
     "factory_param": 4,
-    "getattr_const": 209,
+    "getattr_const": 211,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -614,9 +615,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1903",
+        "site": "data/market_data.py:1984",
         "via": [
-          1808
+          1889
         ]
       },
       {
@@ -647,9 +648,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:238",
+        "site": "data/market_data.py:262",
         "via": [
-          221
+          245
         ]
       },
       {
@@ -669,9 +670,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1904",
+        "site": "data/market_data.py:1985",
         "via": [
-          1808
+          1889
         ]
       },
       {
@@ -812,7 +813,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/__init__.py:87",
+        "site": "gui/panels/__init__.py:96",
         "via": []
       },
       {
@@ -1681,7 +1682,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1479",
+        "site": "data/market_data.py:1560",
         "via": []
       },
       {
@@ -1690,7 +1691,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1513",
+        "site": "data/market_data.py:1594",
         "via": []
       }
     ],
@@ -1701,7 +1702,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1820",
+        "site": "data/market_data.py:1901",
         "via": []
       },
       {
@@ -1710,9 +1711,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1857",
+        "site": "data/market_data.py:1938",
         "via": [
-          1795
+          1876
         ]
       }
     ],
@@ -1723,9 +1724,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1868",
+        "site": "data/market_data.py:1949",
         "via": [
-          1795
+          1876
         ]
       }
     ],
@@ -1769,7 +1770,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:988",
+        "site": "data/market_data.py:1012",
         "via": []
       }
     ],
@@ -1945,7 +1946,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1473",
+        "site": "data/market_data.py:1554",
         "via": []
       },
       {
@@ -1954,7 +1955,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1508",
+        "site": "data/market_data.py:1589",
         "via": []
       },
       {
@@ -1963,7 +1964,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1792",
+        "site": "data/market_data.py:1873",
         "via": []
       },
       {
@@ -1972,7 +1973,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2335",
+        "site": "data/market_data.py:2463",
         "via": []
       }
     ],
@@ -1983,7 +1984,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1356",
+        "site": "data/market_data.py:1437",
         "via": []
       },
       {
@@ -1992,7 +1993,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1476",
+        "site": "data/market_data.py:1557",
         "via": []
       },
       {
@@ -2001,7 +2002,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "data/market_data.py:1509",
+        "site": "data/market_data.py:1590",
         "via": []
       },
       {
@@ -2010,7 +2011,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1793",
+        "site": "data/market_data.py:1874",
         "via": []
       },
       {
@@ -2019,7 +2020,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2336",
+        "site": "data/market_data.py:2464",
         "via": []
       }
     ],
@@ -2030,7 +2031,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1818",
+        "site": "data/market_data.py:1899",
         "via": []
       }
     ],
@@ -2268,7 +2269,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1785",
+        "site": "data/market_data.py:1866",
         "via": []
       },
       {
@@ -2277,7 +2278,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2124",
+        "site": "data/market_data.py:2252",
         "via": []
       }
     ],
@@ -2288,9 +2289,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1848",
+        "site": "data/market_data.py:1929",
         "via": [
-          1795
+          1876
         ]
       }
     ],
@@ -2301,7 +2302,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1780",
+        "site": "data/market_data.py:1861",
         "via": []
       }
     ],
@@ -2486,7 +2487,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6064",
+        "site": "investyo_mcp_server.py:6088",
         "via": []
       }
     ],
@@ -2506,7 +2507,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6016",
+        "site": "investyo_mcp_server.py:6040",
         "via": []
       }
     ],
@@ -2546,7 +2547,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6024",
+        "site": "investyo_mcp_server.py:6048",
         "via": []
       }
     ],
@@ -3081,7 +3082,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/sentiment_sources.py:1932",
+        "site": "data/sentiment_sources.py:1962",
         "via": []
       }
     ],
@@ -3092,9 +3093,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/sentiment_sources.py:1902",
+        "site": "data/sentiment_sources.py:1932",
         "via": [
-          1891
+          1921
         ]
       }
     ],
@@ -3146,6 +3147,17 @@
           "module_level"
         ],
         "site": "api/state_api.py:94",
+        "via": []
+      }
+    ],
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "closure_value"
+        ],
+        "site": "pipeline/production_steps.py:622",
         "via": []
       }
     ],
@@ -3206,6 +3218,7 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
+    "closure_value": 1,
     "cross_module_init_helper": 85,
     "decorator_arg": 13,
     "default_arg": 2,

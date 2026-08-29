@@ -479,9 +479,20 @@ def compute_cpcv_metrics(
     collapses to 1.0), then produces the meta-gated returns proxy
     (``_meta_gated_returns``) on both the train and test slices. The runner
     derives DSR / PBO from the resulting IS/OOS Sharpe matrix.
-    ``mean_oos_max_dd`` is pulled straight from ``run_cpcv_evaluation``'s own
-    return dict (its already-computed mean per-path out-of-sample max
-    drawdown for the DSR-selected strategy) -- never recomputed here.
+    ``mean_oos_max_dd`` is deliberately left ``None`` here rather than passed
+    through from ``run_cpcv_evaluation``'s own return dict -- see the comment
+    at its assignment below for why: ``_meta_gated_returns`` produces a
+    discrete per-event R-multiple-of-barrier-width outcome in {-1, 0, +1}
+    (win/flat/loss), not a periodic fractional-of-capital return, and
+    ``run_cpcv_evaluation``'s max-drawdown aggregate is a COMPOUNDED equity
+    curve (``(1 + returns).cumprod()`` — see ``compute_max_drawdown``),
+    which is only a meaningful statistic for genuine capital-fraction
+    returns (e.g. ``scripts/train_lgbm.py``'s daily long-short spread).
+    Compounding a bare +-1 outcome series either explodes (a win doubles
+    "equity") or permanently zeroes it (a single loss is read as -100% of
+    capital, and once compounded equity hits exactly 0 it can never
+    recover) -- neither reflects real capital risk, since a live gated
+    trade risks a small sized fraction of the book, not the whole account.
 
     Returns metrics as ``None`` (honest — CONSTRAINT #4) when the event set is
     too small to yield any CPCV path. Never raises: any internal failure
@@ -572,7 +583,19 @@ def compute_cpcv_metrics(
             "dsr": float(result["dsr"]),
             "pbo": float(result["pbo"]),
             "mean_oos_sharpe": float(result["mean_oos_sharpe"]),
-            "mean_oos_max_dd": float(result["mean_oos_max_dd"]),
+            # NOT passed through from result["mean_oos_max_dd"]: that value is
+            # a COMPOUNDED-equity-curve drawdown, which is meaningless for
+            # _meta_gated_returns' discrete +-1-per-event outcome series (see
+            # this function's own docstring). Reporting it anyway would pin
+            # near-exactly 1.0 for almost any realistic win/loss mix --
+            # regardless of the meta-labeler's real OOS quality (confirmed:
+            # both meta_labeler_timeseries_momentum, mean OOS Sharpe -0.73,
+            # and meta_labeler_cross_sectional_momentum, mean OOS Sharpe
+            # +0.30, reported an identical, dominating 1.0) -- a fabricated-
+            # looking number for a statistic that was never computable from
+            # this returns representation in the first place (CONSTRAINT #4:
+            # report honest None, not a coerced value).
+            "mean_oos_max_dd": None,
         }
     except Exception as exc:  # dead-letter: never crash training over validation
         logger.warning("CPCV evaluation failed (%s) — metrics stay null (honest).", exc)

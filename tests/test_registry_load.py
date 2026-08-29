@@ -120,6 +120,23 @@ def test_provenance_never_affects_deployable():
     # The gate only reads DSR/PBO; provenance args aren't even accepted by it.
 
 
+def test_high_dsr_high_pbo_still_not_deployable():
+    """Regression lock for the real `cross-sectional-momentum` pilot case
+    (2026-08 deployability-gate audit): Sharpe 1.00, DSR 1.00 — an
+    excellent-looking, clearly-passing DSR — but PBO 0.73 (73% probability
+    of backtest overfitting), which correctly overrides the great DSR and
+    keeps the strategy non-deployable.
+
+    This pins down that PBO is a hard veto, not something a high DSR (or a
+    high in-sample Sharpe) can outweigh — the exact property someone
+    "fixing" a non-deployable pilot by loosening PBO_MAX without
+    understanding why it's there would break silently otherwise.
+    """
+    from ml import registry_io
+
+    assert registry_io.compute_deployable(1.00, 0.73) is False
+
+
 # ---------------------------------------------------------------------------
 # Test 5: PITFeatureStore round-trip (in-memory cache)
 # ---------------------------------------------------------------------------

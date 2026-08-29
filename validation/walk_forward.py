@@ -7,6 +7,14 @@ Implements institutional Walk-Forward Analysis (WFA) following Robert Pardo (200
 3. Institutional metrics: IS/OOS Sharpe, OOS Ulcer Index, OOS Martin Ratio (UPI), Max Drawdown.
 4. Cross-sectional universe rebalancing with strict Point-In-Time (PIT) synchronization
    and zero lookahead bias.
+
+Reviewed false positive (stockpy_codebase_auditor `orphaned_module`, 2026-08):
+this engine (`run_walk_forward_analysis` and helpers) has no production
+caller yet — it is a standalone institutional-metrics addition (see
+docs/VALIDATION_STRATEGY_FIX_LOG.md's "Institutional Quantitative
+Enhancements" entry) exercised by tests/test_walk_forward.py, not code that
+`validation/harness.py` or any pilot currently invokes. Not dead code;
+wiring it into the main validation pipeline is a separate, deliberate task.
 """
 
 from __future__ import annotations

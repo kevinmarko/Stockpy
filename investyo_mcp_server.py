@@ -2724,18 +2724,37 @@ def get_model_registry_status() -> str:
                 except Exception:
                     pass
 
+            cpcv_dsr = meta.get("cpcv_dsr")
+            pbo = meta.get("pbo")
+            n_train = meta.get("n_train")
+
+            # A null cpcv_dsr/pbo means CPCV never ran (e.g. zero training
+            # samples) -- honor CONSTRAINT #4 by rendering that as "not
+            # evaluated" rather than conflating it with a genuine CPCV run
+            # that came back and failed the DSR/PBO gate (deployable=False
+            # for both, but they mean very different things).
+            not_evaluated_reason: Optional[str] = None
+            if cpcv_dsr is None or pbo is None:
+                if n_train is not None and n_train <= 0:
+                    not_evaluated_reason = f"not evaluated — {n_train} training samples"
+                else:
+                    not_evaluated_reason = "not evaluated — CPCV metrics unavailable"
+
             deployable = meta.get("deployable")
-            if deployable is not None:
+            if not_evaluated_reason:
+                lines.append(f"- **Deployability**: ⚠️ NOT EVALUATED ({not_evaluated_reason})")
+            elif deployable is not None:
                 status_icon = "✅ DEPLOYABLE" if deployable else "❌ NOT DEPLOYABLE"
                 lines.append(f"- **Deployability**: {status_icon}")
 
-            cpcv_dsr = meta.get("cpcv_dsr")
-            if cpcv_dsr is not None:
-                lines.append(f"- **CPCV DSR**: {cpcv_dsr}")
-
-            pbo = meta.get("pbo")
-            if pbo is not None:
-                lines.append(f"- **PBO**: {pbo}")
+            if not_evaluated_reason:
+                lines.append(f"- **CPCV DSR**: {not_evaluated_reason}")
+                lines.append(f"- **PBO**: {not_evaluated_reason}")
+            else:
+                if cpcv_dsr is not None:
+                    lines.append(f"- **CPCV DSR**: {cpcv_dsr}")
+                if pbo is not None:
+                    lines.append(f"- **PBO**: {pbo}")
 
             sharpe = meta.get("cpcv_mean_oos_sharpe")
             if sharpe is not None:
@@ -2745,7 +2764,6 @@ def get_model_registry_status() -> str:
             if max_dd is not None:
                 lines.append(f"- **CPCV Mean OOS Max DD**: {max_dd}")
 
-            n_train = meta.get("n_train")
             if n_train is not None:
                 lines.append(f"- **Training Samples**: {n_train}")
 
@@ -5166,7 +5184,13 @@ def get_model_drift_report() -> str:
         for r in rows:
             sym = r.get("symbol", "—")
             decay = r.get("decay_pct")
-            decay_str = f"{decay:.1f}%" if isinstance(decay, (int, float)) else "—"
+            if isinstance(decay, (int, float)):
+                decay_str = f"{decay:.1f}%"
+            else:
+                # Never fabricate a number (CONSTRAINT #4) -- surface the
+                # honest reason forecast_skill_by_symbol_summary gave instead
+                # of a bare dash when one is available.
+                decay_str = f"— ({r.get('decay_reason')})" if r.get("decay_reason") else "—"
             md_lines.append(f"- **{sym}**: Skill decay = {decay_str}")
 
         md_lines.append("\n```json")

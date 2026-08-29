@@ -419,15 +419,71 @@ def test_real_cpcv_populates_metrics_and_gate(tmp_models_dir, tmp_registry):
     assert isinstance(row["cpcv_dsr"], float)
     assert isinstance(row["pbo"], float)
     assert 0.0 <= row["pbo"] <= 1.0, "PBO is a probability in [0, 1]"
-    # The real CPCV mean OOS Sharpe / max drawdown also reach the row now
-    # (previously silently discarded before reaching update_model_metrics).
+    # The real CPCV mean OOS Sharpe also reaches the row now (previously
+    # silently discarded before reaching update_model_metrics).
     assert row["cpcv_mean_oos_sharpe"] is not None
-    assert row["cpcv_mean_oos_max_dd"] is not None
     assert isinstance(row["cpcv_mean_oos_sharpe"], float)
-    assert isinstance(row["cpcv_mean_oos_max_dd"], float)
+    # mean_oos_max_dd is honestly None (CONSTRAINT #4), never passed through
+    # from run_cpcv_evaluation: _meta_gated_returns produces a discrete
+    # per-event +-1 R-multiple-of-barrier-width outcome, not a compoundable
+    # fractional-of-capital return, so a compounded-equity-curve drawdown is
+    # not a meaningful statistic here (see compute_cpcv_metrics' docstring —
+    # this used to silently read exactly 1.0 for almost any realistic
+    # win/loss mix, regardless of the model's actual OOS quality).
+    assert row["cpcv_mean_oos_max_dd"] is None
 
     # deployable is the HONEST gate applied to the real metrics — never spoofed.
     assert row["deployable"] is compute_deployable(row["cpcv_dsr"], row["pbo"])
+
+
+def test_compute_cpcv_metrics_never_passes_through_a_fabricated_max_dd(monkeypatch):
+    """Regression test for a real bug: ``compute_cpcv_metrics`` used to pass
+    ``run_cpcv_evaluation``'s ``mean_oos_max_dd`` straight through, even though
+    ``_meta_gated_returns`` feeds it a discrete per-event +-1 R-multiple-of-
+    barrier-width outcome (win/flat/loss), not a compoundable fractional-of-
+    capital return. Compounding that series -- ``(1 + returns).cumprod()`` --
+    either explodes (a win doubles "equity") or, more commonly, permanently
+    zeroes equity the moment any single event loses (a -1 outcome reads as a
+    total, un-recoverable capital wipeout). With any realistic mix of gated
+    wins/losses this pinned the reported drawdown at *exactly* 1.0 regardless
+    of the model's real OOS quality -- confirmed live for both
+    ``meta_labeler_timeseries_momentum`` (mean OOS Sharpe -0.73) and
+    ``meta_labeler_cross_sectional_momentum`` (mean OOS Sharpe +0.30): opposite
+    Sharpe signs, identical fabricated-looking 1.0 drawdown.
+
+    Stubs ``run_cpcv_evaluation`` itself (isolating this from any real LightGBM
+    fit/CPCV sweep) with a fake result whose ``mean_oos_max_dd`` is the exact
+    degenerate value the real bug produced, and asserts ``compute_cpcv_metrics``
+    reports ``None`` (CONSTRAINT #4 — honest, not a coerced 1.0) while still
+    passing through the perfectly legitimate ``dsr``/``pbo``/``mean_oos_sharpe``.
+    """
+    n = 200
+    idx = pd.RangeIndex(n)
+    X = pd.DataFrame({"feat_a": np.linspace(0.0, 1.0, n)}, index=idx)
+    y_primary = pd.Series(np.resize([1.0, -1.0, 1.0], n), index=idx)
+    y_barrier = pd.Series(np.resize([1.0, 1.0, -1.0], n), index=idx)
+
+    fake_result = {
+        "paths": [{"path_id": (0, 1), "sharpe": 0.3, "returns": [0.0], "params": "x"}],
+        "dsr": 0.005,
+        "pbo": 0.2,
+        "mean_oos_sharpe": 0.30,
+        # The exact degenerate value the real bug produced for BOTH flagged
+        # models, despite their opposite-signed mean_oos_sharpe.
+        "mean_oos_max_dd": 1.0,
+    }
+    monkeypatch.setattr(trainer, "run_cpcv_evaluation", lambda *a, **k: dict(fake_result))
+
+    result = trainer.compute_cpcv_metrics(X, y_primary, y_barrier, min_events=60)
+
+    assert result["dsr"] == pytest.approx(0.005)
+    assert result["pbo"] == pytest.approx(0.2)
+    assert result["mean_oos_sharpe"] == pytest.approx(0.30)
+    assert result["mean_oos_max_dd"] is None, (
+        "mean_oos_max_dd must never be coerced from run_cpcv_evaluation's "
+        "compounded-equity-curve drawdown -- it is not a valid statistic for "
+        "_meta_gated_returns' discrete +-1 R-multiple outcome series."
+    )
 
 
 def test_bad_model_stays_non_deployable_gate_is_genuine(tmp_models_dir, tmp_registry, monkeypatch):

@@ -1,3 +1,19 @@
+"""Covariate/feature drift detection via the Population Stability Index (PSI).
+
+Compares a reference window of a feature's distribution against a recent
+window (see ``adapt_symbol_history_to_windows``), buckets both by the
+reference's own quantiles, and computes PSI = sum((curr% - ref%) * ln(curr% /
+ref%)) per bucket. ``check_and_alert_feature_drift`` is the intended entry
+point: it treats an insufficient-data window as an explicit
+``PSIResult(psi=None, drift_detected=False, details="Insufficient data")``
+rather than a fabricated PSI value, does the same
+(``details="PSI computation failed"``) if ``compute_psi`` itself returns NaN
+(fail closed — an uncomputable PSI is never reported as "confirmed no
+drift"), and fires ``send_alert_fn`` whenever PSI crosses
+``PSI_ALERT_THRESHOLD`` (0.25, the standard PSI "moderate shift" cutoff) or
+is infinite (a bucket losing all reference mass).
+"""
+
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
@@ -16,9 +32,15 @@ class PSIResult:
     details: str
 
 def compute_psi(reference: pd.Series, current: pd.Series, n_buckets: int = 10) -> float:
-    """Compute Population Stability Index between reference and current distribution."""
+    """Compute Population Stability Index between reference and current distribution.
+
+    Returns NaN when PSI cannot be computed (empty input, degenerate/single-value
+    bucket edges, or an unexpected error during binning) — callers must not
+    interpret a NaN as "confirmed no drift". Returns +inf when reference has a
+    single value and current introduces variance (treated as maximum drift).
+    """
     if len(reference) == 0 or len(current) == 0:
-        return 0.0
+        return float('nan')
 
     # Handle cases with no variance in reference
     if reference.nunique() <= 1:
@@ -27,13 +49,13 @@ def compute_psi(reference: pd.Series, current: pd.Series, n_buckets: int = 10) -
             return 0.0
         # If variance is introduced, we could say it's maximum drift
         return float('inf')
-        
+
     try:
         # Define bucket bins based on reference quantiles
         bins = np.unique(np.percentile(reference.dropna(), np.linspace(0, 100, n_buckets + 1)))
         if len(bins) < 2:
-            return 0.0
-            
+            return float('nan')
+
         # Ensure extremes are caught
         bins[0] = -np.inf
         bins[-1] = np.inf
@@ -50,7 +72,7 @@ def compute_psi(reference: pd.Series, current: pd.Series, n_buckets: int = 10) -
         return float(psi)
     except Exception as e:
         logger.warning(f"Error computing PSI: {e}")
-        return 0.0
+        return float('nan')
 
 def adapt_symbol_history_to_windows(df: pd.DataFrame, column: str, reference_size: int = 60, recent_size: int = 20) -> Tuple[pd.Series, pd.Series]:
     """Split historical data into reference and current windows."""
@@ -85,7 +107,18 @@ def check_and_alert_feature_drift(df: pd.DataFrame, columns: Sequence[str], send
             continue
             
         psi = compute_psi(ref, curr)
-        
+
+        if np.isnan(psi):
+            # Fail closed: an uncomputable PSI is not "confirmed no drift" and
+            # must not be reported as within normal range (CONSTRAINT #4/#6).
+            results.append(PSIResult(
+                drift_detected=False,
+                psi=None,
+                feature=col,
+                details="PSI computation failed"
+            ))
+            continue
+
         if np.isinf(psi) or psi >= PSI_ALERT_THRESHOLD:
             msg = f"Feature drift detected for {col}: PSI = {psi:.4f}" if not np.isinf(psi) else f"Feature drift detected for {col}: infinite PSI"
             results.append(PSIResult(

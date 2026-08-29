@@ -1,6 +1,8 @@
 import pytest
 import numpy as np
 import pandas as pd
+from unittest.mock import patch
+import validation.covariate_drift as covariate_drift
 from validation.covariate_drift import (
     compute_psi,
     PSIResult,
@@ -24,9 +26,9 @@ def test_compute_psi_shifted_distributions():
     assert psi >= PSI_ALERT_THRESHOLD
 
 def test_compute_psi_degrades_gracefully():
-    # Empty series
-    assert compute_psi(pd.Series(dtype=float), pd.Series(dtype=float)) == 0.0
-    
+    # Empty series: PSI is uncomputable, not "confirmed no drift"
+    assert np.isnan(compute_psi(pd.Series(dtype=float), pd.Series(dtype=float)))
+
     # Single value
     ref = pd.Series([1.0, 1.0, 1.0])
     curr = pd.Series([1.0, 1.0])
@@ -75,3 +77,23 @@ def test_check_and_alert_feature_drift():
     
     assert len(alerts) == 1
     assert "drifting_feature" in alerts[0]
+
+def test_check_and_alert_feature_drift_reports_nan_psi_as_inconclusive():
+    # A NaN from compute_psi (uncomputable PSI) must never be reported as
+    # "within normal range" or fabricate a no-drift/drift signal — fail closed.
+    df = pd.DataFrame({'feature_a': range(100)})
+
+    alerts = []
+    def alert_fn(msg):
+        alerts.append(msg)
+
+    with patch.object(covariate_drift, 'compute_psi', return_value=float('nan')):
+        results = check_and_alert_feature_drift(df, ['feature_a'], alert_fn)
+
+    assert len(results) == 1
+    res = results[0]
+    assert res.psi is None
+    assert not res.drift_detected
+    assert "within normal range" not in res.details
+    assert res.details == "PSI computation failed"
+    assert len(alerts) == 0
