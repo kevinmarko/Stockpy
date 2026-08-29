@@ -115,21 +115,26 @@ class CapAuditStore:
             return
 
         with session_scope(self.Session) as session:
-            for ev in events:
-                symbol = ev["symbol"]
-                ts = ev.get("timestamp") or datetime.now(timezone.utc)
+            def _clean_ts(ev_ts: Any) -> datetime:
+                ts = ev_ts or datetime.now(timezone.utc)
                 if hasattr(ts, "tzinfo") and ts.tzinfo is not None:
                     ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
-                session.add(SizingCapEvent(
-                    timestamp=ts,
+                return ts
+
+            objects = [
+                SizingCapEvent(
+                    timestamp=_clean_ts(ev.get("timestamp")),
                     cycle_id=ev.get("cycle_id", cycle_id),
-                    symbol=str(symbol).upper(),
+                    symbol=str(ev["symbol"]).upper(),
                     strategy_id=ev.get("strategy_id"),
                     raw_weight=ev.get("raw_weight"),
                     final_weight=ev.get("final_weight"),
                     binding_constraint=ev.get("binding_constraint"),
                     was_capped=bool(ev.get("was_capped", False)),
-                ))
+                )
+                for ev in events
+            ]
+            session.add_all(objects)
 
     def get_recent(self, limit: int = 200) -> List[Dict[str, Any]]:
         """Most-recent-first list of JSON-safe capping-event dicts.
