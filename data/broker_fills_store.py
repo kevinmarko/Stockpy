@@ -162,12 +162,14 @@ class BrokerFillsStore:
             order_ids = [str(f.order_id) for f in fills if str(f.order_id or "").strip()]
             existing: Dict[str, BrokerOrderFill] = {}
             if order_ids:
-                for row in (
-                    session.query(BrokerOrderFill)
-                    .filter(BrokerOrderFill.order_id.in_(order_ids))
-                    .all()
-                ):
-                    existing[row.order_id] = row
+                for i in range(0, len(order_ids), 500):
+                    chunk = order_ids[i:i + 500]
+                    for row in (
+                        session.query(BrokerOrderFill)
+                        .filter(BrokerOrderFill.order_id.in_(chunk))
+                        .all()
+                    ):
+                        existing[row.order_id] = row
 
             for f in fills:
                 order_id = str(f.order_id or "").strip()
@@ -232,25 +234,30 @@ class BrokerFillsStore:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         n = 0
         with session_scope(self.Session) as session:
-            existing = {
-                row.instrument_url: row
+            keys = list(mapping.keys())
+            existing = {}
+            for i in range(0, len(keys), 500):
+                chunk = keys[i:i + 500]
                 for row in (
                     session.query(BrokerInstrumentSymbol)
-                    .filter(BrokerInstrumentSymbol.instrument_url.in_(list(mapping.keys())))
+                    .filter(BrokerInstrumentSymbol.instrument_url.in_(chunk))
                     .all()
-                )
-            }
+                ):
+                    existing[row.instrument_url] = row
+            new_objects = []
             for url, symbol in mapping.items():
                 sym = str(symbol).upper() if symbol else None
                 row = existing.get(url)
                 if row is None:
-                    session.add(
+                    new_objects.append(
                         BrokerInstrumentSymbol(instrument_url=url, symbol=sym, resolved_at=now)
                     )
                 else:
                     row.symbol = sym
                     row.resolved_at = now
                 n += 1
+            if new_objects:
+                session.add_all(new_objects)
         return n
 
     # ------------------------------------------------------------------ #

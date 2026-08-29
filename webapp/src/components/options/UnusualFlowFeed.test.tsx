@@ -193,4 +193,45 @@ describe("UnusualFlowFeed", () => {
     expect(screen.getByText("⚡ SWEEP")).toBeInTheDocument();
     expect(screen.getByText("🟢 BULLISH")).toBeInTheDocument();
   });
+
+  it("shows an incomplete-scan banner when the backend reports degraded coverage", async () => {
+    vi.mocked(api.getUnusualOptionsFlow).mockResolvedValue({
+      ...mockFlowResponse,
+      degraded: true,
+      symbols_fetch_failed: ["TSLA"],
+    });
+
+    render(<UnusualFlowFeed />);
+
+    expect(await screen.findByText(/Incomplete Scan/i)).toBeInTheDocument();
+    expect(screen.getByText(/Live options-chain data failed to load for TSLA/i)).toBeInTheDocument();
+  });
+
+  it("does not show the incomplete-scan banner on a healthy (non-degraded) response", async () => {
+    render(<UnusualFlowFeed />);
+
+    await screen.findByText(/Unusual Options Activity & Order Flow Feed/i);
+    expect(screen.queryByText(/Incomplete Scan/i)).not.toBeInTheDocument();
+  });
+
+  it("marks an estimated price/spot price honestly, never rendering it identically to a real quote", async () => {
+    vi.mocked(api.getUnusualOptionsFlow).mockResolvedValue({
+      trades: [
+        {
+          ...mockFlowResponse.trades[0],
+          price_is_estimated: true,
+          spot_price_is_estimated: true,
+        },
+      ],
+      count: 1,
+      as_of: mockFlowResponse.as_of,
+    });
+
+    render(<UnusualFlowFeed />);
+
+    await screen.findAllByText("NVDA");
+    // Two "(est.)" badges: one next to spot price, one next to fill price
+    // (notional carries a third, since it's derived from the estimated price).
+    expect(screen.getAllByText("(est.)").length).toBeGreaterThanOrEqual(2);
+  });
 });
