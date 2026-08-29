@@ -9,7 +9,7 @@ recommends a delta-neutral Iron Condor to capture the post-earnings IV crush.
 
 ## Backtest Validation — NOT GATEABLE (measured reason)
 
-**Not registered in `STRATEGY_REGISTRY`.** Following the precedent already documented in
+**Explicitly registered in `STRATEGY_REGISTRY` as `UNGATEABLE_DATA_GAP`**. Following the precedent already documented in
 `pilots/catalog.py` (an entry explicitly carrying `validation_strategy_id=None` — "does NOT
 unblock a backtest today") — this pilot's alpha term cannot be honestly measured with any data
 reachable in this repository, and registering a proxy would produce plausible-looking numbers

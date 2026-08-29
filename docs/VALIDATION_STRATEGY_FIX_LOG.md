@@ -725,11 +725,7 @@ that could be honestly registered from the three that could not.
    iron-condor branch blows up in the 2008 crisis window under a constant-entry-sigma
    simplification with no credit-event regime gate. No threshold or delta target was tuned to
    chase the gate. Full detail: `docs/signals/vol_mispricing.md`.
-2. `earnings_crush`, `dispersion_trading`, `zero_dte_engine` — deliberately left unregistered,
-   each with a measured (not asserted) "NOT GATEABLE" write-up in its own
-   `docs/signals/<name>.md`, following the `pilots/catalog.py` `validation_strategy_id=None`
-   precedent ("does NOT unblock a backtest today") rather than registering a proxy that would
-   measure the proxy's own assumptions instead of the pilot.
+2. `earnings_crush`, `dispersion_trading`, `zero_dte_engine` — explicitly registered in `STRATEGY_REGISTRY` using `_build_ungateable_adapter` to ensure the validation harness correctly reports their status as NOT GATEABLE rather than silently dropping them. Each has a measured (not asserted) "NOT GATEABLE" write-up in its own `docs/signals/<name>.md`, following the `pilots/catalog.py` `validation_strategy_id=None` precedent ("does NOT unblock a backtest today") rather than registering a proxy that would measure the proxy's own assumptions instead of the pilot.
 3. `gamma_scalper` — excluded with reasoning in `docs/signals/gamma_scalper.md`; a fabrication
    hazard was found in passing (calling it with no arguments invents a synthetic position and
    price path and returns plausible-looking numbers for a trade that was never real).

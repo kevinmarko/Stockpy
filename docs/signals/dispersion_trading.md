@@ -9,7 +9,7 @@ Short Dispersion (the reverse) opportunities.
 
 ## Backtest Validation — NOT GATEABLE (measured reason)
 
-**Not registered in `STRATEGY_REGISTRY`.** Same precedent as `earnings_crush.md` and
+**Explicitly registered in `STRATEGY_REGISTRY` as `UNGATEABLE_DATA_GAP`**. Same precedent as `earnings_crush.md` and
 `pilots/catalog.py`'s `validation_strategy_id=None` convention — the decline is evidence-backed,
 not asserted.
 
