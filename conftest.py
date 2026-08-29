@@ -215,6 +215,33 @@ def _no_fmp_throttle_in_tests(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 @pytest.fixture(autouse=True)
+def _no_edgar_cooldown_leak_in_tests() -> Any:
+    """Reset data/edgar_fundamentals.py's cooldown/circuit-breaker state
+    between every test -- added alongside that module's F8 fix (see
+    docs/module_efficiency_redundancy_audit.md), which gave it the same
+    module-level consecutive-failure/cooldown state
+    _no_gdelt_throttle_in_tests / _no_fmp_throttle_in_tests already guard for
+    their own modules. Without this, a test that exercises the breaker (a
+    429/5xx) would leak an open cooldown into every EDGAR test that ran after
+    it, silently turning their calls into skips.
+
+    Unlike the GDELT/FMP fixtures, there is no settings-driven request
+    interval to zero here -- data/edgar_fundamentals.py's spacing delay
+    (_REQUEST_DELAY) is a fixed 0.15s module constant, not read from
+    settings, and predates this fixture; existing tests already tolerate it.
+
+    The import is lazy and inside the fixture (rather than at module scope)
+    so a broken data/edgar_fundamentals.py import surfaces as a test failure
+    rather than breaking collection for the ENTIRE suite.
+    """
+    from data.edgar_fundamentals import reset_edgar_rate_limiter
+
+    reset_edgar_rate_limiter()
+    yield
+    reset_edgar_rate_limiter()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_validation_runs_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the default ``validation_runs`` DB resolver at an in-memory db
     for every test, unless the test passes its own explicit ``db_url``.
