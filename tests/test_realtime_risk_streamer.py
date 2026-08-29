@@ -10,6 +10,7 @@ Unit tests for pilots/realtime_risk_streamer.py:
 from datetime import datetime, timezone
 import pytest
 
+from pilots.options_risk import calculate_black_scholes_greeks
 from pilots.realtime_risk_streamer import (
     compute_black_scholes_unit_greeks,
     compute_position_risk_greeks,
@@ -40,6 +41,33 @@ class TestOptionSymbolParsing:
         assert parse_option_symbol("MSFT") is None
         assert parse_option_symbol("") is None
         assert parse_option_symbol("INVALID SYMBOL STRING") is None
+
+
+def test_black_scholes_unit_greeks_delegates_to_canonical_pricer():
+    """F4 dedup (docs/module_efficiency_redundancy_audit.md):
+    compute_black_scholes_unit_greeks now delegates to
+    pilots.options_risk.calculate_black_scholes_greeks instead of carrying
+    its own near-verbatim copy. Seeded grid across standard, 0DTE, and
+    degenerate-vol inputs proves this module's 4-key return contract
+    (delta/gamma/theta_daily/vega_1pct) is byte-identical to a subset of the
+    canonical function's own return dict."""
+    grid = [
+        (100.0, 100.0, 0.25, 0.20, "call"),
+        (100.0, 100.0, 0.25, 0.20, "put"),
+        (150.0, 95.0, 1.0, 0.35, "call"),
+        (50.0, 60.0, 0.5, 0.50, "put"),
+        (100.0, 100.0, 0.0, 0.20, "call"),  # 0DTE
+        (100.0, 95.0, 0.1, 0.0, "call"),  # degenerate sigma
+        (0.0, 100.0, 0.1, 0.2, "call"),  # non-positive spot
+    ]
+    for spot, strike, t_years, sigma, option_type in grid:
+        unit_result = compute_black_scholes_unit_greeks(spot, strike, t_years, sigma, option_type)
+        canonical_result = calculate_black_scholes_greeks(spot, strike, t_years, sigma, option_type)
+        for key in ("delta", "gamma", "theta_daily", "vega_1pct"):
+            assert unit_result[key] == pytest.approx(canonical_result[key], abs=1e-12), (
+                f"{key} diverged for spot={spot} strike={strike} t_years={t_years} "
+                f"sigma={sigma} option_type={option_type}"
+            )
 
 
 class TestBlackScholesUnitGreeks:

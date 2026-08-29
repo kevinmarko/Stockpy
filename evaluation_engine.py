@@ -1119,6 +1119,34 @@ def recommendation_tracking_report(
     # Per-symbol bar cache (avoid redundant fetches)
     _bars_cache: Dict[str, pd.DataFrame] = {}
 
+    # Batched prewarm (F6, docs/module_efficiency_redundancy_audit.md): the
+    # loop below used to be the ONLY thing that populated _bars_cache — a
+    # strictly serial historical_store.get_bars() call the first time each
+    # distinct symbol was seen. Prewarming with ONE bounded-concurrency
+    # get_bars_bulk() call over every distinct symbol across buy_entries
+    # turns that into a single batched fetch for the common case (a symbol
+    # get_bars_bulk() couldn't resolve is simply absent from its result —
+    # never raises, CONSTRAINT #6 — so _get_bars() below still lazily
+    # retries that one symbol individually on first access, preserving the
+    # exact prior per-symbol degrade-to-empty-DataFrame outcome).
+    if historical_store is not None:
+        distinct_symbols: set = set()
+        for e in buy_entries:
+            try:
+                distinct_symbols.add(e.symbol.upper())
+            except Exception:
+                continue
+        if distinct_symbols:
+            try:
+                # 756 days ≈ 3 years — same lookback _get_bars() itself uses.
+                _bars_cache.update(
+                    historical_store.get_bars_bulk(list(distinct_symbols), lookback_days=756)
+                )
+            except Exception as exc:
+                logger.warning(
+                    "recommendation_tracking_report: get_bars_bulk prewarm failed: %s", exc
+                )
+
     def _get_bars(sym: str) -> pd.DataFrame:
         if sym not in _bars_cache:
             if historical_store is None:

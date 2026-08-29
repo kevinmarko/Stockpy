@@ -614,7 +614,12 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "symbols":
         allowed = allowed | {"data", "datetime", "pilots"}
     if module_name == "multi_leg_pricing":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "scipy"}
+        # calculate_black_scholes_leg_greeks (F4, module_efficiency_
+        # redundancy_audit.md) now delegates to pilots.options_risk's
+        # canonical pricer instead of its own near-verbatim copy -- scipy is
+        # no longer directly imported here (that math now lives solely in
+        # options_risk.py).
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
     if module_name == "earnings_crush":
         allowed = allowed | {"data", "datetime", "execution", "numpy", "pandas", "pilots", "uuid"}
     if module_name == "har_volatility":
@@ -625,8 +630,12 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # same shared multi-leg paper-broker executor already allowed for
         # earnings_crush/dispersion_trading/zero_dte_engine above -- plus a
         # module-top `import uuid` for the fallback order_id, matching those
-        # same three siblings' precedent exactly.
-        allowed = allowed | {"data", "dataclasses", "datetime", "execution", "numpy", "pandas", "pilots", "scipy", "uuid"}
+        # same three siblings' precedent exactly. `numeric_utils` (F2,
+        # docs/module_efficiency_redundancy_audit.md) is a stdlib-only leaf
+        # (math + typing) providing the shared _safe_float dedup target --
+        # dependency-light by construction, same treatment as
+        # settings_keysets/runtime_flags above for settings_meta.
+        allowed = allowed | {"data", "dataclasses", "datetime", "execution", "numeric_utils", "numpy", "pandas", "pilots", "scipy", "uuid"}
     if module_name == "gamma_scalper":
         allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
     if module_name == "dispersion_trading":
@@ -664,7 +673,12 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # auto-discovery now actually checks it. datetime only.
         allowed = allowed | {"datetime"}
     if module_name == "realtime_risk_streamer":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "re", "scipy"}
+        # compute_black_scholes_unit_greeks / parse_option_symbol (F3/F4,
+        # module_efficiency_redundancy_audit.md) now delegate to
+        # pilots.options_risk's canonical pricer + symbol regex instead of
+        # near-verbatim copies -- re/scipy/math/settings are no longer
+        # directly imported here.
+        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 

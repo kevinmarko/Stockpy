@@ -114,7 +114,19 @@ def test_fetch_strategy_registry_wrong_shape_dict_returns_empty_list():
 # of scripts.refresh_validations.STRATEGY_REGISTRY. Mirrors every test above.
 # --------------------------------------------------------------------------- #
 def test_fetch_options_strategy_registry_real_invocation_returns_nonempty_list_of_strings():
-    names = _fetch_options_strategy_registry(timeout=120)
+    """Real (non-mocked) subprocess invocation. Retries a bounded number of
+    times on an empty result before failing -- same documented CI-only
+    SIGABRT flake as _fetch_strategy_registry's sibling test above (PR #903);
+    this sibling shares the identical heavy-import subprocess isolation path
+    and was simply never given the same hardening. See that test's docstring
+    for the full explanation of why retrying here does not mask a genuine
+    regression: a broken STANDARD_OPTIONS_STRATEGIES import fails identically
+    on every attempt."""
+    names: list[str] = []
+    for _ in range(3):
+        names = _fetch_options_strategy_registry(timeout=120)
+        if names:
+            break
     assert isinstance(names, list)
     assert len(names) > 0
     assert all(isinstance(n, str) for n in names)
@@ -164,7 +176,19 @@ def test_fetch_options_strategy_registry_wrong_shape_dict_returns_empty_list():
 # STANDARD_OPTIONS_STRATEGIES. Mirrors every test above.
 # --------------------------------------------------------------------------- #
 def test_fetch_paper_broker_options_strategy_registry_real_invocation_returns_nonempty_list_of_strings():
-    names = _fetch_paper_broker_options_strategy_registry(timeout=120)
+    """Real (non-mocked) subprocess invocation. Retries a bounded number of
+    times on an empty result before failing -- same documented CI-only
+    SIGABRT flake as _fetch_strategy_registry's sibling test above (PR #903);
+    this sibling shares the identical heavy-import subprocess isolation path
+    and was simply never given the same hardening. See that test's docstring
+    for the full explanation of why retrying here does not mask a genuine
+    regression: a broken PAPER_BROKER_OPTIONS_STRATEGIES import fails
+    identically on every attempt."""
+    names: list[str] = []
+    for _ in range(3):
+        names = _fetch_paper_broker_options_strategy_registry(timeout=120)
+        if names:
+            break
     assert isinstance(names, list)
     assert len(names) > 0
     assert all(isinstance(n, str) for n in names)

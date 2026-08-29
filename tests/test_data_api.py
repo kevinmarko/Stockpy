@@ -477,7 +477,7 @@ def test_put_universe_requires_token_even_when_unset(monkeypatch):
     GET endpoints on this API — it uses require_write_token, which fails
     CLOSED when STATE_API_TOKEN is unset (the opposite of every read
     endpoint's fail-open default)."""
-    monkeypatch.setattr("gui.env_io.write_setting", lambda key, value: ".env")
+    monkeypatch.setattr("env_io.write_setting", lambda key, value: ".env")
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.put("/data/universe", json=["aapl", " nvda ", ""])
     assert resp.status_code == 403
@@ -491,7 +491,7 @@ def test_put_universe_writes_default_tickers(monkeypatch):
         written["value"] = value
         return ".env"
 
-    monkeypatch.setattr("gui.env_io.write_setting", _fake_write)
+    monkeypatch.setattr("env_io.write_setting", _fake_write)
     with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
         resp = client.put(
             "/data/universe",
@@ -526,6 +526,28 @@ def test_quotes_empty_symbols(monkeypatch):
     monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/quotes?symbols=")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+def test_quotes_batch_provider_outage_degrades_to_empty_not_500(monkeypatch):
+    """Before F6 (docs/module_efficiency_redundancy_audit.md), this endpoint
+    looped per symbol with its own try/except, so a total provider outage
+    could never surface past this endpoint as a 500 -- every symbol was
+    simply dropped one at a time. Migrating to a single
+    get_quotes_batch(sym_list) call collapsed that per-symbol try/except
+    into one call site; without an equivalent wrapper around it, a raising
+    provider now propagates straight through FastAPI as a 500 instead of
+    degrading to {} like every other failure mode this endpoint handles.
+    Regression guard for that gap."""
+
+    class _RaisingBatchProvider:
+        def get_quotes_batch(self, symbols):
+            raise MarketDataError("provider unreachable")
+
+    monkeypatch.setattr(data_api, "get_provider", lambda: _RaisingBatchProvider())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/quotes?symbols=AAPL,NVDA")
     assert resp.status_code == 200
     assert resp.json() == {}
 

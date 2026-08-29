@@ -626,11 +626,11 @@ def get_universe() -> Dict[str, Any]:
 def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
     """Replace the configured universe.
 
-    Writes ``DEFAULT_TICKERS`` via ``gui.env_io.write_setting`` — the
+    Writes ``DEFAULT_TICKERS`` via ``env_io.write_setting`` — the
     allowlist-bounded env writer. (``WATCHLIST`` is intentionally NOT in
     ``ALLOWED_KEYS``, so ``DEFAULT_TICKERS`` is the correct, writable key.)
     """
-    from gui.env_io import write_setting
+    from env_io import write_setting
 
     symbols = [s.strip().upper() for s in watchlist if s and s.strip()]
     try:
@@ -651,12 +651,25 @@ def get_quotes(symbols: str) -> Dict[str, Any]:
     override), instead of N individual ``/quote`` requests. Same
     dead-letter contract as before: a symbol that fails to resolve is
     simply absent from the response, never raises.
+
+    The pre-F6 per-symbol loop caught every exception per ticker, so a
+    total provider outage still returned ``{}`` rather than a 500 -- this
+    endpoint could never crash from a quote-fetch failure. A single
+    ``get_quotes_batch()`` call collapses that per-symbol try/except into
+    one call site; wrap it the same way the other two F6 call sites
+    (``pilots/options_risk.py``, ``pilots/scenario_matrix.py``) already do,
+    so a whole-batch failure degrades to an empty result instead of
+    propagating.
     """
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not sym_list:
         return {}
     provider = get_provider()
-    quotes = provider.get_quotes_batch(sym_list)
+    try:
+        quotes = provider.get_quotes_batch(sym_list)
+    except Exception as exc:
+        logger.warning("data_api: get_quotes_batch failed for %s: %s", sym_list, exc)
+        quotes = {}
     out: Dict[str, Any] = {}
     for sym, q in quotes.items():
         out[sym] = _clean_nan(

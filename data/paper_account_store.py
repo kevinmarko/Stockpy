@@ -1586,6 +1586,16 @@ class PaperAccountStore:
                 return []
 
             positions = session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
+
+            # First pass: parse every option position and identify which
+            # ones are actually expired, so the full set of underlying
+            # tickers needing a spot quote is known BEFORE fetching any of
+            # them (F6, docs/module_efficiency_redundancy_audit.md) -- lets
+            # every expired position's underlying be resolved in ONE
+            # get_quotes_batch() call instead of one get_latest_quote() call
+            # per expired position.
+            expired_candidates: List[tuple] = []
+            expired_tickers: set = set()
             for pos in positions:
                 m = _OPTION_SYMBOL_REGEX.match(pos.symbol)
                 if not m:
@@ -1601,92 +1611,105 @@ class PaperAccountStore:
                 except Exception:
                     continue
 
-                # Check if expired
                 if exp_d <= now_d:
-                    # Resolve underlying spot price
-                    spot = None
-                    if market_provider:
-                        try:
-                            q = market_provider.get_latest_quote(ticker)
-                            if q and getattr(q, "price", None):
-                                spot = float(q.price)
-                        except Exception:
-                            spot = None
-                    if spot is None:
-                        # No honest spot price available -- do NOT fabricate one
-                        # (CONSTRAINT #4). Leave the position open so a later
-                        # call, once a real quote is available again, can
-                        # settle it at its actual intrinsic value instead of
-                        # silently forcing it to zero.
-                        logger.warning(
-                            "settle_expired_options: no quote available for %s "
-                            "(expired %s); skipping settlement rather than "
-                            "fabricating spot=strike.",
-                            ticker, exp_str,
-                        )
-                        continue
+                    expired_candidates.append((pos, ticker, exp_str, strike, opt_type))
+                    expired_tickers.add(ticker)
 
-                    # Calculate intrinsic value
-                    if opt_type == "CALL":
-                        intrinsic = max(0.0, spot - strike)
-                    else:
-                        intrinsic = max(0.0, strike - spot)
+            # Batched (F6): one get_quotes_batch() call for every distinct
+            # expired underlying instead of N get_latest_quote() calls. Same
+            # never-raises/dead-letter-per-symbol contract as the prior
+            # per-position try/except -- a ticker that fails to resolve, or
+            # that a total batch failure leaves absent, maps to spot=None
+            # below exactly as a caught exception from the old per-position
+            # call did (CONSTRAINT #6).
+            quotes: Dict[str, Any] = {}
+            if market_provider and expired_tickers:
+                try:
+                    quotes = market_provider.get_quotes_batch(list(expired_tickers))
+                except Exception:
+                    quotes = {}
 
-                    contracts = abs(float(pos.qty))
-                    is_long = pos.qty > 0
-
-                    # Cash settlement
-                    if is_long:
-                        cash_settlement = intrinsic * contracts * 100.0
-                        acc.cash_balance += cash_settlement
-                    else:
-                        cash_settlement = -(intrinsic * contracts * 100.0)
-                        acc.cash_balance += cash_settlement  # cash_settlement is negative
-
-                    # Record closed trade. `intrinsic` above is a per-SHARE
-                    # dollar amount (proven by cash_settlement's own *100.0
-                    # conversion just above), but pos.avg_entry_price is
-                    # already a per-CONTRACT dollar amount (this codebase's
-                    # option-price convention -- see apply_roll_fill's
-                    # docstring) and _record_closed_trade expects exit_price
-                    # on that same per-contract basis. Convert before passing
-                    # so the ledger row's realized_pnl agrees, by
-                    # construction, with the real cash_settlement applied to
-                    # acc.cash_balance above -- an apples-to-oranges
-                    # subtraction here previously produced a fake, wildly
-                    # wrong PnL (or, after removing the ×100 multiplier in
-                    # _record_closed_trade alone, a mismatched sign/magnitude
-                    # against the real cash credit).
-                    intrinsic_per_contract = intrinsic * 100.0
-                    self._record_closed_trade(session, pos, contracts, intrinsic_per_contract, "expiry_settlement", 0.0)
-
-                    # Delete position
-                    session.delete(pos)
-
-                    # Record settlement order
-                    settle_order_id = f"SETTLE_{pos.symbol}_{now_d.strftime('%Y%m%d')}"
-                    self._insert_order(
-                        session=session,
-                        client_order_id=settle_order_id,
-                        symbol=pos.symbol,
-                        side="SELL" if is_long else "BUY",
-                        qty=contracts,
-                        filled_qty=contracts,
-                        fill_price=intrinsic,
-                        status="SETTLED" if intrinsic > 0 else "EXPIRED",
-                        target_qty=contracts,
+            for pos, ticker, exp_str, strike, opt_type in expired_candidates:
+                # Resolve underlying spot price
+                spot = None
+                quote = quotes.get(ticker.upper())
+                if quote and getattr(quote, "price", None):
+                    spot = float(quote.price)
+                if spot is None:
+                    # No honest spot price available -- do NOT fabricate one
+                    # (CONSTRAINT #4). Leave the position open so a later
+                    # call, once a real quote is available again, can
+                    # settle it at its actual intrinsic value instead of
+                    # silently forcing it to zero.
+                    logger.warning(
+                        "settle_expired_options: no quote available for %s "
+                        "(expired %s); skipping settlement rather than "
+                        "fabricating spot=strike.",
+                        ticker, exp_str,
                     )
+                    continue
 
-                    settled_records.append({
-                        "symbol": pos.symbol,
-                        "ticker": ticker,
-                        "expiration": exp_str,
-                        "strike": strike,
-                        "option_type": opt_type,
-                        "contracts": contracts,
-                        "is_long": is_long,
-                        "spot_price": spot,
-                        "intrinsic_per_share": intrinsic,
+                # Calculate intrinsic value
+                if opt_type == "CALL":
+                    intrinsic = max(0.0, spot - strike)
+                else:
+                    intrinsic = max(0.0, strike - spot)
+
+                contracts = abs(float(pos.qty))
+                is_long = pos.qty > 0
+
+                # Cash settlement
+                if is_long:
+                    cash_settlement = intrinsic * contracts * 100.0
+                    acc.cash_balance += cash_settlement
+                else:
+                    cash_settlement = -(intrinsic * contracts * 100.0)
+                    acc.cash_balance += cash_settlement  # cash_settlement is negative
+
+                # Record closed trade. `intrinsic` above is a per-SHARE
+                # dollar amount (proven by cash_settlement's own *100.0
+                # conversion just above), but pos.avg_entry_price is
+                # already a per-CONTRACT dollar amount (this codebase's
+                # option-price convention -- see apply_roll_fill's
+                # docstring) and _record_closed_trade expects exit_price
+                # on that same per-contract basis. Convert before passing
+                # so the ledger row's realized_pnl agrees, by
+                # construction, with the real cash_settlement applied to
+                # acc.cash_balance above -- an apples-to-oranges
+                # subtraction here previously produced a fake, wildly
+                # wrong PnL (or, after removing the ×100 multiplier in
+                # _record_closed_trade alone, a mismatched sign/magnitude
+                # against the real cash credit).
+                intrinsic_per_contract = intrinsic * 100.0
+                self._record_closed_trade(session, pos, contracts, intrinsic_per_contract, "expiry_settlement", 0.0)
+
+                # Delete position
+                session.delete(pos)
+
+                # Record settlement order
+                settle_order_id = f"SETTLE_{pos.symbol}_{now_d.strftime('%Y%m%d')}"
+                self._insert_order(
+                    session=session,
+                    client_order_id=settle_order_id,
+                    symbol=pos.symbol,
+                    side="SELL" if is_long else "BUY",
+                    qty=contracts,
+                    filled_qty=contracts,
+                    fill_price=intrinsic,
+                    status="SETTLED" if intrinsic > 0 else "EXPIRED",
+                    target_qty=contracts,
+                )
+
+                settled_records.append({
+                    "symbol": pos.symbol,
+                    "ticker": ticker,
+                    "expiration": exp_str,
+                    "strike": strike,
+                    "option_type": opt_type,
+                    "contracts": contracts,
+                    "is_long": is_long,
+                    "spot_price": spot,
+                    "intrinsic_per_share": intrinsic,
                         "cash_settlement": cash_settlement,
                         "status": "SETTLED" if intrinsic > 0 else "EXPIRED",
                     })

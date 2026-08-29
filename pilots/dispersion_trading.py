@@ -27,16 +27,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import logging
-import math
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 
 from data.paper_account_store import OrderStatus, PaperAccountStore
-from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -145,23 +142,33 @@ def calculate_straddle_vega(
     """
     Calculates total straddle vega (ATM Call Vega + ATM Put Vega) per 1 option contract (100 multiplier).
     Returns vega in $ per 1.0 (100%) change in implied volatility ($/vol).
+
+    Delegates to pilots.options_risk.calculate_black_scholes_greeks (F4,
+    docs/module_efficiency_redundancy_audit.md), matching calculate_option_price's
+    own delegation a few lines below -- this was previously the one inconsistent
+    copy in this file, carrying its own inline vega formula. Vega is
+    option_type-independent in Black-Scholes (put-call vega parity), so a
+    straddle's total vega is exactly 2x either leg's raw per-share vega,
+    times the 100-share contract multiplier -- confirmed byte-identical to
+    the prior inline implementation on a seeded grid (including the
+    documented F4 degenerate-vol_sqrt_t boundary shape) before this
+    migration; unlike gamma (see options_gex.py's own deliberate divergence
+    from this same canonical function), vega's formula does not divide by
+    vol_sqrt_t and does not exhibit the spurious-blowup failure mode --
+    empirically confirmed sane (not spuriously large) at the exact inputs
+    that produce options_gex.py's documented ~3.6e9 gamma witness.
     """
-    if r is None:
-        r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
+    from pilots.options_risk import calculate_black_scholes_greeks
 
     if spot <= 0 or strike <= 0 or iv <= 1e-12 or dte <= 0:
         return 0.0
 
     t_years = max(1, dte) / 365.0
-    vol_sqrt_t = iv * math.sqrt(t_years)
-    if vol_sqrt_t <= 1e-12:
-        return 0.0
-
-    d1 = (math.log(spot / strike) + (r + 0.5 * (iv ** 2)) * t_years) / vol_sqrt_t
-    pdf_d1 = float(norm.pdf(d1))
-    vega_per_share = spot * math.sqrt(t_years) * pdf_d1
+    res = calculate_black_scholes_greeks(
+        spot=spot, strike=strike, t_years=t_years, sigma=iv, option_type="call", r=r
+    )
     # Straddle = 1 Call + 1 Put = 2 * vega_per_share. Multiplier = 100 shares / contract.
-    straddle_vega_contract = 2.0 * vega_per_share * 100.0
+    straddle_vega_contract = 2.0 * res["vega_raw"] * 100.0
     return max(0.0, float(straddle_vega_contract))
 
 
@@ -745,10 +752,11 @@ def _source_real_dispersion_inputs(
     weights: Dict[str, float],
 ) -> Tuple[Dict[str, float], Dict[str, float], Optional[float]]:
     """
-    Best-effort sources real spot prices (`pilots.price_provider.get_current_price`), real ATM
-    implied vol from the options chain (`data.market_data.get_options_provider`), and a real
-    trailing realized-correlation estimate (`data.historical_store.HistoricalStore` daily bars
-    via `compute_realized_correlation_matrix`) for one index + its constituent universe.
+    Best-effort sources real spot prices (`data.market_data.get_provider().get_quotes_batch()`,
+    one batched call for the index + every constituent -- F6, docs/module_efficiency_redundancy_audit.md),
+    real ATM implied vol from the options chain (`data.market_data.get_options_provider`), and a
+    real trailing realized-correlation estimate (`data.historical_store.HistoricalStore` daily
+    bars via `compute_realized_correlation_matrix`) for one index + its constituent universe.
 
     Returns `(spot_map, iv_map, realized_correlation)` -- any symbol/value that couldn't be
     resolved from real data is simply absent/None (CONSTRAINT #4: never a fabricated stand-in).
@@ -759,9 +767,11 @@ def _source_real_dispersion_inputs(
     realized_corr: Optional[float] = None
 
     try:
-        from pilots.price_provider import get_current_price
-    except Exception:
-        get_current_price = None  # type: ignore[assignment]
+        from data.market_data import get_provider
+        market_provider = get_provider()
+    except Exception as exc:
+        logger.debug("MarketDataProvider unavailable for dispersion inputs: %s", exc)
+        market_provider = None
 
     try:
         from data.market_data import get_options_provider
@@ -777,14 +787,27 @@ def _source_real_dispersion_inputs(
         logger.debug("HistoricalStore unavailable for dispersion inputs: %s", exc)
         store = None
 
-    if get_current_price is not None:
-        idx_spot = get_current_price(idx_sym)
-        if idx_spot and idx_spot > 0:
-            spot_map[idx_sym] = idx_spot
-        for s in constituents:
-            s_spot = get_current_price(s)
-            if s_spot and s_spot > 0:
-                spot_map[s] = s_spot
+    if market_provider is not None:
+        # Batched (F6, docs/module_efficiency_redundancy_audit.md): one
+        # get_quotes_batch() call for the index + every constituent instead
+        # of a get_current_price()-per-symbol loop (each of which was its
+        # own get_latest_quote() network round-trip). Same
+        # never-raises/dead-letter-per-symbol contract as the prior loop --
+        # a symbol absent from the batch result (unresolvable, or a total
+        # batch failure) simply stays out of spot_map, exactly as
+        # get_current_price returning 0.0 on failure did.
+        all_symbols = [idx_sym] + list(constituents)
+        try:
+            quotes = market_provider.get_quotes_batch(all_symbols)
+        except Exception as exc:
+            logger.debug("get_quotes_batch failed for dispersion inputs: %s", exc)
+            quotes = {}
+        for sym in all_symbols:
+            quote = quotes.get(sym.upper())
+            if quote is not None:
+                price = getattr(quote, "price", None)
+                if price and float(price) > 0:
+                    spot_map[sym] = float(price)
 
     if idx_sym in spot_map:
         idx_iv = _resolve_atm_iv(options_provider, idx_sym, spot_map[idx_sym])

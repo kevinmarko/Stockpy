@@ -20,7 +20,7 @@ import json
 import pytest
 
 import settings as settings_module
-from gui import env_io
+import env_io
 
 
 @pytest.fixture()

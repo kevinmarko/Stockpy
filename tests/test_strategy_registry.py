@@ -128,7 +128,7 @@ class TestSetActiveMode:
         def fake_write(key: str, value, **_kw) -> None:
             written[key] = value
 
-        import gui.env_io as env_io
+        import env_io
         monkeypatch.setattr(env_io, "write_setting", fake_write)
 
         state = sr.set_active_mode(sr.ExecutionMode.LIVE)
@@ -138,7 +138,7 @@ class TestSetActiveMode:
 
     def test_simulation_writes_both_true(self, monkeypatch) -> None:
         written: dict[str, object] = {}
-        import gui.env_io as env_io
+        import env_io
         monkeypatch.setattr(env_io, "write_setting",
                             lambda k, v, **_kw: written.setdefault(k, v))
         state = sr.set_active_mode("simulation")
