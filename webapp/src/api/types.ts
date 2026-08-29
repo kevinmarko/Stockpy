@@ -4109,7 +4109,20 @@ export interface StrategyOptionsCandidatesResponse {
   candidates: StrategyOptionCandidate[];
 }
 
-export interface StrategyOptionsExecutionResult {
+// Shared "dead-letter" shape api/pilots_api.py's paper-broker execute/manage-exits
+// handlers return (still 200-status, per CONSTRAINT #6) when the underlying call
+// raises -- e.g. post_paper_broker_strategy_options_execute /
+// post_paper_broker_manage_exits's `except Exception` fallback. A 200-status
+// `{ok:false}` body never throws, so a caller MUST check for this shape explicitly
+// before reading the corresponding success fields (which never include `ok` at all
+// on the real backend) -- see webapp/src/screens/PaperBroker.tsx's
+// handleExecuteStrategyOptions/handleManageExits for the required pattern.
+export interface PaperBrokerDeadLetterResult {
+  ok: false;
+  error: string;
+}
+
+export interface StrategyOptionsExecutionSuccess {
   executed_count: number;
   skipped_count: number;
   failed_count: number;
@@ -4121,6 +4134,7 @@ export interface StrategyOptionsExecutionResult {
     net_price: number;
     net_cash_impact: number;
     legs?: string[];
+    dry_run?: boolean;
   }>;
   skipped: Array<{
     symbol: string;
@@ -4131,6 +4145,8 @@ export interface StrategyOptionsExecutionResult {
     reason: string;
   }>;
 }
+
+export type StrategyOptionsExecutionResult = StrategyOptionsExecutionSuccess | PaperBrokerDeadLetterResult;
 
 // `pilots/options_risk.py::calculate_position_greeks` returns every field
 // below as `None` (not merely omitted) whenever a live spot quote for the
@@ -4507,21 +4523,43 @@ export interface RollOrderRequest {
   is_live?: boolean;
 }
 
-export interface ClosedExitPosition {
+// Real shape of execution/options_paper_executor.py::OptionsPaperExecutor
+// .execute_auto_exits() (the function POST /pilots/paper-broker/manage-exits
+// returns verbatim on success, via pilots/paper_broker.py::manage_position_exits).
+// Previously this type declared a `closed_count`/`closed_positions`/`message`
+// shape that never existed anywhere in the real backend -- `evaluated_count`,
+// `executed_count`, `failed_count`, `executed`, `failed` are the only real fields;
+// `enabled: false` (auto-exit disabled and neither `force` nor `dry_run` was set)
+// is the one branch that also carries `pending_exits` instead of executing anything.
+export interface ManageExitsExecutedItem {
+  order_id?: string;
   symbol: string;
-  qty: number;
-  reason: "PROFIT_TARGET_50" | "STOP_LOSS_200" | "DTE_EXPIRY_21" | "MANUAL";
-  pnl_dollar: number;
-  pnl_pct: number;
-  closed_at_price: number;
+  reason?: string;
+  reason_detail?: string;
+  contracts: number;
+  net_cash_impact: number;
+  unrealized_pl?: number;
+  dry_run?: boolean;
+  legs: string[];
 }
 
-export interface ManageExitsResult {
-  evaluated_count: number;
-  closed_count: number;
-  closed_positions: ClosedExitPosition[];
-  message: string;
+export interface ManageExitsFailedItem {
+  symbol: string;
+  reason: string;
 }
+
+export interface ManageExitsSuccess {
+  enabled: boolean;
+  evaluated_count: number;
+  executed_count: number;
+  failed_count: number;
+  executed: ManageExitsExecutedItem[];
+  failed: ManageExitsFailedItem[];
+  // Only present when enabled === false.
+  pending_exits?: Record<string, unknown>[];
+}
+
+export type ManageExitsResult = ManageExitsSuccess | PaperBrokerDeadLetterResult;
 
 export interface EarningsCrushCandidate {
   symbol: string;
@@ -4554,15 +4592,45 @@ export interface EarningsCrushCandidatesResponse {
   symbols_errored?: string[];
 }
 
-export interface EarningsCrushExecutionResult {
-  ok: boolean;
+// api/pilots_api.py::OPTIONS_DESK_DEPLOYABILITY_GATES's per-strategy entry, echoed
+// verbatim on both the blocked response and (once execution actually proceeds,
+// whether unblocked or explicitly overridden) the success response.
+export interface OptionsDeskGateStatus {
+  deployable: boolean;
+  gate_status: "UNGATEABLE_DATA_GAP" | "MEASURED_FAIL" | string;
+  reason: string;
+}
+
+// Shared shape for the four options-desk paper-execute endpoints
+// (POST /pilots/options/{earnings-crush,dispersion,zero-dte,mispricing}/execute)
+// when the request is blocked by a deployability gate -- i.e. it omitted
+// `override_deployability_gate: true`. Never carries the strategy-specific success
+// fields (symbol/strategy/fill_price/etc.) -- always narrow on `ok`/`blocked` before
+// reading those. See CLAUDE.md's "Options desk ML/safety gates and findings" bullet
+// and docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section for the
+// backend design this mirrors.
+export interface OptionsDeskGateBlockedResult {
+  ok: false;
+  blocked: true;
+  message: string;
+  gate_status?: OptionsDeskGateStatus;
+}
+
+export interface EarningsCrushExecutionSuccess {
+  ok: true;
   order_id?: string;
   symbol: string;
   strategy: string;
   net_credit?: number;
   message: string;
   placed_at?: string;
+  gate_status?: OptionsDeskGateStatus;
 }
+
+// A real response is one or the other -- never both, and the blocked variant is the
+// DEFAULT for earnings_crush (an UNGATEABLE_DATA_GAP, per CLAUDE.md) unless the
+// request explicitly sets override_deployability_gate: true.
+export type EarningsCrushExecutionResult = EarningsCrushExecutionSuccess | OptionsDeskGateBlockedResult;
 
 export interface UnusualOptionTrade {
   id?: string;
@@ -4758,16 +4826,25 @@ export interface GammaScalpResponse {
   }[];
 }
 
+// Real shape of pilots/options_alerts.py::dispatch_options_alert()'s return value
+// (POST /pilots/options/alerts/test returns it verbatim). Previously this type
+// declared a `dispatched_count`/`channels[]`/per-channel `results[]` breakdown that
+// never existed on the real backend -- dispatch_options_alert calls
+// observability.alerts.send_alert() once, all-channels-at-once, and only ever
+// tracks a single aggregate success/failure, not a per-channel one; fabricating a
+// per-channel status the backend can't actually measure would violate CONSTRAINT #4,
+// so the frontend was corrected to match the honest aggregate shape instead of the
+// backend being made to fake a richer one.
 export interface OptionsAlertTestResult {
-  ok: boolean;
-  dispatched_count: number;
-  channels: string[];
-  results: {
-    channel: string;
-    status: "SENT" | "SIMULATED" | "FAILED";
-    message?: string;
-  }[];
-  as_of?: string;
+  status: "ok" | "failed";
+  alert_type: string;
+  level: string;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
+  success: boolean;
+  error: string | null;
 }
 
 export interface DispersionConstituent {
@@ -4831,8 +4908,8 @@ export interface DispersionBasketOrderRequest {
   notes?: string;
 }
 
-export interface DispersionExecutionResult {
-  ok: boolean;
+export interface DispersionExecutionSuccess {
+  ok: true;
   basket_id?: string;
   index_symbol: string;
   index_order_id?: string;
@@ -4842,7 +4919,13 @@ export interface DispersionExecutionResult {
   legs_count: number;
   message: string;
   placed_at?: string;
+  gate_status?: OptionsDeskGateStatus;
 }
+
+// dispersion_trading is an UNGATEABLE_DATA_GAP (per CLAUDE.md) -- a real response is
+// this success shape only when override_deployability_gate: true was set, otherwise
+// it's the shared OptionsDeskGateBlockedResult shape.
+export type DispersionExecutionResult = DispersionExecutionSuccess | OptionsDeskGateBlockedResult;
 
 export interface ZeroDteContract {
   option_type: "CALL" | "PUT";
@@ -4903,8 +4986,8 @@ export interface ZeroDteTradeRequest {
   hard_exit_time?: string;
 }
 
-export interface ZeroDteExecutionResult {
-  ok: boolean;
+export interface ZeroDteExecutionSuccess {
+  ok: true;
   order_id?: string;
   symbol: string;
   option_type: "CALL" | "PUT";
@@ -4917,7 +5000,13 @@ export interface ZeroDteExecutionResult {
   strategy: string;
   message: string;
   placed_at?: string;
+  gate_status?: OptionsDeskGateStatus;
 }
+
+// zero_dte_engine is an UNGATEABLE_DATA_GAP (per CLAUDE.md) -- a real response is
+// this success shape only when override_deployability_gate: true was set, otherwise
+// it's the shared OptionsDeskGateBlockedResult shape.
+export type ZeroDteExecutionResult = ZeroDteExecutionSuccess | OptionsDeskGateBlockedResult;
 
 export interface VpinBucket {
   bucket_index: number;

@@ -228,12 +228,7 @@ def migrate_daily_signals_schema(cursor, conn):
                 logger.warning(f"Could not add column '{key}': {e}")
 
     if added:
-        try:
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Schema migration commit FAILED: {e}", exc_info=True)
-        else:
-            logger.info(f"Schema migration complete. Added {len(added)} new columns: {added}")
+        logger.info(f"Schema migration complete. Added {len(added)} new columns: {added}")
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")
 
