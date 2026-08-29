@@ -75,14 +75,24 @@ registry fix history and the `.claude/giant_master_plan_audit.md` F4 finding thi
 
 ## Live Paper-Execution Status
 
-As of 2026-08-18, `pilots/vol_mispricing.py` has a live paper-execution path — but unlike
-`earnings_crush`, `dispersion_trading`, and `zero_dte_engine` (each an `UNGATEABLE_DATA_GAP`
-whose deployability gate is surfaced for transparency but never blocks execution),
+As of 2026-08-18, `pilots/vol_mispricing.py` has a live paper-execution path, and like
+`earnings_crush`, `dispersion_trading`, and `zero_dte_engine` (each an `UNGATEABLE_DATA_GAP`),
 `vol_mispricing` is a **MEASURED** deployability failure (Sharpe -0.499, DSR 0.027, fails the
 Oct-2008 stress window — see the Backtest Validation section above), so its execute endpoint is
 **blocked by default** and only proceeds on an explicit, per-request override. This was a
 deliberate, considered design choice, not an oversight, and closes out the decision this
 section previously left open between "document only" and "build with an enforced gate."
+
+**Update, 2026-08-29**: at the time the paragraph above was written, the three
+`UNGATEABLE_DATA_GAP` strategies' deployability gate really was informational-only (surfaced as
+`gate_status` but never blocking) — that has since been reversed. All four options-desk execute
+endpoints now enforce their gate identically: blocked by default, proceeding only on an explicit
+`override_deployability_gate: true`. The `UNGATEABLE_DATA_GAP` vs `MEASURED_FAIL` distinction
+above is now purely about WHY execution is blocked (no historical data to measure a verdict from,
+vs. a real measured failing verdict), not whether it is. See `CLAUDE.md`'s "Options desk ML/safety
+gates and findings" bullet, item (3), for the full reversal write-up, and
+`tests/test_options_desk_deployability_runtime_gap.py` for the enforcement coverage on the three
+`UNGATEABLE_DATA_GAP` endpoints.
 
 - `pilots/vol_mispricing.py::execute_vol_mispricing_trade(symbol, *, candidate, contracts=1,
   dry_run=False, is_live=False)` executes a single, caller-selected candidate trade (one element

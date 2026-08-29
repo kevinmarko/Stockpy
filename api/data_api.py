@@ -708,7 +708,14 @@ def get_sync_report() -> Dict[str, Any]:
         logger.warning("data_api: account snapshot unavailable for sync report: %s", exc)
         snapshot = None
     try:
-        report = build_sync_report(snapshot)
+        from forecasting.forecast_tracker import ForecastTracker
+        forecast_symbols = ForecastTracker().get_covered_symbols(horizon_days=30)
+    except Exception as exc:
+        logger.warning("data_api: forecast coverage lookup failed, degrading to none: %s", exc)
+        forecast_symbols = []
+
+    try:
+        report = build_sync_report(snapshot, forecast_symbols=forecast_symbols)
     except Exception as exc:
         logger.warning("data_api: sync report failed: %s", exc)
         raise HTTPException(status_code=503, detail="Sync report unavailable")

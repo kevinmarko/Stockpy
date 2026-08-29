@@ -27,28 +27,38 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  // dispersion_trading is an UNGATEABLE_DATA_GAP (see CLAUDE.md's "Options desk
+  // ML/safety gates and findings" bullet) -- the backend blocks every request by
+  // default and only proceeds when override_deployability_gate: true is set
+  // explicitly. Tracks which index's first (unblocked) attempt just came back
+  // blocked, so it can offer a distinct, deliberate override action.
+  const [blockedIndexSymbol, setBlockedIndexSymbol] = useState<string | null>(null);
 
   const query = useApi<DispersionBasketResponse>(
     () => api.getDispersionOpportunities(),
     []
   );
 
-  const executeMutation = useMutation((opp: DispersionOpportunity) =>
-    api.executeDispersionBasket({
-      opportunity_id: opp.id,
-      index_symbol: opp.index_symbol,
-      regime: opp.regime,
-    })
+  const executeMutation = useMutation((opp: DispersionOpportunity, override: boolean) =>
+    api.executeDispersionBasket(
+      {
+        opportunity_id: opp.id,
+        index_symbol: opp.index_symbol,
+        regime: opp.regime,
+      },
+      override
+    )
   );
 
   const opportunities: DispersionOpportunity[] = query.data?.opportunities || [];
 
-  const handleExecuteBasket = async (opp: DispersionOpportunity) => {
+  const handleExecuteBasket = async (opp: DispersionOpportunity, override = false) => {
     setIsExecuting(true);
     setStatusMessage(null);
     try {
-      const res = await executeMutation.run(opp);
+      const res = await executeMutation.run(opp, override);
       if (res && res.ok) {
+        setBlockedIndexSymbol(null);
         setStatusMessage({
           text: res.message || `Successfully executed Dispersion Basket on ${opp.index_symbol}. (${res.legs_count} legs executed)`,
           type: "success",
@@ -56,7 +66,11 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
         if (onTradeExecuted) {
           onTradeExecuted(res);
         }
+      } else if (res && res.blocked) {
+        setBlockedIndexSymbol(opp.index_symbol);
+        setStatusMessage({ text: res.message, type: "error" });
       } else {
+        setBlockedIndexSymbol(null);
         setStatusMessage({
           text: executeMutation.error || `Failed to execute dispersion basket on ${opp.index_symbol}.`,
           type: "error",
@@ -64,6 +78,16 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
       }
     } finally {
       setIsExecuting(false);
+    }
+  };
+
+  const handleConfirmOverride = (opp: DispersionOpportunity) => {
+    const reason = statusMessage?.text || "This strategy is blocked by a deployability gate.";
+    const confirmed = window.confirm(
+      `⚠️ Deployability gate override\n\n${reason}\n\nThis places a PAPER (simulated) trade on ${opp.index_symbol} only -- no real capital is at risk. Override and execute anyway?`
+    );
+    if (confirmed) {
+      handleExecuteBasket(opp, true);
     }
   };
 
@@ -171,7 +195,13 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
         >
           <span>{statusMessage.text}</span>
           <button
-            onClick={() => setStatusMessage(null)}
+            onClick={() => {
+              setStatusMessage(null);
+              // Dismissing the disclosed reason retires the override affordance too --
+              // re-clicking "Execute" re-surfaces the honest reason before offering to
+              // override again, so the override is never silent.
+              setBlockedIndexSymbol(null);
+            }}
             style={{ background: "transparent", border: "none", color: "inherit", cursor: "pointer", fontWeight: 700 }}
           >
             ✕
@@ -477,27 +507,52 @@ export const DispersionScanner: React.FC<DispersionScannerProps> = ({
                   </div>
                 </div>
 
-                <button
-                  onClick={() => handleExecuteBasket(activeOpp)}
-                  disabled={isExecuting}
-                  style={{
-                    background: theme.growth,
-                    color: "#000",
-                    border: "none",
-                    borderRadius: 8,
-                    padding: "10px 20px",
-                    fontWeight: 700,
-                    fontSize: "0.95rem",
-                    cursor: isExecuting ? "not-allowed" : "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    opacity: isExecuting ? 0.7 : 1,
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  {isExecuting ? "⚡ Executing Basket..." : "⚡ Execute Dispersion Basket"}
-                </button>
+                {blockedIndexSymbol === activeOpp.index_symbol ? (
+                  <button
+                    onClick={() => handleConfirmOverride(activeOpp)}
+                    disabled={isExecuting}
+                    title="This strategy has an unmeasurable deployability gap. Overriding places a paper (simulated) trade only."
+                    style={{
+                      background: theme.caution,
+                      color: "#000",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "10px 20px",
+                      fontWeight: 700,
+                      fontSize: "0.95rem",
+                      cursor: isExecuting ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      opacity: isExecuting ? 0.7 : 1,
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {isExecuting ? "⚡ Executing Basket..." : "⚠️ Override & Execute"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleExecuteBasket(activeOpp)}
+                    disabled={isExecuting}
+                    style={{
+                      background: theme.growth,
+                      color: "#000",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "10px 20px",
+                      fontWeight: 700,
+                      fontSize: "0.95rem",
+                      cursor: isExecuting ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      opacity: isExecuting ? 0.7 : 1,
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {isExecuting ? "⚡ Executing Basket..." : "⚡ Execute Dispersion Basket"}
+                  </button>
+                )}
               </div>
             </div>
           </div>

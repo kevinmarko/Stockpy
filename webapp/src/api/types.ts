@@ -4541,15 +4541,45 @@ export interface EarningsCrushCandidatesResponse {
   symbols_errored?: string[];
 }
 
-export interface EarningsCrushExecutionResult {
-  ok: boolean;
+// api/pilots_api.py::OPTIONS_DESK_DEPLOYABILITY_GATES's per-strategy entry, echoed
+// verbatim on both the blocked response and (once execution actually proceeds,
+// whether unblocked or explicitly overridden) the success response.
+export interface OptionsDeskGateStatus {
+  deployable: boolean;
+  gate_status: "UNGATEABLE_DATA_GAP" | "MEASURED_FAIL" | string;
+  reason: string;
+}
+
+// Shared shape for the four options-desk paper-execute endpoints
+// (POST /pilots/options/{earnings-crush,dispersion,zero-dte,mispricing}/execute)
+// when the request is blocked by a deployability gate -- i.e. it omitted
+// `override_deployability_gate: true`. Never carries the strategy-specific success
+// fields (symbol/strategy/fill_price/etc.) -- always narrow on `ok`/`blocked` before
+// reading those. See CLAUDE.md's "Options desk ML/safety gates and findings" bullet
+// and docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section for the
+// backend design this mirrors.
+export interface OptionsDeskGateBlockedResult {
+  ok: false;
+  blocked: true;
+  message: string;
+  gate_status?: OptionsDeskGateStatus;
+}
+
+export interface EarningsCrushExecutionSuccess {
+  ok: true;
   order_id?: string;
   symbol: string;
   strategy: string;
   net_credit?: number;
   message: string;
   placed_at?: string;
+  gate_status?: OptionsDeskGateStatus;
 }
+
+// A real response is one or the other -- never both, and the blocked variant is the
+// DEFAULT for earnings_crush (an UNGATEABLE_DATA_GAP, per CLAUDE.md) unless the
+// request explicitly sets override_deployability_gate: true.
+export type EarningsCrushExecutionResult = EarningsCrushExecutionSuccess | OptionsDeskGateBlockedResult;
 
 export interface UnusualOptionTrade {
   id?: string;
@@ -4818,8 +4848,8 @@ export interface DispersionBasketOrderRequest {
   notes?: string;
 }
 
-export interface DispersionExecutionResult {
-  ok: boolean;
+export interface DispersionExecutionSuccess {
+  ok: true;
   basket_id?: string;
   index_symbol: string;
   index_order_id?: string;
@@ -4829,7 +4859,13 @@ export interface DispersionExecutionResult {
   legs_count: number;
   message: string;
   placed_at?: string;
+  gate_status?: OptionsDeskGateStatus;
 }
+
+// dispersion_trading is an UNGATEABLE_DATA_GAP (per CLAUDE.md) -- a real response is
+// this success shape only when override_deployability_gate: true was set, otherwise
+// it's the shared OptionsDeskGateBlockedResult shape.
+export type DispersionExecutionResult = DispersionExecutionSuccess | OptionsDeskGateBlockedResult;
 
 export interface ZeroDteContract {
   option_type: "CALL" | "PUT";
@@ -4890,8 +4926,8 @@ export interface ZeroDteTradeRequest {
   hard_exit_time?: string;
 }
 
-export interface ZeroDteExecutionResult {
-  ok: boolean;
+export interface ZeroDteExecutionSuccess {
+  ok: true;
   order_id?: string;
   symbol: string;
   option_type: "CALL" | "PUT";
@@ -4904,7 +4940,13 @@ export interface ZeroDteExecutionResult {
   strategy: string;
   message: string;
   placed_at?: string;
+  gate_status?: OptionsDeskGateStatus;
 }
+
+// zero_dte_engine is an UNGATEABLE_DATA_GAP (per CLAUDE.md) -- a real response is
+// this success shape only when override_deployability_gate: true was set, otherwise
+// it's the shared OptionsDeskGateBlockedResult shape.
+export type ZeroDteExecutionResult = ZeroDteExecutionSuccess | OptionsDeskGateBlockedResult;
 
 export interface VpinBucket {
   bucket_index: number;

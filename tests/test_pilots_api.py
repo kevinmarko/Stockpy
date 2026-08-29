@@ -7496,14 +7496,16 @@ class TestFixRouteOrderSymbolValidation:
 
 # ---------------------------------------------------------------------------
 # vol_mispricing HAS a live paper-execute path as of 2026-08-18 (`POST
-# /pilots/options/mispricing/execute`) -- but unlike earnings_crush/
-# dispersion_trading/zero_dte_engine (each an UNGATEABLE_DATA_GAP whose
-# gate_status is surfaced but never blocks), vol_mispricing is a MEASURED
-# deployability failure, so the endpoint BLOCKS execution by default and only
-# proceeds when the request explicitly sets override_deployability_gate=True.
-# See docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
-# and the comment above OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in
-# api/pilots_api.py.
+# /pilots/options/mispricing/execute`). Like earnings_crush/dispersion_trading/
+# zero_dte_engine (each an UNGATEABLE_DATA_GAP), vol_mispricing is a MEASURED
+# deployability failure, so ALL FOUR endpoints BLOCK execution by default and
+# only proceed when the request explicitly sets override_deployability_gate=True
+# (as of 2026-08-29, closing a gap where zero_dte_engine's handler called
+# execute_0dte_trade unconditionally with no enforcement check at all -- see
+# tests/test_options_desk_deployability_runtime_gap.py for that endpoint's own
+# blocked-without-override coverage). See docs/signals/vol_mispricing.md's
+# "Live Paper-Execution Status" section and the comment above
+# OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in api/pilots_api.py.
 # ---------------------------------------------------------------------------
 
 

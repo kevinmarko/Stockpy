@@ -552,6 +552,71 @@ class ForecastTracker:
             )
             return []
 
+    def get_covered_symbols(
+        self,
+        horizon_days: Optional[int] = None,
+        window_days: Optional[int] = 7,
+    ) -> "list[str]":
+        """Return symbols with at least one RECENT forecast recorded.
+
+        "Recent" means ``forecast_ts >= now - window_days`` (default 7
+        calendar days) rather than an all-time distinct scan over
+        ``forecast_errors``: a symbol forecast once and never again (e.g.
+        dropped from the universe months ago) must not read as "covered"
+        forever — that would misrepresent the TRUE ACTIVE forecast universe
+        to callers such as ``data.portfolio_sync.build_sync_report`` (which
+        uses this to set ``SymbolStatus.forecast_available``). 7 days
+        tolerates a missed daily cycle / weekend / holiday without
+        indefinitely retaining a symbol nothing has forecast in a long time.
+        Pass ``window_days=None`` to disable the recency filter and fall back
+        to an all-time distinct scan (mainly useful for tests/debugging).
+
+        Never raises (CONSTRAINT #6): any DB error degrades to ``[]``,
+        matching every other read method on this class.
+
+        Parameters
+        ----------
+        horizon_days : int, optional
+            Restrict to forecasts recorded at this horizon (e.g. 30).
+            ``None`` (default) considers every horizon.
+        window_days : int, optional
+            Only count a symbol as covered if it has a forecast whose
+            ``forecast_ts`` falls within the last ``window_days`` calendar
+            days (default 7). ``None`` disables the recency filter entirely.
+
+        Returns
+        -------
+        list[str]
+            Distinct, uppercased ticker symbols. Empty on any DB error or
+            when nothing qualifies.
+        """
+        try:
+            clauses = []
+            params: list = []
+            if horizon_days is not None:
+                clauses.append("horizon_days = ?")
+                params.append(horizon_days)
+            if window_days is not None:
+                since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+                clauses.append("forecast_ts >= ?")
+                params.append(since_iso)
+
+            query = "SELECT DISTINCT symbol FROM forecast_errors"
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
+
+            with self._lock:
+                conn = self._get_conn()
+                cur = conn.execute(query, tuple(params))
+                rows = cur.fetchall()
+            return [row[0] for row in rows]
+        except Exception as exc:
+            logger.warning(
+                "ForecastTracker.get_covered_symbols(h=%s, window=%s) failed: %s",
+                horizon_days, window_days, exc,
+            )
+            return []
+
     def pending_count(self, symbol: str, horizon_days: int) -> int:
         """Return the number of un-actualized forecast rows for a symbol+horizon.
 
