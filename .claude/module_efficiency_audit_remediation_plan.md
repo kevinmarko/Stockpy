@@ -142,7 +142,7 @@ throttle in `sentiment_sources.py`; add a cooldown/circuit-breaker state machine
 in `fmp_client.py`. Both are pure additions of protection that a sibling module already has — no
 existing behavior changes, only new failure-mode coverage.
 
-**PR 8 — DONE, scoped down from the original plan (F9).** Structural test guard landed;
+**PR 8 — OPEN ([#945](https://github.com/kevinmarko/Stockpy/pull/945)), scoped down from the original plan (F9).** Structural test guard landed;
 the `__init__` dedup was investigated and deliberately NOT done — see below for why.
 
 **The load-bearing half (the structural guard) shipped as planned:**
