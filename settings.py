@@ -1570,6 +1570,31 @@ class Settings(BaseSettings):
         description="Webhook URL for CRITICAL drift alerts (Slack/Discord incoming webhook).",
     )
 
+    # --- Sentry Error Tracking ---
+    SENTRY_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Enable Sentry error reporting for background daemons. "
+            "Safe to default True because it degrades to a no-op if "
+            "SENTRY_DSN is absent."
+        ),
+    )
+    SENTRY_DSN: Optional[str] = Field(
+        default=None,
+        description="The Sentry project DSN. Write-capable credential.",
+    )
+    SENTRY_ENVIRONMENT: str = Field(
+        default="development",
+        description="Environment tag sent with Sentry events (e.g., 'production', 'development').",
+    )
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(
+        default=0.0,
+        description=(
+            "Fraction of transactions to trace for performance monitoring. "
+            "Default 0.0 (errors-only) to avoid unexpected event volume."
+        ),
+    )
+
     # --- FIX 4.4 Gateway (execution/fix_gateway.py) ---
     FIX_GATEWAY_ENABLED: bool = Field(default=True, description="Master switch for the simulated FIX 4.4 gateway's route/session endpoints (POST /pilots/execution/fix/route and session management). Defaults True since this module is fully simulated -- it never touches real capital or a real venue connection -- following this repo's 2026-08-03 convention that new admin/execution capabilities default ON unless they change live trading behavior.")
     FIX_HEARTBEAT_INTERVAL_SECONDS: int = Field(default=30, description="Heartbeat interval (seconds) for FixSession -- was previously hardcoded as the class constructor default; now operator-configurable.")

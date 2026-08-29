@@ -710,6 +710,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MAX_OPTION_NOTIONAL_PER_TRADE",
     "MAX_CONCURRENT_OPTION_POSITIONS",
     "OPTIONS_META_LABELER_ENABLED",
+    "SENTRY_ENABLED",
+    "SENTRY_ENVIRONMENT",
+    "SENTRY_TRACES_SAMPLE_RATE",
     "OPTIONS_RISK_FREE_RATE",
     "OPTIONS_AUTO_EXIT_ENABLED",
     "OPTIONS_PROFIT_TARGET_PCT",
@@ -761,6 +764,7 @@ SECRET_KEYS: tuple[str, ...] = (
     # DATABASE_URL — may embed credentials, never logged, never GUI-writable.
     "MCP_DATABASE_URL_RO",
     "ALERT_WEBHOOK_URL",
+    "SENTRY_DSN",
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
     "STATE_API_TOKEN",
