@@ -240,17 +240,20 @@ class BrokerFillsStore:
                     .all()
                 )
             }
+            new_objects = []
             for url, symbol in mapping.items():
                 sym = str(symbol).upper() if symbol else None
                 row = existing.get(url)
                 if row is None:
-                    session.add(
+                    new_objects.append(
                         BrokerInstrumentSymbol(instrument_url=url, symbol=sym, resolved_at=now)
                     )
                 else:
                     row.symbol = sym
                     row.resolved_at = now
                 n += 1
+            if new_objects:
+                session.add_all(new_objects)
         return n
 
     # ------------------------------------------------------------------ #
