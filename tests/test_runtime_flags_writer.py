@@ -167,8 +167,14 @@ def run_in_fresh_interpreter(
 class TestModuleWiring:
     """``runtime_flags.py`` is a stdlib-only leaf because ``settings.py``
     imports it. This module is the opposite — it imports ``settings`` and
-    ``gui.env_io`` — which is only safe as long as nothing on ``settings.py``'s
+    ``env_io`` — which is only safe as long as nothing on ``settings.py``'s
     own import path imports it back.
+
+    ``env_io`` (formerly ``gui.env_io`` -- relocated to the repo root, F13
+    in docs/module_efficiency_redundancy_audit.md) is the module name
+    asserted below; ``gui.env_io`` now only re-exports it via a shim for
+    the frozen Command Center's own internal imports and is no longer
+    what this module itself imports.
     """
 
     @pytest.mark.parametrize("module", ["settings.py", "runtime_flags.py", "settings_keysets.py"])
@@ -179,13 +185,13 @@ class TestModuleWiring:
         source = (REPO_ROOT / module).read_text(encoding="utf-8")
         assert "runtime_flags_writer" not in source, (
             f"{module} references runtime_flags_writer. That module imports "
-            f"settings and gui.env_io; importing it from here is a circular "
+            f"settings and env_io; importing it from here is a circular "
             f"import that breaks `import settings` platform-wide."
         )
 
     def test_writer_really_does_import_the_secret_keyset(self):
         """The whole reason this module exists as a separate, non-leaf file:
-        ``runtime_flags.py`` cannot import ``gui.env_io``, so the SECRET_KEYS
+        ``runtime_flags.py`` cannot import ``env_io``, so the SECRET_KEYS
         refusal had to live here."""
         tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
         imported = set()
@@ -194,7 +200,7 @@ class TestModuleWiring:
                 imported.add(node.module)
             elif isinstance(node, ast.Import):
                 imported.update(alias.name for alias in node.names)
-        assert "gui" in imported or "gui.env_io" in imported
+        assert "env_io" in imported
         assert "settings" in imported
         assert "runtime_flags" in imported
 

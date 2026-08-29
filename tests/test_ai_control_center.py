@@ -749,7 +749,7 @@ def _capability_grid_script() -> str:
 
 class TestCapabilityRowToggleDedup:
     def _isolated_env(self, tmp_path: Path, monkeypatch, *, initial: bool = False) -> Path:
-        from gui import env_io
+        import env_io
         from settings import settings
 
         env_path = tmp_path / ".env"
@@ -776,7 +776,7 @@ class TestCapabilityRowToggleDedup:
 
     def test_enabling_it_sticks_instead_of_being_reverted(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        from gui import env_io
+        import env_io
 
         self._isolated_env(tmp_path, monkeypatch)
         at = AppTest.from_string(_capability_grid_script())
@@ -794,7 +794,7 @@ class TestCapabilityRowToggleDedup:
 
     def test_disabling_it_after_enabling_also_sticks(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        from gui import env_io
+        import env_io
 
         self._isolated_env(tmp_path, monkeypatch, initial=True)
         at = AppTest.from_string(_capability_grid_script())
@@ -819,7 +819,7 @@ class TestCapabilityRowLivePatch:
 
     def test_toggle_write_patches_the_live_settings_object(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        from gui import env_io
+        import env_io
         from settings import settings
 
         env_path = tmp_path / ".env"
@@ -837,7 +837,7 @@ class TestCapabilityRowLivePatch:
 
     def test_provider_selector_write_patches_the_live_settings_object(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        from gui import env_io
+        import env_io
         from settings import settings
 
         env_path = tmp_path / ".env"
