@@ -2674,7 +2674,34 @@ pass; the real machine-global `ml/registry.yaml` and repo-tracked `ml/registry.y
 directly diffed/inspected after each test run in this session to confirm zero pollution,
 not merely assumed clean from the tests passing.
 
-### 2026-08-29 `news_catalyst` UNGATEABLE_DATA_GAP Enforcement
-- **Before:** `news-catalyst` Pilot had `validation_strategy_id=None` but was missing an explicit UNGATEABLE_DATA_GAP exclusion entry in `STRATEGY_REGISTRY` (violating the expectation that all Pilots link to a recognized registry state).
-- **Fix:** Added `news_catalyst` to `STRATEGY_REGISTRY` in `scripts/refresh_validations.py` as an explicit `UNGATEABLE_DATA_GAP`. Updated `pilots/catalog.py` to link `news-catalyst` to `validation_strategy_id="news_catalyst"`.
-- **Reason:** As documented in `docs/signals/news_catalyst.md`, backtesting headline sentiment requires point-in-time news history which is structurally unavailable historically. Fabricating this data would violate CONSTRAINT #4. The adapter raises `RuntimeError` gracefully so the validation harness recognizes its ungateable status.
+### 2026-08-29 `news_catalyst` / `regime_multiplier` / `forecast_alignment` — considered and reverted
+A same-day pass on the `audit_strategy_registry_compliance` branch briefly added
+`news_catalyst`, `regime_multiplier`, and `forecast_alignment` to `STRATEGY_REGISTRY`
+as `_build_ungateable_adapter` stubs (and set `pilots/catalog.py`'s news-catalyst
+Pilot to `validation_strategy_id="news_catalyst"`), reasoning that every Pilot
+should link to a recognized registry state. A pre-merge review audit reverted
+this: unlike `earnings_crush`/`dispersion_trading`/`zero_dte_engine`/`gamma_scalper`
+(order-submitting options Pilots that genuinely had zero registry state and
+needed one), none of these three is itself an order-submitting Pilot with its
+own P&L —
+
+- `news-catalyst`'s Pilot entry already carries a deliberate, documented
+  `validation_strategy_id=None` ("stays None until enough real history exists,
+  roughly 6-12+ months") in `pilots/catalog.py` — the stub silently contradicted
+  its own adjacent comment, and broke
+  `tests/test_pilots_api.py::TestStrategyHealth::test_pilot_without_backtest_is_honest_never_fabricated`,
+  which specifically pins news-catalyst as "the catalog's genuinely
+  backtest-less pilot."
+- `regime_multiplier` and `forecast_alignment` are not `validation_strategy_id`
+  targets for any catalog Pilot at all (`forecast_alignment`'s actual
+  backtestable proxy is the already-registered `forecast_direction_arima_hw`
+  entry) — their own reason strings ("not an independent alpha strategy capable
+  of backing a Pilot" / "Covered by forecast_direction_arima_hw pilot proxy")
+  are themselves arguments against registering them, not for it. Both were also
+  given `turnover=0.0`, failing `tests/test_refresh_validations.py::TestRegistryStructure`'s
+  `turnover > 0` invariant outright.
+
+Reverted in both `scripts/refresh_validations.py` and `pilots/catalog.py`; all
+affected tests pass again. `earnings_crush`/`dispersion_trading`/`zero_dte_engine`/
+`gamma_scalper`'s registrations (item 2/3 above) were kept — those close a real,
+previously-documented gap (order-submitting pilots with zero registry state).

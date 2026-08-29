@@ -405,7 +405,7 @@ PILOTS: List[Pilot] = [
         # table (data/historical_store.py) -- this accumulates real history going
         # forward but does NOT unblock a backtest today; validation_strategy_id
         # stays None until enough real history exists (roughly 6-12+ months).
-        validation_strategy_id="news_catalyst",
+        validation_strategy_id=None,
     ),
     Pilot(
         id="forecast-aligned",
