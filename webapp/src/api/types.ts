@@ -4096,7 +4096,20 @@ export interface StrategyOptionsCandidatesResponse {
   candidates: StrategyOptionCandidate[];
 }
 
-export interface StrategyOptionsExecutionResult {
+// Shared "dead-letter" shape api/pilots_api.py's paper-broker execute/manage-exits
+// handlers return (still 200-status, per CONSTRAINT #6) when the underlying call
+// raises -- e.g. post_paper_broker_strategy_options_execute /
+// post_paper_broker_manage_exits's `except Exception` fallback. A 200-status
+// `{ok:false}` body never throws, so a caller MUST check for this shape explicitly
+// before reading the corresponding success fields (which never include `ok` at all
+// on the real backend) -- see webapp/src/screens/PaperBroker.tsx's
+// handleExecuteStrategyOptions/handleManageExits for the required pattern.
+export interface PaperBrokerDeadLetterResult {
+  ok: false;
+  error: string;
+}
+
+export interface StrategyOptionsExecutionSuccess {
   executed_count: number;
   skipped_count: number;
   failed_count: number;
@@ -4108,6 +4121,7 @@ export interface StrategyOptionsExecutionResult {
     net_price: number;
     net_cash_impact: number;
     legs?: string[];
+    dry_run?: boolean;
   }>;
   skipped: Array<{
     symbol: string;
@@ -4118,6 +4132,8 @@ export interface StrategyOptionsExecutionResult {
     reason: string;
   }>;
 }
+
+export type StrategyOptionsExecutionResult = StrategyOptionsExecutionSuccess | PaperBrokerDeadLetterResult;
 
 // `pilots/options_risk.py::calculate_position_greeks` returns every field
 // below as `None` (not merely omitted) whenever a live spot quote for the
@@ -4494,21 +4510,43 @@ export interface RollOrderRequest {
   is_live?: boolean;
 }
 
-export interface ClosedExitPosition {
+// Real shape of execution/options_paper_executor.py::OptionsPaperExecutor
+// .execute_auto_exits() (the function POST /pilots/paper-broker/manage-exits
+// returns verbatim on success, via pilots/paper_broker.py::manage_position_exits).
+// Previously this type declared a `closed_count`/`closed_positions`/`message`
+// shape that never existed anywhere in the real backend -- `evaluated_count`,
+// `executed_count`, `failed_count`, `executed`, `failed` are the only real fields;
+// `enabled: false` (auto-exit disabled and neither `force` nor `dry_run` was set)
+// is the one branch that also carries `pending_exits` instead of executing anything.
+export interface ManageExitsExecutedItem {
+  order_id?: string;
   symbol: string;
-  qty: number;
-  reason: "PROFIT_TARGET_50" | "STOP_LOSS_200" | "DTE_EXPIRY_21" | "MANUAL";
-  pnl_dollar: number;
-  pnl_pct: number;
-  closed_at_price: number;
+  reason?: string;
+  reason_detail?: string;
+  contracts: number;
+  net_cash_impact: number;
+  unrealized_pl?: number;
+  dry_run?: boolean;
+  legs: string[];
 }
 
-export interface ManageExitsResult {
-  evaluated_count: number;
-  closed_count: number;
-  closed_positions: ClosedExitPosition[];
-  message: string;
+export interface ManageExitsFailedItem {
+  symbol: string;
+  reason: string;
 }
+
+export interface ManageExitsSuccess {
+  enabled: boolean;
+  evaluated_count: number;
+  executed_count: number;
+  failed_count: number;
+  executed: ManageExitsExecutedItem[];
+  failed: ManageExitsFailedItem[];
+  // Only present when enabled === false.
+  pending_exits?: Record<string, unknown>[];
+}
+
+export type ManageExitsResult = ManageExitsSuccess | PaperBrokerDeadLetterResult;
 
 export interface EarningsCrushCandidate {
   symbol: string;
@@ -4775,16 +4813,25 @@ export interface GammaScalpResponse {
   }[];
 }
 
+// Real shape of pilots/options_alerts.py::dispatch_options_alert()'s return value
+// (POST /pilots/options/alerts/test returns it verbatim). Previously this type
+// declared a `dispatched_count`/`channels[]`/per-channel `results[]` breakdown that
+// never existed on the real backend -- dispatch_options_alert calls
+// observability.alerts.send_alert() once, all-channels-at-once, and only ever
+// tracks a single aggregate success/failure, not a per-channel one; fabricating a
+// per-channel status the backend can't actually measure would violate CONSTRAINT #4,
+// so the frontend was corrected to match the honest aggregate shape instead of the
+// backend being made to fake a richer one.
 export interface OptionsAlertTestResult {
-  ok: boolean;
-  dispatched_count: number;
-  channels: string[];
-  results: {
-    channel: string;
-    status: "SENT" | "SIMULATED" | "FAILED";
-    message?: string;
-  }[];
-  as_of?: string;
+  status: "ok" | "failed";
+  alert_type: string;
+  level: string;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
+  success: boolean;
+  error: string | null;
 }
 
 export interface DispersionConstituent {

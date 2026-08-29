@@ -12897,20 +12897,28 @@ export const mockApi = {
     });
   },
   async managePaperOptionsExits(_params?: { force?: boolean }) {
+    // Mirrors execution/options_paper_executor.py::OptionsPaperExecutor
+    // .execute_auto_exits()'s real return shape (enabled/evaluated_count/
+    // executed_count/failed_count/executed/failed) -- see ManageExitsResult's
+    // own doc comment in types.ts for why this replaced a fabricated
+    // closed_count/closed_positions/message shape that never existed live.
     return delay<ManageExitsResult>({
+      enabled: true,
       evaluated_count: 3,
-      closed_count: 1,
-      closed_positions: [
+      executed_count: 1,
+      failed_count: 0,
+      executed: [
         {
+          order_id: `AUTO-EXIT-SPY-${Date.now()}`,
           symbol: "SPY 2026-09-18 $500.00 PUT",
-          qty: -2,
           reason: "PROFIT_TARGET_50",
-          pnl_dollar: 340.0,
-          pnl_pct: 0.52,
-          closed_at_price: 1.20,
+          contracts: 2,
+          net_cash_impact: 340.0,
+          unrealized_pl: 340.0,
+          legs: ["SPY 2026-09-18 $500.00 PUT"],
         },
       ],
-      message: "Evaluated 3 option positions: automatically closed 1 position reaching 50% profit target.",
+      failed: [],
     });
   },
   async rollPaperOptionPosition(request: RollOrderRequest) {
@@ -13209,8 +13217,13 @@ export const mockApi = {
         volume: 7500,
         open_interest: 2100,
         vol_oi_ratio: 3.57,
+        // Exercises pilots/unusual_options_flow.py's price_is_estimated/
+        // spot_price_is_estimated honesty fields in mock mode -- see
+        // UnusualFlowFeed.tsx's "(est.)" badges.
         price: 2.15,
+        price_is_estimated: true,
         spot_price: 482.10,
+        spot_price_is_estimated: true,
         notional: 1612500,
         iv: 0.24,
         historical_vol_30d: 0.18,
@@ -13577,32 +13590,23 @@ export const mockApi = {
     });
   },
   async testOptionsAlert(params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) {
+    // Mirrors pilots/options_alerts.py::dispatch_options_alert()'s real return
+    // shape (status/alert_type/level/title/message/payload/timestamp/success/error)
+    // -- see OptionsAlertTestResult's doc comment in types.ts for why this replaced
+    // a fabricated per-channel results[] breakdown that never existed live.
     const alertType = params?.alert_type || "UOA";
     const symbol = params?.symbol || "NVDA";
-    const isDry = params?.dry_run ?? false;
-
+    const title = `🐋 Institutional UOA Whale Sweep: ${symbol} $500.00 CALL`;
     return delay<OptionsAlertTestResult>({
-      ok: true,
-      dispatched_count: 3,
-      channels: ["Discord Webhook (#options-flow)", "Slack Webhook (#trading-desk)", "System Alert Logger"],
-      results: [
-        {
-          channel: "Discord Webhook (#options-flow)",
-          status: isDry ? "SIMULATED" : "SENT",
-          message: `Dispatched test ${alertType} notification for ${symbol} with rich embed format.`,
-        },
-        {
-          channel: "Slack Webhook (#trading-desk)",
-          status: isDry ? "SIMULATED" : "SENT",
-          message: `Dispatched test ${alertType} block kit message for ${symbol}.`,
-        },
-        {
-          channel: "System Alert Logger",
-          status: "SENT",
-          message: "Event recorded in quant_platform.db alerts table.",
-        },
-      ],
-      as_of: new Date().toISOString(),
+      status: "ok",
+      alert_type: alertType,
+      level: "WARNING",
+      title,
+      message: `**${title}**\n• Test dispatch triggered from the Volatility Forecast Scanner.`,
+      payload: { symbol },
+      timestamp: new Date().toISOString(),
+      success: true,
+      error: null,
     });
   },
   async getDispersionOpportunities(index_symbol?: string) {

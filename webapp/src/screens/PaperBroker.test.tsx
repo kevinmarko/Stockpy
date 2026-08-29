@@ -576,20 +576,25 @@ describe("PaperBroker", () => {
     });
     vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
     vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    // Real shape of execution/options_paper_executor.py::OptionsPaperExecutor
+    // .execute_auto_exits() -- see ManageExitsResult's doc comment in types.ts.
     vi.mocked(api.managePaperOptionsExits).mockResolvedValue({
+      enabled: true,
       evaluated_count: 3,
-      closed_count: 1,
-      closed_positions: [
+      executed_count: 1,
+      failed_count: 0,
+      executed: [
         {
+          order_id: "AUTO-EXIT-SPY-1",
           symbol: "SPY 2026-09-18 $500.00 PUT",
-          qty: -2,
           reason: "PROFIT_TARGET_50",
-          pnl_dollar: 340.0,
-          pnl_pct: 0.52,
-          closed_at_price: 1.20,
+          contracts: 2,
+          net_cash_impact: 340.0,
+          unrealized_pl: 340.0,
+          legs: ["SPY 2026-09-18 $500.00 PUT"],
         },
       ],
-      message: "Closed 1 position reaching 50% profit target.",
+      failed: [],
     });
 
     render(
@@ -605,6 +610,38 @@ describe("PaperBroker", () => {
     await waitFor(() => {
       expect(api.managePaperOptionsExits).toHaveBeenCalled();
     });
+    expect(await screen.findByText(/Evaluated 3 positions: executed 1 exit\(s\)/i)).toBeInTheDocument();
+  });
+
+  it("shows the dead-letter error instead of a fabricated success message on manage-exits server failure", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 100000,
+      cash: 100000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    // api/pilots_api.py's post_paper_broker_manage_exits dead-letters a real
+    // server-side exception into a 200-status {ok:false, error} body -- this must
+    // never render as "Evaluated undefined positions: closed undefined."
+    vi.mocked(api.managePaperOptionsExits).mockResolvedValue({
+      ok: false,
+      error: "Internal error while managing position exits; see server logs for detail.",
+    });
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    const manageExitsBtn = await screen.findByText("⚡ Manage Exits");
+    fireEvent.click(manageExitsBtn);
+
+    expect(
+      await screen.findByText("Internal error while managing position exits; see server logs for detail.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Evaluated/i)).not.toBeInTheDocument();
   });
 
   it("triggers delta hedge rebalance when clicked", async () => {

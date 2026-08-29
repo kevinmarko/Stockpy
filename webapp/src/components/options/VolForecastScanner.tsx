@@ -615,8 +615,10 @@ export const VolForecastScanner: React.FC<VolForecastScannerProps> = ({
         </div>
 
         {testAlertResult && (
-          <div style={{ fontSize: 11, color: theme.growth }}>
-            ✓ Dispatched to {testAlertResult.channels.join(", ")}
+          <div style={{ fontSize: 11, color: testAlertResult.success ? theme.growth : theme.decline }}>
+            {testAlertResult.success
+              ? `✓ ${testAlertResult.title}`
+              : `✗ Alert dispatch failed: ${testAlertResult.error || "unknown error"}`}
           </div>
         )}
       </div>

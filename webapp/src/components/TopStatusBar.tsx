@@ -318,7 +318,16 @@ export function TopStatusBar() {
                         className="btn btn-sm" 
                         onClick={async () => {
                           try {
-                            await api.cancelJob(job.job_id);
+                            // api/control_api.py's POST /jobs/{id}/cancel reports
+                            // `cancelled: false` (200, not a thrown error) when it
+                            // could ask but not confirm the job actually stopped --
+                            // that must not read as a silent success (mirrors
+                            // Console.tsx/RunCommandControl.tsx's handling of the
+                            // same endpoint).
+                            const res = await api.cancelJob(job.job_id);
+                            if (!res.cancelled) {
+                              toast.error("Cancel was requested but could not be confirmed — the job may still be running.");
+                            }
                             reloadJobs();
                           } catch (e) {
                             toast.error("Failed to cancel job.");

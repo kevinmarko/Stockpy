@@ -292,6 +292,30 @@ describe("TopStatusBar", () => {
     await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith("job-abc123"));
     await waitFor(() => expect(listJobsSpy).toHaveBeenCalledTimes(2));
   });
+
+  it("surfaces an honest toast when POST /jobs/{id}/cancel reports cancelled: false, instead of silently doing nothing", async () => {
+    // api/control_api.py's cancel endpoint returns `{cancelled: false}` at 200
+    // (not a thrown error) when it could ask but not confirm the job actually
+    // stopped -- Console.tsx/RunCommandControl.tsx already handle this correctly;
+    // this is the regression test for TopStatusBar.tsx's own Cancel button.
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce(automationStatus());
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(observabilitySummary());
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [job()] });
+    const cancelSpy = vi.spyOn(api, "cancelJob").mockResolvedValueOnce({ job_id: "job-abc123", cancelled: false });
+
+    renderBar();
+    const chip = await screen.findByText("1 running");
+    await user.click(chip);
+
+    const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    await user.click(cancelButton);
+
+    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith("job-abc123"));
+    expect(
+      await screen.findByText("Cancel was requested but could not be confirmed — the job may still be running.")
+    ).toBeInTheDocument();
+  });
 });
 
 describe("TopStatusBar — auto-refresh wiring", () => {

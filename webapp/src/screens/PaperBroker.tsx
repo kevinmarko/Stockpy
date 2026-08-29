@@ -115,6 +115,14 @@ export function PaperBroker() {
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetCash, setResetCash] = useState(100000);
   const [execStatus, setExecStatus] = useState<string | null>(null);
+  // Distinct from execMutation.error: that field only ever populates on a THROWN
+  // exception (network error / non-2xx). api/pilots_api.py's strategy-options/execute
+  // and manage-exits endpoints instead dead-letter a real server-side failure into a
+  // 200-status `{ok: false, error}` body (CONSTRAINT #6) -- which resolves normally
+  // and would otherwise be silently rendered as a fabricated "Successfully executed"
+  // message via execStatus's unconditional green styling. See
+  // handleExecuteStrategyOptions/handleManageExits below.
+  const [execDeadLetterError, setExecDeadLetterError] = useState<string | null>(null);
   const [showVolSurface, setShowVolSurface] = useState(false);
   const [showEarningsCrush, setShowEarningsCrush] = useState(false);
   const [showUnusualFlow, setShowUnusualFlow] = useState(false);
@@ -238,8 +246,15 @@ export function PaperBroker() {
 
   const handleExecuteStrategyOptions = async () => {
     setExecStatus(null);
+    setExecDeadLetterError(null);
     const res = await execMutation.run();
-    if (res) {
+    // A 200-status server-side dead-letter (api/pilots_api.py's `except Exception`
+    // fallback) never throws, so it resolves here just like a real success would --
+    // check for it explicitly before formatting a "Successfully executed" message,
+    // or a real failure renders as a fabricated success with `undefined` counts.
+    if (res && "error" in res) {
+      setExecDeadLetterError(res.error);
+    } else if (res) {
       setExecStatus(`Successfully executed ${res.executed_count} strategy trades (${res.skipped_count} skipped, ${res.failed_count} failed).`);
       account.reload();
       positions.reload();
@@ -265,9 +280,17 @@ export function PaperBroker() {
 
   const handleManageExits = async () => {
     setExecStatus(null);
+    setExecDeadLetterError(null);
     const res = await manageExitsMutation.run();
-    if (res) {
-      setExecStatus(res.message || `Evaluated ${res.evaluated_count} positions: closed ${res.closed_count}.`);
+    // Same dead-letter shape/reasoning as handleExecuteStrategyOptions above.
+    if (res && "error" in res) {
+      setExecDeadLetterError(res.error);
+    } else if (res) {
+      setExecStatus(
+        res.enabled
+          ? `Evaluated ${res.evaluated_count} positions: executed ${res.executed_count} exit(s)${res.failed_count ? `, ${res.failed_count} failed` : ""}.`
+          : `Evaluated ${res.evaluated_count} positions: auto-exit is disabled, ${res.pending_exits?.length ?? 0} exit(s) pending manual action.`
+      );
       account.reload();
       positions.reload();
       orders.reload();
@@ -1279,7 +1302,7 @@ export function PaperBroker() {
             </div>
           )}
 
-          {execMutation.error && (
+          {(execMutation.error || execDeadLetterError) && (
             <div style={{
               padding: "10px 14px",
               background: "rgba(239, 68, 68, 0.15)",
@@ -1288,7 +1311,7 @@ export function PaperBroker() {
               fontSize: 13,
               fontWeight: 500
             }}>
-              {execMutation.error}
+              {execMutation.error || execDeadLetterError}
             </div>
           )}
 
