@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `ac4c53820e096dfb9ceeccc594fc6c5ca181e231`
+- Measured at commit: `4fc79409f411aa8d506240ffa50da0795bcc1bb8`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -217,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **435** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **436** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
