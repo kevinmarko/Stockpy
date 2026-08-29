@@ -290,6 +290,7 @@ import type {
   SecRule606ReportResponse,
   SecRule606VenueRow,
   SecRule606CategoryBreakdown,
+  TrendsStitchDemoResponse,
 } from "./types";
 
 const SECTORS = [
@@ -15349,6 +15350,32 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
   // ---- Dynamic Circuit Breaker ----
   async getCircuitBreakerStatus(): Promise<CircuitBreakerStatusResponse> {
     return delay(getMockCircuitBreakerStatus());
+  },
+
+  // ---- Trends Stitching Demo ----
+  async getTrendsStitchDemo(): Promise<TrendsStitchDemoResponse> {
+    const now = Date.now();
+    const generateCurve = (startVal: number, slope: number, noise: number) => {
+      const data: [number, number][] = [];
+      let val = startVal;
+      for (let i = 0; i < 30; i++) {
+        const time = now - (30 - i) * 86400000;
+        data.push([time, val]);
+        val += slope + (Math.random() - 0.5) * noise;
+      }
+      return data;
+    };
+
+    return delay({
+      raw_curves: [
+        { name: "Trend A (Raw)", data: generateCurve(100, 1, 5) },
+        { name: "Trend B (Raw)", data: generateCurve(130, 0.5, 3) },
+      ],
+      stitched_curve: {
+        name: "Stitched Output",
+        data: generateCurve(115, 0.8, 4),
+      },
+    });
   },
 };
 

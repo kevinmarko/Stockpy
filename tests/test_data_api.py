@@ -17,12 +17,11 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
-from settings import settings
-import api.data_api as data_api
+from api import data_api
 from data.market_data import MarketDataError
+from settings import settings
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -891,7 +890,7 @@ class TestUniverseSyncInvariants:
         key (POST /data/sync remains gated independently by STATE_API_TOKEN via
         require_write_token, so this flag's own writability is not the sole
         safeguard)."""
-        import gui.env_io as env_io
+        from gui import env_io
 
         assert "UNIVERSE_SYNC_ENABLED" in env_io.ALLOWED_KEYS
         assert "UNIVERSE_SYNC_ENABLED" not in env_io.SECRET_KEYS
@@ -1041,3 +1040,9 @@ class TestCircuitBreakerStatus:
             assert resp_ok.status_code == 200
             assert resp_ok.json()["state"] == "NORMAL"
 
+
+def test_get_trends_stitch_demo():
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 501
+    assert resp.json()["detail"] == "Live SVI fetching not implemented. Use mock mode to view the demo."

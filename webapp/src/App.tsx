@@ -60,6 +60,7 @@ import { CacheLongShort } from "./screens/CacheLongShort";
 import { PaperBroker } from "./screens/PaperBroker";
 import { SettingsPaperBroker } from "./screens/SettingsPaperBroker";
 import { LiveTradeApprovals } from "./screens/LiveTradeApprovals";
+import { TrendsVisualizer } from "./screens/TrendsVisualizer";
 
 import { StrategyInsights } from "./screens/StrategyInsights";
 import { CreateDataApp } from "./screens/CreateDataApp";
@@ -269,6 +270,7 @@ export default function App() {
                   <Route path="/agentic" element={<AgenticTrading />} />
                   <Route path="/pilots-manager" element={<PilotsManager />} />
                   <Route path="/research" element={<ResearchHub />} />
+                  <Route path="/research/trends-stitcher" element={<TrendsVisualizer />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />

@@ -87,3 +87,6 @@ Unit tests are implemented in `tests/test_trends_stitcher.py`:
 - `TestGoogleTrendsStitcher`: Verifies exact rescaling recovery across overlapping windows and multi-window chaining.
 - `TestASVICalculator`: Verifies log-median reference output and runs perturbation testing to prove zero lookahead bias.
 - `TestFMPDataLoader`: Verifies indicator computation accuracy and bounds.
+
+### D. Visualizations
+- **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`) demonstrates the overlapping window stitching algorithm. It plots the raw unscaled SVI curves alongside the final stitched continuous sequence. Note that live SVI fetching is disabled for this demo; the visualization relies on the `mock.ts` integration to generate plausible overlapping periods for demonstration purposes.
