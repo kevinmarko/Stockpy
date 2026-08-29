@@ -249,3 +249,19 @@ def test_strategy_engine_cap_audit_store_property_degrades_on_construction_failu
     store = engine.cap_audit_store
     assert isinstance(store, _OfflineCapAuditStore)
     assert engine.cap_audit_store is store  # cached, not reconstructed
+
+def test_record_cap_events_mid_batch_failure_rolls_back_entire_batch():
+    """CONSTRAINT #6 / Atomicity: if an event fails to process (e.g. KeyError), the entire batch must roll back and not persist partial data."""
+    store = CapAuditStore(db_url="sqlite:///:memory:")
+    
+    events = [
+        {"symbol": "AAPL", "was_capped": True},
+        {"missing_symbol_key": True},  # This will raise KeyError
+        {"symbol": "MSFT", "was_capped": False}
+    ]
+    
+    with pytest.raises(KeyError):
+        store.record_cap_events(events)
+        
+    # The whole batch must have aborted
+    assert store.get_recent() == []
