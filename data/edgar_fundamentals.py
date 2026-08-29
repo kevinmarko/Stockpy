@@ -19,6 +19,23 @@ USER_AGENT = "InvestYo_Quant_Platform (beforecoast@gmail.com)"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_FACTS_URL_TEMPLATE = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
+# The ONLY two top-level XBRL namespaces `extract_shares` / `compute_pit_ratios`
+# below ever read from (`facts.get("facts", {}).get("dei"/"us-gaap", {})`).
+# `companyfacts` payloads can carry other, filer-specific namespaces --
+# notably a custom `ffd` ("fee footnote data" / Rule 456/457 registration-fee
+# tagging) namespace on frequent shelf-takedown filers. JPMorgan Chase runs an
+# extremely high-cadence structured-notes/CD program and files a Rule 424(b)(2)
+# pricing supplement most business days; each one tags `ffd:NrrtvMaxAggtOfferingPric`
+# (and friends) with its own `filed` date. Those facts carry no fundamentals
+# data whatsoever, but scripts/backfill_edgar_fundamentals.py::get_all_filed_dates
+# used to scan every namespace indiscriminately, so JPM alone picked up ~90
+# extra "report dates" -- one per structured-note pricing supplement instead of
+# per real 10-K/10-Q -- while every other ticker (whose companyfacts payload
+# has no such non-fundamentals namespace) was unaffected. Scoping the date scan
+# to the same namespaces the ratio/share extraction actually reads keeps the
+# two in lockstep by construction instead of by convention.
+FUNDAMENTALS_NAMESPACES = ("dei", "us-gaap")
+
 _cik_cache = {}
 _last_request_time = 0.0
 _REQUEST_DELAY = 0.15  # 10 req/sec limit, so 150ms delay is safe
