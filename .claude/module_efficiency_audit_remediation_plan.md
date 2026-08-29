@@ -66,7 +66,7 @@ per-ticker `.map()` (`pipeline/production_steps.py:627`) with the existing batch
 Confirmed untouched by any recent PR, so no merge-conflict risk with in-flight work. Highest measured
 win per unit of risk.
 
-**PR 4 — PARTIALLY DONE.** "Consolidate the Black-Scholes holdouts and the regex (F3, F4)". Two
+**PR 4 — DONE.** "Consolidate the Black-Scholes holdouts and the regex (F3, F4)". Two
 parts landed: (1) the `options_gex.py` regex drift (F3) — fixed, `$` is now required, matching the
 canonical pattern exactly, with 4 new regression tests including a direct parity check against
 `options_risk.py`'s own regex object. (2) The `vol_sqrt_t` clamp-vs-early-return divergence (F4) —
@@ -79,15 +79,43 @@ function's own spurious-value behavior, so a future change there doesn't silentl
 reasoning). `options_risk.py`'s own numerical guard was deliberately left unfixed — real, narrow bug,
 but it has 7+ reuse sites and deserves its own dedicated PR.
 
-**Not yet done**: migrating `pilots/multi_leg_pricing.py::calculate_black_scholes_leg_greeks` and
-`pilots/realtime_risk_streamer.py::compute_black_scholes_unit_greeks` (both near-verbatim copies of
-the canonical pricer, no drift found in either) to import `options_risk.py`'s function instead, one
-file per commit, each asserting numeric equality against the prior implementation on a seeded grid
-before deletion — including `realtime_risk_streamer.py`'s own duplicated symbol regex, unaffected by
-F3's fix since that PR only touched `options_gex.py`'s copy. `pilots/dispersion_trading.py`'s
-`calculate_straddle_vega` (inconsistent with the correctly-delegating `calculate_option_price()` a
-few lines below it in the same file) is also still open. Continue this PR (or open a follow-up) for
-these three remaining migrations.
+**Remaining three migrations — DONE (branch: migrate-bs-pricer-holdouts).** All three now delegate to
+`pilots.options_risk.calculate_black_scholes_greeks`, each proven numerically equivalent on a seeded
+grid before landing, matching the ETF-transmission flag-off parity precedent:
+
+- `pilots/multi_leg_pricing.py::calculate_black_scholes_leg_greeks` — thin wrapper returning the
+  canonical function's full dict (a strict superset of the original 5-key contract). One genuine,
+  strictly-additive behavior fix along the way: the old copy compared raw `option_type` without case
+  normalization (an uppercase `"CALL"` silently fell through to the put branch); the canonical
+  function's `str(option_type or "call").lower().strip()` closes that. Dead `math`/`scipy.stats.norm`
+  imports and the now-unused `_DEGENERATE_THRESHOLD` constant removed.
+- `pilots/realtime_risk_streamer.py::compute_black_scholes_unit_greeks` + `parse_option_symbol` —
+  both migrated (F3's regex duplicate + F4's Greeks duplicate in one file). `parse_option_symbol` is
+  now a direct re-export from `options_risk.py` (byte-identical regex/logic; the old copy's `if not
+  symbol: return None` guard was confirmed dead — both real call sites already normalize to a
+  non-empty string before calling it). `compute_black_scholes_unit_greeks` stays a thin wrapper
+  returning its original narrower 4-key contract. `api/ws_api.py`'s external `from
+  pilots.realtime_risk_streamer import ... parse_option_symbol` import continues to resolve correctly
+  through the re-export. Dead `math`/`re`/`scipy.stats.norm`/`settings` imports and
+  `_TRADING_DAYS_PER_YEAR`/`_OPTION_SYM_RE` removed (`_DEGENERATE_THRESHOLD` kept — used elsewhere in
+  the file).
+- `pilots/dispersion_trading.py::calculate_straddle_vega` — migrated to delegate, now consistent with
+  `calculate_option_price()` a few lines below it. **Investigated first, not assumed safe**: vega's
+  formula (`spot * norm.pdf(d1) * sqrt(t_years)`) does not divide by `vol_sqrt_t` the way gamma's
+  denominator does, so it does not exhibit F4's documented spurious-blowup failure mode — empirically
+  confirmed at the exact reproduction inputs from `options_gex.py`'s own regression test
+  (`spot=100, strike=100, t_years=1e-11, sigma=1e-7`): canonical `gamma` there is ~3.6e9 (the known
+  bug) while canonical `vega_raw` is a sane `0.000114`. This migration was therefore safe where a
+  hypothetical gamma migration through the same canonical function would not have been. Dead
+  `math`/`scipy.stats.norm`/`settings` imports removed (confirmed unused file-wide, not just in this
+  function).
+
+All three: `tests/test_pilots_strategy_matrix.py`'s auto-discovered AST allowlist updated per module
+(new `pilots` cross-import for `multi_leg_pricing`/`realtime_risk_streamer`, both already-permitted
+for `dispersion_trading`); new seeded numeric-equivalence regression tests added to each module's own
+test file; `docs/settings_field_census.{json,md}`/`settings_liveness.json` regenerated (import-graph
+shape changed). Full combined suite (147 tests across the 3 target files + the AST guard + the
+canonical pricer's own tests) passes; `ruff --select=F821,F822,F823,E9` clean.
 
 **PR 5 — Add `get_quotes_batch` to the provider ABC (F6).** The loops exist because
 `MarketDataProvider`'s ABC has no batch method — `api/data_api.py`'s own docstring concedes this.

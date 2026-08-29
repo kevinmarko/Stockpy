@@ -56,6 +56,40 @@ def test_calculate_straddle_vega():
     assert calculate_straddle_vega(spot=500.0, strike=500.0, iv=0.18, dte=0) == 0.0
 
 
+def test_calculate_straddle_vega_matches_canonical_pricer_and_a_prior_hand_computation():
+    """F4 dedup (docs/module_efficiency_redundancy_audit.md):
+    calculate_straddle_vega now delegates to
+    pilots.options_risk.calculate_black_scholes_greeks instead of its own
+    inline d1/vega formula -- the one inconsistent copy in this file
+    (calculate_option_price a few lines below already delegated correctly).
+    Two checks: (1) result equals 2x the canonical function's own raw
+    per-share vega x100 contract multiplier, put-call vega parity making the
+    option_type choice immaterial; (2) at the exact degenerate input shape
+    that produces options_gex.py's documented ~3.6e9 spurious gamma
+    (spot=100, strike=100, t_years=1e-11, sigma=1e-7), vega stays sane
+    (a small positive number, not a blowup) -- confirming vega's formula
+    does not share gamma's vol_sqrt_t-division failure mode, so this
+    migration was safe where a gamma migration would not have been."""
+    from pilots.options_risk import calculate_black_scholes_greeks
+
+    for spot, strike, iv, dte in [
+        (500.0, 500.0, 0.18, 30),
+        (150.0, 95.0, 0.35, 60),
+        (50.0, 60.0, 0.50, 7),
+    ]:
+        t_years = max(1, dte) / 365.0
+        canonical = calculate_black_scholes_greeks(spot=spot, strike=strike, t_years=t_years, sigma=iv, option_type="call")
+        expected = 2.0 * canonical["vega_raw"] * 100.0
+        assert calculate_straddle_vega(spot=spot, strike=strike, iv=iv, dte=dte) == pytest.approx(expected, abs=1e-9)
+
+    # dte is capped at t_years=1/365 by max(1, dte) before the canonical call,
+    # so iv=1e-7 with dte=1 (not options_gex.py's raw t_years=1e-11) is the
+    # closest reachable analogue of that degenerate shape through this
+    # function's own public signature -- still confirms boundedness.
+    vega_near_boundary = calculate_straddle_vega(spot=100.0, strike=100.0, iv=1e-7, dte=1)
+    assert 0.0 <= vega_near_boundary < 1.0, "vega must stay bounded near the degenerate vol_sqrt_t boundary, not blow up like gamma"
+
+
 def test_calculate_option_price():
     # ATM Call vs Put prices with positive interest rate
     call_price = calculate_option_price(spot=100.0, strike=100.0, dte=30, iv=0.20, opt_type="call")

@@ -484,7 +484,7 @@
   "read_forms": {
     "attr": 882,
     "factory_param": 4,
-    "getattr_const": 375,
+    "getattr_const": 372,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
