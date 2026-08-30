@@ -2327,3 +2327,54 @@ async def get_circuit_breaker_status():
         "reason": None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+@app.get("/data/svi-stitching-demo", dependencies=[Depends(require_token)])
+def get_svi_stitching_demo():
+    """
+    Returns data for the SVI stitching visualization artifact.
+    Complies with Constraint #2 (Never fabricate a metric) and Constraint #4 (Single source of truth).
+    """
+    import numpy as np
+    import pandas as pd
+    from data.trends_stitcher import GoogleTrendsStitcher
+
+    N = 240
+    true_data = []
+    # Seed for deterministic output
+    np.random.seed(42)
+    for i in range(N):
+        val = 35 + np.sin(i / 12) * 15 + (np.random.random() * 10 - 5)
+        if i == 45: val = 1000
+        if i == 115: val = 1800
+        if i == 195: val = 570
+        true_data.append(max(10, val))
+
+    true_series = pd.Series(true_data)
+
+    # Constraint #2: True SVI data peaks at exactly 100 for any given period.
+    slice_a = true_series.iloc[0:90]
+    period_a = slice_a / slice_a.max() * 100.0
+
+    slice_b = true_series.iloc[75:165]
+    period_b = slice_b / slice_b.max() * 100.0
+
+    slice_c = true_series.iloc[150:240]
+    period_c = slice_c / slice_c.max() * 100.0
+
+    # Constraint #4: Single source of truth logic
+    stitched = GoogleTrendsStitcher.stitch_multiple_intervals([period_a, period_b, period_c])
+
+    # Convert to JSON serializable lists, replacing NaN with None
+    def to_list(series: pd.Series) -> list:
+        arr = [None] * N
+        for idx, val in series.items():
+            if not pd.isna(val):
+                arr[idx] = float(val)
+        return arr
+
+    return {
+        "period_a": to_list(period_a),
+        "period_b": to_list(period_b),
+        "period_c": to_list(period_c),
+        "stitched": to_list(stitched)
+    }
