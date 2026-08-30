@@ -27,6 +27,30 @@ class GoogleTrendsStitcher:
     """
 
     @staticmethod
+    def get_scaling_metadata(period_a_svi: pd.Series, period_b_svi: pd.Series) -> dict:
+        """Extracts the geometric scaling factor and overlap boundaries for two periods."""
+        overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
+        if len(overlap_dates) == 0:
+            raise ValueError("No overlapping dates found between Period A and Period B for scaling.")
+
+        overlap_a = period_a_svi.loc[overlap_dates]
+        overlap_b = period_b_svi.loc[overlap_dates]
+
+        sum_a = float(overlap_a.sum())
+        sum_b = float(overlap_b.sum())
+
+        if sum_b <= 1e-9:
+            f = 1.0
+        else:
+            f = sum_a / sum_b
+            
+        return {
+            "overlapStart": overlap_dates[0],
+            "overlapEnd": overlap_dates[-1],
+            "f": f
+        }
+
+    @staticmethod
     def stitch_intervals(period_a_svi: pd.Series, period_b_svi: pd.Series) -> pd.Series:
         """Stitches two adjacent daily periods where period_b follows period_a with an overlapping window.
         Calculates a scaling factor using the overlapping non-zero days to scale period_b's SVI scale
@@ -44,24 +68,10 @@ class GoogleTrendsStitcher:
         if period_b_svi.empty:
             return period_a_svi.copy()
 
-        # Find overlapping dates
+        # Delegate to single source of truth for scaling math
+        meta = GoogleTrendsStitcher.get_scaling_metadata(period_a_svi, period_b_svi)
         overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
-
-        if len(overlap_dates) == 0:
-            raise ValueError("No overlapping dates found between Period A and Period B for scaling.")
-
-        # Extract overlapping sequences
-        overlap_a = period_a_svi.loc[overlap_dates]
-        overlap_b = period_b_svi.loc[overlap_dates]
-
-        # Compute scaling factor f (ratio of sums of non-zero overlapping daily indexes)
-        sum_a = float(overlap_a.sum())
-        sum_b = float(overlap_b.sum())
-
-        if sum_b <= 1e-9:
-            f = 1.0
-        else:
-            f = sum_a / sum_b
+        f = meta["f"]
 
         # Rescale Period B
         scaled_b = period_b_svi * f

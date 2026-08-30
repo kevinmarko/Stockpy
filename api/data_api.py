@@ -2351,7 +2351,6 @@ def get_svi_stitching_demo():
 
     true_series = pd.Series(true_data)
 
-    # Constraint #2: True SVI data peaks at exactly 100 for any given period.
     slice_a = true_series.iloc[0:90]
     period_a = slice_a / slice_a.max() * 100.0
 
@@ -2361,10 +2360,23 @@ def get_svi_stitching_demo():
     slice_c = true_series.iloc[150:240]
     period_c = slice_c / slice_c.max() * 100.0
 
-    # Constraint #4: Single source of truth logic
-    stitched = GoogleTrendsStitcher.stitch_multiple_intervals([period_a, period_b, period_c])
+    stitched_ab = GoogleTrendsStitcher.stitch_intervals(period_a, period_b)
+    stitched_all = GoogleTrendsStitcher.stitch_intervals(stitched_ab, period_c)
 
-    # Convert to JSON serializable lists, replacing NaN with None
+    def safe_get_scaling_meta(base, target):
+        try:
+            meta = GoogleTrendsStitcher.get_scaling_metadata(base, target)
+            return {
+                "overlapStart": int(meta["overlapStart"]),
+                "overlapEnd": int(meta["overlapEnd"]),
+                "f": meta["f"]
+            }
+        except ValueError:
+            return {"overlapStart": None, "overlapEnd": None, "f": 1.0}
+            
+    stitch1 = safe_get_scaling_meta(period_a, period_b)
+    stitch2 = safe_get_scaling_meta(stitched_ab, period_c)
+
     def to_list(series: pd.Series) -> list:
         arr = [None] * N
         for idx, val in series.items():
@@ -2376,5 +2388,7 @@ def get_svi_stitching_demo():
         "period_a": to_list(period_a),
         "period_b": to_list(period_b),
         "period_c": to_list(period_c),
-        "stitched": to_list(stitched)
+        "stitched": to_list(stitched_all),
+        "stitch1": stitch1,
+        "stitch2": stitch2
     }
