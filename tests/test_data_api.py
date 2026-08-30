@@ -17,12 +17,11 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
-from settings import settings
-import api.data_api as data_api
+from api import data_api
 from data.market_data import MarketDataError
+from settings import settings
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -754,31 +753,9 @@ def test_account_404_on_cold_state(monkeypatch):
     assert resp.status_code == 404
 
 
-class TestCORSLanTailscale:
-    """LAN/Tailscale origins are allowed via api.cors.LAN_TAILSCALE_ORIGIN_REGEX
-    (additive to the explicit CORS_ALLOWED_ORIGINS list), scoped to the Pilots
-    PWA dev server's port (5173, per webapp/vite.config.ts's
-    ``server: { host: true, port: 5173 }``)."""
-
-    def test_lan_origin_is_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://192.168.1.42:5173"
-
-    def test_tailscale_range_origin_is_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://100.101.102.5:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://100.101.102.5:5173"
-
-    def test_lan_origin_wrong_port_not_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5174"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") != "http://192.168.1.42:5174"
-
-    def test_public_ip_not_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://8.8.8.8:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") != "http://8.8.8.8:5173"
+# TestCORSLanTailscale (the LAN/Tailscale-origin reflection contract) lives
+# in tests/test_cors_lan_tailscale_contract.py, shared byte-for-byte with
+# control_api/metrics_api/pilots_api/state_api's identical versions of this test.
 
 
 # ===========================================================================
@@ -913,7 +890,7 @@ class TestUniverseSyncInvariants:
         key (POST /data/sync remains gated independently by STATE_API_TOKEN via
         require_write_token, so this flag's own writability is not the sole
         safeguard)."""
-        import gui.env_io as env_io
+        from gui import env_io
 
         assert "UNIVERSE_SYNC_ENABLED" in env_io.ALLOWED_KEYS
         assert "UNIVERSE_SYNC_ENABLED" not in env_io.SECRET_KEYS
@@ -1063,3 +1040,9 @@ class TestCircuitBreakerStatus:
             assert resp_ok.status_code == 200
             assert resp_ok.json()["state"] == "NORMAL"
 
+
+def test_get_trends_stitch_demo():
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 501
+    assert resp.json()["detail"] == "Live SVI fetching not implemented. Use mock mode to view the demo."

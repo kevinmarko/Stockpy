@@ -5861,3 +5861,13 @@ export class JobConflictError extends ApiError {
 export interface JobsListResponse {
   jobs: JobRecord[];
 }
+
+export interface TrendsCurve {
+  name: string;
+  data: [number, number][]; // timestamp ms, value
+}
+
+export interface TrendsStitchDemoResponse {
+  raw_curves: TrendsCurve[];
+  stitched_curve: TrendsCurve;
+}

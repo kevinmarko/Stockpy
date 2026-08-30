@@ -112,8 +112,15 @@ account with real holdings, and `confirm_live_trade()`'s pre-trade risk gate
 being a silent no-op — have since been fixed as a minimal, targeted patch
 (see `docs/MCP_EXPANSION_PLAN.md`'s "Phase 4 — REVISED PLAN" section). The
 larger propose/notify/approve/execute human-approval redesign that same
-section describes remains open, unbuilt, future work — it was NOT built as
-part of this fix.
+section describes has since shipped (confirmed 2026-08-29): `broker_live_execution_mcp.py`,
+`execution/live_trade_proposals_store.py`'s `LiveTradeProposalStore`, the
+`api/pilots_api.py` human-only approval endpoints
+(`GET /pilots/execution/pending`, `POST /pilots/execution/{token}/approve`,
+`POST /pilots/execution/{token}/reject`), and the
+`LIVE_TRADE_EXECUTION_ENABLED`/`LIVE_TRADE_APPROVAL_ENABLED` settings all
+exist on disk, with test coverage in `tests/test_broker_live_execution_mcp.py`
+and `tests/test_live_trade_proposals_store.py` — see
+`docs/MCP_EXPANSION_PLAN.md`'s Phase 4 section, now marked done, for detail.
 
 Original note from this round, left for context: this file existed
 (imports `OrderManager`/`PreTradeRiskGate`, has a dual-key propose/confirm

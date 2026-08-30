@@ -216,6 +216,7 @@ import type {
   BrokerFailoverResponse,
   SecRule606ReportResponse,
   CircuitBreakerStatusResponse,
+  TrendsStitchDemoResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1449,6 +1450,9 @@ const liveApi = {
 
   // ---- Dynamic Circuit Breaker ----
   getCircuitBreakerStatus: () => http<CircuitBreakerStatusResponse>("/risk/circuit-breaker/status"),
+
+  // ---- Trends Stitching Demo ----
+  getTrendsStitchDemo: () => http<TrendsStitchDemoResponse>("/data/trends/stitch-demo"),
 };
 
 /**
