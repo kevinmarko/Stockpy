@@ -16,6 +16,10 @@ Create an interactive, standalone HTML widget for the Antigravity Studio panel t
 #### [NEW] [.claude/svi_stitching_visualization_task.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/integrate_svi_stitching_ui/.claude/svi_stitching_visualization_task.md)
 Create the project-scoped task tracker to manage execution steps in the repo.
 
+### Backend Data API
+#### [MODIFY] api/data_api.py
+Add `GET /data/svi-stitching-demo` to return the stitched and raw period data, enforcing the single source of truth and resolving the math on the backend.
+
 ### Studio Artifact
 #### [NEW] [svi_stitching_visualizer.html](file:///Users/kevinlee/.gemini/antigravity/brain/960bd910-1b15-44d8-843f-81d07b87258c/svi_stitching_visualizer.html)
 Create the interactive HTML artifact containing:
@@ -27,7 +31,7 @@ Create the interactive HTML artifact containing:
 ## Verification Plan
 
 ### Automated Tests
-- Not applicable for a standalone Studio visualization artifact (no backend Python changes are being made).
+- Added `GET /data/svi-stitching-demo` to `api/data_api.py` to act as the single source of truth for the visualization data.
 
 ### Manual Verification
 - Render the `svi_stitching_visualizer.html` artifact in the Studio panel.
