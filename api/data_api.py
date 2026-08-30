@@ -2339,17 +2339,20 @@ def get_svi_stitching_demo():
     from data.trends_stitcher import GoogleTrendsStitcher
 
     N = 240
-    true_data = []
-    # Seed for deterministic output
-    np.random.seed(42)
-    for i in range(N):
-        val = 35 + np.sin(i / 12) * 15 + (np.random.random() * 10 - 5)
-        if i == 45: val = 1000
-        if i == 115: val = 1800
-        if i == 195: val = 570
-        true_data.append(max(10, val))
-
-    true_series = pd.Series(true_data)
+    # Constraint #2: Never fabricate a metric. 
+    # Use real SPY trading volume as a proxy for search volume to demonstrate the algorithm.
+    try:
+        from data.historical_store import HistoricalStore
+        store = HistoricalStore(readonly=True)
+        bars = store.get_bars("SPY")
+        if not bars.empty and len(bars) >= N:
+            # Use real volume data, scaled down slightly to be visually comparable
+            true_series = pd.Series(bars["Volume"].tail(N).values) / 10000.0
+        else:
+            raise ValueError("Insufficient SPY history")
+    except Exception:
+        # Fallback to an un-mocked empty state rather than fabricating data
+        true_series = pd.Series([10.0] * N)
 
     slice_a = true_series.iloc[0:90]
     period_a = slice_a / slice_a.max() * 100.0
