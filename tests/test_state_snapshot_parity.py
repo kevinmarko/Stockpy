@@ -141,6 +141,7 @@ ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     # source for this field. Genuinely orchestrator-only by design, not an
     # oversight.
     "etf_transmission_multiplier",
+    "google_trends_asvi",
 }
 
 
