@@ -62,13 +62,14 @@ class TestFitPredictLstmAttention:
 
     def test_fit_mode_trains_and_returns_weights(self):
         X_seq, Y_seq, predict_X_seq = self._seq()
-        mock_model.return_value.predict.return_value = np.array([[0.1], [0.2], [0.3], [0.4], [0.5]])
+        mock_model.return_value.predict.return_value = (np.array([[0.1], [0.2], [0.3], [0.4], [0.5]]), np.ones((5, 2, 10, 10)))
         mock_model.return_value.get_weights.return_value = [np.array([1.0]), np.array([2.0])]
 
         result = cnn_lstm_worker.fit_predict_lstm_attention(X_seq, Y_seq, predict_X_seq, hidden_dim=8, num_heads=2)
 
         assert result["predictions"] == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5])
         assert result["weights"] == [[1.0], [2.0]]
+        assert "attention_weights" in result
         mock_model.return_value.fit.assert_called_once()
         mock_model.return_value.set_weights.assert_not_called()
 
@@ -80,7 +81,7 @@ class TestFitPredictLstmAttention:
     def test_inference_only_mode_skips_training(self):
         _, _, predict_X_seq = self._seq()
         stored_weights = [[1.0], [2.0]]
-        mock_model.return_value.predict.return_value = np.zeros((5, 1))
+        mock_model.return_value.predict.return_value = (np.zeros((5, 1)), np.ones((5, 2, 10, 10)))
         mock_model.return_value.get_weights.return_value = [np.array([1.0]), np.array([2.0])]
 
         result = cnn_lstm_worker.fit_predict_lstm_attention(

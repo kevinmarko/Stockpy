@@ -26,7 +26,24 @@ SECTOR_TO_ETF = {
 }
 
 def resolve_sector_proxy(sector: Optional[str]) -> str:
-    """Returns the SPDR ETF ticker for a given sector name. Falls back to SPY."""
+    """
+    Returns the SPDR ETF ticker for a given sector name, handling normalization.
+    
+    Explicit Sector-to-ETF mapping:
+    - Technology: XLK
+    - Financial Services / Financials: XLF
+    - Healthcare / Health Care: XLV
+    - Consumer Cyclical / Consumer Discretionary: XLY
+    - Industrials: XLI
+    - Consumer Defensive / Consumer Staples: XLP
+    - Energy: XLE
+    - Utilities: XLU
+    - Real Estate: XLRE
+    - Materials / Basic Materials: XLB
+    - Communication Services: XLC
+    
+    Fallback: 'SPY' is returned for any unmapped sector or missing data.
+    """
     if not sector:
         return "SPY"
     return SECTOR_TO_ETF.get(sector, "SPY")
@@ -42,6 +59,23 @@ def build_lstm_attention_tensors(
     """
     Builds the 3D sliding window tensors for the LSTM-Attention model.
     Expected to be called after technical indicators have been added to df_ohlcv.
+    
+    The 15-feature sliding window is explicitly ordered as follows:
+    1. Target ASVI (from Google Trends)
+    2. Sector-Proxy ASVI (from Google Trends via SECTOR_TO_ETF mapping)
+    3. Open
+    4. High
+    5. Low
+    6. Close
+    7. Volume
+    8. RSI_14
+    9. EMA_12
+    10. EMA_26
+    11. MACD
+    12. MACD_Signal
+    13. MACD_Hist
+    14. Realized_Vol_60D
+    15. SMA_50
     """
     # 1. Align all data on the same index
     common_idx = df_ohlcv.index

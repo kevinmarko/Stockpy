@@ -252,7 +252,8 @@ def fit_predict_lstm_attention(
 ) -> Dict[str, Any]:
     """Single-layer LSTM + MultiHeadAttention regressor for ASVI.
     
-    Architecture: Input -> LSTM(return_sequences=True) -> MultiHeadAttention -> GlobalAveragePooling1D -> Dense(1)
+    Architecture: Input -> LayerNormalization -> LSTM(return_sequences=True) -> MultiHeadAttention -> GlobalAveragePooling1D -> Dense(1)
+    Returns: {"predictions": [...], "weights": [...], "attention_weights": [...]}
     """
     if not TENSORFLOW_AVAILABLE:
         raise RuntimeError("tensorflow is not importable in this worker process")
@@ -265,12 +266,14 @@ def fit_predict_lstm_attention(
     inputs = Input(shape=(time_steps, num_features))
     norm_inputs = LayerNormalization()(inputs)
     lstm_out = LSTM(units=hidden_dim, activation='tanh', return_sequences=True)(norm_inputs)
-    attention_out = MultiHeadAttention(num_heads=num_heads, key_dim=hidden_dim)(lstm_out, lstm_out)
+    attention_out, attention_scores = MultiHeadAttention(num_heads=num_heads, key_dim=hidden_dim)(lstm_out, lstm_out, return_attention_scores=True)
     pooled_out = GlobalAveragePooling1D()(attention_out)
     outputs = Dense(units=1)(pooled_out)
     
-    model = Model(inputs=inputs, outputs=outputs)
-    model.compile(optimizer='adam', loss='mse')
+    # We output both the prediction and the attention_scores
+    model = Model(inputs=inputs, outputs=[outputs, attention_scores])
+    # The second output (attention) does not contribute to the loss. Keras allows passing None for loss.
+    model.compile(optimizer='adam', loss=['mse', None])
 
     if weights is None:
         if Y_seq is None:
@@ -286,12 +289,18 @@ def fit_predict_lstm_attention(
     else:
         model.set_weights([np.asarray(w) for w in weights])
 
-    preds = model.predict(predict_X_seq, verbose=0).reshape(-1)
+    preds, attn = model.predict(predict_X_seq, verbose=0)
+    preds = preds.reshape(-1)
+    
+    # Extract the last timestep's attention weight matrix. Shape of attn is (batch_size, num_heads, query_seq_len, value_seq_len)
+    # We extract the last element of the batch.
+    attn_last = attn[-1] if len(attn) > 0 else np.array([])
+    
     return {
         "predictions": [float(x) for x in preds],
         "weights": [w.tolist() for w in model.get_weights()],
+        "attention_weights": attn_last.tolist()
     }
-
 def load_predict_lstm_attention(
     keras_path: str,
     last_window: np.ndarray,
