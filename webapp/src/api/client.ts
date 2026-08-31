@@ -1452,7 +1452,7 @@ const liveApi = {
   getCircuitBreakerStatus: () => http<CircuitBreakerStatusResponse>("/risk/circuit-breaker/status"),
 
   // ---- Trends Stitching Demo ----
-  getTrendsStitchDemo: () => http<TrendsStitchDemoResponse>("/data/trends/stitch-demo"),
+  getTrendsStitchDemo: (symbol: string) => http<TrendsStitchDemoResponse>(`/data/trends/${symbol}`),
 };
 
 /**

@@ -1041,8 +1041,3 @@ class TestCircuitBreakerStatus:
             assert resp_ok.json()["state"] == "NORMAL"
 
 
-def test_get_trends_stitch_demo():
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 501
-    assert resp.json()["detail"] == "Live SVI fetching not implemented. Use mock mode to view the demo."

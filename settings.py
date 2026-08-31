@@ -5313,6 +5313,10 @@ class Settings(BaseSettings):
     )
 
     # --- 26. Google Trends ASVI ---
+    GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS: float = Field(
+        default=24.0,
+        description="Hours between automated Google Trends refreshes."
+    )
     GOOGLE_TRENDS_ENABLED: bool = Field(
         default=False,
         description="Master switch for the Google Trends ASVI pipeline."

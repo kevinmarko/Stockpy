@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import { TrendsStitchDemoResponse } from "../api/types";
@@ -9,10 +9,20 @@ import {
 } from "lucide-react";
 
 export const TrendsVisualizer: React.FC = () => {
+  const [symbol, setSymbol] = useState("NVDA");
+  const [inputVal, setInputVal] = useState("NVDA");
+
   const { data, loading, error, reload } = useApi<TrendsStitchDemoResponse>(
-    () => api.getTrendsStitchDemo(),
-    []
+    () => api.getTrendsStitchDemo(symbol),
+    [symbol]
   );
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inputVal.trim()) {
+      setSymbol(inputVal.trim().toUpperCase());
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-zinc-950 p-6 overflow-y-auto">
@@ -28,6 +38,21 @@ export const TrendsVisualizer: React.FC = () => {
             Demonstrates the stitching of multiple overlapping 90-day Google Trends Search Volume Index (SVI) queries into a single continuous time series.
           </p>
         </div>
+        <form onSubmit={handleSearch} className="flex space-x-2">
+          <input 
+            type="text" 
+            value={inputVal}
+            onChange={(e) => setInputVal(e.target.value)}
+            placeholder="Enter symbol (e.g. NVDA)"
+            className="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-blue-500"
+          />
+          <button 
+            type="submit"
+            className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors"
+          >
+            Load
+          </button>
+        </form>
       </div>
 
       {loading && !data && (
