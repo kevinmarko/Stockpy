@@ -59,6 +59,8 @@ Given two adjacent periods $A$ (earlier) and $B$ (subsequent) with non-empty int
    SVI_{B, \text{scaled}, t} & t \in B \setminus O
    \end{cases}$$
 
+**Implementation note:** step 1's scaling-factor computation (the ratio $f = \sum_{t \in O} SVI_{A,t} / \sum_{t \in O} SVI_{B,t}$ over the overlap window, including the $f = 1.0$ degenerate-denominator guard when $\sum_{t \in O} SVI_{B,t} \le 10^{-9}$) is implemented as its own public static method, `GoogleTrendsStitcher.get_scaling_metadata(period_a_svi, period_b_svi) -> dict`, extracted out of `stitch_intervals`. `stitch_intervals` now delegates to it internally rather than re-deriving the ratio itself, so it remains the single source of truth for the overlap-window/scaling-factor computation — any caller needing just the scaling factor and overlap-window details (e.g. a diagnostics or visualization endpoint) can call `get_scaling_metadata` directly without running the full stitch.
+
 ### B. Abnormal Search Volume Index (`ASVICalculator`)
 Following Da, Engelberg & Gao (2011), investor attention shocks are isolated by comparing today's search volume against the historical baseline median:
 $$ASVI_t = \ln(SVI_t) - \ln\left(\text{Median}(SVI_{t-k \dots t-1})\right)$$
@@ -87,3 +89,6 @@ Unit tests are implemented in `tests/test_trends_stitcher.py`:
 - `TestGoogleTrendsStitcher`: Verifies exact rescaling recovery across overlapping windows and multi-window chaining.
 - `TestASVICalculator`: Verifies log-median reference output and runs perturbation testing to prove zero lookahead bias.
 - `TestFMPDataLoader`: Verifies indicator computation accuracy and bounds.
+
+### D. Visualizations
+- **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`) demonstrates the overlapping window stitching algorithm. It plots the raw unscaled curves alongside the final stitched continuous sequence. The backing endpoint, `GET /data/trends/stitch-demo`, is no longer a permanent `501 Not Implemented` stub — it now serves real data end-to-end: three overlapping ~90-day windows sliced from real SPY trading volume (`HistoricalStore(readonly=True).get_bars("SPY")`) stand in for a genuine Google Trends Search Volume Index and are stitched via `GoogleTrendsStitcher.stitch_intervals`. **This is an explicitly disclosed proxy, not real SVI data** — every curve name in the response is labeled accordingly (e.g. "SPY Volume Proxy — Period A"), and the screen must never present it as genuine search-interest data. On insufficient bar history or any fetch failure, the endpoint raises an honest `HTTP 503` rather than ever fabricating a placeholder value (CONSTRAINT #4) — no data fabrication in either the happy or failure path. Mock mode (`VITE_USE_MOCK=true`) still exercises `mock.ts`'s own synthetic overlapping periods for offline development, unchanged.

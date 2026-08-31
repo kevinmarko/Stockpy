@@ -212,7 +212,20 @@ per skill (what does it look like when this goes wrong, and what's the fix).
 
 ---
 
-## Phase 4 — Execution boundary — REVISED PLAN, ready for a fresh agent to build
+## Phase 4 — Execution boundary — ✅ DONE, verified (2026-08-29)
+
+> [!NOTE]
+> **Status update (2026-08-29).** This phase has since been built as
+> designed below: `broker_live_execution_mcp.py` (renamed from
+> `robinhood_execution_mcp.py`), `execution/live_trade_proposals_store.py`'s
+> `LiveTradeProposalStore`, the `api/pilots_api.py` human-only approval
+> endpoints (`GET /pilots/execution/pending`,
+> `POST /pilots/execution/{token}/approve`,
+> `POST /pilots/execution/{token}/reject`), and the
+> `LIVE_TRADE_EXECUTION_ENABLED`/`LIVE_TRADE_APPROVAL_ENABLED` settings all
+> exist on disk, with test coverage in `tests/test_broker_live_execution_mcp.py`
+> and `tests/test_live_trade_proposals_store.py`. The design notes below are
+> kept as the historical record of what was built and why.
 
 > **Why this section was rewritten.** `broker_live_execution_mcp.py` (at the
 > time this section was written, still named `robinhood_execution_mcp.py` --

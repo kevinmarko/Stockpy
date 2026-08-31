@@ -2328,31 +2328,52 @@ async def get_circuit_breaker_status():
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-@app.get("/data/svi-stitching-demo", dependencies=[Depends(require_token)])
-def get_svi_stitching_demo():
+@app.get("/data/trends/stitch-demo", dependencies=[Depends(require_token)])
+def get_trends_stitch_demo() -> Dict[str, Any]:
     """
-    Returns data for the SVI stitching visualization artifact.
-    Complies with Constraint #2 (Never fabricate a metric) and Constraint #4 (Single source of truth).
+    Demonstrates the Google Trends SVI overlapping-window stitching algorithm
+    (data.trends_stitcher.GoogleTrendsStitcher) against real market data.
+
+    Live Google Trends Search Volume Index (SVI) fetching is NOT wired up in this
+    codebase (no SVI provider exists here). Per CONSTRAINT #4 (never fabricate a
+    metric), this endpoint does not synthesize a fake SVI series. Instead it uses
+    real SPY trading volume (via HistoricalStore) as an honestly-labeled PROXY
+    input to exercise the real stitching algorithm end-to-end -- every curve name
+    in the response discloses this explicitly ("SPY Volume Proxy"), never
+    presented as if it were real Google Trends data.
+
+    Raises HTTPException(503) -- rather than returning a fabricated placeholder
+    series -- if SPY bar history is insufficient or unavailable.
     """
-    import numpy as np
     import pandas as pd
+
     from data.trends_stitcher import GoogleTrendsStitcher
 
-    N = 240
-    # Constraint #2: Never fabricate a metric. 
-    # Use real SPY trading volume as a proxy for search volume to demonstrate the algorithm.
+    n_bars = 240
+
     try:
-        from data.historical_store import HistoricalStore
         store = HistoricalStore(readonly=True)
         bars = store.get_bars("SPY")
-        if not bars.empty and len(bars) >= N:
-            # Use real volume data, scaled down slightly to be visually comparable
-            true_series = pd.Series(bars["Volume"].tail(N).values) / 10000.0
-        else:
-            raise ValueError("Insufficient SPY history")
-    except Exception:
-        # Fallback to an un-mocked empty state rather than fabricating data
-        true_series = pd.Series([10.0] * N)
+        if bars.empty or len(bars) < n_bars:
+            raise ValueError(f"Insufficient SPY bar history: {len(bars)} rows (need >= {n_bars})")
+        # Keep the real tz-naive DatetimeIndex intact -- GoogleTrendsStitcher.stitch_intervals
+        # aligns overlapping periods via index intersection, and the response needs real
+        # calendar dates as epoch-ms timestamps, not a fabricated/positional index.
+        true_series = bars["Volume"].tail(n_bars)
+    except Exception as exc:
+        logger.warning(
+            "get_trends_stitch_demo: unable to build SPY-volume-proxy SVI stitching demo (%s): %s",
+            type(exc).__name__,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Live Google Trends SVI fetching is not implemented -- this demo uses real "
+                "SPY trading volume as an honest proxy input, and insufficient SPY bar history "
+                "is currently available to build it. Use mock mode to view the demo."
+            ),
+        )
 
     slice_a = true_series.iloc[0:90]
     period_a = slice_a / slice_a.max() * 100.0
@@ -2366,32 +2387,19 @@ def get_svi_stitching_demo():
     stitched_ab = GoogleTrendsStitcher.stitch_intervals(period_a, period_b)
     stitched_all = GoogleTrendsStitcher.stitch_intervals(stitched_ab, period_c)
 
-    def safe_get_scaling_meta(base, target):
-        try:
-            meta = GoogleTrendsStitcher.get_scaling_metadata(base, target)
-            return {
-                "overlapStart": int(meta["overlapStart"]),
-                "overlapEnd": int(meta["overlapEnd"]),
-                "f": meta["f"]
-            }
-        except ValueError:
-            return {"overlapStart": None, "overlapEnd": None, "f": 1.0}
-            
-    stitch1 = safe_get_scaling_meta(period_a, period_b)
-    stitch2 = safe_get_scaling_meta(stitched_ab, period_c)
-
-    def to_list(series: pd.Series) -> list:
-        arr = [None] * N
-        for idx, val in series.items():
-            if not pd.isna(val):
-                arr[idx] = float(val)
-        return arr
+    def to_curve(name: str, series: pd.Series) -> Dict[str, Any]:
+        points: List[List[float]] = []
+        for ts, val in series.items():
+            if val is None or (isinstance(val, float) and math.isnan(val)):
+                continue
+            points.append([int(ts.timestamp() * 1000), float(val)])
+        return {"name": name, "data": points}
 
     return {
-        "period_a": to_list(period_a),
-        "period_b": to_list(period_b),
-        "period_c": to_list(period_c),
-        "stitched": to_list(stitched_all),
-        "stitch1": stitch1,
-        "stitch2": stitch2
+        "raw_curves": [
+            to_curve("SPY Volume Proxy — Period A", period_a),
+            to_curve("SPY Volume Proxy — Period B", period_b),
+            to_curve("SPY Volume Proxy — Period C", period_c),
+        ],
+        "stitched_curve": to_curve("Stitched SPY Volume Proxy", stitched_all),
     }

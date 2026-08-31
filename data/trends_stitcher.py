@@ -28,7 +28,12 @@ class GoogleTrendsStitcher:
 
     @staticmethod
     def get_scaling_metadata(period_a_svi: pd.Series, period_b_svi: pd.Series) -> dict:
-        """Extracts the geometric scaling factor and overlap boundaries for two periods."""
+        """Extracts the geometric scaling factor and overlap boundaries for two periods.
+
+        Single source of truth for BOTH the scaling factor `f` AND the overlap window
+        (`overlap_dates`) used by `stitch_intervals` — callers must reuse `overlap_dates`
+        rather than re-deriving it via a second `.index.intersection()` call.
+        """
         overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
         if len(overlap_dates) == 0:
             raise ValueError("No overlapping dates found between Period A and Period B for scaling.")
@@ -43,11 +48,12 @@ class GoogleTrendsStitcher:
             f = 1.0
         else:
             f = sum_a / sum_b
-            
+
         return {
             "overlapStart": overlap_dates[0],
             "overlapEnd": overlap_dates[-1],
-            "f": f
+            "overlap_dates": overlap_dates,
+            "f": f,
         }
 
     @staticmethod
@@ -68,9 +74,9 @@ class GoogleTrendsStitcher:
         if period_b_svi.empty:
             return period_a_svi.copy()
 
-        # Delegate to single source of truth for scaling math
+        # Delegate to single source of truth for both the scaling factor AND the overlap window
         meta = GoogleTrendsStitcher.get_scaling_metadata(period_a_svi, period_b_svi)
-        overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
+        overlap_dates = meta["overlap_dates"]
         f = meta["f"]
 
         # Rescale Period B
