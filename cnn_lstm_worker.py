@@ -53,8 +53,8 @@ To keep the (still load-bearing, Round 1-7) import-order guarantee:
 
 try:
     import tensorflow as tf
-    from tensorflow.keras.models import Sequential, load_model
-    from tensorflow.keras.layers import Conv1D, LSTM, Dense, MaxPooling1D
+    from tensorflow.keras.models import Sequential, Model, load_model
+    from tensorflow.keras.layers import Conv1D, LSTM, Dense, MaxPooling1D, MultiHeadAttention, GlobalAveragePooling1D, Input, LayerNormalization
     from tensorflow.keras.callbacks import EarlyStopping
     TENSORFLOW_AVAILABLE = True
 except ImportError:
@@ -242,6 +242,70 @@ def fit_predict_or_infer_lstm(
     }
 
 
+def fit_predict_lstm_attention(
+    X_seq: np.ndarray,
+    Y_seq: Optional[np.ndarray],
+    predict_X_seq: np.ndarray,
+    hidden_dim: int,
+    num_heads: int,
+    weights: Optional[list] = None,
+) -> Dict[str, Any]:
+    """Single-layer LSTM + MultiHeadAttention regressor for ASVI.
+    
+    Architecture: Input -> LSTM(return_sequences=True) -> MultiHeadAttention -> GlobalAveragePooling1D -> Dense(1)
+    """
+    if not TENSORFLOW_AVAILABLE:
+        raise RuntimeError("tensorflow is not importable in this worker process")
+
+    np.random.seed(CNN_LSTM_RANDOM_SEED)
+    tf.random.set_seed(CNN_LSTM_RANDOM_SEED)
+
+    _, time_steps, num_features = X_seq.shape if weights is None else predict_X_seq.shape
+    
+    inputs = Input(shape=(time_steps, num_features))
+    norm_inputs = LayerNormalization()(inputs)
+    lstm_out = LSTM(units=hidden_dim, activation='tanh', return_sequences=True)(norm_inputs)
+    attention_out = MultiHeadAttention(num_heads=num_heads, key_dim=hidden_dim)(lstm_out, lstm_out)
+    pooled_out = GlobalAveragePooling1D()(attention_out)
+    outputs = Dense(units=1)(pooled_out)
+    
+    model = Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer='adam', loss='mse')
+
+    if weights is None:
+        if Y_seq is None:
+            raise ValueError("Y_seq is required when weights is None (fit mode)")
+        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps)
+        model.fit(
+            X_tr, Y_tr,
+            validation_data=(X_val, Y_val),
+            epochs=50, batch_size=16, verbose=0,
+            callbacks=[early_stop],
+        )
+    else:
+        model.set_weights([np.asarray(w) for w in weights])
+
+    preds = model.predict(predict_X_seq, verbose=0).reshape(-1)
+    return {
+        "predictions": [float(x) for x in preds],
+        "weights": [w.tolist() for w in model.get_weights()],
+    }
+
+def load_predict_lstm_attention(
+    keras_path: str,
+    last_window: np.ndarray,
+    num_horizons: int,
+) -> Dict[str, Any]:
+    """Load a persisted .keras model and predict on ``last_window``."""
+    if not TENSORFLOW_AVAILABLE:
+        raise RuntimeError("tensorflow is not importable in this worker process")
+
+    model = load_model(keras_path)
+    if model.output_shape[-1] != num_horizons:
+        raise ValueError("cached model horizon count mismatch")
+    pred_scaled = model.predict(last_window, verbose=0)[0]
+    return {"pred_scaled": [float(x) for x in pred_scaled]}
 def _test_add(a: float, b: float) -> float:
     """TensorFlow-free helper dispatchable by name, for exercising the real
     subprocess/pipe mechanics in tests/test_cnn_lstm_process_pool.py without
@@ -271,6 +335,8 @@ _DISPATCHABLE = {
     "fit_predict_cnn_lstm": fit_predict_cnn_lstm,
     "load_predict_cnn_lstm": load_predict_cnn_lstm,
     "fit_predict_or_infer_lstm": fit_predict_or_infer_lstm,
+    "fit_predict_lstm_attention": fit_predict_lstm_attention,
+    "load_predict_lstm_attention": load_predict_lstm_attention,
     "_test_add": _test_add,
     "_test_sleep_and_return": _test_sleep_and_return,
     "_test_raise_value_error": _test_raise_value_error,

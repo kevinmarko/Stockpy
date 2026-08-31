@@ -8208,3 +8208,81 @@ def get_pilots_execution_sec_606_report(
     reporter = SecRule606Reporter()
     return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
 
+@app.post("/pilots/ml/lstm-attention-forecast", dependencies=[Depends(require_read_token)])
+def run_lstm_attention_forecast_endpoint(
+    symbol: str = Query(..., min_length=1),
+) -> Dict[str, Any]:
+    """Diagnostic endpoint to trigger the LSTM-Attention Phase 4 forecaster."""
+    from data.historical_store import HistoricalStore
+    from data.trends_store import TrendsStore
+    from data.market_data import FMPDataLoader
+    from processing_engine import ProcessingEngine
+    from ml.asvi_feature_engineering import resolve_sector_proxy
+    import numpy as np
+    import pandas as pd
+    from fastapi import HTTPException
+    
+    try:
+        # Fetch 3 years to ensure enough sliding windows
+        bars = HistoricalStore().get_bars(symbol, lookback_days=1095)
+    except Exception:
+        bars = None
+        
+    if bars is None or bars.empty or len(bars) < 60:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"Insufficient history for {symbol}"}
+        )
+        
+    # Technical indicators
+    pe = ProcessingEngine()
+    bars = pe._calculate_technical_metrics_for_symbol(bars)
+    
+    # Sector Proxy
+    fmp = FMPDataLoader()
+    try:
+        fund = fmp.get_fundamentals(symbol)
+        sector = fund.get("sector")
+    except Exception:
+        sector = None
+        
+    sector_proxy = resolve_sector_proxy(sector)
+    try:
+        sector_bars = HistoricalStore().get_bars(sector_proxy, lookback_days=1095)
+        sector_bars = pe._calculate_technical_metrics_for_symbol(sector_bars)
+    except Exception:
+        sector_bars = pd.DataFrame()
+        
+    # ASVI Data
+    trends_store = TrendsStore()
+    asvi_sym = trends_store.get_stitched_series(symbol)
+    asvi_sec = trends_store.get_stitched_series(sector_proxy)
+    
+    if asvi_sym is None:
+        asvi_sym = pd.Series(dtype=float)
+    if asvi_sec is None:
+        asvi_sec = pd.Series(dtype=float)
+
+    from engine.forecasting_engine import ForecastingEngine
+    fe = ForecastingEngine()
+    
+    pred = fe.run_lstm_attention_forecast(
+        symbol=symbol,
+        df_ohlcv=bars,
+        df_sector_ohlcv=sector_bars,
+        df_asvi_symbol=asvi_sym,
+        df_asvi_sector=asvi_sec
+    )
+    
+    if np.isnan(pred):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"LSTM-Attention model skipped or failed for {symbol}"}
+        )
+        
+    return {
+        "symbol": symbol,
+        "predicted_return": pred,
+        "sector_proxy_used": sector_proxy,
+        "status": "success"
+    }

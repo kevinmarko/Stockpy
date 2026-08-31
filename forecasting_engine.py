@@ -661,6 +661,52 @@ class ForecastingEngine:
         except Exception:  # noqa: BLE001
             return False, 300.0, 1
 
+    def run_lstm_attention_forecast(
+        self,
+        symbol: str,
+        df_ohlcv: pd.DataFrame,
+        df_sector_ohlcv: pd.DataFrame,
+        df_asvi_symbol: pd.Series,
+        df_asvi_sector: pd.Series,
+    ) -> float:
+        """LSTM-Attention diagnostic forecaster (Phase 4).
+        
+        Uses the `build_lstm_attention_tensors` generator to produce a 15-feature sliding window.
+        Routes computation to the TF-isolated subprocess pool to prevent deadlocks.
+        """
+        try:
+            from ml.asvi_feature_engineering import build_lstm_attention_tensors
+            X_seq, Y_seq, valid_indices = build_lstm_attention_tensors(
+                symbol, df_ohlcv, df_sector_ohlcv, df_asvi_symbol, df_asvi_sector, sequence_length=15
+            )
+        except ValueError as e:
+            logger.warning(f"LSTM-Attention skipped for {symbol}: {e}")
+            return float('nan')
+            
+        if len(X_seq) < 30:
+            logger.warning(f"LSTM-Attention skipped for {symbol}: Insufficient valid windows ({len(X_seq)} < 30).")
+            return float('nan')
+            
+        # The last sequence is what we use for predicting the *next* day
+        predict_X_seq = X_seq[-1:]
+        
+        # Exclude the last row from training since its forward Y is unknown
+        X_train = X_seq[:-1]
+        Y_train = Y_seq[:-1]
+        
+        if len(X_train) == 0:
+            return float('nan')
+
+        from cnn_lstm_process_pool import dispatch_to_worker
+        try:
+            result = dispatch_to_worker(
+                "fit_predict_lstm_attention",
+                (X_train, Y_train, predict_X_seq, 16, 2, None) # hidden_dim=16, num_heads=2
+            )
+            return float(result["predictions"][0])
+        except Exception as e:
+            logger.error(f"LSTM-Attention worker failed for {symbol}: {e}")
+            return float('nan')
     def run_cnn_lstm_forecast(
         self,
         history_df: pd.DataFrame,
