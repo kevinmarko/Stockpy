@@ -143,3 +143,8 @@ def disable_historical_store():
     """
     with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
         yield
+
+@pytest.fixture(autouse=True)
+def _isolate_trends_store_db_in_tests():
+    with mock.patch("data.trends_store.resolve_database_url", return_value="sqlite:///:memory:"):
+        yield
