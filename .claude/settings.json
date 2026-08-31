@@ -21,7 +21,23 @@
       "Bash(npx --version)",
       "mcp__robinhood-trading__get_equity_positions",
       "mcp__robinhood-trading__get_portfolio",
-      "mcp__robinhood-trading__get_scans"
+      "mcp__robinhood-trading__get_scans",
+      "Bash(ruff check *)",
+      "Bash(git merge-base *)",
+      "mcp__Claude_Browser__tabs_context",
+      "mcp__Claude_Browser__preview_list",
+      "mcp__investyo-platform__query_investyo_db",
+      "mcp__investyo-platform__list_jules_sources",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_model_registry_status",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_pilot_detail",
+      "Bash(gh --version)",
+      "mcp__Claude_Browser__navigate",
+      "mcp__Claude_Browser__tabs_select",
+      "mcp__investyo-platform__list_pilots",
+      "mcp__investyo-platform__get_var_es_metrics",
+      "mcp__investyo-platform__get_signal_breakdown",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_var_es_metrics",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_signal_breakdown"
     ]
   },
   "hooks": {
