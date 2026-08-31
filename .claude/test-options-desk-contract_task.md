@@ -1,0 +1,7 @@
+- [x] git checkout -b test-options-desk-contract
+- [x] Read AGENTS.md for Work Package F details
+- [x] Create tests/test_options_desk_response_contract.py using TestClient
+- [x] Extract expected fields from webapp/src/api/types.ts
+- [x] Run test and perform 'revert-and-confirm-failure' verification step
+- [x] Create PR artifacts in .claude/
+- [ ] Commit and push branch
