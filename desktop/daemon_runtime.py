@@ -41,7 +41,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any, Optional
 
@@ -912,6 +912,64 @@ class OrchestratorDaemon:
         except Exception:  # noqa: BLE001 - CONSTRAINT #6, this check must never break the caller
             logger.warning("maybe_alert_on_pipeline_stall: unexpected failure", exc_info=True)
 
+
+    def maybe_refresh_google_trends(self) -> None:
+        """Periodic refresh of Google Trends data.
+        
+        Gated by settings.GOOGLE_TRENDS_ENABLED. Tracks last run time internally
+        and throttles based on settings.GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS.
+        Never raises.
+        """
+        if not getattr(settings, "GOOGLE_TRENDS_ENABLED", False):
+            return
+            
+        now = time.monotonic()
+        refresh_hours = getattr(settings, "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS", 24.0)
+        
+        # Internal throttle
+        if getattr(self, "_last_google_trends_refresh", 0.0) > 0.0:
+            if (now - self._last_google_trends_refresh) < (refresh_hours * 3600):
+                return
+                
+        try:
+            from data.google_trends_client import fetch_overlapping_windows
+            from data.trends_stitcher import GoogleTrendsStitcher
+            from data.trends_store import TrendsStore
+            import uuid
+            
+            store = TrendsStore()
+            symbols = list(getattr(settings, "DEFAULT_TICKERS", []) or [])
+            if not symbols:
+                return
+            
+            end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Pull 1 year of data
+            start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+
+            for sym in symbols:
+                # fetch overlapping windows
+                series_list = fetch_overlapping_windows(sym, start_date, end_date)
+                if not series_list:
+                    continue
+                    
+                window_ids = [str(uuid.uuid4()) for _ in series_list]
+                
+                # store raw
+                for i, series in enumerate(series_list):
+                    raw_data = [{"date": d.date(), "value": v} for d, v in series.items()]
+                    store.insert_raw_window(sym, window_ids[i], raw_data, datetime.now(timezone.utc))
+                    
+                # stitch and store
+                stitched = GoogleTrendsStitcher.stitch_multiple_intervals(series_list)
+                if not stitched.empty:
+                    stitched_data = [{"date": d.date(), "value": v} for d, v in stitched.items()]
+                    store.save_stitched_series(sym, stitched_data, datetime.now(timezone.utc))
+                    
+            self._last_google_trends_refresh = time.monotonic()
+        except Exception as exc:
+            logger.warning("maybe_refresh_google_trends: unexpected failure: %s", exc)
+
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -938,6 +996,7 @@ class OrchestratorDaemon:
             # see its own docstring. Called unconditionally here so it is a
             # true no-op, not merely "never invoked," when the flag is off.
             self.maybe_update_circuit_breaker()
+            self.maybe_refresh_google_trends()
             # Same "called unconditionally, self-gates internally" contract --
             # see maybe_alert_on_pipeline_stall's own docstring.
             self.maybe_alert_on_pipeline_stall()
@@ -955,6 +1014,7 @@ class OrchestratorDaemon:
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
             self.maybe_update_circuit_breaker()
+            self.maybe_refresh_google_trends()
             self.maybe_alert_on_pipeline_stall()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.

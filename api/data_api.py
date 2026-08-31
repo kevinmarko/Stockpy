@@ -2328,14 +2328,49 @@ async def get_circuit_breaker_status():
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-@app.get("/data/trends/stitch-demo", dependencies=[Depends(require_token)])
-def get_trends_stitch_demo() -> Dict[str, Any]:
-    """
-    Returns an explicit 501 Not Implemented for live mode. 
-    Live fetching of Google Trends SVI curves is not yet wired to this demo route.
-    To view the stitching demonstration, run the Pilots PWA in Mock mode (VITE_USE_MOCK=true).
-    """
-    raise HTTPException(
-        status_code=501, 
-        detail="Live SVI fetching not implemented. Use mock mode to view the demo."
-    )
+@app.get("/data/trends/{symbol}", dependencies=[Depends(require_token)])
+def get_trends_for_symbol(symbol: str) -> Dict[str, Any]:
+    from data.trends_store import TrendsStore
+    from datetime import datetime, timezone
+    
+    symbol = symbol.upper().strip()
+    store = TrendsStore(readonly=True)
+    
+    raw = store.load_raw_windows(symbol)
+    stitched = store.get_stitched_series(symbol)
+    
+    if not raw and not stitched:
+        # Fallback or just empty
+        return {"raw_curves": [], "stitched_curve": {"name": f"Stitched {symbol}", "data": []}}
+        
+    windows = {}
+    for r in raw:
+        if r.window_id not in windows:
+            windows[r.window_id] = []
+        # Convert date to ms timestamp
+        ts = int(datetime.combine(r.date, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
+        windows[r.window_id].append([ts, r.value])
+        
+    raw_curves = []
+    # Sort windows by their earliest date
+    sorted_windows = sorted(windows.items(), key=lambda item: item[1][0][0] if item[1] else 0)
+    for idx, (wid, wdata) in enumerate(sorted_windows):
+        raw_curves.append({
+            "name": f"Window {idx + 1}",
+            "data": sorted(wdata, key=lambda x: x[0])
+        })
+        
+    stitched_data = [
+        [int(datetime.combine(s["date"], datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000), s["value"]]
+        for s in stitched
+    ]
+    stitched_curve = {
+        "name": f"Stitched {symbol}",
+        "data": sorted(stitched_data, key=lambda x: x[0])
+    }
+    
+    return {
+        "raw_curves": raw_curves,
+        "stitched_curve": stitched_curve
+    }
+
