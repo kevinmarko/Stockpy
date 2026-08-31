@@ -100,4 +100,4 @@ Unit tests are implemented in `tests/test_trends_stitcher.py`:
 - `TestFMPDataLoader`: Verifies indicator computation accuracy and bounds.
 
 ### D. Visualizations
-- **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`) demonstrates the overlapping window stitching algorithm. It plots the raw unscaled SVI curves alongside the final stitched continuous sequence. Note that live SVI fetching is disabled for this demo; the visualization relies on the `mock.ts` integration to generate plausible overlapping periods for demonstration purposes.
+- **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`) demonstrates the overlapping window stitching algorithm. It plots the raw unscaled SVI curves alongside the final stitched continuous sequence. Live SVI fetching is enabled for this demo and is wired directly to the real Google Trends API via `pytrends`, pulling authentic overlapping periods for stitching and validation.
