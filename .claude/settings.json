@@ -37,7 +37,9 @@
       "mcp__investyo-platform__get_var_es_metrics",
       "mcp__investyo-platform__get_signal_breakdown",
       "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_var_es_metrics",
-      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_signal_breakdown"
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_signal_breakdown",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   },
   "hooks": {
