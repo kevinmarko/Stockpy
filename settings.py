@@ -5312,6 +5312,36 @@ class Settings(BaseSettings):
         "z_entry/z_entry_threshold parameter defaults.",
     )
 
+    # --- 26. Google Trends ASVI ---
+    GOOGLE_TRENDS_ENABLED: bool = Field(
+        default=False,
+        description="Master switch for the Google Trends ASVI pipeline."
+    )
+    GOOGLE_TRENDS_WINDOW_DAYS: int = Field(
+        default=90,
+        description="Number of days per overlapping fetch window for Google Trends."
+    )
+    GOOGLE_TRENDS_OVERLAP_DAYS: int = Field(
+        default=30,
+        description="Number of days of overlap between consecutive fetch windows."
+    )
+    GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS: float = Field(
+        default=5.0,
+        description="Minimum seconds between pytrends API request ISSUANCE."
+    )
+    GOOGLE_TRENDS_MAX_RETRIES: int = Field(
+        default=3,
+        description="Retries after a pytrends HTTP 429/5xx before the request is given up on."
+    )
+    GOOGLE_TRENDS_COOLDOWN_THRESHOLD: int = Field(
+        default=3,
+        description="Consecutive FAILED pytrends requests after which calls are SKIPPED outright."
+    )
+    GOOGLE_TRENDS_COOLDOWN_SECONDS: float = Field(
+        default=300.0,
+        description="How long the Google Trends cooldown stays open."
+    )
+
     @property
     def fred_key_is_leaked(self) -> bool:
         """True if the configured FRED key is the known-compromised value.
