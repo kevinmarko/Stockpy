@@ -48,8 +48,9 @@ Google Trends provides daily resolution data in 90-day intervals, with each inte
 
 Given two adjacent periods $A$ (earlier) and $B$ (subsequent) with non-empty intersection $O = A \cap B$:
 1. Compute the scaling factor $f$:
-   $$f = \frac{\sum_{t \in O} SVI_{A, t}}{\sum_{t \in O} SVI_{B, t}}$$
-   *(with $f = 1.0$ if $\sum_{t \in O} SVI_{B, t} \le 10^{-9}$)*.
+   Let $S_A = \sum_{t \in O} SVI_{A, t}$ and $S_B = \sum_{t \in O} SVI_{B, t}$.
+   If $S_A \le 10^{-9}$ and $S_B \le 10^{-9}$, $f = 1.0$.
+   Otherwise, $f = \frac{\max(S_A, 0.1)}{\max(S_B, 0.1)}$.
 2. Rescale period $B$:
    $$SVI_{B, \text{scaled}, t} = SVI_{B, t} \times f$$
 3. Blend the overlapping boundary smoothly:

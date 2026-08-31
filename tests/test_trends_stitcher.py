@@ -54,16 +54,17 @@ class TestGoogleTrendsStitcher:
             GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
 
     def test_stitch_multiple_intervals(self):
-        """Verify that multi-interval stitching correctly chains 3 overlapping periods."""
+        """Verify that multi-interval stitching correctly chains 4 overlapping periods."""
         p1 = pd.Series(100.0, index=pd.date_range("2026-01-01", "2026-03-15", freq="D"))
         p2 = pd.Series(50.0, index=pd.date_range("2026-03-01", "2026-05-15", freq="D"))  # 0.5x
         p3 = pd.Series(25.0, index=pd.date_range("2026-05-01", "2026-07-15", freq="D"))  # 0.25x
+        p4 = pd.Series(12.5, index=pd.date_range("2026-07-01", "2026-09-15", freq="D"))  # 0.125x
 
-        stitched = GoogleTrendsStitcher.stitch_multiple_intervals([p1, p2, p3])
+        stitched = GoogleTrendsStitcher.stitch_multiple_intervals([p1, p2, p3, p4])
 
         # All parts should be scaled to the 100.0 baseline
-        assert len(stitched) == len(pd.date_range("2026-01-01", "2026-07-15", freq="D"))
-        np.testing.assert_allclose(stitched.loc["2026-07-01":"2026-07-15"].values, 100.0, rtol=1e-5)
+        assert len(stitched) == len(pd.date_range("2026-01-01", "2026-09-15", freq="D"))
+        np.testing.assert_allclose(stitched.loc["2026-09-01":"2026-09-15"].values, 100.0, rtol=1e-5)
 
     def test_stitch_empty_inputs(self):
         """Verify edge cases where one or both intervals are empty."""
@@ -78,6 +79,31 @@ class TestGoogleTrendsStitcher:
 
         res_empty = GoogleTrendsStitcher.stitch_multiple_intervals([])
         assert res_empty.empty
+
+    def test_stitch_both_zero_overlap(self):
+        """Verify that when both overlap regions sum to zero, factor=1.0 is used."""
+        dates_a = pd.date_range("2026-01-01", "2026-01-10", freq="D")
+        dates_b = pd.date_range("2026-01-05", "2026-01-15", freq="D")
+        
+        svi_a = pd.Series(0.0, index=dates_a)
+        svi_b = pd.Series(0.0, index=dates_b)
+        
+        stitched = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+        
+        assert (stitched == 0.0).all()
+
+    def test_stitch_sparse_low_volume(self):
+        """Verify that when one overlap region is zero, it substitutes 0.1 for the sum to compute ratio."""
+        dates_a = pd.date_range("2026-01-01", "2026-01-10", freq="D")
+        dates_b = pd.date_range("2026-01-05", "2026-01-15", freq="D")
+        
+        svi_a = pd.Series(0.0, index=dates_a)
+        svi_b = pd.Series(50.0, index=dates_b) # 6 overlap days, sum = 300.0
+        
+        stitched = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+        
+        expected_f = 0.1 / 300.0
+        np.testing.assert_allclose(stitched.loc["2026-01-11":"2026-01-15"].values, 50.0 * expected_f, rtol=1e-5)
 
 
 class TestASVICalculator:
