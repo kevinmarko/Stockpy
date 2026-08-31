@@ -74,9 +74,19 @@ along the way.
 - `pytest tests/test_trends_stitcher.py -q` — **9 passed, 0 failed** (pre-existing suite, unmodified,
   confirmed passing against the `stitch_intervals`/`get_scaling_metadata` refactor before any new tests
   were added).
-- Full verification (new tests included, full suite run, mergeability, push) recorded below by the
-  6-agent audit pipeline's final verification step — see the accompanying commit history for the exact
-  pytest output this section reflects.
+- `pytest tests/test_data_api.py tests/test_trends_stitcher.py -v` (new endpoint/method coverage
+  included) — **73 passed, 0 failed**.
+- `pytest tests/ -q --timeout=120 -k "trends or data_api"` (broader sweep for anything else this diff
+  might have touched) — **206 passed, 0 failed** (12,567 deselected — everything outside the `trends`/
+  `data_api` keyword filter).
+- Merge-conflict check against current `origin/main` (`git merge-tree $(git merge-base origin/main HEAD)
+  origin/main HEAD`) — **0 conflict markers**; this branch's merge commit already incorporates the
+  latest `main`.
+- All of the above was independently re-run by a separate verification pass against the actual committed
+  `HEAD` (not just the working tree) before push, per this pipeline's own "don't trust a prior agent's
+  reported pass count without re-observing it" rule — see the PR's audit trail for the full checklist
+  (fabrication check, response-shape-vs-webapp-contract re-derivation, doc/artifact honesty spot-check,
+  untracked-file cleanliness).
 
 ## Next steps
 None outstanding — this PR's scope (consolidate the endpoint, fix the fabrication bug, fix the dropped-
