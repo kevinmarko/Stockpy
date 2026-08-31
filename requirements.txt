@@ -161,3 +161,5 @@ tabulate
 
 google-antigravity>=0.1.0
 hypothesis>=6.100,<7  # property-based testing for sizing invariants (tests/test_sizing_properties.py)
+
+pytrends>=4.9.2

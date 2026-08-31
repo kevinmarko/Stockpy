@@ -10,6 +10,16 @@
 
 This module implements the end-to-end data ingestion, overlapping stitching, and abnormal attention signal transformation pipeline for search volume indicators and financial market series.
 
+**Configuration Settings (settings.py):**
+- `GOOGLE_TRENDS_ENABLED`: Master switch for fetching.
+- `GOOGLE_TRENDS_WINDOW_DAYS`: Size of fetch window in days (default: 90).
+- `GOOGLE_TRENDS_OVERLAP_DAYS`: Overlap between windows for splicing (default: 30).
+- `GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS`: Shared limiter delay between calls.
+- `GOOGLE_TRENDS_MAX_RETRIES`: Number of retries on HTTP 429/5xx.
+- `GOOGLE_TRENDS_COOLDOWN_THRESHOLD`: Failures required to enter cooldown.
+- `GOOGLE_TRENDS_COOLDOWN_SECONDS`: Duration of cooldown lock-out.
+
+
 ```
 ┌───────────────────────────┐      ┌──────────────────────────┐
 │ Google Trends API / Feeds │      │ Financial Modeling Prep  │
