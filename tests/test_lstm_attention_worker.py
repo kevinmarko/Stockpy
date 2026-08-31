@@ -25,7 +25,11 @@ mock_layers.Conv1D = MagicMock()
 mock_layers.LSTM = MagicMock()
 mock_layers.Dense = MagicMock()
 mock_layers.MaxPooling1D = MagicMock()
-mock_layers.MultiHeadAttention = MagicMock()
+
+mha_instance = MagicMock()
+mha_instance.return_value = (MagicMock(), MagicMock())
+mock_layers.MultiHeadAttention = MagicMock(return_value=mha_instance)
+
 mock_layers.GlobalAveragePooling1D = MagicMock()
 mock_layers.LayerNormalization = MagicMock()
 mock_layers.Input = MagicMock()
