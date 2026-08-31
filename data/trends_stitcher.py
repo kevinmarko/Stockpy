@@ -58,10 +58,10 @@ class GoogleTrendsStitcher:
         sum_a = float(overlap_a.sum())
         sum_b = float(overlap_b.sum())
 
-        if sum_b <= 1e-9:
+        if sum_a <= 1e-9 and sum_b <= 1e-9:
             f = 1.0
         else:
-            f = sum_a / sum_b
+            f = max(sum_a, 0.1) / max(sum_b, 0.1)
 
         # Rescale Period B
         scaled_b = period_b_svi * f
