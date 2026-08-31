@@ -55,7 +55,7 @@ def build_lstm_attention_tensors(
     df_asvi_symbol: pd.Series,
     df_asvi_sector: pd.Series,
     sequence_length: int = 15,
-) -> Tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]:
+) -> Tuple[np.ndarray, np.ndarray, List[pd.Timestamp], np.ndarray]:
     """
     Builds the 3D sliding window tensors for the LSTM-Attention model.
     Expected to be called after technical indicators have been added to df_ohlcv.
@@ -147,5 +147,9 @@ def build_lstm_attention_tensors(
         Y_seq.append(target)
         valid_indices.append(common_idx[i+sequence_length])
         
-    return np.array(X_seq), np.array(Y_seq), valid_indices
+    # Generate the prediction window ending exactly at the very last available timestamp
+    predict_window = feature_matrix[n_samples - sequence_length:n_samples]
+    predict_X_seq = np.array([predict_window])
+        
+    return np.array(X_seq), np.array(Y_seq), valid_indices, predict_X_seq
 

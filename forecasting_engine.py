@@ -676,25 +676,15 @@ class ForecastingEngine:
         """
         try:
             from ml.asvi_feature_engineering import build_lstm_attention_tensors
-            X_seq, Y_seq, valid_indices = build_lstm_attention_tensors(
+            X_train, Y_train, valid_indices, predict_X_seq = build_lstm_attention_tensors(
                 symbol, df_ohlcv, df_sector_ohlcv, df_asvi_symbol, df_asvi_sector, sequence_length=15
             )
         except ValueError as e:
             logger.warning(f"LSTM-Attention skipped for {symbol}: {e}")
             return float('nan')
             
-        if len(X_seq) < 30:
-            logger.warning(f"LSTM-Attention skipped for {symbol}: Insufficient valid windows ({len(X_seq)} < 30).")
-            return float('nan')
-            
-        # The last sequence is what we use for predicting the *next* day
-        predict_X_seq = X_seq[-1:]
-        
-        # Exclude the last row from training since its forward Y is unknown
-        X_train = X_seq[:-1]
-        Y_train = Y_seq[:-1]
-        
-        if len(X_train) == 0:
+        if len(X_train) < 30:
+            logger.warning(f"LSTM-Attention skipped for {symbol}: Insufficient valid windows ({len(X_train)} < 30).")
             return float('nan')
 
         from cnn_lstm_process_pool import dispatch_to_worker

@@ -25,7 +25,7 @@ def test_build_lstm_attention_tensors():
     df_asvi_symbol = pd.Series(np.ones(20), index=dates)
     df_asvi_sector = pd.Series(np.ones(20), index=dates)
     
-    X_seq, Y_seq, valid_indices = build_lstm_attention_tensors(
+    X_seq, Y_seq, valid_indices, predict_X_seq = build_lstm_attention_tensors(
         "AAPL", df_ohlcv, df_sector_ohlcv, df_asvi_symbol, df_asvi_sector, sequence_length=15
     )
     
