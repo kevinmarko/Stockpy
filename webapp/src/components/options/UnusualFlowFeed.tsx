@@ -184,6 +184,36 @@ export const UnusualFlowFeed: React.FC<UnusualFlowFeedProps> = ({
         </div>
       </div>
 
+      {/* Honesty banner (CONSTRAINT #4): GET /pilots/options/flow/unusual reports
+          `degraded`/`symbols_fetch_failed` when a symbol's live options-chain fetch
+          failed this cycle and the response wasn't served from cache -- per the
+          endpoint's own docstring, a genuinely incomplete scan otherwise renders
+          identically to "nothing unusual found." Mirrors GexProfileView.tsx's
+          chain_source honesty banner. */}
+      {flowQuery.data?.degraded && (
+        <div
+          style={{
+            padding: "10px 14px",
+            background: "rgba(245, 158, 11, 0.15)",
+            color: theme.caution,
+            borderRadius: 8,
+            border: `1px solid ${theme.caution}`,
+            fontSize: 12,
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ textTransform: "uppercase", letterSpacing: "0.04em" }}>Incomplete Scan</span>
+          <span style={{ fontWeight: 400 }}>
+            {flowQuery.data.symbols_fetch_failed && flowQuery.data.symbols_fetch_failed.length > 0
+              ? `Live options-chain data failed to load for ${flowQuery.data.symbols_fetch_failed.join(", ")} this scan — results below may be missing unusual activity for those symbols.`
+              : "Live options-chain data failed to load for one or more symbols this scan — results below may be missing unusual activity."}
+          </span>
+        </div>
+      )}
+
       {/* Institutional Flow Sentiment Gauge Component */}
       {sentiment && (
         <div
@@ -548,8 +578,14 @@ export const UnusualFlowFeed: React.FC<UnusualFlowFeedProps> = ({
                           {t.symbol}
                         </span>
                         {t.spot_price != null && (
-                          <span style={{ fontSize: 11, color: theme.textSecondary }}>
+                          <span
+                            style={{ fontSize: 11, color: theme.textSecondary }}
+                            title={t.spot_price_is_estimated ? "Spot price inferred from the median option strike, not a real quote" : undefined}
+                          >
                             ${t.spot_price.toFixed(2)}
+                            {t.spot_price_is_estimated && (
+                              <span style={{ color: theme.caution, fontWeight: 600 }}> (est.)</span>
+                            )}
                           </span>
                         )}
                       </div>
@@ -628,12 +664,26 @@ export const UnusualFlowFeed: React.FC<UnusualFlowFeedProps> = ({
                     </td>
 
                     <td style={{ padding: "12px 12px", textAlign: "right" }}>
-                      <div style={{ fontWeight: 600 }}>${t.price.toFixed(2)}</div>
+                      <div
+                        style={{ fontWeight: 600 }}
+                        title={t.price_is_estimated ? "Last trade price unavailable — estimated from the bid/ask midpoint" : undefined}
+                      >
+                        ${t.price.toFixed(2)}
+                        {t.price_is_estimated && (
+                          <span style={{ color: theme.caution, fontWeight: 600, fontSize: 10 }}> (est.)</span>
+                        )}
+                      </div>
                     </td>
 
                     <td style={{ padding: "12px 12px", textAlign: "right" }}>
-                      <div style={{ fontWeight: 700, color: theme.textPrimary }}>
+                      <div
+                        style={{ fontWeight: 700, color: theme.textPrimary }}
+                        title={t.price_is_estimated ? "Derived from an estimated fill price — not a real observed notional" : undefined}
+                      >
                         {formatNotional(t.notional)}
+                        {t.price_is_estimated && (
+                          <span style={{ color: theme.caution, fontWeight: 600, fontSize: 10 }}> (est.)</span>
+                        )}
                       </div>
                     </td>
 

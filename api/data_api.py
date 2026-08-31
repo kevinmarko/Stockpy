@@ -708,7 +708,14 @@ def get_sync_report() -> Dict[str, Any]:
         logger.warning("data_api: account snapshot unavailable for sync report: %s", exc)
         snapshot = None
     try:
-        report = build_sync_report(snapshot)
+        from forecasting.forecast_tracker import ForecastTracker
+        forecast_symbols = ForecastTracker().get_covered_symbols(horizon_days=30)
+    except Exception as exc:
+        logger.warning("data_api: forecast coverage lookup failed, degrading to none: %s", exc)
+        forecast_symbols = []
+
+    try:
+        report = build_sync_report(snapshot, forecast_symbols=forecast_symbols)
     except Exception as exc:
         logger.warning("data_api: sync report failed: %s", exc)
         raise HTTPException(status_code=503, detail="Sync report unavailable")
@@ -2320,3 +2327,15 @@ async def get_circuit_breaker_status():
         "reason": None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+@app.get("/data/trends/stitch-demo", dependencies=[Depends(require_token)])
+def get_trends_stitch_demo() -> Dict[str, Any]:
+    """
+    Returns an explicit 501 Not Implemented for live mode. 
+    Live fetching of Google Trends SVI curves is not yet wired to this demo route.
+    To view the stitching demonstration, run the Pilots PWA in Mock mode (VITE_USE_MOCK=true).
+    """
+    raise HTTPException(
+        status_code=501, 
+        detail="Live SVI fetching not implemented. Use mock mode to view the demo."
+    )

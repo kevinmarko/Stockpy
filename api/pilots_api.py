@@ -5669,12 +5669,14 @@ class EarningsCrushExecuteRequest(BaseModel):
     limit_price: Optional[float] = Field(default=None, gt=0.0)
     dry_run: bool = False
     is_live: bool = False
+    override_deployability_gate: bool = False
 
 class DispersionExecuteRequest(BaseModel):
     index_symbol: str = Field(default="QQQ", min_length=1, max_length=10)
     basket: Optional[Dict[str, Any]] = None
     dry_run: bool = False
     is_live: bool = False
+    override_deployability_gate: bool = False
 
 class ZeroDteExecuteRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=10)
@@ -5687,6 +5689,7 @@ class ZeroDteExecuteRequest(BaseModel):
     profit_target_pct: Optional[float] = Field(default=0.75, ge=0.01, le=5.0)
     dry_run: bool = False
     is_live: bool = False
+    override_deployability_gate: bool = False
 
 
 class VolMispricingExecuteRequest(BaseModel):
@@ -6221,6 +6224,14 @@ OPTIONS_DESK_DEPLOYABILITY_GATES = {
 )
 def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Dict[str, Any]:
     """Executes an earnings crush multi-leg trade in the paper broker with honest deployability gate status."""
+    gate = OPTIONS_DESK_DEPLOYABILITY_GATES["earnings_crush"]
+    if gate["gate_status"] == "UNGATEABLE_DATA_GAP" and not body.override_deployability_gate:
+        return {
+            "ok": False,
+            "blocked": True,
+            "message": "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+            "gate_status": gate,
+        }
     from pilots.earnings_crush import execute_earnings_crush_trade
     res = execute_earnings_crush_trade(
         symbol=body.symbol,
@@ -6233,7 +6244,8 @@ def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Di
         is_live=body.is_live,
     )
     if isinstance(res, dict):
-        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["earnings_crush"]
+        res["gate_status"] = gate
+        res["override_applied"] = body.override_deployability_gate
     return res
 
 
@@ -6309,13 +6321,14 @@ def post_options_mispricing_execute(body: VolMispricingExecuteRequest) -> Dict[s
     """Executes a caller-selected vol_mispricing candidate multi-leg trade in the paper
     broker with an enforced deployability gate.
 
-    Unlike earnings_crush/dispersion_trading/zero_dte_engine (each an UNGATEABLE_DATA_GAP
-    whose gate_status is surfaced but never blocks), vol_mispricing is a MEASURED
-    deployability failure (Sharpe -0.499, DSR 0.027, fails the Oct-2008 stress window --
-    see docs/signals/vol_mispricing.md). Execution is therefore blocked by default and
-    proceeds only when the request explicitly sets override_deployability_gate=True -- a
-    deliberate, per-request, always-visible override, never a silent bypass or a
-    standing settings flag.
+    Like earnings_crush/dispersion_trading/zero_dte_engine (each an UNGATEABLE_DATA_GAP),
+    vol_mispricing execution is blocked by default and proceeds only when the request
+    explicitly sets override_deployability_gate=True -- a deliberate, per-request,
+    always-visible override, never a silent bypass or a standing settings flag. The
+    difference is only WHY it's blocked: vol_mispricing is a MEASURED deployability
+    failure (Sharpe -0.499, DSR 0.027, fails the Oct-2008 stress window -- see
+    docs/signals/vol_mispricing.md), where the other three have no historical data at
+    all to measure a deployability verdict from.
     """
     gate = OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]
     if gate["gate_status"] == "MEASURED_FAIL" and not body.override_deployability_gate:
@@ -6504,6 +6517,14 @@ def get_options_dispersion_opportunities(
 )
 def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
     """Executes a vega-neutral dispersion basket into the paper broker with honest deployability gate status."""
+    gate = OPTIONS_DESK_DEPLOYABILITY_GATES["dispersion_trading"]
+    if gate["gate_status"] == "UNGATEABLE_DATA_GAP" and not body.override_deployability_gate:
+        return {
+            "ok": False,
+            "blocked": True,
+            "message": "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+            "gate_status": gate,
+        }
     from pilots.dispersion_trading import execute_dispersion_trade
     try:
         res = execute_dispersion_trade(
@@ -6513,7 +6534,8 @@ def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str,
             is_live=body.is_live,
         )
         if isinstance(res, dict):
-            res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["dispersion_trading"]
+            res["gate_status"] = gate
+            res["override_applied"] = body.override_deployability_gate
         return res
     except Exception:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
         # exc_info=True already renders the full exception + traceback into the log record
@@ -6543,6 +6565,14 @@ def get_options_zero_dte_signals(
 )
 def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]:
     """Executes 0DTE momentum option trade into the paper broker with honest deployability gate status."""
+    gate = OPTIONS_DESK_DEPLOYABILITY_GATES["zero_dte_engine"]
+    if gate["gate_status"] == "UNGATEABLE_DATA_GAP" and not body.override_deployability_gate:
+        return {
+            "ok": False,
+            "blocked": True,
+            "message": "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+            "gate_status": gate,
+        }
     from pilots.zero_dte_engine import execute_0dte_trade
     res = execute_0dte_trade(
         symbol=body.symbol,
@@ -6557,7 +6587,8 @@ def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]
         is_live=body.is_live,
     )
     if isinstance(res, dict):
-        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["zero_dte_engine"]
+        res["gate_status"] = gate
+        res["override_applied"] = body.override_deployability_gate
     return res
 
 

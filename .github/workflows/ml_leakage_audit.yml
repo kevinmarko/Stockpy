@@ -1,0 +1,52 @@
+name: ML Leakage Audit
+
+on:
+  push:
+    paths:
+      - 'ml/**'
+      - 'sizing/**'
+      - 'scripts/*forecast_backfill*'
+      - 'forecasting_engine.py'
+      - 'cnn_lstm_worker.py'
+  pull_request:
+    paths:
+      - 'ml/**'
+      - 'sizing/**'
+      - 'scripts/*forecast_backfill*'
+      - 'forecasting_engine.py'
+      - 'cnn_lstm_worker.py'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: ML Data Leakage Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Output Watched Paths
+        run: |
+          echo "Watched paths for ML Leakage Audit:"
+          echo "- ml/**"
+          echo "- sizing/**"
+          echo "- scripts/*forecast_backfill*"
+          echo "- forecasting_engine.py"
+          echo "- cnn_lstm_worker.py"
+
+      - name: Run Stockpy Codebase Auditor
+        run: python scripts/auditor/stockpy_codebase_auditor.py --root . --fail-on HIGH
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run Dynamic Lookahead Tests
+        run: pytest tests/test_lgbm_no_leakage.py tests/test_forecasting_lookahead.py tests/test_bert_lla_lookahead.py tests/test_forecast_backfill.py

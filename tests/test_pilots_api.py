@@ -5059,31 +5059,9 @@ class TestAgenticDiscoveryInvariants:
         assert "AGENTIC_DISCOVERY_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 
 
-class TestCORSLanTailscale:
-    """LAN/Tailscale origins are allowed via api.cors.LAN_TAILSCALE_ORIGIN_REGEX
-    (additive to the explicit CORS_ALLOWED_ORIGINS list), scoped to the Pilots
-    PWA dev server's port (5173, per webapp/vite.config.ts's
-    ``server: { host: true, port: 5173 }``)."""
-
-    def test_lan_origin_is_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://192.168.1.42:5173"
-
-    def test_tailscale_range_origin_is_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://100.101.102.5:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://100.101.102.5:5173"
-
-    def test_lan_origin_wrong_port_not_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5174"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") != "http://192.168.1.42:5174"
-
-    def test_public_ip_not_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://8.8.8.8:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") != "http://8.8.8.8:5173"
+# TestCORSLanTailscale (the LAN/Tailscale-origin reflection contract) lives
+# in tests/test_cors_lan_tailscale_contract.py, shared byte-for-byte with
+# control_api/data_api/metrics_api/state_api's identical versions of this test.
 
 
 # ===========================================================================
@@ -7496,14 +7474,16 @@ class TestFixRouteOrderSymbolValidation:
 
 # ---------------------------------------------------------------------------
 # vol_mispricing HAS a live paper-execute path as of 2026-08-18 (`POST
-# /pilots/options/mispricing/execute`) -- but unlike earnings_crush/
-# dispersion_trading/zero_dte_engine (each an UNGATEABLE_DATA_GAP whose
-# gate_status is surfaced but never blocks), vol_mispricing is a MEASURED
-# deployability failure, so the endpoint BLOCKS execution by default and only
-# proceeds when the request explicitly sets override_deployability_gate=True.
-# See docs/signals/vol_mispricing.md's "Live Paper-Execution Status" section
-# and the comment above OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in
-# api/pilots_api.py.
+# /pilots/options/mispricing/execute`). Like earnings_crush/dispersion_trading/
+# zero_dte_engine (each an UNGATEABLE_DATA_GAP), vol_mispricing is a MEASURED
+# deployability failure, so ALL FOUR endpoints BLOCK execution by default and
+# only proceed when the request explicitly sets override_deployability_gate=True
+# (as of 2026-08-29, closing a gap where zero_dte_engine's handler called
+# execute_0dte_trade unconditionally with no enforcement check at all -- see
+# tests/test_options_desk_deployability_runtime_gap.py for that endpoint's own
+# blocked-without-override coverage). See docs/signals/vol_mispricing.md's
+# "Live Paper-Execution Status" section and the comment above
+# OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in api/pilots_api.py.
 # ---------------------------------------------------------------------------
 
 

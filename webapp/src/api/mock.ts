@@ -224,6 +224,7 @@ import type {
   EarningsCrushCandidate,
   EarningsCrushCandidatesResponse,
   EarningsCrushExecutionResult,
+  OptionsDeskGateBlockedResult,
   UnusualOptionTrade,
   UnusualOptionsFlowResponse,
   FlowSentimentData,
@@ -289,6 +290,7 @@ import type {
   SecRule606ReportResponse,
   SecRule606VenueRow,
   SecRule606CategoryBreakdown,
+  TrendsStitchDemoResponse,
 } from "./types";
 
 const SECTORS = [
@@ -1120,6 +1122,46 @@ function writeFollows(fs: Follow[]) {
 const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
 const NOTIONAL_CAP = 2500;
 const MIN_AMOUNT = 100;
+
+// Mirrors api/pilots_api.py::OPTIONS_DESK_DEPLOYABILITY_GATES for the three
+// UNGATEABLE_DATA_GAP options-desk paper-execute endpoints wired into the webapp
+// (earnings_crush, dispersion_trading, zero_dte_engine — vol_mispricing has no
+// webapp caller yet). Real reason text kept verbatim so mock-mode UI development
+// exercises the same blocked/override flow the live backend enforces, instead of
+// always reporting success — see docs/known_issues/ for the parity gap this fixed.
+const OPTIONS_DESK_DEPLOYABILITY_GATES = {
+  earnings_crush: {
+    deployable: false as const,
+    gate_status: "UNGATEABLE_DATA_GAP" as const,
+    reason: "Not gateable: No historical single-name IV exists in data layer to perform walk-forward validation.",
+  },
+  dispersion_trading: {
+    deployable: false as const,
+    gate_status: "UNGATEABLE_DATA_GAP" as const,
+    reason: "Not gateable: Index IV (VIX) is historical; constituent single-name IVs are substituted (+1.18 vol-pt substitution bias).",
+  },
+  zero_dte_engine: {
+    deployable: false as const,
+    gate_status: "UNGATEABLE_DATA_GAP" as const,
+    reason: "Not gateable: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention.",
+  },
+};
+
+// Mirrors api/pilots_api.py's three UNGATEABLE_DATA_GAP execute endpoints' blocked
+// branch exactly: the strategy-agnostic message AND the full gate dict (tested there
+// via tests/test_options_desk_deployability_runtime_gap.py's explicit
+// gate_status["gate_status"] == "UNGATEABLE_DATA_GAP" assertion) -- a caller can
+// render the actual reason before the operator decides whether to override, same as
+// on the success branch below (which echoes the identical dict post-hoc once
+// execution actually proceeds).
+function optionsDeskGateBlockedResult(key: keyof typeof OPTIONS_DESK_DEPLOYABILITY_GATES): OptionsDeskGateBlockedResult {
+  return {
+    ok: false,
+    blocked: true,
+    message: "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES[key],
+  };
+}
 
 // A real (if trivial) 1x1 transparent PNG, base64-encoded — stands in for the
 // live endpoint's actual rendered chart image so <img src="data:image/png;..."/>
@@ -12856,20 +12898,28 @@ export const mockApi = {
     });
   },
   async managePaperOptionsExits(_params?: { force?: boolean }) {
+    // Mirrors execution/options_paper_executor.py::OptionsPaperExecutor
+    // .execute_auto_exits()'s real return shape (enabled/evaluated_count/
+    // executed_count/failed_count/executed/failed) -- see ManageExitsResult's
+    // own doc comment in types.ts for why this replaced a fabricated
+    // closed_count/closed_positions/message shape that never existed live.
     return delay<ManageExitsResult>({
+      enabled: true,
       evaluated_count: 3,
-      closed_count: 1,
-      closed_positions: [
+      executed_count: 1,
+      failed_count: 0,
+      executed: [
         {
+          order_id: `AUTO-EXIT-SPY-${Date.now()}`,
           symbol: "SPY 2026-09-18 $500.00 PUT",
-          qty: -2,
           reason: "PROFIT_TARGET_50",
-          pnl_dollar: 340.0,
-          pnl_pct: 0.52,
-          closed_at_price: 1.20,
+          contracts: 2,
+          net_cash_impact: 340.0,
+          unrealized_pl: 340.0,
+          legs: ["SPY 2026-09-18 $500.00 PUT"],
         },
       ],
-      message: "Evaluated 3 option positions: automatically closed 1 position reaching 50% profit target.",
+      failed: [],
     });
   },
   async rollPaperOptionPosition(request: RollOrderRequest) {
@@ -13003,7 +13053,15 @@ export const mockApi = {
       as_of: new Date().toISOString(),
     });
   },
-  async executeEarningsCrushTrade(candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number }) {
+  async executeEarningsCrushTrade(
+    candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number },
+    overrideDeployabilityGate?: boolean
+  ) {
+    // earnings_crush is UNGATEABLE_DATA_GAP -- blocked by default, same as the live
+    // backend (api/pilots_api.py::post_options_earnings_crush_execute).
+    if (!overrideDeployabilityGate) {
+      return delay<EarningsCrushExecutionResult>(optionsDeskGateBlockedResult("earnings_crush"));
+    }
     const sym = candidate.symbol;
     const strat = (candidate as EarningsCrushCandidate).suggested_strategy || "Iron Condor";
     const credit = (candidate as EarningsCrushCandidate).estimated_credit ?? 2.75;
@@ -13015,6 +13073,7 @@ export const mockApi = {
       net_credit: credit,
       message: `Successfully executed Earnings Crush ${strat} on ${sym} for $${credit.toFixed(2)} net credit. Auto-exit scheduled at 09:35 ET post-announcement.`,
       placed_at: new Date().toISOString(),
+      gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES.earnings_crush,
     });
   },
   async getUnusualOptionsFlow(params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) {
@@ -13159,8 +13218,13 @@ export const mockApi = {
         volume: 7500,
         open_interest: 2100,
         vol_oi_ratio: 3.57,
+        // Exercises pilots/unusual_options_flow.py's price_is_estimated/
+        // spot_price_is_estimated honesty fields in mock mode -- see
+        // UnusualFlowFeed.tsx's "(est.)" badges.
         price: 2.15,
+        price_is_estimated: true,
         spot_price: 482.10,
+        spot_price_is_estimated: true,
         notional: 1612500,
         iv: 0.24,
         historical_vol_30d: 0.18,
@@ -13527,32 +13591,23 @@ export const mockApi = {
     });
   },
   async testOptionsAlert(params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) {
+    // Mirrors pilots/options_alerts.py::dispatch_options_alert()'s real return
+    // shape (status/alert_type/level/title/message/payload/timestamp/success/error)
+    // -- see OptionsAlertTestResult's doc comment in types.ts for why this replaced
+    // a fabricated per-channel results[] breakdown that never existed live.
     const alertType = params?.alert_type || "UOA";
     const symbol = params?.symbol || "NVDA";
-    const isDry = params?.dry_run ?? false;
-
+    const title = `🐋 Institutional UOA Whale Sweep: ${symbol} $500.00 CALL`;
     return delay<OptionsAlertTestResult>({
-      ok: true,
-      dispatched_count: 3,
-      channels: ["Discord Webhook (#options-flow)", "Slack Webhook (#trading-desk)", "System Alert Logger"],
-      results: [
-        {
-          channel: "Discord Webhook (#options-flow)",
-          status: isDry ? "SIMULATED" : "SENT",
-          message: `Dispatched test ${alertType} notification for ${symbol} with rich embed format.`,
-        },
-        {
-          channel: "Slack Webhook (#trading-desk)",
-          status: isDry ? "SIMULATED" : "SENT",
-          message: `Dispatched test ${alertType} block kit message for ${symbol}.`,
-        },
-        {
-          channel: "System Alert Logger",
-          status: "SENT",
-          message: "Event recorded in quant_platform.db alerts table.",
-        },
-      ],
-      as_of: new Date().toISOString(),
+      status: "ok",
+      alert_type: alertType,
+      level: "WARNING",
+      title,
+      message: `**${title}**\n• Test dispatch triggered from the Volatility Forecast Scanner.`,
+      payload: { symbol },
+      timestamp: new Date().toISOString(),
+      success: true,
+      error: null,
     });
   },
   async getDispersionOpportunities(index_symbol?: string) {
@@ -13867,7 +13922,15 @@ export const mockApi = {
       as_of: new Date().toISOString(),
     });
   },
-  async executeDispersionBasket(request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number }) {
+  async executeDispersionBasket(
+    request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number },
+    overrideDeployabilityGate?: boolean
+  ) {
+    // dispersion_trading is UNGATEABLE_DATA_GAP -- blocked by default, same as the
+    // live backend (api/pilots_api.py::post_options_dispersion_execute).
+    if (!overrideDeployabilityGate) {
+      return delay<DispersionExecutionResult>(optionsDeskGateBlockedResult("dispersion_trading"));
+    }
     const sym = request.index_symbol || "QQQ";
     return delay<DispersionExecutionResult>({
       ok: true,
@@ -13889,6 +13952,7 @@ export const mockApi = {
       legs_count: 18,
       message: `Successfully executed vega-neutral Dispersion Arbitrage basket on ${sym}. Placed short index straddle + 8 long constituent straddles (Net Vega: +3.4 $/vol).`,
       placed_at: new Date().toISOString(),
+      gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES.dispersion_trading,
     });
   },
   async getZeroDteSignals(symbol?: string) {
@@ -14033,7 +14097,15 @@ export const mockApi = {
       as_of: new Date().toISOString(),
     });
   },
-  async executeZeroDteTrade(request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number }) {
+  async executeZeroDteTrade(
+    request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number },
+    overrideDeployabilityGate?: boolean
+  ) {
+    // zero_dte_engine is UNGATEABLE_DATA_GAP -- blocked by default, same as the live
+    // backend (api/pilots_api.py::post_options_zero_dte_execute).
+    if (!overrideDeployabilityGate) {
+      return delay<ZeroDteExecutionResult>(optionsDeskGateBlockedResult("zero_dte_engine"));
+    }
     const sym = request.symbol;
     const type = request.option_type || "CALL";
     const strike = request.strike || 547;
@@ -14056,6 +14128,7 @@ export const mockApi = {
       strategy: "0DTE Intraday Momentum Breakout",
       message: `Executed ${contracts}x ${sym} ${strike} ${type} @ $${entry.toFixed(2)}. Profit target set at $${target.toFixed(2)} (+75%), Stop loss at $${stop.toFixed(2)} (-30%), Hard Time Stop at 15:45 ET.`,
       placed_at: new Date().toISOString(),
+      gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES.zero_dte_engine,
     });
   },
   async getVpinMetrics(symbol: string) {
@@ -15277,6 +15350,32 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
   // ---- Dynamic Circuit Breaker ----
   async getCircuitBreakerStatus(): Promise<CircuitBreakerStatusResponse> {
     return delay(getMockCircuitBreakerStatus());
+  },
+
+  // ---- Trends Stitching Demo ----
+  async getTrendsStitchDemo(): Promise<TrendsStitchDemoResponse> {
+    const now = Date.now();
+    const generateCurve = (startVal: number, slope: number, noise: number) => {
+      const data: [number, number][] = [];
+      let val = startVal;
+      for (let i = 0; i < 30; i++) {
+        const time = now - (30 - i) * 86400000;
+        data.push([time, val]);
+        val += slope + (Math.random() - 0.5) * noise;
+      }
+      return data;
+    };
+
+    return delay({
+      raw_curves: [
+        { name: "Trend A (Raw)", data: generateCurve(100, 1, 5) },
+        { name: "Trend B (Raw)", data: generateCurve(130, 0.5, 3) },
+      ],
+      stitched_curve: {
+        name: "Stitched Output",
+        data: generateCurve(115, 0.8, 4),
+      },
+    });
   },
 };
 

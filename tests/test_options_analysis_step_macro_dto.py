@@ -15,7 +15,7 @@ never silently compute off substituted benign defaults (CONSTRAINT #4/#6).
 
 ctx.symbols is deliberately empty in every test here -- OptionsAnalysisStep's
 per-ticker options/GARCH analysis loop is out of scope for this file (already
-covered by tests/test_production_steps_options_columns.py's
+covered by tests/test_production_steps_columns_contract.py's
 _apply_options_columns tests); an empty symbol list exercises the macro-DTO
 construction path (the first ~20 lines of .run()) while making the
 per-ticker ThreadPoolExecutor loop a guaranteed no-op.

@@ -216,6 +216,7 @@ import type {
   BrokerFailoverResponse,
   SecRule606ReportResponse,
   CircuitBreakerStatusResponse,
+  TrendsStitchDemoResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1308,10 +1309,17 @@ const liveApi = {
     const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
     return http<EarningsCrushCandidatesResponse>(`/pilots/options/earnings-crush/candidates${q}`);
   },
-  executeEarningsCrushTrade: (candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number }) =>
+  // earnings_crush is an UNGATEABLE_DATA_GAP (api/pilots_api.py::OPTIONS_DESK_DEPLOYABILITY_GATES)
+  // -- the backend blocks by default and returns EarningsCrushExecutionResult's blocked
+  // variant unless overrideDeployabilityGate is explicitly true. Never a standing flag;
+  // pass true only in direct response to the caller's own deliberate, per-click choice.
+  executeEarningsCrushTrade: (
+    candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number },
+    overrideDeployabilityGate?: boolean
+  ) =>
     http<EarningsCrushExecutionResult>("/pilots/options/earnings-crush/execute", {
       method: "POST",
-      body: JSON.stringify(candidate),
+      body: JSON.stringify({ ...candidate, override_deployability_gate: overrideDeployabilityGate }),
     }),
   getUnusualOptionsFlow: (params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) => {
     const q = new URLSearchParams();
@@ -1343,19 +1351,29 @@ const liveApi = {
     const q = index_symbol ? `?index_symbol=${encodeURIComponent(index_symbol)}` : "";
     return http<DispersionBasketResponse>(`/pilots/options/dispersion/opportunities${q}`);
   },
-  executeDispersionBasket: (request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number }) =>
+  // dispersion_trading is an UNGATEABLE_DATA_GAP -- see executeEarningsCrushTrade's
+  // comment above; identical override contract.
+  executeDispersionBasket: (
+    request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number },
+    overrideDeployabilityGate?: boolean
+  ) =>
     http<DispersionExecutionResult>("/pilots/options/dispersion/execute", {
       method: "POST",
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, override_deployability_gate: overrideDeployabilityGate }),
     }),
   getZeroDteSignals: (symbol?: string) => {
     const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
     return http<ZeroDteSignalResponse>(`/pilots/options/zero-dte/signals${q}`);
   },
-  executeZeroDteTrade: (request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number }) =>
+  // zero_dte_engine is an UNGATEABLE_DATA_GAP -- see executeEarningsCrushTrade's
+  // comment above; identical override contract.
+  executeZeroDteTrade: (
+    request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number },
+    overrideDeployabilityGate?: boolean
+  ) =>
     http<ZeroDteExecutionResult>("/pilots/options/zero-dte/execute", {
       method: "POST",
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, override_deployability_gate: overrideDeployabilityGate }),
     }),
   getVpinMetrics: (symbol: string) =>
     http<VpinMetricsResponse>(`/pilots/options/vpin/metrics?symbol=${encodeURIComponent(symbol)}`),
@@ -1432,6 +1450,9 @@ const liveApi = {
 
   // ---- Dynamic Circuit Breaker ----
   getCircuitBreakerStatus: () => http<CircuitBreakerStatusResponse>("/risk/circuit-breaker/status"),
+
+  // ---- Trends Stitching Demo ----
+  getTrendsStitchDemo: () => http<TrendsStitchDemoResponse>("/data/trends/stitch-demo"),
 };
 
 /**

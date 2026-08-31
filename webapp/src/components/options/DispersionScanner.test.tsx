@@ -204,7 +204,8 @@ describe("DispersionScanner", () => {
           opportunity_id: "disp_qqq_1",
           index_symbol: "QQQ",
           regime: "LONG_DISPERSION",
-        })
+        }),
+        false
       );
       expect(onTradeMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -215,6 +216,67 @@ describe("DispersionScanner", () => {
     });
 
     expect(await screen.findByText(/Successfully executed Dispersion Basket on QQQ/i)).toBeInTheDocument();
+  });
+
+  it("shows an override affordance when blocked by the deployability gate, and executes on confirmed override", async () => {
+    const onTradeMock = vi.fn();
+    vi.mocked(api.executeDispersionBasket).mockResolvedValueOnce({
+      ok: false,
+      blocked: true,
+      message:
+        "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<DispersionScanner onTradeExecuted={onTradeMock} />);
+
+    const execBtn = await screen.findByRole("button", { name: /⚡ Execute Dispersion Basket/i });
+    fireEvent.click(execBtn);
+
+    expect(await screen.findByText(/UNGATEABLE_DATA_GAP/i)).toBeInTheDocument();
+    expect(api.executeDispersionBasket).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ index_symbol: "QQQ" }),
+      false
+    );
+
+    const overrideBtn = await screen.findByRole("button", { name: /⚠️ Override & Execute/i });
+    fireEvent.click(overrideBtn);
+    expect(confirmSpy).toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(api.executeDispersionBasket).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ index_symbol: "QQQ" }),
+        true
+      );
+      expect(onTradeMock).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not execute when the override confirmation dialog is declined", async () => {
+    vi.mocked(api.executeDispersionBasket).mockResolvedValueOnce({
+      ok: false,
+      blocked: true,
+      message:
+        "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<DispersionScanner />);
+
+    const execBtn = await screen.findByRole("button", { name: /⚡ Execute Dispersion Basket/i });
+    fireEvent.click(execBtn);
+
+    const overrideBtn = await screen.findByRole("button", { name: /⚠️ Override & Execute/i });
+    fireEvent.click(overrideBtn);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(api.executeDispersionBasket).toHaveBeenCalledTimes(1);
+
+    confirmSpy.mockRestore();
   });
 
   it("calls onClose when close button clicked", async () => {

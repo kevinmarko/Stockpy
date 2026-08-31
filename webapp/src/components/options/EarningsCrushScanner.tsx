@@ -29,25 +29,33 @@ export const EarningsCrushScanner: React.FC<EarningsCrushScannerProps> = ({
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   const [executingSymbol, setExecutingSymbol] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  // earnings_crush is an UNGATEABLE_DATA_GAP (see CLAUDE.md's "Options desk ML/safety
+  // gates and findings" bullet) -- the backend blocks every request by default and only
+  // proceeds when override_deployability_gate: true is set explicitly. Tracks which
+  // candidate's first (unblocked) attempt just came back blocked, so its row can offer
+  // a distinct, deliberate "override & execute anyway" action instead of silently
+  // failing forever.
+  const [blockedSymbol, setBlockedSymbol] = useState<string | null>(null);
 
   const query = useApi<EarningsCrushCandidatesResponse>(
     () => api.getEarningsCrushCandidates(initialSymbols),
     [initialSymbols]
   );
 
-  const executeMutation = useMutation((candidate: EarningsCrushCandidate) =>
-    api.executeEarningsCrushTrade(candidate)
+  const executeMutation = useMutation((candidate: EarningsCrushCandidate, override: boolean) =>
+    api.executeEarningsCrushTrade(candidate, override)
   );
 
   const candidates: EarningsCrushCandidate[] = query.data?.candidates || [];
 
-  const handleExecuteTrade = async (c: EarningsCrushCandidate, e: React.MouseEvent) => {
+  const handleExecuteTrade = async (c: EarningsCrushCandidate, e: React.MouseEvent, override = false) => {
     e.stopPropagation();
     setExecutingSymbol(c.symbol);
     setStatusMessage(null);
     try {
-      const res = await executeMutation.run(c);
+      const res = await executeMutation.run(c, override);
       if (res && res.ok) {
+        setBlockedSymbol(null);
         setStatusMessage({
           text: res.message || `Successfully executed ${res.strategy} on ${res.symbol} (Credit: $${res.net_credit?.toFixed(2) ?? "—"})`,
           type: "success",
@@ -55,7 +63,11 @@ export const EarningsCrushScanner: React.FC<EarningsCrushScannerProps> = ({
         if (onTradeExecuted) {
           onTradeExecuted(res);
         }
+      } else if (res && res.blocked) {
+        setBlockedSymbol(c.symbol);
+        setStatusMessage({ text: res.message, type: "error" });
       } else {
+        setBlockedSymbol(null);
         setStatusMessage({
           text: executeMutation.error || `Failed to execute trade on ${c.symbol}.`,
           type: "error",
@@ -63,6 +75,17 @@ export const EarningsCrushScanner: React.FC<EarningsCrushScannerProps> = ({
       }
     } finally {
       setExecutingSymbol(null);
+    }
+  };
+
+  const handleConfirmOverride = (c: EarningsCrushCandidate, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const reason = statusMessage?.text || "This strategy is blocked by a deployability gate.";
+    const confirmed = window.confirm(
+      `⚠️ Deployability gate override\n\n${reason}\n\nThis places a PAPER (simulated) trade on ${c.symbol} only -- no real capital is at risk. Override and execute anyway?`
+    );
+    if (confirmed) {
+      handleExecuteTrade(c, e, true);
     }
   };
 
@@ -275,7 +298,13 @@ export const EarningsCrushScanner: React.FC<EarningsCrushScannerProps> = ({
         >
           <span>{statusMessage.text}</span>
           <button
-            onClick={() => setStatusMessage(null)}
+            onClick={() => {
+              setStatusMessage(null);
+              // Dismissing the disclosed reason retires the row's override affordance
+              // too -- re-clicking "Trade Crush Spread" re-surfaces the honest reason
+              // before offering to override again, so the override is never silent.
+              setBlockedSymbol(null);
+            }}
             style={{ background: "transparent", border: "none", color: "inherit", cursor: "pointer", fontSize: 14 }}
           >
             ✕
@@ -450,24 +479,46 @@ export const EarningsCrushScanner: React.FC<EarningsCrushScannerProps> = ({
                       </td>
 
                       <td style={{ padding: "12px 12px", textAlign: "center" }}>
-                        <button
-                          onClick={(e) => handleExecuteTrade(c, e)}
-                          disabled={isExecuting || executeMutation.pending}
-                          style={{
-                            padding: "6px 12px",
-                            background: isEdgeFavorable ? theme.accent : theme.surface2,
-                            border: "none",
-                            color: isEdgeFavorable ? "#000" : theme.textPrimary,
-                            borderRadius: 4,
-                            cursor: isExecuting || executeMutation.pending ? "not-allowed" : "pointer",
-                            fontWeight: 600,
-                            fontSize: 12,
-                            whiteSpace: "nowrap",
-                            opacity: isExecuting ? 0.6 : 1,
-                          }}
-                        >
-                          {isExecuting ? "Executing..." : "⚡ Trade Crush Spread"}
-                        </button>
+                        {blockedSymbol === c.symbol ? (
+                          <button
+                            onClick={(e) => handleConfirmOverride(c, e)}
+                            disabled={isExecuting || executeMutation.pending}
+                            title="This strategy has an unmeasurable deployability gap. Overriding places a paper (simulated) trade only."
+                            style={{
+                              padding: "6px 12px",
+                              background: theme.caution,
+                              border: "none",
+                              color: "#000",
+                              borderRadius: 4,
+                              cursor: isExecuting || executeMutation.pending ? "not-allowed" : "pointer",
+                              fontWeight: 600,
+                              fontSize: 12,
+                              whiteSpace: "nowrap",
+                              opacity: isExecuting ? 0.6 : 1,
+                            }}
+                          >
+                            {isExecuting ? "Executing..." : "⚠️ Override & Execute"}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => handleExecuteTrade(c, e)}
+                            disabled={isExecuting || executeMutation.pending}
+                            style={{
+                              padding: "6px 12px",
+                              background: isEdgeFavorable ? theme.accent : theme.surface2,
+                              border: "none",
+                              color: isEdgeFavorable ? "#000" : theme.textPrimary,
+                              borderRadius: 4,
+                              cursor: isExecuting || executeMutation.pending ? "not-allowed" : "pointer",
+                              fontWeight: 600,
+                              fontSize: 12,
+                              whiteSpace: "nowrap",
+                              opacity: isExecuting ? 0.6 : 1,
+                            }}
+                          >
+                            {isExecuting ? "Executing..." : "⚡ Trade Crush Spread"}
+                          </button>
+                        )}
                       </td>
                     </tr>
 

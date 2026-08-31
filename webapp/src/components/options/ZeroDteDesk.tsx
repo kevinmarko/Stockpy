@@ -26,24 +26,33 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
   const [contractsCount, setContractsCount] = useState<number>(5);
   const [isExecuting, setIsExecuting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  // zero_dte_engine is an UNGATEABLE_DATA_GAP (see CLAUDE.md's "Options desk
+  // ML/safety gates and findings" bullet) -- the backend blocks every request by
+  // default and only proceeds when override_deployability_gate: true is set
+  // explicitly. Tracks which symbol's first (unblocked) attempt just came back
+  // blocked, so it can offer a distinct, deliberate override action.
+  const [blockedSymbol, setBlockedSymbol] = useState<string | null>(null);
 
   const query = useApi<ZeroDteSignalResponse>(
     () => api.getZeroDteSignals(selectedSymbol),
     [selectedSymbol]
   );
 
-  const executeMutation = useMutation((signal: ZeroDteSignal) => {
+  const executeMutation = useMutation((signal: ZeroDteSignal, override: boolean) => {
     const contract = signal.recommended_contract;
-    return api.executeZeroDteTrade({
-      symbol: signal.symbol,
-      option_type: contract?.option_type || (signal.momentum_direction === "BEARISH_BREAKDOWN" ? "PUT" : "CALL"),
-      strike: contract?.strike || signal.spot_price,
-      contracts: contractsCount,
-      entry_price: contract?.mid || 2.0,
-      profit_target_pct: 0.75,
-      stop_loss_pct: 0.30,
-      hard_exit_time: "15:45 ET",
-    });
+    return api.executeZeroDteTrade(
+      {
+        symbol: signal.symbol,
+        option_type: contract?.option_type || (signal.momentum_direction === "BEARISH_BREAKDOWN" ? "PUT" : "CALL"),
+        strike: contract?.strike || signal.spot_price,
+        contracts: contractsCount,
+        entry_price: contract?.mid || 2.0,
+        profit_target_pct: 0.75,
+        stop_loss_pct: 0.30,
+        hard_exit_time: "15:45 ET",
+      },
+      override
+    );
   });
 
   const signals: ZeroDteSignal[] = query.data?.signals || [];
@@ -52,12 +61,13 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
     signals.find((s) => s.symbol.toUpperCase() === selectedSymbol.toUpperCase()) ||
     signals[0];
 
-  const handleExecuteTrade = async (signal: ZeroDteSignal) => {
+  const handleExecuteTrade = async (signal: ZeroDteSignal, override = false) => {
     setIsExecuting(true);
     setStatusMessage(null);
     try {
-      const res = await executeMutation.run(signal);
+      const res = await executeMutation.run(signal, override);
       if (res && res.ok) {
+        setBlockedSymbol(null);
         setStatusMessage({
           text: res.message || `Successfully executed ${res.contracts}x ${res.symbol} ${res.strike} ${res.option_type} @ $${res.fill_price.toFixed(2)}.`,
           type: "success",
@@ -65,7 +75,11 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
         if (onTradeExecuted) {
           onTradeExecuted(res);
         }
+      } else if (res && res.blocked) {
+        setBlockedSymbol(signal.symbol);
+        setStatusMessage({ text: res.message, type: "error" });
       } else {
+        setBlockedSymbol(null);
         setStatusMessage({
           text: executeMutation.error || `Failed to execute 0DTE breakout trade on ${signal.symbol}.`,
           type: "error",
@@ -73,6 +87,16 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
       }
     } finally {
       setIsExecuting(false);
+    }
+  };
+
+  const handleConfirmOverride = (signal: ZeroDteSignal) => {
+    const reason = statusMessage?.text || "This strategy is blocked by a deployability gate.";
+    const confirmed = window.confirm(
+      `⚠️ Deployability gate override\n\n${reason}\n\nThis places a PAPER (simulated) trade on ${signal.symbol} only -- no real capital is at risk. Override and execute anyway?`
+    );
+    if (confirmed) {
+      handleExecuteTrade(signal, true);
     }
   };
 
@@ -164,7 +188,13 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
         >
           <span>{statusMessage.text}</span>
           <button
-            onClick={() => setStatusMessage(null)}
+            onClick={() => {
+              setStatusMessage(null);
+              // Dismissing the disclosed reason retires the override affordance too --
+              // re-clicking "Trade" re-surfaces the honest reason before offering to
+              // override again, so the override is never silent.
+              setBlockedSymbol(null);
+            }}
             style={{ background: "transparent", border: "none", color: "inherit", cursor: "pointer", fontWeight: 700 }}
           >
             ✕
@@ -607,34 +637,59 @@ export const ZeroDteDesk: React.FC<ZeroDteDeskProps> = ({
                   </span>
                 </div>
 
-                <button
-                  onClick={() => handleExecuteTrade(activeSignal)}
-                  disabled={isExecuting}
-                  style={{
-                    background:
-                      activeSignal.suggested_action === "BUY_CALL"
-                        ? theme.growth
-                        : activeSignal.suggested_action === "BUY_PUT"
-                        ? theme.decline
-                        : theme.accent,
-                    color: "#000",
-                    border: "none",
-                    borderRadius: 8,
-                    padding: "10px 24px",
-                    fontWeight: 700,
-                    fontSize: "0.95rem",
-                    cursor: isExecuting ? "not-allowed" : "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    opacity: isExecuting ? 0.7 : 1,
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  {isExecuting
-                    ? "⚡ Executing Trade..."
-                    : `⚡ Trade 0DTE Breakout (${contractsCount}x ${activeSignal.symbol} ${activeSignal.recommended_contract.option_type})`}
-                </button>
+                {blockedSymbol === activeSignal.symbol ? (
+                  <button
+                    onClick={() => handleConfirmOverride(activeSignal)}
+                    disabled={isExecuting}
+                    title="This strategy has an unmeasurable deployability gap. Overriding places a paper (simulated) trade only."
+                    style={{
+                      background: theme.caution,
+                      color: "#000",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "10px 24px",
+                      fontWeight: 700,
+                      fontSize: "0.95rem",
+                      cursor: isExecuting ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      opacity: isExecuting ? 0.7 : 1,
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {isExecuting ? "⚡ Executing Trade..." : "⚠️ Override & Execute"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleExecuteTrade(activeSignal)}
+                    disabled={isExecuting}
+                    style={{
+                      background:
+                        activeSignal.suggested_action === "BUY_CALL"
+                          ? theme.growth
+                          : activeSignal.suggested_action === "BUY_PUT"
+                          ? theme.decline
+                          : theme.accent,
+                      color: "#000",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "10px 24px",
+                      fontWeight: 700,
+                      fontSize: "0.95rem",
+                      cursor: isExecuting ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      opacity: isExecuting ? 0.7 : 1,
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {isExecuting
+                      ? "⚡ Executing Trade..."
+                      : `⚡ Trade 0DTE Breakout (${contractsCount}x ${activeSignal.symbol} ${activeSignal.recommended_contract.option_type})`}
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -17,12 +17,11 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
-from settings import settings
-import api.data_api as data_api
+from api import data_api
 from data.market_data import MarketDataError
+from settings import settings
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -561,7 +560,7 @@ def test_sync_report(monkeypatch):
     monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
-        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": [], "generated_at": "x"}),
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": [], "generated_at": "x"}),
     )
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/sync-report")
@@ -575,7 +574,7 @@ def test_sync_report_tolerates_missing_snapshot(monkeypatch):
     def _fetch(force=False):
         raise RuntimeError("no robinhood creds")
 
-    def _build(snap):
+    def _build(snap, **kwargs):
         called["snap"] = snap
         return SimpleNamespace(to_dict=lambda: {"symbols": []})
 
@@ -585,6 +584,75 @@ def test_sync_report_tolerates_missing_snapshot(monkeypatch):
         resp = client.get("/data/sync-report")
     assert resp.status_code == 200
     assert called["snap"] is None  # degraded to None, still built a report
+
+
+def test_sync_report_forecast_available_reflects_real_forecast_tracker(monkeypatch, tmp_path):
+    """End-to-end regression test: real ForecastTracker (temp SQLite DB) +
+    real (unmocked) build_sync_report, only the account snapshot and the
+    market-data provider are faked. A held symbol with a real, recent
+    forecast row must come back forecast_available=True in the actual HTTP
+    response; a held symbol with none must come back False.
+
+    This is the regression test for the 2026-08 bug where
+    ForecastTracker.get_covered_symbols() queried a nonexistent 'forecasts'
+    table and referenced a nonexistent self.readonly attribute in its
+    finally block -- both errors were silently swallowed by
+    get_sync_report()'s bare except Exception, so forecast_symbols was
+    ALWAYS [] and forecast_available was ALWAYS False for every symbol
+    regardless of real forecast coverage. A test that only mocks
+    build_sync_report (like test_sync_report above) cannot catch this --
+    the bug lives entirely in the ForecastTracker call this test does NOT
+    mock.
+    """
+    import forecasting.forecast_tracker as ft_mod
+    from forecasting.forecast_tracker import MODEL_ARIMA
+
+    db_path = str(tmp_path / "forecast_test.db")
+    seed_tracker = ft_mod.ForecastTracker(db_path=db_path)
+    seed_tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
+    # MSFT deliberately gets no forecast rows at all.
+
+    class _TempDbTracker(ft_mod.ForecastTracker):
+        """Stands in for the real ForecastTracker but always resolves to this
+        test's isolated temp DB -- get_sync_report() constructs it with no
+        arguments (`ForecastTracker()`), so the default db_path must be
+        overridden here rather than passed at the call site."""
+
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("db_path", db_path)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(ft_mod, "ForecastTracker", _TempDbTracker)
+
+    held = {
+        "AAPL": SimpleNamespace(
+            symbol="AAPL", quantity=10.0, average_cost=150.0,
+            current_price=175.0, market_value=1_750.0, unrealized_pl=250.0,
+        ),
+        "MSFT": SimpleNamespace(
+            symbol="MSFT", quantity=5.0, average_cost=300.0,
+            current_price=320.0, market_value=1_600.0, unrealized_pl=100.0,
+        ),
+    }
+    fake_snapshot = SimpleNamespace(positions=held)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: fake_snapshot)
+
+    # Skip the market-data probe entirely (irrelevant to this test) by making
+    # get_provider() fail -- build_sync_report degrades that to
+    # CoverageStatus.UNKNOWN for every symbol rather than raising.
+    import data.market_data as md
+    monkeypatch.setattr(
+        md, "get_provider",
+        lambda: (_ for _ in ()).throw(RuntimeError("no market-data provider in test")),
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/sync-report")
+
+    assert resp.status_code == 200
+    body = resp.json()["symbols"]
+    assert body["AAPL"]["forecast_available"] is True
+    assert body["MSFT"]["forecast_available"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +684,7 @@ def test_sync_report_includes_rating_fields(monkeypatch):
     monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
-        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
     )
     monkeypatch.setattr(
         "rating.symbol_rating_store.SymbolRatingStore", _FakeRatingStore,
@@ -648,7 +716,7 @@ def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
     monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
-        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
     )
 
     def _boom(*args, **kwargs):
@@ -685,31 +753,9 @@ def test_account_404_on_cold_state(monkeypatch):
     assert resp.status_code == 404
 
 
-class TestCORSLanTailscale:
-    """LAN/Tailscale origins are allowed via api.cors.LAN_TAILSCALE_ORIGIN_REGEX
-    (additive to the explicit CORS_ALLOWED_ORIGINS list), scoped to the Pilots
-    PWA dev server's port (5173, per webapp/vite.config.ts's
-    ``server: { host: true, port: 5173 }``)."""
-
-    def test_lan_origin_is_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://192.168.1.42:5173"
-
-    def test_tailscale_range_origin_is_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://100.101.102.5:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://100.101.102.5:5173"
-
-    def test_lan_origin_wrong_port_not_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://192.168.1.42:5174"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") != "http://192.168.1.42:5174"
-
-    def test_public_ip_not_reflected(self):
-        resp = client.get("/health", headers={"Origin": "http://8.8.8.8:5173"})
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") != "http://8.8.8.8:5173"
+# TestCORSLanTailscale (the LAN/Tailscale-origin reflection contract) lives
+# in tests/test_cors_lan_tailscale_contract.py, shared byte-for-byte with
+# control_api/metrics_api/pilots_api/state_api's identical versions of this test.
 
 
 # ===========================================================================
@@ -844,7 +890,7 @@ class TestUniverseSyncInvariants:
         key (POST /data/sync remains gated independently by STATE_API_TOKEN via
         require_write_token, so this flag's own writability is not the sole
         safeguard)."""
-        import gui.env_io as env_io
+        from gui import env_io
 
         assert "UNIVERSE_SYNC_ENABLED" in env_io.ALLOWED_KEYS
         assert "UNIVERSE_SYNC_ENABLED" not in env_io.SECRET_KEYS
@@ -994,3 +1040,9 @@ class TestCircuitBreakerStatus:
             assert resp_ok.status_code == 200
             assert resp_ok.json()["state"] == "NORMAL"
 
+
+def test_get_trends_stitch_demo():
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 501
+    assert resp.json()["detail"] == "Live SVI fetching not implemented. Use mock mode to view the demo."

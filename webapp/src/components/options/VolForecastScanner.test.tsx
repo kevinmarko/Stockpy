@@ -97,18 +97,18 @@ const mockMispricing: VolMispricingResponse = {
   as_of: "2026-08-14T14:00:00Z",
 };
 
+// Real shape of pilots/options_alerts.py::dispatch_options_alert() -- see
+// OptionsAlertTestResult's doc comment in types.ts.
 const mockAlertResult: OptionsAlertTestResult = {
-  ok: true,
-  dispatched_count: 3,
-  channels: ["Discord Webhook (#options-flow)", "Slack Webhook (#trading-desk)"],
-  results: [
-    {
-      channel: "Discord Webhook (#options-flow)",
-      status: "SENT",
-      message: "Dispatched test UOA notification.",
-    },
-  ],
-  as_of: "2026-08-14T14:00:00Z",
+  status: "ok",
+  alert_type: "UOA",
+  level: "WARNING",
+  title: "🐋 Institutional UOA Whale Sweep: SPY $500.00 CALL",
+  message: "**🐋 Institutional UOA Whale Sweep: SPY $500.00 CALL**\n• Test dispatch.",
+  payload: { symbol: "SPY" },
+  timestamp: "2026-08-14T14:00:00Z",
+  success: true,
+  error: null,
 };
 
 describe("VolForecastScanner", () => {
@@ -187,8 +187,29 @@ describe("VolForecastScanner", () => {
 
     await waitFor(() => {
       expect(api.testOptionsAlert).toHaveBeenCalledWith({ alert_type: "UOA", symbol: "SPY" });
-      expect(screen.getByText(/Dispatched to Discord Webhook/i)).toBeInTheDocument();
+      expect(screen.getByText(/Institutional UOA Whale Sweep: SPY \$500\.00 CALL/i)).toBeInTheDocument();
     });
+  });
+
+  it("shows a dispatch failure instead of a fabricated success when the alert genuinely fails", async () => {
+    vi.mocked(api.testOptionsAlert).mockResolvedValue({
+      status: "failed",
+      alert_type: "UOA",
+      level: "WARNING",
+      title: "🐋 Institutional UOA Whale Sweep: SPY $500.00 CALL",
+      message: "**🐋 Institutional UOA Whale Sweep: SPY $500.00 CALL**",
+      payload: { symbol: "SPY" },
+      timestamp: "2026-08-14T14:00:00Z",
+      success: false,
+      error: "No notification channels configured.",
+    });
+
+    render(<VolForecastScanner initialSymbol="SPY" />);
+
+    const uoaAlertBtn = await screen.findByRole("button", { name: /UOA Whale Sweep/i });
+    fireEvent.click(uoaAlertBtn);
+
+    expect(await screen.findByText(/Alert dispatch failed: No notification channels configured\./i)).toBeInTheDocument();
   });
 
   it("calls onClose when close button clicked", async () => {
