@@ -33,6 +33,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -251,8 +252,7 @@ def _resolve_symbols(explicit: Optional[List[str]]) -> List[str]:
     if configured:
         return [s.strip().upper() for s in str(configured).split(",") if s.strip()]
 
-    import os
-    watchlist = os.environ.get("WATCHLIST", "")
+    watchlist = settings.WATCHLIST
     if watchlist:
         return [s.strip().upper() for s in watchlist.split(",") if s.strip()]
 
