@@ -225,6 +225,7 @@ class TestMountTimeoutAdapterEndToEnd:
         server = _BlackHoleServer()
         try:
             session = requests.Session()
+            session.trust_env = False
             mount_timeout_adapter(session, 30.0)  # deliberately long default
 
             started = time.monotonic()
@@ -255,6 +256,7 @@ class TestMountTimeoutAdapterEndToEnd:
         server = _BlackHoleServer()
         try:
             session = requests.Session()
+            session.trust_env = False
             mount_timeout_adapter(session, 0.3)
 
             result: dict = {}

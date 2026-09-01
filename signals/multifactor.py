@@ -277,6 +277,60 @@ class MultifactorSignal(SignalModule):
             explanation=explanation,
         )
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        tickers = df.get(SYMBOL_COL, pd.Series("", index=df.index)).astype(str)
+        scores_dict = getattr(context, 'multifactor_scores', {})
+        
+        has_entry = tickers.map(lambda t: t in scores_dict)
+        excluded = tickers.map(lambda t: scores_dict.get(t, {}).get("excluded_microcap", False))
+        composites = tickers.map(lambda t: scores_dict.get(t, {}).get("Multifactor_Composite", float("nan")))
+        
+        valid = has_entry & ~excluded & composites.notna()
+        
+        score = pd.Series(0.0, index=df.index)
+        score[valid] = np.tanh(composites[valid] / 2.0)
+        
+        confidence = score.abs()
+        
+        explanation = pd.Series("", index=df.index)
+        
+        missing_mask = ~has_entry
+        explanation[missing_mask] = "WARNING: Multifactor scores unavailable for " + tickers[missing_mask] + ". Score set to 0 (neutral)."
+        
+        excluded_mask = has_entry & excluded
+        explanation[excluded_mask] = "DETAIL: " + tickers[excluded_mask] + " excluded from multifactor scoring (microcap)."
+        
+        nan_mask = has_entry & ~excluded & composites.isna()
+        explanation[nan_mask] = "WARNING: Multifactor composite is NaN for " + tickers[nan_mask] + " (insufficient cross-sectional data). Score set to 0 (neutral)."
+        
+        if valid.any():
+            valid_comps = composites[valid]
+            valid_scores = score[valid]
+            weight = settings.SIGNAL_WEIGHTS.get(self.name, 15.0)
+            contrib = valid_scores * weight
+            
+            sign = pd.Series("", index=valid_scores.index)
+            sign[contrib >= 0] = "+"
+            
+            v_z = tickers[valid].map(lambda t: scores_dict[t].get("Value_Z", float("nan")))
+            q_z = tickers[valid].map(lambda t: scores_dict[t].get("Quality_Z", float("nan")))
+            l_z = tickers[valid].map(lambda t: scores_dict[t].get("LowVol_Z", float("nan")))
+            s_z = tickers[valid].map(lambda t: scores_dict[t].get("Size_Z", float("nan")))
+            
+            valid_exp = [
+                f"{sg}{c:.1f}pts: Multifactor composite={comp:+.2f} "
+                f"(Value={vz:+.2f}, Quality={qz:+.2f}, LowVol={lz:+.2f}, Size={sz:+.2f}) -> score={s:+.3f}"
+                for sg, c, comp, vz, qz, lz, sz, s in zip(sign, contrib, valid_comps, v_z, q_z, l_z, s_z, valid_scores)
+            ]
+            explanation.loc[valid] = valid_exp
+            
+        return pd.DataFrame({
+            "score": score,
+            "confidence": confidence,
+            "explanation": explanation,
+            "meta_label_proba": np.nan
+        }, index=df.index)
+
 
 # Auto-register
 global_registry.register(MultifactorSignal())
