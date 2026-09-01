@@ -199,6 +199,122 @@ class TestGoogleTrendsStitcher:
         )
 
 
+class TestGoogleTrendsStitcherScalingMetadata:
+    """Direct unit tests for GoogleTrendsStitcher.get_scaling_metadata -- the
+    single source of truth for BOTH the scaling factor `f` AND the overlap
+    window (`overlap_dates`) that stitch_intervals delegates to."""
+
+    def test_get_scaling_metadata_returns_expected_keys(self):
+        dates_a = pd.date_range("2026-01-01", "2026-03-31", freq="D")
+        dates_b = pd.date_range("2026-03-15", "2026-06-30", freq="D")
+        svi_a = pd.Series(50.0, index=dates_a)
+        svi_b = pd.Series(25.0, index=dates_b)
+
+        meta = GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
+
+        assert set(meta.keys()) == {"overlapStart", "overlapEnd", "overlap_dates", "f"}
+        assert meta["overlapStart"] == pd.Timestamp("2026-03-15")
+        assert meta["overlapEnd"] == pd.Timestamp("2026-03-31")
+
+    def test_get_scaling_metadata_f_matches_exact_ratio(self):
+        """Hand-constructed overlap with known, unequal per-day values so `f`
+        is an exact, non-trivial sum_a/sum_b ratio, not a coincidental 1.0/2.0
+        from a constant series."""
+        overlap_dates = pd.date_range("2026-02-01", "2026-02-05", freq="D")
+        dates_a = pd.date_range("2026-01-01", "2026-02-05", freq="D")
+        dates_b = pd.date_range("2026-02-01", "2026-03-01", freq="D")
+
+        svi_a = pd.Series(10.0, index=dates_a)
+        svi_b = pd.Series(10.0, index=dates_b)
+
+        # Overlap values: A sums to 30, B sums to 60 -> f = 30/60 = 0.5
+        overlap_a_vals = [2.0, 4.0, 6.0, 8.0, 10.0]  # sum = 30
+        overlap_b_vals = [4.0, 8.0, 12.0, 16.0, 20.0]  # sum = 60
+        svi_a.loc[overlap_dates] = overlap_a_vals
+        svi_b.loc[overlap_dates] = overlap_b_vals
+
+        meta = GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
+
+        assert pytest.approx(meta["f"], rel=1e-9) == 30.0 / 60.0
+        assert pytest.approx(meta["f"], rel=1e-9) == 0.5
+
+    def test_get_scaling_metadata_degenerate_sum_b_returns_f_one(self):
+        """sum_b <= 1e-9 (e.g. period B is all-zero over the overlap window)
+        must degrade to f=1.0 rather than dividing by (near-)zero."""
+        dates_a = pd.date_range("2026-01-01", "2026-01-20", freq="D")
+        dates_b = pd.date_range("2026-01-10", "2026-01-31", freq="D")
+        svi_a = pd.Series(50.0, index=dates_a)
+        svi_b = pd.Series(0.0, index=dates_b)
+
+        meta = GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
+
+        assert meta["f"] == 1.0
+
+    def test_get_scaling_metadata_no_overlap_raises_value_error(self):
+        dates_a = pd.date_range("2026-01-01", "2026-02-28", freq="D")
+        dates_b = pd.date_range("2026-03-15", "2026-04-30", freq="D")
+        svi_a = pd.Series(50.0, index=dates_a)
+        svi_b = pd.Series(50.0, index=dates_b)
+
+        with pytest.raises(
+            ValueError,
+            match="No overlapping dates found between Period A and Period B for scaling.",
+        ):
+            GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
+
+    def test_get_scaling_metadata_overlap_dates_equals_index_intersection(self):
+        dates_a = pd.date_range("2026-01-01", "2026-03-15", freq="D")
+        dates_b = pd.date_range("2026-03-01", "2026-05-15", freq="D")
+        rng = np.random.default_rng(3)
+        svi_a = pd.Series(rng.uniform(5, 95, size=len(dates_a)), index=dates_a)
+        svi_b = pd.Series(rng.uniform(5, 95, size=len(dates_b)), index=dates_b)
+
+        meta = GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
+
+        expected_overlap = svi_a.index.intersection(svi_b.index)
+        pd.testing.assert_index_equal(meta["overlap_dates"], expected_overlap)
+
+    def test_stitch_intervals_and_get_scaling_metadata_agree_on_overlap_window(self):
+        """Regression guard for the refactor that made get_scaling_metadata the
+        single source of truth for the overlap window: stitch_intervals's own
+        boundary-averaged dates must exactly match get_scaling_metadata's
+        overlap_dates for the identical pair of series -- no independent
+        re-derivation that could silently drift out of sync."""
+        dates_a = pd.date_range("2026-01-01", "2026-03-15", freq="D")
+        dates_b = pd.date_range("2026-03-01", "2026-05-15", freq="D")
+        rng = np.random.default_rng(11)
+        svi_a = pd.Series(rng.uniform(5, 95, size=len(dates_a)), index=dates_a)
+        svi_b = pd.Series(rng.uniform(5, 95, size=len(dates_b)), index=dates_b)
+
+        meta = GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
+        overlap_dates = meta["overlap_dates"]
+        f = meta["f"]
+
+        stitched = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+
+        # Every date get_scaling_metadata reports as overlapping must be an
+        # exact boundary-average in the stitched output ...
+        expected_overlap_values = (svi_a.loc[overlap_dates] + svi_b.loc[overlap_dates] * f) / 2.0
+        np.testing.assert_allclose(
+            stitched.loc[overlap_dates].values,
+            expected_overlap_values.values,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
+        # ... and no date OUTSIDE that window is boundary-averaged: a
+        # non-overlapping date unique to A must equal A's raw (unscaled)
+        # value untouched.
+        only_a_dates = dates_a.difference(overlap_dates)
+        assert len(only_a_dates) > 0
+        np.testing.assert_allclose(
+            stitched.loc[only_a_dates].values,
+            svi_a.loc[only_a_dates].values,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
+
 class TestASVICalculator:
     """Tests for Abnormal Search Volume Index computation & no-lookahead causality."""
 

@@ -27,6 +27,44 @@ class GoogleTrendsStitcher:
     """
 
     @staticmethod
+    def get_scaling_metadata(period_a_svi: pd.Series, period_b_svi: pd.Series) -> dict:
+        """Extracts the geometric scaling factor and overlap boundaries for two periods.
+
+        Single source of truth for BOTH the scaling factor `f` AND the overlap window
+        (`overlap_dates`) used by `stitch_intervals` — callers must reuse `overlap_dates`
+        rather than re-deriving it via a second `.index.intersection()` call.
+        """
+        overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
+        if len(overlap_dates) == 0:
+            raise ValueError("No overlapping dates found between Period A and Period B for scaling.")
+
+        overlap_a = period_a_svi.loc[overlap_dates]
+        overlap_b = period_b_svi.loc[overlap_dates]
+
+        sum_a = float(overlap_a.sum())
+        sum_b = float(overlap_b.sum())
+
+        # Symmetric epsilon-substitution guard: if EITHER side's overlap sum is
+        # near-zero, the ratio is unreliable/undefined in a meaningful sense —
+        # passthrough (f=1.0) rather than compute a ratio against a near-zero
+        # value on only one side. A guard that only checks sum_b (as this used
+        # to) still lets a real, near-zero-but-nonzero sum_b divide into a real
+        # sum_a and blow up by orders of magnitude — symmetric across all four
+        # quadrants (both-zero, A-zero/B-real, A-real/B-zero, both-real) is
+        # what actually closes that gap.
+        if sum_a <= 1e-9 or sum_b <= 1e-9:
+            f = 1.0
+        else:
+            f = sum_a / sum_b
+
+        return {
+            "overlapStart": overlap_dates[0],
+            "overlapEnd": overlap_dates[-1],
+            "overlap_dates": overlap_dates,
+            "f": f,
+        }
+
+    @staticmethod
     def stitch_intervals(period_a_svi: pd.Series, period_b_svi: pd.Series) -> pd.Series:
         """Stitches two adjacent daily periods where period_b follows period_a with an overlapping window.
         Calculates a scaling factor using the overlapping non-zero days to scale period_b's SVI scale
@@ -44,32 +82,13 @@ class GoogleTrendsStitcher:
         if period_b_svi.empty:
             return period_a_svi.copy()
 
-        # Find overlapping dates
-        overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
-
-        if len(overlap_dates) == 0:
-            raise ValueError("No overlapping dates found between Period A and Period B for scaling.")
-
-        # Extract overlapping sequences
-        overlap_a = period_a_svi.loc[overlap_dates]
-        overlap_b = period_b_svi.loc[overlap_dates]
-
-        # Compute scaling factor f (ratio of sums of non-zero overlapping daily indexes)
-        sum_a = float(overlap_a.sum())
-        sum_b = float(overlap_b.sum())
-
-        # Symmetric epsilon-substitution guard: if EITHER side's overlap sum is
-        # near-zero, the ratio is unreliable/undefined in a meaningful sense —
-        # passthrough (f=1.0) rather than compute a ratio against (or blown up
-        # by) a near-zero value on only one side. Flooring only the denominator
-        # (the prior `max(sum_a, 0.1) / max(sum_b, 0.1)` formula) let a real,
-        # non-zero sum_a divide by a floored near-zero sum_b and blow up by
-        # orders of magnitude — this is symmetric across all four quadrants
-        # (both-zero, A-zero/B-real, A-real/B-zero, both-real).
-        if sum_a <= 1e-9 or sum_b <= 1e-9:
-            f = 1.0
-        else:
-            f = sum_a / sum_b
+        # Delegate to single source of truth for both the scaling factor AND the overlap window
+        # (get_scaling_metadata's own guard is symmetric across sum_a/sum_b -- see its docstring
+        # for why a denominator-only guard let a real sum_a blow up by orders of magnitude
+        # whenever sum_b alone happened to be near-zero).
+        meta = GoogleTrendsStitcher.get_scaling_metadata(period_a_svi, period_b_svi)
+        overlap_dates = meta["overlap_dates"]
+        f = meta["f"]
 
         # Rescale Period B
         scaled_b = period_b_svi * f
