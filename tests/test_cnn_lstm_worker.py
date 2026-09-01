@@ -48,6 +48,27 @@ mock_layers.Conv1D = MagicMock()
 mock_layers.LSTM = MagicMock()
 mock_layers.Dense = MagicMock()
 mock_layers.MaxPooling1D = MagicMock()
+# LSTM-Attention (google-trends-lstm-attention feature) needs these four in
+# addition to the plain CNN-LSTM path's four above -- cnn_lstm_worker.py's
+# own top-level `from tensorflow.keras.layers import Conv1D, LSTM, Dense,
+# MaxPooling1D, MultiHeadAttention, GlobalAveragePooling1D, Input,
+# LayerNormalization` is ONE statement; a mock module missing any of these
+# four makes that whole import raise ImportError partway through (after the
+# first four bind, before these four do), which the module's own
+# `except ImportError: TENSORFLOW_AVAILABLE = False` swallows silently --
+# and this file's own cnn_lstm_worker.TENSORFLOW_AVAILABLE = True override a
+# few lines below then forces the guard past that, leaving Input/
+# MultiHeadAttention/GlobalAveragePooling1D/LayerNormalization permanently
+# unbound in cnn_lstm_worker's namespace for the rest of this worker
+# process -- reproduced directly: any OTHER test module (e.g.
+# tests/test_lstm_attention_worker.py) that runs afterward in the same
+# process hits `NameError: name 'Input' is not defined` the moment it calls
+# fit_predict_lstm_attention, even though its own mocking is unrelated and
+# correct on its own.
+mock_layers.MultiHeadAttention = MagicMock()
+mock_layers.GlobalAveragePooling1D = MagicMock()
+mock_layers.Input = MagicMock()
+mock_layers.LayerNormalization = MagicMock()
 mock_callbacks.EarlyStopping = MagicMock()
 
 sys.modules['tensorflow'] = mock_tf
@@ -58,25 +79,48 @@ sys.modules['tensorflow.keras.callbacks'] = mock_callbacks
 
 import cnn_lstm_worker  # noqa: E402
 
-# Bind the mocks directly onto the module, mirroring
-# test_forecasting_lookahead.py's rationale: if some other test module
-# already imported cnn_lstm_worker first (unlikely today, but a real
-# collection-order hazard the sibling test file documents), module-level
-# names are whatever that first import saw, regardless of what
-# sys.modules['tensorflow'] is reassigned to afterwards.
-cnn_lstm_worker.TENSORFLOW_AVAILABLE = True
-cnn_lstm_worker.tf = mock_tf
-cnn_lstm_worker.Sequential = mock_models.Sequential
-cnn_lstm_worker.load_model = mock_models.load_model
-cnn_lstm_worker.Conv1D = mock_layers.Conv1D
-cnn_lstm_worker.LSTM = mock_layers.LSTM
-cnn_lstm_worker.Dense = mock_layers.Dense
-cnn_lstm_worker.MaxPooling1D = mock_layers.MaxPooling1D
-cnn_lstm_worker.EarlyStopping = mock_callbacks.EarlyStopping
+
+def _rebind_mocks_onto_cnn_lstm_worker() -> None:
+    """Bind this file's mocks directly onto the cnn_lstm_worker module,
+    mirroring test_forecasting_lookahead.py's rationale: if some other test
+    module already imported cnn_lstm_worker first, module-level names are
+    whatever that first import saw, regardless of what
+    sys.modules['tensorflow'] is reassigned to afterwards.
+
+    This is called BOTH at module-collection time (below) AND from this
+    file's own autouse fixture, immediately before every test -- a single
+    collection-time call is not enough, because pytest collects every test
+    FILE's module-level code before running any test, and
+    tests/test_lstm_attention_worker.py does this identical direct-rebind
+    (by necessity, for the same reason) for its own, differently-configured
+    mocks. Whichever file's module-level code runs LAST at collection time
+    wins the shared cnn_lstm_worker module's state for every test that
+    follows -- reproduced directly: without this fixture-time re-assertion,
+    each file's own tests only pass when that file happens to collect after
+    the other one. Re-applying in the fixture makes both files' tests pass
+    regardless of collection order.
+    """
+    cnn_lstm_worker.TENSORFLOW_AVAILABLE = True
+    cnn_lstm_worker.tf = mock_tf
+    cnn_lstm_worker.Sequential = mock_models.Sequential
+    cnn_lstm_worker.load_model = mock_models.load_model
+    cnn_lstm_worker.Conv1D = mock_layers.Conv1D
+    cnn_lstm_worker.LSTM = mock_layers.LSTM
+    cnn_lstm_worker.Dense = mock_layers.Dense
+    cnn_lstm_worker.MaxPooling1D = mock_layers.MaxPooling1D
+    cnn_lstm_worker.MultiHeadAttention = mock_layers.MultiHeadAttention
+    cnn_lstm_worker.GlobalAveragePooling1D = mock_layers.GlobalAveragePooling1D
+    cnn_lstm_worker.Input = mock_layers.Input
+    cnn_lstm_worker.LayerNormalization = mock_layers.LayerNormalization
+    cnn_lstm_worker.EarlyStopping = mock_callbacks.EarlyStopping
+
+
+_rebind_mocks_onto_cnn_lstm_worker()
 
 
 @pytest.fixture(autouse=True)
 def _reset_mock_call_state():
+    _rebind_mocks_onto_cnn_lstm_worker()
     mock_sequential.reset_mock()
     mock_sequential.return_value.predict.return_value = np.ones((1, 4)) * 0.5
     mock_models.load_model.reset_mock()
