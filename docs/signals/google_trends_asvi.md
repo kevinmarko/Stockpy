@@ -101,3 +101,17 @@ Unit tests are implemented in `tests/test_trends_stitcher.py`:
 
 ### D. Visualizations
 - **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`) demonstrates the overlapping window stitching algorithm. It plots the raw unscaled SVI curves alongside the final stitched continuous sequence. Live SVI fetching is enabled for this demo and is wired directly to the real Google Trends API via `pytrends`, pulling authentic overlapping periods for stitching and validation.
+
+---
+
+## 4. LSTM-Attention Forecaster (Phase 5)
+
+An LSTM-Attention model utilizes the generated ASVI and technicals to forecast 1-day percentage returns.
+The model uses a 15-feature sliding window (sequence length 15):
+1. Target ASVI (from Google Trends)
+2. Sector-Proxy ASVI (from Google Trends via SECTOR_TO_ETF mapping)
+3-7. OHLCV
+8-15. Technicals (RSI_14, EMA_12, EMA_26, MACD, MACD_Signal, MACD_Hist, Realized_Vol_60D, SMA_50)
+
+The model leverages `cnn_lstm_worker.py` in a separate process to avoid TensorFlow threading deadlocks in the orchestrator.
+Currently, due to rate limiting constraints preventing a long-horizon backtest on Google Trends, the model is set to `deployable=False` (weight = 0.0) in the registry, and its validation adapter returns `None`.

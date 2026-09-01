@@ -42,5 +42,7 @@ def _register_all():
     import signals.sector_quality_rank
     import signals.vrp_premium_selling
     import signals.options_flow_sentiment
+    import signals.lstm_attention_forecast
 
 _register_all()
+

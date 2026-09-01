@@ -213,6 +213,7 @@ COLUMN_SCHEMA = [
     # DIAGNOSTIC ONLY. Populated by pipeline/production_steps.py::_apply_google_trends_asvi.
     # ==========================================================
     {"header": "Google Trends ASVI", "key": "Google_Trends_ASVI", "format": "number"},
+    {"header": "Google Trends LSTM Forecast", "key": "Google_Trends_LSTM_Forecast", "format": "percent"},
 
     # ==========================================================
     # --- ETF VOLATILITY TRANSMISSION (risk/etf_transmission.py) ---

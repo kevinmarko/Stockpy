@@ -2677,3 +2677,13 @@ escape-hatch proof described above). Full `tests/test_train_lgbm.py` suite (24 t
 pass; the real machine-global `ml/registry.yaml` and repo-tracked `ml/registry.yaml` were
 directly diffed/inspected after each test run in this session to confirm zero pollution,
 not merely assumed clean from the tests passing.
+
+## 2026-08-31: `lstm_attention_forecast` — Not deployable due to lack of historical ASVI data
+
+**What was attempted**: To satisfy Phase 5 of the Google Trends ASVI project, the LSTM-Attention model was to be run through the strategy validation harness (`validation/harness.py`).
+
+**Result**: `deployable=False` (Not run)
+
+**Root cause**: The Google Trends ASVI data is fetched dynamically via PyTrends. The `validation/harness.py` logic runs historical validations dating back to 2005 (or similar 10+ year timeframes). Point-in-time, backwards-looking historical Google Trends data is heavily rate-limited by Google and cannot be fetched in bulk for long periods across the universe.
+
+**Conclusion**: Since it's impossible to gather an honest, long-term point-in-time dataset for ASVI via the currently implemented API without hitting rate limits, `lstm_attention_forecast` cannot be passed through the deployability gate. Therefore, per CONSTRAINT #5, it remains explicitly `deployable=False` and its `SIGNAL_WEIGHTS` is set to `0.0`. Its `pilots/catalog.py` entry maintains `validation_strategy_id=None`.

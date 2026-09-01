@@ -704,6 +704,74 @@ def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['Sector_Heat_Factor'] = float('nan')
 
 
+
+def _apply_lstm_attention_forecast(dashboard_df: pd.DataFrame) -> None:
+    """Compute LSTM-Attention Google Trends forecast for each ticker.
+    
+    NaN-fills the column FIRST so every exit path leaves genuinely-missing
+    cells NaN rather than a fabricated default. Never raises.
+    """
+    import pandas as pd
+    
+    dashboard_df['Google_Trends_LSTM_Forecast'] = float('nan')
+    if not getattr(settings, "GOOGLE_TRENDS_ENABLED", False):
+        return
+        
+    try:
+        from data.historical_store import HistoricalStore
+        from data.trends_store import TrendsStore
+        from data.market_data import FMPDataLoader
+        from ml.asvi_feature_engineering import resolve_sector_proxy
+        from pilots.lstm_diagnostic import run_lstm_diagnostic
+        
+        if 'Symbol' not in dashboard_df.columns:
+            return
+            
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+            
+        store = HistoricalStore()
+        trends_store = TrendsStore()
+        fmp = FMPDataLoader()
+        
+        for ticker in symbols:
+            try:
+                bars = store.get_bars(ticker, lookback_days=1095)
+                if bars is None or bars.empty or len(bars) < 60:
+                    continue
+                    
+                fund = fmp.get_fundamentals(ticker)
+                sector = fund.get("sector")
+                sector_proxy = resolve_sector_proxy(sector)
+                
+                sector_bars = store.get_bars(sector_proxy, lookback_days=1095)
+                if sector_bars is None:
+                    sector_bars = pd.DataFrame()
+                    
+                asvi_sym = trends_store.get_stitched_series(ticker)
+                asvi_sec = trends_store.get_stitched_series(sector_proxy)
+                
+                if asvi_sym is None:
+                    asvi_sym = pd.Series(dtype=float)
+                if asvi_sec is None:
+                    asvi_sec = pd.Series(dtype=float)
+                    
+                diag = run_lstm_diagnostic(ticker, bars, sector_bars, asvi_sym, asvi_sec)
+                pred = diag.get("prediction")
+                if pred is not None and not pd.isna(pred):
+                    dashboard_df.loc[dashboard_df['Symbol'] == ticker, 'Google_Trends_LSTM_Forecast'] = float(pred)
+                    
+            except Exception as e:
+                logger.warning("LSTM Attention Forecast computation failed (non-fatal) for %s: %s", ticker, e)
+                
+    except Exception as exc:
+        logger.warning("LSTM Attention Forecast outer computation failed (non-fatal): %s", exc)
+
+
 def _apply_google_trends_asvi(dashboard_df: pd.DataFrame) -> None:
     """Compute Google Trends Abnormal Search Volume Index (ASVI) for each ticker.
     
@@ -2190,6 +2258,7 @@ class StrategyEvalStep(PipelineStep):
 
         # Google Trends Abnormal Search Volume Index (ASVI)
         _apply_google_trends_asvi(ctx.dashboard_df)
+        _apply_lstm_attention_forecast(ctx.dashboard_df)
 
         # Semantic Related Sector Selection (sector_selection_engine.py) --
         # persists each tracked symbol's top-N related-sector ranking so the

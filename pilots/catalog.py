@@ -549,6 +549,19 @@ PILOTS: List[Pilot] = [
         long_only=False,
         validation_strategy_id="options_flow_sentiment",
     ),
+
+    Pilot(
+        id="lstm-attention-forecast",
+        name="Google Trends LSTM",
+        category="Forecast",
+        description=(
+            "A multimodal deep learning forecaster (LSTM-Attention) trained on 15 features, "
+            "including Google Trends Abnormal Search Volume (ASVI) for both the ticker and its sector."
+        ),
+        weights={"lstm_attention_forecast": 1.0},
+        long_only=False,
+        validation_strategy_id=None,
+    ),
 ]
 
 

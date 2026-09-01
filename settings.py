@@ -2763,6 +2763,11 @@ class Settings(BaseSettings):
             # LightGBM cross-sectional ranker (one ensemble member — modest weight
             # until the model accumulates enough history to earn a larger share).
             "lgbm_ranker": 0.10,
+            # LSTM-Attention Google Trends ASVI forecaster (Phase 5).
+            # Start at a modest weight until live track record proves edge.
+            # LSTM-Attention Google Trends ASVI forecaster (Phase 5).
+            # Must stay 0.0: Point-in-time ASVI history is not available to backtest honestly.
+            "lstm_attention_forecast": 0.0,
             # News / earnings catalyst (Tier 2.4) — modest weight until the
             # module accumulates a track record (FinBERT or lexicon fallback).
             "news_catalyst": 10.0,
