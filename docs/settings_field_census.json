@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "0d9826395f98f0188d5c9935edb10a7a659414c3",
+    "git_commit": "faf7a9af8dbe1c8ebe5c814e179f426ea2b63c11",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3950,7 +3950,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 443,
+    "files_scanned": 444,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3979,10 +3979,10 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 813,
+      "total_reads": 814,
       "distinct_fields": 269,
       "counts": {
-        "OUTPUT_DIR": 134,
+        "OUTPUT_DIR": 135,
         "LOCAL_DATA_ROOT": 22,
         "SIGNAL_WEIGHTS": 21,
         "DASHBOARD_REFRESH_SECONDS": 18,
