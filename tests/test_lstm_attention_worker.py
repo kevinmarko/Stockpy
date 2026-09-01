@@ -117,7 +117,12 @@ class TestFitPredictLstmAttention:
 class TestLoadPredictLstmAttention:
     def test_returns_pred_scaled_from_loaded_model(self):
         fake_model = MagicMock()
-        fake_model.output_shape = (None, 1)
+        # A real multi-output Functional model (predictions + attention_scores,
+        # predictions at output index 0) reports `.output_shape` as a LIST of
+        # per-output shape tuples, not a single tuple -- this must be a list
+        # of two tuples to actually exercise the real failure mode this test
+        # covers (see cnn_lstm_worker.load_predict_lstm_attention).
+        fake_model.output_shape = [(None, 1), (None, 2, 10, 10)]
         fake_model.predict.return_value = np.array([[1.0, 2.0, 3.0, 4.0]])
         mock_models.load_model.return_value = fake_model
 
@@ -126,3 +131,12 @@ class TestLoadPredictLstmAttention:
 
         assert result["pred_scaled"] == pytest.approx([1.0, 2.0, 3.0, 4.0])
         mock_models.load_model.assert_called_once_with("some/path.keras")
+
+    def test_raises_on_horizon_count_mismatch(self):
+        fake_model = MagicMock()
+        fake_model.output_shape = [(None, 1), (None, 2, 10, 10)]
+        mock_models.load_model.return_value = fake_model
+
+        last_window = np.random.rand(1, 10, 15)
+        with pytest.raises(ValueError, match="horizon count mismatch"):
+            cnn_lstm_worker.load_predict_lstm_attention("some/path.keras", last_window, num_horizons=4)

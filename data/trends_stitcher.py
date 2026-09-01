@@ -58,10 +58,18 @@ class GoogleTrendsStitcher:
         sum_a = float(overlap_a.sum())
         sum_b = float(overlap_b.sum())
 
-        if sum_a <= 1e-9 and sum_b <= 1e-9:
+        # Symmetric epsilon-substitution guard: if EITHER side's overlap sum is
+        # near-zero, the ratio is unreliable/undefined in a meaningful sense —
+        # passthrough (f=1.0) rather than compute a ratio against (or blown up
+        # by) a near-zero value on only one side. Flooring only the denominator
+        # (the prior `max(sum_a, 0.1) / max(sum_b, 0.1)` formula) let a real,
+        # non-zero sum_a divide by a floored near-zero sum_b and blow up by
+        # orders of magnitude — this is symmetric across all four quadrants
+        # (both-zero, A-zero/B-real, A-real/B-zero, both-real).
+        if sum_a <= 1e-9 or sum_b <= 1e-9:
             f = 1.0
         else:
-            f = max(sum_a, 0.1) / max(sum_b, 0.1)
+            f = sum_a / sum_b
 
         # Rescale Period B
         scaled_b = period_b_svi * f

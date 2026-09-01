@@ -936,35 +936,48 @@ class OrchestratorDaemon:
             from data.trends_stitcher import GoogleTrendsStitcher
             from data.trends_store import TrendsStore
             import uuid
-            
+
             store = TrendsStore()
             symbols = list(getattr(settings, "DEFAULT_TICKERS", []) or [])
             if not symbols:
                 return
-            
+
             end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             # Pull 1 year of data
             start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
 
+            # Each symbol is isolated in its own try/except so one bad symbol
+            # (a malformed stitcher input, a transient DB write error, ...)
+            # never aborts the remaining symbols in this pass -- matching this
+            # repo's convention for per-ticker loops (see CLAUDE.md).
             for sym in symbols:
-                # fetch overlapping windows
-                series_list = fetch_overlapping_windows(sym, start_date, end_date)
-                if not series_list:
-                    continue
-                    
-                window_ids = [str(uuid.uuid4()) for _ in series_list]
-                
-                # store raw
-                for i, series in enumerate(series_list):
-                    raw_data = [{"date": d.date(), "value": v} for d, v in series.items()]
-                    store.insert_raw_window(sym, window_ids[i], raw_data, datetime.now(timezone.utc))
-                    
-                # stitch and store
-                stitched = GoogleTrendsStitcher.stitch_multiple_intervals(series_list)
-                if not stitched.empty:
-                    stitched_data = [{"date": d.date(), "value": v} for d, v in stitched.items()]
-                    store.save_stitched_series(sym, stitched_data, datetime.now(timezone.utc))
-                    
+                try:
+                    # fetch overlapping windows
+                    series_list = fetch_overlapping_windows(sym, start_date, end_date)
+                    if not series_list:
+                        continue
+
+                    window_ids = [str(uuid.uuid4()) for _ in series_list]
+
+                    # store raw
+                    for i, series in enumerate(series_list):
+                        raw_data = [{"date": d.date(), "value": v} for d, v in series.items()]
+                        store.insert_raw_window(sym, window_ids[i], raw_data, datetime.now(timezone.utc))
+
+                    # stitch and store
+                    stitched = GoogleTrendsStitcher.stitch_multiple_intervals(series_list)
+                    if not stitched.empty:
+                        stitched_data = [{"date": d.date(), "value": v} for d, v in stitched.items()]
+                        store.save_stitched_series(sym, stitched_data, datetime.now(timezone.utc))
+                except Exception as sym_exc:  # noqa: BLE001 - one bad symbol must not abort the rest
+                    logger.warning(
+                        "maybe_refresh_google_trends: symbol %s failed: %s", sym, sym_exc
+                    )
+
+            # Update the throttle timestamp regardless of whether individual
+            # symbols failed above -- otherwise a single bad symbol would
+            # defeat the throttle entirely and every subsequent timer wake
+            # would retry immediately with no backoff.
             self._last_google_trends_refresh = time.monotonic()
         except Exception as exc:
             logger.warning("maybe_refresh_google_trends: unexpected failure: %s", exc)

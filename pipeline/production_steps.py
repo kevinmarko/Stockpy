@@ -730,8 +730,7 @@ def _apply_google_trends_asvi(dashboard_df: pd.DataFrame) -> None:
         store = TrendsStore(readonly=True)
         asvi_map = {}
 
-        raw_budget = getattr(settings, "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE", None)
-        max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
+        max_seconds = max(0.0, float(settings.GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE))
         deadline = _time.monotonic() + max_seconds
         budget_exhausted = False
 
@@ -752,7 +751,6 @@ def _apply_google_trends_asvi(dashboard_df: pd.DataFrame) -> None:
                 if stitched_data:
                     dates = [d["date"] for d in stitched_data]
                     values = [float(d["value"]) for d in stitched_data]
-                    import pandas as pd
                     svi_series = pd.Series(values, index=dates)
                     
                     asvi_series = ASVICalculator.compute_asvi(svi_series)

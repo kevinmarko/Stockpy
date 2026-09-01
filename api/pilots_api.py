@@ -8215,7 +8215,7 @@ def run_lstm_attention_forecast_endpoint(
     """Diagnostic endpoint to trigger the LSTM-Attention Phase 4 forecaster."""
     from data.historical_store import HistoricalStore
     from data.trends_store import TrendsStore
-    from data.market_data import FMPDataLoader
+    from data.trends_stitcher import FMPDataLoader
     from ml.asvi_feature_engineering import resolve_sector_proxy
     import numpy as np
     import pandas as pd

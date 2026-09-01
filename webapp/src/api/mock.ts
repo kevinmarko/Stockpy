@@ -15353,39 +15353,27 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
   },
 
   // ---- Trends Stitching Demo ----
-  async getTrendsStitchDemo(symbol: string): Promise<TrendsStitchDemoResponse> {
+  async getTrendsStitchDemo(): Promise<TrendsStitchDemoResponse> {
     const now = Date.now();
-    
-    // Synthesize the same response shape the real endpoint returns (not independent Math.random())
-    // 3 overlapping 90-day windows with 30-day overlap
-    
-    const stitched_data: [number, number][] = [];
-    let current_val = 100;
-    
-    // Total span: 90 + 60 + 60 = 210 days
-    const total_days = 210;
-    for (let i = 0; i < total_days; i++) {
-        const time = now - (total_days - i) * 86400000;
-        stitched_data.push([time, current_val]);
-        current_val += 0.2 + (Math.sin(i / 10) * 5); // deterministic smooth trend with some wave
-    }
-    
-    // Window 1: days 0-89
-    const w1_data = stitched_data.slice(0, 90).map(([t, v]): [number, number] => [t, v * 0.8]);
-    // Window 2: days 60-149
-    const w2_data = stitched_data.slice(60, 150).map(([t, v]): [number, number] => [t, v * 1.1]);
-    // Window 3: days 120-209
-    const w3_data = stitched_data.slice(120, 210).map(([t, v]): [number, number] => [t, v * 0.95]);
+    const generateCurve = (startVal: number, slope: number, noise: number) => {
+      const data: [number, number][] = [];
+      let val = startVal;
+      for (let i = 0; i < 30; i++) {
+        const time = now - (30 - i) * 86400000;
+        data.push([time, val]);
+        val += slope + (Math.random() - 0.5) * noise;
+      }
+      return data;
+    };
 
     return delay({
       raw_curves: [
-        { name: "Window 1", data: w1_data },
-        { name: "Window 2", data: w2_data },
-        { name: "Window 3", data: w3_data },
+        { name: "Trend A (Raw)", data: generateCurve(100, 1, 5) },
+        { name: "Trend B (Raw)", data: generateCurve(130, 0.5, 3) },
       ],
       stitched_curve: {
-        name: `Stitched ${symbol.toUpperCase()}`,
-        data: stitched_data,
+        name: "Stitched Output",
+        data: generateCurve(115, 0.8, 4),
       },
     });
   },

@@ -2328,49 +2328,78 @@ async def get_circuit_breaker_status():
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-@app.get("/data/trends/{symbol}", dependencies=[Depends(require_token)])
-def get_trends_for_symbol(symbol: str) -> Dict[str, Any]:
-    from data.trends_store import TrendsStore
-    from datetime import datetime, timezone
-    
-    symbol = symbol.upper().strip()
-    store = TrendsStore(readonly=True)
-    
-    raw = store.load_raw_windows(symbol)
-    stitched = store.get_stitched_series(symbol)
-    
-    if not raw and not stitched:
-        # Fallback or just empty
-        return {"raw_curves": [], "stitched_curve": {"name": f"Stitched {symbol}", "data": []}}
-        
-    windows = {}
-    for r in raw:
-        if r.window_id not in windows:
-            windows[r.window_id] = []
-        # Convert date to ms timestamp
-        ts = int(datetime.combine(r.date, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
-        windows[r.window_id].append([ts, r.value])
-        
-    raw_curves = []
-    # Sort windows by their earliest date
-    sorted_windows = sorted(windows.items(), key=lambda item: item[1][0][0] if item[1] else 0)
-    for idx, (wid, wdata) in enumerate(sorted_windows):
-        raw_curves.append({
-            "name": f"Window {idx + 1}",
-            "data": sorted(wdata, key=lambda x: x[0])
-        })
-        
-    stitched_data = [
-        [int(datetime.combine(s["date"], datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000), s["value"]]
-        for s in stitched
-    ]
-    stitched_curve = {
-        "name": f"Stitched {symbol}",
-        "data": sorted(stitched_data, key=lambda x: x[0])
-    }
-    
-    return {
-        "raw_curves": raw_curves,
-        "stitched_curve": stitched_curve
-    }
+@app.get("/data/trends/stitch-demo", dependencies=[Depends(require_token)])
+def get_trends_stitch_demo() -> Dict[str, Any]:
+    """
+    Demonstrates the Google Trends SVI overlapping-window stitching algorithm
+    (data.trends_stitcher.GoogleTrendsStitcher) against real market data.
 
+    Live Google Trends Search Volume Index (SVI) fetching is NOT wired up in this
+    codebase (no SVI provider exists here). Per CONSTRAINT #4 (never fabricate a
+    metric), this endpoint does not synthesize a fake SVI series. Instead it uses
+    real SPY trading volume (via HistoricalStore) as an honestly-labeled PROXY
+    input to exercise the real stitching algorithm end-to-end -- every curve name
+    in the response discloses this explicitly ("SPY Volume Proxy"), never
+    presented as if it were real Google Trends data.
+
+    Raises HTTPException(503) -- rather than returning a fabricated placeholder
+    series -- if SPY bar history is insufficient or unavailable.
+    """
+    import pandas as pd
+
+    from data.trends_stitcher import GoogleTrendsStitcher
+
+    n_bars = 240
+
+    try:
+        store = HistoricalStore(readonly=True)
+        bars = store.get_bars("SPY")
+        if bars.empty or len(bars) < n_bars:
+            raise ValueError(f"Insufficient SPY bar history: {len(bars)} rows (need >= {n_bars})")
+        # Keep the real tz-naive DatetimeIndex intact -- GoogleTrendsStitcher.stitch_intervals
+        # aligns overlapping periods via index intersection, and the response needs real
+        # calendar dates as epoch-ms timestamps, not a fabricated/positional index.
+        true_series = bars["Volume"].tail(n_bars)
+    except Exception as exc:
+        logger.warning(
+            "get_trends_stitch_demo: unable to build SPY-volume-proxy SVI stitching demo (%s): %s",
+            type(exc).__name__,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Live Google Trends SVI fetching is not implemented -- this demo uses real "
+                "SPY trading volume as an honest proxy input, and insufficient SPY bar history "
+                "is currently available to build it. Use mock mode to view the demo."
+            ),
+        )
+
+    slice_a = true_series.iloc[0:90]
+    period_a = slice_a / slice_a.max() * 100.0
+
+    slice_b = true_series.iloc[75:165]
+    period_b = slice_b / slice_b.max() * 100.0
+
+    slice_c = true_series.iloc[150:240]
+    period_c = slice_c / slice_c.max() * 100.0
+
+    stitched_ab = GoogleTrendsStitcher.stitch_intervals(period_a, period_b)
+    stitched_all = GoogleTrendsStitcher.stitch_intervals(stitched_ab, period_c)
+
+    def to_curve(name: str, series: pd.Series) -> Dict[str, Any]:
+        points: List[List[float]] = []
+        for ts, val in series.items():
+            if val is None or (isinstance(val, float) and math.isnan(val)):
+                continue
+            points.append([int(ts.timestamp() * 1000), float(val)])
+        return {"name": name, "data": points}
+
+    return {
+        "raw_curves": [
+            to_curve("SPY Volume Proxy — Period A", period_a),
+            to_curve("SPY Volume Proxy — Period B", period_b),
+            to_curve("SPY Volume Proxy — Period C", period_c),
+        ],
+        "stitched_curve": to_curve("Stitched SPY Volume Proxy", stitched_all),
+    }

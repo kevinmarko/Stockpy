@@ -16152,14 +16152,3 @@ if __name__ == "__main__":
     # Output the structured, machine-readable format for the AI to parse
     print(json_output)
     print("\n✅ Verification Suite Complete. Ready for Gravity AI ingestion.")
-    # -- Google Trends Phase 4 LSTM-Attention ---------------------------
-    def step_lstm_attention_feature_dimensions(self) -> None:
-        """Check Phase 4 LSTM-Attention 15-feature constraint."""
-        import inspect
-        try:
-            from ml.asvi_feature_engineering import build_lstm_attention_tensors
-            src = inspect.getsource(build_lstm_attention_tensors)
-            if "15" not in src:
-                self.record_finding("F-LSTM-DIM", "build_lstm_attention_tensors does not explicitly document or enforce 15 dimensions", severity="HIGH")
-        except ImportError:
-            self.record_finding("F-LSTM-MISSING", "ml.asvi_feature_engineering not found", severity="HIGH")

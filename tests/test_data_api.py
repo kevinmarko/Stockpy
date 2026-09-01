@@ -11,6 +11,7 @@ rule (NaN/missing → ``null``, never a fabricated ``0.0``).
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
@@ -1041,3 +1042,124 @@ class TestCircuitBreakerStatus:
             assert resp_ok.json()["state"] == "NORMAL"
 
 
+# ---------------------------------------------------------------------------
+# GET /data/trends/stitch-demo
+# ---------------------------------------------------------------------------
+
+
+def _make_stitch_demo_bars(n: int = 260) -> pd.DataFrame:
+    """Realistic-enough SPY-bar fixture for the stitch-demo endpoint: a real
+    tz-naive DatetimeIndex (the endpoint relies on this for epoch-ms
+    conversion) and a Volume column with varying, non-degenerate values so
+    the ``sum_b <= 1e-9`` degenerate-scaling guard in
+    ``GoogleTrendsStitcher.get_scaling_metadata`` never trips and the real
+    scaling math is actually exercised."""
+    idx = pd.date_range("2025-01-01", periods=n, freq="B")
+    rng = np.random.default_rng(7)
+    # Trend + noise, all strictly positive -- never a flat/constant series.
+    volume = 1_000_000.0 + np.arange(n) * 500.0 + rng.normal(0, 50_000, size=n)
+    volume = np.clip(volume, 100_000.0, None)
+    return pd.DataFrame(
+        {
+            "Open": np.linspace(400, 450, n),
+            "High": np.linspace(401, 451, n),
+            "Low": np.linspace(399, 449, n),
+            "Close": np.linspace(400.5, 450.5, n),
+            "Volume": volume,
+        },
+        index=idx,
+    )
+
+
+class _FakeStoreBars:
+    """Minimal HistoricalStore stand-in exposing only ``get_bars`` -- the one
+    method the stitch-demo endpoint calls."""
+
+    def __init__(self, bars: pd.DataFrame):
+        self._bars = bars
+
+    def get_bars(self, symbol, lookback_days=252, provider=None):
+        return self._bars
+
+
+def test_get_trends_stitch_demo_happy_path(monkeypatch):
+    bars = _make_stitch_demo_bars(260)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert set(body.keys()) == {"raw_curves", "stitched_curve"}
+
+    raw_curves = body["raw_curves"]
+    assert isinstance(raw_curves, list)
+    assert len(raw_curves) == 3
+    for curve in raw_curves:
+        assert set(curve.keys()) == {"name", "data"}
+        # Honest labeling: never claims to be real Google Trends data.
+        assert "SPY Volume Proxy" in curve["name"]
+        assert "Google Trends" not in curve["name"]
+        assert isinstance(curve["data"], list)
+        assert len(curve["data"]) > 0
+        for point in curve["data"]:
+            assert len(point) == 2
+            ts_ms, value = point
+            assert isinstance(ts_ms, int)
+            assert ts_ms > 0
+            assert value is not None
+            assert not (isinstance(value, float) and math.isnan(value))
+
+    stitched = body["stitched_curve"]
+    assert set(stitched.keys()) == {"name", "data"}
+    assert "SPY Volume Proxy" in stitched["name"]
+    assert isinstance(stitched["data"], list)
+    assert len(stitched["data"]) > 0
+    for point in stitched["data"]:
+        ts_ms, value = point
+        assert isinstance(ts_ms, int)
+        assert value is not None
+        assert not (isinstance(value, float) and math.isnan(value))
+
+    # Stitched series should span (roughly) the union of periods A/B/C, i.e.
+    # materially more points than any single one of the three raw curves.
+    assert len(stitched["data"]) > len(raw_curves[0]["data"])
+
+
+def test_get_trends_stitch_demo_insufficient_history_degrades_to_503_not_fabricated(monkeypatch):
+    # Fewer than the required 240 bars -- the endpoint must refuse to build
+    # the demo rather than proceed on a too-short window.
+    bars = _make_stitch_demo_bars(50)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert "detail" in body
+    # No fabricated/placeholder series is ever returned alongside the error.
+    assert "raw_curves" not in body
+    assert "stitched_curve" not in body
+
+
+def test_get_trends_stitch_demo_empty_bars_degrades_to_503(monkeypatch):
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(pd.DataFrame()))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert "raw_curves" not in body
+    assert "stitched_curve" not in body
+
+
+def test_get_trends_stitch_demo_generic_exception_degrades_to_503_not_500(monkeypatch):
+    class _BoomStore:
+        def get_bars(self, *a, **k):
+            raise RuntimeError("db locked")
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomStore())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 503  # dead-letter, never a raw 500
+    body = resp.json()
+    assert "raw_curves" not in body
+    assert "stitched_curve" not in body

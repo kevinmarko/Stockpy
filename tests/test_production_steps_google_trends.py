@@ -29,9 +29,14 @@ def test_exception_degrades_to_nan(monkeypatch):
         def __init__(self, *args, **kwargs):
             raise RuntimeError("DB Connection Failed")
             
-    import pipeline.production_steps
-    monkeypatch.setattr(pipeline.production_steps, "TrendsStore", MockTrendsStore, raising=False)
-    
+    # _apply_google_trends_asvi does a LOCAL `from data.trends_store import
+    # TrendsStore` inside its own body, so patching the name onto
+    # pipeline.production_steps's module namespace has no effect -- the local
+    # import re-resolves the name fresh from data.trends_store every call.
+    # Patch the real source module instead (matches
+    # test_normal_success_writes_values below).
+    monkeypatch.setattr("data.trends_store.TrendsStore", MockTrendsStore)
+
     _apply_google_trends_asvi(df)
     assert "Google_Trends_ASVI" in df.columns
     assert df["Google_Trends_ASVI"].isna().all()

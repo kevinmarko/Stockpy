@@ -5345,6 +5345,20 @@ class Settings(BaseSettings):
         default=300.0,
         description="How long the Google Trends cooldown stays open."
     )
+    GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=120.0,
+        description=(
+            "Hard wall-clock ceiling (seconds) for "
+            "pipeline/production_steps.py::_apply_google_trends_asvi()'s entire "
+            "per-cycle per-symbol TrendsStore.get_stitched_series() loop. A "
+            "single unreachable/slow local store read can otherwise stack "
+            "across every remaining symbol with no overall ceiling -- once "
+            "this budget elapses, every remaining symbol degrades to NaN "
+            "(never fabricated -- CONSTRAINT #4) for the rest of the cycle "
+            "instead of continuing to attempt reads. Only consulted once "
+            "GOOGLE_TRENDS_ENABLED is True."
+        ),
+    )
 
     @property
     def fred_key_is_leaked(self) -> bool:

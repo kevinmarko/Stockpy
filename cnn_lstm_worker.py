@@ -306,12 +306,21 @@ def load_predict_lstm_attention(
     last_window: np.ndarray,
     num_horizons: int,
 ) -> Dict[str, Any]:
-    """Load a persisted .keras model and predict on ``last_window``."""
+    """Load a persisted .keras model and predict on ``last_window``.
+
+    The LSTM-Attention model built by ``fit_predict_lstm_attention`` is a
+    multi-output ``Model(inputs, outputs=[predictions, attention_scores])``
+    (predictions is output index 0). A genuine multi-output Functional
+    model's ``.output_shape`` is a LIST of per-output shape tuples, not a
+    single tuple -- so the horizon-count check must index into the
+    predictions output specifically (``output_shape[0][-1]``), not the bare
+    ``output_shape[-1]`` the single-output CNN-LSTM path uses.
+    """
     if not TENSORFLOW_AVAILABLE:
         raise RuntimeError("tensorflow is not importable in this worker process")
 
     model = load_model(keras_path)
-    if model.output_shape[-1] != num_horizons:
+    if model.output_shape[0][-1] != num_horizons:
         raise ValueError("cached model horizon count mismatch")
     pred_scaled = model.predict(last_window, verbose=0)[0]
     return {"pred_scaled": [float(x) for x in pred_scaled]}

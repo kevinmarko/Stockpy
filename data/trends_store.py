@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, Date, DateTime, Float, Integer, String
+from sqlalchemy import Column, Date, DateTime, Float, Integer, String, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import create_db_engine, resolve_database_url, session_scope
@@ -16,6 +16,9 @@ Base = declarative_base()
 
 class RawTrendsDownload(Base):
     __tablename__ = "raw_trends_downloads"
+    __table_args__ = (
+        UniqueConstraint("query_term", "window_id", "date", name="uq_raw_trends_downloads_term_window_date"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     query_term = Column(String(255), nullable=False, index=True)
@@ -47,17 +50,32 @@ class TrendsStore:
         self.Session = sessionmaker(bind=self.engine)
 
     def insert_raw_window(self, query_term: str, window_id: str, data: list[dict], downloaded_at: datetime) -> None:
+        """Upsert one raw-download window's rows, keyed on
+        ``(query_term, window_id, date)`` (see ``RawTrendsDownload``'s
+        ``UniqueConstraint``). A re-download of an already-stored window
+        (e.g. a daemon cycle re-fetching an overlapping window) updates the
+        existing row's value/downloaded_at in place instead of appending a
+        duplicate -- mirrors ``save_stitched_series``'s query-then-update-or-
+        insert idiom below for consistency within this module.
+        """
         if self._readonly:
             raise RuntimeError("TrendsStore is read-only")
         with session_scope(self.Session) as session:
             for item in data:
-                session.add(RawTrendsDownload(
-                    query_term=query_term,
-                    window_id=window_id,
-                    date=item["date"],
-                    value=item["value"],
-                    downloaded_at=downloaded_at
-                ))
+                existing = session.query(RawTrendsDownload).filter_by(
+                    query_term=query_term, window_id=window_id, date=item["date"]
+                ).first()
+                if existing:
+                    existing.value = item["value"]
+                    existing.downloaded_at = downloaded_at
+                else:
+                    session.add(RawTrendsDownload(
+                        query_term=query_term,
+                        window_id=window_id,
+                        date=item["date"],
+                        value=item["value"],
+                        downloaded_at=downloaded_at
+                    ))
 
     def load_raw_windows(self, query_term: str) -> list[RawTrendsDownload]:
         try:

@@ -79,11 +79,35 @@ def build_lstm_attention_tensors(
     """
     # 1. Align all data on the same index
     common_idx = df_ohlcv.index
-    
-    # Forward fill ASVI gaps, then fill remaining with 0
-    asvi_sym_aligned = df_asvi_symbol.reindex(common_idx).ffill().fillna(0.0)
-    asvi_sec_aligned = df_asvi_sector.reindex(common_idx).ffill().fillna(0.0)
-    
+
+    # CONSTRAINT #4: a symbol/sector with NO real Google Trends coverage over
+    # this window must not be silently treated as "zero abnormal search
+    # volume" -- that is a fabricated, plausible-looking value, not an
+    # honest absence. Raise (caught by the caller,
+    # ForecastingEngine.run_lstm_attention_forecast, which already skips a
+    # symbol on ValueError) rather than fabricate. A partial/leading gap is
+    # still forward-filled then zero-filled below -- narrower, disclosed
+    # fabrication risk left in place (see this function's own known-issue
+    # note in the module changelog rather than restructuring the sliding
+    # window loop to drop leading rows).
+    asvi_sym_raw = df_asvi_symbol.reindex(common_idx)
+    asvi_sec_raw = df_asvi_sector.reindex(common_idx)
+    if asvi_sym_raw.isna().all():
+        raise ValueError(
+            f"No Google Trends ASVI data available for {symbol}; cannot build "
+            "LSTM-Attention tensors without fabricating zero search volume"
+        )
+    if asvi_sec_raw.isna().all():
+        raise ValueError(
+            f"No Google Trends sector-proxy ASVI data available for {symbol}; "
+            "cannot build LSTM-Attention tensors without fabricating zero "
+            "search volume"
+        )
+
+    # Forward fill ASVI gaps, then fill any remaining (leading) gap with 0.
+    asvi_sym_aligned = asvi_sym_raw.ffill().fillna(0.0)
+    asvi_sec_aligned = asvi_sec_raw.ffill().fillna(0.0)
+
     # 2. Extract features
     # Required columns in df_ohlcv: Open, High, Low, Close, Volume
     # Optional technicals: RSI_14, EMA_12, EMA_26, MACD, MACD_Signal, MACD_Hist, Realized_Vol_60D
@@ -97,20 +121,34 @@ def build_lstm_attention_tensors(
     # Feature 2: Sector ASVI
     features.append(asvi_sec_aligned.values)
     
-    # Features 3-7: OHLCV
+    # Features 3-7: OHLCV. CONSTRAINT #4: a missing required column must
+    # never be silently fabricated as a plausible-looking 0.0 (e.g. RSI=0
+    # implies "extreme oversold", MACD=0 implies "no momentum" -- both real,
+    # misleading claims about data that was never observed). Raise instead,
+    # matching this repo's per-ticker "exclude, don't fabricate" convention
+    # -- the caller (ForecastingEngine.run_lstm_attention_forecast) already
+    # catches ValueError and skips the symbol.
     for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
         if col in df_ohlcv.columns:
             features.append(df_ohlcv[col].ffill().fillna(0.0).values)
         else:
-            features.append(np.zeros(len(common_idx)))
-            
-    # Features 8+: Technicals
+            raise ValueError(
+                f"Required OHLCV column '{col}' missing from df_ohlcv for "
+                f"{symbol}; cannot build LSTM-Attention tensors without "
+                "fabricating a value"
+            )
+
+    # Features 8+: Technicals. Same CONSTRAINT #4 reasoning as above.
     tech_cols = ['RSI_14', 'EMA_12', 'EMA_26', 'MACD', 'MACD_Signal', 'MACD_Hist', 'Realized_Vol_60D', 'SMA_50']
     for col in tech_cols:
         if col in df_ohlcv.columns:
             features.append(df_ohlcv[col].ffill().fillna(0.0).values)
         else:
-            features.append(np.zeros(len(common_idx)))
+            raise ValueError(
+                f"Required technical indicator column '{col}' missing from "
+                f"df_ohlcv for {symbol}; cannot build LSTM-Attention tensors "
+                "without fabricating a value"
+            )
             
     # Stack into (time_steps, num_features)
     feature_matrix = np.column_stack(features)
