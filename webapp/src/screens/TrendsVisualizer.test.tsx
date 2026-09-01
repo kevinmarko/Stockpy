@@ -39,12 +39,15 @@ describe('TrendsVisualizer', () => {
     expect(screen.getByTestId('trends-stitch-chart')).toBeInTheDocument();
   });
 
-  it('honestly discloses the SPY-volume-proxy nature of the demo data', () => {
-    // Regression guard: the backend's own response labels every curve "SPY Volume
-    // Proxy" specifically so this demo is never mistaken for real Google Trends
-    // data (see api/data_api.py::get_trends_stitch_demo's docstring). The screen's
-    // headline text must not contradict that by presenting it as unqualified real
-    // search-volume data.
+  it('honestly discloses the SPY-volume-proxy nature of the fallback demo data', () => {
+    // Regression guard: the backend's SPY-proxy fallback response labels every
+    // curve "SPY Volume Proxy" specifically so it is never mistaken for real
+    // Google Trends data (see api/data_api.py::get_trends_stitch_demo's
+    // docstring). The screen's headline text must not contradict that by
+    // presenting the fallback as unqualified real search-volume data. Since the
+    // backend can also return REAL Google Trends data now (when TrendsStore has
+    // some on file), the copy must not claim live data "isn't wired up" -- only
+    // that a proxy substitution, when it happens, is always disclosed by name.
     vi.mocked(useApi).mockReturnValue({
       data: {
         raw_curves: [],
@@ -61,6 +64,6 @@ describe('TrendsVisualizer', () => {
     render(<TrendsVisualizer />);
 
     expect(screen.getByText(/SPY Volume Proxy/)).toBeInTheDocument();
-    expect(screen.getByText(/isn't wired up in this platform/)).toBeInTheDocument();
+    expect(screen.getByText(/never presented as real search-volume data/)).toBeInTheDocument();
   });
 });

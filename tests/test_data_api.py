@@ -1239,7 +1239,11 @@ def test_get_trends_stitch_demo_prefers_real_trends_store_data_when_available(mo
     the endpoint must use it directly rather than falling back to the SPY-volume
     proxy -- regression guard for the finding that this endpoint used to never
     even attempt the real (opt-in) SVI source before substituting an unrelated
-    proxy."""
+    proxy. Uses "AAPL" (not "SPY") to also regression-guard the fix for the
+    finding that the query term used to be hardcoded to "SPY", which never
+    matches what desktop/daemon_runtime.py actually ingests (settings.
+    DEFAULT_TICKERS, whose default has no SPY member) -- the endpoint must now
+    discover the term via TrendsStore.get_query_terms_with_raw_windows()."""
     import data.trends_store as trends_store_mod
 
     raw_rows = [
@@ -1258,10 +1262,15 @@ def test_get_trends_stitch_demo_prefers_real_trends_store_data_when_available(mo
         def __init__(self, *a, **k):
             pass
 
+        def get_query_terms_with_raw_windows(self):
+            return ["AAPL"]
+
         def load_raw_windows(self, query_term):
+            assert query_term == "AAPL"
             return raw_rows
 
         def get_stitched_series(self, query_term):
+            assert query_term == "AAPL"
             return stitched_rows
 
     monkeypatch.setattr(trends_store_mod, "TrendsStore", _FakeTrendsStore)
@@ -1274,7 +1283,9 @@ def test_get_trends_stitch_demo_prefers_real_trends_store_data_when_available(mo
 
     monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomIfCalled())
 
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
+        settings, "GOOGLE_TRENDS_ENABLED", True
+    ):
         resp = client.get("/data/trends/stitch-demo")
     assert resp.status_code == 200
     body = resp.json()
@@ -1283,24 +1294,72 @@ def test_get_trends_stitch_demo_prefers_real_trends_store_data_when_available(mo
     assert len(raw_curves) == 2
     # Windows ordered chronologically by their own earliest date (window_id is an
     # opaque UUID in production, not a chronological identifier).
-    assert raw_curves[0]["name"] == "Google Trends SVI (SPY) — w1"
-    assert raw_curves[1]["name"] == "Google Trends SVI (SPY) — w2"
+    assert raw_curves[0]["name"] == "Google Trends SVI (AAPL) — w1"
+    assert raw_curves[1]["name"] == "Google Trends SVI (AAPL) — w2"
     for curve in raw_curves:
         assert "SPY Volume Proxy" not in curve["name"]
 
     stitched = body["stitched_curve"]
-    assert stitched["name"] == "Stitched Google Trends SVI (SPY)"
+    assert stitched["name"] == "Stitched Google Trends SVI (AAPL)"
     assert [point[1] for point in stitched["data"]] == [10.0, 22.5, 30.0]
 
 
+def test_get_trends_stitch_demo_computes_stitched_series_when_not_yet_persisted(monkeypatch):
+    """Real raw windows on file but no persisted stitched series yet (a real
+    timing gap -- the daemon only calls save_stitched_series once stitching has
+    actually produced a non-empty result) must still use the real raw data,
+    computing a stitched curve on the fly via GoogleTrendsStitcher, rather than
+    discarding it for the SPY-volume proxy."""
+    import data.trends_store as trends_store_mod
+
+    raw_rows = [
+        SimpleNamespace(window_id="w1", date=date(2026, 1, 1), value=10.0),
+        SimpleNamespace(window_id="w1", date=date(2026, 1, 2), value=20.0),
+    ]
+
+    class _FakeTrendsStore:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_query_terms_with_raw_windows(self):
+            return ["AAPL"]
+
+        def load_raw_windows(self, query_term):
+            return raw_rows
+
+        def get_stitched_series(self, query_term):
+            return []  # not persisted yet
+
+    monkeypatch.setattr(trends_store_mod, "TrendsStore", _FakeTrendsStore)
+
+    class _BoomIfCalled:
+        def get_bars(self, *a, **k):
+            raise AssertionError("should not fall through to the SPY-volume proxy")
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomIfCalled())
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
+        settings, "GOOGLE_TRENDS_ENABLED", True
+    ):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["raw_curves"][0]["name"] == "Google Trends SVI (AAPL) — w1"
+    # A single window stitched via stitch_multiple_intervals returns it unchanged.
+    assert [point[1] for point in body["stitched_curve"]["data"]] == [10.0, 20.0]
+
+
 def test_get_trends_stitch_demo_falls_back_to_proxy_when_trends_store_empty(monkeypatch):
-    """No real SVI windows on file (the common case -- GOOGLE_TRENDS_ENABLED is
-    opt-in) must still degrade to the honest SPY-volume proxy, not an error."""
+    """No real SVI windows on file for any query term must still degrade to
+    the honest SPY-volume proxy, not an error."""
     import data.trends_store as trends_store_mod
 
     class _EmptyTrendsStore:
         def __init__(self, *a, **k):
             pass
+
+        def get_query_terms_with_raw_windows(self):
+            return []
 
         def load_raw_windows(self, query_term):
             return []
@@ -1312,7 +1371,31 @@ def test_get_trends_stitch_demo_falls_back_to_proxy_when_trends_store_empty(monk
 
     bars = _make_stitch_demo_bars(260)
     monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
+        settings, "GOOGLE_TRENDS_ENABLED", True
+    ):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert all("SPY Volume Proxy" in curve["name"] for curve in body["raw_curves"])
+
+
+def test_get_trends_stitch_demo_skips_trends_store_when_feature_disabled(monkeypatch):
+    """GOOGLE_TRENDS_ENABLED=False (the default) must skip TrendsStore entirely
+    -- never even constructing it -- instead of unconditionally querying it (and
+    its likely-nonexistent tables) on every request regardless of the flag."""
+    import data.trends_store as trends_store_mod
+
+    def _boom(*a, **k):
+        raise AssertionError("TrendsStore must not be constructed when GOOGLE_TRENDS_ENABLED is False")
+
+    monkeypatch.setattr(trends_store_mod, "TrendsStore", _boom)
+
+    bars = _make_stitch_demo_bars(260)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
+        settings, "GOOGLE_TRENDS_ENABLED", False
+    ):
         resp = client.get("/data/trends/stitch-demo")
     assert resp.status_code == 200
     body = resp.json()

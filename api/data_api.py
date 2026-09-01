@@ -2467,47 +2467,67 @@ def get_trends_stitch_demo() -> Dict[str, Any]:
             points.append([int(ts.timestamp() * 1000), float(val)])
         return {"name": name, "data": points}
 
-    query_term = "SPY"
-
     # 1. Prefer real, already-persisted Google Trends SVI data over the SPY-volume
-    #    proxy below -- see the docstring above for why this codebase does have a
-    #    real (opt-in) SVI source, unlike what this endpoint previously claimed.
-    try:
-        from data.trends_store import TrendsStore
+    #    proxy below -- gated on settings.GOOGLE_TRENDS_ENABLED so a default
+    #    deployment (the daemon job is opt-in, and its tables are typically never
+    #    created) doesn't pay for a DB engine + queries on every single request.
+    if settings.GOOGLE_TRENDS_ENABLED:
+        query_term: Optional[str] = None
+        raw_rows: List[Any] = []
+        try:
+            from data.trends_store import TrendsStore
 
-        trends_store = TrendsStore(readonly=True)
-        raw_rows = trends_store.load_raw_windows(query_term)
-        stitched_rows = trends_store.get_stitched_series(query_term)
-        if raw_rows and stitched_rows:
-            windows: Dict[str, List[Any]] = {}
-            for row in raw_rows:
-                windows.setdefault(row.window_id, []).append(row)
-            raw_curves = []
-            # window_id is an opaque UUID (see desktop/daemon_runtime.py's insert_raw_window
-            # call), not a chronological identifier -- order windows by their own earliest
-            # date instead of sorting the id strings themselves.
-            for window_id in sorted(windows, key=lambda wid: min(r.date for r in windows[wid])):
-                window_rows = sorted(windows[window_id], key=lambda r: r.date)
-                window_series = pd.Series(
-                    [r.value for r in window_rows],
-                    index=pd.DatetimeIndex([r.date for r in window_rows]),
-                )
-                raw_curves.append(to_curve(f"Google Trends SVI ({query_term}) — {window_id}", window_series))
-            stitched_series = pd.Series(
-                [row["value"] for row in stitched_rows],
-                index=pd.DatetimeIndex([row["date"] for row in stitched_rows]),
+            trends_store = TrendsStore(readonly=True)
+            # Discover which symbol(s) the daemon has actually populated rather than
+            # guessing a single hardcoded term -- desktop/daemon_runtime.py's
+            # maybe_refresh_google_trends ingests settings.DEFAULT_TICKERS, an
+            # operator-configured universe with no fixed member.
+            populated_terms = trends_store.get_query_terms_with_raw_windows()
+            if populated_terms:
+                query_term = populated_terms[0]
+                raw_rows = trends_store.load_raw_windows(query_term)
+        except Exception as exc:
+            logger.warning(
+                "get_trends_stitch_demo: TrendsStore unavailable, falling back to SPY volume "
+                "proxy (%s): %s",
+                type(exc).__name__,
+                exc,
             )
-            return {
-                "raw_curves": raw_curves,
-                "stitched_curve": to_curve(f"Stitched Google Trends SVI ({query_term})", stitched_series),
-            }
-    except Exception as exc:
-        logger.warning(
-            "get_trends_stitch_demo: real TrendsStore data unavailable, falling back to SPY volume "
-            "proxy (%s): %s",
-            type(exc).__name__,
-            exc,
-        )
+
+        if raw_rows:
+            # A failure past this point is a genuine defect in this reconstruction
+            # logic, not "no real data available yet" -- log it distinctly (ERROR +
+            # traceback) rather than at the same WARNING level as the routine
+            # not-yet-populated case above, then still degrade to the honest proxy
+            # below (CONSTRAINT #6: never a raw, unhandled 500 from this endpoint).
+            try:
+                windowed_series = GoogleTrendsStitcher.group_raw_windows_into_series(raw_rows)
+                raw_curves = [
+                    to_curve(f"Google Trends SVI ({query_term}) — {window_id}", series)
+                    for window_id, series in windowed_series
+                ]
+                stitched_rows = trends_store.get_stitched_series(query_term)
+                if stitched_rows:
+                    stitched_series = GoogleTrendsStitcher.rows_to_series(stitched_rows)
+                else:
+                    # No persisted stitched series yet for this term (a real timing gap --
+                    # desktop/daemon_runtime.py only calls save_stitched_series when
+                    # `if not stitched.empty:`) -- compute one from the raw windows we
+                    # already have instead of discarding real data for the proxy below.
+                    stitched_series = GoogleTrendsStitcher.stitch_multiple_intervals(
+                        [series for _, series in windowed_series]
+                    )
+                return {
+                    "raw_curves": raw_curves,
+                    "stitched_curve": to_curve(f"Stitched Google Trends SVI ({query_term})", stitched_series),
+                }
+            except Exception:
+                logger.error(
+                    "get_trends_stitch_demo: unexpected failure building real-SVI curves for "
+                    "query_term=%r -- falling back to SPY volume proxy",
+                    query_term,
+                    exc_info=True,
+                )
 
     # 2. Fall back to the real-SPY-volume proxy.
     n_bars = 240
@@ -2554,9 +2574,9 @@ def get_trends_stitch_demo() -> Dict[str, Any]:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Live Google Trends SVI fetching is not implemented -- this demo uses real "
-                "SPY trading volume as an honest proxy input, and insufficient SPY bar history "
-                "is currently available to build it. Use mock mode to view the demo."
+                "Neither real Google Trends SVI data (opt-in via GOOGLE_TRENDS_ENABLED) nor "
+                "sufficient SPY bar history for the honest SPY-volume-proxy fallback is "
+                "currently available to build this demo. Use mock mode to view the demo."
             ),
         )
 
