@@ -1781,7 +1781,27 @@ class TestDaemonOptionsLifecycleIntegration:
             d = OrchestratorDaemon()
             d._run_one_cycle(run_id="test-run-1", reason="interval", mode="full")
 
-            mock_lifecycle.assert_called_once_with(macro_dto=mock_macro)
+            mock_lifecycle.assert_called_once_with(macro_dto=mock_macro, run_0dte=False)
+
+    def test_daemon_skips_options_lifecycle_on_freshness_skip(self, monkeypatch):
+        """When _main_body returns CYCLE_SKIPPED (the data-freshness gate
+        skipped the cycle outright -- no real pipeline run, no real
+        macro_dto), the options lifecycle must NOT run: doing so would
+        silently bypass the VIX/CREDIT-EVENT premium-selling gate with a
+        stale/absent macro context on the majority of interval wakes in a
+        short-interval deployment."""
+        async def _fake_main_body(*_a, **_k):
+            return main_orchestrator.CYCLE_SKIPPED
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
+
+        with mock.patch(
+            "execution.options_lifecycle.run_automated_options_lifecycle"
+        ) as mock_lifecycle:
+            d = OrchestratorDaemon()
+            d._run_one_cycle(run_id="test-run-5", reason="interval", mode="full")
+
+            mock_lifecycle.assert_not_called()
 
     def test_daemon_skips_options_lifecycle_on_non_full_mode(self, monkeypatch):
         async def _fake_main_body(*_a, **_k):

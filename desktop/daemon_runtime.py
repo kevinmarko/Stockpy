@@ -361,10 +361,22 @@ class OrchestratorDaemon:
             # Automated options paper execution and dynamic lifecycle
             # (auto-exits, strategy auto-execution, delta hedging).
             # Sourced from execution.options_lifecycle without side-effects.
-            if mode == "full" and not self._dry_run:
+            # Only run when a real cycle actually executed this wake -- NOT on
+            # a DATA_FRESHNESS_TTL_SECONDS freshness-skip (macro_dto is then
+            # main_orchestrator.CYCLE_SKIPPED, not a real macro context),
+            # otherwise every skipped interval wake would silently bypass the
+            # VIX/CREDIT-EVENT premium-selling gate that macro_dto threading
+            # exists to enforce. run_0dte=False because _timer_loop already
+            # evaluates 0DTE exits directly on every interval wake (see its
+            # own comment below) -- re-running it here would double-fire it.
+            if (
+                mode == "full"
+                and not self._dry_run
+                and macro_dto is not main_orchestrator.CYCLE_SKIPPED
+            ):
                 try:
                     from execution.options_lifecycle import run_automated_options_lifecycle
-                    run_automated_options_lifecycle(macro_dto=macro_dto)
+                    run_automated_options_lifecycle(macro_dto=macro_dto, run_0dte=False)
                 except Exception as opt_exc:  # noqa: BLE001 - non-fatal to daemon cycle
                     logger.warning(
                         "Daemon options lifecycle execution failed (non-critical): %s",

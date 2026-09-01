@@ -47,6 +47,17 @@ This plan extracts the execution logic into a shared module and wires it into th
 #### [MODIFY] `docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md`
 - Update the known issue doc to reflect that Bug 2 has been fixed and the options lifecycle is fully wired into the persistent daemon.
 
+#### [MODIFY] `CLAUDE.md` / `AGENTS.md`
+- Remove the "disclosed not fixed" daemon gap disclaimer from the Multi-Leg Option Paper Trading bullet, since Bug 2 is now fixed.
+
+#### [MODIFY] `docs/architecture/execution.md`
+- Update the `execution/options_paper_executor.py` bullet and add a new bullet for `execution/options_lifecycle.py` to reflect the extraction and daemon wiring.
+
+*(Retroactive note: this Documentation section originally omitted the three
+bullets above, even though the commit edited all three files — added here
+per CLAUDE.md's rule that every Implementation Plan must name the doc files
+a change touches.)*
+
 ## Verification Plan
 
 ### Automated Tests
