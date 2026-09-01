@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-29T12:50:40.708706+00:00",
-  "command_count": 17,
+  "generated_at": "2026-09-01T02:17:13.381120+00:00",
+  "command_count": 18,
   "dead_letters": [],
   "commands": [
     {
@@ -647,7 +647,7 @@
           "aliases": [
             "--strategies"
           ],
-          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, copula_stat_arb, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dispersion_trading, dividend_yield_edgar_pit, earnings_crush, forecast_alignment, forecast_direction_arima_hw, gamma_scalper, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, news_catalyst, options_flow_sentiment, pairs_trading, put_credit_spread, put_debit_spread, regime_multiplier, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vol_mispricing, vrp_premium_selling, zero_dte_engine).",
+          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, copula_stat_arb, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, options_flow_sentiment, pairs_trading, put_credit_spread, put_debit_spread, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vol_mispricing, vrp_premium_selling).",
           "default": null,
           "choices": null,
           "required": false,
@@ -763,7 +763,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/audit_strategy_registry_compliance/output",
+          "default": "/Users/kevinlee/Stockpy-live/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -799,7 +799,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/audit_strategy_registry_compliance/output",
+          "default": "/Users/kevinlee/Stockpy-live/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -1063,6 +1063,15 @@
       ],
       "positionals": [],
       "subcommands": []
+    },
+    {
+      "name": "export_notebooklm.py",
+      "invocation": "python scripts/export_notebooklm.py",
+      "aliases": [],
+      "description": "Generate a NotebookLM export.",
+      "options": [],
+      "positionals": [],
+      "subcommands": []
     }
   ],
   "strategy_registry": [
@@ -1074,11 +1083,8 @@
     "covered_call",
     "cross_sectional_momentum",
     "deep_value_edgar_pit",
-    "dispersion_trading",
     "dividend_yield_edgar_pit",
-    "earnings_crush",
     "forecast_direction_arima_hw",
-    "gamma_scalper",
     "garch_vol_target",
     "lgbm_ranker",
     "macd_trend",
@@ -1097,8 +1103,7 @@
     "timeseries_momentum",
     "value_quality_edgar_pit",
     "vol_mispricing",
-    "vrp_premium_selling",
-    "zero_dte_engine"
+    "vrp_premium_selling"
   ],
   "options_strategy_registry": [
     "Bear Put Spread",
@@ -1114,7 +1119,6 @@
     "covered_call",
     "put_credit_spread",
     "put_debit_spread",
-    "vol_mispricing",
     "vrp_premium_selling"
   ]
 }
