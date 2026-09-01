@@ -738,14 +738,19 @@ class TestSkillMdInvariantsPinned:
     so they cannot be accidentally removed or hallucinated away."""
 
     def test_skill_md_contains_required_safety_invariants(self):
-        skill_md_path = Path(".claude/skills/robinhood-execution/SKILL.md")
-        if not skill_md_path.exists():
-            skill_md_path = Path(".agents/skills/robinhood-execution/SKILL.md")
+        # Check every copy of the skill that actually exists -- not just
+        # .claude's with an .agents fallback used only when .claude's is
+        # missing. .claude/skills/robinhood-execution/SKILL.md always
+        # exists in this repo, so a fallback-only check would never
+        # actually read the .agents/ copy and could miss a safety
+        # invariant silently dropped from it while .claude's stayed intact.
+        candidate_paths = [
+            Path(".claude/skills/robinhood-execution/SKILL.md"),
+            Path(".agents/skills/robinhood-execution/SKILL.md"),
+        ]
+        skill_md_paths = [p for p in candidate_paths if p.exists()]
 
-        assert skill_md_path.exists(), f"Could not find {skill_md_path}"
-        content = skill_md_path.read_text(encoding="utf-8")
-
-        assert "## Invariants (never violate)" in content, "Missing 'Invariants (never violate)' section header."
+        assert skill_md_paths, f"Could not find any of {candidate_paths}"
 
         required_phrases = [
             "Preview before place, always.",
@@ -760,5 +765,14 @@ class TestSkillMdInvariantsPinned:
             "Limit price from the live quote."
         ]
 
-        for phrase in required_phrases:
-            assert phrase in content, f"Missing critical safety invariant phrase in SKILL.md: '{phrase}'"
+        for skill_md_path in skill_md_paths:
+            content = skill_md_path.read_text(encoding="utf-8")
+
+            assert "## Invariants (never violate)" in content, (
+                f"Missing 'Invariants (never violate)' section header in {skill_md_path}."
+            )
+
+            for phrase in required_phrases:
+                assert phrase in content, (
+                    f"Missing critical safety invariant phrase in {skill_md_path}: '{phrase}'"
+                )
