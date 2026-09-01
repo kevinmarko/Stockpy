@@ -13,8 +13,6 @@ This meant that if `settings.ORCHESTRATOR_DAEMON_ENABLED` were turned on, option
    Modified `main_orchestrator.py` (`fetch_all_data_async`) to explicitly return the `macro_dto` object so the daemon has access to it.
 3. **Daemon Wiring**:
    Updated `desktop/daemon_runtime.py` to accept the `macro_dto` from the `main_orchestrator` and thread it into `run_automated_options_lifecycle(macro_dto=macro_dto)` whenever a full pipeline cycle runs and is not a dry-run.
-4. **Test Leakage Fix**:
-   Fixed a widespread issue where tests in `tests/test_options_lifecycle.py` used `patch("data.paper_account_store.PaperAccountStore").start()` without `.stop()`, polluting downstream tests (like `test_zero_dte_engine.py`). Replaced all with `with patch(...)` context managers.
 
 ## Testing & Verification
 - Unit tests added to `tests/test_options_lifecycle.py` targeting the extracted logic.
@@ -26,3 +24,23 @@ This meant that if `settings.ORCHESTRATOR_DAEMON_ENABLED` were turned on, option
 - Marked Bug 2 as "fully fixed" with resolution details in `docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md`.
 - Updated `docs/architecture/execution.md` to reflect the new `options_lifecycle.py` architecture.
 - Removed the "disclosed not fixed" daemon gap disclaimer in `CLAUDE.md`/`AGENTS.md`.
+
+## Code-review follow-up (same PR)
+A subsequent review of this commit found and fixed two real regressions this
+first pass introduced:
+- `_run_one_cycle` invoked the lifecycle unconditionally on `mode=="full"`,
+  including on a `DATA_FRESHNESS_TTL_SECONDS` freshness-skip cycle (where
+  `_main_body` never actually runs the pipeline) — `macro_dto` was then
+  `None`, silently bypassing the VIX/CREDIT-EVENT gate this whole change was
+  meant to protect. Fixed via a new `main_orchestrator.CYCLE_SKIPPED`
+  sentinel that `_run_one_cycle` checks for before invoking the lifecycle.
+- `manage_0dte_exits()` double-fired every interval wake — once from
+  `_timer_loop`'s own direct call, once again from the lifecycle's step 1b.
+  Fixed via a new `run_0dte` parameter on `run_automated_options_lifecycle`;
+  the daemon path now passes `run_0dte=False`.
+
+The item previously listed here as a "Test Leakage Fix" (replacing
+`patch(...).start()`/`.stop()` calls in `tests/test_options_lifecycle.py`
+with `with patch(...)` context managers) did not actually happen in this
+commit — no such pattern exists in that file before or after it. That claim
+has been removed from this document.

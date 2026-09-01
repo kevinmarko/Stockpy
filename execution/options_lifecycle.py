@@ -72,6 +72,7 @@ def run_automated_options_lifecycle(
     macro_dto: Optional[Any] = None,
     executor: Optional[Any] = None,
     delta_hedge_fn: Optional[Any] = None,
+    run_0dte: bool = True,
 ) -> Dict[str, Any]:
     """Runs the automated options paper-trading lifecycle: exit management,
     0DTE fast exits, new-position auto-execution, and dynamic SPY delta
@@ -83,8 +84,22 @@ def run_automated_options_lifecycle(
       - OPTIONS_DELTA_HEDGE_ENABLED
       - OPTIONS_0DTE_ENABLED
 
-    Never raises -- every step is independently non-fatal to the pipeline
-    (CONSTRAINT #6).
+    ``run_0dte`` (default ``True``) lets a caller that already evaluates 0DTE
+    exits on its own, more frequent cadence opt out of step 1b here to avoid
+    double-firing it. desktop/daemon_runtime.py's ``_timer_loop`` already
+    calls ``manage_0dte_exits()`` directly on every interval wake -- it
+    passes ``run_0dte=False`` here so this function doesn't re-run the exact
+    same evaluation a second time per cycle. main.py has no such standalone
+    caller, so it keeps the default.
+
+    Each of the four steps below is wrapped in its own try/except: a failure
+    in one step (e.g. exit management) does NOT prevent the later steps
+    (strategy auto-execution, delta hedging) from still running in the same
+    cycle -- a deliberate, more dead-letter-resilient granularity than the
+    original inline main.py block this was extracted from, which shared one
+    outer try/except across steps 1 and 2 and so aborted the whole cycle on
+    a step-1 failure. The outer try/except below exists only to guard
+    executor construction itself.
     """
     if not (
         getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
@@ -116,7 +131,13 @@ def run_automated_options_lifecycle(
                 results["auto_exits"] = {"error": str(_exit_exc)}
 
         # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
-        if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+        # Skipped when run_0dte=False -- see this function's own docstring for why
+        # (avoids double-firing against a caller, e.g. the daemon's _timer_loop,
+        # that already evaluates 0DTE exits on its own separate cadence).
+        if run_0dte and (
+            getattr(settings, "OPTIONS_0DTE_ENABLED", False)
+            or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
+        ):
             try:
                 from pilots.zero_dte_engine import manage_0dte_exits
                 _0dte_res = manage_0dte_exits(store=executor.store)
