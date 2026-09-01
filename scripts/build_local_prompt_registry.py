@@ -147,7 +147,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    signing_key = os.environ.get("PROMPT_REGISTRY_SIGNING_KEY")
+    import settings
+    signing_key = settings.settings.PROMPT_REGISTRY_SIGNING_KEY
     if not signing_key:
         print(
             "Error: PROMPT_REGISTRY_SIGNING_KEY is not set.\n"

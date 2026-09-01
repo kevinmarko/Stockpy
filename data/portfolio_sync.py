@@ -639,7 +639,7 @@ def load_env_watchlist(watchlist_file: str) -> List[str]:
     tickers: Dict[str, None] = {}
     rejected: List[str] = []
 
-    env_val = os.environ.get("WATCHLIST", "").strip()
+    env_val = settings.WATCHLIST.strip()
     if env_val:
         for t in env_val.split(","):
             t = t.strip().upper()
