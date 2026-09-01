@@ -5335,7 +5335,7 @@ class Settings(BaseSettings):
     # Missing fields flagged by the codebase auditor (scripts/auditor/
     # stockpy_codebase_auditor.py's undeclared_env_var check).
     #
-    # RH_LOGIN_WORKER and KEY are deliberately NOT declared here:
+    # RH_LOGIN_WORKER and KEY are deliberately NOT declared here (enforced by tests/test_measure_settings_census.py census-gate test):
     #  - RH_LOGIN_WORKER is a structural in-process marker
     #    (os.environ.get("RH_LOGIN_WORKER") == "1", string comparison, never
     #    read via settings.X) set only by data/robinhood_login_worker.py to

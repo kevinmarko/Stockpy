@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `b967e070b893f1b65aa63e395a6572f5d02a3699`
+- Measured at commit: `b49d0f12160e69527d8223987cdaa9bb60fc0cb5`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -218,23 +218,23 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **439** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **441** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **22** distinct local names
+The singleton is bound under **23** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
+_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings.settings, settings_module.settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 802 | 263 |
+| (a) `settings.KEY` | 826 | 273 |
 | (b) `getattr(settings, "KEY", default)` | 372 | 211 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
-| (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
+| (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
 Fields reached by at least one form: **440** of 449.
 
@@ -257,7 +257,7 @@ referenced by name somewhere and is probably read dynamically.
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1442`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **177**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **167**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -268,12 +268,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `AI_CHAT_DEFAULT_MODEL` | b | 1 | 0 |
 | `AI_CHAT_DEFAULT_PROVIDER` | b | 2 | 0 |
 | `AI_GENERATION_API_ENABLED` | b | 1 | 0 |
-| `ALERT_CHANNELS` | d | 0 | 1 |
-| `ALERT_EMAIL_SMTP_HOST` | d | 0 | 1 |
-| `ALERT_EMAIL_SMTP_PASSWORD` | d | 0 | 1 |
-| `ALERT_EMAIL_SMTP_PORT` | d | 0 | 1 |
-| `ALERT_NTFY_TOPIC` | d | 0 | 1 |
-| `ALERT_SLACK_WEBHOOK_URL` | d | 0 | 1 |
 | `ALERT_WEBHOOK_URL` | b | 1 | 0 |
 | `ALPACA_KEY_ROTATED_DATE` | b | 1 | 0 |
 | `ATTENTION_CIRCUIT_BREAKER_THRESHOLD` | b | 1 | 0 |
@@ -315,7 +309,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FEATURE_DRIFT_PSI_ENABLED` | b | 1 | 0 |
 | `FINBERT_BATCH_SIZE` | b | 1 | 0 |
 | `FINBERT_SCORE_CACHE_ENABLED` | b | 1 | 0 |
-| `FINNHUB_RATE_LIMIT_PER_MIN` | d | 0 | 2 |
 | `FMP_ANALYST_ENABLED` | b | 2 | 0 |
 | `FMP_ANALYST_REFRESH_HOURS` | b | 1 | 0 |
 | `FMP_BARS_ENABLED` | b | 1 | 0 |
@@ -424,8 +417,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `PAIRS_SNAPSHOT_MAX_PAIRS` | b | 1 | 0 |
 | `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | b | 2 | 0 |
 | `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` | b | 1 | 0 |
-| `QDRANT_COLLECTION` | d | 0 | 1 |
-| `QDRANT_URL` | d | 0 | 1 |
 | `RAG_EMBEDDING_PROVIDER` | b | 1 | 0 |
 | `RAG_INDEX_LOOKBACK_DAYS` | b | 1 | 0 |
 | `RAG_INDEX_MAX_DOCUMENTS` | b | 1 | 0 |
@@ -439,7 +430,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `SENTIMENT_LLM_VERIFICATION_PROVIDER` | b | 1 | 0 |
 | `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` | b | 2 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
-| `WATCHLIST` | b+d | 1 | 5 |
 
 ### Dynamic `getattr` sites (form c) — **17**
 
@@ -465,7 +455,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `runtime_flags_writer.py:774` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:783` | `getattr(settings_module.settings, key, None)` |
 
-### Fields read via `os.environ` (form d) — 18 field(s)
+### Fields read via `os.environ` (form d) — 2 field(s)
 
 `.env` is loaded into the `Settings` model directly by pydantic-settings; it is only
 copied into the real `os.environ` when something calls `load_dotenv()`. A field read
@@ -474,24 +464,8 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 
 | Field | Reads | Also read via (a) |
 |---|---|---|
-| `WATCHLIST` | 5 | **no** |
-| `FINNHUB_RATE_LIMIT_PER_MIN` | 2 | **no** |
-| `FUNDAMENTALS_CACHE_TTL_SECONDS` | 2 | yes |
-| `FUNDAMENTALS_NEG_CACHE_TTL_SECONDS` | 2 | yes |
-| `ALERT_CHANNELS` | 1 | **no** |
-| `ALERT_EMAIL_FROM` | 1 | yes |
-| `ALERT_EMAIL_SMTP_HOST` | 1 | **no** |
-| `ALERT_EMAIL_SMTP_PASSWORD` | 1 | **no** |
-| `ALERT_EMAIL_SMTP_PORT` | 1 | **no** |
-| `ALERT_EMAIL_TO` | 1 | yes |
-| `ALERT_NTFY_TOPIC` | 1 | **no** |
-| `ALERT_SLACK_WEBHOOK_URL` | 1 | **no** |
 | `GCLOUD_BIN` | 1 | **no** |
-| `LOG_LEVEL` | 1 | yes |
 | `NO_VENV_REEXEC` | 1 | **no** |
-| `PROMPT_REGISTRY_SIGNING_KEY` | 1 | yes |
-| `QDRANT_COLLECTION` | 1 | **no** |
-| `QDRANT_URL` | 1 | **no** |
 
 ---
 
