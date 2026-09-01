@@ -227,10 +227,14 @@ def notify(
         # controlled URL or scheme.
         with urllib.request.urlopen(req, timeout=_NTFY_REQUEST_TIMEOUT_S) as resp:  # nosec B310
             if resp.status not in (200, 201):
+                # CONSTRAINT #3: ALERT_NTFY_TOPIC is a SECRET_KEYS field (it functions
+                # like a bearer token -- ntfy.sh access-controls a topic by its name
+                # alone, per this function's own docstring above) and must never be
+                # logged in cleartext. Log only that a topic was configured, not what
+                # it is.
                 logger.warning(
-                    "ntfy POST returned unexpected HTTP %d for topic '%s'.",
+                    "ntfy POST returned unexpected HTTP %d for the configured topic.",
                     resp.status,
-                    topic,
                 )
                 return False
             else:
