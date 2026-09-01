@@ -214,9 +214,11 @@ class TestGoogleTrendsStitcherScalingMetadata:
 
         meta = GoogleTrendsStitcher.get_scaling_metadata(svi_a, svi_b)
 
-        assert set(meta.keys()) == {"overlapStart", "overlapEnd", "overlap_dates", "f"}
-        assert meta["overlapStart"] == pd.Timestamp("2026-03-15")
-        assert meta["overlapEnd"] == pd.Timestamp("2026-03-31")
+        # overlapStart/overlapEnd are deliberately NOT separate keys -- they're
+        # trivially derivable from overlap_dates (see get_scaling_metadata's docstring).
+        assert set(meta.keys()) == {"overlap_dates", "f"}
+        assert meta["overlap_dates"][0] == pd.Timestamp("2026-03-15")
+        assert meta["overlap_dates"][-1] == pd.Timestamp("2026-03-31")
 
     def test_get_scaling_metadata_f_matches_exact_ratio(self):
         """Hand-constructed overlap with known, unequal per-day values so `f`

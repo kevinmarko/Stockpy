@@ -12,7 +12,7 @@ rule (NaN/missing → ``null``, never a fabricated ``0.0``).
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
 
@@ -1232,6 +1232,91 @@ def test_get_trends_stitch_demo_happy_path(monkeypatch):
     expected_ts_ms = [int(ts.timestamp() * 1000) for ts in slice_a.index]
     actual_ts_ms = [point[0] for point in raw_curves[0]["data"]]
     assert actual_ts_ms == expected_ts_ms
+
+
+def test_get_trends_stitch_demo_prefers_real_trends_store_data_when_available(monkeypatch):
+    """When real, already-persisted Google Trends SVI data exists in TrendsStore,
+    the endpoint must use it directly rather than falling back to the SPY-volume
+    proxy -- regression guard for the finding that this endpoint used to never
+    even attempt the real (opt-in) SVI source before substituting an unrelated
+    proxy."""
+    import data.trends_store as trends_store_mod
+
+    raw_rows = [
+        SimpleNamespace(window_id="w1", date=date(2026, 1, 1), value=10.0),
+        SimpleNamespace(window_id="w1", date=date(2026, 1, 2), value=20.0),
+        SimpleNamespace(window_id="w2", date=date(2026, 1, 2), value=25.0),
+        SimpleNamespace(window_id="w2", date=date(2026, 1, 3), value=30.0),
+    ]
+    stitched_rows = [
+        {"date": date(2026, 1, 1), "value": 10.0},
+        {"date": date(2026, 1, 2), "value": 22.5},
+        {"date": date(2026, 1, 3), "value": 30.0},
+    ]
+
+    class _FakeTrendsStore:
+        def __init__(self, *a, **k):
+            pass
+
+        def load_raw_windows(self, query_term):
+            return raw_rows
+
+        def get_stitched_series(self, query_term):
+            return stitched_rows
+
+    monkeypatch.setattr(trends_store_mod, "TrendsStore", _FakeTrendsStore)
+
+    # A HistoricalStore that raises if ever touched -- proves the real-data path
+    # short-circuits before falling through to the SPY-volume proxy below it.
+    class _BoomIfCalled:
+        def get_bars(self, *a, **k):
+            raise AssertionError("should not fall through to the SPY-volume proxy")
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomIfCalled())
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    raw_curves = body["raw_curves"]
+    assert len(raw_curves) == 2
+    # Windows ordered chronologically by their own earliest date (window_id is an
+    # opaque UUID in production, not a chronological identifier).
+    assert raw_curves[0]["name"] == "Google Trends SVI (SPY) — w1"
+    assert raw_curves[1]["name"] == "Google Trends SVI (SPY) — w2"
+    for curve in raw_curves:
+        assert "SPY Volume Proxy" not in curve["name"]
+
+    stitched = body["stitched_curve"]
+    assert stitched["name"] == "Stitched Google Trends SVI (SPY)"
+    assert [point[1] for point in stitched["data"]] == [10.0, 22.5, 30.0]
+
+
+def test_get_trends_stitch_demo_falls_back_to_proxy_when_trends_store_empty(monkeypatch):
+    """No real SVI windows on file (the common case -- GOOGLE_TRENDS_ENABLED is
+    opt-in) must still degrade to the honest SPY-volume proxy, not an error."""
+    import data.trends_store as trends_store_mod
+
+    class _EmptyTrendsStore:
+        def __init__(self, *a, **k):
+            pass
+
+        def load_raw_windows(self, query_term):
+            return []
+
+        def get_stitched_series(self, query_term):
+            return []
+
+    monkeypatch.setattr(trends_store_mod, "TrendsStore", _EmptyTrendsStore)
+
+    bars = _make_stitch_demo_bars(260)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert all("SPY Volume Proxy" in curve["name"] for curve in body["raw_curves"])
 
 
 def test_get_trends_stitch_demo_insufficient_history_degrades_to_503_not_fabricated(monkeypatch):
