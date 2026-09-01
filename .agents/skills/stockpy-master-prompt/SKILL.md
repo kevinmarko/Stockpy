@@ -24,7 +24,10 @@ history, even if it didn't.
 You are working in **Stockpy** (also called **InvestYo**) — a solo-developer,
 personal quantitative trading *advisory* platform, hosted on a Mac mini.
 
-- Backend: Python/FastAPI, ~28 modules
+- Backend: Python/FastAPI, a flat modular "Engine" architecture (no package
+  directories for top-level engines) — see `docs/architecture/*.md` for the
+  current per-subsystem module inventory rather than trusting a headline
+  module count, which drifts fast in this codebase
 - Storage: SQLite via `PaperAccountStore`
 - Frontend: React/TypeScript PWA
 - Market data: FMP (primary), yfinance (fallback)
@@ -198,26 +201,38 @@ that *is* the finding. Say so — don't round it up to "looks good."
 
 ## 7. Known open gaps — don't rediscover these, don't assume they're fixed
 
-- `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate is fully
-  implemented and unit-tested but never called from any production path —
-  the UI shows it as live.
-- `earnings_crush`, `vol_mispricing`, `dispersion_trading`,
-  `zero_dte_engine`, `gamma_scalper`, and `copula_stat_arb` submit real
-  paper trades with zero `STRATEGY_REGISTRY` entries, zero validation-log
-  entries, and zero stress-scenario coverage.
-- Active trading universe (~430 symbols, heavy OTC/ADR/small-cap) is
-  disconnected from the forecast/drift-tracking universe (a fixed 26-symbol
-  semiconductor/mega-cap list) — `forecast_available` returns false for
-  essentially every held position, and PIT fundamentals coverage sits
-  around 7% of the active universe. This is flagged as a root cause behind
-  several other pipeline gaps, not a symptom to patch locally.
+This section previously restated specific claims about the 0DTE exit gate
+and the six options-desk pilots' registry status. Both were later fixed
+(the gate is wired into `desktop/daemon_runtime.py`'s `_timer_loop`; all six
+pilots now have `STRATEGY_REGISTRY` entries and — as of a later, separate
+fix — `earnings_crush`/`dispersion_trading`/`zero_dte_engine`/
+`vol_mispricing` are blocked from execution by default unless the request
+sets `override_deployability_gate=True`), and this file shipped the stale
+version for a while before that was caught. Restating specific numbers or
+statuses here is exactly the kind of claim that goes stale between one
+session and the next — read `stockpy-quant-integrity`'s own "Currently
+open, already-flagged gaps" section for the maintained, current answer
+instead of trusting anything reproduced here.
+
 - A Robinhood MCP live-order server (`place_equity_order` and similar
-  tools) has been flagged as a direct conflict with the advisory-only
-  design and should be gated or removed before further integration work —
-  confirm its status before assuming it's inert.
-- If a task touches any module above and doesn't mention fixing the
-  relevant gap, flag it in your response instead of quietly working around
-  it.
+  tools) shares its connection with the read-only account tools, has no
+  vendor-side read-only mode, and its one-confirmation-per-order safety
+  invariant is enforced entirely by prose in
+  `.claude/skills/robinhood-execution/SKILL.md` (pinned only by a
+  verbatim-string test, not code) — see
+  `docs/known_issues/robinhood_confirmation_gate_is_prose_only.md`. Confirm
+  its status before assuming it's inert; there is currently no code-level
+  interception point for it.
+- Before restating any other "known gap" claim — registry status, a gate
+  being wired/unwired, universe coverage — grep the live code yourself and
+  check `docs/known_issues/README.md` for the current, actively-maintained
+  index of open/closed investigations. A gap list is a starting point for
+  where past audits found problems, not a guarantee those problems are
+  still open.
+- If a task touches any module above and you find the gap already fixed,
+  or find it's a different shape than described, correct this file in the
+  same PR instead of quietly working around the discrepancy or restating
+  the stale claim.
 
 ## 8. Your first move in this session
 

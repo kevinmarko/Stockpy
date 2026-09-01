@@ -32,18 +32,24 @@ already found by audit passes, not by the original author:
   hardcoded `"cvar_95": float(0.05), # placeholder` instead of the real
   computed value — the module's own math was correct, only the wiring
   fabricated the number.
-- `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate is fully
-  implemented and unit-tested, and is simply never called from any
-  production path — the UI shows "15:45 ET Auto-Close" as if it's live.
-- Five live options-selling pilots (`earnings_crush`, `vol_mispricing`,
-  `dispersion_trading`, `zero_dte_engine`, `gamma_scalper`) plus
-  `copula_stat_arb` submit real paper trades with zero `STRATEGY_REGISTRY`
-  entry, zero validation-log entry, and zero stress-scenario coverage.
+- `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate sat fully
+  implemented and unit-tested for a while with nothing calling it from any
+  production path — the UI showed "15:45 ET Auto-Close" as if it were live
+  when it wasn't.
+- For a while, five live options-selling pilots (`earnings_crush`,
+  `vol_mispricing`, `dispersion_trading`, `zero_dte_engine`,
+  `gamma_scalper`) plus `copula_stat_arb` submitted real paper trades with
+  zero `STRATEGY_REGISTRY` entry, zero validation-log entry, and zero
+  stress-scenario coverage.
 
 None of these were carelessness — they're the natural failure mode of a
 codebase this large, where "I wrote it and the happy path works" quietly
 substitutes for "I verified it against the actual gate." This skill exists
-so that substitution stops happening by default.
+so that substitution stops happening by default. **Both of the gaps above
+are now closed** — see "Currently open, already-flagged gaps" below for
+their actual current state, and don't re-report either as still open
+without checking there first; stale claims about a fixed gap are the same
+CONSTRAINT #4-shaped failure this skill exists to prevent.
 
 ## Quick checklist — work through this before saying something is done
 

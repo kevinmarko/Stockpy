@@ -32,18 +32,24 @@ already found by audit passes, not by the original author:
   hardcoded `"cvar_95": float(0.05), # placeholder` instead of the real
   computed value — the module's own math was correct, only the wiring
   fabricated the number.
-- `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate is fully
-  implemented and unit-tested, and is simply never called from any
-  production path — the UI shows "15:45 ET Auto-Close" as if it's live.
-- Five live options-selling pilots (`earnings_crush`, `vol_mispricing`,
-  `dispersion_trading`, `zero_dte_engine`, `gamma_scalper`) plus
-  `copula_stat_arb` submit real paper trades with zero `STRATEGY_REGISTRY`
-  entry, zero validation-log entry, and zero stress-scenario coverage.
+- `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate sat fully
+  implemented and unit-tested for a while with nothing calling it from any
+  production path — the UI showed "15:45 ET Auto-Close" as if it were live
+  when it wasn't.
+- For a while, five live options-selling pilots (`earnings_crush`,
+  `vol_mispricing`, `dispersion_trading`, `zero_dte_engine`,
+  `gamma_scalper`) plus `copula_stat_arb` submitted real paper trades with
+  zero `STRATEGY_REGISTRY` entry, zero validation-log entry, and zero
+  stress-scenario coverage.
 
 None of these were carelessness — they're the natural failure mode of a
 codebase this large, where "I wrote it and the happy path works" quietly
 substitutes for "I verified it against the actual gate." This skill exists
-so that substitution stops happening by default.
+so that substitution stops happening by default. **Both of the gaps above
+are now closed** — see "Currently open, already-flagged gaps" below for
+their actual current state, and don't re-report either as still open
+without checking there first; stale claims about a fixed gap are the same
+CONSTRAINT #4-shaped failure this skill exists to prevent.
 
 ## Quick checklist — work through this before saying something is done
 
@@ -196,11 +202,24 @@ because they aren't mentioned in whatever task you're on:
   `settings.OPTIONS_0DTE_ENABLED`. Do not claim it is dead code or
   unconnected.
 - **Is the strategy registry honest?** Don't hallucinate that a strategy is
-  registered if it isn't. `earnings_crush`, `dispersion_trading`,
-  `zero_dte_engine`, `gamma_scalper`, and `copula_stat_arb` have zero
-  `STRATEGY_REGISTRY` entries. However, `vol_mispricing` IS explicitly
-  registered in `scripts/refresh_validations.py` with a measured fail. Know
-  the difference between unregistered and registered-but-failing.
+  registered if it isn't, and don't conflate three different registry
+  states. As of 2026-08-29: `copula_stat_arb` and `vol_mispricing` are
+  registered with REAL adapters and measured numbers (`vol_mispricing`
+  fails the gate: Sharpe -0.499, DSR 0.027). `earnings_crush`,
+  `dispersion_trading`, `zero_dte_engine`, and `gamma_scalper` are
+  registered as explicit `_build_ungateable_adapter` stubs (always raise
+  `RuntimeError` with a documented `UNGATEABLE_DATA_GAP` reason) — this
+  makes the harness report their status honestly rather than silently
+  omitting them, but it is NOT a real backtest and carries no PBO/DSR/
+  Sharpe/MaxDD numbers of its own. Don't report any of these four as
+  "measured" or "validated" — they are structurally ungateable, not
+  passing. `news_catalyst`, `regime_multiplier`, and `forecast_alignment`
+  were briefly given the same ungateable-stub treatment and then reverted
+  (see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "2026-08-29 ... reverted"
+  entry) — none of the three is an order-submitting Pilot with its own
+  P&L, and the stub broke a deliberate `validation_strategy_id=None`
+  invariant for news-catalyst. Know the difference between unregistered,
+  registered-but-ungateable-by-design, and registered-with-a-measured-fail.
 
 If a task touches any of these modules and doesn't mention fixing the gap,
 flag it in your response rather than silently working around it.
