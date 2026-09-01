@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 115
+    EXPECTED_COLUMN_COUNT = 117
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -260,6 +260,8 @@ class TestAdvisoryColumnCoverage:
     # so the two sets can never silently drift apart from each other.
     KNOWN_UNMAPPED_ORCHESTRATOR_ONLY_COLUMNS = frozenset({
         "sector", "shortName", "Market Cap",
+        "Google_Trends_LSTM_Forecast", "Google_Trends_ASVI",
+        "Google_Trends_LSTM_Forecast", "Google_Trends_ASVI",
         "Target_Days", "ARIMA", "MC_Target", "MC_Lower", "MC_Upper",
         "Quality Score", "Graham Num", "Gordon Fair Value", "P/E", "Book Value",
         "DPS", "Institutional Velocity", "DPH", "Leverage Distress Factor",
@@ -315,8 +317,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 80
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 115
+        assert len(unmapped) == 82
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 117
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and

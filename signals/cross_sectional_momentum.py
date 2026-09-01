@@ -185,6 +185,56 @@ class CrossSectionalMomentumSignal(SignalModule):
             explanation=explanation,
         )
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        ranks = getattr(context, "xsec_percentile_ranks", {})
+        tickers = df.get(SYMBOL_COL, pd.Series("", index=df.index)).astype(str)
+        
+        mapped_ranks = tickers.map(ranks)
+        valid = mapped_ranks.notna()
+        
+        score = pd.Series(0.0, index=df.index)
+        score[valid] = 2.0 * (mapped_ranks[valid] - 0.5)
+        
+        confidence = score.abs()
+        
+        explanation = pd.Series(
+            "WARNING: Cross-sectional rank unavailable for " + tickers + ". Score set to 0 (neutral).",
+            index=df.index
+        )
+        
+        if valid.any():
+            valid_ranks = mapped_ranks[valid]
+            valid_scores = score[valid]
+            
+            weight = settings.SIGNAL_WEIGHTS.get(self.name, 15.0)
+            contrib = valid_scores * weight
+            
+            quintiles = pd.Series("Q1-Loser", index=valid_scores.index)
+            quintiles[valid_ranks >= 0.20] = "Q2"
+            quintiles[valid_ranks >= 0.40] = "Q3"
+            quintiles[valid_ranks >= 0.60] = "Q4"
+            quintiles[valid_ranks >= 0.80] = "Q5-Winner"
+            
+            direction = pd.Series("Neutral", index=valid_scores.index)
+            direction[valid_scores > 0] = "Bullish"
+            direction[valid_scores < 0] = "Bearish"
+            
+            sign = pd.Series("", index=valid_scores.index)
+            sign[contrib >= 0] = "+"
+            
+            valid_exp = [
+                f"{sg}{c:.1f}pts: XSec Momentum {d} (rank={r:.3f}, {q}, score={s:+.3f})"
+                for sg, c, d, r, q, s in zip(sign, contrib, direction, valid_ranks, quintiles, valid_scores)
+            ]
+            explanation.loc[valid] = valid_exp
+
+        return pd.DataFrame({
+            "score": score,
+            "confidence": confidence,
+            "explanation": explanation,
+            "meta_label_proba": np.nan
+        }, index=df.index)
+
     # ------------------------------------------------------------------ #
     # Vectorized historical-backfill fast path (ml/forecast_backfill.py    #
     # only -- never called from the live per-cycle pipeline)               #

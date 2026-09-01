@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 
 from signals.base import SignalModule, SignalContext, SignalOutput
@@ -64,6 +65,26 @@ class RegimeMultiplierSignal(SignalModule):
             confidence=multiplier,
             explanation=f"DETAIL: regime_multiplier: HMM risk_on_probability={multiplier:.3f} -> sizing multiplier={multiplier:.3f}.",
         )
+
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        hmm_p = getattr(context.macro, "hmm_risk_on_probability", None)
+        
+        score = pd.Series(0.0, index=df.index)
+        
+        if hmm_p is None:
+            confidence = pd.Series(1.0, index=df.index)
+            explanation = pd.Series("DETAIL: regime_multiplier: HMM unavailable this cycle; sizing multiplier=1.0 (neutral).", index=df.index)
+        else:
+            multiplier = float(hmm_p)
+            confidence = pd.Series(multiplier, index=df.index)
+            explanation = pd.Series(f"DETAIL: regime_multiplier: HMM risk_on_probability={multiplier:.3f} -> sizing multiplier={multiplier:.3f}.", index=df.index)
+            
+        return pd.DataFrame({
+            "score": score,
+            "confidence": confidence,
+            "explanation": explanation,
+            "meta_label_proba": np.nan
+        }, index=df.index)
 
 
 # Auto-register
