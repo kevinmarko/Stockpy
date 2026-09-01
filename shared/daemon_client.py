@@ -77,7 +77,7 @@ def _get_json(path: str, timeout: float) -> Optional[dict]:
     url = _base_url() + path
     req = urllib.request.Request(url, method="GET", headers=_auth_headers())
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 -- scheme/host are hardcoded in _base_url() (http://127.0.0.1:<port>), never derived from untrusted input
             body = resp.read()
         return json.loads(body)
     except urllib.error.HTTPError as exc:
@@ -101,7 +101,7 @@ def daemon_available(timeout: float = 0.5) -> bool:
     url = _base_url() + "/health"
     req = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 -- scheme/host are hardcoded in _base_url() (http://127.0.0.1:<port>), never derived from untrusted input
             if resp.status != 200:
                 return False
             body = resp.read()
@@ -173,7 +173,7 @@ def trigger_run(timeout: float = 5.0) -> TriggerResponse:
     url = _base_url() + "/run"
     req = urllib.request.Request(url, method="POST", headers=_auth_headers())
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 -- scheme/host are hardcoded in _base_url() (http://127.0.0.1:<port>), never derived from untrusted input
             body = resp.read()
             if resp.status == 202:
                 data = json.loads(body)
@@ -291,7 +291,7 @@ def set_interval(interval_seconds: int, timeout: float = 5.0) -> IntervalRespons
     headers = {**_auth_headers(), "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=body, method="PUT", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 -- scheme/host are hardcoded in _base_url() (http://127.0.0.1:<port>), never derived from untrusted input
             raw = resp.read()
             if resp.status == 200:
                 data = json.loads(raw)
