@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 341,
+    "live_safe": 348,
     "no_op": 0,
-    "restart_required": 108,
-    "total": 449
+    "restart_required": 110,
+    "total": 458
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 439,
+  "files_scanned": 443,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -290,6 +290,13 @@
     "GEMINI_LIVE_VOICE_NAME",
     "GENERAL_SETTINGS_WRITES_ENABLED",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
+    "GOOGLE_TRENDS_COOLDOWN_SECONDS",
+    "GOOGLE_TRENDS_COOLDOWN_THRESHOLD",
+    "GOOGLE_TRENDS_ENABLED",
+    "GOOGLE_TRENDS_MAX_RETRIES",
+    "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE",
+    "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS",
+    "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
     "GRAVITY_AI_RUNNER_ENABLED",
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "GRAVITY_REQUIRE_NATIVE",
@@ -486,15 +493,15 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 887,
+    "attr": 904,
     "factory_param": 4,
-    "getattr_const": 372,
+    "getattr_const": 376,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 266,
+    "attr": 272,
     "factory_param": 4,
-    "getattr_const": 211,
+    "getattr_const": 214,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -999,6 +1006,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/trends_store.py:42",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "desktop/run_history_store.py:62",
         "via": []
       },
@@ -1191,6 +1207,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/sector_correlation_store.py:70",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:48",
         "via": []
       },
       {
@@ -1453,6 +1487,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/trends_store.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:48",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "desktop/run_history_store.py:67",
         "via": []
       },
@@ -1699,7 +1751,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:922",
+        "site": "env_io.py:937",
         "via": []
       },
       {
@@ -2092,6 +2144,28 @@
         "via": []
       }
     ],
+    "GOOGLE_TRENDS_OVERLAP_DAYS": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:555",
+        "via": []
+      }
+    ],
+    "GOOGLE_TRENDS_WINDOW_DAYS": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "env_io.py:554",
+        "via": []
+      }
+    ],
     "HMM_COVARIANCE_TYPE": [
       {
         "discarded": false,
@@ -2468,6 +2542,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/trends_store.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "desktop/run_history_store.py:67",
         "via": []
       },
@@ -2659,7 +2742,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:720",
+        "site": "env_io.py:735",
         "via": []
       }
     ],
@@ -2983,7 +3066,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:620",
+        "site": "env_io.py:635",
         "via": []
       }
     ],
@@ -3003,7 +3086,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:621",
+        "site": "env_io.py:636",
         "via": []
       }
     ],
@@ -3295,10 +3378,10 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 85,
+    "cross_module_init_helper": 91,
     "decorator_arg": 13,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 16,
+    "dynamic_name_literal_unattributable": 18,
     "indirect_init_helper_d1": 13,
     "init_body": 8,
     "init_self_assign": 51,
@@ -3311,6 +3394,8 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
+    "GOOGLE_TRENDS_OVERLAP_DAYS",
+    "GOOGLE_TRENDS_WINDOW_DAYS",
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
     "PROMPT_MAX_CHARS",
     "PROMPT_REGISTRY_REFRESH_SECONDS",

@@ -330,6 +330,47 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_trends_store_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the default Google Trends store DB resolver at an in-memory db
+    for every test, unless the test passes its own explicit ``db_url`` to
+    ``TrendsStore``.
+
+    Same risk class as ``_isolate_validation_runs_db_in_tests`` /
+    ``_isolate_execution_audit_db_in_tests`` / ``_isolate_broker_fills_db_in_tests``
+    above: ``TrendsStore()`` is constructed with no explicit ``db_url`` from
+    widely-called production functions far outside any single test file's
+    control -- ``desktop/daemon_runtime.py``'s ``maybe_refresh_google_trends``
+    and ``pipeline/production_steps.py``'s Google Trends ASVI wiring both
+    resolve straight to the real, shared ``~/.stockpy_local/quant_platform.db``
+    via ``resolve_database_url()`` when unpatched. Left unguarded, any test
+    exercising either path would mutate the operator's real production
+    database schema (write-mode construction calls ``Base.metadata.
+    create_all``) and seed it with fake ``raw_trends_downloads``/
+    ``stitched_google_trends`` rows -- a session-wide autouse fixture here
+    (rather than per-file opt-in) is required for the same reason as its
+    three siblings above: there is no single choke point to edit instead.
+
+    This fixture previously lived in ``tests/conftest.py`` as a bare
+    ``mock.patch`` context manager; moved here (and rewritten to match the
+    ``monkeypatch.setattr`` + lazy-import style of its three siblings above)
+    because ``tests/conftest.py``'s own docstring is explicit that it is
+    "deliberately small and opt-in (no test-suite-wide autouse fixtures
+    here)" -- this class of "protect a widely-reachable shared production
+    DB from every test in the suite" fixture belongs at the root level
+    alongside the validation-runs/execution-audit/broker-fills siblings, not
+    in the file that documents avoiding exactly this pattern.
+
+    Lazy import (mirrors the three siblings above) so a broken
+    ``data/trends_store.py`` import surfaces as a test failure for whichever
+    test actually touches it, not a collection-time failure for the entire
+    suite.
+    """
+    import data.trends_store as _trends_store_mod
+
+    monkeypatch.setattr(_trends_store_mod, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""

@@ -8208,3 +8208,78 @@ def get_pilots_execution_sec_606_report(
     reporter = SecRule606Reporter()
     return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
 
+@app.post("/pilots/ml/lstm-attention-forecast", dependencies=[Depends(require_read_token)])
+def run_lstm_attention_forecast_endpoint(
+    symbol: str = Query(..., min_length=1),
+) -> Dict[str, Any]:
+    """Diagnostic endpoint to trigger the LSTM-Attention Phase 4 forecaster."""
+    from data.historical_store import HistoricalStore
+    from data.trends_store import TrendsStore
+    from data.trends_stitcher import FMPDataLoader
+    from ml.asvi_feature_engineering import resolve_sector_proxy
+    import numpy as np
+    import pandas as pd
+    from fastapi import HTTPException
+    
+    try:
+        # Fetch 3 years to ensure enough sliding windows
+        bars = HistoricalStore().get_bars(symbol, lookback_days=1095)
+    except Exception:
+        bars = None
+        
+    if bars is None or bars.empty or len(bars) < 60:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"Insufficient history for {symbol}"}
+        )
+        
+    # Technical indicators
+    
+    # Sector Proxy
+    fmp = FMPDataLoader()
+    try:
+        fund = fmp.get_fundamentals(symbol)
+        sector = fund.get("sector")
+    except Exception:
+        sector = None
+        
+    sector_proxy = resolve_sector_proxy(sector)
+    try:
+        sector_bars = HistoricalStore().get_bars(sector_proxy, lookback_days=1095)
+    except Exception:
+        sector_bars = pd.DataFrame()
+        
+    # ASVI Data
+    trends_store = TrendsStore()
+    asvi_sym = trends_store.get_stitched_series(symbol)
+    asvi_sec = trends_store.get_stitched_series(sector_proxy)
+    
+    if asvi_sym is None:
+        asvi_sym = pd.Series(dtype=float)
+    if asvi_sec is None:
+        asvi_sec = pd.Series(dtype=float)
+
+    from pilots.lstm_diagnostic import run_lstm_diagnostic
+    
+    result = run_lstm_diagnostic(
+        symbol=symbol,
+        bars=bars,
+        sector_bars=sector_bars,
+        asvi_sym=asvi_sym,
+        asvi_sec=asvi_sec
+    )
+    
+    pred_val = result.get("prediction", float('nan'))
+    if np.isnan(pred_val):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"LSTM-Attention model skipped or failed for {symbol}"}
+        )
+        
+    return {
+        "symbol": symbol,
+        "predicted_return": pred_val,
+        "attention_weights": result.get("attention_weights", []),
+        "sector_proxy_used": sector_proxy,
+        "status": "success"
+    }
