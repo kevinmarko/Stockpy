@@ -28,11 +28,14 @@ class GoogleTrendsStitcher:
 
     @staticmethod
     def get_scaling_metadata(period_a_svi: pd.Series, period_b_svi: pd.Series) -> dict:
-        """Extracts the geometric scaling factor and overlap boundaries for two periods.
+        """Extracts the geometric scaling factor and overlap window for two periods.
 
         Single source of truth for BOTH the scaling factor `f` AND the overlap window
         (`overlap_dates`) used by `stitch_intervals` — callers must reuse `overlap_dates`
-        rather than re-deriving it via a second `.index.intersection()` call.
+        rather than re-deriving it via a second `.index.intersection()` call. The overlap
+        window's start/end boundaries are not returned as separate keys since they're
+        trivially derivable from `overlap_dates` (`overlap_dates[0]` / `overlap_dates[-1]`)
+        -- a caller that only needs the boundaries can take them from there.
         """
         overlap_dates = period_a_svi.index.intersection(period_b_svi.index)
         if len(overlap_dates) == 0:
@@ -58,8 +61,6 @@ class GoogleTrendsStitcher:
             f = sum_a / sum_b
 
         return {
-            "overlapStart": overlap_dates[0],
-            "overlapEnd": overlap_dates[-1],
             "overlap_dates": overlap_dates,
             "f": f,
         }
