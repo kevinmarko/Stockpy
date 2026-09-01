@@ -6,6 +6,8 @@ Unit tests for data/trends_stitcher.py:
 - FMPDataLoader (OHLCV ingestion & technical indicators EMA/MACD/RSI-14)
 """
 
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -313,6 +315,28 @@ class TestGoogleTrendsStitcherScalingMetadata:
             rtol=1e-12,
             atol=1e-12,
         )
+
+    def test_stitch_intervals_structurally_delegates_to_get_scaling_metadata(self):
+        """Structural regression guard, distinct from the behavioral-equivalence test
+        above: proves stitch_intervals actually CALLS get_scaling_metadata rather than
+        independently reimplementing an overlap computation that merely happens to
+        agree today. The behavioral test above cannot catch a reintroduced duplicate
+        computation when the duplicate formula is still mathematically identical to
+        get_scaling_metadata's own -- only a call-spy can."""
+        dates_a = pd.date_range("2026-01-01", "2026-03-15", freq="D")
+        dates_b = pd.date_range("2026-03-01", "2026-05-15", freq="D")
+        rng = np.random.default_rng(13)
+        svi_a = pd.Series(rng.uniform(5, 95, size=len(dates_a)), index=dates_a)
+        svi_b = pd.Series(rng.uniform(5, 95, size=len(dates_b)), index=dates_b)
+
+        with mock.patch.object(
+            GoogleTrendsStitcher,
+            "get_scaling_metadata",
+            wraps=GoogleTrendsStitcher.get_scaling_metadata,
+        ) as spy:
+            GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+
+        spy.assert_called_once_with(svi_a, svi_b)
 
 
 class TestASVICalculator:
