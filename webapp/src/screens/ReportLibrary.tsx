@@ -1,8 +1,10 @@
 /**
  * ReportLibrary.tsx — the webapp port of Streamlit's "Report Library" tab
- * (gui/panels/reports_library.py). Four sections, matching that panel's own
- * layout: the daily report, the two orchestrator dashboards, daily
- * briefings, and validation reports (summary JSON + per-strategy HTML).
+ * (gui/panels/reports_library.py), plus one webapp-only section. Five
+ * sections: the daily report, the two orchestrator dashboards, daily
+ * briefings, the NotebookLM export (scripts/export_notebooklm.py — not in
+ * the Streamlit panel, which is decommissioned and gains no new capability),
+ * and validation reports (summary JSON + per-strategy HTML).
  *
  * Backed by GET /reports (the manifest — name/kind/size/mtime, no content)
  * and GET /reports/{name} (content, fetched on demand). Every HTML report
@@ -183,13 +185,26 @@ function ValidationSummaryBlock({ file }: { file: ReportFile }) {
 
 const TERMINAL_STATUSES = new Set(["success", "failed", "cancelled", "unknown"]);
 
-/** "Generate today's briefing" — posts the SAME job-creation flow
- * Commands.tsx's RunCommandControl uses (POST /jobs, job_type "command",
- * command "daily_briefing.py"), not a bespoke trigger. Not high-stakes
- * (daily_briefing.py carries no HIGH_STAKES_COMMANDS entry), so no
+/** "Generate ..." — posts the SAME job-creation flow Commands.tsx's
+ * RunCommandControl uses (POST /jobs, job_type "command"), not a bespoke
+ * trigger. `command` must carry no HIGH_STAKES_COMMANDS entry (verified for
+ * both call sites below — daily_briefing.py and export_notebooklm.py are
+ * both plain reporting scripts), so `confirm` is always `false` — no
  * confirmation dialog. On success, calls `onGenerated` so the manifest
- * (which now has a new/updated briefing_*.md row) refetches. */
-function GenerateBriefingButton({ onGenerated }: { onGenerated: () => void }) {
+ * (which now has a new/updated row for this command's output) refetches.
+ * Extracted out of a notebooklm-specific and a briefing-specific copy of
+ * this exact same component (2026-09) so the two don't drift. */
+function GenerateReportButton({
+  command,
+  label,
+  testIdSuffix,
+  onGenerated,
+}: {
+  command: string;
+  label: string;
+  testIdSuffix: string;
+  onGenerated: () => void;
+}) {
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const notifiedRef = useRef(false);
@@ -217,7 +232,7 @@ function GenerateBriefingButton({ onGenerated }: { onGenerated: () => void }) {
     notifiedRef.current = false;
     try {
       const params: CommandJobParams = {
-        command: "daily_briefing.py",
+        command,
         subcommand: null,
         args: [],
         confirm: false,
@@ -235,9 +250,9 @@ function GenerateBriefingButton({ onGenerated }: { onGenerated: () => void }) {
         variant="primary"
         onClick={run}
         pending={Boolean(activeJob) && !TERMINAL_STATUSES.has(activeJob?.status ?? "")}
-        data-testid="generate-briefing-button"
+        data-testid={`generate-${testIdSuffix}-button`}
       >
-        📝 Generate today's briefing
+        {label}
       </Button>
       {error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
@@ -247,7 +262,7 @@ function GenerateBriefingButton({ onGenerated }: { onGenerated: () => void }) {
       )}
       {activeJob && (
         <div style={{ marginTop: "var(--s-2-5)" }}>
-          <span style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }} data-testid="generate-briefing-status">
+          <span style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }} data-testid={`generate-${testIdSuffix}-status`}>
             Job {activeJob.job_id} — {activeJob.status}
           </span>
           <div style={{ marginTop: "var(--s-2)" }}>
@@ -274,7 +289,12 @@ function BriefingsSection({ files, onReload }: { files: ReportFile[]; onReload: 
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
 
-      <GenerateBriefingButton onGenerated={onReload} />
+      <GenerateReportButton
+        command="daily_briefing.py"
+        label="📝 Generate today's briefing"
+        testIdSuffix="briefing"
+        onGenerated={onReload}
+      />
 
       {files.length === 0 ? (
         <EmptyState title="No briefings yet" hint="Generate one with the button above." />
@@ -317,6 +337,83 @@ function BriefingsSection({ files, onReload }: { files: ReportFile[]; onReload: 
   );
 }
 
+/** The NotebookLM export (scripts/export_notebooklm.py) — always at most one
+ * row (`notebooklm_source.md`; `pilots/reports.py::_catalog()` checks a
+ * single fixed filename, never a glob), so unlike BriefingsSection there is
+ * no selector: the one file's content, when present, renders inline
+ * unconditionally — same "small machine-generated markdown" convention as
+ * briefings. Not in the Streamlit Report Library tab (webapp-only — see
+ * this file's module docstring). */
+function NotebookLmExportSection({ files, onReload }: { files: ReportFile[]; onReload: () => void }) {
+  const file = files[0] ?? null;
+  const { data, loading, error, status, reload } = useApi<ReportContent>(
+    () => (file ? api.getReport(file.name) : Promise.resolve(null as unknown as ReportContent)),
+    [file?.name]
+  );
+
+  return (
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🧠 NotebookLM export</h2>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
+          A snapshot of portfolio, follows, and macro context formatted for ingestion into Google NotebookLM.
+        </p>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+
+      <GenerateReportButton
+        command="export_notebooklm.py"
+        label="🧠 Generate NotebookLM export"
+        testIdSuffix="notebooklm-export"
+        onGenerated={onReload}
+      />
+
+      {!file ? (
+        <EmptyState title="No export yet" hint="Generate one with the button above." />
+      ) : (
+        <>
+          {loading && <Loading lines={3} />}
+          {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+          {!loading && !error && data && (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: "var(--s-2)",
+                  flexWrap: "wrap",
+                  marginBottom: "var(--s-3)",
+                }}
+              >
+                <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
+                  {fmtBytes(file.size)} · {timeAgo(file.mtime)}
+                </span>
+                <Button
+                  variant="neutral"
+                  onClick={() => downloadBlob(textFor(data), file.name, mimeFor(data))}
+                  data-testid={`download-${file.name}`}
+                >
+                  ⬇️ Download
+                </Button>
+              </div>
+              {data.reason ? (
+                <Notice variant="warn">
+                  <span aria-hidden>⚠️</span>
+                  <span>{data.reason}</span>
+                </Notice>
+              ) : (
+                <MiniMarkdown text={data.text ?? ""} />
+              )}
+            </>
+          )}
+        </>
+      )}
+      </div>
+    </section>
+  );
+}
+
 export function ReportLibrary() {
   const nav = useNavigate();
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -340,7 +437,8 @@ export function ReportLibrary() {
           <h1 className="screen-title" style={{ marginBottom: "var(--s-1)" }}>Report Library</h1>
           <p className="screen-sub">
             Every report the platform has generated — the daily report, orchestrator
-            dashboards, daily briefings, and validation reports — in one place.
+            dashboards, daily briefings, the NotebookLM export, and validation
+            reports — in one place.
           </p>
         </div>
       </div>
@@ -401,6 +499,10 @@ export function ReportLibrary() {
 
               <div key="briefings">
                 <BriefingsSection files={byKind("briefing")} onReload={reload} />
+              </div>
+
+              <div key="notebooklm-export">
+                <NotebookLmExportSection files={byKind("notebooklm_export")} onReload={reload} />
               </div>
 
               <div key="validation-reports">
