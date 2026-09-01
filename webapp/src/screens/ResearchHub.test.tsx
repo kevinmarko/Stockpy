@@ -2,8 +2,8 @@
  * ResearchHub.test.tsx — the Research section's landing hub: all 12 screen
  * cards render with their label + description (Sentiment Dynamics and
  * Sector Selection closing parity gap G2 — the hub previously listed only 9
- * of the 11 screens the nav actually carries; Google Trends SVI Stitching
- * added later to close the "unreachable from any UI link" gap for
+ * of the 11 screens the nav actually carries; the SVI Stitching Algorithm
+ * Demo card added later to close the "unreachable from any UI link" gap for
  * /research/trends-stitcher), the TAB_HELP-sourced
  * descriptions read live off help/helpContent.ts (never a hard-coded
  * duplicate, so the test would catch drift), and clicking a card's
@@ -75,7 +75,7 @@ describe("ResearchHub screen", () => {
       "Sector Selection",
       "Forecast Viewer",
       "Data Explorer",
-      "Google Trends SVI Stitching",
+      "SVI Stitching Algorithm Demo",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
@@ -105,14 +105,17 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the Google Trends SVI Stitching card's static description", () => {
+  it("renders the SVI Stitching Algorithm Demo card's static description", () => {
     renderHub();
     // Not TAB_HELP-sourced (no helpContent.ts entry exists for this demo
-    // screen yet) -- static prose mirroring TrendsVisualizer.tsx's own
-    // subheading text verbatim.
+    // screen yet) -- static prose. Disclosure fix: the description must not
+    // present this as unqualified real Google Trends data (the backend
+    // fetches this on labeled proxy data, since no live Google Trends
+    // source is wired into this platform) -- see TrendsVisualizer.tsx's own
+    // header for the sibling fix.
     expect(
       screen.getByText(
-        "Demonstrates the stitching of multiple overlapping 90-day Google Trends Search Volume Index (SVI) queries into a single continuous time series."
+        "Demonstrates the overlapping-window stitching algorithm used to reconstruct a continuous Google Trends SVI series from adjacent 90-day intervals (live Google Trends data isn't wired up in this platform, so the demo runs on labeled proxy data)."
       )
     ).toBeInTheDocument();
   });
@@ -129,7 +132,7 @@ describe("ResearchHub screen", () => {
     ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
     ["Data Explorer", "landed:data-explorer"],
-    ["Google Trends SVI Stitching", "landed:trends-stitcher"],
+    ["SVI Stitching Algorithm Demo", "landed:trends-stitcher"],
   ])("clicking the %s card's body navigates to its route", async (label, marker) => {
     const user = userEvent.setup();
     renderHub();

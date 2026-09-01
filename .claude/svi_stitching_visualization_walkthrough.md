@@ -173,6 +173,49 @@ raised 9 findings; all 9 were independently confirmed on re-check (0 refuted). A
   worktree/test activity on this machine), not caused by this diff. Not re-attempted; the scoped runs
   above are the real verification for this round's changes.
 
+## Reconciliation with a concurrently-merged PR (PR #961)
+While the second audit round above was being fixed, PR #957 (this branch's own first-round PR) merged
+into `main`, and — independently, in a separate session — **PR #961** ("fix: Trends Stitching demo audit
+findings (real stitching, nav, docs)") also merged into `main` minutes later, covering overlapping ground:
+a real port of the stitching algorithm into a new `webapp/src/utils/trendsStitch.ts` (making `mock.ts`'s
+demo genuinely demonstrate stitching instead of 3 unrelated random walks), a `TrendsCurve` type
+de-duplication in `TrendsStitchChart.tsx`, a `navigation.tsx` `NAV_ITEMS` entry, and a `ResearchHub.tsx`
+reachability card. Rebasing this round's fixes onto the post-#961 `main` produced real conflicts (not
+staleness) in `navigation.tsx` and `mock.ts`. Resolved as follows, each a deliberate choice, not a
+mechanical "ours wins":
+- **`navigation.tsx`**: took PR #961's entry (functionally identical to ours — same route/icon/section,
+  trivial label wording difference) — dropped our duplicate.
+- **`mock.ts`**: took PR #961's version in full — it is a materially better fix for the same finding (#5
+  in this round) than our simpler relabeling: it actually runs the real stitching algorithm against
+  genuinely overlapping, differently-scaled synthetic windows, rather than just relabeling 3 independent
+  curves. Its curve names ("Window A/B/C (Raw...)", "Stitched Output") were kept as-is rather than forced
+  into our "SPY Volume Proxy" convention — that label is specific to the LIVE endpoint's real SPY-volume
+  substitution and would have been misleading applied to synthetic mock data.
+- **`TrendsStitchChart.tsx`**: both changes auto-merged cleanly (PR #961's type-import de-duplication near
+  the top of the file; this round's `formatUtcDate` export + timezone fix in the middle) — no conflict,
+  both kept.
+- **`Marketplace.tsx`**, **`TrendsVisualizer.tsx`**, **`api/data_api.py`**, both test files: untouched by
+  PR #961, no conflict, kept as-is. The Marketplace Explore tile (this round's fix for finding #3) is a
+  deliberate second reachability surface alongside PR #961's `ResearchHub.tsx` card and `NAV_ITEMS` entry
+  — not redundant, matching this codebase's own established precedent (`SymbolScreener.tsx`/
+  `TradeHistory.tsx` both got a `NAV_ITEMS` entry AND a Marketplace tile).
+- **One additional fix made during reconciliation, not part of the original 9**: PR #961's new
+  `ResearchHub.tsx` card carried the exact same header-honesty gap this round's finding #4 fixed in
+  `TrendsVisualizer.tsx` — its static description presented the demo as unqualified real Google Trends
+  data with no proxy-data disclosure (its own commit message says it was written to mirror
+  `TrendsVisualizer.tsx`'s OLD, pre-fix subheading verbatim). Fixed the same way, with matching updates to
+  `ResearchHub.test.tsx`'s three assertions on the old label/description text.
+
+Re-verified after reconciliation: `pytest tests/test_data_api.py tests/test_trends_stitcher.py -q` — 75
+passed (unaffected, no Python files touched during reconciliation). `npm run --prefix webapp typecheck` —
+clean. `npx vitest run` on all 6 affected webapp test files (including PR #961's own
+`trendsStitch.test.ts` and `ResearchHub.test.tsx`) — **92 passed, 0 failed**.
+
+Because PR #957 was squash-merged, this round's work could not be pushed as more commits onto the
+already-closed PR #957 — it landed as a new PR, **#964**, based on current `main` (which already includes
+both #957 and #961), containing exactly this round's 13-file diff.
+
 ## Next steps
-None outstanding. Both audit rounds' findings (4 from the first, 9 from the second, 13 total, all
-independently re-verified against the real committed code, 0 refuted) are fixed and verified above.
+None outstanding. Three audit rounds' findings (4 from the first round on this branch, 4 from the
+independent PR #961, 9 from this round, plus the ResearchHub.tsx honesty fix found during reconciliation
+— 18 total) are fixed and verified above.
