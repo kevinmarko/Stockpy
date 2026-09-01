@@ -185,6 +185,7 @@ from pilots import (
 )
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
+from pilots.portfolio import serialize_portfolio as _serialize_portfolio
 from pilots.scan_config_store import ScanConfigStore
 
 # RLHF Calibration Review Queue write path (POST /rlhf/proposals,
@@ -1012,51 +1013,9 @@ def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) ->
     }
 
 
-def _serialize_portfolio(snap: Any) -> Dict[str, Any]:
-    """Reshape an ``AccountSnapshot`` into the PWA ``Portfolio`` contract
-    (webapp/src/api/types.ts).
-
-    ``AccountSnapshot.to_dict()`` emits ``positions`` as a *dict* keyed by symbol
-    with ``quantity``/``average_cost`` field names and carries no
-    ``position_count``/``total_unrealized_pl``/``source`` — none of which match
-    the frontend's ``Portfolio``/``PortfolioPositionView``. This serializer maps
-    them across without touching ``to_dict()`` itself (whose shape is load-bearing
-    for the JSON-cache ``from_dict`` round-trip). Every value is read from the real
-    snapshot — nothing is fabricated (CONSTRAINT #4); ``source`` is honestly
-    ``"db"`` because this endpoint reads DB-first via ``HistoricalStore``.
-    """
-    data = snap.to_dict()
-    raw_positions = data.get("positions") or {}
-    positions: List[Dict[str, Any]] = []
-    total_unrealized_pl = 0.0
-    for pos in raw_positions.values():
-        upl = pos.get("unrealized_pl")
-        if isinstance(upl, (int, float)) and upl == upl:  # skip None / NaN
-            total_unrealized_pl += float(upl)
-        positions.append(
-            {
-                "symbol": pos.get("symbol"),
-                "qty": pos.get("quantity"),
-                "avg_cost": pos.get("average_cost"),
-                "current_price": pos.get("current_price"),
-                "market_value": pos.get("market_value"),
-                "unrealized_pl": pos.get("unrealized_pl"),
-                "unrealized_pl_pct": pos.get("unrealized_pl_pct"),
-                "name": pos.get("name"),
-            }
-        )
-    return {
-        "total_equity": data.get("total_equity"),
-        "buying_power": data.get("buying_power"),
-        "total_unrealized_pl": total_unrealized_pl,
-        "total_dividends": data.get("total_dividends"),
-        "position_count": len(positions),
-        "positions": positions,
-        "fetched_at": data.get("fetched_at"),
-        "source": "db",
-        "is_stale": snap.is_stale(),
-        "age_hours": snap.age_hours(),
-    }
+# `_serialize_portfolio` now lives in pilots/portfolio.py (dependency-light —
+# see that module's docstring) and is imported above as `_serialize_portfolio`
+# to keep this file's one internal call site unchanged.
 
 
 # ---------------------------------------------------------------------------

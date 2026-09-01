@@ -5,8 +5,10 @@ Ports ``gui/panels/reports_library.py``'s enumeration logic (the Streamlit
 Report Library tab) into a dependency-light read: the daily report
 (``output/daily_report.html``), the two orchestrator dashboards
 (``output/daily_report_dashboard.html`` / ``output/volatility_bands_dashboard.html``),
-daily briefings (``output/briefing_*.md``), and validation reports
-(``<reports_dir>/*_validation_summary.json`` / ``<reports_dir>/validation_*.html``).
+daily briefings (``output/briefing_*.md``), the NotebookLM export
+(``output/notebooklm_source.md``, see ``scripts/export_notebooklm.py``), and
+validation reports (``<reports_dir>/*_validation_summary.json`` /
+``<reports_dir>/validation_*.html``).
 
 Security — the whole point of this module's shape
 ---------------------------------------------------
@@ -57,6 +59,7 @@ _TEXT_CONTENT_TYPES: Dict[str, str] = {
     "daily_report": "html",
     "dashboard": "html",
     "briefing": "markdown",
+    "notebooklm_export": "markdown",
     "validation_html": "html",
 }
 
@@ -104,6 +107,10 @@ def _catalog(reports_dir: Optional[str] = None) -> List[Tuple[str, str, Path]]:
     for p in _list_glob(output_dir, "briefing_*.md"):
         entries.append((p.name, "briefing", p))
 
+    notebooklm = output_dir / "notebooklm_source.md"
+    if notebooklm.is_file():
+        entries.append((notebooklm.name, "notebooklm_export", notebooklm))
+
     reports_root = Path(reports_dir) if reports_dir is not None else Path("reports")
     for p in _list_glob(reports_root, "*_validation_summary.json"):
         entries.append((p.name, "validation_summary", p))
@@ -144,9 +151,9 @@ def _sanitize_json(obj: Any) -> Any:
 def list_reports(reports_dir: Optional[str] = None) -> Dict[str, Any]:
     """``GET /reports`` manifest: ``name``/``kind``/``size``/``mtime`` (ISO
     8601 UTC) per file, in catalog order (daily report, dashboards,
-    briefings newest-first, validation summaries, validation HTML reports).
-    Never raises; an empty universe degrades to ``reports: []`` plus an
-    honest ``reason`` (CONSTRAINT #6)."""
+    briefings newest-first, the NotebookLM export, validation summaries,
+    validation HTML reports). Never raises; an empty universe degrades to
+    ``reports: []`` plus an honest ``reason`` (CONSTRAINT #6)."""
     rows: List[Dict[str, Any]] = []
     for name, kind, path in _catalog(reports_dir):
         size, mtime = _stat(path)

@@ -98,6 +98,25 @@ def test_get_report_content_briefing_is_markdown_text(tmp_path: Path):
     assert result["reason"] is None
 
 
+def test_list_reports_includes_notebooklm_export(tmp_path: Path):
+    _write_output(tmp_path)
+    (tmp_path / "notebooklm_source.md").write_text("# Stockpy System Export", encoding="utf-8")
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        out = reports_reader.list_reports(reports_dir=str(tmp_path / "reports"))
+    row = next(r for r in out["reports"] if r["name"] == "notebooklm_source.md")
+    assert row["kind"] == "notebooklm_export"
+
+
+def test_get_report_content_notebooklm_export_is_markdown_text(tmp_path: Path):
+    _write_output(tmp_path)
+    (tmp_path / "notebooklm_source.md").write_text("# Stockpy System Export", encoding="utf-8")
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        result = reports_reader.get_report_content("notebooklm_source.md")
+    assert result is not None
+    assert result["content_type"] == "markdown"
+    assert result["text"] == "# Stockpy System Export"
+
+
 def test_get_report_content_daily_report_is_html_text(tmp_path: Path):
     _write_output(tmp_path)
     with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
