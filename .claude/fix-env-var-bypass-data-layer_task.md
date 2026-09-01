@@ -1,0 +1,4 @@
+- [x] §0 dependency check
+- [x] update data/market_data.py
+- [x] update data/market_data_ws.py
+- [x] verify tests pass
