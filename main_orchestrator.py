@@ -728,6 +728,7 @@ def _write_state_snapshot(
     tickers: list,
     macro_kill_switch: Optional[bool] = None,
     hmm_regime_state: Optional[str] = None,
+    universe_funnel: Optional[dict] = None,
 ) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
@@ -748,6 +749,17 @@ def _write_state_snapshot(
     label, threaded through verbatim for the same reason: ``macro_raw`` is the
     raw pre-DTO fetch dict and never carries an ``"HMM_Regime_State"`` key, so
     deriving it from ``macro_raw`` here would always resolve to ``None``.
+
+    ``universe_funnel`` is the per-cycle symbol-count diagnostic built up by
+    ``pipeline/production_steps.py``'s ``AsyncDataFetchStep``/``ProcessingStep``/
+    ``ForecastingStep`` (see
+    ``docs/known_issues/universe_count_reporting_mismatch.md``) -- how many
+    symbols survived each narrowing stage (configured DEFAULT_TICKERS ->
+    tracked universe -> raw data fetch -> dashboard compilation -> actually
+    forecasted). ``None``/``{}`` (never fabricated) when the caller is
+    ``main.py``'s advisory path, which doesn't build this dict — orchestrator-
+    only, matching ``tests/test_state_snapshot_parity.py``'s existing
+    convention for orchestrator-only fields.
     """
     import json
     try:
@@ -957,6 +969,11 @@ def _write_state_snapshot(
             # Persist the current gate state so the dashboard reflects the
             # operator's choice without re-importing settings at read time.
             "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
+            # Per-stage symbol-count diagnostic -- see this function's own
+            # docstring and docs/known_issues/universe_count_reporting_mismatch.md.
+            # {} (never fabricated) rather than None so a consumer can always
+            # safely call .get() on it without a None-check.
+            "universe_funnel": universe_funnel or {},
             "signals": signals,
         }
         # Atomic write-then-rename (2026-07 fix; mirrors execution/kill_switch.py's
@@ -1321,6 +1338,24 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
     
     try:
         await _main_body(effective_dry_run, strict=strict)
+
+        # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
+        # Evaluated here so a standalone `python main_orchestrator.py` CLI run
+        # evaluates 0DTE hard stops, since the daemon's own _timer_loop
+        # handles it separately.
+        if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+            try:
+                from pilots.zero_dte_engine import manage_0dte_exits
+                _0dte_res = manage_0dte_exits()
+                if _0dte_res.get("executed_count", 0) > 0:
+                    telemetry.info(
+                        "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
+                        _0dte_res.get("evaluated_count", 0),
+                        _0dte_res.get("executed_count", 0),
+                        _0dte_res.get("failed_count", 0),
+                    )
+            except Exception as _0dte_exc:
+                telemetry.debug("0DTE exit lifecycle evaluation skipped: %s", _0dte_exc)
     finally:
         _hb_task.cancel()
         if _cls_task:

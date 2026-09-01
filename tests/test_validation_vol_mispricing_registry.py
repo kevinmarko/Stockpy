@@ -27,7 +27,9 @@ import numpy as np
 import pandas as pd
 import pytest
 import yfinance as yf
+from dotenv import dotenv_values
 
+import settings as settings_module
 from execution.cost_model import TieredCostModel
 from scripts.refresh_validations import (
     _build_vol_mispricing_adapter,
@@ -52,7 +54,33 @@ def spy_close() -> pd.Series:
     return close.dropna()
 
 
-def test_adapter_returns_three_items(spy_close):
+@pytest.fixture()
+def fred_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore a real ``FRED_API_KEY`` for this test's scope only.
+
+    ``_build_vol_mispricing_adapter`` -> ``simulate_vol_mispricing_returns``
+    reads real VIX history via ``HistoricalStore.get_macro("VIXCLS")``, which
+    live-fetches from FRED when the local cache has no VIXCLS rows yet. This
+    is the same class of gap ``test_validation_forecast_direction.py``'s
+    network test hit: conftest.py's session-wide autouse fixture deliberately
+    blanks ``settings.settings.FRED_API_KEY`` (an ``env_io.SECRET_KEYS``
+    member) for every test, including this network-marked one, for
+    isolation. Restores from the raw ``.env`` file (bypassing the
+    already-scrubbed settings singleton) for this test's scope only, and
+    skips -- honestly, not a fabricated pass -- when no real key is present
+    anywhere (a credential-less CI/sandbox environment genuinely cannot
+    exercise this live path)."""
+    real_key = dotenv_values(settings_module.ENV_PATH).get("FRED_API_KEY") or ""
+    if not real_key:
+        pytest.skip(
+            "No real FRED_API_KEY in .env -- this network-marked test needs "
+            "live FRED credentials (for the real VIX history the adapter "
+            "depends on) and cannot run in a credential-less environment."
+        )
+    monkeypatch.setattr(settings_module.settings, "FRED_API_KEY", real_key)
+
+
+def test_adapter_returns_three_items(spy_close, fred_credential):
     X, y, precomputed = _build_vol_mispricing_adapter(spy_close)
     assert not X.empty
     assert not y.empty
@@ -62,7 +90,7 @@ def test_adapter_returns_three_items(spy_close):
     assert y.index.is_unique
 
 
-def test_adapter_produces_finite_returns(spy_close):
+def test_adapter_produces_finite_returns(spy_close, fred_credential):
     X, y, precomputed = _build_vol_mispricing_adapter(spy_close)
     returns = precomputed["VolMispricing"]
     assert not returns.empty
@@ -94,7 +122,7 @@ def test_options_selling_stress_fn_resolves_for_this_strategy_only():
     assert _resolve_options_selling_stress_fn("lgbm_ranker") is None
 
 
-def test_vol_mispricing_validation_harness_runs(spy_close, tmp_path):
+def test_vol_mispricing_validation_harness_runs(spy_close, tmp_path, fred_credential):
     """Smoke-tests StrategyValidationHarness end-to-end on the production
     adapter, WITH the real is_options_selling/stress_returns_fn wiring --
     asserts a well-formed report (finite numbers, deployable is a bool,

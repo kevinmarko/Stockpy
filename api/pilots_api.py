@@ -6212,6 +6212,11 @@ OPTIONS_DESK_DEPLOYABILITY_GATES = {
         "gate_status": "UNGATEABLE_DATA_GAP",
         "reason": "Not gateable: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention.",
     },
+    "gamma_scalper": {
+        "deployable": False,
+        "gate_status": "UNGATEABLE_NOT_A_STRATEGY",
+        "reason": "Excluded: Not a strategy (no scan/evaluate/execute path, no PaperAccountStore import, its only threshold is a hedge band).",
+    },
 }
 
 
@@ -6408,7 +6413,10 @@ def post_options_gamma_scalp_simulate(body: Optional[GammaScalpSimulateRequest] 
         dt_days=dt,
         transaction_cost_per_share=cost,
     )
-    return to_gamma_scalp_response(raw)
+    res = to_gamma_scalp_response(raw)
+    if isinstance(res, dict):
+        res["gate_status"] = OPTIONS_DESK_DEPLOYABILITY_GATES["gamma_scalper"]
+    return res
 
 
 class OptionsAlertTestRequest(BaseModel):

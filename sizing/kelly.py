@@ -170,7 +170,16 @@ def fractional_kelly(p: float, b: float, fraction: float = 0.5, cap: float = 0.2
     if p is None or b is None or (isinstance(p, float) and math.isnan(p)) or (isinstance(b, float) and math.isnan(b)):
         return float("nan")
 
-    if b <= 0:
+    # Degenerate-divisor guard (matches this codebase's std/drawdown-divisor
+    # convention -- see CLAUDE.md's "Degenerate-std guard convention"):
+    # b this close to zero is floating-point noise, not a meaningful payoff
+    # ratio, and `-1/b`-scale terms in full_kelly below can overflow to +/-inf,
+    # which then poisons `fraction * full_kelly` into NaN (0.0 * inf is NaN)
+    # for fraction=0.0 -- and NaN silently survives `max(0.0, min(cap, NaN))`
+    # as `cap` rather than the correct 0.0, since Python's min/max treat NaN
+    # comparisons as always-False. Guarding with < 1e-12 (not just <= 0)
+    # prevents ever entering that unstable arithmetic in the first place.
+    if b < 1e-12:
         logger.warning("fractional_kelly: non-positive payoff ratio b=%.4f; returning 0.0.", b)
         return 0.0
 

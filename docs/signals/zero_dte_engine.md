@@ -8,7 +8,7 @@ liquidation to eliminate overnight/pin risk.
 
 ## Backtest Validation — NOT GATEABLE (structural, not merely data-limited)
 
-**Not registered in `STRATEGY_REGISTRY`.** Three independent, compounding blockers, the third of
+**Explicitly registered in `STRATEGY_REGISTRY` as `UNGATEABLE_DATA_GAP`**. Three independent, compounding blockers, the third of
 which is decisive on its own:
 
 1. **No intraday history exists in this repository.** The entry signal is a 15-minute opening

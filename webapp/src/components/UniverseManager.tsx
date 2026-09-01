@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { UniverseListResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading } from "./ui";
+import { Button, ErrorState, Input, Loading, Notice } from "./ui";
 import { SymbolInput } from "./SymbolInput";
 import { theme } from "../theme";
 import { Modal } from "./Modal";
@@ -87,6 +87,11 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
       )}
       {!loaded.loading && !loaded.error && (
         <>
+          {loaded.data?.default_tickers_is_fallback === false && loaded.data.note && (
+            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }} data-testid="universe-not-effective-notice">
+              {loaded.data.note}
+            </Notice>
+          )}
           <div style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-3)", alignItems: "flex-end" }}>
             <div style={{ flex: 1 }}>
               <Input

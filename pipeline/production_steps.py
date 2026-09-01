@@ -39,6 +39,39 @@ telemetry = TelemetryProxy()
 
 logger = logging.getLogger("ProductionPipeline")
 
+# Fraction of a stage's INPUT symbols that must be dropped before we log a
+# WARNING calling it out. 0.5 is deliberately loose (a routine handful of
+# dead-lettered symbols must never spam the log) -- this exists purely so a
+# repeat of the "430-symbol universe, 26 forecasted" operator report is
+# visible in the logs at the moment it happens, not only reconstructable
+# after the fact from state_snapshot.json (see
+# docs/known_issues/universe_count_reporting_mismatch.md).
+_UNIVERSE_FUNNEL_DROP_WARN_FRACTION = 0.5
+
+
+def _warn_on_universe_funnel_drop(before: int, after: int, stage_label: str) -> None:
+    """Log a WARNING when *stage_label* dropped more than
+    ``_UNIVERSE_FUNNEL_DROP_WARN_FRACTION`` of *before*'s symbols, producing
+    *after*. No-op when ``before`` is 0 (nothing to drop) or ``after >=
+    before`` (no drop, or a stage that can only add symbols). Never raises
+    (CONSTRAINT #6) -- this is diagnostic-only and must never affect the
+    pipeline it's observing.
+    """
+    try:
+        if before <= 0 or after >= before:
+            return
+        dropped = before - after
+        if (dropped / before) > _UNIVERSE_FUNNEL_DROP_WARN_FRACTION:
+            logger.warning(
+                "Universe funnel: %s dropped %d/%d symbols (%.0f%%) -- %d -> %d. "
+                "See state_snapshot.json's 'universe_funnel' field for the full "
+                "per-stage breakdown this cycle.",
+                stage_label, dropped, before, 100.0 * dropped / before, before, after,
+            )
+    except Exception:  # noqa: BLE001 - diagnostic helper must never raise
+        pass
+
+
 class AsyncDataFetchStep(PipelineStep):
     """Fetches macro, fundamentals, and technicals concurrently."""
     name = "data"
@@ -78,6 +111,21 @@ class AsyncDataFetchStep(PipelineStep):
             default_tickers=settings.DEFAULT_TICKERS,
         )
 
+        # Permanent universe-funnel diagnostic (see
+        # docs/known_issues/universe_count_reporting_mismatch.md): records the
+        # symbol count surviving each narrowing stage of a cycle so a future
+        # "N-symbol universe but only M forecasted" report can be diagnosed
+        # from state_snapshot.json directly instead of re-deriving it from
+        # scratch. Never gates behavior -- purely additive telemetry.
+        universe_funnel: dict = {
+            "configured_default_tickers": len(settings.DEFAULT_TICKERS or []),
+            "watchlist_count": len(watchlist_symbols),
+            "discovered_count": len(discovered_symbols),
+            "default_tickers_is_fallback": not (watchlist_symbols or discovered_symbols),
+            "tracked_universe_before_held": len(base_symbols),
+        }
+        ctx.context_extras["universe_funnel"] = universe_funnel
+
         # Initialize data engine
         de = ctx.market
         if de is None:
@@ -109,6 +157,8 @@ class AsyncDataFetchStep(PipelineStep):
                 "proceeding without holdings-aware overlay."
             )
         ctx.context_extras["robinhood_positions"] = rh_positions
+        universe_funnel["held_positions_added"] = len(rh_positions)
+        universe_funnel["tracked_universe_total"] = len(ctx.symbols)
 
         # 1. Asynchronous concurrent data fetching
         if ctx.progress is not None:
@@ -145,6 +195,12 @@ class AsyncDataFetchStep(PipelineStep):
             # does NOT stamp it, so an offline blip re-tries on the next cycle
             # rather than being treated as a fresh pull.
             main_orchestrator._mark_data_refreshed()
+
+        universe_funnel["tech_raw_count"] = len(ctx.tech_raw)
+        universe_funnel["fund_raw_count"] = len(ctx.fund_raw)
+        _warn_on_universe_funnel_drop(
+            universe_funnel["tracked_universe_total"], universe_funnel["tech_raw_count"], "technical data fetch",
+        )
 
         # Kill-switch check
         ks = main_orchestrator.GlobalKillSwitch()
@@ -383,6 +439,21 @@ class ProcessingStep(PipelineStep):
         
         ctx.dashboard_df = pe.compile_dashboard(tech_metrics, fund_metrics, regime_metrics)
 
+        # Universe-funnel diagnostic (see AsyncDataFetchStep above and
+        # docs/known_issues/universe_count_reporting_mismatch.md).
+        # compile_dashboard() is a UNION of tech/fund keys, so this stage can
+        # only add rows relative to tech_raw/fund_raw individually -- but it
+        # can still be smaller than the tracked universe if BOTH tech_raw and
+        # fund_raw dropped the same ticker.
+        universe_funnel = ctx.context_extras.get("universe_funnel")
+        if universe_funnel is not None:
+            universe_funnel["dashboard_rows"] = len(ctx.dashboard_df)
+            _warn_on_universe_funnel_drop(
+                universe_funnel.get("tracked_universe_total", 0),
+                universe_funnel["dashboard_rows"],
+                "dashboard compilation (tech ∪ fund raw data)",
+            )
+
         tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
         _apply_options_columns(ctx.dashboard_df, tech_opt_indicators)
 
@@ -472,6 +543,22 @@ class ForecastingStep(PipelineStep):
             with ThreadPoolExecutor(max_workers=min(workers, len(rows))) as pool:
                 pairs = list(pool.map(_forecast_one, rows))
         forecast_results = {tk: fc for tk, fc in pairs if fc is not None}
+
+        # Universe-funnel diagnostic, final stage (see AsyncDataFetchStep /
+        # ProcessingStep above and
+        # docs/known_issues/universe_count_reporting_mismatch.md).
+        # `forecasted_count` counts every ticker that got ANY forecast entry
+        # (a real ForecastingEngine result OR its Monte-Carlo fallback on a
+        # ForecastingEngine exception) -- `_forecast_one` returns None ONLY
+        # when Price was falsy/zero, so `dashboard_rows - forecasted_count`
+        # is exactly the count of rows skipped for that reason this cycle.
+        universe_funnel = ctx.context_extras.get("universe_funnel")
+        if universe_funnel is not None:
+            universe_funnel["forecasted_count"] = len(forecast_results)
+            universe_funnel["skipped_missing_price_count"] = len(rows) - len(forecast_results)
+            _warn_on_universe_funnel_drop(
+                len(rows), len(forecast_results), "forecasting (rows with a usable Price)",
+            )
 
         _apply_forecast_columns(ctx.dashboard_df, forecast_results, forecast_cols)
 
@@ -3072,6 +3159,7 @@ class StateSnapshotStep(PipelineStep):
             ctx.macro_raw, ctx.dashboard_df, ctx.symbols,
             macro_kill_switch=getattr(ctx.macro_dto, "killSwitch", None),
             hmm_regime_state=getattr(ctx.macro_dto, "hmm_regime_state", None),
+            universe_funnel=ctx.context_extras.get("universe_funnel"),
         )
 
         # Persist the optional Pilots-PWA analytics artifacts (options premium

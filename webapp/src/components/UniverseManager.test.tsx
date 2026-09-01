@@ -151,4 +151,22 @@ describe("UniverseManager (real mock API)", () => {
     expect(within(list).getByText("AAPL")).toBeInTheDocument();
     expect(getUniverseSpy).not.toHaveBeenCalled();
   });
+
+  // Regression test for the DEFAULT_TICKERS reporting-mismatch fix -- see
+  // docs/known_issues/universe_count_reporting_mismatch.md. The mock's
+  // MOCK_ACTIVE_WATCHLIST is deliberately narrower than MOCK_DATA_UNIVERSE
+  // so GET /data/universe honestly reports `default_tickers_is_fallback:
+  // false`, and this screen must surface that as a visible warning rather
+  // than silently implying DEFAULT_TICKERS is what the pipeline evaluates.
+  it("shows a warning notice when DEFAULT_TICKERS is configured but NOT the effective per-cycle universe", async () => {
+    render(
+      <MemoryRouter>
+        <UniverseManager />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("universe-chip-AAPL");
+
+    const notice = await screen.findByTestId("universe-not-effective-notice");
+    expect(notice).toHaveTextContent("is NOT the effective per-cycle universe");
+  });
 });
