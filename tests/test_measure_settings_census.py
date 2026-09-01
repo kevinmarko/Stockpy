@@ -113,3 +113,25 @@ class TestCommittedArtifactIsFresh:
         assert fresh_md == committed_md, (
             f"docs/settings_field_census.md is stale. {_REGEN_HINT}"
         )
+
+    def test_form_d_counts_match_allowlist(self, fresh_census):
+        # Known aliases / dynamic names that are legitimately absent.
+        benign = {"HOME", "PATH", "PWD", "USER", "TERM", "HTTPS_PROXY", "HTTP_PROXY",
+                  "DATABASE_URL", "PYTEST_CURRENT_TEST", "CI", "RH_LOGIN_WORKER", "NO_VENV_REEXEC"}
+                  
+        # Temporary allowlist: removed once WP-A/B/C/D lands
+        allowlist = {
+            "FUNDAMENTALS_CACHE_TTL_SECONDS", "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS",
+            "FINNHUB_RATE_LIMIT_PER_MIN", "WATCHLIST", "LOG_LEVEL", "NTFY_TOPIC",
+            "ALERT_NTFY_TOPIC", "ALERT_EMAIL_SMTP_HOST", "ALERT_EMAIL_SMTP_PORT",
+            "ALERT_EMAIL_SMTP_PASSWORD", "ALERT_EMAIL_FROM", "ALERT_EMAIL_TO",
+            "ALERT_SLACK_WEBHOOK_URL", "ALERT_CHANNELS", "PROMPT_REGISTRY_SIGNING_KEY",
+            "QDRANT_URL", "QDRANT_COLLECTION",
+            "GCLOUD_BIN", "NO_VENV_REEXEC"
+        }
+        
+        actual = set(fresh_census["read_forms"]["form_d_os_environ"]["counts"].keys())
+        # NTFY_TOPIC is in the A-D list but not actually referenced yet
+        allowlist.discard("NTFY_TOPIC")
+        
+        assert actual == allowlist
