@@ -145,6 +145,28 @@ def wait_turn(state_path: Path, min_interval: float) -> None:
                 last = 0.0
 
             now = time.monotonic()
+            if last > now:
+                # `last` was written during a PRIOR boot session. POSIX
+                # monotonic clocks (mach_absolute_time on macOS,
+                # CLOCK_MONOTONIC on Linux) reset to near-zero on every
+                # reboot, so a value written before a reboot always reads as
+                # "in the future" to a process running in a new boot session
+                # -- something that can never happen validly, since `last` is
+                # only ever written from `time.monotonic()` a moment before.
+                # Without this guard, `elapsed = now - last` goes deeply
+                # negative and the sleep below blocks -- WHILE HOLDING this
+                # exclusive lock -- for the full magnitude of the gap.
+                # Observed in production: a multi-day sleep (the file's stale
+                # timestamp was ~914,497s / ~10.6 days into a prior boot
+                # session; the reading process was only ~232,906s / ~2.7 days
+                # into the new one, giving an ~681,591s / ~7.9-day sleep)
+                # that froze EVERY process on the machine wanting to make an
+                # FMP/EDGAR request, since they all queue on this same lock.
+                # Treat it identically to a corrupt/unreadable state file: no
+                # prior request known. See
+                # docs/known_issues/cross_process_throttle_monotonic_clock_reboot_reset.md.
+                last = 0.0
+
             elapsed = now - last
             if elapsed < min_interval:
                 time.sleep(min_interval - elapsed)

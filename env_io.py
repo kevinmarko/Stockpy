@@ -739,6 +739,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FIX_GATEWAY_ENABLED",
     "FIX_HEARTBEAT_INTERVAL_SECONDS",
     "WS_RISK_STREAM_INTERVAL_SECONDS",
+    # --- Sentry error-tracking instrumentation (observability/sentry_integration.py) ---
+    # Non-secret tunables only -- SENTRY_DSN is the one credential-shaped field
+    # here and lives in SECRET_KEYS below (masked, never GUI-writable), same
+    # treatment as ALERT_WEBHOOK_URL/DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL.
+    "SENTRY_ENABLED",
+    "SENTRY_ENVIRONMENT",
+    "SENTRY_TRACES_SAMPLE_RATE",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -761,6 +768,7 @@ SECRET_KEYS: tuple[str, ...] = (
     # DATABASE_URL — may embed credentials, never logged, never GUI-writable.
     "MCP_DATABASE_URL_RO",
     "ALERT_WEBHOOK_URL",
+    "SENTRY_DSN",
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
     "STATE_API_TOKEN",

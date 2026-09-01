@@ -274,6 +274,13 @@ export function Marketplace() {
                 Semantic related-sector ranking
               </div>
             </Link>
+            <Link to="/research/trends-stitcher" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧵</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Trends stitcher</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
+                Overlapping-window SVI stitching demo
+              </div>
+            </Link>
           </div>
 
           <p

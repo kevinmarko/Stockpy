@@ -228,6 +228,9 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
     # reproduced exactly that silent-kill failure mode.
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
 
+    from observability.sentry_integration import init_sentry
+    init_sentry(service_name="orchestrator_daemon")
+
     # Deferred import: mirrors app_shell.py's deferred `from desktop.xxx
     # import yyy` imports -- keeps `import desktop.orchestrator_daemon`
     # side-effect-free/importable even before desktop.daemon_runtime exists

@@ -88,6 +88,74 @@ class TestCorruptStateDegradesGracefully:
         assert elapsed < 0.05
 
 
+class TestStaleTimestampFromPriorBootSession:
+    """Reproduces a real production incident: a state file written during a
+    PRIOR boot session holds a ``time.monotonic()`` value that is larger than
+    anything the current boot session's clock has reached yet (monotonic
+    clocks reset to near-zero on reboot). Before the fix, this made
+    ``elapsed = now - last`` deeply negative, and the resulting
+    ``time.sleep(min_interval - elapsed)`` slept for the full (huge)
+    magnitude of the gap -- multiple days in the wild -- WHILE HOLDING the
+    exclusive cross-process lock, freezing every process on the machine that
+    wanted to make an FMP/EDGAR request. See
+    docs/known_issues/cross_process_throttle_monotonic_clock_reboot_reset.md."""
+
+    def test_future_timestamp_does_not_hang_and_is_treated_as_no_prior_request(self, tmp_path):
+        state_path = tmp_path / "x.state"
+        # Simulate a value written far into a previous boot session, i.e.
+        # comfortably larger than this test process's own time.monotonic().
+        future_stamp = time.monotonic() + 900_000.0  # +10.4 days
+        state_path.write_text(f"{future_stamp:.6f}")
+
+        t0 = time.perf_counter()
+        wait_turn(state_path, 0.05)
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 1.0, (
+            f"wait_turn slept {elapsed:.1f}s against a stale future-looking "
+            "timestamp instead of treating it as 'no prior request known'"
+        )
+
+    def test_future_timestamp_does_not_deadlock_a_second_waiting_process(self, tmp_path):
+        """The load-bearing property: since the lock is held across the
+        sleep, a second REAL process racing to acquire it must not be stuck
+        behind the first one's (would-be) multi-day sleep either."""
+        state_path = tmp_path / "shared.state"
+        future_stamp = time.monotonic() + 900_000.0
+        state_path.write_text(f"{future_stamp:.6f}")
+
+        repo_root = repr(str(Path(__file__).resolve().parent.parent))
+        script = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {repo_root})\n"
+            "from data.cross_process_throttle import wait_turn\n"
+            "from pathlib import Path\n"
+            f"wait_turn(Path({str(state_path)!r}), 0.05)\n"
+            "print('done')\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script], stdout=subprocess.PIPE, text=True
+        )
+        out, _ = proc.communicate(timeout=10)
+        assert proc.returncode == 0
+        assert out.strip() == "done"
+
+    def test_writes_a_fresh_valid_stamp_after_recovering_from_a_stale_one(self, tmp_path):
+        state_path = tmp_path / "x.state"
+        future_stamp = time.monotonic() + 900_000.0
+        state_path.write_text(f"{future_stamp:.6f}")
+
+        before = time.monotonic()
+        wait_turn(state_path, 0.01)
+        after = time.monotonic()
+
+        stamp = float(state_path.read_text().strip())
+        assert before <= stamp <= after + 0.01, (
+            "state file must be overwritten with a fresh, current-session "
+            "timestamp, not left holding the stale pre-reboot value"
+        )
+
+
 class TestMissingFcntlDegradesToNoop:
     def test_no_fcntl_logs_once_and_never_raises(self, tmp_path, monkeypatch):
         import data.cross_process_throttle as mod

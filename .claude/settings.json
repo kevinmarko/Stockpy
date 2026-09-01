@@ -2,26 +2,49 @@
   "permissions": {
     "allow": [
       "Bash(source .venv/bin/activate *)",
-      "mcp__Claude_Browser__get_page_text",
-      "mcp__Claude_Browser__read_page",
-      "mcp__Claude_Browser__read_network_requests",
-      "mcp__Claude_Browser__read_console_messages",
-      "mcp__Claude_Browser__find",
       "Bash(npm run typecheck *)",
       "Bash(git fetch *)",
       "Bash(git rebase *)",
       "Bash(git worktree *)",
       "Bash(git rev-list *)",
+      "Bash(git merge-base *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
       "Bash(gh run *)",
+      "Bash(gh --version)",
       "Bash(./setup.sh)",
       "Bash(.venv/bin/python --version)",
       "Bash(.venv/bin/pip list *)",
       "Bash(.venv/bin/python -m pytest tests/ -q -p no:cacheprovider --tb=no)",
       "Bash(.venv/bin/python -m pytest tests/ -q -p no:cacheprovider --tb=short)",
       "Bash(npx --version)",
+      "Bash(ruff check *)",
+      "mcp__Claude_Browser__get_page_text",
+      "mcp__Claude_Browser__read_page",
+      "mcp__Claude_Browser__read_network_requests",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__tabs_context",
+      "mcp__Claude_Browser__preview_list",
+      "mcp__Claude_Browser__navigate",
+      "mcp__Claude_Browser__tabs_select",
       "mcp__robinhood-trading__get_equity_positions",
       "mcp__robinhood-trading__get_portfolio",
-      "mcp__robinhood-trading__get_scans"
+      "mcp__robinhood-trading__get_scans",
+      "mcp__investyo-platform__query_investyo_db",
+      "mcp__investyo-platform__list_jules_sources",
+      "mcp__investyo-platform__list_pilots",
+      "mcp__investyo-platform__get_var_es_metrics",
+      "mcp__investyo-platform__get_signal_breakdown",
+      "mcp__investyo-platform__get_model_registry_status",
+      "mcp__investyo-platform__get_pilot_detail",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__query_investyo_db",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__list_jules_sources",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__list_pilots",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_var_es_metrics",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_signal_breakdown",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_model_registry_status",
+      "mcp__6923c6a7-e67c-40a1-ab2f-53bf08c55489__get_pilot_detail"
     ]
   },
   "hooks": {
@@ -32,6 +55,16 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/block_env_write.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/git_bash_guard.sh",
             "timeout": 10
           }
         ]
