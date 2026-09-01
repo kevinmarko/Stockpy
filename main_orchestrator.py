@@ -1126,7 +1126,7 @@ def _dispatch_daily_summary(ctx) -> None:
 async def _main_body(effective_dry_run: bool, strict: bool = False,
                       *, engines: Optional[EngineContext] = None,
                       data_engine: Optional[Any] = None, mode: str = "full",
-                      force: bool = True) -> None:
+                      force: bool = True) -> Optional[Any]:
     """Thin progress-instrumentation wrapper around ``_main_body_impl``.
 
     Constructs ONE ``ProgressReporter`` per cycle (reporting/progress.py),
@@ -1151,7 +1151,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
     """
     _progress = ProgressReporter(_PROGRESS_STAGES)
     try:
-        await _main_body_impl(
+        res = await _main_body_impl(
             effective_dry_run, strict, engines=engines, data_engine=data_engine,
             progress=_progress, mode=mode, force=force,
         )
@@ -1160,13 +1160,14 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
         raise
     else:
         _progress.finish("succeeded")
+        return res
 
 
 async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
                            *, engines: Optional[EngineContext] = None,
                            data_engine: Optional[Any] = None,
                            progress: Optional[ProgressReporter] = None,
-                           mode: str = "full", force: bool = True) -> None:
+                           mode: str = "full", force: bool = True) -> Optional[Any]:
     """Core pipeline logic using the modular Pipeline framework.
 
     ``mode`` selects which pipeline steps run:
@@ -1364,6 +1365,7 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
             await _hb_task
             if _cls_task:
                 await _cls_task
+    return getattr(ctx, "macro_dto", None)
 
 
 if __name__ == "__main__":
