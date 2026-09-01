@@ -3708,14 +3708,17 @@ export class ForecastBackfillConflictError extends ApiError {
 
 /**
  * A report file's category — mirrors `gui/panels/reports_library.py`'s four
- * sections. `validation_summary` (parsed JSON) is rendered distinctly from
- * `validation_html` (a full harness HTML report) even though both live in
- * the same `reports/` directory.
+ * sections, plus `notebooklm_export` (webapp-only; the Streamlit GUI is
+ * decommissioned and does not gain new capability — see
+ * `scripts/export_notebooklm.py`). `validation_summary` (parsed JSON) is
+ * rendered distinctly from `validation_html` (a full harness HTML report)
+ * even though both live in the same `reports/` directory.
  */
 export type ReportKind =
   | "daily_report"
   | "dashboard"
   | "briefing"
+  | "notebooklm_export"
   | "validation_summary"
   | "validation_html";
 
@@ -3730,13 +3733,15 @@ export interface ReportFile {
 }
 
 /**
- * `GET /reports` — every generated report file the Streamlit Report Library
- * tab enumerates: the daily report, the two orchestrator dashboards, daily
- * briefings, and validation reports. `reason` is set only when `reports` is
- * empty (CONSTRAINT #4 — never a fabricated list). `GET /reports/{name}`
- * resolves `name` back to one of these rows ONLY — the server never joins a
- * client-supplied string onto a filesystem path (see that endpoint's own
- * doc comment on `client.ts`).
+ * `GET /reports` — every generated report file `pilots/reports.py` catalogs:
+ * the daily report, the two orchestrator dashboards, daily briefings, the
+ * NotebookLM export, and validation reports (the Streamlit Report Library
+ * tab enumerates the same set minus the NotebookLM export, which is
+ * webapp-only). `reason` is set only when `reports` is empty (CONSTRAINT #4
+ * — never a fabricated list). `GET /reports/{name}` resolves `name` back to
+ * one of these rows ONLY — the server never joins a client-supplied string
+ * onto a filesystem path (see that endpoint's own doc comment on
+ * `client.ts`).
  */
 export interface ReportManifest {
   generated_at: string | null;
