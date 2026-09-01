@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `56b2de6a02c376aabdd3a84a6db0b8d3a3d1bc8c`
+- Measured at commit: `0d9826395f98f0188d5c9935edb10a7a659414c3`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,13 +14,13 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **449**
+`len(Settings.model_fields)` = **458**
 
 | Annotation | Count |
 |---|---|
-| `bool` | 130 |
-| `int` | 108 |
-| `float` | 97 |
+| `bool` | 131 |
+| `int` | 112 |
+| `float` | 101 |
 | `Optional[str]` | 51 |
 | `str` | 48 |
 | `list[str]` | 8 |
@@ -32,7 +32,7 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 | `dict[str, str]` | 1 |
 | `list[int]` | 1 |
 
-Fields whose name ends in `_ENABLED`: **117**
+Fields whose name ends in `_ENABLED`: **118**
 
 Distinct `dict[...]` shapes: **4**
 
@@ -55,7 +55,7 @@ A future kind-derivation switch needs an explicit branch for each of these:
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 396 | 396 | 0 duplicate entries (clean) |
+| `ALLOWED_KEYS` | 405 | 405 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 47 | 46 | 1 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
 | `EXCLUDED_FROM_GUI` | 9 | 9 | frozenset; third classification bucket |
@@ -69,7 +69,7 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 | Bucket | Count | Definition |
 |---|---|---|
 | `SECRET` | 44 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 396 | in `env_io.ALLOWED_KEYS` |
+| `IN_ALLOWED_KEYS` | 405 | in `env_io.ALLOWED_KEYS` |
 | `UNCLASSIFIED` | 9 | in neither |
 
 Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
@@ -79,7 +79,7 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1758 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5357 | yes | Path to the gcloud binary for environment integrations. |
+| `GCLOUD_BIN` | L5405 | yes | Path to the gcloud binary for environment integrations. |
 | `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4591 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
 | `LLM_COMMENTARY_CACHE_PATH` | L4392 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
 | `LOCAL_DATA_ROOT` | L2011 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
@@ -143,7 +143,7 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **83**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **84**
 - routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
@@ -218,7 +218,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **439** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **443** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -231,14 +231,14 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 803 | 263 |
-| (b) `getattr(settings, "KEY", default)` | 374 | 211 |
+| (a) `settings.KEY` | 813 | 269 |
+| (b) `getattr(settings, "KEY", default)` | 376 | 214 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
-Fields reached by at least one form: **440** of 449.
+Fields reached by at least one form: **447** of 458.
 
-### Fields with NO statically-attributable read — **9**
+### Fields with NO statically-attributable read — **11**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -251,13 +251,15 @@ referenced by name somewhere and is probably read dynamically.
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4794` | likely read dynamically |
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4964`, `gui/panels/settings_manager.py:126` | likely read dynamically |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4936`, `gui/panels/settings_manager.py:162` | likely read dynamically |
+| `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
+| `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11072` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1543`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1442`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **177**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **178**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -376,6 +378,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `GEMINI_LIVE_CHAT_ENABLED` | b | 1 | 0 |
 | `GEMINI_LIVE_CHAT_MODEL` | b | 1 | 0 |
 | `GEMINI_LIVE_VOICE_NAME` | b | 1 | 0 |
+| `GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS` | b | 1 | 0 |
 | `GRAVITY_AI_RUNNER_ENABLED` | b | 4 | 0 |
 | `HMM_INFLATION_FEATURE_ENABLED` | b | 2 | 0 |
 | `HMM_RISK_OFF_AGREEMENT_THRESHOLD` | b | 1 | 0 |
@@ -401,12 +404,12 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPAL_RESEARCH_MODEL` | b | 2 | 0 |
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
-| `OPTIONS_0DTE_ENABLED` | b | 6 | 0 |
+| `OPTIONS_0DTE_ENABLED` | b | 5 | 0 |
 | `OPTIONS_0DTE_HARD_EXIT_TIME` | b | 4 | 0 |
 | `OPTIONS_0DTE_PROFIT_TARGET_PCT` | b | 3 | 0 |
 | `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |
 | `OPTIONS_ALERT_WEBHOOK_URL` | b | 5 | 0 |
-| `OPTIONS_AUTO_EXIT_ENABLED` | b | 5 | 0 |
+| `OPTIONS_AUTO_EXIT_ENABLED` | b | 4 | 0 |
 | `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | b | 3 | 0 |
 | `OPTIONS_DELTA_HEDGE_ENABLED` | b | 2 | 0 |
 | `OPTIONS_EARNINGS_MIN_EDGE` | b | 1 | 0 |

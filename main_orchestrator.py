@@ -831,6 +831,16 @@ def _write_state_snapshot(
                     # GDELT query failed, or this ticker's sector wasn't
                     # covered this cycle.
                     "sector_heat_factor": _safe_float_or_none(row.get("Sector_Heat_Factor")),
+                    # Google Trends Abnormal Search Volume Index (ASVI) --
+                    # see pipeline/production_steps.py::_apply_google_trends_asvi
+                    # and data/trends_stitcher.py::ASVICalculator. Same
+                    # NaN-never-fabricated convention as the multifactor
+                    # z-scores/sector_heat_factor above -- NaN -> JSON null
+                    # when settings.GOOGLE_TRENDS_ENABLED is False, this
+                    # ticker has no stitched Trends series yet, or the
+                    # per-cycle time budget was exhausted before this symbol
+                    # was reached.
+                    "google_trends_asvi": _safe_float_or_none(row.get("Google_Trends_ASVI")),
                     # ETF volatility transmission (Ben-David, Franzoni &
                     # Moussawi 2018) -- see risk/etf_transmission.py and
                     # pipeline/production_steps.py::_apply_etf_transmission.
