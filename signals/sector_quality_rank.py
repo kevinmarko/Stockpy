@@ -374,6 +374,45 @@ class SectorNeutralQualitySignal(SignalModule):
             explanation=explanation,
         )
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        import numpy as np
+
+        ranks = getattr(context, "sector_quality_ranks", {})
+        weight = settings.SIGNAL_WEIGHTS.get(self.name, 15.0)
+
+        if SYMBOL_COL in df:
+            tickers = df[SYMBOL_COL].astype(str)
+        else:
+            tickers = pd.Series(df.index.astype(str), index=df.index)
+
+        sector_s = df.get(SECTOR_COL, df.get(SECTOR_COL_FALLBACK, pd.Series("Unknown", index=df.index))).astype(str)
+        sector_s = sector_s.replace("nan", "Unknown")
+
+        def get_row_result(args):
+            ticker, sec = args
+            if not ranks or ticker not in ranks:
+                return 0.0, 0.0, f"WARNING: Sector-neutral quality rank unavailable for {ticker}. Score set to 0 (neutral)."
+            percentile = ranks[ticker]
+            score = 2.0 * (percentile - 0.5)
+            contrib = score * weight
+            direction = "Bullish" if score > 0 else ("Bearish" if score < 0 else "Neutral")
+            sign = "+" if contrib >= 0 else ""
+            explanation = f"{sign}{contrib:.1f}pts: SNEQR {direction} (sector={sec}, percentile={percentile:.3f}, score={score:+.3f})"
+            return score, abs(score), explanation
+
+        res = pd.Series(list(zip(tickers, sector_s)), index=df.index).map(get_row_result)
+        
+        scores = np.array([r[0] for r in res], dtype=float)
+        confidences = np.array([r[1] for r in res], dtype=float)
+        explanations = np.array([r[2] for r in res], dtype=object)
+
+        return pd.DataFrame({
+            "score": scores,
+            "confidence": confidences,
+            "explanation": explanations,
+            "meta_label_proba": np.nan
+        }, index=df.index)
+
 
 # Auto-register
 global_registry.register(SectorNeutralQualitySignal())

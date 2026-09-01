@@ -113,6 +113,30 @@ class LGBMRankerSignal(SignalModule):
             explanation=f"LGBM cross-sectional rank={rank:.3f}",
         )
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        import numpy as np
+
+        if "Symbol" in df:
+            tickers = df["Symbol"].astype(str)
+        else:
+            tickers = pd.Series(df.index.astype(str), index=df.index)
+            
+        lgbm_scores = getattr(context, "lgbm_scores", {})
+        
+        ranks = tickers.map(lgbm_scores).fillna(0.5)
+        
+        scores = 2.0 * (ranks - 0.5)
+        scores = np.clip(scores, -1.0, 1.0)
+        
+        explanations = ranks.map(lambda r: f"LGBM cross-sectional rank={r:.3f}")
+        
+        return pd.DataFrame({
+            "score": scores,
+            "confidence": 1.0,
+            "explanation": explanations,
+            "meta_label_proba": np.nan
+        }, index=df.index)
+
 
 # Auto-register module (one input among many to SignalAggregator.aggregate();
 # contributes nothing to final_score while settings.SIGNAL_WEIGHTS["lgbm_ranker"]

@@ -1220,6 +1220,63 @@ class NewsCatalystSignal(SignalModule):
             ),
         )
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        import numpy as np
+
+        if "Symbol" in df:
+            symbols = df["Symbol"]
+        elif "Ticker" in df:
+            symbols = df["Ticker"]
+        else:
+            symbols = pd.Series(df.index, index=df.index)
+        
+        symbols = symbols.fillna("").astype(str).str.upper()
+
+        def get_row_result(sym):
+            headline_score = self._news_scores.get(sym, 0.0)
+            archive_raw = self._news_archive_scores.get(sym, float("nan"))
+            had_real_headlines = not math.isnan(archive_raw)
+            confidence = 0.75 if had_real_headlines else 0.5
+
+            social_entry = self._sentiment_credibility.get(sym)
+            blend_suffix = ""
+            if social_entry is not None:
+                social_score = social_entry.get("credibility_weighted_sentiment", 0.0)
+                if isinstance(social_score, float) and math.isnan(social_score):
+                    score = headline_score
+                else:
+                    headline_weight, social_weight = _resolve_social_blend_weights()
+                    score = headline_weight * headline_score + social_weight * social_score
+                    blend_suffix = f" [social blend w={social_weight:.2f}]"
+            else:
+                score = headline_score
+
+            if score > 0.1:
+                direction = f"positive (+{score:.2f})"
+            elif score < -0.1:
+                direction = f"negative ({score:.2f})"
+            else:
+                direction = "neutral"
+
+            earnings = self._earnings_dt.get(sym)
+            suffix = f" [earnings {earnings.strftime('%Y-%m-%d')}]" if earnings else ""
+            
+            explanation = f"News sentiment: {direction}{suffix}{blend_suffix}."
+            return score, confidence, explanation
+
+        res = symbols.map(get_row_result)
+
+        scores = np.array([r[0] for r in res], dtype=float)
+        confidences = np.array([r[1] for r in res], dtype=float)
+        explanations = np.array([r[2] for r in res], dtype=object)
+
+        return pd.DataFrame({
+            "score": scores,
+            "confidence": confidences,
+            "explanation": explanations,
+            "meta_label_proba": np.nan
+        }, index=df.index)
+
 
 # Auto-register with the global signal registry
 global_registry.register(NewsCatalystSignal())
