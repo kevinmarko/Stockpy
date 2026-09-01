@@ -1,0 +1,7 @@
+- [x] Create implementation plan
+- [x] Edit data/portfolio_sync.py
+- [x] Edit pilots/watchlist_writer.py
+- [x] Edit gui/panels/_shared.py
+- [x] Edit tests/test_portfolio_sync.py
+- [x] Run tests
+- [x] Create walkthrough

@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def append_symbols(
     """
     target = path if path is not None else DEFAULT_WATCHLIST_PATH
 
-    env_val = watchlist_env if watchlist_env is not None else os.environ.get("WATCHLIST", "")
+    env_val = watchlist_env if watchlist_env is not None else settings.WATCHLIST
     if env_val and env_val.strip():
         raise WatchlistEnvPrecedenceError(
             "The WATCHLIST environment variable is set, which takes precedence "

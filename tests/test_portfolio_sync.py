@@ -907,7 +907,7 @@ class TestLoadEnvWatchlist:
     def test_env_var_only(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "aapl, msft")
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "aapl, msft")
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL", "MSFT"]
 
@@ -923,7 +923,7 @@ class TestLoadEnvWatchlist:
     def test_env_and_file_merge_deduped(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "AAPL")
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "AAPL")
         wl = tmp_path / "watchlist.txt"
         wl.write_text("AAPL\nMSFT\n")
         got = ps.load_env_watchlist(str(wl))
@@ -944,7 +944,7 @@ class TestLoadEnvWatchlist:
         be treated as a ticker and handed to a live bars fetch."""
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv(
+        monkeypatch.setattr(ps.settings, 
             "WATCHLIST", "# Plain text comma-separated fallback ticker list"
         )
         with caplog.at_level("WARNING"):
@@ -956,7 +956,7 @@ class TestLoadEnvWatchlist:
     def test_env_var_mixed_valid_and_garbage_keeps_only_valid(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "aapl, # a stray comment fragment, msft")
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "aapl, # a stray comment fragment, msft")
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL", "MSFT"]
 
@@ -974,6 +974,6 @@ class TestLoadEnvWatchlist:
     def test_implausibly_long_candidate_is_rejected(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "AAPL," + "X" * 40)
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "AAPL," + "X" * 40)
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL"]
