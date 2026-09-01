@@ -2362,17 +2362,26 @@ def get_trends_stitch_demo() -> Dict[str, Any]:
         true_series = bars["Volume"].tail(n_bars)
 
         # Slicing/scaling/stitching stays inside the same try block as the fetch above --
-        # any exception here (e.g. a degenerate max()==0 slice, or GoogleTrendsStitcher
-        # raising on a malformed overlap) must degrade to the same honest 503 this
-        # endpoint is built around, never an unhandled raw 500.
+        # any exception here (e.g. GoogleTrendsStitcher raising on a malformed overlap)
+        # must degrade to the same honest 503 this endpoint is built around, never an
+        # unhandled raw 500. A degenerate all-zero slice is guarded explicitly (per this
+        # codebase's degenerate-std guard convention, < 1e-12) since slice / 0.0 would
+        # otherwise silently produce NaN -- not an exception -- and to_curve() would drop
+        # every NaN point, returning an honest-looking 200 with an empty curve instead.
+        def _scale_period(period_slice: pd.Series) -> pd.Series:
+            peak = float(period_slice.max())
+            if peak < 1e-12:
+                raise ValueError("Degenerate SPY volume window: max() is ~0, cannot scale")
+            return period_slice / peak * 100.0
+
         slice_a = true_series.iloc[0:90]
-        period_a = slice_a / slice_a.max() * 100.0
+        period_a = _scale_period(slice_a)
 
         slice_b = true_series.iloc[75:165]
-        period_b = slice_b / slice_b.max() * 100.0
+        period_b = _scale_period(slice_b)
 
         slice_c = true_series.iloc[150:240]
-        period_c = slice_c / slice_c.max() * 100.0
+        period_c = _scale_period(slice_c)
 
         stitched_ab = GoogleTrendsStitcher.stitch_intervals(period_a, period_b)
         stitched_all = GoogleTrendsStitcher.stitch_intervals(stitched_ab, period_c)

@@ -1158,6 +1158,24 @@ def test_get_trends_stitch_demo_insufficient_history_degrades_to_503_not_fabrica
     assert "stitched_curve" not in body
 
 
+def test_get_trends_stitch_demo_degenerate_zero_volume_slice_degrades_to_503(monkeypatch):
+    # A slice whose volume is genuinely all-zero (e.g. a data-quality bug or a
+    # placeholder/forward-filled feed) must fail closed like every other error
+    # path here -- not silently divide by zero into an all-NaN curve that
+    # to_curve() then drops, returning an honest-looking 200 with data: [].
+    bars = _make_stitch_demo_bars(260).copy()
+    # Period A is true_series.iloc[0:90], i.e. bars.iloc[-240:-150] once tail(240)
+    # is applied -- zero out exactly that window.
+    bars.iloc[-240:-150, bars.columns.get_loc("Volume")] = 0.0
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/trends/stitch-demo")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert "raw_curves" not in body
+    assert "stitched_curve" not in body
+
+
 def test_get_trends_stitch_demo_empty_bars_degrades_to_503(monkeypatch):
     monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(pd.DataFrame()))
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
