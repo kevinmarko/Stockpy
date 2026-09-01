@@ -1,9 +1,7 @@
 # Known issue (2026-08-22): `OPTIONS_0DTE_ENABLED` missing from the automated options-lifecycle outer gate; automated options lifecycle entirely unwired on the daemon path
 
-**Status: partially fixed.** Branch `fix-options-0dte-gate-missing`. Bug 1
-(the `main.py` outer-gate omission) is fixed with a regression test. Bug 2
-(the daemon-path gap) is **documented, not fixed** — see "What's still open"
-below for why and what a real fix would need.
+**Status: fully fixed.** Branches `fix-options-0dte-gate-missing` & `phase-7-options-lifecycle-hedging`. Bug 1
+(the `main.py` outer-gate omission) and Bug 2 (the daemon-path gap) are both **fixed with full regression and unit test coverage**.
 
 ## Bug 1 (fixed): `main.py`'s outer gate omitted `OPTIONS_0DTE_ENABLED`
 
@@ -164,21 +162,13 @@ proper implementation plan, rather than folded into this bug-fix PR. This
 doc is the loud, explicit disclosure CLAUDE.md's own workflow requires for
 exactly this situation.
 
-### What's still open
+### Resolution for Bug 2 (Fixed in Phase 7)
 
-- No code fix for Bug 2 in this PR. See "Why this isn't fixed in the same
-  PR" above for the recommended follow-up shape (a shared
-  `execution/options_lifecycle.py`-style module, a cadence decision, and a
-  `macro_dto`-threading decision for the daemon path specifically).
-- `desktop/daemon_runtime.py`'s existing comments near `_run_one_cycle` and
-  `_timer_loop`'s 0DTE call were extended to state this gap plainly
-  (previously they only explained why 0DTE *specifically* isn't re-run per
-  full cycle, which reads as "everything else already has an equivalent" by
-  omission).
-- `docs/architecture/execution.md`'s `execution/options_paper_executor.py`
-  bullet was extended with a pointer to this doc.
-- No test added for Bug 2 — there is no code change to regression-test yet;
-  the follow-up task should add daemon-path coverage alongside its fix.
+- Extracted `run_automated_options_lifecycle` and `run_automated_delta_hedge_cycle` into `execution/options_lifecycle.py` without side-effects.
+- Updated `main_orchestrator._main_body` and `_main_body_impl` to return `ctx.macro_dto` cleanly upon cycle completion.
+- Updated `desktop/daemon_runtime.py::_run_one_cycle` to capture `macro_dto` and call `run_automated_options_lifecycle(macro_dto=macro_dto)` on full successful cycles.
+- Preserved backward compatibility in `main.py` by delegating `_run_automated_options_lifecycle` and `_run_automated_delta_hedge_cycle` to `execution.options_lifecycle`.
+- Added unit tests in `tests/test_options_lifecycle.py` and integration tests in `tests/test_daemon_runtime.py::TestDaemonOptionsLifecycleIntegration`.
 
 ## Tests
 
@@ -188,3 +178,13 @@ exactly this situation.
 `test_options_lifecycle_runs_strategy_auto_execute_when_only_that_flag_enabled`,
 `test_options_lifecycle_runs_delta_hedge_when_only_that_flag_enabled`,
 `test_options_lifecycle_swallows_exceptions_and_logs_warning`.
+
+`tests/test_options_lifecycle.py`: `test_run_automated_options_lifecycle_all_disabled`,
+`test_run_automated_options_lifecycle_runs_all_active_steps`,
+`test_run_automated_delta_hedge_cycle_no_quote`,
+`test_run_automated_delta_hedge_cycle_success`.
+
+`tests/test_daemon_runtime.py`: `TestDaemonOptionsLifecycleIntegration::test_daemon_runs_options_lifecycle_on_successful_full_cycle`,
+`TestDaemonOptionsLifecycleIntegration::test_daemon_skips_options_lifecycle_on_non_full_mode`,
+`TestDaemonOptionsLifecycleIntegration::test_daemon_skips_options_lifecycle_on_dry_run`,
+`TestDaemonOptionsLifecycleIntegration::test_daemon_swallows_options_lifecycle_exception_and_cycle_still_succeeds`.

@@ -345,7 +345,7 @@ class OrchestratorDaemon:
         # skipped as "data still fresh".
         force = reason != "interval"
         try:
-            asyncio.run(
+            macro_dto = asyncio.run(
                 main_orchestrator._main_body(
                     self._dry_run,
                     strict=self._strict,
@@ -357,28 +357,19 @@ class OrchestratorDaemon:
             )
             state = RunState.SUCCEEDED
             error = None
-            # Note: 0DTE exit-lifecycle management (manage_0dte_exits) is NOT
-            # re-run here. _timer_loop already calls it on every interval wake
-            # (more frequently than once per full pipeline cycle, and without
-            # waiting on cycle success) -- see _timer_loop below. A second call
-            # here would just double-fire it once per completed cycle.
-            #
-            # 0DTE is also the ONLY piece of main.py's automated options
-            # lifecycle with any daemon-path equivalent at all -- exit
-            # management (execution.options_paper_executor.OptionsPaperExecutor
-            # .execute_auto_exits), new-position strategy auto-execution
-            # (.execute_strategy_directives), and delta hedging
-            # (main._run_automated_delta_hedge_cycle) are called ONLY from
-            # main.py's _run_cycle() and have NO equivalent call anywhere in
-            # main_orchestrator.py or this file. If ORCHESTRATOR_DAEMON_ENABLED
-            # is ever flipped to True, those three automated behaviors would
-            # silently stop running. This is a disclosed, deferred gap, not an
-            # oversight left uncommented -- see
-            # docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md
-            # for the full write-up and why a real fix needs a shared,
-            # importable-from-both module plus a cadence + macro_dto-threading
-            # design decision, not a quick import from main.py (main.py's
-            # module-top venv-reexec guard makes importing it from here unsafe).
+
+            # Automated options paper execution and dynamic lifecycle
+            # (auto-exits, strategy auto-execution, delta hedging).
+            # Sourced from execution.options_lifecycle without side-effects.
+            if mode == "full" and not self._dry_run:
+                try:
+                    from execution.options_lifecycle import run_automated_options_lifecycle
+                    run_automated_options_lifecycle(macro_dto=macro_dto)
+                except Exception as opt_exc:  # noqa: BLE001 - non-fatal to daemon cycle
+                    logger.warning(
+                        "Daemon options lifecycle execution failed (non-critical): %s",
+                        opt_exc,
+                    )
         except main_orchestrator.PipelineFatalError as exc:
             state = RunState.FAILED
             error = str(exc)
@@ -1037,12 +1028,10 @@ class OrchestratorDaemon:
                 logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
                 continue
             # Periodically evaluate and manage 0DTE exits (F5) during market hours.
-            # This is the ONLY automated-options-lifecycle behavior wired into
-            # the daemon path -- exit management, strategy auto-execution, and
-            # delta hedging (main.py's OPTIONS_AUTO_EXIT_ENABLED /
-            # PAPER_OPTIONS_AUTO_EXECUTE_ENABLED / OPTIONS_DELTA_HEDGE_ENABLED)
-            # have no daemon-path equivalent at all -- see
-            # docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md.
+            # Runs on every interval tick during market hours for fast response
+            # to intraday profit targets and stop losses. Full options lifecycle
+            # (auto-exits, strategy auto-execution, delta hedging) runs on each
+            # full pipeline cycle in _run_one_cycle.
             if getattr(settings, "OPTIONS_0DTE_ENABLED", False):
                 try:
                     from pilots.zero_dte_engine import manage_0dte_exits
