@@ -1,7 +1,7 @@
 # Feature: Google Trends Stitching & Abnormal Search Volume Index (ASVI)
 
 **File:** `data/trends_stitcher.py` (`GoogleTrendsStitcher`, `ASVICalculator`, `FMPDataLoader`)
-**Related Files:** `data/attention_sources.py`, `data/sector_selection_heat.py`, `data/fmp_client.py`
+**Related Files:** `data/attention_sources.py`, `data/sector_selection_heat.py`, `data/fmp_client.py`, `data/google_trends_client.py` (live `pytrends` fetcher), `data/trends_store.py` (SQLite persistence), `desktop/daemon_runtime.py::maybe_refresh_google_trends` (daemon scheduling), `pipeline/production_steps.py` (`Google_Trends_ASVI` diagnostic dashboard column)
 **Research Grounding:** Da, Engelberg & Gao (2011), "In Search of Attention," *Journal of Finance* 66(5): 1461-1499.
 
 ---
@@ -9,6 +9,18 @@
 ## 1. Overview & Architecture
 
 This module implements the end-to-end data ingestion, overlapping stitching, and abnormal attention signal transformation pipeline for search volume indicators and financial market series.
+
+**Configuration Settings (settings.py):**
+- `GOOGLE_TRENDS_ENABLED`: Master switch for fetching (default `False` — opt-in).
+- `GOOGLE_TRENDS_WINDOW_DAYS`: Size of fetch window in days (default: 90).
+- `GOOGLE_TRENDS_OVERLAP_DAYS`: Overlap between windows for splicing (default: 30).
+- `GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS`: Daemon fetch cadence for `maybe_refresh_google_trends` (default: 24).
+- `GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS`: In-process limiter delay between calls.
+- `GOOGLE_TRENDS_MAX_RETRIES`: Number of retries on HTTP 429/5xx.
+- `GOOGLE_TRENDS_COOLDOWN_THRESHOLD`: Failures required to enter cooldown.
+- `GOOGLE_TRENDS_COOLDOWN_SECONDS`: Duration of cooldown lock-out.
+- `GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE`: Wall-clock budget for the per-symbol pipeline dashboard-column loop (default: 120).
+
 
 ```
 ┌───────────────────────────┐      ┌──────────────────────────┐
@@ -48,8 +60,14 @@ Google Trends provides daily resolution data in 90-day intervals, with each inte
 
 Given two adjacent periods $A$ (earlier) and $B$ (subsequent) with non-empty intersection $O = A \cap B$:
 1. Compute the scaling factor $f$:
-   $$f = \frac{\sum_{t \in O} SVI_{A, t}}{\sum_{t \in O} SVI_{B, t}}$$
-   *(with $f = 1.0$ if $\sum_{t \in O} SVI_{B, t} \le 10^{-9}$)*.
+   Let $S_A = \sum_{t \in O} SVI_{A, t}$ and $S_B = \sum_{t \in O} SVI_{B, t}$.
+   If $S_A \le 10^{-9}$ **or** $S_B \le 10^{-9}$ (either side's overlap sum is near-zero), $f = 1.0$ (passthrough).
+   Otherwise, $f = \frac{S_A}{S_B}$.
+
+   The guard is deliberately symmetric across both operands rather than only flooring the
+   denominator: flooring only $S_B$ against a real, unfloored $S_A$ (an earlier formulation of
+   this guard) let a genuine, non-zero $S_B$ get rescaled by a multi-thousand-times factor
+   whenever $S_A$ happened to be near-zero — the exact case this symmetric guard now excludes.
 2. Rescale period $B$:
    $$SVI_{B, \text{scaled}, t} = SVI_{B, t} \times f$$
 3. Blend the overlapping boundary smoothly:
@@ -91,4 +109,4 @@ Unit tests are implemented in `tests/test_trends_stitcher.py`:
 - `TestFMPDataLoader`: Verifies indicator computation accuracy and bounds.
 
 ### D. Visualizations
-- **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`) demonstrates the overlapping window stitching algorithm. It plots the raw unscaled curves alongside the final stitched continuous sequence. The backing endpoint, `GET /data/trends/stitch-demo`, is no longer a permanent `501 Not Implemented` stub — it now serves real data end-to-end: three overlapping ~90-day windows sliced from real SPY trading volume (`HistoricalStore(readonly=True).get_bars("SPY")`) stand in for a genuine Google Trends Search Volume Index and are stitched via `GoogleTrendsStitcher.stitch_intervals`. **This is an explicitly disclosed proxy, not real SVI data** — every curve name in the response is labeled accordingly (e.g. "SPY Volume Proxy — Period A"), and the screen must never present it as genuine search-interest data. On insufficient bar history or any fetch failure, the endpoint raises an honest `HTTP 503` rather than ever fabricating a placeholder value (CONSTRAINT #4) — no data fabrication in either the happy or failure path. Mock mode (`VITE_USE_MOCK=true`) still exercises `mock.ts`'s own synthetic overlapping periods for offline development, unchanged.
+- **Trends Stitching Demo:** A dedicated visualization screen in the Pilots PWA (`/research/trends-stitcher`, charted with `recharts`) demonstrates the overlapping window stitching algorithm, reachable from both the `ResearchHub` screen and the main nav (`webapp/src/navigation.tsx`'s `NAV_ITEMS`). **Live mode:** the backing endpoint, `GET /data/trends/stitch-demo`, is no longer a permanent `501 Not Implemented` stub — it serves real data end-to-end: three overlapping ~90-day windows sliced from real SPY trading volume (`HistoricalStore(readonly=True).get_bars("SPY")`) stand in for a genuine Google Trends Search Volume Index and are stitched via `GoogleTrendsStitcher.stitch_intervals`. **This is an explicitly disclosed proxy, not real SVI data** — every curve name in the response is labeled accordingly (e.g. "SPY Volume Proxy — Period A"), and the screen must never present it as genuine search-interest data. On insufficient bar history or any fetch failure, the endpoint raises an honest `HTTP 503` rather than ever fabricating a placeholder value (CONSTRAINT #4) — no data fabrication in either the happy or failure path. **Mock mode** (`VITE_USE_MOCK=true`, the default): `webapp/src/utils/trendsStitch.ts` is a pure, dependency-free TypeScript port of `GoogleTrendsStitcher.stitch_intervals`/`stitch_multiple_intervals` — the identical overlapping-window empirical scaling-factor algorithm derived in §2.A above — unit-tested in `webapp/src/utils/trendsStitch.test.ts`. `webapp/src/api/mock.ts::getTrendsStitchDemo()` generates three genuinely overlapping windows on different absolute baselines — simulating how Google Trends independently renormalizes each query window against its own peak, the exact problem this algorithm solves — and the displayed stitched curve is produced by feeding those raw windows through the real `stitchMultipleIntervals()` port, not a fabricated fourth series. **This demo screen is independent of, and not yet wired to, the real Google Trends ingestion pipeline described below** — that pipeline (`data/google_trends_client.py` + `data/trends_store.py`) fetches genuine SVI data via `pytrends` only when `GOOGLE_TRENDS_ENABLED=True` (default `False`), on a daemon-scheduled cadence (`GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS`, default 24h) restricted to `settings.DEFAULT_TICKERS`, persisting to `TrendsStore` for consumption by the diagnostic `Google_Trends_ASVI` dashboard column — it has no dedicated UI visualization of its own yet.

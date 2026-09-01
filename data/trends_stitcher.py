@@ -44,7 +44,15 @@ class GoogleTrendsStitcher:
         sum_a = float(overlap_a.sum())
         sum_b = float(overlap_b.sum())
 
-        if sum_b <= 1e-9:
+        # Symmetric epsilon-substitution guard: if EITHER side's overlap sum is
+        # near-zero, the ratio is unreliable/undefined in a meaningful sense —
+        # passthrough (f=1.0) rather than compute a ratio against a near-zero
+        # value on only one side. A guard that only checks sum_b (as this used
+        # to) still lets a real, near-zero-but-nonzero sum_b divide into a real
+        # sum_a and blow up by orders of magnitude — symmetric across all four
+        # quadrants (both-zero, A-zero/B-real, A-real/B-zero, both-real) is
+        # what actually closes that gap.
+        if sum_a <= 1e-9 or sum_b <= 1e-9:
             f = 1.0
         else:
             f = sum_a / sum_b
@@ -75,6 +83,9 @@ class GoogleTrendsStitcher:
             return period_a_svi.copy()
 
         # Delegate to single source of truth for both the scaling factor AND the overlap window
+        # (get_scaling_metadata's own guard is symmetric across sum_a/sum_b -- see its docstring
+        # for why a denominator-only guard let a real sum_a blow up by orders of magnitude
+        # whenever sum_b alone happened to be near-zero).
         meta = GoogleTrendsStitcher.get_scaling_metadata(period_a_svi, period_b_svi)
         overlap_dates = meta["overlap_dates"]
         f = meta["f"]

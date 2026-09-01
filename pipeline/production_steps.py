@@ -704,6 +704,70 @@ def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['Sector_Heat_Factor'] = float('nan')
 
 
+def _apply_google_trends_asvi(dashboard_df: pd.DataFrame) -> None:
+    """Compute Google Trends Abnormal Search Volume Index (ASVI) for each ticker.
+    
+    NaN-fills the column FIRST so every exit path leaves genuinely-missing
+    cells NaN rather than a fabricated default. Never raises.
+    """
+    dashboard_df['Google_Trends_ASVI'] = float('nan')
+    if not getattr(settings, "GOOGLE_TRENDS_ENABLED", False):
+        return
+    try:
+        from data.trends_store import TrendsStore
+        from data.trends_stitcher import ASVICalculator
+        import time as _time
+
+        if 'Symbol' not in dashboard_df.columns:
+            return
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        store = TrendsStore(readonly=True)
+        asvi_map = {}
+
+        max_seconds = max(0.0, float(settings.GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE))
+        deadline = _time.monotonic() + max_seconds
+        budget_exhausted = False
+
+        for sym in symbols:
+            if not budget_exhausted and _time.monotonic() >= deadline:
+                budget_exhausted = True
+                logger.warning(
+                    "Google Trends ASVI: cycle time budget (%.0fs) reached; "
+                    "remaining symbols served from NaN only this cycle.",
+                    max_seconds,
+                )
+
+            if budget_exhausted:
+                continue
+
+            try:
+                stitched_data = store.get_stitched_series(sym)
+                if stitched_data:
+                    dates = [d["date"] for d in stitched_data]
+                    values = [float(d["value"]) for d in stitched_data]
+                    svi_series = pd.Series(values, index=dates)
+                    
+                    asvi_series = ASVICalculator.compute_asvi(svi_series)
+                    if not asvi_series.empty:
+                        valid_asvi = asvi_series.dropna()
+                        if not valid_asvi.empty:
+                            asvi_map[sym] = float(valid_asvi.iloc[-1])
+            except Exception as e:
+                logger.warning("Google Trends ASVI failed for %s: %s", sym, e)
+
+        if asvi_map:
+            dashboard_df['Google_Trends_ASVI'] = dashboard_df['Symbol'].str.upper().map(asvi_map)
+    except Exception as exc:
+        logger.warning("Google Trends ASVI computation failed (non-fatal): %s", exc)
+        dashboard_df['Google_Trends_ASVI'] = float('nan')
+
+
 def _apply_sector_selection(dashboard_df: pd.DataFrame) -> None:
     """Compute and durably persist each tracked symbol's semantic Related
     Sector Selection ranking (``sector_selection_engine.run_sector_selection``)
@@ -2121,6 +2185,9 @@ class StrategyEvalStep(PipelineStep):
         # See data/sentiment_sources.py::compute_sector_heat_factors and
         # docs/signals/sector_heat_factor.md.
         _apply_sector_heat_factor(ctx.dashboard_df)
+
+        # Google Trends Abnormal Search Volume Index (ASVI)
+        _apply_google_trends_asvi(ctx.dashboard_df)
 
         # Semantic Related Sector Selection (sector_selection_engine.py) --
         # persists each tracked symbol's top-N related-sector ranking so the

@@ -33,6 +33,49 @@ built: consolidating this branch's real-data-fetch logic into the already-shippe
 - [x] Run the relevant test files and confirm a clean pass before merge (see walkthrough for the actual
       results)
 
+## Second audit round (6-agent Workflow audit, 9/9 findings confirmed, all fixed)
+A fresh 6-agent audit (constraint-compliance, data-integrity, api-webapp-contract, test-coverage,
+doc-artifact-honesty, duplication-security-cleanup) with adversarial re-verification of every raised
+finding was run against this PR's actual committed code (not its own self-report). 9 findings raised, 9
+confirmed on independent re-check, 0 refuted. All 9 are fixed in this round:
+- [x] `api/data_api.py`: moved the slicing/scaling/`stitch_intervals` computation inside the endpoint's
+      existing `try` block, so any exception there also degrades to the honest `503` instead of an
+      unhandled raw `500` (was reachable in principle, not in practice with today's fixed 240-bar slicing)
+- [x] `webapp/src/components/charts/TrendsStitchChart.tsx`: fixed a real off-by-one-day bug — the backend
+      encodes each date as UTC midnight, but the chart formatted it in the viewer's LOCAL timezone,
+      shifting every date back a day for any US-based viewer. Now formats in UTC via an exported, directly
+      unit-tested `formatUtcDate` helper.
+- [x] `webapp/src/navigation.tsx` + `webapp/src/screens/Marketplace.tsx`: the screen (`/research/trends-
+      stitcher`) had zero navigation entry points anywhere in the app — reachable only by typing the URL
+      manually. Added a `NAV_ITEMS` entry and a Marketplace "Explore" tile, per this codebase's documented
+      mobile-reachability convention for standalone research screens.
+- [x] `webapp/src/screens/TrendsVisualizer.tsx`: the screen's headline title/description presented the
+      chart as unqualified real Google Trends data, contradicting the backend's own honest "SPY Volume
+      Proxy" curve labeling. Rewrote to disclose the proxy substitution up front; added a test asserting
+      the disclosure text renders.
+- [x] `webapp/src/api/mock.ts`: the mock fixture returned 2 unlabeled raw curves ("Trend A/B (Raw)")
+      instead of the real live contract's 3 honestly-labeled curves — mock mode never exercised the real
+      3-curve layout. Fixed to match.
+- [x] `tests/test_data_api.py`: the happy-path test only checked shape/labels, never that returned values
+      actually trace back to the injected fixture data — a fabrication regression (e.g. a fake linspace
+      ramp) would have passed undetected. Added a fidelity assertion recomputing expected values/dates
+      from the real fixture and comparing directly. Also added a regression test asserting the old,
+      removed `GET /data/svi-stitching-demo` route stays a `404`.
+- [x] `tests/test_trends_stitcher.py`: the SSOT regression test only proved behavioral equivalence, not
+      structural delegation — a reintroduced duplicate (but still mathematically identical) overlap
+      computation would have passed undetected. Added a `mock.patch.object(..., wraps=...)` spy test
+      proving `stitch_intervals` genuinely calls `get_scaling_metadata`.
+- [x] `.claude/svi_stitching_visualization_pr_body.md`: corrected an overclaim ("`GoogleTrendsStitcher`
+      has zero callers anywhere in the live signal/pipeline path") — it's referenced via an unused,
+      pre-existing import chain in `data/attention_sources.py` (imported by the live pipeline, but no
+      method on the class is ever called from there). The safety conclusion was correct; the phrasing
+      wasn't.
+
+Verification for this round: `pytest tests/test_data_api.py tests/test_trends_stitcher.py -q` — **75
+passed, 0 failed** (up from 73; +2 new test functions, plus new assertions inside existing tests).
+`ruff check --select F,E9` on all touched Python files — all checks passed. `npm run --prefix webapp
+typecheck` — clean. `npx vitest run` on the 4 touched webapp test files — **70 passed, 0 failed**.
+
 ## Explicitly dropped from original scope
 - ~~Create `svi_stitching_visualizer.html` artifact~~ — never delivered, not part of this PR
 - ~~Scaffold HTML/Tailwind CSS~~ — dropped with the above

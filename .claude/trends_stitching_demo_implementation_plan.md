@@ -79,3 +79,78 @@ Ensures frontend component rendering.
 ### 7. Documentation Updates
 #### [MODIFY] docs/signals/google_trends_asvi.md
 - Add a new "Visualizations" section documenting the newly created TrendsVisualizer screen and how it demonstrates the stitching algorithm using the frontend `mock.ts` integration.
+
+## Post-Merge Remediation (Audit Findings)
+
+The sections above are the historical record of what was originally proposed and built by
+the 6 subagents. They are left intact. This section documents two remediation passes that
+happened afterward, both of which changed what actually shipped relative to "### 1. Backend
+API (Agent 1)" above — read that section as the original proposal, and this section as what
+replaced part of it and why.
+
+### Pass 1: CONSTRAINT #4 fix — backend fails closed instead of fabricating SVI data
+
+An independent audit found that "### 1. Backend API (Agent 1)" as originally proposed and
+built violated CONSTRAINT #4 (never fabricate a metric on a live endpoint,
+`.claude/skills/stockpy-quant-integrity/`): `GET /data/trends/stitch-demo` in
+`api/data_api.py` generated 3 synthetic SVI curves server-side via `numpy` random walks and
+ran the real `GoogleTrendsStitcher.stitch_multiple_intervals` over them, then served the
+result as if it were real data over a live API endpoint. A live endpoint returning
+plausible-looking, entirely fabricated Google Trends SVI data is exactly the failure mode
+CONSTRAINT #4 exists to prevent — nothing in the response distinguished "measured" from
+"invented," and a caller (or an operator glancing at the Research Hub) had no way to tell
+the difference.
+
+**Fix**: `GET /data/trends/stitch-demo` in `api/data_api.py` now unconditionally raises
+`HTTPException(501, detail="Live SVI fetching not implemented. Use mock mode to view the
+demo.")`. No server-side generation, no server-side stitching — the endpoint fails closed
+per CONSTRAINT #6 rather than serving fabricated data. `tests/test_data_api.py`'s
+`test_get_trends_stitch_demo` was updated to assert the 501 status and the exact detail
+string, replacing whatever assertion originally checked for a 200 + curve payload.
+
+This means the demo is mock-mode-only until a real Google Trends data source is wired up —
+a deliberate, disclosed limitation, not an oversight. The "Data Source" note in the
+"User Review Required" section above (which floated the idea of hooking this up to live
+data) was never acted on; this fix formalizes the "not yet" answer as an explicit 501
+rather than a silent fabrication.
+
+### Pass 2: This session's fixes — mock demo must demonstrate the real algorithm, plus reachability
+
+A follow-up audit of the mock-mode path (the only path left standing after Pass 1) found
+three further problems, all fixed in this session:
+
+1. **Mock data didn't actually demonstrate the stitching algorithm.** `webapp/src/api/mock.ts`'s
+   `getTrendsStitchDemo()` generated 3 overlapping random-walk curves plus a FOURTH,
+   unrelated random walk mislabeled as `stitched_curve` — the "Stitched Output" line on the
+   chart was never actually derived from the 3 raw curves at all. This defeats the entire
+   purpose of the demo: a mock that doesn't run the real algorithm doesn't demonstrate it, it
+   just draws a plausible-looking line next to some other lines. Per the same reasoning
+   CONSTRAINT #4/#6 apply to live endpoints — the mock demo must actually demonstrate the
+   algorithm it claims to, not fabricate an unrelated curve standing in for it.
+
+   **Fix**: added `webapp/src/utils/trendsStitch.ts`, a pure TypeScript port of
+   `data/trends_stitcher.py::GoogleTrendsStitcher` (`stitchIntervals`/`stitchMultipleIntervals`,
+   including the overlapping-window scaling-factor computation), unit-tested in
+   `webapp/src/utils/trendsStitch.test.ts`. `mock.ts`'s `getTrendsStitchDemo()` now generates
+   3 genuinely overlapping windows on different absolute baselines (simulating how Google
+   Trends renormalizes each query window to its own 0-100 scale) and calls the real
+   `stitchMultipleIntervals` to derive `stitched_curve` — so the mock demo now genuinely
+   demonstrates the same stitching math the Python engine performs, run client-side.
+
+2. **Duplicated `TrendsCurve` type.** `webapp/src/components/charts/TrendsStitchChart.tsx`
+   redeclared its own local `TrendsCurve` interface instead of importing the canonical one
+   from `webapp/src/api/types.ts` — a drift risk (the two could silently diverge). Fixed:
+   the component now imports/re-exports the canonical type from `types.ts`.
+
+3. **Screen was unreachable from navigation.** The route `/research/trends-stitcher` (added
+   in "### 4. Frontend Screen & Routing (Agent 4)" above) was never linked from anywhere in
+   the app — reachable only by typing the URL directly, which meant an operator would never
+   discover it. Fixed: `webapp/src/screens/ResearchHub.tsx` and `webapp/src/navigation.tsx`
+   (`NAV_ITEMS`, which drives both the desktop sidebar and the mobile bottom-nav "More"
+   sheet) now both link to `/research/trends-stitcher`.
+
+**Note on charting library**: the plan above (see "Framework Selection") originally
+considered `echarts-for-react`. The component that actually shipped
+(`TrendsStitchChart.tsx`) uses `recharts` instead — it was already a dependency of the
+webapp, so this was a substitution made during the original build with no feature loss, not
+part of either remediation pass.

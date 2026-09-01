@@ -1,8 +1,10 @@
 /**
- * ResearchHub.test.tsx — the Research section's landing hub: all 11 screen
+ * ResearchHub.test.tsx — the Research section's landing hub: all 12 screen
  * cards render with their label + description (Sentiment Dynamics and
  * Sector Selection closing parity gap G2 — the hub previously listed only 9
- * of the 11 screens the nav actually carries), the TAB_HELP-sourced
+ * of the 11 screens the nav actually carries; the SVI Stitching Algorithm
+ * Demo card added later to close the "unreachable from any UI link" gap for
+ * /research/trends-stitcher), the TAB_HELP-sourced
  * descriptions read live off help/helpContent.ts (never a hard-coded
  * duplicate, so the test would catch drift), and clicking a card's
  * click-to-navigate body (role="button", separate from its `.drag-handle`
@@ -44,6 +46,7 @@ function renderHub(initialPath = "/research") {
         <Route path="/sector-selection" element={<Stub marker="landed:sector-selection" />} />
         <Route path="/forecast" element={<Stub marker="landed:forecast" />} />
         <Route path="/data-explorer" element={<Stub marker="landed:data-explorer" />} />
+        <Route path="/research/trends-stitcher" element={<Stub marker="landed:trends-stitcher" />} />
       </Routes>
     </MemoryRouter>
   );
@@ -58,7 +61,7 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 11 card labels", () => {
+  it("renders all 12 card labels", () => {
     renderHub();
     for (const label of [
       "Pilots",
@@ -72,6 +75,7 @@ describe("ResearchHub screen", () => {
       "Sector Selection",
       "Forecast Viewer",
       "Data Explorer",
+      "SVI Stitching Algorithm Demo",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
@@ -101,6 +105,21 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the SVI Stitching Algorithm Demo card's static description", () => {
+    renderHub();
+    // Not TAB_HELP-sourced (no helpContent.ts entry exists for this demo
+    // screen yet) -- static prose. Disclosure fix: the description must not
+    // present this as unqualified real Google Trends data (the backend
+    // fetches this on labeled proxy data, since no live Google Trends
+    // source is wired into this platform) -- see TrendsVisualizer.tsx's own
+    // header for the sibling fix.
+    expect(
+      screen.getByText(
+        "Demonstrates the overlapping-window stitching algorithm used to reconstruct a continuous Google Trends SVI series from adjacent 90-day intervals (live Google Trends data isn't wired up in this platform, so the demo runs on labeled proxy data)."
+      )
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ["Pilots", "landed:marketplace"],
     ["Compare", "landed:compare"],
@@ -113,6 +132,7 @@ describe("ResearchHub screen", () => {
     ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
     ["Data Explorer", "landed:data-explorer"],
+    ["SVI Stitching Algorithm Demo", "landed:trends-stitcher"],
   ])("clicking the %s card's body navigates to its route", async (label, marker) => {
     const user = userEvent.setup();
     renderHub();

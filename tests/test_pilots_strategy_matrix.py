@@ -409,8 +409,16 @@ _PILOTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "pilots"
 #                           distinct guarded lazy imports)
 #   - simulation.py     -> evaluation_engine, data.historical_store, pandas
 #                           (also imports pilots.observability at top)
+#   - lstm_diagnostic.py -> forecasting_engine, processing_engine, pandas
+#                           (lazy, function-body imports) -- this module's
+#                           entire purpose is invoking
+#                           ForecastingEngine.run_lstm_attention_forecast as a
+#                           genuinely heavy diagnostic dispatch (Phase 4
+#                           LSTM-Attention forecaster), not an accidental
+#                           transitive import creeping into a read-only helper
 _DEPENDENCY_LIGHT_EXEMPT = {
     "attribution", "brinson", "calibration", "models", "observability", "simulation",
+    "lstm_diagnostic",
 }
 
 _ALL_PILOTS_MODULES = sorted(
