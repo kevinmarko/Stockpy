@@ -6,6 +6,8 @@ Unit tests for data/trends_stitcher.py:
 - FMPDataLoader (OHLCV ingestion & technical indicators EMA/MACD/RSI-14)
 """
 
+from datetime import date
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -339,6 +341,61 @@ class TestGoogleTrendsStitcherScalingMetadata:
             GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
 
         spy.assert_called_once_with(svi_a, svi_b)
+
+
+class TestGoogleTrendsStitcherRawWindowReconstruction:
+    """Direct unit tests for the two reusable reconstruction helpers extracted
+    out of api/data_api.py::get_trends_stitch_demo -- group_raw_windows_into_series
+    (TrendsStore.load_raw_windows() rows -> ordered per-window pd.Series) and
+    rows_to_series (TrendsStore.get_stitched_series()'s {date, value} dicts ->
+    pd.Series)."""
+
+    def test_group_raw_windows_into_series_orders_by_earliest_date_not_window_id(self):
+        """window_id is an opaque UUID, not a chronological identifier -- windows
+        must be ordered by their own earliest date, not by sorting the id
+        strings, and a window's rows must retain the caller-supplied order
+        (TrendsStore.load_raw_windows already returns date-ascending rows)."""
+        Row = SimpleNamespace
+        # "zzz" would sort AFTER "aaa" alphabetically but starts earlier in time --
+        # proves ordering is date-driven, not id-string-driven.
+        raw_rows = [
+            Row(window_id="zzz", date=date(2026, 1, 1), value=10.0),
+            Row(window_id="zzz", date=date(2026, 1, 2), value=20.0),
+            Row(window_id="aaa", date=date(2026, 2, 1), value=30.0),
+            Row(window_id="aaa", date=date(2026, 2, 2), value=40.0),
+        ]
+
+        result = GoogleTrendsStitcher.group_raw_windows_into_series(raw_rows)
+
+        assert [window_id for window_id, _ in result] == ["zzz", "aaa"]
+        zzz_series = result[0][1]
+        assert list(zzz_series.values) == [10.0, 20.0]
+        assert list(zzz_series.index) == [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-02")]
+        aaa_series = result[1][1]
+        assert list(aaa_series.values) == [30.0, 40.0]
+
+    def test_group_raw_windows_into_series_empty_input(self):
+        assert GoogleTrendsStitcher.group_raw_windows_into_series([]) == []
+
+    def test_rows_to_series_preserves_order_and_values(self):
+        rows = [
+            {"date": date(2026, 1, 1), "value": 10.0},
+            {"date": date(2026, 1, 2), "value": 22.5},
+            {"date": date(2026, 1, 3), "value": 30.0},
+        ]
+
+        series = GoogleTrendsStitcher.rows_to_series(rows)
+
+        assert list(series.values) == [10.0, 22.5, 30.0]
+        assert list(series.index) == [
+            pd.Timestamp("2026-01-01"),
+            pd.Timestamp("2026-01-02"),
+            pd.Timestamp("2026-01-03"),
+        ]
+
+    def test_rows_to_series_empty_input(self):
+        series = GoogleTrendsStitcher.rows_to_series([])
+        assert series.empty
 
 
 class TestASVICalculator:
