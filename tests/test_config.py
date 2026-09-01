@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 115
+    EXPECTED_COLUMN_COUNT = 116
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -297,6 +297,13 @@ class TestAdvisoryColumnCoverage:
         # for these two exists on the advisory side, and rec_to_sheet_row
         # never sets them.
         "Symbol_Rating_Consecutive_Bad_Cycles", "Symbol_Rating_Excluded",
+        # Google Trends ASVI diagnostic (pipeline/production_steps.py) --
+        # orchestrator-only by construction, matching Sector_Heat_Factor/
+        # Attention_Score's precedent above: written only inside
+        # StrategyEvalStep's _apply_google_trends_asvi helper, which the
+        # advisory path (main.py -> engine/advisory.py -> rec_to_sheet_row)
+        # never runs.
+        "Google_Trends_ASVI",
     })
 
     def test_mapped_and_unmapped_sets_are_exact_complements_of_column_schema(self) -> None:
@@ -315,8 +322,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 80
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 115
+        assert len(unmapped) == 81
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 116
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and

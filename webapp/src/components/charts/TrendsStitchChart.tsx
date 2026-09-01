@@ -17,6 +17,18 @@ interface TrendsStitchChartProps {
   stitchedCurve: TrendsCurve;
 }
 
+// These curves carry calendar-date bars (no meaningful intraday time), and the
+// backend encodes each date as UTC midnight (pandas treats a tz-naive Timestamp
+// as UTC). Formatting with the viewer's LOCAL timezone would shift every date
+// back by one calendar day for any timezone behind UTC (e.g. all of the US) --
+// format in UTC (and pin the locale, so this is deterministic in tests
+// regardless of the runtime's default locale) instead so the displayed date
+// always matches the real bar date. Exported for direct unit testing.
+export const formatUtcDate = (tickItem: any): string => {
+  if (!tickItem) return '';
+  return new Date(tickItem).toLocaleDateString('en-US', { timeZone: 'UTC' });
+};
+
 export const TrendsStitchChart: React.FC<TrendsStitchChartProps> = ({ rawCurves, stitchedCurve }) => {
   const chartData = useMemo(() => {
     const map = new Map<number, any>();
@@ -40,10 +52,7 @@ export const TrendsStitchChart: React.FC<TrendsStitchChartProps> = ({ rawCurves,
     return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
   }, [rawCurves, stitchedCurve]);
 
-  const dateFormatter = (tickItem: any) => {
-    if (!tickItem) return '';
-    return new Date(tickItem).toLocaleDateString();
-  };
+  const dateFormatter = formatUtcDate;
 
   return (
     <div className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-4 shadow-sm h-[400px]">

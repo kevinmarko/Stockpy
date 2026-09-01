@@ -209,6 +209,12 @@ COLUMN_SCHEMA = [
     {"header": "Attention Score", "key": "Attention_Score", "format": "number"},
 
     # ==========================================================
+    # --- GOOGLE TRENDS ABNORMAL SEARCH VOLUME (ASVI) ---
+    # DIAGNOSTIC ONLY. Populated by pipeline/production_steps.py::_apply_google_trends_asvi.
+    # ==========================================================
+    {"header": "Google Trends ASVI", "key": "Google_Trends_ASVI", "format": "number"},
+
+    # ==========================================================
     # --- ETF VOLATILITY TRANSMISSION (risk/etf_transmission.py) ---
     # Ben-David, Franzoni & Moussawi (2018) "Do ETFs Increase Volatility?".
     # DIAGNOSTIC ONLY as of this commit -- populated by

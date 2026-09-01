@@ -73,11 +73,16 @@ problems with that original scope, all addressed by this PR:
 - **CONSTRAINT #4 — never fabricate a metric**: the endpoint's only two outcomes on a data problem are
   "don't respond with fake data" (`503`) or "respond with real data, honestly labeled as a proxy." No
   literal fallback series remains anywhere in this path.
-- **CONSTRAINT #2 — no lookahead bias**: not applicable to this change — `GoogleTrendsStitcher` has zero
-  callers anywhere in the live signal/pipeline path (confirmed by audit); the stitching/scaling math here
-  operates on already-materialized historical windows for a demo endpoint, with no forward-looking
-  computation, and `ASVICalculator`'s existing causal (`shift(1)`) rolling-median logic is untouched by
-  this PR.
+- **CONSTRAINT #2 — no lookahead bias**: not applicable to this change. Correction to an earlier version
+  of this checklist: `GoogleTrendsStitcher` is *referenced* inside the live pipeline import chain (an
+  unused `from data.trends_stitcher import ASVICalculator, GoogleTrendsStitcher` in
+  `data/attention_sources.py`, a module `pipeline/production_steps.py`/`main_orchestrator.py` import) —
+  but that import is dead code, no method on the class is ever called from that chain, so it carries no
+  actual lookahead risk. This unused import predates this PR (added by the separate Google Trends FMP
+  ASVI feature) and is not touched by this diff. The only call site this PR's own code introduces is
+  `api/data_api.py`'s demo endpoint, which operates on already-materialized historical windows with no
+  forward-looking computation, and `ASVICalculator`'s existing causal (`shift(1)`) rolling-median logic
+  is untouched by this PR.
 - **Single source of truth**: the overlap-window/scaling-factor math now lives in exactly one method
   (`get_scaling_metadata`), not two independently-maintained copies.
 - **Branch Workflow Rule 5**: plans/trackers/walkthrough remain scoped and prefixed
@@ -98,3 +103,20 @@ section describes (the HTML artifact, the `/data/svi-stitching-demo` route, a `s
 shape, and the swapped constraint numbering) — none of that ever landed in the actual code, which has
 been re-verified against the current `HEAD` and matches everything stated above. This is the corrected
 version.
+
+## Update: second 6-agent audit round (2026-08-31)
+A fresh, independently-launched 6-agent audit (one agent per dimension — constraint-compliance,
+data-integrity, api-webapp-contract, test-coverage, doc-artifact-honesty, duplication-security-cleanup —
+each finding then adversarially re-verified by a second agent against the real checkout) was run against
+this PR's current code, explicitly told not to take the first audit's report on faith. It raised 9
+findings; all 9 were independently confirmed on re-check (0 refuted), and all 9 are fixed in this update:
+a fail-closed try/except gap in the endpoint, a real off-by-one-day timezone bug in the chart (backend
+encodes UTC-midnight dates, frontend rendered them in local time), a missing navigation entry point (the
+screen was unreachable from anywhere in the app UI), an honesty gap in the screen's own header text
+(didn't disclose the SPY-volume-proxy substitution the backend already labels), a mock/live fixture
+mismatch, a fabrication-regression gap in the happy-path test (proved by mutation — a fake data series
+would have passed undetected), a structural-delegation gap in the SSOT regression test (also proved by
+mutation), a missing regression guard for the removed duplicate route, and a minor overclaim in this PR
+body's own CONSTRAINT #2 justification. Full detail, evidence, and verification numbers (75 Python tests
+passed, 70 webapp tests passed, clean typecheck, clean genuine-bug lint) in
+`.claude/svi_stitching_visualization_walkthrough.md`'s "Second audit round" section.

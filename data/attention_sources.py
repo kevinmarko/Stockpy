@@ -118,7 +118,7 @@ from urllib.parse import quote
 
 import requests
 
-from data.trends_stitcher import ASVICalculator, GoogleTrendsStitcher
+# GoogleTrendsStitcher is now wired into the daemon via daemon_runtime.maybe_refresh_google_trends()
 
 logger = logging.getLogger(__name__)
 
