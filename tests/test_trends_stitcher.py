@@ -6,6 +6,8 @@ Unit tests for data/trends_stitcher.py:
 - FMPDataLoader (OHLCV ingestion & technical indicators EMA/MACD/RSI-14)
 """
 
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -54,16 +56,17 @@ class TestGoogleTrendsStitcher:
             GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
 
     def test_stitch_multiple_intervals(self):
-        """Verify that multi-interval stitching correctly chains 3 overlapping periods."""
+        """Verify that multi-interval stitching correctly chains 4 overlapping periods."""
         p1 = pd.Series(100.0, index=pd.date_range("2026-01-01", "2026-03-15", freq="D"))
         p2 = pd.Series(50.0, index=pd.date_range("2026-03-01", "2026-05-15", freq="D"))  # 0.5x
         p3 = pd.Series(25.0, index=pd.date_range("2026-05-01", "2026-07-15", freq="D"))  # 0.25x
+        p4 = pd.Series(12.5, index=pd.date_range("2026-07-01", "2026-09-15", freq="D"))  # 0.125x
 
-        stitched = GoogleTrendsStitcher.stitch_multiple_intervals([p1, p2, p3])
+        stitched = GoogleTrendsStitcher.stitch_multiple_intervals([p1, p2, p3, p4])
 
         # All parts should be scaled to the 100.0 baseline
-        assert len(stitched) == len(pd.date_range("2026-01-01", "2026-07-15", freq="D"))
-        np.testing.assert_allclose(stitched.loc["2026-07-01":"2026-07-15"].values, 100.0, rtol=1e-5)
+        assert len(stitched) == len(pd.date_range("2026-01-01", "2026-09-15", freq="D"))
+        np.testing.assert_allclose(stitched.loc["2026-09-01":"2026-09-15"].values, 100.0, rtol=1e-5)
 
     def test_stitch_empty_inputs(self):
         """Verify edge cases where one or both intervals are empty."""
@@ -78,6 +81,124 @@ class TestGoogleTrendsStitcher:
 
         res_empty = GoogleTrendsStitcher.stitch_multiple_intervals([])
         assert res_empty.empty
+
+    def test_stitch_both_zero_overlap(self):
+        """Verify that when both overlap regions sum to zero, factor=1.0 is used."""
+        dates_a = pd.date_range("2026-01-01", "2026-01-10", freq="D")
+        dates_b = pd.date_range("2026-01-05", "2026-01-15", freq="D")
+        
+        svi_a = pd.Series(0.0, index=dates_a)
+        svi_b = pd.Series(0.0, index=dates_b)
+        
+        stitched = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+        
+        assert (stitched == 0.0).all()
+
+    def test_stitch_sparse_low_volume_a_zero_b_real(self):
+        """Verify that when period A's overlap sum is near-zero but period B's is real,
+        the symmetric epsilon guard passes B through unchanged (f=1.0) rather than
+        scaling it down via a floored-denominator ratio (0.1/sum_b), which would have
+        crushed a genuine B reading toward zero for no principled reason.
+        """
+        dates_a = pd.date_range("2026-01-01", "2026-01-10", freq="D")
+        dates_b = pd.date_range("2026-01-05", "2026-01-15", freq="D")
+
+        svi_a = pd.Series(0.0, index=dates_a)
+        svi_b = pd.Series(50.0, index=dates_b)  # 6 overlap days, sum = 300.0
+
+        stitched = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+
+        # f=1.0 passthrough: B's non-overlap tail is untouched.
+        np.testing.assert_allclose(stitched.loc["2026-01-11":"2026-01-15"].values, 50.0, rtol=1e-5)
+
+    def test_stitch_sparse_low_volume_a_real_b_zero(self):
+        """CONFIRMED-BUG REGRESSION: mirror of the A-zero/B-real case above. Period A's
+        overlap sum is real (300.0) while period B's overlap sum is near-zero (0.0), but
+        period B carries a REAL, later, non-overlap reading (80.0). The old asymmetric
+        formula `f = max(sum_a, 0.1) / max(sum_b, 0.1)` computed f = 300/0.1 = 3000 here,
+        fabricating a ~3000x-inflated value (240000.0) for that real 80.0 reading. The
+        symmetric guard must instead detect sum_b's near-zero overlap and fall back to
+        f=1.0 (passthrough), leaving the real 80.0 reading untouched.
+        """
+        dates_a = pd.date_range("2026-01-01", "2026-01-10", freq="D")
+        dates_b = pd.date_range("2026-01-05", "2026-01-15", freq="D")
+
+        svi_a = pd.Series(50.0, index=dates_a)  # 6 overlap days, sum = 300.0
+        svi_b = pd.Series(0.0, index=dates_b)
+        svi_b.loc["2026-01-11":"2026-01-15"] = 80.0  # real, later, non-overlap reading
+
+        stitched = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+
+        # f=1.0 passthrough: B's real non-overlap tail must be UNCHANGED, not blown up.
+        np.testing.assert_allclose(stitched.loc["2026-01-11":"2026-01-15"].values, 80.0, rtol=1e-5)
+
+    def test_stitch_scaling_factor_no_lookahead_bias(self):
+        """CRITICAL NO-LOOKAHEAD TEST for the scaling-factor computation itself:
+        the factor f is derived ONLY from the overlap-window sums. Perturbing
+        values strictly OUTSIDE the overlap window (period A's pre-overlap
+        history, or period B's post-overlap tail) must never change:
+        (a) f itself -- observable via the overlap-blended output values, which
+            are a direct function of f, and via B's f-scaled non-overlap tail;
+        (b) period A's own pre-overlap values, which pass through untouched
+            regardless of anything in period B.
+        """
+        dates_a = pd.date_range("2026-01-01", "2026-01-20", freq="D")  # A: Jan 1-20
+        dates_b = pd.date_range("2026-01-15", "2026-02-10", freq="D")  # B: Jan 15 - Feb 10
+        # Overlap: Jan 15-20
+
+        rng = np.random.default_rng(7)
+        svi_a = pd.Series(rng.uniform(20, 80, size=len(dates_a)), index=dates_a)
+        svi_b = pd.Series(rng.uniform(20, 80, size=len(dates_b)), index=dates_b)
+
+        stitched_clean = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+
+        # --- Perturb B's post-overlap tail (Jan 21 - Feb 10) drastically ---
+        svi_b_tail_perturbed = svi_b.copy()
+        svi_b_tail_perturbed.loc["2026-01-21":] = svi_b_tail_perturbed.loc["2026-01-21":] * 1000.0 + 5000.0
+        stitched_tail_perturbed = GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b_tail_perturbed)
+
+        # A's own pre-overlap dates (Jan 1-14) must be byte-identical.
+        np.testing.assert_allclose(
+            stitched_clean.loc["2026-01-01":"2026-01-14"].values,
+            stitched_tail_perturbed.loc["2026-01-01":"2026-01-14"].values,
+            rtol=1e-12,
+            atol=1e-12,
+            err_msg="Perturbing B's post-overlap tail changed A's own pre-overlap values.",
+        )
+        # The overlap-blended values (Jan 15-20) are a direct function of f and
+        # must also be byte-identical -- proving f was not affected by the
+        # post-overlap tail perturbation.
+        np.testing.assert_allclose(
+            stitched_clean.loc["2026-01-15":"2026-01-20"].values,
+            stitched_tail_perturbed.loc["2026-01-15":"2026-01-20"].values,
+            rtol=1e-12,
+            atol=1e-12,
+            err_msg="Perturbing B's post-overlap tail changed the overlap-blended (f-dependent) values.",
+        )
+
+        # --- Perturb A's pre-overlap history (Jan 1-14) drastically ---
+        svi_a_head_perturbed = svi_a.copy()
+        svi_a_head_perturbed.loc[:"2026-01-14"] = svi_a_head_perturbed.loc[:"2026-01-14"] * 1000.0 + 5000.0
+        stitched_head_perturbed = GoogleTrendsStitcher.stitch_intervals(svi_a_head_perturbed, svi_b)
+
+        # The overlap-blended values (Jan 15-20) must be unaffected: f is computed
+        # purely from the overlap-window sums, never A's pre-overlap history.
+        np.testing.assert_allclose(
+            stitched_clean.loc["2026-01-15":"2026-01-20"].values,
+            stitched_head_perturbed.loc["2026-01-15":"2026-01-20"].values,
+            rtol=1e-12,
+            atol=1e-12,
+            err_msg="Perturbing A's pre-overlap history changed the overlap-blended (f-dependent) values.",
+        )
+        # B's post-overlap tail (Jan 21 - Feb 10), scaled purely by f, must also
+        # be unaffected by A's pre-overlap history.
+        np.testing.assert_allclose(
+            stitched_clean.loc["2026-01-21":"2026-02-10"].values,
+            stitched_head_perturbed.loc["2026-01-21":"2026-02-10"].values,
+            rtol=1e-12,
+            atol=1e-12,
+            err_msg="Perturbing A's pre-overlap history changed B's f-scaled post-overlap tail.",
+        )
 
 
 class TestGoogleTrendsStitcherScalingMetadata:
@@ -194,6 +315,28 @@ class TestGoogleTrendsStitcherScalingMetadata:
             rtol=1e-12,
             atol=1e-12,
         )
+
+    def test_stitch_intervals_structurally_delegates_to_get_scaling_metadata(self):
+        """Structural regression guard, distinct from the behavioral-equivalence test
+        above: proves stitch_intervals actually CALLS get_scaling_metadata rather than
+        independently reimplementing an overlap computation that merely happens to
+        agree today. The behavioral test above cannot catch a reintroduced duplicate
+        computation when the duplicate formula is still mathematically identical to
+        get_scaling_metadata's own -- only a call-spy can."""
+        dates_a = pd.date_range("2026-01-01", "2026-03-15", freq="D")
+        dates_b = pd.date_range("2026-03-01", "2026-05-15", freq="D")
+        rng = np.random.default_rng(13)
+        svi_a = pd.Series(rng.uniform(5, 95, size=len(dates_a)), index=dates_a)
+        svi_b = pd.Series(rng.uniform(5, 95, size=len(dates_b)), index=dates_b)
+
+        with mock.patch.object(
+            GoogleTrendsStitcher,
+            "get_scaling_metadata",
+            wraps=GoogleTrendsStitcher.get_scaling_metadata,
+        ) as spy:
+            GoogleTrendsStitcher.stitch_intervals(svi_a, svi_b)
+
+        spy.assert_called_once_with(svi_a, svi_b)
 
 
 class TestASVICalculator:

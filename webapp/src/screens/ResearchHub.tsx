@@ -49,10 +49,10 @@ const CARDS: HubCard[] = [
   { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", description: TAB_HELP["data-explorer"].description },
   {
     to: "/research/trends-stitcher",
-    label: "Google Trends SVI Stitching",
+    label: "SVI Stitching Algorithm Demo",
     ico: "📊",
     description:
-      "Demonstrates the stitching of multiple overlapping 90-day Google Trends Search Volume Index (SVI) queries into a single continuous time series.",
+      "Demonstrates the overlapping-window stitching algorithm used to reconstruct a continuous Google Trends SVI series from adjacent 90-day intervals (live Google Trends data isn't wired up in this platform, so the demo runs on labeled proxy data).",
   },
 ];
 

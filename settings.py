@@ -5312,6 +5312,54 @@ class Settings(BaseSettings):
         "z_entry/z_entry_threshold parameter defaults.",
     )
 
+    # --- 26. Google Trends ASVI ---
+    GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS: float = Field(
+        default=24.0,
+        description="Hours between automated Google Trends refreshes."
+    )
+    GOOGLE_TRENDS_ENABLED: bool = Field(
+        default=False,
+        description="Master switch for the Google Trends ASVI pipeline."
+    )
+    GOOGLE_TRENDS_WINDOW_DAYS: int = Field(
+        default=90,
+        description="Number of days per overlapping fetch window for Google Trends."
+    )
+    GOOGLE_TRENDS_OVERLAP_DAYS: int = Field(
+        default=30,
+        description="Number of days of overlap between consecutive fetch windows."
+    )
+    GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS: float = Field(
+        default=5.0,
+        description="Minimum seconds between pytrends API request ISSUANCE."
+    )
+    GOOGLE_TRENDS_MAX_RETRIES: int = Field(
+        default=3,
+        description="Retries after a pytrends HTTP 429/5xx before the request is given up on."
+    )
+    GOOGLE_TRENDS_COOLDOWN_THRESHOLD: int = Field(
+        default=3,
+        description="Consecutive FAILED pytrends requests after which calls are SKIPPED outright."
+    )
+    GOOGLE_TRENDS_COOLDOWN_SECONDS: float = Field(
+        default=300.0,
+        description="How long the Google Trends cooldown stays open."
+    )
+    GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=120.0,
+        description=(
+            "Hard wall-clock ceiling (seconds) for "
+            "pipeline/production_steps.py::_apply_google_trends_asvi()'s entire "
+            "per-cycle per-symbol TrendsStore.get_stitched_series() loop. A "
+            "single unreachable/slow local store read can otherwise stack "
+            "across every remaining symbol with no overall ceiling -- once "
+            "this budget elapses, every remaining symbol degrades to NaN "
+            "(never fabricated -- CONSTRAINT #4) for the rest of the cycle "
+            "instead of continuing to attempt reads. Only consulted once "
+            "GOOGLE_TRENDS_ENABLED is True."
+        ),
+    )
+
     @property
     def fred_key_is_leaked(self) -> bool:
         """True if the configured FRED key is the known-compromised value.

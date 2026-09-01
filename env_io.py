@@ -544,6 +544,21 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PYTRENDS_ENABLED",
     "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
     "ATTENTION_CIRCUIT_BREAKER_THRESHOLD",
+    # Google Trends live SVI fetch + persistence (data/google_trends_client.py,
+    # data/trends_store.py, desktop/daemon_runtime.py::maybe_refresh_google_trends,
+    # pipeline/production_steps.py's Google_Trends_ASVI diagnostic column).
+    # All 9 keys are non-secret -- pytrends is unauthenticated, no credential
+    # material anywhere in this family. Master switch defaults False; every
+    # tunable below is only ever consulted once GOOGLE_TRENDS_ENABLED is True.
+    "GOOGLE_TRENDS_ENABLED",
+    "GOOGLE_TRENDS_WINDOW_DAYS",
+    "GOOGLE_TRENDS_OVERLAP_DAYS",
+    "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
+    "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS",
+    "GOOGLE_TRENDS_MAX_RETRIES",
+    "GOOGLE_TRENDS_COOLDOWN_THRESHOLD",
+    "GOOGLE_TRENDS_COOLDOWN_SECONDS",
+    "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE",
     # Related Sector Selection tunables (webapp /settings/sector-selection,
     # api/pilots_api.py's _SECTOR_SELECTION_GROUPS) — data/sector_selection_heat.py's
     # semantic-similarity feature backing the SectorSelection.tsx screen.

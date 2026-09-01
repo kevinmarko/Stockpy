@@ -141,6 +141,14 @@ ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     # source for this field. Genuinely orchestrator-only by design, not an
     # oversight.
     "etf_transmission_multiplier",
+    # Google Trends ASVI (data/trends_stitcher.py::ASVICalculator) is
+    # orchestrator-only for the same structural reason as attention_score/
+    # sector_heat_factor above: pipeline/production_steps.py::
+    # _apply_google_trends_asvi is the sole producer, and the advisory path
+    # (main.py) has no Google Trends data source at all -- it never builds
+    # or reads a stitched TrendsStore series. Revisit if/when the advisory
+    # path grows one.
+    "google_trends_asvi",
 }
 
 
