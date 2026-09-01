@@ -21,11 +21,15 @@ export const TrendsVisualizer: React.FC = () => {
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl font-semibold text-zinc-100 flex items-center">
               <Activity className="w-6 h-6 mr-2 text-zinc-400" />
-              Google Trends SVI Stitching
+              SVI Stitching Algorithm Demo
             </h1>
           </div>
           <p className="text-zinc-400 mt-1 text-sm max-w-3xl">
-            Demonstrates the stitching of multiple overlapping 90-day Google Trends Search Volume Index (SVI) queries into a single continuous time series.
+            Demonstrates the overlapping-window stitching algorithm used to reconstruct a continuous
+            long-term Google Trends Search Volume Index (SVI) series from adjacent 90-day intervals.
+            Live Google Trends data isn't wired up in this platform, so this demo runs the real
+            algorithm against real SPY trading volume as an honestly-labeled stand-in ("SPY Volume
+            Proxy" in the chart below) — it is never real search-volume data.
           </p>
         </div>
       </div>

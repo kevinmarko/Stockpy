@@ -88,7 +88,134 @@ along the way.
   (fabrication check, response-shape-vs-webapp-contract re-derivation, doc/artifact honesty spot-check,
   untracked-file cleanliness).
 
+## Second audit round (6-agent Workflow audit)
+
+The above described the first audit's fixes. A follow-up, independently-launched 6-agent Workflow audit
+(one agent per dimension: constraint-compliance, data-integrity, api-webapp-contract, test-coverage,
+doc-artifact-honesty, duplication-security-cleanup — each finding then adversarially re-verified by a
+second agent against the real checkout, never trusting the first agent's own report) was run against this
+PR's actual committed code, explicitly instructed not to take the first audit's conclusions on faith. It
+raised 9 findings; all 9 were independently confirmed on re-check (0 refuted). All 9 are fixed here:
+
+1. **[low, constraint-compliance] Stitching computation sat outside the fail-closed `try`/`except`.** The
+   slicing/scaling/`GoogleTrendsStitcher.stitch_intervals` calls ran after the `try` block that builds the
+   honest `503` closed — any exception there would have surfaced as a raw, unredacted `500` instead.
+   Not exploitable today (the fixed 240-bar slicing guarantees non-degenerate overlaps), but a real
+   robustness gap. Fixed by moving the whole computation inside the same `try` block.
+2. **[medium, data-integrity] Off-by-one-day timezone bug.** `to_curve()` built epoch-ms via `ts.timestamp()`
+   on a tz-naive pandas `Timestamp`, which pandas treats as UTC midnight. The one frontend consumer,
+   `TrendsStitchChart.tsx`, formatted that epoch-ms using the browser's LOCAL timezone
+   (`toLocaleDateString()` with no `timeZone` option) — for any US-based viewer (this platform's entire
+   expected audience), every one of the 240 real trading dates rendered one calendar day earlier than the
+   real bar date. Reproduced end-to-end with a real Node engine in `America/New_York` before fixing.
+   Fixed by formatting in UTC with a pinned locale (`formatUtcDate`, now exported and directly unit-tested
+   with a hardcoded epoch-ms → date assertion that doesn't depend on the test runner's own timezone).
+3. **[medium, api-webapp-contract] No navigation entry point anywhere in the app.** `/research/trends-
+   stitcher` was a real, working route rendering `TrendsVisualizer`, but absent from `navigation.tsx`'s
+   `NAV_ITEMS` (source for both the desktop sidebar and the mobile bottom-nav/"more" menu) and absent from
+   `Marketplace.tsx`'s "Explore" tile grid — the documented mobile-reachability pattern this codebase uses
+   for exactly this class of standalone research screen. A user could only reach the now-fixed endpoint's
+   UI by typing the URL by hand. Fixed by adding both.
+4. **[low, api-webapp-contract] Screen header didn't disclose the SPY-volume-proxy substitution.** The
+   backend goes out of its way (per its own docstring's CONSTRAINT #4 reasoning) to label every curve "SPY
+   Volume Proxy" so the demo is never mistaken for real Google Trends data — but the screen's prominent
+   title ("Google Trends SVI Stitching") and description asserted the opposite with no caveat, leaving the
+   honest disclosure buried in small chart-legend text a viewer might never read. Fixed by rewriting the
+   header/description to disclose the proxy substitution up front, with a new test asserting the
+   disclosure text actually renders.
+5. **[nit, api-webapp-contract] Mock fixture didn't mirror the live contract.** `mock.ts`'s
+   `getTrendsStitchDemo()` returned 2 unlabeled raw curves ("Trend A/B (Raw)") against the real live
+   endpoint's 3 curves labeled "SPY Volume Proxy — Period A/B/C" — mock mode (this platform's dev default)
+   never exercised the real 3-curve honesty-labeled layout. Fixed to match.
+6. **[medium, test-coverage] Happy-path test never proved the response is real, injected data.** The
+   audit agent empirically proved this by mutation: it replaced the endpoint's real `bars["Volume"]` read
+   with a fabricated `np.linspace` ramp while keeping correct dates/labels/shape, re-ran the test suite,
+   and all 4 stitch-demo tests — including the happy-path test — still passed. This is exactly the class
+   of regression CONSTRAINT #4 exists to prevent, and the existing test suite would not have caught it.
+   Fixed by adding an assertion that recomputes period A's expected values and dates directly from the
+   real injected fixture and compares them against the response.
+7. **[low, test-coverage] SSOT regression test proved behavioral equivalence, not structural delegation.**
+   The audit agent proved this by mutation too: reintroducing an independent
+   `overlap_dates = period_a_svi.index.intersection(period_b_svi.index)` re-derivation inside
+   `stitch_intervals` (the exact duplication the earlier fix removed) still passed all 19
+   trends-stitcher/data-api "stitch"-keyword tests, because the reintroduced formula is still
+   mathematically identical to `get_scaling_metadata`'s own. Fixed by adding a
+   `mock.patch.object(GoogleTrendsStitcher, "get_scaling_metadata", wraps=...)` spy test that asserts
+   `stitch_intervals` genuinely calls into it.
+8. **[nit, test-coverage] No regression guard against the removed duplicate route reappearing.** The old
+   `GET /data/svi-stitching-demo` route was genuinely removed (confirmed absent everywhere via a
+   repo-wide grep), but nothing asserted its absence — a future merge/rebase could silently reintroduce
+   it undetected. Fixed by adding a test asserting that path now `404`s.
+9. **[nit, doc-artifact-honesty] PR-body overclaim.** The PR body's CONSTRAINT #2 (no-lookahead)
+   justification stated `GoogleTrendsStitcher` "has zero callers anywhere in the live signal/pipeline
+   path" — but `data/attention_sources.py` (imported by the live `pipeline/production_steps.py`/
+   `main_orchestrator.py` pipeline) does `from data.trends_stitcher import ASVICalculator,
+   GoogleTrendsStitcher`, an unused import that predates this PR. The underlying safety conclusion (no
+   lookahead risk, since no method is ever actually invoked from that chain) was correct; the literal
+   phrasing wasn't. Fixed by correcting the PR body's wording to describe the unused-import chain
+   accurately.
+
+### Second-round verification results
+- `pytest tests/test_data_api.py tests/test_trends_stitcher.py -q` — **75 passed, 0 failed** (up from the
+  first round's 73 — 2 new test functions: the duplicate-route-404 guard and the structural-delegation
+  spy test — plus new fidelity/date assertions added inside the existing happy-path test, all passing).
+- `ruff check --select F,E9` (pyflakes + syntax errors — the genuine-bug-focused subset; this repo has no
+  `pyproject.toml`/`ruff.toml`, and a full unscoped `ruff check` surfaces ~149 pre-existing style/import-
+  order findings repo-wide unrelated to this diff) on every touched Python file — all checks passed.
+- `npm run --prefix webapp typecheck` — clean, no errors.
+- `npx vitest run` on all 4 touched webapp test files (`TrendsVisualizer.test.tsx`,
+  `TrendsStitchChart.test.tsx`, `Marketplace.test.tsx`, `mock.test.ts`) — **70 passed, 0 failed** (this
+  included fixing one pre-existing test whose title assertion broke against item 4's honest header
+  rewrite, and adding new tests for items 2 and 4's fixes).
+- A broader `pytest tests/ -k "trends or data_api"` sweep was attempted but hit unrelated, pre-existing
+  numba JIT-cache collection errors in unaffected test files (`test_simulation_engine.py`,
+  `test_run_once.py`, etc.) — an environment issue (a shared numba cache under contention from concurrent
+  worktree/test activity on this machine), not caused by this diff. Not re-attempted; the scoped runs
+  above are the real verification for this round's changes.
+
+## Reconciliation with a concurrently-merged PR (PR #961)
+While the second audit round above was being fixed, PR #957 (this branch's own first-round PR) merged
+into `main`, and — independently, in a separate session — **PR #961** ("fix: Trends Stitching demo audit
+findings (real stitching, nav, docs)") also merged into `main` minutes later, covering overlapping ground:
+a real port of the stitching algorithm into a new `webapp/src/utils/trendsStitch.ts` (making `mock.ts`'s
+demo genuinely demonstrate stitching instead of 3 unrelated random walks), a `TrendsCurve` type
+de-duplication in `TrendsStitchChart.tsx`, a `navigation.tsx` `NAV_ITEMS` entry, and a `ResearchHub.tsx`
+reachability card. Rebasing this round's fixes onto the post-#961 `main` produced real conflicts (not
+staleness) in `navigation.tsx` and `mock.ts`. Resolved as follows, each a deliberate choice, not a
+mechanical "ours wins":
+- **`navigation.tsx`**: took PR #961's entry (functionally identical to ours — same route/icon/section,
+  trivial label wording difference) — dropped our duplicate.
+- **`mock.ts`**: took PR #961's version in full — it is a materially better fix for the same finding (#5
+  in this round) than our simpler relabeling: it actually runs the real stitching algorithm against
+  genuinely overlapping, differently-scaled synthetic windows, rather than just relabeling 3 independent
+  curves. Its curve names ("Window A/B/C (Raw...)", "Stitched Output") were kept as-is rather than forced
+  into our "SPY Volume Proxy" convention — that label is specific to the LIVE endpoint's real SPY-volume
+  substitution and would have been misleading applied to synthetic mock data.
+- **`TrendsStitchChart.tsx`**: both changes auto-merged cleanly (PR #961's type-import de-duplication near
+  the top of the file; this round's `formatUtcDate` export + timezone fix in the middle) — no conflict,
+  both kept.
+- **`Marketplace.tsx`**, **`TrendsVisualizer.tsx`**, **`api/data_api.py`**, both test files: untouched by
+  PR #961, no conflict, kept as-is. The Marketplace Explore tile (this round's fix for finding #3) is a
+  deliberate second reachability surface alongside PR #961's `ResearchHub.tsx` card and `NAV_ITEMS` entry
+  — not redundant, matching this codebase's own established precedent (`SymbolScreener.tsx`/
+  `TradeHistory.tsx` both got a `NAV_ITEMS` entry AND a Marketplace tile).
+- **One additional fix made during reconciliation, not part of the original 9**: PR #961's new
+  `ResearchHub.tsx` card carried the exact same header-honesty gap this round's finding #4 fixed in
+  `TrendsVisualizer.tsx` — its static description presented the demo as unqualified real Google Trends
+  data with no proxy-data disclosure (its own commit message says it was written to mirror
+  `TrendsVisualizer.tsx`'s OLD, pre-fix subheading verbatim). Fixed the same way, with matching updates to
+  `ResearchHub.test.tsx`'s three assertions on the old label/description text.
+
+Re-verified after reconciliation: `pytest tests/test_data_api.py tests/test_trends_stitcher.py -q` — 75
+passed (unaffected, no Python files touched during reconciliation). `npm run --prefix webapp typecheck` —
+clean. `npx vitest run` on all 6 affected webapp test files (including PR #961's own
+`trendsStitch.test.ts` and `ResearchHub.test.tsx`) — **92 passed, 0 failed**.
+
+Because PR #957 was squash-merged, this round's work could not be pushed as more commits onto the
+already-closed PR #957 — it landed as a new PR, **#964**, based on current `main` (which already includes
+both #957 and #961), containing exactly this round's 13-file diff.
+
 ## Next steps
-None outstanding — this PR's scope (consolidate the endpoint, fix the fabrication bug, fix the dropped-
-dates bug, fix the single-source-of-truth duplication, document the change, add test coverage) is
-complete and verified above.
+None outstanding. Three audit rounds' findings (4 from the first round on this branch, 4 from the
+independent PR #961, 9 from this round, plus the ResearchHub.tsx honesty fix found during reconciliation
+— 18 total) are fixed and verified above.
