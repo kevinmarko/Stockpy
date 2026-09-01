@@ -12,7 +12,7 @@ Package the Stockpy / InvestYo Master Session Prompt into a dedicated, reusable 
 
 ### Agent Skills Layer
 
-#### [NEW] [`.agents/skills/stockpy-master-prompt/SKILL.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/create_stockpy_master_prompt/.agents/skills/stockpy-master-prompt/SKILL.md)
+#### [NEW] `.agents/skills/stockpy-master-prompt/SKILL.md`
 - Encodes the full master prompt:
   1. System context & audit-first philosophy
   2. 5 non-negotiable constraints (advisory-only, never fabricate a metric / CONSTRAINT #4, fail closed / CONSTRAINT #6, single source of quant truth, deployability gate)
@@ -23,15 +23,15 @@ Package the Stockpy / InvestYo Master Session Prompt into a dedicated, reusable 
   7. Known open gaps (0DTE exit gate wiring, unregistered options pilots, universe divergence, live order MCP status)
   8. First move instructions.
 
-#### [NEW] [`.claude/skills/stockpy-master-prompt/SKILL.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/create_stockpy_master_prompt/.claude/skills/stockpy-master-prompt/SKILL.md)
+#### [NEW] `.claude/skills/stockpy-master-prompt/SKILL.md`
 - Exact mirror of the skill for Claude Code environment.
 
-#### [NEW] [`.agents/skills/stockpy-quant-integrity/SKILL.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/create_stockpy_master_prompt/.agents/skills/stockpy-quant-integrity/SKILL.md)
+#### [NEW] `.agents/skills/stockpy-quant-integrity/SKILL.md`
 - Mirrored from `.claude/skills/stockpy-quant-integrity/SKILL.md` to ensure Antigravity has local access to the quant integrity reference cited in the startup ritual.
 
 ### Documentation Layer
 
-#### [MODIFY] [`docs/architecture/simulation-eval-reporting.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/create_stockpy_master_prompt/docs/architecture/simulation-eval-reporting.md)
+#### [MODIFY] `docs/architecture/simulation-eval-reporting.md`
 - Updated `.agents/skills/` and `.claude/skills/` section to document the full skill surface including `stockpy-master-prompt`.
 
 ## Verification Plan
