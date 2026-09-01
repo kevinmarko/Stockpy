@@ -66,4 +66,10 @@ TARGETS: list[Target] = [
         "backfill_sentiment_history.py",
         "python scripts/backfill_sentiment_history.py",
     ),
+    Target(
+        "path",
+        "scripts/export_notebooklm.py",
+        "export_notebooklm.py",
+        "python scripts/export_notebooklm.py",
+    ),
 ]

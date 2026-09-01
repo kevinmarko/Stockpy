@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-27T17:55:37.987172+00:00",
-  "command_count": 17,
+  "generated_at": "2026-09-01T02:17:13.381120+00:00",
+  "command_count": 18,
   "dead_letters": [],
   "commands": [
     {
@@ -1061,6 +1061,15 @@
           "takes_value": true
         }
       ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "export_notebooklm.py",
+      "invocation": "python scripts/export_notebooklm.py",
+      "aliases": [],
+      "description": "Generate a NotebookLM export.",
+      "options": [],
       "positionals": [],
       "subcommands": []
     }
