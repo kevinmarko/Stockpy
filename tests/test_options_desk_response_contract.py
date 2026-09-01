@@ -13,11 +13,20 @@ client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
 FIXTURES = Path(__file__).parent / "fixtures"
 
 def parse_types_ts():
+    """Parse webapp/src/api/types.ts and return, per interface, the set of
+    field names that are REQUIRED (i.e. NOT marked `field?: type`).
+
+    A TypeScript `field?: type` member is genuinely optional -- the backend
+    is not contractually obligated to include it on every response (e.g. an
+    honest CONSTRAINT #4 "unavailable" case may omit it entirely rather than
+    send a fabricated placeholder). Only fields without a `?` before the `:`
+    are part of the response contract this test enforces.
+    """
     types_path = Path(__file__).parent.parent / "webapp" / "src" / "api" / "types.ts"
     lines = types_path.read_text(encoding="utf-8").splitlines()
     interfaces = {}
     current_interface = None
-    
+
     for line in lines:
         if line.startswith("export interface "):
             current_interface = line.split("export interface ")[1].split(" {")[0].strip()
@@ -25,8 +34,8 @@ def parse_types_ts():
         elif current_interface and line.strip() == "}":
             current_interface = None
         elif current_interface:
-            m = re.match(r'^\s*([a-zA-Z0-9_]+)\??\s*:', line)
-            if m:
+            m = re.match(r'^\s*([a-zA-Z0-9_]+)(\?)?\s*:', line)
+            if m and m.group(2) is None:
                 interfaces[current_interface].add(m.group(1))
     return interfaces
 
