@@ -127,7 +127,13 @@ to it existed anywhere in the app. This has been fixed in two places:
 > implementation used `recharts` instead without any feature loss.
 
 > [!NOTE]
-> There is no live-mode path for this demo. Running the PWA with
-> `VITE_USE_MOCK=false` against the real backend will hit the 501 endpoint
-> and surface an honest "not implemented" error in the UI rather than any
-> chart — this is deliberate, not a bug to be filed.
+> As of this PR's own commits, running the PWA with `VITE_USE_MOCK=false`
+> against the real backend hits the 501 endpoint and surfaces an honest
+> "not implemented" error in the UI rather than any chart. **This is scoped
+> to mock mode deliberately, not a gap this PR left unfixed** — but a live
+> implementation of `GET /data/trends/stitch-demo` is a separate,
+> independently tracked effort (touching `api/data_api.py` and
+> `data/trends_stitcher.py`, neither of which this PR modifies) and may land
+> before or after this one. Do not assume the endpoint still 501s without
+> checking `api/data_api.py` directly — this note describes this PR's own
+> scope, not a permanent architectural decision.
