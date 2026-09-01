@@ -307,7 +307,7 @@ class ForecastTracker:
                 if price and price > 0.0
             ]
             if not rows:
-                return
+                rows = [(symbol.upper(), "empty", horizon_days, ts_iso, None, now_iso)]
             with self._lock:
                 conn = self._get_conn()
                 conn.executemany(

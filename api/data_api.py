@@ -809,10 +809,10 @@ def get_sync_report() -> Dict[str, Any]:
         logger.warning("data_api: account snapshot unavailable for sync report: %s", exc)
         snapshot = None
     try:
-        from forecasting.forecast_tracker import ForecastTracker
-        forecast_symbols = ForecastTracker().get_covered_symbols(horizon_days=30)
+        from data.portfolio_sync import resolve_universe
+        forecast_symbols = resolve_universe()
     except Exception as exc:
-        logger.warning("data_api: forecast coverage lookup failed, degrading to none: %s", exc)
+        logger.warning("data_api: forecast universe lookup failed, degrading to none: %s", exc)
         forecast_symbols = []
 
     try:
