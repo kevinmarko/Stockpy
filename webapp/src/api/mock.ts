@@ -15510,6 +15510,12 @@ const MOCK_REPORTS: ReportFile[] = [
     mtime: "2026-07-29T12:00:04+00:00",
   },
   {
+    name: "notebooklm_source.md",
+    kind: "notebooklm_export",
+    size: 3084,
+    mtime: "2026-08-31T14:34:15+00:00",
+  },
+  {
     name: "trend_following_validation_summary.json",
     kind: "validation_summary",
     size: 918,
@@ -15586,6 +15592,16 @@ const MOCK_REPORT_CONTENT: Record<string, ReportContent> = {
     json: null,
     size: 1987,
     mtime: "2026-07-29T12:00:04+00:00",
+    reason: null,
+  },
+  "notebooklm_source.md": {
+    name: "notebooklm_source.md",
+    kind: "notebooklm_export",
+    content_type: "markdown",
+    text: "# Stockpy System Export\n**Generated At (UTC):** 2026-08-31T14:34:15+00:00\n\n## Macro Context\n- **VIX**: 15.5\n\n## Current Portfolio\n- **Total Equity**: $43,086.18\n\n## Active Pilot Follows\n- **Pilot ID**: trend-following | **Amount**: $500.00 | **Status**: active\n",
+    json: null,
+    size: 3084,
+    mtime: "2026-08-31T14:34:15+00:00",
     reason: null,
   },
   "trend_following_validation_summary.json": {

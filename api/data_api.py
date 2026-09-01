@@ -2433,28 +2433,88 @@ async def get_circuit_breaker_status():
 def get_trends_stitch_demo() -> Dict[str, Any]:
     """
     Demonstrates the Google Trends SVI overlapping-window stitching algorithm
-    (data.trends_stitcher.GoogleTrendsStitcher) against real market data.
+    (data.trends_stitcher.GoogleTrendsStitcher).
 
-    Live Google Trends Search Volume Index (SVI) fetching is NOT wired up in this
-    codebase (no SVI provider exists here). Per CONSTRAINT #4 (never fabricate a
-    metric), this endpoint does not synthesize a fake SVI series. Instead it uses
-    real SPY trading volume (via HistoricalStore) as an honestly-labeled PROXY
-    input to exercise the real stitching algorithm end-to-end -- every curve name
-    in the response discloses this explicitly ("SPY Volume Proxy"), never
-    presented as if it were real Google Trends data.
+    Prefers real, already-persisted Google Trends SVI data from
+    data/trends_store.py::TrendsStore -- populated by the opt-in daemon job
+    (data/google_trends_client.py, settings.GOOGLE_TRENDS_ENABLED; see CLAUDE.md's
+    "Google Trends Live Fetching & Persistence" section) and already consumed
+    elsewhere in this codebase (POST /pilots/ml/lstm-attention-forecast in
+    api/pilots_api.py). Most deployments won't have that daemon job enabled/warmed
+    up yet, though, so when no real SVI windows are on file for this query term,
+    this endpoint falls back to real SPY trading volume (via HistoricalStore) as an
+    honestly-labeled PROXY input to exercise the real stitching algorithm end-to-end.
+    Per CONSTRAINT #4 (never fabricate a metric), it never synthesizes a fake SVI
+    series in either case -- every proxy curve name in the response discloses the
+    substitution explicitly ("SPY Volume Proxy"), never presented as if it were real
+    Google Trends data. Note the three proxy windows are non-independent overlapping
+    slices of ONE real series (not three independently-collected Google Trends
+    downloads), so they demonstrate the rescaling math correctly but not every
+    real-world artifact of independently-collected windows.
 
     Raises HTTPException(503) -- rather than returning a fabricated placeholder
-    series -- if SPY bar history is insufficient or unavailable.
+    series -- if neither real SVI data nor sufficient SPY bar history is available.
     """
     import pandas as pd
 
     from data.trends_stitcher import GoogleTrendsStitcher
 
+    def to_curve(name: str, series: pd.Series) -> Dict[str, Any]:
+        points: List[List[float]] = []
+        for ts, val in series.items():
+            if val is None or (isinstance(val, float) and math.isnan(val)):
+                continue
+            points.append([int(ts.timestamp() * 1000), float(val)])
+        return {"name": name, "data": points}
+
+    query_term = "SPY"
+
+    # 1. Prefer real, already-persisted Google Trends SVI data over the SPY-volume
+    #    proxy below -- see the docstring above for why this codebase does have a
+    #    real (opt-in) SVI source, unlike what this endpoint previously claimed.
+    try:
+        from data.trends_store import TrendsStore
+
+        trends_store = TrendsStore(readonly=True)
+        raw_rows = trends_store.load_raw_windows(query_term)
+        stitched_rows = trends_store.get_stitched_series(query_term)
+        if raw_rows and stitched_rows:
+            windows: Dict[str, List[Any]] = {}
+            for row in raw_rows:
+                windows.setdefault(row.window_id, []).append(row)
+            raw_curves = []
+            # window_id is an opaque UUID (see desktop/daemon_runtime.py's insert_raw_window
+            # call), not a chronological identifier -- order windows by their own earliest
+            # date instead of sorting the id strings themselves.
+            for window_id in sorted(windows, key=lambda wid: min(r.date for r in windows[wid])):
+                window_rows = sorted(windows[window_id], key=lambda r: r.date)
+                window_series = pd.Series(
+                    [r.value for r in window_rows],
+                    index=pd.DatetimeIndex([r.date for r in window_rows]),
+                )
+                raw_curves.append(to_curve(f"Google Trends SVI ({query_term}) — {window_id}", window_series))
+            stitched_series = pd.Series(
+                [row["value"] for row in stitched_rows],
+                index=pd.DatetimeIndex([row["date"] for row in stitched_rows]),
+            )
+            return {
+                "raw_curves": raw_curves,
+                "stitched_curve": to_curve(f"Stitched Google Trends SVI ({query_term})", stitched_series),
+            }
+    except Exception as exc:
+        logger.warning(
+            "get_trends_stitch_demo: real TrendsStore data unavailable, falling back to SPY volume "
+            "proxy (%s): %s",
+            type(exc).__name__,
+            exc,
+        )
+
+    # 2. Fall back to the real-SPY-volume proxy.
     n_bars = 240
 
     try:
         store = HistoricalStore(readonly=True)
-        bars = store.get_bars("SPY")
+        bars = store.get_bars("SPY", lookback_days=n_bars)
         if bars.empty or len(bars) < n_bars:
             raise ValueError(f"Insufficient SPY bar history: {len(bars)} rows (need >= {n_bars})")
         # Keep the real tz-naive DatetimeIndex intact -- GoogleTrendsStitcher.stitch_intervals
@@ -2484,8 +2544,7 @@ def get_trends_stitch_demo() -> Dict[str, Any]:
         slice_c = true_series.iloc[150:240]
         period_c = _scale_period(slice_c)
 
-        stitched_ab = GoogleTrendsStitcher.stitch_intervals(period_a, period_b)
-        stitched_all = GoogleTrendsStitcher.stitch_intervals(stitched_ab, period_c)
+        stitched_all = GoogleTrendsStitcher.stitch_multiple_intervals([period_a, period_b, period_c])
     except Exception as exc:
         logger.warning(
             "get_trends_stitch_demo: unable to build SPY-volume-proxy SVI stitching demo (%s): %s",
@@ -2500,14 +2559,6 @@ def get_trends_stitch_demo() -> Dict[str, Any]:
                 "is currently available to build it. Use mock mode to view the demo."
             ),
         )
-
-    def to_curve(name: str, series: pd.Series) -> Dict[str, Any]:
-        points: List[List[float]] = []
-        for ts, val in series.items():
-            if val is None or (isinstance(val, float) and math.isnan(val)):
-                continue
-            points.append([int(ts.timestamp() * 1000), float(val)])
-        return {"name": name, "data": points}
 
     return {
         "raw_curves": [

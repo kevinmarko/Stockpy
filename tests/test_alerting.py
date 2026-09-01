@@ -230,7 +230,7 @@ class TestNotify:
             alerting.notify("T", "M")  # must not raise
 
     def test_non_2xx_http_status_logged_not_raised(self, monkeypatch, caplog):
-        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", "topic")
+        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", "my-secret-topic")
 
         class _FakeErrorResponse:
             status = 500
@@ -243,6 +243,10 @@ class TestNotify:
             with caplog.at_level("WARNING"):
                 alerting.notify("T", "M")  # must not raise
         assert "500" in caplog.text
+        # CONSTRAINT #3: ALERT_NTFY_TOPIC is a SECRET_KEYS field (functions like a
+        # bearer token -- ntfy.sh access-controls a topic by its name alone). The
+        # non-2xx warning must never log the topic value in cleartext.
+        assert "my-secret-topic" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

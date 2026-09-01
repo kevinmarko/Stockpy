@@ -32,11 +32,12 @@ const EMPTY_MANIFEST: ReportManifest = {
 describe("ReportLibrary screen (real mock API)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("renders all four sections from the real mock manifest", async () => {
+  it("renders all five sections from the real mock manifest", async () => {
     renderScreen();
     expect(await screen.findByText("📰 Daily report")).toBeInTheDocument();
     expect(screen.getByText("📊 Orchestrator dashboards")).toBeInTheDocument();
     expect(screen.getByText("📝 Daily briefings")).toBeInTheDocument();
+    expect(screen.getByText("🧠 NotebookLM export")).toBeInTheDocument();
     expect(screen.getByText("✅ Validation reports")).toBeInTheDocument();
     expect(screen.getByText("daily_report.html")).toBeInTheDocument();
     expect(screen.getByText("daily_report_dashboard.html")).toBeInTheDocument();
@@ -96,14 +97,17 @@ describe("ReportLibrary screen (real mock API)", () => {
   it("renders a briefing's markdown inline by default (no gate, matches Streamlit)", async () => {
     renderScreen();
     await screen.findByText("📝 Daily briefings");
-    expect(await screen.findByTestId("mini-markdown")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Daily Briefing/ })).toBeInTheDocument();
+    // Two sections render MiniMarkdown on this page (briefings + the
+    // NotebookLM export below), so "mini-markdown" alone is no longer
+    // unique -- the specific heading is the scoped assertion.
+    expect(await screen.findByRole("heading", { name: /Daily Briefing/ })).toBeInTheDocument();
+    expect(screen.getAllByTestId("mini-markdown").length).toBeGreaterThan(0);
   });
 
   it("switching the briefing selector loads the other briefing's content", async () => {
     const user = userEvent.setup();
     renderScreen();
-    await screen.findByTestId("mini-markdown");
+    await screen.findByRole("heading", { name: /Daily Briefing — 2026-07-30/ });
     const select = screen.getByTestId("briefing-select") as HTMLSelectElement;
     await user.selectOptions(select, "briefing_2026-07-29.md");
     await waitFor(() =>
@@ -158,6 +162,69 @@ describe("ReportLibrary screen (real mock API)", () => {
     expect(await screen.findByTestId("generate-briefing-status")).toHaveTextContent(
       "job-briefing-1"
     );
+  });
+
+  it("renders the NotebookLM export's markdown inline by default (no gate)", async () => {
+    renderScreen();
+    await screen.findByText("🧠 NotebookLM export");
+    expect(await screen.findByText("Stockpy System Export")).toBeInTheDocument();
+    expect(screen.getByTestId("download-notebooklm_source.md")).toBeInTheDocument();
+  });
+
+  it("Generate NotebookLM export posts the export_notebooklm.py command job", async () => {
+    const spy = vi.spyOn(api, "createJob").mockResolvedValue({
+      job_id: "job-notebooklm-1",
+      job_type: "command",
+      status: "running",
+      cancellable: true,
+    });
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByTestId("generate-notebooklm-export-button"));
+    expect(spy).toHaveBeenCalledWith("command", {
+      command: "export_notebooklm.py",
+      subcommand: null,
+      args: [],
+      confirm: false,
+    });
+    expect(await screen.findByTestId("generate-notebooklm-export-status")).toHaveTextContent(
+      "job-notebooklm-1"
+    );
+  });
+
+  it("Download on the NotebookLM export triggers a browser download of the already-loaded content", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
+    let downloadedName: string | null = null;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      downloadedName = this.download;
+    });
+
+    renderScreen();
+    const downloadBtn = await screen.findByTestId("download-notebooklm_source.md");
+    fireEvent.click(downloadBtn);
+
+    await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
+    expect(downloadedName).toBe("notebooklm_source.md");
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it("no NotebookLM export yet renders the honest empty state, not fabricated content", async () => {
+    const realManifest = await api.getReports();
+    const manifestWithoutExport: ReportManifest = {
+      ...realManifest,
+      reports: realManifest.reports.filter((r) => r.kind !== "notebooklm_export"),
+    };
+    vi.spyOn(api, "getReports").mockResolvedValueOnce(manifestWithoutExport);
+    renderScreen();
+    await screen.findByText("🧠 NotebookLM export");
+    expect(await screen.findByText("No export yet")).toBeInTheDocument();
   });
 
   it("a cold-start empty manifest renders the honest empty state, not fabricated sections", async () => {
