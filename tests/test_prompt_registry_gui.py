@@ -74,7 +74,7 @@ from prompt_registry.signing import compute_sha256, sign
 
 # Defer import to avoid triggering top-level st calls before mock is set up
 import importlib
-_panels = importlib.import_module("gui.panels")
+_panels = importlib.import_module("legacy.streamlit_command_center.panels")
 
 _pr_source_badge = getattr(_panels, "_pr_source_badge")
 _pr_resolve_source = getattr(_panels, "_pr_resolve_source")
@@ -344,7 +344,7 @@ class TestAllKnownIds:
         assert ids == sorted(ids)
 
     def test_degrades_on_import_error(self, monkeypatch):
-        import gui.panels as p
+        import legacy.streamlit_command_center.panels as p
         monkeypatch.setattr(p, "_pr_all_known_ids",
                             lambda enabled: [])  # simulate import failure
         # The real function tolerates errors and returns []
@@ -378,7 +378,7 @@ class TestRenderPromptRegistryExists:
 
 class TestSecurityInvariants:
     def test_four_creds_in_secret_keys(self):
-        from gui.env_io import SECRET_KEYS
+        from shared.env_io import SECRET_KEYS
         for k in [
             "PROMPT_REGISTRY_URL",
             "PROMPT_REGISTRY_TOKEN",
@@ -388,7 +388,7 @@ class TestSecurityInvariants:
             assert k in SECRET_KEYS, f"{k} must be in SECRET_KEYS"
 
     def test_four_creds_not_in_allowed_keys(self):
-        from gui.env_io import ALLOWED_KEYS
+        from shared.env_io import ALLOWED_KEYS
         for k in [
             "PROMPT_REGISTRY_URL",
             "PROMPT_REGISTRY_TOKEN",
@@ -398,7 +398,7 @@ class TestSecurityInvariants:
             assert k not in ALLOWED_KEYS, f"{k} must NOT be in ALLOWED_KEYS"
 
     def test_three_tunables_in_allowed_keys(self):
-        from gui.env_io import ALLOWED_KEYS
+        from shared.env_io import ALLOWED_KEYS
         for k in [
             "PROMPT_REGISTRY_ENABLED",
             "PROMPT_REGISTRY_BACKEND",
@@ -407,18 +407,18 @@ class TestSecurityInvariants:
             assert k in ALLOWED_KEYS, f"{k} must be in ALLOWED_KEYS"
 
     def test_pins_in_json_keys(self):
-        from gui.env_io import _JSON_KEYS
+        from shared.env_io import _JSON_KEYS
         assert "PROMPT_REGISTRY_PINS" in _JSON_KEYS
 
     def test_security_banner_in_source(self):
         # gui/panels.py was converted to a package (commit 162df57); the
         # active source now lives in gui/panels/prompt_registry.py.
-        panels_src = Path(_REPO_ROOT / "gui" / "panels" / "prompt_registry.py").read_text()
+        panels_src = Path(_REPO_ROOT / "legacy" / "streamlit_command_center" / "panels" / "prompt_registry.py").read_text()
         assert "safety gates are enforced in code" in panels_src.lower() or \
                "safety gates are" in panels_src
 
     def test_creds_raise_secret_write_error(self):
-        from gui.env_io import write_setting, SecretWriteError
+        from shared.env_io import write_setting, SecretWriteError
         for k in [
             "PROMPT_REGISTRY_URL",
             "PROMPT_REGISTRY_TOKEN",
@@ -435,20 +435,20 @@ class TestSecurityInvariants:
 
 class TestAppWiring:
     def test_prompts_tab_in_app_tab_labels(self):
-        app_src = Path(_REPO_ROOT / "gui" / "app.py").read_text()
+        app_src = Path(_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text()
         assert "📝 Prompts" in app_src
 
     def test_render_prompt_registry_called_in_app(self):
-        app_src = Path(_REPO_ROOT / "gui" / "app.py").read_text()
+        app_src = Path(_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text()
         assert "render_prompt_registry" in app_src
 
     def test_safe_panel_wraps_render_prompt_registry(self):
-        app_src = Path(_REPO_ROOT / "gui" / "app.py").read_text()
+        app_src = Path(_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text()
         # safe_panel(panels.render_prompt_registry) must appear
         assert "safe_panel(panels.render_prompt_registry)" in app_src
 
     def test_tab_count_includes_prompts(self):
-        app_src = Path(_REPO_ROOT / "gui" / "app.py").read_text()
+        app_src = Path(_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text()
         # Count entries in the tab_labels list by a simple heuristic
         import ast
         tree = ast.parse(app_src)
@@ -525,16 +525,16 @@ class TestRollbackPath:
         rolled = reg.rollback(_KNOWN_ID)
         assert rolled is not None, "rollback must succeed with 2 versions"
 
-        with unittest.mock.patch("env_io.write_setting") as mock_write:
+        with unittest.mock.patch("shared.env_io.write_setting") as mock_write:
             pins_dict = dict(sorted(reg._pins.items()))
             # Import from the real env_io module directly, not the gui/env_io.py
             # shim -- the shim's own `write_setting` name was bound once, via
             # `from env_io import *`, at shim MODULE LOAD time, so it holds a
             # stale reference to the unpatched function regardless of when this
-            # `from gui.env_io import write_setting` statement itself executes;
+            # `from shared.env_io import write_setting` statement itself executes;
             # patching env_io.write_setting only swaps the attribute on the real
             # module's own namespace, which importing via the shim never re-reads.
-            from env_io import write_setting
+            from shared.env_io import write_setting
             write_setting("PROMPT_REGISTRY_PINS", pins_dict)
             mock_write.assert_called_once_with("PROMPT_REGISTRY_PINS", pins_dict)
             key, val = mock_write.call_args[0]
@@ -556,7 +556,7 @@ class TestPinWriteEncoding:
         rollback, clear pin) may pre-``json.dumps`` the pins dict before
         handing it to ``env_io.write_setting`` — that double-encodes."""
         panels_src = Path(
-            _REPO_ROOT / "gui" / "panels" / "prompt_registry.py"
+            _REPO_ROOT / "legacy" / "streamlit_command_center" / "panels" / "prompt_registry.py"
         ).read_text()
         assert "json.dumps(dict(sorted(reg._pins.items())))" not in panels_src
 
@@ -575,7 +575,7 @@ class TestPinWriteEncoding:
         STRING instead of a dict — exactly the silent-discard bug
         PromptRegistry._build_registry_from_settings()'s isinstance(pins, dict)
         check would hit."""
-        import env_io as env_io_mod
+        import shared.env_io as env_io_mod
         env_file = tmp_path / ".env"
         env_file.write_text("", encoding="utf-8")
         monkeypatch.setattr(env_io_mod, "ENV_PATH", env_file)

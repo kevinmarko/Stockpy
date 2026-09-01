@@ -1,6 +1,6 @@
 """tests/test_progress_ui.py
 =============================
-Unit tests for :mod:`gui.progress_ui` — the shared "busy/working" indicator
+Unit tests for :mod:`shared.progress_ui` — the shared "busy/working" indicator
 helper — plus an import-smoke test for every panel this task edited.
 
 ``busy()`` must be safe to use OUTSIDE a live Streamlit script run (no
@@ -16,7 +16,7 @@ import importlib
 
 import pytest
 
-from gui.progress_ui import busy
+from shared.progress_ui import busy
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ class TestBusyHeadless:
         there's no UI to render into."""
         # This IS the default test environment already, but assert it
         # explicitly and directly via the internal probe too.
-        from gui import progress_ui
+        from shared import progress_ui
 
         assert progress_ui._has_script_run_ctx() is False
         with busy("no-op in headless mode"):
@@ -123,7 +123,7 @@ class _FakeStreamlit:
 
 class TestBusySimulatedStreamlit:
     def _patch_live(self, monkeypatch, fake_st: "_FakeStreamlit"):
-        from gui import progress_ui
+        from shared import progress_ui
 
         monkeypatch.setattr(progress_ui, "_try_import_streamlit", lambda: fake_st)
         monkeypatch.setattr(progress_ui, "_has_script_run_ctx", lambda: True)
@@ -168,7 +168,7 @@ class TestBusySimulatedStreamlit:
         """Even if status.update() itself blows up while recording the error
         state, the ORIGINAL exception must still propagate (never a
         secondary bookkeeping error masking the real one)."""
-        from gui import progress_ui
+        from shared import progress_ui
 
         class _BrokenStatus(_FakeStatus):
             def update(self, *, label=None, state=None):
@@ -189,7 +189,7 @@ class TestBusySimulatedStreamlit:
         """If st.status(...) itself raises when constructing (e.g. an
         unusual embedding), busy() must degrade to running the block plainly
         rather than crashing the panel."""
-        from gui import progress_ui
+        from shared import progress_ui
 
         class _BadStreamlit:
             def status(self, label, expanded=True):
@@ -206,7 +206,7 @@ class TestBusySimulatedStreamlit:
     def test_streamlit_not_importable_degrades_to_noop(self, monkeypatch):
         """When streamlit itself isn't importable, busy() must still run the
         block (headless-safe import path)."""
-        from gui import progress_ui
+        from shared import progress_ui
 
         monkeypatch.setattr(progress_ui, "_try_import_streamlit", lambda: None)
 
@@ -225,14 +225,14 @@ class TestBusySimulatedStreamlit:
 
 
 EDITED_PANEL_MODULES = [
-    "gui.panels.paper_monitor",
-    "gui.panels.live_inventory",
-    "gui.panels.settings_manager",
-    "gui.panels.strategy_matrix",
-    "gui.panels.report_viewer",
-    "gui.panels.market_data",
-    "gui.panels.analytics",
-    "gui.panels.reports_library",
+    "legacy.streamlit_command_center.panels.paper_monitor",
+    "legacy.streamlit_command_center.panels.live_inventory",
+    "legacy.streamlit_command_center.panels.settings_manager",
+    "legacy.streamlit_command_center.panels.strategy_matrix",
+    "legacy.streamlit_command_center.panels.report_viewer",
+    "legacy.streamlit_command_center.panels.market_data",
+    "legacy.streamlit_command_center.panels.analytics",
+    "legacy.streamlit_command_center.panels.reports_library",
 ]
 
 

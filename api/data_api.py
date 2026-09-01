@@ -73,13 +73,13 @@ import pairs_ondemand
 # None of these modules import streamlit at module top (verified) and this
 # file carries no AST import guard (unlike ``api/pilots_api.py`` /
 # ``api/state_api.py``), so importing them here is safe and intentional.
-from gui.ai_insights_panel import (
+from shared.ai_insights_panel import (
     derive_disagreement_overview,
     disagreement_summary,
     insights_status,
     latest_verdict_maps_from_cache,
 )
-from gui.llm_commentary_panel import commentary_status, generate_for_symbol_row
+from shared.llm_commentary_panel import commentary_status, generate_for_symbol_row
 from llm.chart_insight import generate_chart_pattern_read, render_price_chart_png
 from llm.research import generate_research_brief
 from pilots.catalog import get_pilot as _catalog_get_pilot, list_pilots as _catalog_list_pilots
@@ -731,7 +731,7 @@ def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
     allowlist-bounded env writer. (``WATCHLIST`` is intentionally NOT in
     ``ALLOWED_KEYS``, so ``DEFAULT_TICKERS`` is the correct, writable key.)
     """
-    from env_io import write_setting
+    from shared.env_io import write_setting
 
     symbols = [s.strip().upper() for s in watchlist if s and s.strip()]
     try:
@@ -1261,7 +1261,7 @@ def generate_commentary(symbol: str) -> Dict[str, Any]:
     """On-demand Claude analyst note for ``symbol`` (Tier 9 analyst rationale).
 
     Ports ``gui/panels/ai_insights.py``'s "Claude analyst note" section
-    (``_render_llm_commentary_button`` / ``gui.llm_commentary_panel``) to a
+    (``_render_llm_commentary_button`` / ``shared.llm_commentary_panel``) to a
     stateless HTTP call. Gate: ``settings.LLM_COMMENTARY_ENABLED`` +
     ``settings.ANTHROPIC_API_KEY`` (via ``commentary_status``).
 
@@ -1310,9 +1310,9 @@ def generate_chart_insight(symbol: str) -> Dict[str, Any]:
     chart, then (capability permitting) send it to Gemini Vision.
 
     Gate: ``settings.LLM_COMMENTARY_ENABLED`` + ``settings.GEMINI_API_KEY``
-    via ``gui.ai_insights_panel.insights_status`` -- the SAME status
+    via ``shared.ai_insights_panel.insights_status`` -- the SAME status
     classifier ``render_ai_insights()`` uses to gate this exact section
-    (deliberately NOT ``gui.llm_commentary_panel.commentary_status``, which
+    (deliberately NOT ``shared.llm_commentary_panel.commentary_status``, which
     additionally requires ``ANTHROPIC_API_KEY`` -- that's the Claude
     analyst-note gate, a different key requirement than the chart section
     actually uses at its real call site, ``_get_vision_provider()``).
@@ -1452,12 +1452,12 @@ def generate_research(symbol: str) -> Dict[str, Any]:
 # of THAT exact table. What IS durable is the on-disk LLM commentary cache
 # both buttons already write through (llm/cache.py's
 # output/llm_commentary_cache.json, a real file, not session state) --
-# gui.ai_insights_panel.latest_verdict_maps_from_cache reconstructs the same
+# shared.ai_insights_panel.latest_verdict_maps_from_cache reconstructs the same
 # {symbol: verdict} maps derive_disagreement_overview needs FROM that cache,
 # so this endpoint answers the same question ("where do Claude and Gemini
 # disagree, per symbol") from a genuinely durable source instead of
 # fabricating one. This is a NEW, small addition to the AST-guard-free
-# api/data_api.py (which already imports gui.ai_insights_panel above), not a
+# api/data_api.py (which already imports shared.ai_insights_panel above), not a
 # reuse of api/pilots_api.py's dependency-light pilots/*.py read layer.
 # ---------------------------------------------------------------------------
 
@@ -1470,9 +1470,9 @@ def get_ai_disagreements() -> Dict[str, Any]:
     (``llm.cache.read_all_entries`` — real disk state, not
     ``st.session_state``), keeps the MOST RECENT Claude analyst-rationale and
     Gemini chart-pattern-read entry per symbol
-    (``gui.ai_insights_panel.latest_verdict_maps_from_cache``), and compares
+    (``shared.ai_insights_panel.latest_verdict_maps_from_cache``), and compares
     them against the current snapshot's tracked symbol universe
-    (``gui.ai_insights_panel.derive_disagreement_overview`` /
+    (``shared.ai_insights_panel.derive_disagreement_overview`` /
     ``disagreement_summary`` — the SAME pure comparison logic the legacy
     Streamlit tab used, just fed from a durable source instead of a
     per-browser-session dict).
@@ -1636,7 +1636,7 @@ def get_provider_status() -> Dict[str, Any]:
 
     Connection-health tracking (Streamlit's sliding 20-fetch-window
     Healthy/Degraded/Down badge,
-    ``gui.market_data_diagnostics.FetchHealthTracker``) is DELIBERATELY NOT
+    ``shared.market_data_diagnostics.FetchHealthTracker``) is DELIBERATELY NOT
     duplicated server-side here: ``components/MarketDataHealth.tsx`` already
     implements the identical session-local sliding-window tracker
     client-side (its own ``useRef``-based ledger, mirroring

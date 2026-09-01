@@ -1007,10 +1007,12 @@ def collect_read_forms(model_fields: Dict[str, Any]) -> Dict[str, Any]:
     name_literal_sites: Dict[str, List[str]] = defaultdict(list)
     # settings.py and env_io.py mention every field name by construction;
     # counting them would drown the signal. (env_io.py was relocated from
-    # gui/env_io.py -- F13, docs/module_efficiency_redundancy_audit.md --
-    # the literal ALLOWED_KEYS/SECRET_KEYS tuples now live at the new path;
-    # gui/env_io.py is a re-export shim containing no field-name literals.)
-    _literal_scan_skip = {"settings.py", "env_io.py"}
+    # repo root to shared/env_io.py in the 2026-09 gui/ -> shared/ +
+    # legacy/streamlit_command_center/ split; before that, F13
+    # (docs/module_efficiency_redundancy_audit.md) had relocated it from
+    # gui/env_io.py to repo root, leaving a re-export shim at gui/env_io.py
+    # containing no field-name literals -- that shim no longer exists.)
+    _literal_scan_skip = {"settings.py", "shared/env_io.py"}
 
     for path in files:
         rel = str(path.relative_to(_REPO_ROOT))
@@ -1119,8 +1121,7 @@ def collect_census() -> Dict[str, Any]:
     # Project imports are deliberately function-local: this keeps module scope
     # importable without bootstrap() having run (see module docstring).
     from settings import Settings
-    import env_io
-
+    import shared.env_io as env_io
     model_fields = dict(Settings.model_fields)
 
     try:
@@ -1136,7 +1137,7 @@ def collect_census() -> Dict[str, Any]:
     # The ONE existing in-process hot-reload beachhead: keys that
     # `PUT /llm/setting` will apply to the live singleton via setattr.
     try:
-        from gui.ai_control_center import LIVE_PATCHABLE_KEYS as _live_keys
+        from shared.ai_control_center import LIVE_PATCHABLE_KEYS as _live_keys
         live_patchable = sorted(_live_keys)
         live_patchable_error = None
     except Exception as exc:  # pragma: no cover - defensive
@@ -1173,7 +1174,7 @@ def collect_census() -> Dict[str, Any]:
         },
         "env_io_lists": env_lists,
         "live_patchable_keys": {
-            "source": "gui/ai_control_center.py::LIVE_PATCHABLE_KEYS",
+            "source": "shared/ai_control_center.py::LIVE_PATCHABLE_KEYS",
             "count": len(live_patchable),
             "keys": live_patchable,
             "all_are_real_fields": sorted(set(live_patchable) - set(model_fields)) == [],

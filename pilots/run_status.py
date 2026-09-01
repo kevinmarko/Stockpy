@@ -147,7 +147,7 @@ def _pid_alive(pid) -> Optional[bool]:
       which is essentially always alive, silently reporting a dead daemon
       as alive from a malformed file.
 
-    Deliberately diverges from ``gui.orchestrator_runner._pid_alive``, which
+    Deliberately diverges from ``shared.orchestrator_runner._pid_alive``, which
     returns a plain ``bool`` and maps an unknown ``OSError`` to ``False``.
     That is correct THERE: its caller (``RunHandle.is_running()``) needs a
     bool, and "assume finished" is the safe default for a subprocess

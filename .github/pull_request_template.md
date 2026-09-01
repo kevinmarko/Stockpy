@@ -8,7 +8,7 @@
 - [ ] ML pipeline (`ml/`)
 - [ ] data layer (`data/`, `data_engine.py`, `dto_models.py`)
 - [ ] execution (`execution/`)
-- [ ] GUI / reporting (`gui/`, `diagnostics_and_visuals.py`)
+- [ ] GUI / reporting (`legacy/streamlit_command_center/` (frozen), `shared/`, `diagnostics_and_visuals.py`)
 - [ ] observability (`observability/`)
 - [ ] config / schema (`config.py`, `database_setup.py`)
 - [ ] tests

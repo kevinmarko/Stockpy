@@ -222,14 +222,14 @@ misrepresent the actual arrangement. Any agent may touch any file for the task i
 |-------------|-------------|----------------|
 | `python3 main.py` | Advisory refresh — fastest, broker-free | Calls `engine/advisory.py` directly; writes `output/daily_report.html` + `output/state_snapshot.json` |
 | `python3 main_orchestrator.py` | Full async pipeline with schema validation | Runs all 50+ dashboard columns through Pandera; writes `output/daily_report_dashboard.html` |
-| `streamlit run gui/app.py` | Visual control panel | Launches orchestrator as subprocess; reads file-backed state; never calls broker directly |
+| `streamlit run legacy/streamlit_command_center/app.py` | Visual control panel | Launches orchestrator as subprocess; reads file-backed state; never calls broker directly |
 | `python scripts/preflight_check.py` | Readiness gate | 17 checks; advisory-mode auto-skips 8 broker/false-positive checks |
 
 ---
 
 ## Cross-cutting & extracted modules
 
-* **`reporting/progress.py`** — file-backed 0–100% pipeline-progress contract. `ProgressReporter(stages, …)` is instantiated once per cycle by the orchestrator (`start_stage` / `advance_symbol` / `finish`), atomically writing `output/progress.json`; module-level `read_progress()` is the dead-letter-safe read side (missing/malformed → `None`, never a fabricated partial). Consumed by the GUI Launcher tab's live `st.progress` bar via `gui/orchestrator_runner.py::compute_run_progress`, polling at `settings.PROGRESS_POLL_SECONDS` (default 5 s).
+* **`reporting/progress.py`** — file-backed 0–100% pipeline-progress contract. `ProgressReporter(stages, …)` is instantiated once per cycle by the orchestrator (`start_stage` / `advance_symbol` / `finish`), atomically writing `output/progress.json`; module-level `read_progress()` is the dead-letter-safe read side (missing/malformed → `None`, never a fabricated partial). Consumed by the GUI Launcher tab's live `st.progress` bar via `shared/orchestrator_runner.py::compute_run_progress`, polling at `settings.PROGRESS_POLL_SECONDS` (default 5 s).
 * **`reporting/html_publisher.py`** — the HTML publish layer extracted out of `main.py`, so the advisory orchestrator's report-writing path is a standalone, independently-testable module rather than an inline `main.py` helper.
 * **`pipeline/steps.py`** — `run_once()` recast as a command/mediator pipeline of discrete steps (including `KillSwitchGateStep`, the advisory pause gate) instead of one monolithic function body.
 

@@ -31,8 +31,8 @@ from pathlib import Path
 
 import pytest
 
-import env_io
-from gui.env_io import ALLOWED_KEYS, SECRET_KEYS, SecretWriteError, write_setting
+import shared.env_io as env_io
+from shared.env_io import ALLOWED_KEYS, SECRET_KEYS, SecretWriteError, write_setting
 
 SECRET_KEYS_TO_VERIFY = (
     "OPENAI_API_KEY",
@@ -111,7 +111,7 @@ def test_secrets_expander_shows_source():
     # expander iterates env_io.SECRET_KEYS directly — membership above is
     # sufficient for it to render a row, but pin the wiring explicitly so
     # a future refactor of that panel can't silently drop the iteration.
-    source = Path("gui/panels/settings_manager.py").read_text(encoding="utf-8")
+    source = Path("legacy/streamlit_command_center/panels/settings_manager.py").read_text(encoding="utf-8")
     assert "env_io.SECRET_KEYS" in source
 
 

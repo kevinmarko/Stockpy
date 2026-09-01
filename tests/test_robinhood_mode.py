@@ -1,7 +1,7 @@
 """
 tests/test_robinhood_mode.py
 =============================
-Unit tests for ``gui.robinhood_mode.read_robinhood_execution_mode`` and the
+Unit tests for ``shared.robinhood_mode.read_robinhood_execution_mode`` and the
 banner wiring in ``gui/app.py`` (Tier 8 §Domain-note follow-up).
 
 Coverage
@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gui.robinhood_mode import (
+from shared.robinhood_mode import (
     BannerVariant,
     RobinhoodModeState,
     read_robinhood_execution_mode,
@@ -224,11 +224,11 @@ class TestDegradesGracefully:
 
 class TestAppWiring:
     def test_gui_app_imports_the_helper(self):
-        src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
-        assert "from gui.robinhood_mode import read_robinhood_execution_mode" in src
+        src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
+        assert "from shared.robinhood_mode import read_robinhood_execution_mode" in src
 
     def test_gui_app_renders_error_and_warning_but_not_hidden(self):
-        src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+        src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
         # Search only the tail (after the RH banner marker) so we don't
         # accidentally match st.error() calls unrelated to the Robinhood
         # banner (e.g. safe_panel's own error rendering).
@@ -240,7 +240,7 @@ class TestAppWiring:
         assert "_rh_mode_state.label" in tail
 
     def test_banner_rendered_after_advisory_and_run_mode_banners(self):
-        src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+        src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
         advisory_idx = src.index("ADVISORY MODE")
         rh_idx = src.index("Tier 8: Robinhood execution-mode banner")
         assert advisory_idx < rh_idx, (
@@ -249,7 +249,7 @@ class TestAppWiring:
         )
 
     def test_banner_soft_fails_never_blocks_app(self):
-        src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+        src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
         anchor = "Tier 8: Robinhood execution-mode banner"
         # Slice a generous window after the anchor so both the comment block
         # AND the following try/except live inside it.

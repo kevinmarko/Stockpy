@@ -531,7 +531,14 @@ class StockpyAuditor:
         if any(m in low for m in entry_markers):
             return True
         rel = info.rel
-        if rel.startswith(("scripts/", "api/", "gui/", "deploy/", "ml/models/")):
+        # "gui/" (the old blanket exemption) was split 2026-09 into shared/
+        # (live modules genuinely imported by api/pilots_api.py etc. — these
+        # no longer need the exemption, the normal reachability check now
+        # correctly sees they're used) and legacy/streamlit_command_center/
+        # (the frozen Streamlit entry surface, only ever launched via
+        # `streamlit run`/`python -m`, never Python-imported by anything else
+        # — still needs the exemption exactly as gui/ did).
+        if rel.startswith(("scripts/", "api/", "legacy/streamlit_command_center/", "deploy/", "ml/models/")):
             return True
         try:
             source = info.path.read_text(encoding="utf-8", errors="replace")

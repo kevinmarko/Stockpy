@@ -253,7 +253,7 @@ class TestSendModelStalenessAlert:
     def test_noop_when_exactly_at_retrain_window(self, monkeypatch):
         """days_old <= MODEL_RETRAIN_WINDOW_DAYS (live-imported, never a
         re-typed literal here — mirrors pilots/models.py's own convention)."""
-        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+        from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
         recorded = []
         monkeypatch.setattr(
@@ -273,7 +273,7 @@ class TestSendModelStalenessAlert:
         assert recorded == []
 
     def test_fires_over_threshold_with_dedup_key_and_extra(self, monkeypatch):
-        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+        from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
         recorded = []
 
@@ -301,7 +301,7 @@ class TestSendModelStalenessAlert:
         real_import = builtins.__import__
 
         def _raising_import(name, *args, **kwargs):
-            if name == "gui.help_content":
+            if name == "shared.help_content":
                 raise ImportError("simulated import failure")
             return real_import(name, *args, **kwargs)
 

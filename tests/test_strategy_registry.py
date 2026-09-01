@@ -2,7 +2,7 @@
 
 Exercises ``gui/strategy_registry.py``. The mode-toggle test never touches
 the real .env: it monkey-patches ``settings.ALPACA_PAPER`` / ``settings.DRY_RUN``
-on a copied object, and stubs ``gui.env_io.write_setting`` so writes are
+on a copied object, and stubs ``shared.env_io.write_setting`` so writes are
 captured in a dict.
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from gui import strategy_registry as sr
+from shared import strategy_registry as sr
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ class TestSetActiveMode:
         def fake_write(key: str, value, **_kw) -> None:
             written[key] = value
 
-        import env_io
+        import shared.env_io as env_io
         monkeypatch.setattr(env_io, "write_setting", fake_write)
 
         state = sr.set_active_mode(sr.ExecutionMode.LIVE)
@@ -138,7 +138,7 @@ class TestSetActiveMode:
 
     def test_simulation_writes_both_true(self, monkeypatch) -> None:
         written: dict[str, object] = {}
-        import env_io
+        import shared.env_io as env_io
         monkeypatch.setattr(env_io, "write_setting",
                             lambda k, v, **_kw: written.setdefault(k, v))
         state = sr.set_active_mode("simulation")

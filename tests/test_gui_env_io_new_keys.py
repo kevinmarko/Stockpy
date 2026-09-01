@@ -41,8 +41,8 @@ from __future__ import annotations
 
 import pytest
 
-import env_io
-from gui.env_io import ALLOWED_KEYS, SECRET_KEYS, DisallowedKeyError, SecretWriteError
+import shared.env_io as env_io
+from shared.env_io import ALLOWED_KEYS, SECRET_KEYS, DisallowedKeyError, SecretWriteError
 
 # key -> (value to write, expected .env-encoded string)
 NEW_KEYS: dict[str, tuple[object, str]] = {
@@ -111,7 +111,7 @@ def test_daemon_shutdown_timeout_has_a_settings_manager_widget():
     """Per this codebase's convention (CLAUDE.md's gui/env_io.py bullet):
     never add a GUI-writable setting without both ALLOWED_KEYS AND a
     _SETTINGS_LAYOUT widget."""
-    from gui.panels.settings_manager import _SETTINGS_LAYOUT
+    from legacy.streamlit_command_center.panels.settings_manager import _SETTINGS_LAYOUT
 
     layout = dict(_SETTINGS_LAYOUT)
     assert "DAEMON_SHUTDOWN_TIMEOUT_SECONDS" in layout
@@ -125,7 +125,7 @@ def test_daemon_shutdown_timeout_widget_bounds_match_the_real_validator():
     write successfully to .env, then fail Settings() construction on the
     daemon's next launch, potentially locking the operator out of this very
     UI needing to fix it."""
-    from gui.panels.settings_manager import _NUMBER_BOUNDS
+    from legacy.streamlit_command_center.panels.settings_manager import _NUMBER_BOUNDS
     from settings import (
         DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
         DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,

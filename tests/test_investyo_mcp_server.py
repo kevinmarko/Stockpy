@@ -135,7 +135,7 @@ Coverage
   subprocess but always with ``--tickers``). Mocked at the engine/store's
   OWN module path (imported locally inside each tool body).
 * ``update_universe_tickers`` routes ``.env`` writes through
-  ``gui.env_io.write_setting("DEFAULT_TICKERS", ...)`` — a guard test
+  ``shared.env_io.write_setting("DEFAULT_TICKERS", ...)`` — a guard test
   pins that an unrelated comment line SURVIVES the edit and the new
   ticker lands in the parsed ``DEFAULT_TICKERS``.
 * ``get_universe_status`` counts the real ``trades`` table (not a
@@ -154,7 +154,7 @@ Coverage
 * ``get_execution_queue``: missing file, empty (real) queue, a real
   builder-produced payload rendering correct columns, gate-reasons list
   joining, ``settings.OUTPUT_DIR`` (not cwd) resolution, and parity with
-  ``gui.robinhood_execution_panel.read_execution_queue`` on the same file.
+  ``shared.robinhood_execution_panel.read_execution_queue`` on the same file.
 * ``get_trade_journal``: symbol filter, win-rate/P&L summary.
 * ``configure_alerts`` / ``send_test_alert``: partial-update preserves
   existing config, event toggles, per-channel result rendering — also
@@ -1338,15 +1338,14 @@ class TestUpdateWatchRules:
 
 
 class TestUpdateUniverseTickers:
-    """``gui.env_io`` computes ``ENV_PATH`` from the repo root at import time,
+    """``shared.env_io`` computes ``ENV_PATH`` from the repo root at import time,
     NOT from the CWD -- ``monkeypatch.chdir()`` alone does not redirect it.
     Every test here must also redirect the module symbol directly, or it will
     silently read/write the real repo ``.env`` file instead of the fixture.
     """
 
     def _redirect_env(self, monkeypatch, tmp_path):
-        import env_io
-
+        import shared.env_io as env_io
         env_file = tmp_path / ".env"
         monkeypatch.setattr(env_io, "ENV_PATH", env_file)
         monkeypatch.chdir(tmp_path)
@@ -1416,7 +1415,7 @@ class TestUpdateUniverseTickers:
 
     def test_add_via_env_io_preserves_comments(self, monkeypatch, tmp_path):
         """Fixed contract: the write is routed through
-        ``gui.env_io.write_setting("DEFAULT_TICKERS", ...)`` (dotenv ``set_key``,
+        ``shared.env_io.write_setting("DEFAULT_TICKERS", ...)`` (dotenv ``set_key``,
         which edits in place) instead of rewriting the whole file line-by-line.
         This means unrelated lines -- crucially a comment -- SURVIVE the edit.
         """
@@ -3282,10 +3281,10 @@ class TestGetExecutionQueue:
         """Anti-drift guard (tests/test_state_snapshot_parity.py's pattern,
         applied to the two execution-queue readers): a real builder payload
         fed to BOTH the MCP tool and the GUI's read_execution_queue must
-        agree on the intent set. gui.robinhood_execution_panel.py already
+        agree on the intent set. shared.robinhood_execution_panel.py already
         reads this schema correctly -- it's the reference this fix matches."""
         from settings import settings
-        from gui.robinhood_execution_panel import read_execution_queue
+        from shared.robinhood_execution_panel import read_execution_queue
 
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
         payload = self._real_payload()
@@ -4727,8 +4726,7 @@ class TestPinRegistryPrompt:
         assert "custom.test.prompt" not in reg._pins
 
     def test_valid_version_sets_pin_and_writes_env(self, monkeypatch, tmp_path):
-        import env_io
-
+        import shared.env_io as env_io
         reg = _pr_make_registry(tmp_path)
         reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
         _pr_inject(monkeypatch, reg)
@@ -4750,8 +4748,7 @@ class TestPinRegistryPrompt:
         keys, that pre-encodes the value TWICE, writing a JSON string literal
         wrapping the real dict rather than the dict itself. This tool must
         pass the dict straight through instead."""
-        import env_io
-
+        import shared.env_io as env_io
         reg = _pr_make_registry(tmp_path)
         reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
         _pr_inject(monkeypatch, reg)
@@ -4768,8 +4765,7 @@ class TestPinRegistryPrompt:
         assert isinstance(captured["PROMPT_REGISTRY_PINS"], dict)
 
     def test_env_write_failure_degrades_to_in_memory_pin(self, monkeypatch, tmp_path):
-        import env_io
-
+        import shared.env_io as env_io
         reg = _pr_make_registry(tmp_path)
         reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
         _pr_inject(monkeypatch, reg)
@@ -4805,7 +4801,7 @@ class TestRollbackRegistryPrompt:
         assert "Cannot roll back" in result
 
     def test_rollback_success_writes_env(self, monkeypatch, tmp_path):
-        import env_io
+        import shared.env_io as env_io
         import time as _time
 
         reg = _pr_make_registry(tmp_path)

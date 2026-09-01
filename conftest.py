@@ -138,7 +138,7 @@ try:
     # Now the secret-string half: env_io.SECRET_KEYS intersected with real
     # Settings fields, filtered to string-typed ones (see the block comment
     # above for why both filters are needed).
-    import env_io as _env_io
+    import shared.env_io as _env_io
     _model_fields = type(settings).model_fields
     _SECRET_STR_FIELD_NAMES = tuple(
         name

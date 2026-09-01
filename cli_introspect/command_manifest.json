@@ -1,7 +1,9 @@
 {
-  "generated_at": "2026-09-01T05:53:28.377201+00:00",
-  "command_count": 18,
-  "dead_letters": [],
+  "generated_at": "2026-09-01T20:04:19.626555+00:00",
+  "command_count": 16,
+  "dead_letters": [
+    "export_notebooklm.py"
+  ],
   "commands": [
     {
       "name": "main.py",
@@ -119,29 +121,6 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": false
-        }
-      ],
-      "positionals": [],
-      "subcommands": []
-    },
-    {
-      "name": "app_shell.py",
-      "invocation": "python3 app_shell.py",
-      "aliases": [],
-      "description": "InvestYo native desktop supervisor (UI server + advisory engine loop).",
-      "options": [
-        {
-          "name": "--interval",
-          "aliases": [
-            "--interval"
-          ],
-          "description": "Advisory engine refresh cadence in seconds (default: 300).",
-          "default": 300,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": true
         }
       ],
       "positionals": [],
@@ -763,7 +742,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/fervent-elgamal-793c9c/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/investyo-command-center-cleanup-e9cd33/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -799,7 +778,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/fervent-elgamal-793c9c/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/investyo-command-center-cleanup-e9cd33/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -1061,15 +1040,6 @@
           "takes_value": true
         }
       ],
-      "positionals": [],
-      "subcommands": []
-    },
-    {
-      "name": "export_notebooklm.py",
-      "invocation": "python scripts/export_notebooklm.py",
-      "aliases": [],
-      "description": "Generate a NotebookLM export.",
-      "options": [],
       "positionals": [],
       "subcommands": []
     }

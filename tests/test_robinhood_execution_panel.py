@@ -17,7 +17,7 @@ import pytest
 
 from settings import settings
 
-from gui.robinhood_execution_panel import (
+from shared.robinhood_execution_panel import (
     EXECUTION_PLACED_PATH,
     EXECUTION_QUEUE_PATH,
     EXECUTION_RECEIPTS_PATH,
@@ -208,7 +208,7 @@ class TestReadExecutionQueue:
     def test_default_path_used_when_none_given(self, monkeypatch, tmp_path):
         fake_path = tmp_path / "execution_queue.json"
         _write_json(tmp_path, _sample_payload())
-        import gui.robinhood_execution_panel as mod
+        import shared.robinhood_execution_panel as mod
         monkeypatch.setattr(mod, "EXECUTION_QUEUE_PATH", fake_path)
         snap = read_execution_queue()
         assert snap is not None
@@ -368,7 +368,7 @@ class TestReadNotificationState:
                         "last_notified_priority": "default"}),
             encoding="utf-8",
         )
-        import gui.robinhood_execution_panel as mod
+        import shared.robinhood_execution_panel as mod
         monkeypatch.setattr(mod, "NOTIFIED_STATE_PATH", fake_path)
         assert read_notification_state() is not None
 
@@ -579,7 +579,7 @@ class TestReadPlacedLedger:
     def test_default_path_used_when_none_given(self, monkeypatch, tmp_path):
         fake = tmp_path / "execution_placed.jsonl"
         fake.write_text(json.dumps({"symbol": "AAPL"}), encoding="utf-8")
-        import gui.robinhood_execution_panel as mod
+        import shared.robinhood_execution_panel as mod
         monkeypatch.setattr(mod, "EXECUTION_PLACED_PATH", fake)
         assert read_placed_ledger() == [{"symbol": "AAPL"}]
 
@@ -648,22 +648,22 @@ class TestBuildReconciliationSummary:
 
 class TestHelpContentKeys:
     def test_section_help_keys_present(self):
-        from gui.help_content import SECTION_HELP
+        from shared.help_content import SECTION_HELP
         assert SECTION_HELP.get("robinhood_execution.intent_status")
         assert SECTION_HELP.get("robinhood_execution.reconciliation")
 
     def test_metric_help_keys_present(self):
-        from gui.help_content import metric_help
+        from shared.help_content import metric_help
         assert metric_help("robinhood_execution.placed_count")
         assert metric_help("robinhood_execution.matched")
         assert metric_help("robinhood_execution.unmatched")
 
     def test_unknown_metric_key_returns_empty_string(self):
-        from gui.help_content import metric_help
+        from shared.help_content import metric_help
         assert metric_help("robinhood_execution.does_not_exist") == ""
 
     def test_placed_count_help_cites_settings_notional_cap(self):
-        from gui.help_content import metric_help
+        from shared.help_content import metric_help
         from settings import settings
         text = metric_help("robinhood_execution.placed_count")
         assert f"{settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER:,.2f}" in text
@@ -681,6 +681,6 @@ class TestPlacedLedgerPathConvention:
 
 class TestPanelWiring:
     def test_launcher_references_robinhood_execution_status(self):
-        source = Path("gui/panels/launcher.py").read_text(encoding="utf-8")
+        source = Path("legacy/streamlit_command_center/panels/launcher.py").read_text(encoding="utf-8")
         assert "_render_robinhood_execution_status" in source
-        assert "gui.robinhood_execution_panel" in source
+        assert "shared.robinhood_execution_panel" in source

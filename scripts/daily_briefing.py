@@ -196,7 +196,7 @@ def _section_delta(output_dir: Path) -> str:
 def _section_dead_letters(output_dir: Path) -> str:
     """Symbols that failed in the last pipeline run."""
     try:
-        from gui.dead_letter import read_dead_letter
+        from shared.dead_letter import read_dead_letter
 
         report = read_dead_letter(output_dir / "dead_letter.json")
     except Exception as exc:

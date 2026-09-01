@@ -344,7 +344,7 @@ class TestKeyRotationCheck:
 
     def test_fred_key_rotated_date_is_not_secret(self):
         """FRED_KEY_ROTATED_DATE is a date string, not a credential — not in SECRET_KEYS."""
-        from gui.env_io import SECRET_KEYS
+        from shared.env_io import SECRET_KEYS
         assert "FRED_KEY_ROTATED_DATE" not in SECRET_KEYS
 
 
@@ -428,7 +428,7 @@ class TestWatchlistQuickAdd:
     def test_render_live_inventory_defines_add_button(self):
         """Source guard: render_live_inventory must reference the watchlist add button."""
         import inspect
-        from gui import panels
+        from legacy.streamlit_command_center import panels
         src = inspect.getsource(panels.render_live_inventory)
         assert "watchlist_add_btn" in src or "Add to watchlist" in src
         assert "watchlist.txt" in src
@@ -436,7 +436,7 @@ class TestWatchlistQuickAdd:
     def test_write_to_file_not_env(self):
         """The quick-add must write to watchlist.txt, never to .env."""
         import inspect
-        from gui import panels
+        from legacy.streamlit_command_center import panels
         src = inspect.getsource(panels.render_live_inventory)
         # Must reference watchlist.txt
         assert "watchlist.txt" in src

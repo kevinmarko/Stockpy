@@ -1,14 +1,14 @@
 """tests/test_engine_supervisor.py
 ===================================
 Pins the exact call contract of ``desktop/engine_supervisor.py`` — a thin
-pass-through wrapper over ``gui.orchestrator_runner``'s already-tested
+pass-through wrapper over ``shared.orchestrator_runner``'s already-tested
 ``launch_scheduled_advisory`` / ``stop_run`` functions (WS3 of the
 always-on-desktop-app unification), OR, behind
 ``settings.ORCHESTRATOR_DAEMON_ENABLED``, ``launch_daemon_engine`` (see
 tests/test_orchestrator_runner_daemon_cutover.py for that branch's own
 dedicated coverage).
 
-These tests monkeypatch the underlying ``gui.orchestrator_runner`` functions
+These tests monkeypatch the underlying ``shared.orchestrator_runner`` functions
 so they exercise only the wrapper's argument-mapping and pass-through
 behavior, never the real subprocess machinery.
 
@@ -25,12 +25,12 @@ tests/test_orchestrator_runner_daemon_cutover.py.
 
 from __future__ import annotations
 
-import gui.orchestrator_runner as orchestrator_runner
-from desktop.engine_supervisor import start_engine, stop_engine
+import shared.orchestrator_runner as orchestrator_runner
+from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine, stop_engine
 
 
 class _SentinelHandle:
-    """Stand-in for gui.orchestrator_runner.RunHandle."""
+    """Stand-in for shared.orchestrator_runner.RunHandle."""
 
 
 def test_start_engine_default_maps_to_launch_scheduled_advisory(monkeypatch):

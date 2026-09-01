@@ -10,7 +10,7 @@ PARITY of the duplicated ``_resolve_effective_weights`` / ``_MAX_WEIGHT`` agains
 the real ``signals.aggregator`` originals (tests are NOT AST-guarded, so importing
 ``signals`` here is fine); per-module ``version_hash``/``last_modified`` (backlog
 item #13a's inline sha256+mtime fingerprint, deliberately independent of
-``gui.strategy_registry``); and a dependency-light ALLOWLIST guard over
+``shared.strategy_registry``); and a dependency-light ALLOWLIST guard over
 ``pilots/strategy_matrix.py``, ``pilots/options.py``, and
 ``pilots/strategy_health.py`` (each promises a narrow, specific import surface —
 see the guard test's own docstring for why ``import signals`` on the API import
@@ -402,8 +402,8 @@ _PILOTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "pilots"
 #   - brinson.py        -> evaluation_engine (lazy) -- explicitly to avoid
 #                           pulling in report_viewer.py -> streamlit
 #   - calibration.py    -> evaluation_engine, transactions_store,
-#                           gui.decision_log, pandas, data.historical_store
-#   - models.py         -> gui.help_content, ml.registry_io, yaml
+#                           shared.decision_log, pandas, data.historical_store
+#   - models.py         -> shared.help_content, ml.registry_io, yaml
 #   - observability.py  -> evaluation_engine, gui.*, forecasting.forecast_tracker,
 #                           db_config, market_data_latency (heaviest — ~10
 #                           distinct guarded lazy imports)
@@ -465,7 +465,7 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     allowed = {"__future__", "json", "logging", "math", "pathlib", "typing", "settings"}
     if module_name == "strategy_matrix":
         # Backlog item #13a's inline sha256+mtime version fingerprint —
-        # stdlib only, deliberately NOT gui.strategy_registry (see this
+        # stdlib only, deliberately NOT shared.strategy_registry (see this
         # module's docstring for the ~700-module import trap that avoids).
         allowed = allowed | {"hashlib", "datetime"}
     if module_name == "strategy_health":

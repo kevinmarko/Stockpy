@@ -1,7 +1,7 @@
 """Tests for GET /execution-queue — the read-only Robinhood execution-queue
 surface added to api/pilots_api.py.
 
-This endpoint reuses gui.robinhood_execution_panel.read_execution_queue (the
+This endpoint reuses shared.robinhood_execution_panel.read_execution_queue (the
 existing, dead-letter-tolerant reader the Streamlit Launcher tab already uses)
 rather than re-parsing output/execution_queue.json. It never contacts the
 Robinhood MCP and never places an order — per execution/queue_builder.py's
@@ -17,7 +17,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from settings import settings
-import gui.robinhood_execution_panel as execution_panel
+import shared.robinhood_execution_panel as execution_panel
 import api.pilots_api as pilots_api
 
 # Starlette's TestClient defaults request.client.host to the literal

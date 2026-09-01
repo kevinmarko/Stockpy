@@ -79,7 +79,7 @@ any DTO-bypass in calc code.
 - **Secret handling in logs:** confirm credentials/tokens are never logged (only key
   *names*/lengths per `gui/env_io.py` convention), and DSNs never log the full URL
   (`db_config.py` logs backend name only).
-- **GUI env-write safety:** any `.env` write must route through `gui.env_io`
+- **GUI env-write safety:** any `.env` write must route through `shared.env_io`
   (`ALLOWED_KEYS` allowlist + `SECRET_KEYS` denylist). A new GUI-writable setting
   that is a credential is a CRITICAL finding.
 
@@ -241,7 +241,7 @@ These are **deliberate, documented** decisions — do not report them as defects
 - **Lazy imports** to break `HistoricalStore`/engine circular dependencies.
 - **DTO boundary:** raw dicts never enter calculation code.
 - **Secrets** flow only through `os.environ`/`settings`; GUI writes only through the
-  `gui.env_io` allowlist.
+  `shared.env_io` allowlist.
 - **`.db` files are per-machine runtime state**, gitignored, never committed.
 
 When in doubt, consult `CLAUDE.md` (the single source of architectural truth) and

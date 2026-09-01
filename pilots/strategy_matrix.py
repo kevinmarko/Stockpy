@@ -37,7 +37,7 @@ here) and PINNED against the originals by ``tests/test_pilots_strategy_matrix.py
 item #13a)** — a sha256-prefix fingerprint + file mtime for each module's
 ``signals/<name>.py`` file, read directly off disk (``hashlib`` + ``pathlib``
 only, no import of the ``signals`` package). This deliberately does NOT reuse
-``gui.strategy_registry.list_strategy_versions`` — that function's default
+``shared.strategy_registry.list_strategy_versions`` — that function's default
 code path does ``from signals.registry import global_registry`` / ``import
 signals`` to enumerate the live registry, which is exactly the ~700-module
 trap this module's docstring (above) warns about. The fingerprint format

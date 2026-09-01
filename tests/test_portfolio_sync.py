@@ -32,7 +32,7 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Test doubles — minimal stand-ins for AccountSnapshot, RobinhoodClient,
-# CompositeProvider, and the gui.env_io.write_setting side-effect.
+# CompositeProvider, and the shared.env_io.write_setting side-effect.
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ def test_build_sync_report_happy_path(monkeypatch):
     # + the one fake RH watchlist below) -- it must NOT also pick up whatever
     # real file(s) an operator's own .env happens to point SYNC_WATCHLIST_FILES
     # at (e.g. a real, populated `watchlist.txt` sitting at the repo root when
-    # pytest is invoked from there). Neither a bool nor a `gui.env_io.
+    # pytest is invoked from there). Neither a bool nor a `shared.env_io.
     # SECRET_KEYS` member, so conftest.py's blanket per-test reset does not
     # cover it -- pin it explicitly, matching this file's other
     # SYNC_WATCHLIST_FILES-aware tests below.
@@ -468,10 +468,10 @@ def test_universe_dedup_and_sort(monkeypatch):
 
 
 def test_async_sync_now_dry_run_skips_env_write(monkeypatch, tmp_path):
-    """``persist_default_tickers=False`` must NOT touch gui.env_io."""
+    """``persist_default_tickers=False`` must NOT touch shared.env_io."""
     import data.market_data as md
     from data import portfolio_sync as ps
-    import env_io
+    import shared.env_io as env_io
     from settings import settings
 
     # See test_build_sync_report_happy_path's comment above -- pin so a real
@@ -512,7 +512,7 @@ def test_async_sync_now_persist_swallows_env_io_failure(monkeypatch, tmp_path):
     """A failing env_io.write_setting must NOT propagate (CONSTRAINT #6)."""
     import data.market_data as md
     from data import portfolio_sync as ps
-    import env_io
+    import shared.env_io as env_io
     from settings import settings
 
     # See test_build_sync_report_happy_path's comment above.

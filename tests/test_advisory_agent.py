@@ -75,7 +75,7 @@ class _Rec:
 
 @dataclass
 class _DecisionEntry:
-    """Duck-typed gui.decision_log.DecisionEntry."""
+    """Duck-typed shared.decision_log.DecisionEntry."""
     symbol: str
     action_taken: str
     timestamp: str  # ISO-8601 UTC

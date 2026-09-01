@@ -284,8 +284,18 @@ jobs:
           # ruff step in the `test` job above, not a full-ruleset gate).
           # Excludes tests/ (test fixtures deliberately exercise unsafe
           # patterns to prove a guard rejects them -- see
-          # tests/test_security_audit_fixes.py) and webapp/ (TypeScript,
-          # out of Bandit's scope; covered by the `webapp` job instead).
+          # tests/test_security_audit_fixes.py), webapp/ (TypeScript,
+          # out of Bandit's scope; covered by the `webapp` job instead),
+          # and legacy/ (was ./gui before the gui/ -> legacy/streamlit_
+          # command_center/ archive move -- the frozen, decommissioned
+          # Streamlit Command Center; see CLAUDE.md's "Frontend strategy"
+          # section. Verified this exclusion is load-bearing, not just
+          # inherited: scanning legacy/ on its own surfaces a real B608
+          # "possible SQL injection" finding in panels/observability.py
+          # that is a confirmed false positive -- a `?`-placeholder count
+          # string, never untrusted data, interpolated alongside real
+          # parameterized bind params -- which would otherwise trip this
+          # step's EXIT-CODE-BLOCKING gate on every run).
           # Every finding Bandit's medium+/medium+ baseline surfaced as of
           # this workflow's introduction was triaged and is either a
           # confirmed false positive (documented inline via `# nosec BXXX`
@@ -296,7 +306,7 @@ jobs:
           # llm/research_copilot.py) -- so this step starts EXIT-CODE
           # BLOCKING (a fresh unreviewed finding fails the build), not
           # report-only.
-          python -m bandit -r . -x './tests,./webapp,./.venv,./node_modules,./gui' -ll -ii
+          python -m bandit -r . -x './tests,./webapp,./.venv,./node_modules,./legacy' -ll -ii
 
   security:
     name: security (pip-audit)

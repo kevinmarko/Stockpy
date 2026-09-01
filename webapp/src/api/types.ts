@@ -572,7 +572,7 @@ export interface Thresholds {
   /** Live settings.AGENTIC_MAX_CANDIDATES — cap on GET /agentic/discovery's candidate list. */
   agentic_max_candidates: number;
   /**
-   * Live gui.help_content.MODEL_RETRAIN_WINDOW_DAYS — the same constant
+   * Live shared.help_content.MODEL_RETRAIN_WINDOW_DAYS — the same constant
    * ml.meta_labeling.MetaLabeler.needs_retrain() uses. Display-text only: the
    * Models screen's per-model `needs_retrain`/`age_days` flag (GET /models)
    * is already computed server-side against this same constant — this key
@@ -1252,7 +1252,7 @@ export interface RollingBeta {
  *
  * `age_days`/`needs_retrain` (webapp porting backlog rider 13b) are computed
  * server-side in `pilots/models.py` against the SAME
- * `gui.help_content.MODEL_RETRAIN_WINDOW_DAYS` constant `GET /thresholds`'
+ * `shared.help_content.MODEL_RETRAIN_WINDOW_DAYS` constant `GET /thresholds`'
  * `retrain_window_days` surfaces for display text — never re-derive the flag
  * client-side from `trained_date` date math. Both are `null` when
  * `trained_date` itself is null/unparseable (CONSTRAINT #4: no fabricated
@@ -2576,7 +2576,7 @@ export interface SizingCapAuditTrail {
 
 /**
  * One symbol's ETF volatility-transmission telemetry (Ben-David, Franzoni &
- * Moussawi 2018) -- mirrors `gui.observability_panel_helpers
+ * Moussawi 2018) -- mirrors `shared.observability_panel_helpers
  * .etf_transmission_rows`'s output shape exactly (that pure helper is reused
  * server-side, not reimplemented).
  */
@@ -2611,7 +2611,7 @@ export interface EtfTransmissionSummary {
  * GET /observability/summary's `heartbeat` key -- the CURRENT orchestrator
  * heartbeat age (seconds since `output/heartbeat.txt` was last written by
  * `main_orchestrator.py`'s async heartbeat task) + a freshness label
- * (`gui.observability_panel_helpers.heartbeat_status`).
+ * (`shared.observability_panel_helpers.heartbeat_status`).
  *
  * Deliberately carries NO trend/history: the legacy Streamlit "Heartbeat Age
  * Trend" sparkline is a 60-sample ring buffer held only in

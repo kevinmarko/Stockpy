@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 #       UP from the calling file's directory to filesystem root — in a git
 #       worktree with no `.env` of its own, this silently finds a PARENT
 #       checkout's `.env` instead;
-#   (3) gui/env_io.py and data/brokerage_credentials.py, which each
+#   (3) shared/env_io.py and data/brokerage_credentials.py, which each
 #       independently re-derived a repo-root-anchored path.
 # Anchoring all three to this one constant makes `.env` resolution identical
 # regardless of CWD or worktree, and makes it impossible for a stray
@@ -521,7 +521,7 @@ class Settings(BaseSettings):
             "an auth flow. False (default) preserves today's exact bearer-only "
             "behavior — mcp_oauth_provider.py is never imported. Carries no "
             "secret material, so per the 2026-08-08 operator decision (see "
-            "gui/env_io.py's ALLOWED_KEYS) it is GUI-writable; it decides "
+            "shared/env_io.py's ALLOWED_KEYS) it is GUI-writable; it decides "
             "which authorization-server endpoints (/register, /authorize, "
             "/token, /revoke) are live on the streamable-http transport, a "
             "bigger risk than an ordinary GUI-writable tunable, so it is also "
@@ -608,7 +608,7 @@ class Settings(BaseSettings):
             "ORCHESTRATOR_DAEMON_TOKEN guard already protecting POST /jobs. "
             "False (default) preserves today's compose-only behavior. Carries "
             "no secret material, so per the 2026-08-08 operator decision (see "
-            "gui/env_io.py's ALLOWED_KEYS) it is GUI-writable; it gates "
+            "shared/env_io.py's ALLOWED_KEYS) it is GUI-writable; it gates "
             "execution of the global kill switch, a forced Robinhood re-login, "
             "and arbitrary flags to the orchestrators, a materially bigger "
             "risk than the fixed 7-job-type dispatch JOBS_API_ENABLED alone "
@@ -2642,13 +2642,13 @@ class Settings(BaseSettings):
     # daemon_runtime.py + desktop/orchestrator_daemon.py + api/control_api.py).
     # False (the default) preserves today's exact behavior everywhere: the
     # desktop shell's always-on refresh loop spawns `main.py --interval N`
-    # (gui.orchestrator_runner.launch_scheduled_advisory), and the Launcher
+    # (shared.orchestrator_runner.launch_scheduled_advisory), and the Launcher
     # tab's manual "Run Pipeline" button spawns a fresh
     # `main_orchestrator.py` subprocess per click. True switches BOTH to the
     # warm daemon: desktop/engine_supervisor.start_engine spawns
     # `python -m desktop.orchestrator_daemon --interval N` instead (still a
     # supervised subprocess -- the warm-engine benefit is entirely internal
-    # to that process), and gui.orchestrator_runner.launch_orchestrator()
+    # to that process), and shared.orchestrator_runner.launch_orchestrator()
     # triggers a cycle over the Control API (gui/daemon_client.py) against
     # an already-running daemon instead of spawning a new process, falling
     # back to the old subprocess path if the daemon is unreachable.
@@ -3869,7 +3869,7 @@ class Settings(BaseSettings):
     # see data/brokerage_credentials.py). Default False: credential intake over
     # HTTP is a deliberate departure from this project's normal hand-edit-.env
     # posture, so it must be explicitly opted into. GUI-writable (added to
-    # gui/env_io.py's ALLOWED_KEYS by operator decision) — the endpoints remain
+    # shared/env_io.py's ALLOWED_KEYS by operator decision) — the endpoints remain
     # gated by TWO further independent checks: FOLLOW_API_TOKEN (fail-closed
     # command token, reused from the follow write-path) and a loopback-only
     # check, so flipping this flag alone is not sufficient to enable intake.
@@ -3884,7 +3884,7 @@ class Settings(BaseSettings):
     # Master switch for the Pilots API's Data & Automation WRITE endpoints
     # (api/pilots_api.py PUT /automation/schedule/interval, POST /automation/resume
     # — see the Data & Automation plan). Default False. GUI-writable (added to
-    # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
+    # shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor) — the endpoint remains
     # gated by FOLLOW_API_TOKEN independently of this flag. Deliberately
@@ -3912,7 +3912,7 @@ class Settings(BaseSettings):
     # set -> .env). A DEDICATED flag, not AUTOMATION_WRITES_ENABLED: that flag was
     # scoped to the daemon interval and kill-switch resume; signal-weight tuning
     # changes WHAT THE PLATFORM RECOMMENDS and must not ride in on it. Default
-    # False. GUI-writable (added to gui/env_io.py's ALLOWED_KEYS 2026-08-08 by
+    # False. GUI-writable (added to shared/env_io.py's ALLOWED_KEYS 2026-08-08 by
     # operator decision — carries no secret material; also a
     # settings_keysets.DANGEROUS_KEYS member, requiring typed confirmation on
     # write regardless of editor), and also requires FOLLOW_API_TOKEN.
@@ -3935,7 +3935,7 @@ class Settings(BaseSettings):
     # resume and to signal-weight tuning respectively — flipping an AI capability
     # (which provider narrates a rationale, whether the Gravity AI runner or Opal
     # research agent can fire) is its own risk class and must not ride in on
-    # either. Default False. GUI-writable (added to gui/env_io.py's ALLOWED_KEYS
+    # either. Default False. GUI-writable (added to shared/env_io.py's ALLOWED_KEYS
     # 2026-08-08 by operator decision — carries no secret material; also a
     # settings_keysets.DANGEROUS_KEYS member, requiring typed confirmation on
     # write regardless of editor), and also requires FOLLOW_API_TOKEN.
@@ -3958,7 +3958,7 @@ class Settings(BaseSettings):
     # not AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED: this
     # changes WHAT THE AGENT DISCOVERS (which symbols get scanned and fed toward the
     # gated order queue), its own risk class, and must not ride in on any of those.
-    # Default False; GUI-writable (added to gui/env_io.py's ALLOWED_KEYS by operator
+    # Default False; GUI-writable (added to shared/env_io.py's ALLOWED_KEYS by operator
     # decision) — the endpoint remains gated by FOLLOW_API_TOKEN independently of
     # this flag. GET /agentic/status and GET /agentic/discovery are read-only
     # and NOT gated by this flag (require_read_token alone, matching GET
@@ -3984,7 +3984,7 @@ class Settings(BaseSettings):
     # scanned or which LLM narrates) and must not ride in on any of those.
     # Mirrors AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
     # LLM_WRITES_ENABLED exactly: default True. GUI-writable (added to
-    # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
+    # shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor), and also requires
     # FOLLOW_API_TOKEN. GET /settings/tunables is read-only and NOT gated by
@@ -4064,7 +4064,7 @@ class Settings(BaseSettings):
     # Opal calls the instant an operator turns on the Streamlit-side capability
     # flag for their own desktop use. Default False: nothing is remotely
     # triggerable until this is explicitly, separately opted into. GUI-writable
-    # (added to gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision —
+    # (added to shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision —
     # carries no secret material; also a settings_keysets.DANGEROUS_KEYS
     # member, requiring typed confirmation on write regardless of editor).
     # Turning it back to False (and restarting the data API process)
@@ -4091,7 +4091,7 @@ class Settings(BaseSettings):
     # call, via llm/router.py::get_rationale_provider, reachable over an API
     # gated only by require_command_token otherwise), so it gets the same
     # fail-closed treatment: off by default. GUI-writable (added to
-    # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
+    # shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor).
     RAG_QUERY_API_ENABLED: bool = Field(
@@ -4115,7 +4115,7 @@ class Settings(BaseSettings):
     # own risk class, must not ride in on any sibling flag. Mirrors
     # GENERAL_SETTINGS_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
     # LLM_WRITES_ENABLED exactly: default True. GUI-writable (added to
-    # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
+    # shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor), and also requires
     # FOLLOW_API_TOKEN. Note MACRO_REGIME_GATE_ENABLED itself (the key this
@@ -4151,7 +4151,7 @@ class Settings(BaseSettings):
     # AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED /
     # GENERAL_SETTINGS_WRITES_ENABLED /
     # MACRO_GATE_WRITES_ENABLED exactly: default True. GUI-writable (added to
-    # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
+    # shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor), and also requires
     # FOLLOW_API_TOKEN and the same loopback-only check as /brokerage/connect
@@ -4973,7 +4973,7 @@ class Settings(BaseSettings):
     )
     # Master switch for the Pilots API's dead-letter retry endpoint
     # (api/pilots_api.py POST /dead-letter/retry -- spawns a real single-symbol
-    # `main.py` subprocess via gui.orchestrator_runner.launch_symbol_retry, the
+    # `main.py` subprocess via shared.orchestrator_runner.launch_symbol_retry, the
     # SAME launcher the Streamlit Launcher tab's dead-letter Retry button
     # already calls). A DEDICATED flag, per this codebase's established
     # pattern (see BROKERAGE_REFRESH_ENABLED /
@@ -4981,7 +4981,7 @@ class Settings(BaseSettings):
     # write with a real persistence/subprocess/network cost gets its OWN
     # flag, never rides in on an unrelated one (e.g. AUTOMATION_WRITES_ENABLED,
     # which is scoped to the daemon interval and kill-switch resume). Default
-    # False. GUI-writable (added to gui/env_io.py's ALLOWED_KEYS 2026-08-08 by
+    # False. GUI-writable (added to shared/env_io.py's ALLOWED_KEYS 2026-08-08 by
     # operator decision — carries no secret material, so it's not in
     # SECRET_KEYS either; also a settings_keysets.DANGEROUS_KEYS member,
     # requiring typed confirmation on write regardless of editor), and also
@@ -5006,7 +5006,7 @@ class Settings(BaseSettings):
     # SKILL.md §1's "fail-closed command + dedicated master flag" tier).
     # Both default to False (today's exact behavior — neither endpoint exists
     # in a reachable form until explicitly enabled). PROMPT_REGISTRY_WRITES_ENABLED
-    # is GUI-writable (added to gui/env_io.py's ALLOWED_KEYS 2026-08-08 by
+    # is GUI-writable (added to shared/env_io.py's ALLOWED_KEYS 2026-08-08 by
     # operator decision — carries no secret material, so it's not in
     # SECRET_KEYS either; also a settings_keysets.DANGEROUS_KEYS member,
     # requiring typed confirmation on write regardless of editor), exactly
@@ -5039,7 +5039,7 @@ class Settings(BaseSettings):
             "read plus a DEFAULT_TICKERS .env write). A DEDICATED flag: this is a "
             "real broker call with a real .env side effect, a materially different "
             "risk from every fail-open GET on this API. GUI-writable (added to "
-            "gui/env_io.py's ALLOWED_KEYS by operator decision) -- the endpoint "
+            "shared/env_io.py's ALLOWED_KEYS by operator decision) -- the endpoint "
             "remains gated by the STATE_API_TOKEN command-token guard below "
             "independently of this flag. `GET /data/sync-report` "
             "remains read-only and NOT gated by this flag. Sits behind the "
@@ -5126,7 +5126,7 @@ class Settings(BaseSettings):
     # meta-labeler model artifacts (ml/models/meta_*.pkl) feeding the live
     # meta_label_composite score -- a materially heavier and more
     # consequential action than an ordinary config-toggle write. GUI-writable
-    # (gui/env_io.py's ALLOWED_KEYS) like every other non-secret tunable, per
+    # (shared/env_io.py's ALLOWED_KEYS) like every other non-secret tunable, per
     # explicit operator decision, but also a settings_keysets.DANGEROUS_KEYS
     # member (SAFETY_CRITICAL_KEY_REASONS), requiring typed confirmation on
     # write regardless of editor -- the same treatment as the other
@@ -5301,7 +5301,7 @@ class Settings(BaseSettings):
         "or marks a TLH recommendation approved. Its own risk class, must not "
         "ride in on AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED (this "
         "changes what a trading strategy recommends). GUI-writable (added to "
-        "gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision -- carries "
+        "shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision -- carries "
         "no secret material; also a settings_keysets.DANGEROUS_KEYS member, "
         "requiring typed confirmation on write regardless of editor). The "
         "POST /pilots/cache-long-short/* endpoints it guards remain "

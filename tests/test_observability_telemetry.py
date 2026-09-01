@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from gui import observability_telemetry as ot
+from shared import observability_telemetry as ot
 
 
 # ===========================================================================

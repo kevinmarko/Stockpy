@@ -53,7 +53,8 @@ but are no longer the primary day-to-day path:
 
 **To change the interval**: open `launch.command` in any text editor, set
 `REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run). `launch_app.command`'s
-background refresh loop is controlled the same way via `app_shell.py --interval N`.
+background refresh loop is controlled the same way via
+`python -m legacy.streamlit_command_center.app_shell --interval N`.
 
 **If `.venv` is missing** (e.g., fresh clone):
 
@@ -69,7 +70,7 @@ Then double-click `launch_app.command` again.
 and how to recreate `.venv` with Python 3.12.
 
 **Still prefer a browser-tab control panel?** Double-click **`launch_gui.command`** (or run
-`streamlit run gui/app.py`) to open the **Command Center** — an 18-tab GUI that launches
+`streamlit run legacy/streamlit_command_center/app.py`) to open the **Command Center** — an 18-tab GUI that launches
 the pipeline, shows live stage status, edits non-secret `.env` tunables (secrets stay
 masked/read-only), toggles signal modules and the pause gate (kill switch), and surfaces
 the Gravity audit. The GUI is read-only / file-backed: it launches `main_orchestrator.py`
@@ -122,8 +123,9 @@ The **Reports tab** includes:
 ### 0.1 Migrating to Webapp-Only (recommended)
 
 Per `CLAUDE.md`'s "Frontend strategy" section, the Pilots PWA (`webapp/`) is now the
-platform's one actively-developed frontend; `gui/`, `app_shell.py`/`desktop/`'s native-shell
-modules, and their launchers (`launch_app.command`, `launch_gui.command`) are frozen/legacy —
+platform's one actively-developed frontend; `legacy/streamlit_command_center/` (the former
+`gui/`, `app_shell.py`, and `desktop/`'s native-shell modules), and their launchers
+(`launch_app.command`, `launch_gui.command`) are frozen/legacy —
 still runnable, but getting no new tabs, panels, or capability. Everything above in §0
 describes that legacy desktop-app startup path, kept accurate for existing setups. This
 subsection is the operator sequence for retiring day-to-day reliance on it in favor of the
@@ -587,7 +589,7 @@ file, correctly reported as "missing" for a key that was only ever set in the *r
 `.env`. Fixed: `settings.ENV_PATH` (`Path(__file__).resolve().parent / ".env"`, anchored
 at `settings.py`'s own location, not the process CWD or a directory walk) is now the
 single anchor every `.env` locator in the codebase imports — `main.py`,
-`main_orchestrator.py`, `app_shell.py`, `desktop/orchestrator_daemon.py`, all five
+`main_orchestrator.py`, `legacy/streamlit_command_center/app_shell.py`, `desktop/orchestrator_daemon.py`, all five
 standalone `api/*.py` FastAPI services, and every `scripts/*.py` entry point (via the new
 `scripts/_bootstrap.py::bootstrap()` — see §3.5c below) all pass `ENV_PATH` explicitly.
 
@@ -854,7 +856,7 @@ routinely SIGKILLing it mid-teardown as happened before this fix. The ladder:
 |---|---|---|---|
 | 0 | An in-flight pipeline cycle | unbounded — never waited out | unbounded — never waited out |
 | 1 | Daemon `_teardown()` (`desktop/orchestrator_daemon.py`) | n/a | `DAEMON_SHUTDOWN_TIMEOUT_SECONDS` = 25s |
-| 2 | `stop_engine`/`stop_run` (`desktop/engine_supervisor.py`) | 5s (unchanged) | ~30s (= 25 + 5s grace) |
+| 2 | `stop_engine`/`stop_run` (`legacy/streamlit_command_center/desktop_shell/engine_supervisor.py`) | 5s (unchanged) | ~30s (= 25 + 5s grace) |
 | 3 | `launch_app.command`'s previous-instance replace | `SHUTDOWN_GRACE_SECONDS` = 40s | 40s |
 
 **Why an in-flight cycle is never waited out**: a full pipeline cycle can take minutes, and
@@ -1157,7 +1159,7 @@ When a data source (Alpaca market data, Finnhub, FRED, Robinhood) is reporting e
 - **Fallback Behavior**: When FMP is unavailable, `CompositeProvider` transparently falls back to Alpaca/yfinance for quotes and Yahoo for fundamentals (if `FMP_FALLBACK_ENABLED=true`).
 - **What to Check**: If data is stale or missing, check `$LOCAL_DATA_ROOT/logs/investyo.log` for warnings naming FMP fallbacks. Confirm `FMP_API_KEY` is set and valid.
 
-1. Open Safety tab → Dependency Map (`gui/dependency_map.py`).
+1. Open Safety tab → Dependency Map (`shared/dependency_map.py`).
 2. Multi-select the degraded sources.
 3. Read the impacted-consumers table — this is the authoritative list of
    strategies/tabs/reports that lose coverage right now.
@@ -1176,7 +1178,7 @@ broker surface quarantined:
 
 1. **Orchestrator** — `main_orchestrator._execute_broker_orders` returns immediately with
    an INFO log before any broker import is reached.
-2. **GUI** — `gui/app.py` renders a persistent `📋 ADVISORY MODE` banner; the Strategy
+2. **GUI** — `legacy/streamlit_command_center/app.py` renders a persistent `📋 ADVISORY MODE` banner; the Strategy
    Matrix mode toggle (Simulation / Paper / Live) is suppressed.
 3. **Preflight** — eight broker-dependent / advisory-false-positive checks auto-skip;
    `advisory_only_active` check is PASS-loud (and PASS-with-warning when
@@ -1465,7 +1467,7 @@ python -m prompt_registry rollback <prompt_id>
 python -m prompt_registry list         # source should now show "pin"
 
 # Step 4: Persist the pin to .env so it survives restarts
-#   The rollback command does this automatically via gui/env_io.
+#   The rollback command does this automatically via shared/env_io.
 #   Verify:
 grep PROMPT_REGISTRY_PINS .env
 

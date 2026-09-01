@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from gui.dead_letter import (
+from shared.dead_letter import (
     DEAD_LETTER_PATH,
     DeadLetterEntry,
     DeadLetterReport,

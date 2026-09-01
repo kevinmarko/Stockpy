@@ -20,12 +20,12 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from gui.help_content import (
+from shared.help_content import (
     MODEL_RETRAIN_WINDOW_DAYS,
     get_glossary,
     metric_help,
 )
-from gui.panels import analytics
+from legacy.streamlit_command_center.panels import analytics
 
 
 # ── _days_since ──────────────────────────────────────────────────────────────

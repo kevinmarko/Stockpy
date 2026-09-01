@@ -20,9 +20,7 @@ import json
 import pytest
 
 import settings as settings_module
-import env_io
-
-
+import shared.env_io as env_io
 @pytest.fixture()
 def temp_env(tmp_path, monkeypatch):
     """Point env_io at an isolated temp .env seeded with a comment + secret."""
@@ -157,7 +155,7 @@ def test_every_settings_field_is_classified():
     classified = set(env_io.ALLOWED_KEYS) | set(env_io.SECRET_KEYS) | env_io.EXCLUDED_FROM_GUI
     missing = fields - classified
     assert not missing, (
-        f"settings.py field(s) not classified in gui/env_io.py: {sorted(missing)}. "
+        f"settings.py field(s) not classified in shared/env_io.py: {sorted(missing)}. "
         "Add each to ALLOWED_KEYS (non-secret tunable), SECRET_KEYS (credential/"
         "webhook/token), or EXCLUDED_FROM_GUI (filesystem path or fail-closed "
         "command flag -- see that set's own docstring)."

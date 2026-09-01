@@ -2,7 +2,7 @@
 tests/test_pilots_api_tunables.py
 =================================
 Tests for ``GET/PUT /settings/tunables`` on ``api/pilots_api.py`` — the PWA's
-non-secret runtime-tunables editor, backed by ``gui.env_io``'s allowlist-bounded
+non-secret runtime-tunables editor, backed by ``shared.env_io``'s allowlist-bounded
 write layer.
 
 Covers: GET shape/grouping + live-from-settings value/default/description

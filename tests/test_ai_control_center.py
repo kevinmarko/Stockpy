@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gui.ai_control_center import (
+from shared.ai_control_center import (
     CAPABILITIES,
     AICapability,
     capability_status,
@@ -71,14 +71,14 @@ class TestCapabilitiesRegistry:
             assert c.trigger in {"on_demand", "scheduled"}
 
     def test_toggle_keys_are_non_secret(self) -> None:
-        from gui.env_io import SECRET_KEYS
+        from shared.env_io import SECRET_KEYS
 
         for c in CAPABILITIES:
             if c.toggle_key is not None:
                 assert c.toggle_key not in SECRET_KEYS
 
     def test_provider_keys_are_secret(self) -> None:
-        from gui.env_io import SECRET_KEYS
+        from shared.env_io import SECRET_KEYS
 
         for c in CAPABILITIES:
             for k in c.provider_key_settings:
@@ -382,13 +382,13 @@ class TestOverview:
 # ---------------------------------------------------------------------------
 class TestToggleWriteGuard:
     def test_rejects_secret_key(self) -> None:
-        from gui.env_io import SecretWriteError
+        from shared.env_io import SecretWriteError
 
         with pytest.raises(SecretWriteError):
             validate_toggle_write("OPENAI_API_KEY")
 
     def test_rejects_non_allowlisted_key(self) -> None:
-        from gui.env_io import DisallowedKeyError
+        from shared.env_io import DisallowedKeyError
 
         with pytest.raises(DisallowedKeyError):
             validate_toggle_write("TOTALLY_MADE_UP_KEY")
@@ -408,14 +408,14 @@ class TestToggleWriteGuard:
 # ---------------------------------------------------------------------------
 class TestLivePatchableKeys:
     def test_covers_every_toggle_key(self) -> None:
-        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+        from shared.ai_control_center import LIVE_PATCHABLE_KEYS
 
         for c in CAPABILITIES:
             if c.toggle_key:
                 assert c.toggle_key in LIVE_PATCHABLE_KEYS
 
     def test_covers_every_provider_selector_setting(self) -> None:
-        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+        from shared.ai_control_center import LIVE_PATCHABLE_KEYS
 
         for c in CAPABILITIES:
             if c.provider_selector_setting:
@@ -424,15 +424,15 @@ class TestLivePatchableKeys:
     def test_covers_opal_research_model(self) -> None:
         # llm/router.py reads this via getattr(settings, ...) at call time,
         # not cached -- see LIVE_PATCHABLE_KEYS's docstring.
-        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+        from shared.ai_control_center import LIVE_PATCHABLE_KEYS
 
         assert "OPAL_RESEARCH_MODEL" in LIVE_PATCHABLE_KEYS
 
     def test_every_member_is_non_secret_allowlisted(self) -> None:
         # Membership here is an ADDITIVE narrowing on top of validate_toggle_
         # write's ALLOWED_KEYS/SECRET_KEYS gate, never a way around it.
-        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
-        from gui.env_io import ALLOWED_KEYS, SECRET_KEYS
+        from shared.ai_control_center import LIVE_PATCHABLE_KEYS
+        from shared.env_io import ALLOWED_KEYS, SECRET_KEYS
 
         for key in LIVE_PATCHABLE_KEYS:
             assert key in ALLOWED_KEYS
@@ -443,7 +443,7 @@ class TestLivePatchableKeys:
         # objects elsewhere -- live-patching those here would create a
         # misleading half-live state instead of the honest "needs a
         # restart" contract they still get.
-        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+        from shared.ai_control_center import LIVE_PATCHABLE_KEYS
 
         for key in ("KELLY_FRACTION", "VOL_TARGET", "MAX_LEVERAGE", "SIGNAL_WEIGHTS"):
             assert key not in LIVE_PATCHABLE_KEYS
@@ -488,7 +488,7 @@ class _FakePopen:
 
 class TestSchedulingLauncher:
     def test_launch_interval_spawns_subprocess(self, monkeypatch, tmp_path) -> None:
-        from gui import orchestrator_runner as orr
+        from shared import orchestrator_runner as orr
 
         captured = {}
 
@@ -508,7 +508,7 @@ class TestSchedulingLauncher:
         assert handle.is_running() is True
 
     def test_launch_agent_uses_agent_flag(self, monkeypatch, tmp_path) -> None:
-        from gui import orchestrator_runner as orr
+        from shared import orchestrator_runner as orr
 
         captured = {}
 
@@ -525,7 +525,7 @@ class TestSchedulingLauncher:
         assert "--interval" not in captured["cmd"]
 
     def test_interval_clamped_to_minimum(self, monkeypatch, tmp_path) -> None:
-        from gui import orchestrator_runner as orr
+        from shared import orchestrator_runner as orr
 
         captured = {}
 
@@ -542,7 +542,7 @@ class TestSchedulingLauncher:
         assert "30" in captured["cmd"]
 
     def test_stop_run_terminates(self, monkeypatch, tmp_path) -> None:
-        from gui import orchestrator_runner as orr
+        from shared import orchestrator_runner as orr
 
         monkeypatch.setattr(orr.subprocess, "Popen", lambda cmd, **kw: _FakePopen(cmd, **kw))
         monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
@@ -553,7 +553,7 @@ class TestSchedulingLauncher:
         assert handle.is_running() is False
 
     def test_stop_run_none_handle_is_safe(self) -> None:
-        from gui import orchestrator_runner as orr
+        from shared import orchestrator_runner as orr
 
         assert orr.stop_run(None) is True
 
@@ -563,19 +563,19 @@ class TestSchedulingLauncher:
 # ---------------------------------------------------------------------------
 class TestTabWiring:
     def test_app_registers_control_center_tab(self) -> None:
-        app_src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+        app_src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
         assert "panels.render_ai_control_center" in app_src
         assert "AI Control Center" in app_src
 
     def test_scheduling_has_no_autonomous_scheduler(self) -> None:
-        orr_src = (_REPO_ROOT / "gui" / "orchestrator_runner.py").read_text(encoding="utf-8")
+        orr_src = (_REPO_ROOT / "shared" / "orchestrator_runner.py").read_text(encoding="utf-8")
         assert "subprocess" in orr_src
         assert "threading.Timer" not in orr_src
         assert "schedule.every" not in orr_src
         assert "crontab" not in orr_src
 
     def test_control_center_has_no_order_verbs(self) -> None:
-        src = (_REPO_ROOT / "gui" / "ai_control_center.py").read_text(encoding="utf-8")
+        src = (_REPO_ROOT / "shared" / "ai_control_center.py").read_text(encoding="utf-8")
         for verb in ("submit_order", "place_order", "buy_order", "sell_order"):
             assert verb not in src
 
@@ -722,14 +722,14 @@ def _capability_grid_script() -> str:
     return (
         "import streamlit as st\n"
         "from settings import settings\n"
-        "from gui.ai_control_center import (\n"
+        "from shared.ai_control_center import (\n"
         "    CAPABILITIES,\n"
         "    _PROVIDER_KEY_MAP,\n"
         "    control_center_overview,\n"
         "    status_badge,\n"
         "    validate_toggle_write,\n"
         ")\n"
-        "from gui.panels.ai_control_center import _render_capability_row\n"
+        "from legacy.streamlit_command_center.panels.ai_control_center import _render_capability_row\n"
         "\n"
         "overview = control_center_overview(settings, last_calls=None)\n"
         "cap_by_key = {c.key: c for c in CAPABILITIES}\n"
@@ -749,7 +749,7 @@ def _capability_grid_script() -> str:
 
 class TestCapabilityRowToggleDedup:
     def _isolated_env(self, tmp_path: Path, monkeypatch, *, initial: bool = False) -> Path:
-        import env_io
+        import shared.env_io as env_io
         from settings import settings
 
         env_path = tmp_path / ".env"
@@ -776,8 +776,7 @@ class TestCapabilityRowToggleDedup:
 
     def test_enabling_it_sticks_instead_of_being_reverted(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        import env_io
-
+        import shared.env_io as env_io
         self._isolated_env(tmp_path, monkeypatch)
         at = AppTest.from_string(_capability_grid_script())
         at.run(timeout=15)
@@ -794,8 +793,7 @@ class TestCapabilityRowToggleDedup:
 
     def test_disabling_it_after_enabling_also_sticks(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        import env_io
-
+        import shared.env_io as env_io
         self._isolated_env(tmp_path, monkeypatch, initial=True)
         at = AppTest.from_string(_capability_grid_script())
         at.run(timeout=15)
@@ -819,7 +817,7 @@ class TestCapabilityRowLivePatch:
 
     def test_toggle_write_patches_the_live_settings_object(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        import env_io
+        import shared.env_io as env_io
         from settings import settings
 
         env_path = tmp_path / ".env"
@@ -837,7 +835,7 @@ class TestCapabilityRowLivePatch:
 
     def test_provider_selector_write_patches_the_live_settings_object(self, tmp_path, monkeypatch) -> None:
         from streamlit.testing.v1 import AppTest
-        import env_io
+        import shared.env_io as env_io
         from settings import settings
 
         env_path = tmp_path / ".env"
@@ -866,7 +864,7 @@ def test_ai_control_center_never_imports_status_store() -> None:
     The panel and the API read the store and pass last_calls in."""
     import ast
 
-    from gui import ai_control_center as acc
+    from shared import ai_control_center as acc
 
     tree = ast.parse(Path(acc.__file__).read_text(encoding="utf-8"))
     for node in ast.walk(tree):

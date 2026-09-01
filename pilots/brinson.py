@@ -15,7 +15,7 @@ views; this module is the manual "what-if" calculator sitting alongside them).
 Deliberately NOT built on top of ``gui/report_viewer_helpers.py``'s
 ``compute_brinson_fachler``/``build_brinson_fachler_inputs``/
 ``default_brinson_fachler_frame`` — those lazily import
-``gui.panels._shared``, which executes the ``gui.panels`` package ``__init__``
+``legacy.streamlit_command_center.panels._shared``, which executes the ``legacy.streamlit_command_center.panels`` package ``__init__``
 (-> ``report_viewer.py`` -> ``streamlit``). Pulling a UI framework import into
 a headless FastAPI process is a layering violation this module avoids by being
 fully self-contained: stdlib + pandas + ``evaluation_engine`` only (the same

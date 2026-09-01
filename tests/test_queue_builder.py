@@ -423,7 +423,7 @@ class TestProactiveNotify:
         rr = _rr([_Rec("NVDA", "SELL", 0.9)])
         qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
 
-        from gui.robinhood_execution_panel import read_notification_state
+        from shared.robinhood_execution_panel import read_notification_state
         state = read_notification_state(tmp_path / "execution_queue_notified.json")
         assert state is not None
         assert state.last_notified_at == _RTH.isoformat()

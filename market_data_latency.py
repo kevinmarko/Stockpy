@@ -2,7 +2,7 @@
 
 Replaces the legacy Streamlit Command Center's per-symbol "Data Latency
 Heatmap" (``gui/panels/observability.py::_render_observability_latency_heatmap``,
-backed by ``gui.observability_telemetry.LatencySampleStore``), which cannot be
+backed by ``shared.observability_telemetry.LatencySampleStore``), which cannot be
 honestly ported as-is: that store lives ONLY in Streamlit ``st.session_state``,
 populated only when the operator manually clicks "Fetch quotes" on the GUI's
 Market Data tab — a stateless FastAPI process has no equivalent session to read
@@ -18,7 +18,7 @@ This module is the honest replacement, not a literal port:
   strictly more useful than the legacy panel's manual-trigger design, not a
   downgrade.
 * Storage is a fixed-capacity, in-process ring buffer (``collections.deque``),
-  matching ``gui.observability_telemetry.LatencySampleStore``'s own explicitly
+  matching ``shared.observability_telemetry.LatencySampleStore``'s own explicitly
   documented rationale for staying in-memory ("latency is a live signal that
   should reset each session ... stale samples across runs would muddy the
   heatmap without adding insight") — NOT a new SQLite table. It clears on
@@ -127,7 +127,7 @@ def record_quote_latency(
 
 def summarize_latency(samples: List[LatencySample]) -> dict:
     """p50/p95 latency + the single worst-p95 symbol, mirroring
-    ``gui.observability_telemetry.summarise_latency``'s exact shape so the
+    ``shared.observability_telemetry.summarise_latency``'s exact shape so the
     webapp's KPI strip reads the same way the legacy panel's did. Returns an
     honest all-``None``/zero-count shape on an empty list — never a
     fabricated 0.0 latency (CONSTRAINT #4)."""

@@ -2,7 +2,7 @@
 tests/test_opal_research_panel.py
 ====================================
 Unit tests for the Opal research-brief GUI surface (Tier 9 Scope 4):
-``gui.ai_insights_panel.format_research_brief_markdown`` plus the
+``shared.ai_insights_panel.format_research_brief_markdown`` plus the
 ``_render_opal_research_section`` wiring inside ``gui/panels/__init__.py``.
 
 Coverage
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gui.ai_insights_panel import format_research_brief_markdown
+from shared.ai_insights_panel import format_research_brief_markdown
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -118,13 +118,13 @@ class TestFormatResearchBriefMarkdown:
 
 class TestPanelWiring:
     def test_ai_insights_panel_exports_formatter(self):
-        from gui import ai_insights_panel
+        from shared import ai_insights_panel
 
         assert hasattr(ai_insights_panel, "format_research_brief_markdown")
         assert callable(ai_insights_panel.format_research_brief_markdown)
 
     def test_render_opal_research_section_exists(self):
-        from gui import panels
+        from legacy.streamlit_command_center import panels
 
         assert hasattr(panels, "_render_opal_research_section")
         assert callable(panels._render_opal_research_section)
@@ -133,7 +133,7 @@ class TestPanelWiring:
         # Lives in gui/panels/ai_insights.py post-refactor (Phase 4a extracted
         # gui/panels/__init__.py into per-tab modules; __init__.py is now a
         # thin re-export stub).
-        path = _REPO_ROOT / "gui" / "panels" / "ai_insights.py"
+        path = _REPO_ROOT / "legacy" / "streamlit_command_center" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         # The Opal helper must reference its OWN independent switch.  It may be
         # the last function in the file, so fall back to end-of-file when no
@@ -145,7 +145,7 @@ class TestPanelWiring:
         assert "OPAL_RESEARCH_ENABLED" in body
 
     def test_opal_section_called_before_claude_section_in_render_ai_insights(self):
-        path = _REPO_ROOT / "gui" / "panels" / "ai_insights.py"
+        path = _REPO_ROOT / "legacy" / "streamlit_command_center" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         start = src.index("def render_ai_insights")
         end = src.index("\ndef ", start + 1)
@@ -159,7 +159,7 @@ class TestPanelWiring:
             assert opal_idx < claude_idx
 
     def test_research_module_imported_lazily_inside_section(self):
-        path = _REPO_ROOT / "gui" / "panels" / "ai_insights.py"
+        path = _REPO_ROOT / "legacy" / "streamlit_command_center" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         top_level_lines = [
             ln for ln in src.splitlines() if not ln.startswith(" ") and not ln.startswith("\t")

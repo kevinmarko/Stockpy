@@ -23,7 +23,7 @@ import math
 
 import pytest
 
-from gui.observability_panel_helpers import (
+from shared.observability_panel_helpers import (
     IndicatorBadge,
     compute_portfolio_heat,
     etf_transmission_rows,
@@ -208,7 +208,7 @@ class TestForecastCellFormatters:
 
 
 class TestEtfTransmissionRows:
-    """gui.observability_panel_helpers.etf_transmission_rows -- the pure
+    """shared.observability_panel_helpers.etf_transmission_rows -- the pure
     row-extraction/sort logic behind the Observability tab's ETF Volatility
     Transmission section (gui/panels/observability.py)."""
 

@@ -4,9 +4,9 @@ tests/test_reports_library.py
 Offline, deterministic tests for the 📁 Report Library tab (Agent 3).
 
 Covers:
-  (a) ``gui.panels._shared.list_report_files`` — newest-first ordering, glob
+  (a) ``legacy.streamlit_command_center.panels._shared.list_report_files`` — newest-first ordering, glob
       filtering, and the nonexistent-directory dead-letter path.
-  (b) A light smoke check that ``gui.panels.reports_library.render_reports_library``
+  (b) A light smoke check that ``legacy.streamlit_command_center.panels.reports_library.render_reports_library``
       imports cleanly and is callable (the module import pulls in streamlit,
       which is available in this repo's test environment).
   (c) ``streamlit.testing.v1.AppTest``-driven interaction tests for
@@ -26,7 +26,7 @@ import os
 import time
 from pathlib import Path
 
-from gui.panels._shared import list_report_files
+from legacy.streamlit_command_center.panels._shared import list_report_files
 
 
 def _touch(path: Path, mtime: float) -> None:
@@ -92,12 +92,12 @@ class TestListReportFiles:
 
 class TestRenderImportable:
     def test_render_reports_library_exists_and_callable(self) -> None:
-        from gui.panels.reports_library import render_reports_library
+        from legacy.streamlit_command_center.panels.reports_library import render_reports_library
 
         assert callable(render_reports_library)
 
     def test_reexported_from_panels(self) -> None:
-        from gui import panels
+        from legacy.streamlit_command_center import panels
 
         assert hasattr(panels, "render_reports_library")
         assert callable(panels.render_reports_library)
@@ -109,7 +109,7 @@ def _html_block_script() -> str:
     return (
         "import streamlit as st\n"
         "from settings import settings\n"
-        "from gui.panels.reports_library import _html_file_block\n"
+        "from legacy.streamlit_command_center.panels.reports_library import _html_file_block\n"
         "\n"
         "settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)\n"
         "report_path = settings.OUTPUT_DIR / 'daily_report.html'\n"

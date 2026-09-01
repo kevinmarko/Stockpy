@@ -156,7 +156,7 @@ SKIP_FILE_PATTERNS = (
 # A field's own definition site and the GUI write-allowlist name every key by
 # construction; counting those as "the name appears as a literal" would make
 # the dynamic-dispatch signal fire for all 320 fields and mean nothing.
-LITERAL_SCAN_SKIP = {"settings.py", os.path.join("gui", "env_io.py")}
+LITERAL_SCAN_SKIP = {"settings.py", os.path.join("shared", "env_io.py")}
 
 INIT_METHODS = {"__init__", "__post_init__", "__new__"}
 COERCIONS = {"int", "float", "bool", "str", "list", "dict", "set", "tuple"}

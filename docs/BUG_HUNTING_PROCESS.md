@@ -39,7 +39,7 @@ Every bug discovered during audits, testing, or production operation is assigned
 | 🔴 **Severity 1: CRITICAL** | Security, Execution Safety, Data Corruption | Immediate (Block Release) | Committed private keys / API secrets; broker order verb outside `execution/`; silent lookahead bias in strategy signals; SQLite database corruption or deadlock; kill switch bypass. |
 | 🟠 **Severity 2: HIGH** | Architecture, Harness Gates, API Parity | < 24 Hours (Requires Branch & PR) | Top-level module circular import cycles; strategy deployability gate regression; mock/live API drift causing broken PWA screen; unhandled network I/O fail in data engine. |
 | 🟡 **Severity 3: MEDIUM** | Configuration, Error Handling, Performance | Scheduled Sprint | Undeclared runtime environment variable (`settings.py` missing key); missing error/loading state in UI; performance bottleneck (> 2s latency spike in signal computation). |
-| 🔵 **Severity 4: LOW** | Documentation, Code Quality, Anchor Links | Standard Backlog | `gui/help_content.py` anchor mismatch with `docs/HOW_TO_GUIDE.md`; missing docstrings; non-critical type-hint gaps; minor UI spacing misalignment. |
+| 🔵 **Severity 4: LOW** | Documentation, Code Quality, Anchor Links | Standard Backlog | `shared/help_content.py` anchor mismatch with `docs/HOW_TO_GUIDE.md`; missing docstrings; non-critical type-hint gaps; minor UI spacing misalignment. |
 
 ---
 

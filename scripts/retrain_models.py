@@ -120,7 +120,7 @@ def retrain_all(
     """
     # Staleness sweep: warn (once per model, deduped) about any model that was
     # already past its retrain window BEFORE this run started. Lazy-imported
-    # (pilots.models pulls in gui.help_content's own import chain) and
+    # (pilots.models pulls in shared.help_content's own import chain) and
     # wrapped so a staleness-check failure can never block the actual
     # retraining below (CONSTRAINT #6).
     try:

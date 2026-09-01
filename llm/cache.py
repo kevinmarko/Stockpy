@@ -170,7 +170,7 @@ def read_all_entries() -> List[Dict[str, Any]]:
 
     Read-only introspection over the whole cache — for callers building a
     per-symbol/per-provider VIEW over cached results (e.g. the AI Insights
-    aggregate Claude-vs-Gemini disagreement table, ``gui.ai_insights_panel
+    aggregate Claude-vs-Gemini disagreement table, ``shared.ai_insights_panel
     .latest_verdict_maps_from_cache``) rather than looking up one known key
     via :func:`cache_get`. Each entry's opaque hash key is intentionally
     NOT returned — callers must key off ``meta``/``payload`` content, matching

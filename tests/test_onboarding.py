@@ -43,10 +43,10 @@ import pytest
 
 class TestImport:
     def test_module_importable(self) -> None:
-        import gui.onboarding  # noqa: F401
+        import shared.onboarding  # noqa: F401
 
     def test_public_api_callable(self) -> None:
-        from gui.onboarding import (
+        from shared.onboarding import (
             mark_onboarded,
             read_onboarding_state,
             should_show_tour,
@@ -57,12 +57,12 @@ class TestImport:
         assert callable(read_onboarding_state)
 
     def test_session_key_is_string(self) -> None:
-        from gui.onboarding import SESSION_KEY
+        from shared.onboarding import SESSION_KEY
 
         assert isinstance(SESSION_KEY, str) and SESSION_KEY
 
     def test_default_marker_is_path(self) -> None:
-        from gui.onboarding import DEFAULT_MARKER
+        from shared.onboarding import DEFAULT_MARKER
 
         assert isinstance(DEFAULT_MARKER, Path)
 
@@ -74,7 +74,7 @@ class TestImport:
 
 class TestOnboardingState:
     def test_importable_and_frozen(self) -> None:
-        from gui.onboarding import OnboardingState
+        from shared.onboarding import OnboardingState
 
         state = OnboardingState(should_show=True, marker_path=Path("output/.gui_onboarded"))
         # frozen dataclass must reject mutation
@@ -83,7 +83,7 @@ class TestOnboardingState:
             state.should_show = False  # type: ignore[misc]
 
     def test_fields_exist(self) -> None:
-        from gui.onboarding import OnboardingState
+        from shared.onboarding import OnboardingState
 
         state = OnboardingState(should_show=False, marker_path=Path("test.marker"))
         assert state.should_show is False
@@ -91,7 +91,7 @@ class TestOnboardingState:
 
     def test_read_onboarding_state_fresh(self, tmp_path: Path) -> None:
         """Factory returns should_show=True when no marker file exists."""
-        from gui.onboarding import read_onboarding_state
+        from shared.onboarding import read_onboarding_state
 
         marker = tmp_path / ".gui_onboarded"
         state = read_onboarding_state({}, marker)
@@ -100,7 +100,7 @@ class TestOnboardingState:
 
     def test_read_onboarding_state_after_mark(self, tmp_path: Path) -> None:
         """Factory returns should_show=False once marker has been written."""
-        from gui.onboarding import mark_onboarded, read_onboarding_state
+        from shared.onboarding import mark_onboarded, read_onboarding_state
 
         marker = tmp_path / ".gui_onboarded"
         mark_onboarded(marker)
@@ -110,7 +110,7 @@ class TestOnboardingState:
 
     def test_read_onboarding_state_session_key_set(self, tmp_path: Path) -> None:
         """Factory respects SESSION_KEY in session_state (no marker needed)."""
-        from gui.onboarding import SESSION_KEY, read_onboarding_state
+        from shared.onboarding import SESSION_KEY, read_onboarding_state
 
         marker = tmp_path / ".gui_onboarded"  # does not exist
         state = read_onboarding_state({SESSION_KEY: True}, marker)
@@ -118,7 +118,7 @@ class TestOnboardingState:
 
     def test_read_onboarding_state_never_raises(self) -> None:
         """Factory handles a totally bogus marker path without raising."""
-        from gui.onboarding import read_onboarding_state
+        from shared.onboarding import read_onboarding_state
 
         bad = Path("/this/path/does/not/exist/.gui_onboarded")
         state = read_onboarding_state({}, bad)
@@ -132,21 +132,21 @@ class TestOnboardingState:
 
 class TestShouldShowTour:
     def test_fresh_session_no_marker_shows_tour(self, tmp_path: Path) -> None:
-        from gui.onboarding import should_show_tour
+        from shared.onboarding import should_show_tour
 
         marker = tmp_path / ".gui_onboarded"
         assert not marker.exists(), "precondition: marker must not exist"
         assert should_show_tour({}, marker) is True
 
     def test_marker_exists_no_tour(self, tmp_path: Path) -> None:
-        from gui.onboarding import should_show_tour
+        from shared.onboarding import should_show_tour
 
         marker = tmp_path / ".gui_onboarded"
         marker.write_text("onboarded", encoding="utf-8")
         assert should_show_tour({}, marker) is False
 
     def test_session_key_truthy_no_tour(self, tmp_path: Path) -> None:
-        from gui.onboarding import SESSION_KEY, should_show_tour
+        from shared.onboarding import SESSION_KEY, should_show_tour
 
         marker = tmp_path / ".gui_onboarded"
         # Marker absent — but session says already dismissed.
@@ -156,7 +156,7 @@ class TestShouldShowTour:
 
     def test_session_key_falsy_defers_to_marker(self, tmp_path: Path) -> None:
         """SESSION_KEY present but falsy should NOT short-circuit to False."""
-        from gui.onboarding import SESSION_KEY, should_show_tour
+        from shared.onboarding import SESSION_KEY, should_show_tour
 
         marker = tmp_path / ".gui_onboarded"
         session = {SESSION_KEY: False}
@@ -164,7 +164,7 @@ class TestShouldShowTour:
         assert should_show_tour(session, marker) is True
 
     def test_returns_bool_type(self, tmp_path: Path) -> None:
-        from gui.onboarding import should_show_tour
+        from shared.onboarding import should_show_tour
 
         marker = tmp_path / ".gui_onboarded"
         result = should_show_tour({}, marker)
@@ -172,7 +172,7 @@ class TestShouldShowTour:
 
     def test_never_raises_on_bad_path(self) -> None:
         """A marker path that can't be stat'd should not raise."""
-        from gui.onboarding import should_show_tour
+        from shared.onboarding import should_show_tour
 
         bad = Path("/this/path/does/not/exist/at/all/.gui_onboarded")
         result = should_show_tour({}, bad)
@@ -186,7 +186,7 @@ class TestShouldShowTour:
 
 class TestMarkOnboarded:
     def test_creates_marker_file(self, tmp_path: Path) -> None:
-        from gui.onboarding import mark_onboarded
+        from shared.onboarding import mark_onboarded
 
         marker = tmp_path / ".gui_onboarded"
         assert not marker.exists()
@@ -195,7 +195,7 @@ class TestMarkOnboarded:
 
     def test_atomic_write_no_tmp_leftover(self, tmp_path: Path) -> None:
         """After mark_onboarded the .tmp sibling must be gone."""
-        from gui.onboarding import mark_onboarded
+        from shared.onboarding import mark_onboarded
 
         marker = tmp_path / ".gui_onboarded"
         tmp_sibling = marker.with_suffix(".tmp")
@@ -204,7 +204,7 @@ class TestMarkOnboarded:
         assert not tmp_sibling.exists(), ".tmp file should be cleaned up atomically"
 
     def test_creates_parent_directories(self, tmp_path: Path) -> None:
-        from gui.onboarding import mark_onboarded
+        from shared.onboarding import mark_onboarded
 
         marker = tmp_path / "nested" / "dir" / ".gui_onboarded"
         mark_onboarded(marker)
@@ -212,7 +212,7 @@ class TestMarkOnboarded:
 
     def test_failure_is_swallowed(self) -> None:
         """Passing a path that can't be written must never raise."""
-        from gui.onboarding import mark_onboarded
+        from shared.onboarding import mark_onboarded
 
         # Use a path whose directory we can't create (/proc on macOS doesn't exist
         # or isn't writable; use a clearly-impossible path instead).
@@ -220,7 +220,7 @@ class TestMarkOnboarded:
         mark_onboarded(bad)  # must not raise
 
     def test_idempotent_second_call(self, tmp_path: Path) -> None:
-        from gui.onboarding import mark_onboarded
+        from shared.onboarding import mark_onboarded
 
         marker = tmp_path / ".gui_onboarded"
         mark_onboarded(marker)
@@ -229,7 +229,7 @@ class TestMarkOnboarded:
 
     def test_tour_false_after_mark(self, tmp_path: Path) -> None:
         """should_show_tour returns False after mark_onboarded has run."""
-        from gui.onboarding import mark_onboarded, should_show_tour
+        from shared.onboarding import mark_onboarded, should_show_tour
 
         marker = tmp_path / ".gui_onboarded"
         assert should_show_tour({}, marker) is True  # precondition

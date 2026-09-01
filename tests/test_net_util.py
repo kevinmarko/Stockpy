@@ -18,7 +18,7 @@ import socket
 import threading
 import time
 
-from desktop.net_util import find_free_port, wait_for_http
+from legacy.streamlit_command_center.desktop_shell.net_util import find_free_port, wait_for_http
 
 
 class TestFindFreePort:

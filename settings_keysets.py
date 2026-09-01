@@ -26,7 +26,7 @@ file. Because ``settings.py`` imports it, it can never import ``settings``
 back. ``runtime_flags.py`` will import ``BOOTSTRAP_KEYS`` from here, so THIS
 module inherits the same constraint:
 
-    **Never import ``settings``, ``gui.env_io``, or anything non-stdlib at
+    **Never import ``settings``, ``shared.env_io``, or anything non-stdlib at
     module scope here.** The names below are deliberately plain string
     literals, not derived from ``Settings.model_fields``. The test module does
     the cross-checking; this module stays importable from anywhere, including

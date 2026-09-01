@@ -252,7 +252,7 @@ def notify(
 def send_model_staleness_alert(model_key: str, days_old: int) -> None:
     """Warn when a model has crossed the retrain-staleness window.
 
-    The threshold is live-imported from ``gui.help_content.MODEL_RETRAIN_WINDOW_DAYS``
+    The threshold is live-imported from ``shared.help_content.MODEL_RETRAIN_WINDOW_DAYS``
     (never re-typed as a literal here) -- mirrors ``pilots/models.py``'s own
     lazy-import convention for the same constant, so the staleness window
     stays in sync with the live config without a separate update step.
@@ -267,7 +267,7 @@ def send_model_staleness_alert(model_key: str, days_old: int) -> None:
     check must never crash the caller).
     """
     try:
-        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+        from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
     except Exception:  # noqa: BLE001 - dead-letter, mirrors pilots/models.py's own guard
         logger.debug("MODEL_RETRAIN_WINDOW_DAYS unavailable; skipping staleness check")
         return

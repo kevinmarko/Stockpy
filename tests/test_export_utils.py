@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gui.export_utils import (
+from shared.export_utils import (
     dataframe_to_csv_bytes,
     dataframe_to_csv_str,
     signals_snapshot_to_dataframe,

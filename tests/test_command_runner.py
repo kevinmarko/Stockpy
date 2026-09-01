@@ -31,8 +31,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from gui import command_runner
-from gui.command_runner import (
+from shared import command_runner
+from shared.command_runner import (
     CommandResult,
     run_command,
     run_daily_briefing,

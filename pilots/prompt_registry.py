@@ -14,7 +14,7 @@ Design invariants (identical to the rest of the Pilots read layer —
   ``prompt_registry`` package itself (confirmed independently dependency-light
   by its own module docstrings: ``models``/``cache``/``guardrails``/``signing``/
   ``store``/``registry``/``__main__`` are all stdlib-only). Never imports
-  ``gui.panels.prompt_registry`` — that module imports ``streamlit`` at its own
+  ``legacy.streamlit_command_center.panels.prompt_registry`` — that module imports ``streamlit`` at its own
   module top, which this dependency-light reader must never pull onto the
   AST-guarded ``api/pilots_api.py`` import path. See
   ``tests/test_pilots_strategy_matrix.py::test_pilots_read_helpers_stay_dependency_light``

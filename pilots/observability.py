@@ -56,27 +56,28 @@ Center's "Observability / Mission Control" tab
 4. **Risk gate block log** — last ~100 entries from
    ``output/risk_gate_blocks.jsonl``. Ported verbatim (not imported) from
    ``gui/panels/_shared.py::load_block_log`` per this effort's scope, since
-   ``api/pilots_api.py`` never reaches into ``gui.panels.*`` internals.
+   ``api/pilots_api.py`` never reaches into ``legacy.streamlit_command_center.panels.*`` internals.
 5. **Circuit breaker dashboard** — the merged kill-switch + risk-gate-block
    severity view from ``gui/panels/gravity_audit.py
    ::_render_circuit_breaker_dashboard``. Unlike section 4 above,
-   ``gui/circuit_breakers.py`` is NOT under ``gui.panels.*`` (it imports only
+   ``gui/circuit_breakers.py`` is NOT under ``legacy.streamlit_command_center.panels.*`` (it imports only
    ``json``/``logging``/``dataclasses``/``datetime``/``pathlib``/``typing`` —
-   no streamlit, no heavy engines), so the "don't reach into gui.panels.*
+   no streamlit, no heavy engines), so the "don't reach into legacy.streamlit_command_center.panels.*
    internals" rationale that justified re-porting ``load_block_log`` in
    section 4 does NOT apply here — this calls
-   ``gui.circuit_breakers.collect_circuit_breaker_trips``/``summarise_trips``
+   ``shared.circuit_breakers.collect_circuit_breaker_trips``/``summarise_trips``
    directly rather than adding a THIRD local copy of the same derivation.
-   ``gui.daemon_client``/``gui.env_io``/``gui.ai_control_center``/
-   ``gui.robinhood_execution_panel`` are already imported directly at
-   ``api/pilots_api.py``'s module top, confirming ``gui.*`` (as opposed to
-   ``gui.panels.*``) is an established, safe import surface for this
-   AST-guarded API (see ``tests/test_pilots_api.py
+   ``shared.daemon_client``/``shared.env_io``/``shared.ai_control_center``/
+   ``shared.robinhood_execution_panel`` are already imported directly at
+   ``api/pilots_api.py``'s module top, confirming ``shared.*`` (as opposed to
+   ``legacy.streamlit_command_center.panels.*``, the frozen archive's own
+   namespace) is an established, safe import surface for this AST-guarded
+   API (see ``tests/test_pilots_api.py
    ::test_pilots_api_never_imports_heavy_engines``'s ``forbidden_modules``,
-   which does not include ``gui``).
+   which does not include ``shared``).
 6. **System telemetry** — host + current-process CPU/memory/disk, ported
-   from ``gui/panels/observability.py::_render_observability_system_telemetry``
-   via ``gui.observability_telemetry.collect_system_telemetry()`` (already
+   from ``legacy/streamlit_command_center/panels/observability.py::_render_observability_system_telemetry``
+   via ``shared.observability_telemetry.collect_system_telemetry()`` (already
    NaN/-1-shaped on missing ``psutil`` — CONSTRAINT #4). Unlike every other
    section here, this is NOT a persisted-artifact read — host resource usage
    is inherently point-in-time, so :func:`system_telemetry_summary` samples
@@ -99,7 +100,7 @@ Center's "Observability / Mission Control" tab
    samples rather than a stale cross-restart figure.
 7. **Log aggregation** — a bounded tail of ``logs/investyo.log``, parsed and
    tallied by level, ported from ``gui/panels/observability.py
-   ::_render_observability_error_log`` via ``gui.observability_telemetry``'s
+   ::_render_observability_error_log`` via ``shared.observability_telemetry``'s
    pure parsing helpers (``read_log_tail``/``parse_log_lines``/
    ``tally_levels``/``classify_log_entry``). Served by its OWN
    ``GET /observability/logs`` endpoint rather than riding the summary
@@ -119,17 +120,17 @@ Center's "Observability / Mission Control" tab
 9. **ETF volatility transmission** — the read-only per-symbol diagnostic view
    ported from ``gui/panels/observability.py
    ::_render_observability_etf_transmission``. Reuses
-   ``gui.observability_panel_helpers.etf_transmission_rows`` directly (already
+   ``shared.observability_panel_helpers.etf_transmission_rows`` directly (already
    pure/Streamlit-free and unit-tested) against the current state snapshot's
    ``signals`` list, plus the three independent master-switch states
    (``ETF_TRANSMISSION_ENABLED``/``_SIZING_ENABLED``/``_PORTFOLIO_ENABLED``).
 10. **Heartbeat age** — the CURRENT orchestrator heartbeat age (seconds) +
-    freshness classification, via ``gui.orchestrator_runner.heartbeat_age_seconds``
-    and ``gui.observability_panel_helpers.heartbeat_status`` (both already
+    freshness classification, via ``shared.orchestrator_runner.heartbeat_age_seconds``
+    and ``shared.observability_panel_helpers.heartbeat_status`` (both already
     reused elsewhere in this module/its sibling GUI panel). Deliberately does
     NOT attempt to reproduce the legacy Streamlit panel's "Heartbeat Age
     Trend" sparkline: that trend is a 60-sample ring buffer held ONLY in
-    ``st.session_state`` (``gui.observability_telemetry.HeartbeatTrendStore``)
+    ``st.session_state`` (``shared.observability_telemetry.HeartbeatTrendStore``)
     — never persisted to disk — so there is no durable series this stateless
     HTTP endpoint could honestly serve. See :func:`heartbeat_summary`'s
     docstring for the full honesty note (``history_available=False`` always,
@@ -1072,7 +1073,7 @@ def forecast_skill_by_symbol_summary(
 # ---------------------------------------------------------------------------
 # 4. Risk gate block log — ported verbatim from gui/panels/_shared.py's
 # load_block_log (per this effort's scope: api/pilots_api.py doesn't reach
-# into gui.panels.* internals for anything, so this is a deliberate small
+# into legacy.streamlit_command_center.panels.* internals for anything, so this is a deliberate small
 # duplication rather than a cross-package import).
 # ---------------------------------------------------------------------------
 
@@ -1110,7 +1111,7 @@ def risk_gate_block_log(n: int = 100) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # 5. Circuit breaker dashboard — merged kill-switch + risk-gate-block severity
-# view. Calls gui.circuit_breakers directly (lazy import) rather than
+# view. Calls shared.circuit_breakers directly (lazy import) rather than
 # re-deriving the classification here — see module docstring section 5 for
 # why this is NOT the same situation as section 4's local load_block_log port.
 # ---------------------------------------------------------------------------
@@ -1129,7 +1130,7 @@ def circuit_breaker_summary(window_hours: int = 24) -> Dict[str, Any]:
     """Merged kill-switch + risk-gate-block severity dashboard — the PWA's
     port of ``gui/panels/gravity_audit.py::_render_circuit_breaker_dashboard``.
 
-    Calls ``gui.circuit_breakers.collect_circuit_breaker_trips`` +
+    Calls ``shared.circuit_breakers.collect_circuit_breaker_trips`` +
     ``summarise_trips`` directly (lazy import, matching this module's own
     convention for ``data.historical_store``/``forecasting.forecast_tracker``)
     against the SAME two files the GUI panel reads:
@@ -1152,7 +1153,7 @@ def circuit_breaker_summary(window_hours: int = 24) -> Dict[str, Any]:
     can't be imported, or the underlying files can't be read. Never raises
     (CONSTRAINT #6)."""
     try:
-        from gui.circuit_breakers import collect_circuit_breaker_trips, summarise_trips
+        from shared.circuit_breakers import collect_circuit_breaker_trips, summarise_trips
     except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
         logger.debug("circuit_breaker_summary import failed: %s", exc)
         return _empty_circuit_breakers(window_hours)
@@ -1205,7 +1206,7 @@ def circuit_breaker_summary(window_hours: int = 24) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 6. System telemetry — host + current-process CPU/memory/disk. Point-in-time
 # only (no persisted history — see module docstring section 6). Calls
-# gui.observability_telemetry.collect_system_telemetry directly (lazy import,
+# shared.observability_telemetry.collect_system_telemetry directly (lazy import,
 # same gui.* precedent as circuit_breaker_summary above) rather than
 # re-deriving psutil sampling here.
 # ---------------------------------------------------------------------------
@@ -1238,7 +1239,7 @@ def system_telemetry_summary() -> Dict[str, Any]:
     Unlike every other section in this module, this is NOT a read of a
     persisted artifact — host resource usage is inherently point-in-time, so
     there is no history to report and none is fabricated (CONSTRAINT #4).
-    Every call re-samples via ``gui.observability_telemetry
+    Every call re-samples via ``shared.observability_telemetry
     .collect_system_telemetry()`` (already backed by ``psutil``, a hard
     ``requirements.txt`` dependency — NOT ``requirements-optional.txt``).
 
@@ -1247,7 +1248,7 @@ def system_telemetry_summary() -> Dict[str, Any]:
     raises, converting it to this module's ``None``-for-missing convention.
     Never raises (CONSTRAINT #6)."""
     try:
-        from gui.observability_telemetry import collect_system_telemetry
+        from shared.observability_telemetry import collect_system_telemetry
     except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
         logger.debug("system_telemetry_summary import failed: %s", exc)
         return _empty_system_telemetry("Telemetry module unavailable.")
@@ -1369,7 +1370,7 @@ def latency_heatmap_summary(limit: int = 200) -> Dict[str, Any]:
 # Deliberately its OWN endpoint (GET /observability/logs), not folded into the
 # summary composite: unlike the other (cheap, scalar) sections, a log tail is
 # a meaningfully heavier payload naturally viewed on-demand rather than on
-# every Mission Control page load. Calls gui.observability_telemetry's pure
+# every Mission Control page load. Calls shared.observability_telemetry's pure
 # parsing helpers directly (lazy import, same gui.* precedent as
 # circuit_breaker_summary/system_telemetry_summary above) rather than
 # re-deriving log parsing/classification here.
@@ -1422,13 +1423,13 @@ def log_aggregation(limit: int = 300) -> Dict[str, Any]:
     ``reason``) when the log file doesn't exist yet or the module can't be
     imported. Never raises (CONSTRAINT #6)."""
     try:
-        from gui.observability_telemetry import (
+        from shared.observability_telemetry import (
             classify_log_entry,
             parse_log_lines,
             read_log_tail,
             tally_levels,
         )
-        from gui.orchestrator_runner import TELEMETRY_LOG_PATH
+        from shared.orchestrator_runner import TELEMETRY_LOG_PATH
     except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
         logger.debug("log_aggregation import failed: %s", exc)
         return _empty_log_aggregation("Log module unavailable.")
@@ -1550,7 +1551,7 @@ def sizing_cap_audit_summary(limit: int = 100) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # 9. ETF volatility transmission — read-only diagnostic view.
-# Reuses gui.observability_panel_helpers.etf_transmission_rows directly — see
+# Reuses shared.observability_panel_helpers.etf_transmission_rows directly — see
 # module docstring section 9.
 # ---------------------------------------------------------------------------
 
@@ -1570,7 +1571,7 @@ def etf_transmission_summary(snapshot: Optional[dict]) -> Dict[str, Any]:
     independent master-switch states, the PWA's port of
     ``gui/panels/observability.py::_render_observability_etf_transmission``.
 
-    Reuses ``gui.observability_panel_helpers.etf_transmission_rows`` directly
+    Reuses ``shared.observability_panel_helpers.etf_transmission_rows`` directly
     (already pure/Streamlit-free and unit-tested) against ``snapshot``'s
     ``signals`` list. Returns the honest empty shape (CONSTRAINT #4) —
     never a table of fabricated nulls — when ``ETF_TRANSMISSION_ENABLED`` is
@@ -1584,7 +1585,7 @@ def etf_transmission_summary(snapshot: Optional[dict]) -> Dict[str, Any]:
         )
 
     try:
-        from gui.observability_panel_helpers import etf_transmission_rows
+        from shared.observability_panel_helpers import etf_transmission_rows
     except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
         logger.debug("etf_transmission_summary import failed: %s", exc)
         return _empty_etf_transmission("ETF transmission helper module unavailable.")
@@ -1623,10 +1624,10 @@ _NO_HEARTBEAT_HISTORY_NOTE = (
 def heartbeat_summary() -> Dict[str, Any]:
     """Current orchestrator heartbeat age (seconds) + freshness label.
 
-    Sourced from ``gui.orchestrator_runner.heartbeat_age_seconds()`` (reads
+    Sourced from ``shared.orchestrator_runner.heartbeat_age_seconds()`` (reads
     ``output/heartbeat.txt``'s mtime — written only by
     ``main_orchestrator.py``'s async heartbeat task) and classified via
-    ``gui.observability_panel_helpers.heartbeat_status`` — both already
+    ``shared.observability_panel_helpers.heartbeat_status`` — both already
     reused elsewhere in this codebase, not re-derived here.
 
     ``history_available`` is always ``False`` here — see
@@ -1634,8 +1635,8 @@ def heartbeat_summary() -> Dict[str, Any]:
     a durable trend can't be honestly served (CONSTRAINT #4: no fabricated
     single-point "trend"). Never raises (CONSTRAINT #6)."""
     try:
-        from gui.observability_panel_helpers import heartbeat_status
-        from gui.orchestrator_runner import heartbeat_age_seconds
+        from shared.observability_panel_helpers import heartbeat_status
+        from shared.orchestrator_runner import heartbeat_age_seconds
     except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
         logger.debug("heartbeat_summary import failed: %s", exc)
         return {

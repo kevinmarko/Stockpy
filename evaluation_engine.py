@@ -1085,7 +1085,7 @@ def recommendation_tracking_report(
 
     # --- Read decision log (lazy import to avoid circular dependency) -----------
     try:
-        from gui.decision_log import read_decisions
+        from shared.decision_log import read_decisions
         entries = read_decisions(log_path)
     except Exception as exc:
         logger.warning("recommendation_tracking_report: cannot read decision log: %s", exc)

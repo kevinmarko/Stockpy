@@ -1,14 +1,21 @@
 """
-tests/test_app_shell.py — orchestration tests for app_shell.py
-===============================================================
-app_shell.py depends on three sibling modules built in parallel by other
-workstreams (WS1/WS2/WS3): desktop.net_util, desktop.ui_server, and
-desktop.engine_supervisor. Those modules may not exist yet in this worktree
-at test-collection time, so every test in this file installs fake modules
-into sys.modules BEFORE importing app_shell, then patches the specific
-functions under test via unittest.mock.patch. This exercises app_shell's
-OWN orchestration logic (call order, error handling, teardown-on-exception)
-completely independently of whether the real desktop/ package has landed.
+tests/test_app_shell.py — orchestration tests for
+legacy.streamlit_command_center.app_shell
+============================================================================
+app_shell.py depends on three sibling modules in the same archived package:
+legacy.streamlit_command_center.desktop_shell.net_util,
+legacy.streamlit_command_center.desktop_shell.ui_server, and
+legacy.streamlit_command_center.desktop_shell.engine_supervisor. Every test
+in this file installs fake versions of those three LEAF modules into
+sys.modules BEFORE importing app_shell, then patches the specific functions
+under test via unittest.mock.patch. This exercises app_shell's OWN
+orchestration logic (call order, error handling, teardown-on-exception)
+completely independently of the real desktop_shell modules' own behavior.
+
+Unlike the three leaf modules, the parent packages (`legacy`,
+`legacy.streamlit_command_center`, `legacy.streamlit_command_center.desktop_shell`)
+are NOT faked — they're real, tiny, side-effect-free packages on disk, so
+Python's normal import machinery resolves them without help.
 
 The `webview` module (pywebview) is mocked the same way — these tests never
 require pywebview to be installed.
@@ -22,33 +29,33 @@ import types
 import unittest
 from unittest.mock import MagicMock, call, patch
 
+_APP_SHELL_MODULE_NAME = "legacy.streamlit_command_center.app_shell"
+_DESKTOP_SHELL_PREFIX = "legacy.streamlit_command_center.desktop_shell"
+
 
 def _install_fake_desktop_modules() -> None:
-    """Install minimal fake `desktop.net_util`, `desktop.ui_server`, and
-    `desktop.engine_supervisor` modules into sys.modules so `app_shell`'s
-    `from desktop.xxx import yyy` statements resolve without the real
-    desktop/ package being present. Each fake module exposes MagicMock
-    callables matching the frozen signatures app_shell.py imports.
+    """Install minimal fake `legacy.streamlit_command_center.desktop_shell.net_util`,
+    `...ui_server`, and `...engine_supervisor` LEAF modules into sys.modules so
+    `app_shell`'s `from legacy.streamlit_command_center.desktop_shell.xxx import
+    yyy` statements resolve against fakes instead of the real implementations.
+    Each fake module exposes MagicMock callables matching the frozen
+    signatures app_shell.py imports.
     """
-    desktop_pkg = types.ModuleType("desktop")
-    desktop_pkg.__path__ = []  # mark as a package
-
-    net_util = types.ModuleType("desktop.net_util")
+    net_util = types.ModuleType(f"{_DESKTOP_SHELL_PREFIX}.net_util")
     net_util.find_free_port = MagicMock(name="find_free_port", return_value=54321)
     net_util.wait_for_http = MagicMock(name="wait_for_http", return_value=True)
 
-    ui_server = types.ModuleType("desktop.ui_server")
+    ui_server = types.ModuleType(f"{_DESKTOP_SHELL_PREFIX}.ui_server")
     ui_server.start_ui_server = MagicMock(name="start_ui_server")
     ui_server.stop_ui_server = MagicMock(name="stop_ui_server", return_value=True)
 
-    engine_supervisor = types.ModuleType("desktop.engine_supervisor")
+    engine_supervisor = types.ModuleType(f"{_DESKTOP_SHELL_PREFIX}.engine_supervisor")
     engine_supervisor.start_engine = MagicMock(name="start_engine")
     engine_supervisor.stop_engine = MagicMock(name="stop_engine", return_value=True)
 
-    sys.modules["desktop"] = desktop_pkg
-    sys.modules["desktop.net_util"] = net_util
-    sys.modules["desktop.ui_server"] = ui_server
-    sys.modules["desktop.engine_supervisor"] = engine_supervisor
+    sys.modules[f"{_DESKTOP_SHELL_PREFIX}.net_util"] = net_util
+    sys.modules[f"{_DESKTOP_SHELL_PREFIX}.ui_server"] = ui_server
+    sys.modules[f"{_DESKTOP_SHELL_PREFIX}.engine_supervisor"] = engine_supervisor
 
 
 def _install_fake_webview_module() -> types.ModuleType:
@@ -63,28 +70,32 @@ def _install_fake_webview_module() -> types.ModuleType:
 
 
 def _purge_app_shell_related_modules() -> dict:
-    """Remove app_shell + desktop.*/webview modules from sys.modules so each
-    test gets a clean import (patched mocks don't bleed across tests), and
-    return a snapshot of whatever was actually there beforehand.
+    """Remove app_shell + desktop_shell.*/webview modules from sys.modules so
+    each test gets a clean import (patched mocks don't bleed across tests),
+    and return a snapshot of whatever was actually there beforehand.
 
-    The "desktop" prefix match doesn't distinguish this file's fakes (
-    desktop.net_util/ui_server/engine_supervisor) from the REAL desktop/
-    package, which by now also holds daemon_runtime.py, run_history_store.py,
-    orchestrator_daemon.py, etc. A plain delete-with-no-restore would evict
-    those real modules from sys.modules for the rest of the pytest session:
-    fine for code that only ever imports desktop.* once at module top level
-    (existing objects keep working even if unreachable via sys.modules), but
-    NOT fine for anything doing a runtime `import desktop.xxx` inside a
-    function body (e.g. OrchestratorDaemon._run_one_cycle's lazy
-    RunHistoryStore import) -- a later test importing that fresh would get a
-    BRAND NEW module/class object, silently distinct from (and un-
-    monkeypatchable via) whatever a test imported at collection time. The
-    caller is expected to restore the returned snapshot afterward via
-    _restore_app_shell_related_modules.
+    This ALSO purges the real `desktop` package (daemon_runtime.py,
+    run_history_store.py, orchestrator_daemon.py, etc. — unrelated to
+    app_shell, but a plain delete-with-no-restore would evict it from
+    sys.modules for the rest of the pytest session if it were ever imported
+    here without care): fine for code that only ever imports desktop.* once
+    at module top level (existing objects keep working even if unreachable
+    via sys.modules), but NOT fine for anything doing a runtime
+    `import desktop.xxx` inside a function body (e.g.
+    OrchestratorDaemon._run_one_cycle's lazy RunHistoryStore import) -- a
+    later test importing that fresh would get a BRAND NEW module/class
+    object, silently distinct from (and un-monkeypatchable via) whatever a
+    test imported at collection time. The caller is expected to restore the
+    returned snapshot afterward via _restore_app_shell_related_modules.
     """
     snapshot: dict = {}
     for name in list(sys.modules):
-        if name == "app_shell" or name.startswith("desktop") or name == "webview":
+        if (
+            name == _APP_SHELL_MODULE_NAME
+            or name.startswith(_DESKTOP_SHELL_PREFIX)
+            or name.startswith("desktop")
+            or name == "webview"
+        ):
             snapshot[name] = sys.modules.pop(name)
     return snapshot
 
@@ -94,7 +105,12 @@ def _restore_app_shell_related_modules(snapshot: dict) -> None:
     app_shell itself, so the next test re-imports it fresh) and put back
     whatever real modules were there before."""
     for name in list(sys.modules):
-        if name == "app_shell" or name.startswith("desktop") or name == "webview":
+        if (
+            name == _APP_SHELL_MODULE_NAME
+            or name.startswith(_DESKTOP_SHELL_PREFIX)
+            or name.startswith("desktop")
+            or name == "webview"
+        ):
             del sys.modules[name]
     sys.modules.update(snapshot)
 
@@ -111,11 +127,12 @@ class BaseAppShellTest(unittest.TestCase):
         _install_fake_desktop_modules()
         self.fake_webview = _install_fake_webview_module()
 
-        # Import app_shell fresh, with the fake desktop.* modules already
-        # registered in sys.modules so its top-level `from dotenv import ...`
-        # succeeds normally and its deferred `from desktop.xxx import yyy`
+        # Import app_shell fresh, with the fake desktop_shell.* modules
+        # already registered in sys.modules so its top-level
+        # `from dotenv import ...` succeeds normally and its deferred
+        # `from legacy.streamlit_command_center.desktop_shell.xxx import yyy`
         # (inside main()) resolves against our fakes.
-        import app_shell  # noqa: PLC0415
+        import legacy.streamlit_command_center.app_shell as app_shell  # noqa: PLC0415
         self.app_shell = app_shell
 
         # Prevent real .env loading from mutating the test process env.
@@ -138,9 +155,9 @@ class TestHappyPath(BaseAppShellTest):
         """
         manager = MagicMock()
 
-        from desktop.net_util import wait_for_http
-        from desktop.ui_server import start_ui_server, stop_ui_server
-        from desktop.engine_supervisor import start_engine, stop_engine
+        from legacy.streamlit_command_center.desktop_shell.net_util import wait_for_http
+        from legacy.streamlit_command_center.desktop_shell.ui_server import start_ui_server, stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine, stop_engine
 
         manager.attach_mock(start_ui_server, "start_ui_server")
         manager.attach_mock(start_engine, "start_engine")
@@ -166,7 +183,7 @@ class TestHappyPath(BaseAppShellTest):
         self.assertEqual(actual_order, expected_order)
 
     def test_ui_port_passed_through_to_start_ui_server_and_url(self):
-        from desktop.ui_server import start_ui_server
+        from legacy.streamlit_command_center.desktop_shell.ui_server import start_ui_server
 
         self.app_shell.main(interval_seconds=60, ui_port=7777)
 
@@ -176,8 +193,8 @@ class TestHappyPath(BaseAppShellTest):
         )
 
     def test_ui_port_none_resolves_via_find_free_port(self):
-        from desktop.net_util import find_free_port
-        from desktop.ui_server import start_ui_server
+        from legacy.streamlit_command_center.desktop_shell.net_util import find_free_port
+        from legacy.streamlit_command_center.desktop_shell.ui_server import start_ui_server
 
         find_free_port.return_value = 54321
         self.app_shell.main(interval_seconds=60, ui_port=None)
@@ -186,14 +203,14 @@ class TestHappyPath(BaseAppShellTest):
         start_ui_server.assert_called_once_with(54321, headless=True)
 
     def test_engine_started_with_interval_seconds(self):
-        from desktop.engine_supervisor import start_engine
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine
 
         self.app_shell.main(interval_seconds=42, ui_port=1234)
         start_engine.assert_called_once_with(42)
 
     def test_teardown_called_exactly_once_each(self):
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         self.app_shell.main(interval_seconds=60, ui_port=1234)
         stop_engine.assert_called_once()
@@ -205,7 +222,7 @@ class TestWaitForHttpNotReady(BaseAppShellTest):
         """If wait_for_http returns False, app_shell should log an error but
         still attempt to open the window (best-effort, never hang forever).
         """
-        from desktop.net_util import wait_for_http
+        from legacy.streamlit_command_center.desktop_shell.net_util import wait_for_http
 
         wait_for_http.return_value = False
 
@@ -223,8 +240,8 @@ class TestExceptionDuringWindow(BaseAppShellTest):
         """
         self.fake_webview.start.side_effect = RuntimeError("window crashed")
 
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         with self.assertRaises(RuntimeError):
             self.app_shell.main(interval_seconds=60, ui_port=1234)
@@ -235,8 +252,8 @@ class TestExceptionDuringWindow(BaseAppShellTest):
     def test_create_window_exception_still_tears_down(self):
         self.fake_webview.create_window.side_effect = RuntimeError("cannot create window")
 
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         with self.assertRaises(RuntimeError):
             self.app_shell.main(interval_seconds=60, ui_port=1234)
@@ -249,8 +266,8 @@ class TestExceptionDuringWindow(BaseAppShellTest):
         stop_ui_server must still run; stop_engine must NOT be called since
         there is no handle to stop.
         """
-        from desktop.engine_supervisor import start_engine, stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine, stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         start_engine.side_effect = RuntimeError("engine failed to start")
 
@@ -263,8 +280,8 @@ class TestExceptionDuringWindow(BaseAppShellTest):
     def test_keyboard_interrupt_during_webview_start_still_tears_down(self):
         self.fake_webview.start.side_effect = KeyboardInterrupt()
 
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         with self.assertRaises(KeyboardInterrupt):
             self.app_shell.main(interval_seconds=60, ui_port=1234)
@@ -318,9 +335,9 @@ class TestSigtermHandling(BaseAppShellTest):
     def setUp(self):
         super().setUp()
         _FakeWatcherThread.instances = []
-        self._thread_patcher = patch("app_shell.threading.Thread", _FakeWatcherThread)
+        self._thread_patcher = patch("legacy.streamlit_command_center.app_shell.threading.Thread", _FakeWatcherThread)
         self._thread_patcher.start()
-        self._sigwait_patcher = patch("app_shell.signal.sigwait", return_value=signal.SIGTERM)
+        self._sigwait_patcher = patch("legacy.streamlit_command_center.app_shell.signal.sigwait", return_value=signal.SIGTERM)
         self._sigwait_patcher.start()
         self.addCleanup(self._thread_patcher.stop)
         self.addCleanup(self._sigwait_patcher.stop)
@@ -331,7 +348,7 @@ class TestSigtermHandling(BaseAppShellTest):
         return _FakeWatcherThread.instances[0].target
 
     def test_watcher_thread_started_as_daemon_with_sigterm_blocked(self):
-        with patch("app_shell.signal.pthread_sigmask") as mock_mask:
+        with patch("legacy.streamlit_command_center.app_shell.signal.pthread_sigmask") as mock_mask:
             rc = self.app_shell.main(interval_seconds=60, ui_port=1234)
 
         self.assertEqual(rc, 0)
@@ -342,7 +359,7 @@ class TestSigtermHandling(BaseAppShellTest):
         mock_mask.assert_any_call(signal.SIG_BLOCK, {signal.SIGTERM})
 
     def test_pthread_sigmask_unblocked_on_clean_exit(self):
-        with patch("app_shell.signal.pthread_sigmask") as mock_mask:
+        with patch("legacy.streamlit_command_center.app_shell.signal.pthread_sigmask") as mock_mask:
             self.app_shell.main(interval_seconds=60, ui_port=1234)
 
         mock_mask.assert_any_call(signal.SIG_UNBLOCK, {signal.SIGTERM})
@@ -353,8 +370,8 @@ class TestSigtermHandling(BaseAppShellTest):
         returning would) must call stop_engine/stop_ui_server and then
         force-exit via os._exit.
         """
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         def _webview_start_side_effect(*a, **kw):
             # Simulate the OS delivering SIGTERM: invoke the watcher's
@@ -364,7 +381,7 @@ class TestSigtermHandling(BaseAppShellTest):
 
         self.fake_webview.start.side_effect = _webview_start_side_effect
 
-        with patch("app_shell.os._exit") as mock_exit:
+        with patch("legacy.streamlit_command_center.app_shell.os._exit") as mock_exit:
             self.app_shell.main(interval_seconds=60, ui_port=1234)
 
         stop_engine.assert_called_once()
@@ -375,14 +392,14 @@ class TestSigtermHandling(BaseAppShellTest):
         """If SIGTERM arrives (and is handled) mid-run, main()'s own
         `finally` teardown afterward must not double-stop anything.
         """
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import stop_ui_server
 
         def _webview_start_side_effect(*a, **kw):
             # os._exit is mocked to a no-op so control returns here instead
             # of the process actually exiting, letting us prove the
             # subsequent `finally` path doesn't double-call teardown.
-            with patch("app_shell.os._exit"):
+            with patch("legacy.streamlit_command_center.app_shell.os._exit"):
                 self._watcher_target()()
 
         self.fake_webview.start.side_effect = _webview_start_side_effect
@@ -398,8 +415,8 @@ class TestSigtermHandling(BaseAppShellTest):
         raise or call stop_engine/stop_ui_server; there is nothing to tear
         down yet.
         """
-        from desktop.engine_supervisor import stop_engine
-        from desktop.ui_server import start_ui_server, stop_ui_server
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
+        from legacy.streamlit_command_center.desktop_shell.ui_server import start_ui_server, stop_ui_server
 
         def _start_ui_server_side_effect(*a, **kw):
             self._watcher_target()()
@@ -407,7 +424,7 @@ class TestSigtermHandling(BaseAppShellTest):
 
         start_ui_server.side_effect = _start_ui_server_side_effect
 
-        with patch("app_shell.os._exit") as mock_exit:
+        with patch("legacy.streamlit_command_center.app_shell.os._exit") as mock_exit:
             self.app_shell.main(interval_seconds=60, ui_port=1234)
 
         stop_engine.assert_not_called()

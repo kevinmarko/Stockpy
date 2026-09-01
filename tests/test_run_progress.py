@@ -1,8 +1,8 @@
 """
 tests/test_run_progress.py
 ===========================
-Unit tests for :func:`gui.orchestrator_runner.compute_run_progress` and its
-:class:`gui.orchestrator_runner.RunProgress` result type.
+Unit tests for :func:`shared.orchestrator_runner.compute_run_progress` and its
+:class:`shared.orchestrator_runner.RunProgress` result type.
 
 Streamlit panels can't be rendered without a live Streamlit runtime, so — like
 ``tests/test_pipeline_stage_status.py`` before it — these tests exercise only
@@ -28,7 +28,7 @@ Verified invariants
 *   Subprocess handle + missing ``progress.json`` + NOT running -> ``None``.
 *   Daemon handle whose Control API run-status payload carries a ``progress``
     sub-dict -> real percent, ``indeterminate=False``, sourced from that dict
-    (monkeypatches ``gui.daemon_client.get_run_status``, which
+    (monkeypatches ``shared.daemon_client.get_run_status``, which
     ``orchestrator_runner._daemon_run_status`` wraps).
 *   Daemon handle with no ``progress`` sub-dict falls back to the same coarse
     stage-count logic as the subprocess path.
@@ -116,7 +116,7 @@ def _write_progress_json(
 
 
 def test_compute_run_progress_none_handle():
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
 
     assert compute_run_progress(None) is None
 
@@ -127,7 +127,7 @@ def test_compute_run_progress_none_handle():
 
 
 def test_subprocess_fresh_progress_returns_real_percent(tmp_path):
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
     from settings import settings
 
     _write_progress_json(tmp_path, percent=58.3, age_seconds=0.0)
@@ -146,7 +146,7 @@ def test_subprocess_fresh_progress_returns_real_percent(tmp_path):
 def test_subprocess_fresh_terminal_succeeded_is_100_percent(tmp_path):
     """A terminal 'succeeded' snapshot always reports 100%, regardless of the
     raw stored percent field (mirrors reporting.progress.ProgressReporter.finish)."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
     from settings import settings
 
     _write_progress_json(tmp_path, state="succeeded", percent=100.0, age_seconds=0.0)
@@ -166,7 +166,7 @@ def test_subprocess_fresh_terminal_succeeded_is_100_percent(tmp_path):
 
 
 def test_subprocess_stale_progress_falls_back_to_coarse(tmp_path, monkeypatch):
-    from gui.orchestrator_runner import StageStatus, compute_run_progress
+    from shared.orchestrator_runner import StageStatus, compute_run_progress
     from settings import settings
 
     # PROGRESS_POLL_SECONDS may not exist on `settings` yet in this worktree
@@ -207,7 +207,7 @@ def test_subprocess_stale_progress_falls_back_to_coarse(tmp_path, monkeypatch):
 def test_subprocess_missing_progress_running_with_log_is_coarse(tmp_path):
     """No progress.json, but the log shows one stage marker and the run is
     still active -> coarse indeterminate estimate (not None)."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
     from settings import settings
 
     log = tmp_path / "run.log"
@@ -227,7 +227,7 @@ def test_subprocess_missing_progress_running_with_log_is_coarse(tmp_path):
 def test_subprocess_missing_progress_no_log_returns_none(tmp_path):
     """No progress.json AND no log written yet (nothing observed at all) ->
     None rather than a fabricated 0% bar (CONSTRAINT #4)."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
     from settings import settings
 
     handle = _make_handle(
@@ -246,7 +246,7 @@ def test_subprocess_missing_progress_no_log_returns_none(tmp_path):
 def test_subprocess_missing_progress_not_running_returns_none(tmp_path):
     """No progress.json and the run has already finished -> None (nothing
     fresh/terminal to show)."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
     from settings import settings
 
     handle = _make_handle(
@@ -268,7 +268,7 @@ def test_subprocess_missing_progress_not_running_returns_none(tmp_path):
 
 
 def test_daemon_handle_with_progress_dict_returns_real_percent(monkeypatch):
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
 
     fake_status = {
         "run_id": "daemon-run-1",
@@ -289,7 +289,7 @@ def test_daemon_handle_with_progress_dict_returns_real_percent(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "gui.daemon_client.get_run_status", lambda run_id, timeout=2.0: fake_status
+        "shared.daemon_client.get_run_status", lambda run_id, timeout=2.0: fake_status
     )
 
     handle = _make_handle(is_running=True, backend="daemon", daemon_run_id="daemon-run-1")
@@ -303,7 +303,7 @@ def test_daemon_handle_with_progress_dict_returns_real_percent(monkeypatch):
 
 
 def test_daemon_handle_terminal_succeeded_progress_is_100_percent(monkeypatch):
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
 
     fake_status = {
         "run_id": "daemon-run-2",
@@ -324,7 +324,7 @@ def test_daemon_handle_terminal_succeeded_progress_is_100_percent(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "gui.daemon_client.get_run_status", lambda run_id, timeout=2.0: fake_status
+        "shared.daemon_client.get_run_status", lambda run_id, timeout=2.0: fake_status
     )
 
     handle = _make_handle(is_running=False, returncode=0, backend="daemon", daemon_run_id="daemon-run-2")
@@ -339,11 +339,11 @@ def test_daemon_handle_no_progress_dict_falls_back_to_coarse(monkeypatch):
     """Control API reachable, run status known, but no 'progress' sub-dict
     (e.g. that piece hasn't shipped yet) -> uniform coarse status derived
     from compute_stage_status's daemon branch (all ACTIVE while running)."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
 
     fake_status = {"run_id": "daemon-run-3", "state": "running"}
     monkeypatch.setattr(
-        "gui.daemon_client.get_run_status", lambda run_id, timeout=2.0: fake_status
+        "shared.daemon_client.get_run_status", lambda run_id, timeout=2.0: fake_status
     )
 
     handle = _make_handle(is_running=True, backend="daemon", daemon_run_id="daemon-run-3")
@@ -359,10 +359,10 @@ def test_daemon_handle_no_progress_dict_falls_back_to_coarse(monkeypatch):
 def test_daemon_handle_unreachable_not_running_returns_none(monkeypatch):
     """Daemon unreachable (get_run_status -> None) and the handle reports not
     running -> None (nothing to show, matches the subprocess not-running case)."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
 
     monkeypatch.setattr(
-        "gui.daemon_client.get_run_status", lambda run_id, timeout=2.0: None
+        "shared.daemon_client.get_run_status", lambda run_id, timeout=2.0: None
     )
 
     handle = _make_handle(is_running=False, backend="daemon", daemon_run_id="daemon-run-4")
@@ -377,7 +377,7 @@ def test_daemon_handle_unreachable_not_running_returns_none(monkeypatch):
 
 
 def test_malformed_progress_payload_never_raises(tmp_path):
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
     from settings import settings
 
     bad_path = tmp_path / "progress.json"
@@ -396,14 +396,14 @@ def test_malformed_progress_payload_never_raises(tmp_path):
 
 
 def test_daemon_client_exception_degrades_gracefully(monkeypatch, tmp_path):
-    """If gui.daemon_client.get_run_status itself raises, compute_run_progress
+    """If shared.daemon_client.get_run_status itself raises, compute_run_progress
     must still degrade (never propagate) — CONSTRAINT #6."""
-    from gui.orchestrator_runner import compute_run_progress
+    from shared.orchestrator_runner import compute_run_progress
 
     def _boom(run_id, timeout=2.0):
         raise RuntimeError("network exploded")
 
-    monkeypatch.setattr("gui.daemon_client.get_run_status", _boom)
+    monkeypatch.setattr("shared.daemon_client.get_run_status", _boom)
 
     handle = _make_handle(is_running=False, backend="daemon", daemon_run_id="daemon-run-5")
     rp = compute_run_progress(handle)

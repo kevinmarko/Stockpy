@@ -77,7 +77,7 @@ webapp/
 - Dark fintech palette on `#0b0e11` base / `#12161c` surfaces (Pilots-PWA-only —
   the Streamlit operator console renders on its own light chrome, not shared).
   Its status colors — green `#10b981` growth / red `#ef4444` decline / amber
-  `#f59e0b` caution — DO reuse `gui/styling.py`'s `BRAND_ACCENTS` trio exactly.
+  `#f59e0b` caution — DO reuse `shared/styling.py`'s `BRAND_ACCENTS` trio exactly.
 - The sector-donut categorical palette was validated with the dataviz skill's
   `validate_palette.js` against the dark surface: lightness band, chroma floor,
   and ≥3:1 contrast all pass for all 8 slots; CVD separation is a WARN (worst

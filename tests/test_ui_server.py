@@ -27,9 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from desktop import ui_server
-
-
+from legacy.streamlit_command_center.desktop_shell import ui_server
 # ---------------------------------------------------------------------------
 # start_ui_server — argv / cwd construction
 # ---------------------------------------------------------------------------
@@ -65,7 +63,7 @@ def test_start_ui_server_builds_correct_argv(monkeypatch, tmp_path):
         "-m",
         "streamlit",
         "run",
-        "gui/app.py",
+        "legacy/streamlit_command_center/app.py",
         "--server.headless",
         "true",
         "--server.port",

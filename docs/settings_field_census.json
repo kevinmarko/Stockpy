@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "50a960deb67a9d7d191ba9e22bd11e4bc46f49ed",
+    "git_commit": "9d1e8c2782db436c420d1518d228417a4e504d1b",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -1117,7 +1117,7 @@
     "allowed_and_secret_overlap": []
   },
   "live_patchable_keys": {
-    "source": "gui/ai_control_center.py::LIVE_PATCHABLE_KEYS",
+    "source": "shared/ai_control_center.py::LIVE_PATCHABLE_KEYS",
     "count": 11,
     "keys": [
       "GRAVITY_AI_RUNNER_ENABLED",
@@ -3950,7 +3950,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 445,
+    "files_scanned": 447,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -4532,27 +4532,27 @@
           "expr": "getattr(_settings, name, None)"
         },
         {
-          "file": "gui/panels/ai_control_center.py",
+          "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
           "line": 164,
           "expr": "getattr(settings, tkey, False)"
         },
         {
-          "file": "gui/panels/ai_control_center.py",
+          "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
           "line": 189,
           "expr": "getattr(settings, sel_key, 'none')"
         },
         {
-          "file": "gui/panels/settings_manager.py",
+          "file": "legacy/streamlit_command_center/panels/settings_manager.py",
           "line": 190,
           "expr": "getattr(settings, key, fallback)"
         },
         {
-          "file": "gui/panels/settings_manager.py",
+          "file": "legacy/streamlit_command_center/panels/settings_manager.py",
           "line": 207,
           "expr": "getattr(settings, key, '')"
         },
         {
-          "file": "gui/panels/settings_manager.py",
+          "file": "legacy/streamlit_command_center/panels/settings_manager.py",
           "line": 275,
           "expr": "getattr(settings, key, [])"
         },
@@ -4563,12 +4563,12 @@
         },
         {
           "file": "runtime_flags_writer.py",
-          "line": 774,
+          "line": 773,
           "expr": "getattr(settings_module.settings, key, None)"
         },
         {
           "file": "runtime_flags_writer.py",
-          "line": 783,
+          "line": 782,
           "expr": "getattr(settings_module.settings, key, None)"
         }
       ]
@@ -4963,7 +4963,7 @@
         "field": "ETF_HOLDINGS_TICKERS",
         "name_literal_sites": [
           "api/pilots_api.py:4923",
-          "gui/panels/settings_manager.py:126"
+          "legacy/streamlit_command_center/panels/settings_manager.py:126"
         ],
         "name_literal_site_count": 2,
         "likely_dynamic_read": true
@@ -4972,7 +4972,7 @@
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
           "api/pilots_api.py:4895",
-          "gui/panels/settings_manager.py:162"
+          "legacy/streamlit_command_center/panels/settings_manager.py:162"
         ],
         "name_literal_site_count": 2,
         "likely_dynamic_read": true
@@ -5004,7 +5004,7 @@
       {
         "field": "PROMPT_REGISTRY_REFRESH_SECONDS",
         "name_literal_sites": [
-          "Gravity AI Review Suite.py:11072"
+          "Gravity AI Review Suite.py:11079"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true

@@ -44,9 +44,9 @@ from __future__ import annotations
 
 import pytest
 
-import env_io
-from gui.env_io import ALLOWED_KEYS, SECRET_KEYS
-from gui.panels.settings_manager import _SETTINGS_LAYOUT
+import shared.env_io as env_io
+from shared.env_io import ALLOWED_KEYS, SECRET_KEYS
+from legacy.streamlit_command_center.panels.settings_manager import _SETTINGS_LAYOUT
 
 BOOL_KEYS = [
     "ETF_HOLDINGS_ENABLED",

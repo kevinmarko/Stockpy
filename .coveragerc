@@ -10,6 +10,21 @@ omit =
     setup.py
     conftest.py
     */conftest.py
+    # legacy/streamlit_command_center/* is the frozen, decommissioned
+    # Streamlit "InvestYo Command Center" + native-shell archive (see
+    # CLAUDE.md's "Frontend strategy" section) -- no new tabs/panels/
+    # capability, so its coverage number will never move again except to
+    # drift downward as the rest of the platform changes around it. Unlike
+    # the earlier documented decision to NOT add a gui/panels/* omit
+    # (docs/test_coverage_analysis.md's ".coveragerc vs. this doc's own
+    # stated intent" section -- made while that code was still being
+    # actively extracted/tested), that concern no longer applies once the
+    # code is explicitly frozen: there is no more "keep the pressure on to
+    # write more tests" signal to protect. Omitting it keeps `fail_under`
+    # a real regression gate on the actively-developed engine/signal/
+    # execution/webapp code, not a number a frozen archive can silently
+    # drag down over time.
+    legacy/*
 
 [report]
 show_missing = True

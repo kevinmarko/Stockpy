@@ -3,7 +3,7 @@ tests/test_validation_lab_panel.py
 ==================================
 Offline unit tests for Agent B's 🔬 **Validation Lab** tab:
 
-* ``render_validation_lab`` is importable and exported on the ``gui.panels``
+* ``render_validation_lab`` is importable and exported on the ``legacy.streamlit_command_center.panels``
   namespace (so ``gui/app.py``'s ``safe_panel(panels.render_validation_lab)``
   binding resolves).
 * ``orchestrator_runner.launch_validation_run`` builds the exact expected argv
@@ -54,7 +54,7 @@ class TestLaunchValidationRun:
     def test_builds_expected_argv(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        from gui import orchestrator_runner
+        from shared import orchestrator_runner
 
         _FakePopen.last_cmd = None
         monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _FakePopen)
@@ -89,7 +89,7 @@ class TestLaunchValidationRun:
     def test_multiple_strategies_comma_joined(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        from gui import orchestrator_runner
+        from shared import orchestrator_runner
 
         _FakePopen.last_cmd = None
         monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _FakePopen)
@@ -104,7 +104,7 @@ class TestLaunchValidationRun:
         assert cmd[cmd.index("--strategies") + 1] == "a_strategy,b_strategy"
 
     def test_empty_strategies_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from gui import orchestrator_runner
+        from shared import orchestrator_runner
 
         _FakePopen.last_cmd = None
         monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _FakePopen)
@@ -120,19 +120,19 @@ class TestLaunchValidationRun:
 # ---------------------------------------------------------------------------
 class TestPanelWiring:
     def test_render_validation_lab_importable(self) -> None:
-        from gui.panels.validation_lab import render_validation_lab
+        from legacy.streamlit_command_center.panels.validation_lab import render_validation_lab
 
         assert callable(render_validation_lab)
 
     def test_render_validation_lab_on_panels_namespace(self) -> None:
-        from gui import panels
+        from legacy.streamlit_command_center import panels
 
         assert hasattr(panels, "render_validation_lab")
         assert callable(panels.render_validation_lab)
 
     def test_tab_label_present_in_app_source(self) -> None:
         # Read the source (not import — gui/app.py runs Streamlit at import time).
-        src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+        src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
         assert '"🔬 Validation Lab"' in src
         # And that it is bound as tabs[17] with the right panel.
         assert "safe_panel(panels.render_validation_lab)" in src
@@ -161,20 +161,20 @@ def _valid_anchors_from_guide() -> Set[str]:
 
 class TestValidationLabHelp:
     def test_tab_help_entry_exists(self) -> None:
-        from gui.help_content import TAB_HELP
+        from shared.help_content import TAB_HELP
 
         assert "validation_lab" in TAB_HELP
         tab = TAB_HELP["validation_lab"]
         assert tab.guide_anchor == "#18-validation-lab"
 
     def test_guide_anchor_resolves(self) -> None:
-        from gui.help_content import TAB_HELP
+        from shared.help_content import TAB_HELP
 
         anchor = TAB_HELP["validation_lab"].guide_anchor
         assert anchor in _valid_anchors_from_guide()
 
     def test_key_concepts_all_in_glossary(self) -> None:
-        from gui.help_content import GLOSSARY, TAB_HELP
+        from shared.help_content import GLOSSARY, TAB_HELP
 
         for term in TAB_HELP["validation_lab"].key_concepts:
             assert term in GLOSSARY, f"key_concept {term!r} missing from GLOSSARY"

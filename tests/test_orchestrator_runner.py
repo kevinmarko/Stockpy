@@ -37,8 +37,8 @@ import pytest
 
 @pytest.fixture()
 def runner(monkeypatch, tmp_path):
-    """Import ``gui.orchestrator_runner`` with all FS paths sandboxed to ``tmp_path``."""
-    from gui import orchestrator_runner as runner
+    """Import ``shared.orchestrator_runner`` with all FS paths sandboxed to ``tmp_path``."""
+    from shared import orchestrator_runner as runner
 
     # Redirect every FS sink the module writes to.
     monkeypatch.setattr(runner, "RUN_LOG_PATH", tmp_path / "gui_run.log")

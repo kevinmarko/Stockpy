@@ -171,7 +171,7 @@ class TestModuleIsADependencyFreeLeaf:
                         offending.append(f"line {node.lineno}: import {alias.name}")
 
         assert not offending, (
-            "runtime_flags.py must never import settings/gui.env_io/config at any "
+            "runtime_flags.py must never import settings/shared.env_io/config at any "
             f"scope — settings.py imports it. Found: {offending}"
         )
 

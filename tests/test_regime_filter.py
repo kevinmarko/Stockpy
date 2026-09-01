@@ -5,15 +5,15 @@ Unit tests for the cross-tab macro-regime filter (``gui/regime_filter.py``) and
 a small contract check on the shared severity palette + Styler helpers
 (``gui/styling.py``).
 
-These are fully offline and Streamlit-free — ``gui.regime_filter`` and the
-pure parts of ``gui.styling`` import cleanly without a running Streamlit app.
+These are fully offline and Streamlit-free — ``shared.regime_filter`` and the
+pure parts of ``shared.styling`` import cleanly without a running Streamlit app.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from gui.regime_filter import (
+from shared.regime_filter import (
     ALL_REGIMES_LABEL,
     apply_regime_filter,
     filter_snapshot,
@@ -161,7 +161,7 @@ def test_filter_snapshot_missing_signals_key_unchanged():
 
 
 def test_severity_palette_has_light_and_dark_with_same_keys():
-    from gui import styling
+    from shared import styling
 
     assert set(styling.SEVERITY_PALETTE) == {"light", "dark"}
     light_keys = set(styling.SEVERITY_PALETTE["light"])
@@ -180,7 +180,7 @@ def test_severity_palette_has_light_and_dark_with_same_keys():
 
 
 def test_severity_color_accessor():
-    from gui import styling
+    from shared import styling
 
     assert styling.severity_color("positive", "light") == styling.SEVERITY_PALETTE["light"]["positive"]
     assert styling.severity_color("negative", "dark") == styling.SEVERITY_PALETTE["dark"]["negative"]
@@ -190,7 +190,7 @@ def test_severity_color_accessor():
 
 
 def test_styler_helpers_return_valid_css_strings():
-    from gui import styling
+    from shared import styling
 
     # Positive P&L → green; negative → red; non-numeric → empty.
     assert "color:" in styling._color_pnl(5.0)
@@ -211,7 +211,7 @@ def test_styler_helpers_return_valid_css_strings():
 
 
 def test_build_global_css_contains_vars_and_theme_blocks():
-    from gui import styling
+    from shared import styling
 
     css = styling.build_global_css()
     assert "<style>" in css and "</style>" in css
