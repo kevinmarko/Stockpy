@@ -4,10 +4,10 @@
   - [ ] Register `earnings_crush`, `vol_mispricing`, `dispersion_trading`.
   - [ ] Run validation harness.
   - [ ] Document in `VALIDATION_STRATEGY_FIX_LOG.md` and `docs/signals/`.
-- [ ] **Work Package B: Equity/Complex Strategies Deployability Gate (Agent 2)**
-  - [ ] Register `zero_dte_engine`, `gamma_scalper`, `copula_stat_arb`.
-  - [ ] Run validation harness.
-  - [ ] Document in `VALIDATION_STRATEGY_FIX_LOG.md` and `docs/signals/`.
+- [x] **Work Package B: Equity/Complex Strategies Deployability Gate (Agent 2)**
+  - [x] Register `zero_dte_engine`, `gamma_scalper`, `copula_stat_arb`.
+  - [x] Run validation harness.
+  - [x] Document in `VALIDATION_STRATEGY_FIX_LOG.md` and `docs/signals/`.
 - [ ] **Work Package C: Universe Disconnect (Agent 3)**
   - [ ] Unify forecast universe with active trading universe.
   - [ ] Enforce NaN fallback for missing history.
