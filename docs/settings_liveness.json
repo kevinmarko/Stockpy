@@ -505,9 +505,9 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 930,
+    "attr": 931,
     "factory_param": 4,
-    "getattr_const": 376,
+    "getattr_const": 378,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
