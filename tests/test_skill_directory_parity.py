@@ -41,6 +41,7 @@ their introducing PR) are enforced here.
 
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 
 import pytest
@@ -93,36 +94,39 @@ class TestSkillDirectoryParity:
 
         agents_lines = agents_content.splitlines()
         claude_lines = claude_content.splitlines()
-        first_diff = next(
-            (
-                i
-                for i in range(min(len(agents_lines), len(claude_lines)))
-                if agents_lines[i] != claude_lines[i]
-            ),
-            min(len(agents_lines), len(claude_lines)),
+        diff_lines = list(
+            difflib.unified_diff(
+                agents_lines,
+                claude_lines,
+                fromfile=f".agents/skills/{skill_name}/SKILL.md",
+                tofile=f".claude/skills/{skill_name}/SKILL.md",
+                lineterm="",
+            )
         )
 
         pytest.fail(
             f"'{skill_name}' has drifted between .agents/skills/ and "
             f".claude/skills/ -- these are meant to be exact mirrors.\n"
-            f"First differing line (1-indexed: {first_diff + 1}):\n"
-            f"  .agents/skills/{skill_name}/SKILL.md: "
-            f"{agents_lines[first_diff] if first_diff < len(agents_lines) else '<EOF>'!r}\n"
-            f"  .claude/skills/{skill_name}/SKILL.md: "
-            f"{claude_lines[first_diff] if first_diff < len(claude_lines) else '<EOF>'!r}\n"
+            + "\n".join(diff_lines)
+            + "\n"
             f"Either sync the two copies to match, or -- if the divergence is "
             f"deliberate -- remove '{skill_name}' from EXACT_MIRROR_SKILLS in "
             f"tests/test_skill_directory_parity.py with a comment explaining why."
         )
 
     def test_mirrored_skill_set_is_non_empty(self) -> None:
-        """Sanity check that this test is actually exercising something --
-        an empty parametrize list would make the parity test above silently
-        pass on zero cases if either skill directory, or every name in
-        EXACT_MIRROR_SKILLS, went missing from one of the trees."""
-        assert _mirrored_skill_names(), (
+        """Sanity check that this test is actually exercising every skill in
+        EXACT_MIRROR_SKILLS -- checking only that _mirrored_skill_names() is
+        non-empty would let one mirrored skill silently drop out of coverage
+        (e.g. its directory renamed/removed from one tree) while the other
+        keeps the parametrize list non-empty; the parity test above would
+        then simply stop generating a case for the missing one instead of
+        failing or even being visibly reported as skipped."""
+        missing = set(EXACT_MIRROR_SKILLS) - set(_mirrored_skill_names())
+        assert not missing, (
             "Expected every name in EXACT_MIRROR_SKILLS to be present in "
-            "both .agents/skills/ and .claude/skills/; found none. Did the "
-            "skills directories move, or did one of the mirrored skills get "
-            "renamed or removed from one tree?"
+            f"both .agents/skills/ and .claude/skills/; missing from one or "
+            f"both trees: {sorted(missing)}. Did the skills directories "
+            "move, or did one of the mirrored skills get renamed or "
+            "removed from one tree?"
         )

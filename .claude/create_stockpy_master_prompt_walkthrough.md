@@ -65,9 +65,14 @@ Fixed in the same session:
   resolved only inside the authoring agent's own transient worktree).
 
 No code/runtime files were touched — this addendum and its fixes are
-scoped entirely to `.claude/`, `.agents/`, and `docs/architecture/`, all
-within the "may be committed directly to `main`" low-risk carve-out in
-this repo's `CLAUDE.md` Branch Workflow §2.
+scoped entirely to `.claude/`, `.agents/`, and `docs/architecture/`. Of
+those, only `.claude/` config is one of the categories CLAUDE.md's
+Branch Workflow §2 low-risk carve-out actually names ("docs, `.claude/`
+config (settings, hooks, skills, agents), comments, test-only additions,
+and other non-behavioral edits — may be committed directly to `main`");
+the rule text doesn't separately name `.agents/`, even though these
+`.agents/` edits are the same kind of non-behavioral doc change in
+substance.
 
 ## 2026-09-01 follow-up (independent code review, reconciled with PR #972)
 
@@ -99,6 +104,115 @@ what wasn't there yet:
   says the two are unioned, deduped, with neither taking precedence —
   confirmed against `main.py:267-286` directly. Fixed to match the correct
   `.claude/` text.
+
+## 2026-09-01 code-review pass (8 findings, 7 fixed)
+
+A `/code-review` at high effort over commits `640f0f03..2038dd6e` (this
+whole `stockpy-master-prompt`/`stockpy-quant-integrity` chain, PRs
+#970/#972/#973) found 8 more issues, all in files this chain itself
+added or edited — the same "self-verification gap" pattern documented
+above, one layer deeper. 7 were fixed in this pass, verified against the
+actual repo rather than assumed:
+
+- **CVaR-placeholder example misattributed** (`.claude/skills/stockpy-
+  quant-integrity/SKILL.md:32` + `.agents/` mirror): the "never fabricate
+  a metric" bullet pointed at `sizing/hrp_cvar_optimizer.py`'s CVaR field
+  as the site of the fabricated `"cvar_95": float(0.05), # placeholder`;
+  `git log -S 'cvar_95": float(0.05)'` shows that string only ever
+  existed in `api/pilots_api.py`'s HRP/CVaR endpoint handler, never in
+  the optimizer module. Corrected in both mirror copies.
+- **Startup-ritual step 1 referenced a nonexistent memory tool/path**
+  (`stockpy-master-prompt/SKILL.md:130` + mirror): `memory_read
+  /areas/stockpy.md` doesn't resolve to any tool or file in this Claude
+  Code session (verified: no `memory_read` tool, no `/areas/` directory
+  anywhere under `~/.claude/`, no `stockpy.md`). Reworded to describe the
+  memory mechanism generically instead of assuming one specific,
+  unverified tool call works across every target platform.
+- **`tests/test_skill_directory_parity.py`'s sanity check had a
+  coverage-gap blind spot**: `test_mirrored_skill_set_is_non_empty` only
+  asserted the mirror-list intersection was non-empty, so one of the two
+  `EXACT_MIRROR_SKILLS` silently dropping out of coverage (e.g. a
+  directory rename) would leave it passing. Now asserts
+  `set(EXACT_MIRROR_SKILLS) - set(_mirrored_skill_names())` is empty;
+  verified it correctly fires when one mirror is simulated missing.
+- **Same test file's docstring misdescribed pytest's own behavior**: it
+  claimed an empty `parametrize` list "would make the parity test above
+  silently pass on zero cases" — reproduced directly that pytest instead
+  reports `SKIPPED (got empty parameter set)`. Docstring corrected.
+- **First-differing-line diff logic replaced with `difflib.unified_diff`**
+  in the same file — the old manual scan only ever reported the single
+  first differing line, requiring a fix-rerun cycle per divergent region
+  (the real incident had two in one file). Verified via a scratch
+  two-region mutation (reverted) that the new failure message surfaces
+  both regions in one run.
+- **`tests/test_robinhood_e2e.py`'s `TestSkillMdInvariantsPinned` only
+  ever read `.claude/skills/robinhood-execution/SKILL.md`**, falling back
+  to the `.agents/` copy only when `.claude`'s was missing — which it
+  never is, so the `.agents/` copy's safety-invariant phrasing (gating
+  live order confirmation) had zero test coverage, and it's one of the 8
+  skills the new parity test explicitly declines to cover. Widened to
+  check every copy that exists; verified both currently pass.
+- **Walkthrough (this file) overstated a CLAUDE.md carve-out**: an
+  earlier addendum claimed `.agents/` changes fall within CLAUDE.md's
+  "may be committed directly to `main`" low-risk carve-out; the rule
+  text names only "docs, `.claude/` config (settings, hooks, skills,
+  agents), ..." — `.agents/` isn't separately named. Corrected to state
+  that precisely (moot for this PR either way, since it's going through
+  a numbered PR, not a direct push).
+
+**Follow-up in the same session: the 8th finding (altitude) fixed too.**
+The initial pass left this one `skipped` on the theory that a live
+`PostToolUse` hook change couldn't be safely trigger-tested in this
+sandbox. That theory was wrong — the hook scripts just read a JSON blob
+on stdin and do plain filesystem `cp`, which can be exercised directly
+without a real Claude Code/Antigravity harness. Both
+`.claude/hooks/sync_agent_docs.sh` and `.agents/hooks/sync_agent_docs.sh`
+were extended with a `MIRRORED_SKILL_NAMES` case (kept in sync with
+`tests/test_skill_directory_parity.py::EXACT_MIRROR_SKILLS` by comment
+cross-reference) that additionally matches `.claude/skills/<name>/
+SKILL.md` <-> `.agents/skills/<name>/SKILL.md` for the two confirmed
+exact-mirror skills, alongside the pre-existing `CLAUDE.md`/`AGENTS.md`
+case (left untouched in logic and message format). Guarded so it never
+creates a brand-new destination file and never fires for any other
+skill (verified against `agentic-discovery` and against a same-named
+`SKILL.md` at an unrelated path).
+
+Verified end-to-end, not just read for plausibility:
+- Editing `.claude/skills/stockpy-master-prompt/SKILL.md` via the real
+  `Edit` tool auto-fired the registered `.claude/hooks/sync_agent_docs.sh`
+  `PostToolUse` hook and correctly synced the change to (and, on revert,
+  back out of) the `.agents/` copy, both confirmed via `diff`.
+- `.claude/hooks/sync_agent_docs.sh` was also invoked directly (crafted
+  stdin JSON matching its real input contract) to confirm: the
+  `CLAUDE.md`/`AGENTS.md` case is unchanged (identical `systemMessage`
+  output); a mirrored-skill SKILL.md edit syncs correctly; a
+  non-mirrored skill (`agentic-discovery`) is correctly ignored (file
+  hash unchanged); a same-named `SKILL.md` at a decoy path outside the
+  real skill directories is correctly ignored.
+- `.agents/hooks/sync_agent_docs.sh` was invoked directly (crafted stdin
+  JSON matching its `toolCall.args.TargetFile` contract) in both
+  directions: the write-blocked direction (`.agents` edited -> `.claude`
+  dest) reached the correct branch and failed only on this session's own
+  Bash-tool sandbox protection of `.claude/skills/`, not on hook logic;
+  the writable direction (`.claude` edited -> `.agents` dest) completed
+  a real `cp` and was confirmed via `diff`.
+- All test mutations were made against scratch backups and fully
+  reverted; final state re-confirmed byte-identical for both mirror
+  pairs and `CLAUDE.md`/`AGENTS.md`, `tests/test_skill_directory_parity.py`
+  passing 3/3, and both hook scripts passing `bash -n` syntax checks.
+
+No findings left unfixed from the original 8; all 8 are `fixed`.
+
+Verification for this pass: `python3 -m pytest tests/test_skill_directory_parity.py -v`
+— 3 passed (including a scratch two-region-drift mutation and a
+simulated partial-coverage-loss check, both reverted before commit); the
+widened `robinhood-execution` invariant check verified to pass against
+both real copies via a standalone script (`tests/test_robinhood_e2e.py`'s
+own `pytest` collection independently fails in this sandbox on a
+pre-existing, unrelated `numba`/`pandas_ta_classic` import error under
+system Python 3.14 — not something this change introduced or could fix,
+since this repo requires Python 3.12 and no `.venv` exists in this
+worktree); plus the hook end-to-end verification described above.
 
 Full reconciled write-up: `docs/known_issues/skill_directory_manual_copy_drift.md`.
 Verification: `python3 -m pytest tests/test_skill_directory_parity.py -v`

@@ -127,8 +127,14 @@ find it; don't fold it into a minor-gaps footnote.
 
 ## 3. Before you touch anything: the startup ritual
 
-1. Read `memory_read /areas/stockpy.md` for architecture notes and the phase
-   gate structure.
+1. If a project-memory tool is available in this session, consult it for
+   architecture notes and the phase gate structure — the exact tool/path
+   varies by platform (e.g. Claude Code has no `memory_read` tool or
+   `/areas/` hierarchy; its own persistent memory is either auto-injected
+   as system-reminder context or lives under
+   `~/.claude/projects/*/memory/`). Don't assume a specific tool call
+   works verbatim across agent platforms; use whatever memory mechanism
+   this session actually has.
 2. If the task touches `pilots/`, `sizing/`, `signals/`, `execution/`, or
    `validation/` — read `stockpy-quant-integrity` (`.claude/skills/stockpy-quant-integrity/SKILL.md` or `.agents/skills/stockpy-quant-integrity/SKILL.md`)
    in full before writing anything.

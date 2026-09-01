@@ -28,10 +28,11 @@ already found by audit passes, not by the original author:
 
 - Two divergent Kelly-sizing formulas lived at different call sites for a
   while before someone noticed they disagreed.
-- A live API endpoint (`sizing/hrp_cvar_optimizer.py`'s CVaR field) shipped
-  hardcoded `"cvar_95": float(0.05), # placeholder` instead of the real
-  computed value — the module's own math was correct, only the wiring
-  fabricated the number.
+- A live API endpoint (`api/pilots_api.py`'s HRP/CVaR handler, wiring
+  `sizing/hrp_cvar_optimizer.py`) shipped hardcoded
+  `"cvar_95": float(0.05), # placeholder` instead of the real computed
+  value — the optimizer module's own math was correct, only the endpoint
+  wiring fabricated the number.
 - `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate sat fully
   implemented and unit-tested for a while with nothing calling it from any
   production path — the UI showed "15:45 ET Auto-Close" as if it were live
