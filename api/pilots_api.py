@@ -8216,7 +8216,6 @@ def run_lstm_attention_forecast_endpoint(
     from data.historical_store import HistoricalStore
     from data.trends_store import TrendsStore
     from data.market_data import FMPDataLoader
-    from processing_engine import ProcessingEngine
     from ml.asvi_feature_engineering import resolve_sector_proxy
     import numpy as np
     import pandas as pd
@@ -8235,8 +8234,6 @@ def run_lstm_attention_forecast_endpoint(
         )
         
     # Technical indicators
-    pe = ProcessingEngine()
-    bars = pe._calculate_technical_metrics_for_symbol(bars)
     
     # Sector Proxy
     fmp = FMPDataLoader()
@@ -8249,7 +8246,6 @@ def run_lstm_attention_forecast_endpoint(
     sector_proxy = resolve_sector_proxy(sector)
     try:
         sector_bars = HistoricalStore().get_bars(sector_proxy, lookback_days=1095)
-        sector_bars = pe._calculate_technical_metrics_for_symbol(sector_bars)
     except Exception:
         sector_bars = pd.DataFrame()
         
@@ -8263,15 +8259,14 @@ def run_lstm_attention_forecast_endpoint(
     if asvi_sec is None:
         asvi_sec = pd.Series(dtype=float)
 
-    from forecasting_engine import ForecastingEngine
-    fe = ForecastingEngine()
+    from pilots.lstm_diagnostic import run_lstm_diagnostic
     
-    result = fe.run_lstm_attention_forecast(
+    result = run_lstm_diagnostic(
         symbol=symbol,
-        df_ohlcv=bars,
-        df_sector_ohlcv=sector_bars,
-        df_asvi_symbol=asvi_sym,
-        df_asvi_sector=asvi_sec
+        bars=bars,
+        sector_bars=sector_bars,
+        asvi_sym=asvi_sym,
+        asvi_sec=asvi_sec
     )
     
     pred_val = result.get("prediction", float('nan'))
