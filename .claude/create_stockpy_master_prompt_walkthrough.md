@@ -68,3 +68,39 @@ No code/runtime files were touched — this addendum and its fixes are
 scoped entirely to `.claude/`, `.agents/`, and `docs/architecture/`, all
 within the "may be committed directly to `main`" low-risk carve-out in
 this repo's `CLAUDE.md` Branch Workflow §2.
+
+## 2026-09-01 follow-up (independent code review, reconciled with PR #972)
+
+A separate code review of merged PR #970 found the same two core bugs the
+audit above already fixed, discovered independently and concurrently —
+PR #972 landed on `origin/main` while this review was still in progress.
+Rather than duplicate that fix, this pass synced to `origin/main` and added
+what wasn't there yet:
+
+- **`tests/test_skill_directory_parity.py`** — the audit above notes "no
+  test in the repo references these skill files by name" and that the repo
+  Python test suite couldn't be run in that environment. This pass added a
+  standalone (no project dependencies beyond `pytest`) regression test
+  asserting `stockpy-master-prompt` and `stockpy-quant-integrity` — the
+  only two skills confirmed to have no per-platform porting-note preamble
+  and to be intended as literal byte-identical mirrors — stay in sync.
+  Verified both ways: 3/3 passing against the fixed state, and a scratch
+  mutation of one copy (reverted immediately) reproduces exactly the
+  failure this incident is about.
+- **A second, real, previously-unfound divergence.** Sweeping every skill
+  present in both `.agents/skills/` and `.claude/skills/` found 8 already
+  differing by a consistent ~8-line HTML-comment "ported from the Claude
+  Code sibling skill" preamble. Stripping that preamble confirmed 7 of the
+  8 are genuinely body-identical (a legitimate porting note, not drift) —
+  but `.agents/skills/agentic-discovery/SKILL.md` had a real, wrong claim
+  beyond the preamble: it told an Antigravity agent that `WATCHLIST` takes
+  precedence over `watchlist.txt` ("appending to `watchlist.txt` would be
+  silently ineffective"), while `main._load_watchlist()`'s own docstring
+  says the two are unioned, deduped, with neither taking precedence —
+  confirmed against `main.py:267-286` directly. Fixed to match the correct
+  `.claude/` text.
+
+Full reconciled write-up: `docs/known_issues/skill_directory_manual_copy_drift.md`.
+Verification: `python3 -m pytest tests/test_skill_directory_parity.py -v`
+— 3 passed; `diff` confirms `agentic-discovery`'s two copies are now
+body-identical beyond the (legitimate, untouched) porting preamble.
