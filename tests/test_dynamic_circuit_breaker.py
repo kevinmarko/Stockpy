@@ -229,9 +229,9 @@ class TestFlashCrashShield:
         assert vpin > 0.80  # Extreme adverse selection
 
     def test_vpin_empty_or_mismatched(self):
-        assert compute_vpin([], []) == 0.0
-        assert compute_vpin([100.0], [100.0, 200.0]) == 0.0
-        assert compute_vpin([0.0], [0.0]) == 0.0
+        assert compute_vpin([], []) is None
+        assert compute_vpin([100.0], [100.0, 200.0]) is None
+        assert compute_vpin([0.0], [0.0]) is None
 
     def test_flash_crash_shield_trigger_conditions(self, tmp_cb: DynamicCircuitBreaker):
         # Triggered: OFI = -1500 (< -1000) and VPIN = 0.65 (> 0.40)
@@ -301,8 +301,10 @@ class TestDynamicCircuitBreakerStateTransitions:
         assert not tmp_cb.kill_switch.is_active()  # Hard kill switch is NOT active
 
     def test_normal_to_soft_halt_via_flash_crash(self, tmp_cb: DynamicCircuitBreaker):
-        metrics = tmp_cb.update_metrics(ofi=-2000.0, vpin=0.55, persist=True)
-        assert metrics.state == CircuitBreakerState.SOFT_HALT
+        import settings
+        with __import__('unittest.mock', fromlist=['mock']).patch.object(settings.settings, 'OFI_SHIELD_ENABLED', True, create=True):
+            metrics = tmp_cb.update_metrics(ofi=-2000.0, vpin=0.55, persist=True)
+            assert metrics.state == CircuitBreakerState.SOFT_HALT
         assert tmp_cb.kill_switch.is_soft_halt_active()
 
     def test_normal_to_hard_halt_via_loss_velocity(self, tmp_cb: DynamicCircuitBreaker):

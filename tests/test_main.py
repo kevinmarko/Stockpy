@@ -94,6 +94,7 @@ def test_run_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both
     price for one and a real price for the other."""
     executor = mock.MagicMock()
     executor.store = mock.sentinel.store
+    executor.store.has_any_open_position = lambda: True
 
     with mock.patch("pilots.price_provider.get_current_price", return_value=642.17) as mock_get_price, \
          mock.patch("pilots.options_risk.calculate_portfolio_greeks") as mock_calc_greeks, \
@@ -119,6 +120,7 @@ def test_run_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog
     a fabricated placeholder price."""
     executor = mock.MagicMock()
     executor.store = mock.sentinel.store
+    executor.store.has_any_open_position = lambda: True
 
     with mock.patch("pilots.price_provider.get_current_price", return_value=0.0), \
          mock.patch("pilots.options_risk.calculate_portfolio_greeks") as mock_calc_greeks, \
@@ -140,6 +142,7 @@ def test_run_automated_delta_hedge_cycle_logs_on_real_hedged_result(caplog):
     fill['fill_price'])."""
     executor = mock.MagicMock()
     executor.store = mock.sentinel.store
+    executor.store.has_any_open_position = lambda: True
 
     hedge_result = {
         "ok": True,

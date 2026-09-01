@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 359,
+    "live_safe": 360,
     "no_op": 0,
-    "restart_required": 99,
-    "total": 458
+    "restart_required": 101,
+    "total": 461
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 446,
+  "files_scanned": 448,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -357,6 +357,7 @@
     "NEWS_HISTORY_CAPTURE_ENABLED",
     "NEWS_LOOKBACK_DAYS",
     "NTFY_DASHBOARD_URL",
+    "OFI_SHIELD_ENABLED",
     "OPAL_RESEARCH_ENABLED",
     "OPAL_RESEARCH_MODEL",
     "OPAL_RESEARCH_PROVIDER",
@@ -506,13 +507,13 @@
   "read_forms": {
     "attr": 934,
     "factory_param": 4,
-    "getattr_const": 378,
+    "getattr_const": 381,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 282,
     "factory_param": 4,
-    "getattr_const": 214,
+    "getattr_const": 217,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1625,7 +1626,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:538",
+        "site": "env_io.py:539",
         "via": []
       }
     ],
@@ -1645,7 +1646,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:537",
+        "site": "env_io.py:538",
         "via": []
       }
     ],
@@ -1665,7 +1666,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:384",
+        "site": "env_io.py:385",
         "via": []
       },
       {
@@ -1674,7 +1675,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:937",
+        "site": "env_io.py:940",
         "via": []
       },
       {
@@ -1705,6 +1706,30 @@
         ],
         "site": "data/market_data.py:1587",
         "via": []
+      }
+    ],
+    "FIX_MOCK_VENUES_ENABLED": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_body"
+        ],
+        "site": "execution/fix_gateway.py:2326",
+        "via": []
+      }
+    ],
+    "FIX_VENUES_CONFIG_PATH": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "indirect_init_helper_d1"
+        ],
+        "site": "execution/fix_gateway.py:2340",
+        "via": [
+          2336
+        ]
       }
     ],
     "FMP_API_KEY": [
@@ -1758,7 +1783,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:443",
+        "site": "env_io.py:444",
         "via": []
       },
       {
@@ -2085,7 +2110,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:555",
+        "site": "env_io.py:556",
         "via": []
       }
     ],
@@ -2096,7 +2121,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:554",
+        "site": "env_io.py:555",
         "via": []
       }
     ],
@@ -2667,7 +2692,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:735",
+        "site": "env_io.py:736",
         "via": []
       }
     ],
@@ -2991,7 +3016,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:635",
+        "site": "env_io.py:636",
         "via": []
       }
     ],
@@ -3011,7 +3036,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:636",
+        "site": "env_io.py:637",
         "via": []
       }
     ],
@@ -3145,7 +3170,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:507",
+        "site": "env_io.py:508",
         "via": []
       }
     ],
@@ -3227,8 +3252,8 @@
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 18,
-    "indirect_init_helper_d1": 13,
-    "init_body": 11,
+    "indirect_init_helper_d1": 14,
+    "init_body": 12,
     "init_self_assign": 51,
     "method_self_assign": 8,
     "module_level": 79,

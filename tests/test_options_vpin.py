@@ -156,7 +156,7 @@ def test_compute_vpin_buckets_directional_bvc():
 def test_calculate_vpin_empty():
     res = calculate_vpin(pd.DataFrame())
     assert isinstance(res, VPINResult)
-    assert res.vpin == 0.0
+    assert res.vpin is None
     assert res.rolling_vpin == []
     assert res.total_buckets == 0
     assert res.toxicity_regime == "LOW"

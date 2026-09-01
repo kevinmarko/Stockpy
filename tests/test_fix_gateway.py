@@ -9,6 +9,12 @@ import logging
 from unittest import mock
 
 from settings import settings
+
+@pytest.fixture(autouse=True)
+def enable_mock_venues():
+    with mock.patch.object(settings, "FIX_MOCK_VENUES_ENABLED", True):
+        yield
+
 from execution.fix_gateway import (
     FixMessage,
     FixMsgType,
@@ -464,6 +470,70 @@ async def test_multi_venue_aggregator_routing():
     finally:
         np.random.set_state(np_state)
         random.setstate(py_state)
+
+
+# --- 5b. Fail-Closed Venue Configuration Loading ---
+# These tests deliberately override the file-wide `enable_mock_venues`
+# autouse fixture (FIX_MOCK_VENUES_ENABLED=False) so the new
+# `_load_configured_venues()` JSON-loading path and `route_order()`'s
+# "no venues -> REJECTED" fail-closed branch are actually exercised, not
+# just the pre-existing hardcoded-mock-venue branch every other test in
+# this file hits.
+
+def test_load_configured_venues_missing_file_degrades_to_empty(tmp_path):
+    missing_path = str(tmp_path / "does_not_exist.json")
+    with mock.patch.object(settings, "FIX_MOCK_VENUES_ENABLED", False), \
+         mock.patch.object(settings, "FIX_VENUES_CONFIG_PATH", missing_path):
+        aggregator = MultiVenueAggregator()
+    assert aggregator.venues == {}
+
+
+def test_load_configured_venues_malformed_json_degrades_to_empty(tmp_path):
+    bad_path = tmp_path / "fix_venues.json"
+    bad_path.write_text("{not valid json")
+    with mock.patch.object(settings, "FIX_MOCK_VENUES_ENABLED", False), \
+         mock.patch.object(settings, "FIX_VENUES_CONFIG_PATH", str(bad_path)):
+        aggregator = MultiVenueAggregator()
+    assert aggregator.venues == {}
+
+
+def test_load_configured_venues_reads_valid_json(tmp_path):
+    import json
+
+    config_path = tmp_path / "fix_venues.json"
+    config_path.write_text(json.dumps({
+        "TESTVENUE": {
+            "base_latency_ms": 0.9,
+            "liquidity_depth": 250.0,
+            "fee_per_contract": 0.20,
+            "maker_fee": -0.10,
+            "taker_fee": 0.20,
+            "quote_spread_cents": 1.5,
+        }
+    }))
+    with mock.patch.object(settings, "FIX_MOCK_VENUES_ENABLED", False), \
+         mock.patch.object(settings, "FIX_VENUES_CONFIG_PATH", str(config_path)):
+        aggregator = MultiVenueAggregator()
+
+    assert set(aggregator.venues.keys()) == {"TESTVENUE"}
+    assert aggregator.venues["TESTVENUE"].base_latency_ms == 0.9
+    assert aggregator.venues["TESTVENUE"].fee_per_contract == 0.20
+
+
+@pytest.mark.anyio
+async def test_route_order_rejects_when_no_venues_configured(tmp_path):
+    missing_path = str(tmp_path / "does_not_exist.json")
+    with mock.patch.object(settings, "FIX_MOCK_VENUES_ENABLED", False), \
+         mock.patch.object(settings, "FIX_VENUES_CONFIG_PATH", missing_path):
+        aggregator = MultiVenueAggregator()
+        assert aggregator.venues == {}
+
+        result = await aggregator.route_order("AAPL", Side.BUY, 100.0, 150.0, detailed=True)
+        assert result["status"] == "REJECTED"
+        assert result["fills"] == []
+
+        fills_only = await aggregator.route_order("AAPL", Side.BUY, 100.0, 150.0)
+        assert fills_only == []
 
 
 # --- 6. Additional Edge Cases & Validation Tests ---

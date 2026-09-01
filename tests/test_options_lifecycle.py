@@ -495,6 +495,7 @@ def test_run_automated_delta_hedge_cycle_success(monkeypatch):
     from execution.options_lifecycle import run_automated_delta_hedge_cycle
     mock_exec = mock.MagicMock()
     mock_exec.store = mock.MagicMock()
+    mock_exec.store.has_any_open_position.return_value = True
 
     with patch("pilots.price_provider.get_current_price", return_value=590.50), \
          patch("pilots.options_risk.calculate_portfolio_greeks", return_value={"beta_weighted_delta_spy": 50.0}), \
@@ -502,5 +503,22 @@ def test_run_automated_delta_hedge_cycle_success(monkeypatch):
         res = run_automated_delta_hedge_cycle(executor=mock_exec)
         assert res is not None
         assert res["hedged"] is True
+
+
+def test_run_automated_delta_hedge_cycle_skips_spy_quote_fetch_when_no_open_position():
+    """Skips the live SPY quote fetch entirely (never calls get_current_price)
+    when the paper book holds no open position at all -- a delta-hedge cycle
+    with nothing open has nothing to hedge, so the live quote call is wasted
+    work worth avoiding rather than a correctness requirement."""
+    from execution.options_lifecycle import run_automated_delta_hedge_cycle
+    mock_exec = mock.MagicMock()
+    mock_exec.store = mock.MagicMock()
+    mock_exec.store.has_any_open_position.return_value = False
+
+    with patch("pilots.price_provider.get_current_price") as mock_get_price:
+        res = run_automated_delta_hedge_cycle(executor=mock_exec)
+
+    assert res is None
+    mock_get_price.assert_not_called()
 
 

@@ -1461,6 +1461,15 @@ class Settings(BaseSettings):
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
     DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
+    
+    FIX_MOCK_VENUES_ENABLED: bool = Field(
+        default=True,
+        description="When True (default, preserves prior behavior), MultiVenueAggregator() with no explicit venues populates its 6 hardcoded simulated mock venues -- the FIX gateway is fully simulated and never touches real capital, so this is a zero-risk default. Set False to require a real settings.FIX_VENUES_CONFIG_PATH JSON file instead; a missing/malformed file then fails closed to zero venues (route_order rejects every order) rather than silently falling back to mock data."
+    )
+    FIX_VENUES_CONFIG_PATH: str = Field(
+        default="output/fix_venues.json",
+        description="Path to the FIX venues JSON config."
+    )
 
     # --- Advisory-only mode (Tier 5.1, 2026-06) ---
     # When True (the project default), the entire broker-execution surface is
@@ -1670,6 +1679,10 @@ class Settings(BaseSettings):
     CIRCUIT_BREAKER_ENABLED: bool = Field(
         default=False,
         description="Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
+    )
+    OFI_SHIELD_ENABLED: bool = Field(
+        default=False,
+        description="Fail-closed extension to the Flash Crash (OFI + VPIN) shield: when both ofi and vpin are supplied to DynamicCircuitBreaker.update_metrics(), the real flash-crash check always runs regardless of this flag. This flag ONLY controls what happens when vpin (the signal maybe_update_circuit_breaker actually computes) is missing: True forces a fail-closed SOFT_HALT on that data gap. Deliberately does NOT fail closed on ofi's absence alone -- OFI is architecturally unwired platform-wide (no provider populates bid/ask size), so treating its routine absence as fail-closed would make this flag permanently SOFT_HALT every tick the moment it's enabled.",
     )
     CIRCUIT_BREAKER_REFERENCE_SYMBOL: str = Field(
         default="SPY",

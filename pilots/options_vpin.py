@@ -160,7 +160,7 @@ class VPINBucket:
 class VPINResult:
     """Comprehensive result of VPIN toxicity calculation."""
 
-    vpin: float
+    vpin: Optional[float]
     rolling_vpin: List[float]
     total_trade_count: int
     total_volume: float
@@ -176,7 +176,7 @@ class VPINResult:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "vpin": round(float(self.vpin), 4),
+            "vpin": round(float(self.vpin), 4) if self.vpin is not None else None,
             "rolling_vpin": [round(float(v), 4) for v in self.rolling_vpin],
             "total_trade_count": self.total_trade_count,
             "total_volume": round(float(self.total_volume), 4),
@@ -445,7 +445,7 @@ def calculate_vpin(
     df = _normalize_trades_df(trades_df)
     if df.empty:
         return VPINResult(
-            vpin=0.0,
+            vpin=None,
             rolling_vpin=[],
             total_trade_count=0,
             total_volume=0.0,
@@ -472,7 +472,7 @@ def calculate_vpin(
 
     if total_buckets == 0:
         return VPINResult(
-            vpin=0.0,
+            vpin=None,
             rolling_vpin=[],
             total_trade_count=total_trade_count,
             total_volume=total_volume,
@@ -560,7 +560,7 @@ def is_toxic_flow(vpin: float, threshold: Optional[float] = None) -> bool:
 
 def apply_defensive_spread_concession(
     base_spread: float,
-    vpin: float,
+    vpin: Optional[float],
     toxicity_threshold: Optional[float] = None,
     max_widening_mult: float = 2.0,
 ) -> float:
@@ -570,8 +570,11 @@ def apply_defensive_spread_concession(
     -----------
     base_spread: float
         Original bid-ask spread or limit price concession ($).
-    vpin: float
-        Current VPIN toxicity score $\\in [0.0, 1.0]$.
+    vpin: Optional[float]
+        Current VPIN toxicity score $\\in [0.0, 1.0]$, or `None` when VPIN could
+        not be computed (insufficient trade volume) -- returns `base_spread`
+        unchanged rather than fabricating a widening decision from missing
+        data (CONSTRAINT #4).
     toxicity_threshold: float
         Threshold above which spread widening activates (default 0.35).
     max_widening_mult: float
@@ -583,6 +586,9 @@ def apply_defensive_spread_concession(
     """
     if base_spread <= 0.0:
         return 0.0
+
+    if vpin is None:
+        return base_spread
 
     if toxicity_threshold is None:
         toxicity_threshold = float(
@@ -777,6 +783,15 @@ def get_options_vpin_metrics(
         num_buckets=effective_num_buckets,
         symbol=clean_sym,
     )
+    if result.vpin is None:
+        # calculate_vpin() hit its own empty-data/zero-bucket path even
+        # though real bars were fetched (e.g. all-zero-volume bars for a
+        # thinly-traded symbol) -- honor the same data_available=False
+        # contract as the "bars couldn't be fetched at all" branch above
+        # (CONSTRAINT #4) instead of reporting a fabricated success.
+        return _unavailable_vpin_metrics(
+            clean_sym, effective_num_buckets, "insufficient trade volume to compute VPIN"
+        )
     res_dict = result.to_dict()
     res_dict["bucket_history"] = res_dict.get("buckets", [])
     res_dict["sample_time"] = res_dict.get("timestamp", datetime.now(timezone.utc).isoformat())
