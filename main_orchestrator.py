@@ -1099,7 +1099,7 @@ def _dispatch_daily_summary(ctx) -> None:
 async def _main_body(effective_dry_run: bool, strict: bool = False,
                       *, engines: Optional[EngineContext] = None,
                       data_engine: Optional[Any] = None, mode: str = "full",
-                      force: bool = True) -> None:
+                      force: bool = True) -> Optional[Any]:
     """Thin progress-instrumentation wrapper around ``_main_body_impl``.
 
     Constructs ONE ``ProgressReporter`` per cycle (reporting/progress.py),
@@ -1121,10 +1121,11 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
     ``_main_body_impl`` below is the exact original ``_main_body`` logic,
     now accepting one additional keyword-only ``progress`` parameter that
     every existing test / call site (which never passes it) does not see.
+    Returns the cycle's ``macro_dto`` (or ``None`` if skipped or unpopulated).
     """
     _progress = ProgressReporter(_PROGRESS_STAGES)
     try:
-        await _main_body_impl(
+        macro_dto = await _main_body_impl(
             effective_dry_run, strict, engines=engines, data_engine=data_engine,
             progress=_progress, mode=mode, force=force,
         )
@@ -1133,13 +1134,14 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
         raise
     else:
         _progress.finish("succeeded")
+        return macro_dto
 
 
 async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
                            *, engines: Optional[EngineContext] = None,
                            data_engine: Optional[Any] = None,
                            progress: Optional[ProgressReporter] = None,
-                           mode: str = "full", force: bool = True) -> None:
+                           mode: str = "full", force: bool = True) -> Optional[Any]:
     """Core pipeline logic using the modular Pipeline framework.
 
     ``mode`` selects which pipeline steps run:
@@ -1165,7 +1167,7 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
             "after the TTL elapses.",
             settings.DATA_FRESHNESS_TTL_SECONDS,
         )
-        return
+        return None
 
     from pipeline.context import RunContext
     from pipeline.runner import AsyncPipelineRunner
@@ -1220,6 +1222,8 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
         _dispatch_daily_summary(ctx)
     except Exception as exc:
         telemetry.warning("Daily summary dispatch failed (non-fatal): %s", exc)
+
+    return getattr(ctx, "macro_dto", None)
 
 
 
