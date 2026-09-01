@@ -1761,3 +1761,93 @@ class TestMaybeAlertOnPipelineStall:
             d.maybe_alert_on_pipeline_stall()
             d.maybe_alert_on_pipeline_stall()
         assert fake_console.call_count == 1
+
+
+class TestDaemonOptionsLifecycleIntegration:
+    """Verifies that OrchestratorDaemon._run_one_cycle invokes the shared
+    options lifecycle on successful full cycles and passes through macro_dto."""
+
+    def test_daemon_runs_options_lifecycle_on_successful_full_cycle(self, monkeypatch):
+        mock_macro = mock.sentinel.macro_dto
+
+        async def _fake_main_body(*_a, **_k):
+            return mock_macro
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
+
+        with mock.patch(
+            "execution.options_lifecycle.run_automated_options_lifecycle"
+        ) as mock_lifecycle:
+            d = OrchestratorDaemon()
+            d._run_one_cycle(run_id="test-run-1", reason="interval", mode="full")
+
+            mock_lifecycle.assert_called_once_with(macro_dto=mock_macro, run_0dte=False)
+
+    def test_daemon_skips_options_lifecycle_on_freshness_skip(self, monkeypatch):
+        """When _main_body returns CYCLE_SKIPPED (the data-freshness gate
+        skipped the cycle outright -- no real pipeline run, no real
+        macro_dto), the options lifecycle must NOT run: doing so would
+        silently bypass the VIX/CREDIT-EVENT premium-selling gate with a
+        stale/absent macro context on the majority of interval wakes in a
+        short-interval deployment."""
+        async def _fake_main_body(*_a, **_k):
+            return main_orchestrator.CYCLE_SKIPPED
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
+
+        with mock.patch(
+            "execution.options_lifecycle.run_automated_options_lifecycle"
+        ) as mock_lifecycle:
+            d = OrchestratorDaemon()
+            d._run_one_cycle(run_id="test-run-5", reason="interval", mode="full")
+
+            mock_lifecycle.assert_not_called()
+
+    def test_daemon_skips_options_lifecycle_on_non_full_mode(self, monkeypatch):
+        async def _fake_main_body(*_a, **_k):
+            return mock.sentinel.macro_dto
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
+
+        with mock.patch(
+            "execution.options_lifecycle.run_automated_options_lifecycle"
+        ) as mock_lifecycle:
+            d = OrchestratorDaemon()
+            d._run_one_cycle(run_id="test-run-2", reason="manual", mode="data")
+
+            mock_lifecycle.assert_not_called()
+
+    def test_daemon_skips_options_lifecycle_on_dry_run(self, monkeypatch):
+        async def _fake_main_body(*_a, **_k):
+            return mock.sentinel.macro_dto
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
+
+        with mock.patch(
+            "execution.options_lifecycle.run_automated_options_lifecycle"
+        ) as mock_lifecycle:
+            d = OrchestratorDaemon(dry_run=True)
+            d._run_one_cycle(run_id="test-run-3", reason="manual", mode="full")
+
+            mock_lifecycle.assert_not_called()
+
+    def test_daemon_swallows_options_lifecycle_exception_and_cycle_still_succeeds(self, monkeypatch, caplog):
+        async def _fake_main_body(*_a, **_k):
+            return mock.sentinel.macro_dto
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
+
+        with mock.patch(
+            "execution.options_lifecycle.run_automated_options_lifecycle",
+            side_effect=RuntimeError("options engine exploded"),
+        ):
+            d = OrchestratorDaemon()
+            d._run_one_cycle(run_id="test-run-4", reason="interval", mode="full")
+
+        # Run must still be recorded as SUCCEEDED
+        run = d.get_run("test-run-4")
+        assert run is not None
+        assert run.state == RunState.SUCCEEDED
+        assert any("Daemon options lifecycle execution failed" in rec.message for rec in caplog.records)
+
+

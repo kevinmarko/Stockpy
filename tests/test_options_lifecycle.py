@@ -9,6 +9,7 @@ Tests:
 """
 
 from datetime import date, datetime, timedelta, timezone
+from unittest import mock
 from unittest.mock import patch
 import pytest
 
@@ -412,3 +413,94 @@ def test_settle_post_earnings_trades(store, executor):
     orders = store.get_full_orders()
     nvda_ec_orders = [o for o in orders if o["symbol"] == "NVDA" and o.get("strategy_id") == "Earnings Crush" and o.get("order_kind") == "parent"]
     assert len(nvda_ec_orders) == 2, f"Expected 2 parent orders for NVDA EC, found {len(nvda_ec_orders)}"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: execution.options_lifecycle Unit Tests
+# ---------------------------------------------------------------------------
+
+def test_run_automated_options_lifecycle_all_disabled(monkeypatch):
+    """When all flags are False, run_automated_options_lifecycle skips without constructing executor."""
+    from execution.options_lifecycle import run_automated_options_lifecycle
+    monkeypatch.setattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
+    monkeypatch.setattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
+    monkeypatch.setattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False)
+    monkeypatch.setattr(settings, "OPTIONS_0DTE_ENABLED", False)
+
+    with patch("execution.options_paper_executor.OptionsPaperExecutor") as mock_exec_cls:
+        res = run_automated_options_lifecycle()
+        assert res["status"] == "skipped"
+        mock_exec_cls.assert_not_called()
+
+
+def test_run_automated_options_lifecycle_runs_all_active_steps(monkeypatch):
+    """When all flags are True, run_automated_options_lifecycle invokes all steps cleanly."""
+    from execution.options_lifecycle import run_automated_options_lifecycle
+    monkeypatch.setattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", True)
+    monkeypatch.setattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", True)
+    monkeypatch.setattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "OPTIONS_0DTE_ENABLED", True)
+
+    mock_inst = mock.MagicMock()
+    mock_inst.store = mock.MagicMock()
+    mock_inst.execute_auto_exits.return_value = {"evaluated_count": 2, "closed_count": 1, "failed_count": 0}
+    mock_inst.execute_strategy_directives.return_value = {"executed_count": 1, "skipped_count": 0, "failed_count": 0}
+
+    with patch("execution.options_paper_executor.OptionsPaperExecutor", return_value=mock_inst), \
+         patch("pilots.zero_dte_engine.manage_0dte_exits", return_value={"executed_count": 1, "evaluated_count": 1, "failed_count": 0}) as mock_0dte, \
+         patch("execution.options_lifecycle.run_automated_delta_hedge_cycle", return_value={"hedged": True}) as mock_hedge:
+        res = run_automated_options_lifecycle(macro_dto=mock.MagicMock())
+
+    assert res["status"] == "executed"
+    mock_inst.execute_auto_exits.assert_called_once()
+    mock_0dte.assert_called_once_with(store=mock_inst.store)
+    mock_inst.execute_strategy_directives.assert_called_once()
+    mock_hedge.assert_called_once_with(mock_inst)
+
+
+def test_run_automated_options_lifecycle_run_0dte_false_skips_0dte_step(monkeypatch):
+    """run_0dte=False (used by desktop/daemon_runtime.py, which already
+    evaluates 0DTE exits on its own separate cadence) must skip step 1b
+    entirely, even when OPTIONS_0DTE_ENABLED is True -- otherwise 0DTE exits
+    double-fire per daemon interval wake."""
+    from execution.options_lifecycle import run_automated_options_lifecycle
+    monkeypatch.setattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
+    monkeypatch.setattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", True)
+    monkeypatch.setattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False)
+    monkeypatch.setattr(settings, "OPTIONS_0DTE_ENABLED", True)
+
+    mock_inst = mock.MagicMock()
+    mock_inst.store = mock.MagicMock()
+    mock_inst.execute_auto_exits.return_value = {"evaluated_count": 0, "executed_count": 0, "failed_count": 0}
+
+    with patch("execution.options_paper_executor.OptionsPaperExecutor", return_value=mock_inst), \
+         patch("pilots.zero_dte_engine.manage_0dte_exits") as mock_0dte:
+        res = run_automated_options_lifecycle(run_0dte=False)
+
+    assert res["status"] == "executed"
+    assert "0dte_exits" not in res
+    mock_0dte.assert_not_called()
+
+
+def test_run_automated_delta_hedge_cycle_no_quote(monkeypatch):
+    """Delta hedge skips cleanly when no live SPY quote is available."""
+    from execution.options_lifecycle import run_automated_delta_hedge_cycle
+    with patch("pilots.price_provider.get_current_price", return_value=None):
+        res = run_automated_delta_hedge_cycle()
+        assert res is None
+
+
+def test_run_automated_delta_hedge_cycle_success(monkeypatch):
+    """Delta hedge calculates greeks and executes hedge when SPY quote is valid."""
+    from execution.options_lifecycle import run_automated_delta_hedge_cycle
+    mock_exec = mock.MagicMock()
+    mock_exec.store = mock.MagicMock()
+
+    with patch("pilots.price_provider.get_current_price", return_value=590.50), \
+         patch("pilots.options_risk.calculate_portfolio_greeks", return_value={"beta_weighted_delta_spy": 50.0}), \
+         patch("pilots.options_hedging.execute_delta_hedge", return_value={"hedged": True, "action": "SELL", "shares": 50, "fill": {"fill_price": 590.50}}):
+        res = run_automated_delta_hedge_cycle(executor=mock_exec)
+        assert res is not None
+        assert res["hedged"] is True
+
+
