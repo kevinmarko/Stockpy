@@ -8263,10 +8263,10 @@ def run_lstm_attention_forecast_endpoint(
     if asvi_sec is None:
         asvi_sec = pd.Series(dtype=float)
 
-    from engine.forecasting_engine import ForecastingEngine
+    from forecasting_engine import ForecastingEngine
     fe = ForecastingEngine()
     
-    pred = fe.run_lstm_attention_forecast(
+    result = fe.run_lstm_attention_forecast(
         symbol=symbol,
         df_ohlcv=bars,
         df_sector_ohlcv=sector_bars,
@@ -8274,7 +8274,8 @@ def run_lstm_attention_forecast_endpoint(
         df_asvi_sector=asvi_sec
     )
     
-    if np.isnan(pred):
+    pred_val = result.get("prediction", float('nan'))
+    if np.isnan(pred_val):
         raise HTTPException(
             status_code=422,
             detail={"error": f"LSTM-Attention model skipped or failed for {symbol}"}
@@ -8282,7 +8283,8 @@ def run_lstm_attention_forecast_endpoint(
         
     return {
         "symbol": symbol,
-        "predicted_return": pred,
+        "predicted_return": pred_val,
+        "attention_weights": result.get("attention_weights", []),
         "sector_proxy_used": sector_proxy,
         "status": "success"
     }

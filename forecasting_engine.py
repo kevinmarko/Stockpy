@@ -668,7 +668,7 @@ class ForecastingEngine:
         df_sector_ohlcv: pd.DataFrame,
         df_asvi_symbol: pd.Series,
         df_asvi_sector: pd.Series,
-    ) -> float:
+    ) -> Dict[str, Any]:
         """LSTM-Attention diagnostic forecaster (Phase 4).
         
         Uses the `build_lstm_attention_tensors` generator to produce a 15-feature sliding window.
@@ -681,11 +681,11 @@ class ForecastingEngine:
             )
         except ValueError as e:
             logger.warning(f"LSTM-Attention skipped for {symbol}: {e}")
-            return float('nan')
+            return {"prediction": float('nan'), "attention_weights": []}
             
         if len(X_train) < 30:
             logger.warning(f"LSTM-Attention skipped for {symbol}: Insufficient valid windows ({len(X_train)} < 30).")
-            return float('nan')
+            return {"prediction": float('nan'), "attention_weights": []}
 
         from cnn_lstm_process_pool import dispatch_to_worker
         try:
@@ -693,10 +693,13 @@ class ForecastingEngine:
                 "fit_predict_lstm_attention",
                 (X_train, Y_train, predict_X_seq, 16, 2, None) # hidden_dim=16, num_heads=2
             )
-            return float(result["predictions"][0])
+            return {
+                "prediction": float(result["predictions"][0]),
+                "attention_weights": result.get("attention_weights", [])
+            }
         except Exception as e:
             logger.error(f"LSTM-Attention worker failed for {symbol}: {e}")
-            return float('nan')
+            return {"prediction": float('nan'), "attention_weights": []}
     def run_cnn_lstm_forecast(
         self,
         history_df: pd.DataFrame,
