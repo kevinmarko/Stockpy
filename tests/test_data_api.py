@@ -1125,6 +1125,23 @@ def test_get_trends_stitch_demo_happy_path(monkeypatch):
     # materially more points than any single one of the three raw curves.
     assert len(stitched["data"]) > len(raw_curves[0]["data"])
 
+    # Fidelity check (CONSTRAINT #4 regression guard): the above only proves the
+    # response is well-shaped and honestly labeled -- it does NOT prove the values
+    # actually trace back to the injected HistoricalStore's real Volume series. A
+    # silent fallback to fabricated-but-plausible-looking data (e.g. a flat/linspace
+    # ramp) would pass every assertion above unnoticed. Recompute period A's expected
+    # values and dates the exact same way the endpoint does and compare directly.
+    true_series = bars["Volume"].tail(240)
+    slice_a = true_series.iloc[0:90]
+    expected_period_a = (slice_a / slice_a.max() * 100.0).to_numpy()
+    actual_period_a = np.array([point[1] for point in raw_curves[0]["data"]])
+    assert len(actual_period_a) == len(expected_period_a)
+    np.testing.assert_allclose(actual_period_a, expected_period_a, rtol=1e-9)
+
+    expected_ts_ms = [int(ts.timestamp() * 1000) for ts in slice_a.index]
+    actual_ts_ms = [point[0] for point in raw_curves[0]["data"]]
+    assert actual_ts_ms == expected_ts_ms
+
 
 def test_get_trends_stitch_demo_insufficient_history_degrades_to_503_not_fabricated(monkeypatch):
     # Fewer than the required 240 bars -- the endpoint must refuse to build
@@ -1163,3 +1180,14 @@ def test_get_trends_stitch_demo_generic_exception_degrades_to_503_not_500(monkey
     body = resp.json()
     assert "raw_curves" not in body
     assert "stitched_curve" not in body
+
+
+def test_svi_stitching_demo_duplicate_route_stays_removed():
+    """Regression guard: an earlier version of this branch shipped a separate,
+    duplicate GET /data/svi-stitching-demo route (commit e1504dbd) that was later
+    consolidated into the single GET /data/trends/stitch-demo endpoint above.
+    Nothing else in this suite would catch that duplicate route being silently
+    reintroduced by a future merge/rebase."""
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/svi-stitching-demo")
+    assert resp.status_code == 404

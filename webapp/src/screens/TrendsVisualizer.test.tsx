@@ -34,8 +34,33 @@ describe('TrendsVisualizer', () => {
     });
 
     render(<TrendsVisualizer />);
-    
-    expect(screen.getByText('Google Trends SVI Stitching')).toBeInTheDocument();
+
+    expect(screen.getByText('SVI Stitching Algorithm Demo')).toBeInTheDocument();
     expect(screen.getByTestId('trends-stitch-chart')).toBeInTheDocument();
+  });
+
+  it('honestly discloses the SPY-volume-proxy nature of the demo data', () => {
+    // Regression guard: the backend's own response labels every curve "SPY Volume
+    // Proxy" specifically so this demo is never mistaken for real Google Trends
+    // data (see api/data_api.py::get_trends_stitch_demo's docstring). The screen's
+    // headline text must not contradict that by presenting it as unqualified real
+    // search-volume data.
+    vi.mocked(useApi).mockReturnValue({
+      data: {
+        raw_curves: [],
+        stitched_curve: { name: 'Test', data: [] }
+      },
+      loading: false,
+      error: null,
+      status: 200,
+      stale: false,
+      cachedAt: null,
+      reload: vi.fn(),
+    });
+
+    render(<TrendsVisualizer />);
+
+    expect(screen.getByText(/SPY Volume Proxy/)).toBeInTheDocument();
+    expect(screen.getByText(/isn't wired up in this platform/)).toBeInTheDocument();
   });
 });
