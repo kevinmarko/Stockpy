@@ -378,3 +378,81 @@ disclosed here rather than asserted as tested.
   changes were verified by manual review only; the Python side (the actual
   bug fix, its regression tests, and the new instrumentation) was fully
   executed and passed (304/304, see section 6).
+
+## Section 7 (2026-08-31): conflict resolution against `main`, CI fix, and a
+## re-confirmation that the live-execution infrastructure was NOT deleted
+
+By this date `main` had moved 20+ commits past this branch's last merge
+(`a7416653`), producing add/add conflicts with an unrelated, independently
+landed `run-investyo-mcp` skill + `MCP_EXPANSION_*` docs pair (`main`'s
+`195547b1`, vs. this branch's own out-of-scope copy from `f6622274` — see
+section 2/3 for how that copy came to exist). CI's `test (offline suite)`
+job was separately red: `regime_multiplier`/`forecast_alignment`/
+`news_catalyst` had each been given a `turnover=0.0` `STRATEGY_REGISTRY`
+stub entry, failing `TestRegistryStructure`'s `turnover > 0` invariant, and
+the committed `docs/settings_liveness.json` / `docs/settings_field_census.
+{md,json}` artifacts were stale against the merged tree.
+
+**What was done:**
+- Cherry-picked commit `ef227327` — a fix independently authored and
+  verified (full `pytest tests/ -q`, 12735+ passed) in a separate, unpushed
+  Antigravity worktree checkout of this exact branch. It removes the three
+  zero-turnover stub entries (none of the three is an order-submitting Pilot
+  the way `earnings_crush`/`dispersion_trading`/`zero_dte_engine`/
+  `gamma_scalper` are — matching an equivalent, never-merged fix already
+  authored on a sibling branch, `strategy-registry-compliance-cleanup`
+  commit `3a4c197b`), drops the same three names from
+  `cli_introspect/command_manifest.json`, and separately fixes a real
+  `sizing/kelly.py::fractional_kelly` degenerate-divisor bug
+  (`b <= 0` widened to `b < 1e-12`) found by the hypothesis property test in
+  `tests/test_sizing_properties.py` during that verification run.
+- Merged current `main` in and resolved the 4 add/add conflicts by keeping
+  `main`'s already-landed copies (this branch's own duplicate `f6622274`
+  content was out-of-scope for a strategy-registry-compliance PR to begin
+  with, per section 2/3's own account of that commit).
+- Regenerated `docs/settings_liveness.json` / `docs/settings_field_census.
+  {md,json}` fresh (`scripts/settings_liveness.py --write`,
+  `scripts/measure_settings_census.py --write`) against the fully merged
+  tree, since `main` had moved substantially further than what `ef227327`
+  regenerated against.
+
+**What was verified, and how:**
+- The 4 test files CI's `test (offline suite)` job had flagged
+  (`test_settings_liveness.py`, `test_measure_settings_census.py`,
+  `test_refresh_validations.py`, plus `test_command_manifest_freshness.py`
+  since the registry entries changed): 211/211 passed.
+- `npm run --prefix webapp -s typecheck`: clean, zero errors. (This
+  corrects section 6's "sandbox can't run npm at all" finding above — npm
+  worked without issue this session; whatever produced the earlier `EPERM`
+  did not reproduce.)
+- **Re-confirmed the live-execution safety infrastructure from section 2 is
+  intact**: `.claude/skills/robinhood-execution/SKILL.md`,
+  `.agents/skills/robinhood-execution/SKILL.md`,
+  `pilots/live_trade_proposals.py`, `broker_live_execution_mcp.py`,
+  `execution/live_trade_proposals_store.py`, and their three test files are
+  all present on the commit that was pushed, and their tests pass (77/77).
+  This check exists because, while doing this work, a *second* unpushed
+  local commit was found sitting on top of this same branch in a separate
+  Antigravity worktree (`207086af`, "Revert 'revert: restore Robinhood
+  live-execution infrastructure removed without cause'") that re-deletes
+  every one of those files — i.e., a second occurrence of exactly the
+  runaway deletion section 2 already documents and reverted once. It was
+  never pushed to `origin`, was NOT pulled into the commit pushed here, and
+  the operator explicitly confirmed ("we dont want to delete it") that it
+  should not be. That commit still exists, unpushed, in that other
+  worktree — whoever owns that session will need to drop it (or rebase past
+  it) before pushing from there again.
+- Full offline suite (`pytest tests/ -q -m "not network"`, matching CI's
+  job): 3 failures observed locally
+  (`test_forecast_backfill.py::test_kill_mid_step_5_leaves_partial_export_with_completed_combos`,
+  `test_portfolio_context.py::TestSelfIndexing::test_rag_index_lookback_days_default`,
+  `test_sector_selection_review_populated.py::TestReviewTermGenuinelyPopulated::test_review_volume_reflects_a_genuine_quiet_window_once_channel_is_active`).
+  All three were proven to be artifacts of this specific machine's local
+  `.env` (non-default `FORECAST_BACKFILL_RSI_WINDOW`, `RAG_INDEX_LOOKBACK_DAYS`,
+  and `SENTIMENT_SOURCES` values overriding code defaults that these tests
+  read live off the `settings` singleton), not regressions — each was
+  re-run against the exact same pushed commit in an isolated
+  `git worktree add --detach` checkout (which has no `.env`, since it's
+  untracked) and passed cleanly there. None of the three touch any file
+  this round of work changed. CI has no such `.env` override and is
+  unaffected.
