@@ -21,8 +21,23 @@ may be worked on by whichever agent is assigned the task at hand. Branch naming 
    orchestrators, or other runtime/trading logic — always goes through
    `git checkout -b <short-description>` (lowercase-kebab, e.g. `fix-hmm-lookahead`) and a PR.
    Never commit these directly to `main`.
-4. Open a PR when a feature-branch change is complete; do not squash or amend published commits.
-5. **PR Artifacts & Unique Naming**: When submitting a Pull Request, you must copy and commit the implementation plan, task tracker, and walkthrough from your local brain artifacts directory to the `.claude/` folder on your branch. To prevent collisions and accidental overwrites when multiple plans or concurrent agent tasks run in parallel across the repository, artifact and plan files must use unique, project/feature-scoped names matching the task or branch (e.g., `.claude/fmp_pipeline_optimization_implementation_plan.md`, `.claude/fmp_pipeline_optimization_task.md`, `.claude/fmp_pipeline_optimization_walkthrough.md`) alongside standard base files. Test files created for a feature must likewise carry clear, project-scoped names.
+4. Open a PR when a feature-branch change is complete; do not squash or amend published commits —
+   this means never rewriting `main`'s own history or another PR's already-reviewed commits without
+   being asked. It does **not** forbid the normal maintenance of your own open PR: rebasing that PR's
+   branch onto `origin/main` (and force-pushing to that same branch) to resolve staleness/merge
+   conflicts is expected, not prohibited — prefer an additive fix commit on top of the existing one
+   when the base hasn't moved, and reach for a rebase specifically when GitHub reports the PR as
+   behind/conflicting and a clean rebase is possible.
+5. **Rebase and merge when ready** — once a PR's targeted verification has actually passed this
+   session (the tests in "Verification is mandatory" below, run and shown green, not assumed) and
+   you've self-reviewed the full diff, merge it yourself (`gh pr merge`, matching this repo's
+   established merge style for that PR) without waiting for a separate go-ahead — unless the operator
+   said otherwise for that specific PR, or the change is genuinely ambiguous/high-stakes enough that
+   §2's Explicit-permission-required categories apply (e.g. it touches live execution/broker
+   behavior in a way the operator hasn't already signed off on). When rebasing surfaces a real
+   conflict (not just a stale base), resolve it faithfully to both sides' intent, re-run
+   verification, and say what the conflict was and how it was resolved — don't silently pick a side.
+6. **PR Artifacts & Unique Naming**: When submitting a Pull Request, you must copy and commit the implementation plan, task tracker, and walkthrough from your local brain artifacts directory to the `.claude/` folder on your branch. To prevent collisions and accidental overwrites when multiple plans or concurrent agent tasks run in parallel across the repository, artifact and plan files must use unique, project/feature-scoped names matching the task or branch (e.g., `.claude/fmp_pipeline_optimization_implementation_plan.md`, `.claude/fmp_pipeline_optimization_task.md`, `.claude/fmp_pipeline_optimization_walkthrough.md`) alongside standard base files. Test files created for a feature must likewise carry clear, project-scoped names.
    **This rule is not limited to PR-submission time and applies to every AI agent working in this
    repo (Claude Code, Antigravity, or any other), not just whichever one authored a given file.**
    Bare, unscoped filenames — `plan.md`, `implementation_plan.md`, `walkthrough.md`, `task.md`,
@@ -33,7 +48,7 @@ may be worked on by whichever agent is assigned the task at hand. Branch naming 
    task/feature/branch slug the same way the `.claude/fmp_pipeline_optimization_*` example above
    does, for every plan, implementation plan, walkthrough, and task-tracker file, whether it's a
    local working artifact or one committed with a PR.
-6. **After merging any PR**, sync the local main checkout so the next session (in this or any
+7. **After merging any PR**, sync the local main checkout so the next session (in this or any
    other worktree) starts from the merged state instead of a stale `main`:
    `git -C <main-checkout-path> fetch origin && git -C <main-checkout-path> merge --ff-only origin/main`.
    Do this immediately after the merge, not at the start of some future session.
