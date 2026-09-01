@@ -138,8 +138,9 @@ def retrieve_documents(state: RAGState) -> Dict[str, Any]:
         return {"retrieved_docs": []}
 
     try:
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-        collection = os.environ.get("QDRANT_COLLECTION", "investyo_news")
+        import settings
+        qdrant_url = settings.settings.QDRANT_URL
+        collection = settings.settings.QDRANT_COLLECTION
         client = QdrantClient(url=qdrant_url, timeout=5)
 
         # Dense embedding via a sentence transformer -- MUST be the same

@@ -1,0 +1,1 @@
+- [x] Fix WATCHLIST bypass issue

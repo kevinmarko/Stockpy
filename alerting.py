@@ -117,7 +117,7 @@ def setup_logging(log_level: str = "INFO") -> None:
         # Already configured — adding handlers again would duplicate log lines.
         return
 
-    effective_str = os.environ.get("LOG_LEVEL", log_level).upper()
+    effective_str = (settings.LOG_LEVEL or log_level).upper()
     numeric_level = getattr(logging, effective_str, logging.INFO)
     root.setLevel(numeric_level)
 
@@ -164,11 +164,13 @@ def notify(
     title: str,
     message: str,
     priority: str = "default",
-) -> None:
-    """POST a push notification to ntfy.sh via the NTFY_TOPIC environment variable.
+) -> bool:
+    """POST a push notification to ntfy.sh via the ALERT_NTFY_TOPIC environment variable.
+
+    Returns True if sent successfully, False otherwise.
 
     This is **fire-and-forget**: network failures are caught and logged as
-    WARNING; they never propagate.  When ``NTFY_TOPIC`` is unset the function
+    WARNING; they never propagate.  When ``ALERT_NTFY_TOPIC`` is unset the function
     returns immediately (silent no-op) — no crash, no side-effect.
 
     Security invariant
@@ -198,9 +200,9 @@ def notify(
         ntfy priority string (see table above).  Defaults to ``"default"``.
         Unknown strings are silently replaced with ``"default"``.
     """
-    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    topic = (settings.ALERT_NTFY_TOPIC or "").strip()
     if not topic:
-        return  # NTFY_TOPIC not configured → silent no-op
+        return False  # ALERT_NTFY_TOPIC not configured → silent no-op
 
     if priority not in _VALID_PRIORITIES:
         priority = "default"
@@ -221,7 +223,7 @@ def notify(
 
     try:
         # Bandit B310: `req` targets ntfy.sh, built from the operator's own
-        # NTFY_TOPIC env var (see the docstring above), never a raw/attacker-
+        # ALERT_NTFY_TOPIC env var (see the docstring above), never a raw/attacker-
         # controlled URL or scheme.
         with urllib.request.urlopen(req, timeout=_NTFY_REQUEST_TIMEOUT_S) as resp:  # nosec B310
             if resp.status not in (200, 201):
@@ -230,13 +232,17 @@ def notify(
                     resp.status,
                     topic,
                 )
+                return False
             else:
                 logger.debug("ntfy push sent (priority=%s title=%r).", priority, title)
+                return True
     except urllib.error.URLError as exc:
         logger.warning("ntfy notification failed (network error): %s", exc)
+        return False
     except Exception as exc:
         # Catch-all: never let a failed push crash the analysis pipeline.
         logger.warning("ntfy notification failed (unexpected): %s", exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
