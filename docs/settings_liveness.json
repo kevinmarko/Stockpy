@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 360,
+    "live_safe": 359,
     "no_op": 0,
-    "restart_required": 98,
+    "restart_required": 99,
     "total": 458
   },
   "dynamic_sites": [
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3207,
+      "line": 3166,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4313,
+      "line": 4272,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4418,
+      "line": 4377,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 444,
+  "files_scanned": 445,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -282,7 +282,6 @@
     "FORECAST_SKILL_WEIGHTING_ENABLED",
     "FORECAST_SKILL_WINDOW_DAYS",
     "FORECAST_USE_GARCH_SIGMA",
-    "FRED_API_KEY",
     "FRED_KEY_ROTATED_DATE",
     "FRED_REQUEST_TIMEOUT_SECONDS",
     "FUNDAMENTALS_REFRESH_DAYS",
@@ -505,7 +504,7 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 931,
+    "attr": 933,
     "factory_param": 4,
     "getattr_const": 378,
     "os_environ": 2
@@ -695,7 +694,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:330",
+        "site": "api/pilots_api.py:331",
         "via": []
       },
       {
@@ -1617,7 +1616,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4795",
+        "site": "api/pilots_api.py:4754",
         "via": []
       },
       {
@@ -1637,7 +1636,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4794",
+        "site": "api/pilots_api.py:4753",
         "via": []
       },
       {
@@ -1657,7 +1656,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4964",
+        "site": "api/pilots_api.py:4923",
         "via": []
       },
       {
@@ -1750,7 +1749,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4936",
+        "site": "api/pilots_api.py:4895",
         "via": []
       },
       {
@@ -1803,7 +1802,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:640",
+        "site": "api/pilots_api.py:641",
         "via": []
       }
     ],
@@ -1958,6 +1957,17 @@
           "init_self_assign"
         ],
         "site": "ml/forecast_backfill.py:142",
+        "via": []
+      }
+    ],
+    "FRED_API_KEY": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "method_self_assign"
+        ],
+        "site": "scripts/export_notebooklm.py:55",
         "via": []
       }
     ],
@@ -3190,7 +3200,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:635",
+        "site": "api/pilots_api.py:636",
         "via": []
       },
       {
@@ -3220,7 +3230,7 @@
     "indirect_init_helper_d1": 13,
     "init_body": 11,
     "init_self_assign": 51,
-    "method_self_assign": 7,
+    "method_self_assign": 8,
     "module_level": 79,
     "os_environ": 2
   },

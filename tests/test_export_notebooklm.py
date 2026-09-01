@@ -16,6 +16,13 @@ covers:
 4. ``HistoricalStore(readonly=True)`` construction failing degrades BOTH
    store-dependent sections (macro, portfolio) while the Follows section
    (independent of ``store``) still works.
+5. A later item in a multi-position/multi-follow list that fails to format
+   must never leave earlier real lines in the document alongside the
+   section's "unavailable" fallback (each section commits its buffered
+   output atomically, all-or-nothing).
+6. The atomic write step (temp file + rename) cleans up its stray temp file
+   and re-raises on a genuine I/O failure, and ``_OneShotMacroDataEngine``
+   only ever performs one live macro fetch per script invocation.
 
 The module performs a venv-reexec + ``.env``-load side effect at import time
 via ``scripts._bootstrap.bootstrap()`` — but ``bootstrap()`` detects
@@ -30,6 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from scripts import export_notebooklm as notebooklm
 from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
@@ -468,3 +476,175 @@ class TestNeverFabricates:
         text = _read_export(tmp_path)
 
         assert "**TSLA** (Tesla Inc.): N/A shares @ N/A (Market Value: N/A)" in text
+
+
+# ---------------------------------------------------------------------------
+# Partial-append protection — a later item's failure must not leak earlier
+# real data alongside the section's "unavailable" fallback.
+# ---------------------------------------------------------------------------
+
+class TestPartialAppendProtection:
+    def test_portfolio_later_position_failure_leaves_no_partial_data(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A second position with a non-numeric field must not leave the
+        first position's line (or Total Equity/Buying Power) in the document
+        alongside 'Portfolio snapshot is unavailable.' -- the whole section
+        commits atomically, all-or-nothing."""
+        _patch_output_dir(monkeypatch, tmp_path)
+        good_pos = PortfolioPosition(
+            symbol="AAPL",
+            quantity=10.0,
+            average_cost=150.0,
+            current_price=175.0,
+            market_value=1750.0,
+            unrealized_pl=250.0,
+            unrealized_pl_pct=16.67,
+            dividends_received=12.5,
+            name="Apple Inc.",
+        )
+        # A dataclass has no runtime type enforcement -- this mirrors a
+        # hand-edited/legacy DB row whose column held a string, which
+        # `_fmt_money`'s `f"${value:,.2f}"` raises on.
+        bad_pos = PortfolioPosition(
+            symbol="TSLA",
+            quantity=5.0,
+            average_cost="corrupted",  # type: ignore[arg-type]
+            current_price=200.0,
+            market_value=1000.0,
+            unrealized_pl=0.0,
+            unrealized_pl_pct=0.0,
+            dividends_received=0.0,
+            name="Tesla Inc.",
+        )
+        snap = AccountSnapshot(
+            positions={"AAPL": good_pos, "TSLA": bad_pos},
+            buying_power=5000.0,
+            total_equity=6750.0,
+            total_dividends=12.5,
+            fetched_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+        fake_store = _FakeHistoricalStore(latest_account_snapshot=lambda: snap)
+        monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        notebooklm.build_export()
+        text = _read_export(tmp_path)
+
+        assert "Portfolio snapshot is unavailable." in text
+        assert "Total Equity" not in text
+        assert "AAPL" not in text
+
+    def test_follows_later_row_failure_leaves_no_partial_data(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A second follow row with a non-numeric amount must not leave the
+        first follow's line in the document alongside 'Active pilot follows
+        are unavailable.'."""
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
+        )
+        follow_rows = [
+            {"pilot_id": "pilot-alpha", "amount": 500.0, "status": "active"},
+            {"pilot_id": "pilot-beta", "amount": "corrupted", "status": "active"},
+        ]
+        monkeypatch.setattr(
+            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=follow_rows)
+        )
+
+        notebooklm.build_export()
+        text = _read_export(tmp_path)
+
+        assert "Active pilot follows are unavailable." in text
+        assert "pilot-alpha" not in text
+
+
+# ---------------------------------------------------------------------------
+# Atomic write — temp-file cleanup on failure, re-raise, one-shot macro fetch
+# ---------------------------------------------------------------------------
+
+class TestAtomicWrite:
+    def test_write_failure_cleans_up_temp_file_and_reraises(
+        self, tmp_path: Path, monkeypatch
+    ):
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
+        )
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        def _boom_write_text(self, *args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "write_text", _boom_write_text)
+
+        with pytest.raises(OSError):
+            notebooklm.build_export()
+
+        # No stray "<name>.tmp.<pid>.<tid>" file left behind on failure.
+        assert list(tmp_path.glob("notebooklm_source.md.tmp.*")) == []
+        assert not (tmp_path / "notebooklm_source.md").exists()
+
+    def test_temp_filename_is_pid_tid_scoped_not_a_bare_tmp_suffix(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Two concurrent invocations must never share the same temp
+        filename -- a bare `.with_suffix(".tmp")` is not race-safe."""
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
+        )
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        seen_tmp_names = []
+        original_write_text = Path.write_text
+
+        def _spy_write_text(self, *args, **kwargs):
+            seen_tmp_names.append(self.name)
+            return original_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", _spy_write_text)
+
+        notebooklm.build_export()
+
+        assert len(seen_tmp_names) == 1
+        tmp_name = seen_tmp_names[0]
+        assert tmp_name != "notebooklm_source.md.tmp"
+        assert tmp_name.startswith("notebooklm_source.md.tmp.")
+        # "<name>.tmp.<pid>.<tid>" -- both segments after "tmp." are digits.
+        pid_str, tid_str = tmp_name.rsplit(".tmp.", 1)[1].split(".")
+        assert pid_str.isdigit()
+        assert tid_str.isdigit()
+
+
+class TestOneShotMacroDataEngine:
+    def test_fetch_macro_history_only_fetches_once_per_instance(self, monkeypatch):
+        call_count = []
+
+        class _FakeRealDataEngine:
+            def __init__(self, fred_api_key):
+                pass
+
+            def fetch_macro_history(self):
+                call_count.append(1)
+                return pd.DataFrame({"value": [1.0]})
+
+        monkeypatch.setattr(notebooklm.settings, "FRED_API_KEY", "fake-key")
+        monkeypatch.setattr("data_engine.DataEngine", _FakeRealDataEngine)
+
+        engine = notebooklm._OneShotMacroDataEngine()
+        df1 = engine.fetch_macro_history()
+        df2 = engine.fetch_macro_history()
+        df3 = engine.fetch_macro_history()
+
+        assert len(call_count) == 1
+        assert df1 is df2 is df3
+
+    def test_no_fred_key_degrades_to_empty_dataframe_without_raising(self, monkeypatch):
+        monkeypatch.setattr(notebooklm.settings, "FRED_API_KEY", "")
+
+        engine = notebooklm._OneShotMacroDataEngine()
+        df = engine.fetch_macro_history()
+
+        assert df.empty
