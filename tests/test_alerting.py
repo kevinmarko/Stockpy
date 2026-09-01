@@ -244,6 +244,26 @@ class TestNotify:
                 alerting.notify("T", "M")  # must not raise
         assert "500" in caplog.text
 
+    def test_non_2xx_never_logs_the_ntfy_topic_value(self, monkeypatch, caplog):
+        """ALERT_NTFY_TOPIC is a SECRET_KEYS-classified field (env_io.py) --
+        ntfy.sh topics are access-controlled by the topic name alone (see
+        notify()'s own docstring), so a non-2xx response must never log the
+        real topic value in cleartext."""
+        secret_topic = "unguessable-secret-topic-value-12345"
+        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", secret_topic)
+
+        class _FakeErrorResponse:
+            status = 500
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        with _patch("alerting.urllib.request.urlopen", lambda req, timeout=None: _FakeErrorResponse()):
+            with caplog.at_level("WARNING"):
+                alerting.notify("T", "M")  # must not raise
+        assert secret_topic not in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # send_model_staleness_alert

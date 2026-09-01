@@ -227,10 +227,13 @@ def notify(
         # controlled URL or scheme.
         with urllib.request.urlopen(req, timeout=_NTFY_REQUEST_TIMEOUT_S) as resp:  # nosec B310
             if resp.status not in (200, 201):
+                # Never log `topic` itself -- ntfy.sh topics are access-
+                # controlled by the topic name alone (see this function's own
+                # docstring), and env_io.py classifies ALERT_NTFY_TOPIC as a
+                # secret field for exactly that reason. Logging it here would
+                # leak it into log aggregation/error-tracking in cleartext.
                 logger.warning(
-                    "ntfy POST returned unexpected HTTP %d for topic '%s'.",
-                    resp.status,
-                    topic,
+                    "ntfy POST returned unexpected HTTP %d.", resp.status,
                 )
                 return False
             else:
