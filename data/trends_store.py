@@ -90,6 +90,33 @@ class TrendsStore:
             logger.warning("TrendsStore.load_raw_windows: %s", exc)
             return []
 
+    def get_query_terms_with_raw_windows(self) -> list[str]:
+        """Returns distinct ``query_term`` values with at least one raw window
+        on file, ordered alphabetically for a deterministic pick.
+
+        Used by diagnostic/demo consumers (e.g. ``GET /data/trends/stitch-demo``)
+        that need to discover which symbol(s) the opt-in daemon job has actually
+        populated, rather than guessing a single hardcoded symbol that may never
+        match the real, operator-configured ingested universe (``settings.
+        DEFAULT_TICKERS`` has no fixed member -- see ``desktop/daemon_runtime.py``'s
+        ``maybe_refresh_google_trends``, the sole writer of this table).
+        """
+        try:
+            session = self.Session()
+            try:
+                rows = (
+                    session.query(RawTrendsDownload.query_term)
+                    .distinct()
+                    .order_by(RawTrendsDownload.query_term.asc())
+                    .all()
+                )
+                return [r[0] for r in rows]
+            finally:
+                session.close()
+        except Exception as exc:
+            logger.warning("TrendsStore.get_query_terms_with_raw_windows: %s", exc)
+            return []
+
     def save_stitched_series(self, query_term: str, series: list[dict], stitched_at: datetime) -> None:
         if self._readonly:
             raise RuntimeError("TrendsStore is read-only")

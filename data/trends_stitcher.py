@@ -14,7 +14,7 @@ Provides production modules for:
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
@@ -115,11 +115,52 @@ class GoogleTrendsStitcher:
         """
         if not intervals:
             return pd.Series(dtype=float)
-        
+
         stitched = intervals[0]
         for next_interval in intervals[1:]:
             stitched = cls.stitch_intervals(stitched, next_interval)
         return stitched
+
+    @staticmethod
+    def group_raw_windows_into_series(raw_rows: Sequence[Any]) -> List[Tuple[str, pd.Series]]:
+        """Groups ``data/trends_store.py::TrendsStore.load_raw_windows()`` rows
+        (objects exposing ``.window_id``/``.date``/``.value``) by ``window_id``
+        into chronologically-ordered ``(window_id, pd.Series)`` pairs, one per
+        window.
+
+        ``window_id`` is an opaque UUID (see ``desktop/daemon_runtime.py``'s
+        ``insert_raw_window`` call), not a chronological identifier -- windows
+        are ordered by their own earliest date instead. Rows within a window
+        are NOT re-sorted here: ``load_raw_windows``'s own
+        ``order_by(RawTrendsDownload.date.asc())`` query already guarantees
+        both per-window date order and that each window's first row is its
+        earliest, so a caller passing that method's return value straight
+        through gets a free, already-sorted result.
+        """
+        windows: dict[str, List[Any]] = {}
+        for row in raw_rows:
+            windows.setdefault(row.window_id, []).append(row)
+        ordered_window_ids = sorted(windows, key=lambda wid: windows[wid][0].date)
+        return [
+            (
+                window_id,
+                pd.Series(
+                    [r.value for r in windows[window_id]],
+                    index=pd.DatetimeIndex([r.date for r in windows[window_id]]),
+                ),
+            )
+            for window_id in ordered_window_ids
+        ]
+
+    @staticmethod
+    def rows_to_series(rows: Sequence[dict]) -> pd.Series:
+        """Converts a list of ``{"date": ..., "value": ...}`` dicts --
+        ``data/trends_store.py::TrendsStore.get_stitched_series()``'s return
+        shape -- into a ``pd.Series`` indexed by date."""
+        return pd.Series(
+            [row["value"] for row in rows],
+            index=pd.DatetimeIndex([row["date"] for row in rows]),
+        )
 
 
 class ASVICalculator:

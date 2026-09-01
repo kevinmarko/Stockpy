@@ -73,6 +73,26 @@ def test_insert_raw_window_upserts_on_duplicate_natural_key():
     assert len(raw_final) == 3
 
 
+def test_get_query_terms_with_raw_windows_returns_distinct_sorted_terms():
+    store = TrendsStore()
+    dt = datetime(2023, 1, 1, 12, 0, 0)
+
+    store.insert_raw_window("MSFT", "w1", [{"date": date(2023, 1, 1), "value": 5.0}], dt)
+    # A second window for the SAME term must not duplicate it in the result.
+    store.insert_raw_window("MSFT", "w2", [{"date": date(2023, 1, 2), "value": 6.0}], dt)
+    store.insert_raw_window("AAPL", "w1", [{"date": date(2023, 1, 1), "value": 7.0}], dt)
+
+    terms = store.get_query_terms_with_raw_windows()
+
+    # Alphabetically sorted, distinct, no "ZZZZ" (never ingested) present.
+    assert terms == ["AAPL", "MSFT"]
+
+
+def test_get_query_terms_with_raw_windows_empty_store():
+    store = TrendsStore()
+    assert store.get_query_terms_with_raw_windows() == []
+
+
 def test_readonly_mode():
     with mock.patch("db_config.create_readonly_db_engine"):
         store = TrendsStore(readonly=True)
