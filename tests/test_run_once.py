@@ -120,7 +120,7 @@ class TestLoadWatchlist:
     """Tests for _load_watchlist()."""
 
     def test_from_env_var(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-        monkeypatch.setenv("WATCHLIST", "AAPL, MSFT, GOOG")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL, MSFT, GOOG")
         # Isolate from a real repo-root watchlist.txt (_load_watchlist() reads
         # a bare relative "watchlist.txt" from the CWD) -- without this, an
         # operator checkout with a populated watchlist.txt leaks its real
@@ -133,7 +133,7 @@ class TestLoadWatchlist:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         """WATCHLIST env var and watchlist.txt are a genuine union, not precedence."""
-        monkeypatch.setenv("WATCHLIST", "TSLA")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "TSLA")
         (tmp_path / "watchlist.txt").write_text("NVDA\nAMD\n")
         monkeypatch.chdir(tmp_path)
         result = _load_watchlist()
@@ -143,7 +143,7 @@ class TestLoadWatchlist:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         """Different tickers in each source are unioned; overlapping ones are deduped."""
-        monkeypatch.setenv("WATCHLIST", "TSLA,NVDA")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "TSLA,NVDA")
         (tmp_path / "watchlist.txt").write_text("NVDA\nAMD\n")
         monkeypatch.chdir(tmp_path)
         result = _load_watchlist()
@@ -153,7 +153,7 @@ class TestLoadWatchlist:
     def test_from_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         wl = tmp_path / "watchlist.txt"
         wl.write_text("NVDA\n# comment line\nAMD\n\n  INTC  \n")
         monkeypatch.chdir(tmp_path)
@@ -163,14 +163,14 @@ class TestLoadWatchlist:
     def test_empty_when_neither_configured(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.chdir(tmp_path)  # no watchlist.txt here
         assert _load_watchlist() == []
 
     def test_env_empty_string_treated_as_absent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.setenv("WATCHLIST", "   ")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "   ")
         monkeypatch.chdir(tmp_path)
         assert _load_watchlist() == []
 
@@ -185,7 +185,7 @@ class TestBuildUniverse:
     def test_held_only_no_watchlist(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL"), "TSLA": _make_position("TSLA")})
         result = _build_universe(snap)
@@ -193,7 +193,7 @@ class TestBuildUniverse:
         assert result == sorted(result)  # must be sorted
 
     def test_union_with_watchlist(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "NVDA,MSFT")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
@@ -201,7 +201,7 @@ class TestBuildUniverse:
         assert set(result) == {"AAPL", "NVDA", "MSFT"}
 
     def test_deduplication(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("WATCHLIST", "AAPL,MSFT")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL,MSFT")
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
         result = _build_universe(snap)
         assert result.count("AAPL") == 1
@@ -209,7 +209,7 @@ class TestBuildUniverse:
     def test_empty_account_empty_watchlist(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
@@ -220,7 +220,7 @@ class TestBuildUniverse:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         """Sheet2 is consulted only when held + watchlist are both empty."""
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
@@ -233,7 +233,7 @@ class TestBuildUniverse:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         """Sheet2 must NOT be consulted when the watchlist already has tickers."""
-        monkeypatch.setenv("WATCHLIST", "AAPL")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
@@ -246,7 +246,7 @@ class TestBuildUniverse:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         """Sheet2 must NOT be consulted when Robinhood positions are held."""
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"TSLA": _make_position("TSLA")})
         with patch("main._load_tickers_from_sheet2") as mock_sheet2:
@@ -260,7 +260,7 @@ class TestBuildUniverse:
         """When SYMBOL_RATING_AUTO_DROP_ENABLED is on but SymbolRatingStore fails,
         the exception should be caught and the universe returned unaffected."""
         monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
-        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "NVDA,MSFT")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
 
@@ -278,7 +278,7 @@ class TestBuildUniverse:
         are both merged into the universe -- a genuine 3-way union with held
         positions, per this repo's documented `positions ∪ WATCHLIST ∪
         watchlist.txt` convention."""
-        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "NVDA,MSFT")
         (tmp_path / "watchlist.txt").write_text("AMD\nINTC\n")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
@@ -350,7 +350,7 @@ class TestRunOnce:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Any,
     ) -> None:
-        monkeypatch.setenv("WATCHLIST", "AAPL,MSFT")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL,MSFT")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot()
@@ -386,7 +386,7 @@ class TestRunOnce:
         as context_extras to every per-symbol advisory_evaluate() call -- so
         cross-sectional momentum / multifactor signals see universe-relative
         data identical to what the orchestrator path already provides."""
-        monkeypatch.setenv("WATCHLIST", "AAPL,MSFT,GOOG")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL,MSFT,GOOG")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot()
@@ -432,7 +432,7 @@ class TestRunOnce:
         tmp_path: Any,
     ) -> None:
         """One symbol raising should not abort the run; error goes to RunResult.errors."""
-        monkeypatch.setenv("WATCHLIST", "AAPL,FAIL_SYM")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL,FAIL_SYM")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot()
@@ -475,7 +475,7 @@ class TestRunOnce:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Any,
     ) -> None:
-        monkeypatch.setenv("WATCHLIST", "BAD1,BAD2")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "BAD1,BAD2")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         mock_snap.return_value = _make_snapshot()
@@ -506,7 +506,7 @@ class TestRunOnce:
         tmp_path: Any,
     ) -> None:
         """When Robinhood is unreachable, the run proceeds on empty account + watchlist."""
-        monkeypatch.setenv("WATCHLIST", "SPY")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "SPY")
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         mock_snap.side_effect = RuntimeError("Robinhood login failed")
@@ -541,7 +541,7 @@ class TestRunOnce:
         tmp_path: Any,
     ) -> None:
         """No held symbols and no watchlist → empty RunResult; advisory never called."""
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         # discovery() is neutralized file-wide by the _isolate_scan_discovery
         # autouse fixture above.
@@ -573,7 +573,7 @@ class TestRunOnce:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """run_once(force_account=True) passes force=True to fetch_account_snapshot."""
-        monkeypatch.setenv("WATCHLIST", "AAPL")
+        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL")
         mock_snap.return_value = _make_snapshot()
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
         mock_eval.return_value = _make_recommendation("AAPL", "BUY")
@@ -600,7 +600,7 @@ class TestRunOnce:
         tmp_path: Any,
     ) -> None:
         """Held tickers appear in universe even when no watchlist is configured."""
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(
             positions={
@@ -637,7 +637,7 @@ class TestAdvisoryConcurrency:
         fail_symbol: str | None = None,
         tmp_path: Any = None,
     ) -> RunResult:
-        monkeypatch.setenv("WATCHLIST", self._UNIVERSE)
+        monkeypatch.setattr(m.settings, "WATCHLIST", self._UNIVERSE)
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         # tmp_path is optional (defaulting None) so any caller that forgets to
         # pass it fails loudly via chdir(None) rather than silently reading

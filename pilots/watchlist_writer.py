@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+from settings import settings
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -129,7 +129,7 @@ def append_symbols(
         :data:`DEFAULT_WATCHLIST_PATH`.
     watchlist_env:
         Injectable override for the ``WATCHLIST`` env var (tests). ``None`` reads
-        ``os.environ`` — matching ``main._load_watchlist()`` exactly. When
+        ``settings.WATCHLIST`` — matching ``main._load_watchlist()`` exactly. When
         non-empty, raises :class:`WatchlistEnvPrecedenceError` (the file would be
         ignored) BEFORE touching the file.
     clock:
@@ -144,7 +144,7 @@ def append_symbols(
     """
     target = path if path is not None else DEFAULT_WATCHLIST_PATH
 
-    env_val = watchlist_env if watchlist_env is not None else os.environ.get("WATCHLIST", "")
+    env_val = watchlist_env if watchlist_env is not None else settings.WATCHLIST
     if env_val and env_val.strip():
         raise WatchlistEnvPrecedenceError(
             "The WATCHLIST environment variable is set, which takes precedence "
@@ -304,7 +304,7 @@ def record_fetch_failures(
     # append_symbols honesty convention for the same precedence rule.
     if dropped_symbols:
         removed = remove_symbols(dropped_symbols, path=target_watchlist)
-        if os.environ.get("WATCHLIST", "").strip():
+        if settings.WATCHLIST.strip():
             logger.warning(
                 "Removed %s from watchlist.txt after %d consecutive fetch "
                 "failures, but the WATCHLIST env var is set and takes "

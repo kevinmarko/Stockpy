@@ -16,6 +16,7 @@ Configuration lives in .env:
 """
 
 import os
+from settings import settings
 import json
 import logging
 import smtplib
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 def _send_ntfy(title: str, message: str, priority: str = "default") -> bool:
     """Send a push notification via ntfy.sh (free, no account required)."""
-    topic = os.getenv("ALERT_NTFY_TOPIC", "investyo-alerts")
+    topic = settings.ALERT_NTFY_TOPIC or "investyo-alerts"
     url = f"https://ntfy.sh/{topic}"
 
     priority_map = {"low": "2", "default": "3", "high": "4", "urgent": "5"}
@@ -57,11 +58,11 @@ def _send_ntfy(title: str, message: str, priority: str = "default") -> bool:
 
 def _send_email(title: str, message: str, priority: str = "default") -> bool:
     """Send an email notification via SMTP."""
-    smtp_host = os.getenv("ALERT_EMAIL_SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("ALERT_EMAIL_SMTP_PORT", "587"))
-    smtp_password = os.getenv("ALERT_EMAIL_SMTP_PASSWORD")
-    email_from = os.getenv("ALERT_EMAIL_FROM", "investyo-alerts@gmail.com")
-    email_to = os.getenv("ALERT_EMAIL_TO", "beforecoast@gmail.com")
+    smtp_host = settings.ALERT_EMAIL_SMTP_HOST or "smtp.gmail.com"
+    smtp_port = int(settings.ALERT_EMAIL_SMTP_PORT or 587)
+    smtp_password = settings.ALERT_EMAIL_SMTP_PASSWORD
+    email_from = settings.ALERT_EMAIL_FROM or "investyo-alerts@gmail.com"
+    email_to = settings.ALERT_EMAIL_TO or "beforecoast@gmail.com"
 
     if not smtp_password:
         logger.warning("ALERT_EMAIL_SMTP_PASSWORD not set; skipping email")
@@ -91,7 +92,7 @@ def _send_email(title: str, message: str, priority: str = "default") -> bool:
 
 def _send_slack(title: str, message: str, priority: str = "default") -> bool:
     """Send a Slack notification via incoming webhook."""
-    webhook_url = os.getenv("ALERT_SLACK_WEBHOOK_URL")
+    webhook_url = settings.ALERT_SLACK_WEBHOOK_URL
     if not webhook_url:
         logger.warning("ALERT_SLACK_WEBHOOK_URL not set; skipping Slack")
         return False
@@ -128,7 +129,7 @@ CHANNEL_HANDLERS = {
 
 def get_active_channels() -> List[str]:
     """Returns the list of active alert channels from .env."""
-    raw = os.getenv("ALERT_CHANNELS", "ntfy")
+    raw = settings.ALERT_CHANNELS or "ntfy"
     return [ch.strip().lower() for ch in raw.split(",") if ch.strip()]
 
 

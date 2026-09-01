@@ -24,7 +24,7 @@ Public API
 :class:`NotificationState`      — the last ntfy push `execution/queue_builder.py` attempted (frozen).
 :func:`read_notification_state`  — parse ``output/execution_queue_notified.json`` → state or ``None``.
 :func:`notification_age_seconds` — age of a `NotificationState` relative to ``now``.
-:func:`ntfy_topic_configured`    — whether ``NTFY_TOPIC`` is set (boolean only — never the value).
+:func:`ntfy_topic_configured`    — whether ``ALERT_NTFY_TOPIC`` is set (boolean only — never the value).
 :func:`read_placed_ledger`       — tail ``output/execution_placed.jsonl`` → list[dict] (absent-file tolerant).
 :func:`derive_intent_status`     — map one queued intent + receipts → a :class:`IntentStatus` badge.
 :func:`build_reconciliation_summary` — cross-check the placed ledger against receipts → :class:`ReconciliationSummary`.
@@ -514,16 +514,22 @@ def notification_age_seconds(state: NotificationState, *, now: Optional[datetime
 
 
 def ntfy_topic_configured() -> bool:
-    """Whether ``NTFY_TOPIC`` is set to a non-empty value.
+    """Whether ``ALERT_NTFY_TOPIC`` is set to a non-empty value.
 
-    Returns a boolean only — mirrors `alerting.notify`'s own env read
-    (``NTFY_TOPIC`` is a plain ``os.environ`` var, not a pydantic Settings
-    field, and is classified as a GUI secret in `gui/env_io.py`, so its
-    cleartext must never be captured here — CONSTRAINT #3).
+    Returns a boolean only — mirrors `alerting.notify`'s own read of the real
+    ``ALERT_NTFY_TOPIC`` pydantic Settings field (a plain ``os.environ`` read
+    of a bare ``NTFY_TOPIC`` name was the bug this fixes: pydantic-settings
+    loads ``.env`` into the ``Settings`` model only, never into the real
+    process environment, so an operator whose only source for this value was
+    ``.env`` got a silently-always-``False`` result here forever). This field
+    is classified as a GUI secret in `gui/env_io.py`'s ``SECRET_KEYS``, so its
+    cleartext must never be captured here — CONSTRAINT #3. Lazy-imports
+    `settings.settings` (mirrors `gui/robinhood_mode.py::read_robinhood_execution_mode`)
+    so this module keeps importing cleanly in minimal test environments.
     """
     try:
-        import os  # noqa: PLC0415
-        return bool(os.environ.get("NTFY_TOPIC", "").strip())
+        from settings import settings as _settings  # noqa: PLC0415
+        return bool((_settings.ALERT_NTFY_TOPIC or "").strip())
     except Exception:
         return False
 

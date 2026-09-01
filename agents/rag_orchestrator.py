@@ -35,7 +35,6 @@ docstring for why that gate matters for any new paid-LLM-calling surface.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, List, Optional, TypedDict
 
 from pydantic import BaseModel
@@ -138,8 +137,14 @@ def retrieve_documents(state: RAGState) -> Dict[str, Any]:
         return {"retrieved_docs": []}
 
     try:
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-        collection = os.environ.get("QDRANT_COLLECTION", "investyo_news")
+        # Read from settings.settings, not os.environ — pydantic-settings'
+        # env_file loading does not copy .env values into the real
+        # os.environ (see prompt_registry.registry._build_registry_from_settings's
+        # docstring for the full precedent / CLAUDE.md's 2026-07 Finnhub fix).
+        from settings import settings as _settings  # noqa: PLC0415
+
+        qdrant_url = _settings.QDRANT_URL
+        collection = _settings.QDRANT_COLLECTION
         client = QdrantClient(url=qdrant_url, timeout=5)
 
         # Dense embedding via a sentence transformer -- MUST be the same

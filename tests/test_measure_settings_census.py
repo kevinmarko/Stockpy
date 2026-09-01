@@ -113,3 +113,73 @@ class TestCommittedArtifactIsFresh:
         assert fresh_md == committed_md, (
             f"docs/settings_field_census.md is stale. {_REGEN_HINT}"
         )
+
+class TestFormDOsEnvironIsFullyAllowlisted:
+    """Gate for ``scripts/measure_settings_census.py``'s ``form_d_os_environ``
+    measurement -- the census's count of ``Settings``-field-shaped names read
+    via a bare ``os.environ.get(...)``/``os.environ[...]`` instead of through
+    ``settings.settings.X`` (Form D in the census's own terminology; see
+    ``read_forms.form_d_os_environ`` in ``docs/settings_field_census.json``).
+
+    This is the trailing gate for the trading-safety-audit os.environ-bypass
+    sweep (PR #962 and its work packages): once every WP-A through WP-Z fix
+    lands, exactly two fields should remain in Form D, both for structural
+    reasons that make a ``settings.X`` read impossible or actively wrong at
+    the read site -- not oversights:
+
+    - ``GCLOUD_BIN`` -- read in ``mcp_remote_adapter.py``, a standalone stdio
+      proxy script explicitly configured via ``claude_desktop_config.json``'s
+      ``env`` block (per that file's own module docstring), never via
+      ``.env``/``settings.py``. It is also a declared ``Settings`` field
+      (``settings.py``'s ``GCLOUD_BIN`` field), so
+      ``scripts/auditor/stockpy_codebase_auditor.py::check_configuration``'s
+      separate ``undeclared_env_var`` check never flags it at all -- it does
+      not need (and does not have) an entry in that check's own ``benign``
+      allowlist.
+    - ``NO_VENV_REEXEC`` -- read in ``scripts/_bootstrap.py``, BEFORE
+      ``settings.py`` can safely be imported (deciding whether to re-exec
+      under the ``.venv`` interpreter) -- the same category as ``main.py``'s
+      /``main_orchestrator.py``'s own top-of-file reexec guards, which read
+      raw env vars for the identical reason. ``settings.py`` documents this
+      explicitly in its own comment block just above the ``WATCHLIST`` field
+      (search for ``RH_LOGIN_WORKER and KEY are deliberately NOT declared
+      here``), which names this test file as the enforcement mechanism.
+      ``scripts/auditor/stockpy_codebase_auditor.py::check_configuration``'s
+      ``benign`` allowlist independently carries the same two-field
+      reasoning (``RH_LOGIN_WORKER`` and ``NO_VENV_REEXEC`` are both listed
+      there) for its own, differently-scoped check.
+
+    A regression here means a fix in one of the other os.environ-bypass work
+    packages (``data/market_data.py``, ``data/portfolio_sync.py``,
+    ``alerting.py``, etc.) was reverted, or a brand-new bypass was
+    introduced -- in either case, re-run
+    ``python3 scripts/measure_settings_census.py --json`` and grep the
+    ``read_forms.form_d_os_environ.counts`` object to find the offending
+    field and its reading module, then either fix the read site to use
+    ``settings.settings.X`` or (if it is a third, equally-structural case
+    like the two above) extend this allowlist with the same class of
+    justification.
+    """
+
+    ALLOWED_OS_ENVIRON_FIELDS = frozenset({"GCLOUD_BIN", "NO_VENV_REEXEC"})
+
+    def test_form_d_os_environ_counts_only_the_two_allowlisted_fields(self, fresh_census):
+        form_d = fresh_census["read_forms"]["form_d_os_environ"]
+        counted_fields = set(form_d["counts"].keys())
+        assert counted_fields == self.ALLOWED_OS_ENVIRON_FIELDS, (
+            "scripts/measure_settings_census.py's form_d_os_environ measurement "
+            f"found {sorted(counted_fields)}, expected exactly "
+            f"{sorted(self.ALLOWED_OS_ENVIRON_FIELDS)}. A Settings-field-shaped "
+            "name bypassing settings.settings.X via a bare os.environ read was "
+            "either introduced or left unfixed -- see this class's docstring "
+            "for the two structurally-justified exceptions and how to "
+            "investigate a new one."
+        )
+
+    def test_form_d_os_environ_distinct_fields_matches_allowlist_size(self, fresh_census):
+        # Belt-and-suspenders on the census's own reported distinct_fields
+        # count, independent of the counts dict's keys checked above.
+        form_d = fresh_census["read_forms"]["form_d_os_environ"]
+        assert form_d["distinct_fields"] == len(self.ALLOWED_OS_ENVIRON_FIELDS)
+
+
