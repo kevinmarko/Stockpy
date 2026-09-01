@@ -5350,6 +5350,7 @@ class Settings(BaseSettings):
     #    literal string `os.environ.get("key")` inside a comment in
     #    scripts/measure_settings_census.py illustrating that script's own
     #    pattern-matching, not a real env var read anywhere in the codebase.
+    #    Note: This is now enforced by the census-gate test (tests/test_measure_settings_census.py).
     WATCHLIST: str = Field(
         default="",
         description="Comma-separated list of symbols to always include in the universe.",
