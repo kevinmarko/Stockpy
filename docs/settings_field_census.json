@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "d8d39a1a52a390b6b6ecca13d8dd9ad02774b6d1",
+    "git_commit": "33b1ae48b661704b23541cae3985d2f85cc0e2ea",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3979,7 +3979,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 842,
+      "total_reads": 843,
       "distinct_fields": 279,
       "counts": {
         "OUTPUT_DIR": 135,
@@ -4097,6 +4097,7 @@
         "FORECAST_BACKFILL_DEADLINE_SECONDS": 2,
         "FORECAST_USE_GARCH_SIGMA": 2,
         "FRED_REQUEST_TIMEOUT_SECONDS": 2,
+        "GOOGLE_TRENDS_ENABLED": 2,
         "GRAVITY_AI_RUNNER_OUTPUT_PATH": 2,
         "HMM_COVARIANCE_TYPE": 2,
         "HMM_N_STATES": 2,
@@ -4181,7 +4182,6 @@
         "GENERAL_SETTINGS_WRITES_ENABLED": 1,
         "GOOGLE_NEWS_LOOKBACK_WINDOW": 1,
         "GOOGLE_TRENDS_COOLDOWN_SECONDS": 1,
-        "GOOGLE_TRENDS_ENABLED": 1,
         "GOOGLE_TRENDS_MAX_RETRIES": 1,
         "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE": 1,
         "GRAVITY_REQUIRE_NATIVE": 1,
