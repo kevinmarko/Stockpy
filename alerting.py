@@ -117,7 +117,7 @@ def setup_logging(log_level: str = "INFO") -> None:
         # Already configured — adding handlers again would duplicate log lines.
         return
 
-    effective_str = os.environ.get("LOG_LEVEL", log_level).upper()
+    effective_str = (settings.LOG_LEVEL or log_level).upper()
     numeric_level = getattr(logging, effective_str, logging.INFO)
     root.setLevel(numeric_level)
 
@@ -198,7 +198,7 @@ def notify(
         ntfy priority string (see table above).  Defaults to ``"default"``.
         Unknown strings are silently replaced with ``"default"``.
     """
-    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    topic = (settings.ALERT_NTFY_TOPIC or "").strip()
     if not topic:
         return  # NTFY_TOPIC not configured → silent no-op
 

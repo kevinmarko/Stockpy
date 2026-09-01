@@ -141,9 +141,9 @@ class TestSendEmail:
         smtp_cls.assert_not_called()
 
     def test_sends_via_starttls_when_configured(self, monkeypatch):
-        monkeypatch.setenv("ALERT_EMAIL_SMTP_PASSWORD", "app-password")
-        monkeypatch.setenv("ALERT_EMAIL_FROM", "from@example.com")
-        monkeypatch.setenv("ALERT_EMAIL_TO", "to@example.com")
+        monkeypatch.setattr("settings.settings.ALERT_EMAIL_SMTP_PASSWORD", "app-password")
+        monkeypatch.setattr("settings.settings.ALERT_EMAIL_FROM", "from@example.com")
+        monkeypatch.setattr("settings.settings.ALERT_EMAIL_TO", "to@example.com")
 
         server = MagicMock()
         server.__enter__ = MagicMock(return_value=server)
@@ -163,7 +163,7 @@ class TestSendEmail:
         assert "Subject Line" in sent_msg["Subject"]
 
     def test_smtp_exception_swallowed(self, monkeypatch):
-        monkeypatch.setenv("ALERT_EMAIL_SMTP_PASSWORD", "app-password")
+        monkeypatch.setattr("settings.settings.ALERT_EMAIL_SMTP_PASSWORD", "app-password")
 
         def _raise(*a, **k):
             raise OSError("connection refused")
@@ -188,7 +188,7 @@ class TestSendSlack:
         assert called == []
 
     def test_success_posts_json_with_emoji(self, monkeypatch):
-        monkeypatch.setenv("ALERT_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/x")
+        monkeypatch.setattr("settings.settings.ALERT_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/x")
         captured = {}
 
         class _Resp:
@@ -218,7 +218,7 @@ class TestSendSlack:
         assert "alert body" in captured["payload"]["text"]
 
     def test_network_error_swallowed(self, monkeypatch):
-        monkeypatch.setenv("ALERT_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/x")
+        monkeypatch.setattr("settings.settings.ALERT_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/x")
 
         def _raise(req, timeout=None):
             raise urllib.error.URLError("boom")
@@ -235,15 +235,15 @@ class TestSendSlack:
 
 class TestGetActiveChannels:
     def test_defaults_to_ntfy(self, monkeypatch):
-        monkeypatch.delenv("ALERT_CHANNELS", raising=False)
+        monkeypatch.setattr("settings.settings.ALERT_CHANNELS", None) #, raising=False)
         assert notifier.get_active_channels() == ["ntfy"]
 
     def test_parses_comma_separated_list(self, monkeypatch):
-        monkeypatch.setenv("ALERT_CHANNELS", "ntfy, email,slack ")
+        monkeypatch.setattr("settings.settings.ALERT_CHANNELS", "ntfy, email,slack ")
         assert notifier.get_active_channels() == ["ntfy", "email", "slack"]
 
     def test_blank_entries_dropped(self, monkeypatch):
-        monkeypatch.setenv("ALERT_CHANNELS", "ntfy,,email")
+        monkeypatch.setattr("settings.settings.ALERT_CHANNELS", "ntfy,,email")
         assert notifier.get_active_channels() == ["ntfy", "email"]
 
 
@@ -288,7 +288,7 @@ class TestSendDispatcher:
         assert result == {"ntfy": True, "email": False}
 
     def test_uses_active_channels_from_env_when_not_overridden(self, monkeypatch):
-        monkeypatch.setenv("ALERT_CHANNELS", "ntfy")
+        monkeypatch.setattr("settings.settings.ALERT_CHANNELS", "ntfy")
         monkeypatch.setitem(notifier.CHANNEL_HANDLERS, "ntfy", lambda t, m, priority="default": True)
 
         result = notifier.send("t", "m")
@@ -304,7 +304,7 @@ class TestSendDispatcher:
 class TestAlertConfigStore:
     def test_missing_file_returns_default(self, monkeypatch, tmp_path):
         monkeypatch.setattr(notifier, "_ALERT_CONFIG_PATH", str(tmp_path / "does_not_exist.json"))
-        monkeypatch.delenv("ALERT_CHANNELS", raising=False)
+        monkeypatch.setattr("settings.settings.ALERT_CHANNELS", None) #, raising=False)
 
         cfg = notifier.get_alert_config()
 

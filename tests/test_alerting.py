@@ -110,7 +110,7 @@ class TestSetupLogging:
         self, clean_root_logger, isolated_log_dir, monkeypatch
     ):
         clean_root_logger.handlers = []
-        monkeypatch.setenv("LOG_LEVEL", "WARNING")
+        monkeypatch.setattr("settings.settings.LOG_LEVEL", "WARNING")
         alerting.setup_logging(log_level="INFO")
         assert clean_root_logger.level == logging.WARNING
 
@@ -118,7 +118,7 @@ class TestSetupLogging:
         self, clean_root_logger, isolated_log_dir, monkeypatch
     ):
         clean_root_logger.handlers = []
-        monkeypatch.setenv("LOG_LEVEL", "NOT_A_REAL_LEVEL")
+        monkeypatch.setattr("settings.settings.LOG_LEVEL", "NOT_A_REAL_LEVEL")
         alerting.setup_logging()
         assert clean_root_logger.level == logging.INFO
 
@@ -168,19 +168,19 @@ class _FakeOkResponse:
 
 class TestNotify:
     def test_noop_when_ntfy_topic_unset(self, monkeypatch):
-        monkeypatch.delenv("NTFY_TOPIC", raising=False)
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", None) # raising=False)
         with _patch("alerting.urllib.request.urlopen") as mock_urlopen:
             alerting.notify("Title", "Message")  # must not raise
             mock_urlopen.assert_not_called()
 
     def test_noop_when_ntfy_topic_is_blank_whitespace(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "   ")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "   ")
         with _patch("alerting.urllib.request.urlopen") as mock_urlopen:
             alerting.notify("Title", "Message")
             mock_urlopen.assert_not_called()
 
     def test_successful_post_hits_ntfy_sh_with_topic_in_url(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "my-secret-topic")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "my-secret-topic")
         captured = {}
 
         def fake_urlopen(req, timeout=None):
@@ -197,7 +197,7 @@ class TestNotify:
         assert captured["headers"]["Priority"] == "high"
 
     def test_unknown_priority_silently_replaced_with_default(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "topic")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "topic")
         captured = {}
 
         def fake_urlopen(req, timeout=None):
@@ -210,7 +210,7 @@ class TestNotify:
         assert captured["headers"]["Priority"] == "default"
 
     def test_url_error_is_caught_and_never_raises(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "topic")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "topic")
 
         def raising_urlopen(req, timeout=None):
             raise urllib.error.URLError("connection refused")
@@ -219,7 +219,7 @@ class TestNotify:
             alerting.notify("T", "M")  # must not raise
 
     def test_generic_exception_is_caught_and_never_raises(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "topic")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "topic")
 
         def raising_urlopen(req, timeout=None):
             raise ValueError("something unexpected")
@@ -228,7 +228,7 @@ class TestNotify:
             alerting.notify("T", "M")  # must not raise
 
     def test_non_2xx_http_status_logged_not_raised(self, monkeypatch, caplog):
-        monkeypatch.setenv("NTFY_TOPIC", "topic")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "topic")
 
         class _FakeErrorResponse:
             status = 500

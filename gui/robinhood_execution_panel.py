@@ -514,16 +514,16 @@ def notification_age_seconds(state: NotificationState, *, now: Optional[datetime
 
 
 def ntfy_topic_configured() -> bool:
-    """Whether ``NTFY_TOPIC`` is set to a non-empty value.
+    """Whether ``ALERT_NTFY_TOPIC`` is set to a non-empty value.
 
     Returns a boolean only — mirrors `alerting.notify`'s own env read
-    (``NTFY_TOPIC`` is a plain ``os.environ`` var, not a pydantic Settings
-    field, and is classified as a GUI secret in `gui/env_io.py`, so its
-    cleartext must never be captured here — CONSTRAINT #3).
+    (``ALERT_NTFY_TOPIC`` is a pydantic Settings field, but classified as a GUI secret
+    in `gui/env_io.py`, so its cleartext must never be captured here — CONSTRAINT #3).
     """
     try:
-        import os  # noqa: PLC0415
-        return bool(os.environ.get("NTFY_TOPIC", "").strip())
+        from settings import settings
+        val = settings.ALERT_NTFY_TOPIC or ""
+        return bool(val.strip())
     except Exception:
         return False
 

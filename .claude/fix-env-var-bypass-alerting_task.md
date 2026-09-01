@@ -1,0 +1,5 @@
+- [x] Implement Bug 1 in alerting.py
+- [x] Implement Bug 2 in alerting.py and gui/robinhood_execution_panel.py
+- [x] Implement Bug 3 in alerting_mcp/notifier.py
+- [x] Verify tests
+- [x] Create walkthrough
