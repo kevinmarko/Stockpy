@@ -1,9 +1,12 @@
 # Known issue (2026-08-22): `OPTIONS_0DTE_ENABLED` missing from the automated options-lifecycle outer gate; automated options lifecycle entirely unwired on the daemon path
 
-**Status: partially fixed.** Branch `fix-options-0dte-gate-missing`. Bug 1
-(the `main.py` outer-gate omission) is fixed with a regression test. Bug 2
-(the daemon-path gap) is **documented, not fixed** — see "What's still open"
-below for why and what a real fix would need.
+**Status: fixed.** Branch `fix-options-0dte-gate-missing`. Bug 1 (the
+`main.py` outer-gate omission) is fixed with a regression test. Bug 2 (the
+daemon-path gap) was documented-not-fixed here, then closed by Phase 37 Work
+Package D (`execution/options_lifecycle.py` + `desktop/daemon_runtime.py`
+wiring) and a follow-up code-review fix pass that corrected a real bug in
+WP D's own `macro_dto` threading — see "Bug 2 — resolution" below for the
+full history, including the intermediate bug.
 
 ## Bug 1 (fixed): `main.py`'s outer gate omitted `OPTIONS_0DTE_ENABLED`
 
@@ -74,7 +77,44 @@ the pre-fix gate condition (reintroducing the missing `OR
 getattr(settings, "OPTIONS_0DTE_ENABLED", False)` clause makes it fail) before
 committing the fix.
 
-## Bug 2 (documented, not fixed): the automated options lifecycle has no daemon-path equivalent
+## Bug 2 — resolution
+
+Fixed in two steps:
+
+1. **Phase 37 Work Package D** implemented the "real fix" shape this doc
+   recommended below: `run_automated_options_lifecycle`/
+   `run_automated_delta_hedge_cycle` were extracted into
+   `execution/options_lifecycle.py` (a module both `main.py` and
+   `desktop/daemon_runtime.py` can import without side effects), and
+   `desktop/daemon_runtime.py::_run_one_cycle` now calls
+   `run_automated_options_lifecycle(macro_dto=macro_dto)` immediately after
+   `main_orchestrator._main_body(...)` returns, mirroring `main.py`'s own
+   post-cycle call.
+2. **A follow-up code-review pass** found WP D's own `macro_dto` threading
+   was itself broken: `main_orchestrator.py::_main_body_impl()`'s signature
+   claimed `-> Optional[Any]` but its body never actually contained a
+   `return` statement, so it always implicitly returned `None` — meaning the
+   daemon's captured `macro_dto` was always `None` regardless of WP D's
+   fix, and `execute_strategy_directives(macro_dto=None)`'s VIX/CREDIT-EVENT
+   regime gate (the exact risk this doc's "macro_dto availability" bullet
+   below warned about) silently never saw the real macro context on the
+   daemon path. Fixed by adding `return ctx.macro_dto` to
+   `_main_body_impl()`'s actual end (a stray, unrelated
+   `return getattr(ctx, "macro_dto", None)` line that had been mistakenly
+   appended to `async def main()` instead — which has no local `ctx` and
+   raised `NameError` on every successful `python3 main_orchestrator.py`
+   run — was removed rather than kept).
+
+The **cadence decision** this doc originally flagged as open was resolved by
+WP D as: run once per full daemon pipeline cycle (tied to `_run_one_cycle`,
+same cadence `main.py` already used), not on every timer wake like 0DTE —
+matching this doc's own suggestion that strategy auto-execution (which scans
+directives only refreshed once per cycle) wants the slower cadence, and
+applying that same cadence to delta hedging/exit management too for
+consistency with `main.py`'s existing behavior rather than splitting them
+across two cadences.
+
+## Bug 2 (historical — documented, not fixed, as of 2026-08-22): the automated options lifecycle has no daemon-path equivalent
 
 `execution/options_paper_executor.py::OptionsPaperExecutor`'s exit management
 (`execute_auto_exits` — the 50%/2x/21-DTE logic), `execute_strategy_directives`
@@ -164,7 +204,7 @@ proper implementation plan, rather than folded into this bug-fix PR. This
 doc is the loud, explicit disclosure CLAUDE.md's own workflow requires for
 exactly this situation.
 
-### What's still open
+### What's still open (as of the original 2026-08-22 write-up — since resolved, see "Bug 2 — resolution" above)
 
 - No code fix for Bug 2 in this PR. See "Why this isn't fixed in the same
   PR" above for the recommended follow-up shape (a shared

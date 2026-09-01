@@ -1249,6 +1249,8 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     except Exception as exc:
         telemetry.warning("Daily summary dispatch failed (non-fatal): %s", exc)
 
+    return ctx.macro_dto
+
 
 
 
@@ -1365,7 +1367,6 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
             await _hb_task
             if _cls_task:
                 await _cls_task
-    return getattr(ctx, "macro_dto", None)
 
 
 if __name__ == "__main__":

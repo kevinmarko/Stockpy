@@ -809,10 +809,19 @@ def get_sync_report() -> Dict[str, Any]:
         logger.warning("data_api: account snapshot unavailable for sync report: %s", exc)
         snapshot = None
     try:
-        from data.portfolio_sync import resolve_universe
-        forecast_symbols = resolve_universe()
+        # NOT resolve_universe(): that returns the operator's TRACKED
+        # universe (held ∪ watchlists ∪ DEFAULT_TICKERS), which is nearly
+        # the same union `build_sync_report()` itself iterates to build this
+        # report -- using it here would make forecast_available reflect
+        # universe membership, not whether ForecastingEngine actually
+        # produced a forecast for the symbol (CONSTRAINT #4: a near-
+        # tautological "yes" is a fabricated coverage signal). See
+        # docs/known_issues/... forecast_universe_disconnect for the real,
+        # separate fix this narrow flag can't stand in for.
+        from forecasting.forecast_tracker import ForecastTracker
+        forecast_symbols = ForecastTracker().get_covered_symbols(horizon_days=30)
     except Exception as exc:
-        logger.warning("data_api: forecast universe lookup failed, degrading to none: %s", exc)
+        logger.warning("data_api: forecast coverage lookup failed, degrading to none: %s", exc)
         forecast_symbols = []
 
     try:

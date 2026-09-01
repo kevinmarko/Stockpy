@@ -328,6 +328,19 @@ class TestGenerateForecast:
         assert result["Forecast_30"] == 0.0
         assert result["ARIMA"] == 0.0
 
+    def test_insufficient_history_raises_instead_of_fabricating_a_forecast(self, engine):
+        """Regression test: generate_forecast() must let its own
+        ValueError("Insufficient historical data...") propagate to the
+        caller instead of it being caught by this same function's outer
+        `except Exception` (which used to make it silently return the
+        initial all-0.0 `results` dict as if that were a real forecast --
+        a CONSTRAINT #4 violation, and it made
+        pipeline/production_steps.py::ForecastingStep's NaN-fallback branch
+        for exactly this scenario unreachable)."""
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        with pytest.raises(ValueError, match="Insufficient historical data"):
+            engine.generate_forecast(row, current_price=123.45, history_series=None)
+
     def test_end_to_end_populates_all_forecast_horizons(self, engine):
         row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
         history = _price_series(90, seed=6)
@@ -339,8 +352,14 @@ class TestGenerateForecast:
             assert result[key] > 0.0
 
     def test_unknown_sector_defaults_to_60_day_mc_config(self, engine):
+        # Needs a real history series -- generate_forecast() now raises
+        # ValueError on insufficient history (CONSTRAINT #4: no more
+        # fabricated mu=0.0002/sigma=0.015 fallback), so a no-history call
+        # can no longer be used as a shortcut to exercise sector-config
+        # lookup, the thing this test actually verifies.
         row = pd.Series({"sector": "Crypto Mining", "Symbol": "ZZZ"})
-        result = engine.generate_forecast(row, current_price=50.0)
+        history = _price_series(90, seed=8)
+        result = engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
         assert result["Target_Days"] == 60
 
     def test_real_estate_sector_uses_30_day_target(self, engine):

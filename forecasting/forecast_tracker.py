@@ -67,6 +67,18 @@ ALL_MODEL_NAMES = (
     MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA,
 )
 
+# Sentinel model_name recorded by record_forecasts() when a cycle produced NO
+# usable model price for a symbol/horizon -- keeps the symbol visible to any
+# tool tracking dataset completeness (e.g. "did this symbol get a forecast
+# attempt this cycle") without pretending a real price was predicted.
+# update_actuals() deliberately never actualizes these rows (see its own
+# comment), which keeps them permanently excluded from get_skill_weights()/
+# the pilots/observability.py aggregate siblings (all filter on
+# actual_price IS NOT NULL) -- a synthetic placeholder must never be able to
+# masquerade as a real, measured model in the skill-weighted blend
+# (CONSTRAINT #4).
+MODEL_EMPTY = "empty"
+
 # Minimum positive RMSE to prevent division-by-zero when a model is extremely
 # accurate over a stretch (a $0.01 RMSE cap avoids assigning infinite weight).
 _MIN_RMSE = 0.01
@@ -307,7 +319,17 @@ class ForecastTracker:
                 if price and price > 0.0
             ]
             if not rows:
-                rows = [(symbol.upper(), "empty", horizon_days, ts_iso, None, now_iso)]
+                # forecast_price is NOT NULL, and SQLite silently stores a
+                # bound Python float("nan") as NULL (verified -- it still
+                # trips the NOT NULL check), so NaN can't be used here. 0.0
+                # is safe precisely because every downstream reader of
+                # forecast_price in this file (get_forecast_error_summary,
+                # calibration/pct-error queries) filters on
+                # `actual_price IS NOT NULL`, and update_actuals() below
+                # never actualizes a MODEL_EMPTY row -- its forecast_price
+                # value is therefore never read by anything (CONSTRAINT #4:
+                # no query ever presents it as a measured price).
+                rows = [(symbol.upper(), MODEL_EMPTY, horizon_days, ts_iso, 0.0, now_iso)]
             with self._lock:
                 conn = self._get_conn()
                 conn.executemany(
@@ -378,10 +400,11 @@ class ForecastTracker:
                        WHERE symbol       = ?
                          AND horizon_days = ?
                          AND forecast_ts  <= ?
-                         AND actual_price IS NULL""",
+                         AND actual_price IS NULL
+                         AND model_name   != ?""",
                     (
                         actual_price, actual_price, actual_price,
-                        symbol.upper(), horizon_days, cutoff_iso,
+                        symbol.upper(), horizon_days, cutoff_iso, MODEL_EMPTY,
                     ),
                 )
                 conn.commit()

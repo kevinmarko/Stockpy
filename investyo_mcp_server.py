@@ -3992,7 +3992,13 @@ def get_portfolio_coverage() -> str:
             snapshot = None
             snapshot_note = f"account snapshot unavailable ({type(se).__name__})"
 
-        report = build_sync_report(snapshot, probe_market=True)
+        try:
+            from forecasting.forecast_tracker import ForecastTracker
+            forecast_symbols = ForecastTracker().get_covered_symbols(horizon_days=30)
+        except Exception:
+            forecast_symbols = []
+
+        report = build_sync_report(snapshot, probe_market=True, forecast_symbols=forecast_symbols)
 
         def _num(v):
             try:

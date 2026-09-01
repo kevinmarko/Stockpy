@@ -1607,6 +1607,13 @@ class ForecastingEngine:
                 results['Forecast_30_Prophet_Lower'] = prophet_30_lower
                 results['Forecast_30_Prophet_Upper'] = prophet_30_upper
 
+        except ValueError:
+            # Insufficient-history is a genuine "no forecast possible" case
+            # (CONSTRAINT #4) -- let it propagate so the caller's own
+            # NaN-fallback branch (pipeline/production_steps.py::ForecastingStep)
+            # runs instead of this function silently returning the initial
+            # all-0.0 `results` dict as if it were a real forecast.
+            raise
         except Exception as e:
             logger.error(f"Forecasting Engine Error for {row.get('Symbol', 'Unknown')}: {e}")
             

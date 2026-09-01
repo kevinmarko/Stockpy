@@ -89,7 +89,7 @@ def test_read_macro_snapshot_hint_file_io_exception(monkeypatch):
 # docs/known_issues/options_risk_fabricated_spy_spot.md).
 # ---------------------------------------------------------------------------
 
-def testrun_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both_calls():
+def test_run_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both_calls():
     """Sizing (calculate_portfolio_greeks) and fill (execute_delta_hedge) must
     be called with the IDENTICAL resolved spy_spot -- never a fabricated
     price for one and a real price for the other."""
@@ -114,7 +114,7 @@ def testrun_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both_
     assert result == mock_execute_hedge.return_value
 
 
-def testrun_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog):
+def test_run_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog):
     """No live SPY quote -> the cycle is skipped entirely (fail closed) --
     neither sizing nor execution is ever attempted, and nothing is sized off
     a fabricated placeholder price."""
@@ -133,7 +133,7 @@ def testrun_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog)
     assert any("no live SPY quote" in rec.message for rec in caplog.records)
 
 
-def testrun_automated_delta_hedge_cycle_logs_on_real_hedged_result(caplog):
+def test_run_automated_delta_hedge_cycle_logs_on_real_hedged_result(caplog):
     """A real hedged=True result must actually produce the confirmation INFO
     log -- regression for the dead `_hedge_res.get('executed')` /
     `_hedge_res.get('spot_price')` key-mismatch bug (execute_delta_hedge's

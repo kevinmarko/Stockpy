@@ -33,6 +33,7 @@ from forecasting.forecast_tracker import (
     MODEL_MONTE_CARLO,
     MODEL_HOLT_WINTERS,
     MODEL_CNN_LSTM,
+    MODEL_EMPTY,
     ALL_MODEL_NAMES,
     _MIN_RMSE,
     compute_skill_weights_from_stats,
@@ -122,10 +123,55 @@ class TestRecordForecasts:
         assert tracker.pending_count("AAPL", 30) == 2
 
     def test_skips_zero_and_negative_prices(self, tmp_path):
+        """Every real model price is invalid (0.0/negative) -> no real model
+        row is recorded, but a single MODEL_EMPTY sentinel row IS persisted
+        (dataset-completeness tracking -- the symbol stays visible to any
+        tool tracking "did this symbol get a forecast attempt this cycle").
+        It counts as pending (it's never actualized -- see
+        test_empty_sentinel_never_actualized_or_surfaced_in_skill_weights
+        below) but must never appear as a real model in get_skill_weights()."""
         tracker = _make_tracker(tmp_path)
         ts = datetime.now(timezone.utc)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 0.0, MODEL_MONTE_CARLO: -5.0}, ts)
-        assert tracker.pending_count("AAPL", 30) == 0
+        assert tracker.pending_count("AAPL", 30) == 1
+
+    def test_empty_sentinel_row_actually_persists(self, tmp_path):
+        """Regression test: the MODEL_EMPTY sentinel row used to violate the
+        table's forecast_price REAL NOT NULL constraint on every insert
+        (bound via forecast_price=None), so it silently never persisted --
+        the whole "dataset completeness" feature was dead code. Also pins
+        that a bound Python float("nan") is NOT a usable substitute: SQLite
+        coerces it back to NULL, which still trips the same constraint."""
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts("ZZZZ", 30, {}, ts)
+        conn = tracker._get_conn()
+        rows = conn.execute(
+            "SELECT symbol, model_name, forecast_price, actual_price FROM forecast_errors "
+            "WHERE symbol = ?",
+            ("ZZZZ",),
+        ).fetchall()
+        assert len(rows) == 1
+        symbol, model_name, forecast_price, actual_price = rows[0]
+        assert symbol == "ZZZZ"
+        assert model_name == MODEL_EMPTY
+        assert forecast_price is not None
+        assert not math.isnan(forecast_price)
+        assert actual_price is None
+
+    def test_empty_sentinel_never_actualized_or_surfaced_in_skill_weights(self, tmp_path):
+        """The MODEL_EMPTY sentinel must never masquerade as a real model
+        with a fabricated MSE in get_skill_weights() (CONSTRAINT #4): even
+        once its horizon has fully elapsed and update_actuals() is called,
+        it must stay un-actualized and absent from skill_weights."""
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc) - timedelta(days=31)
+        tracker.record_forecasts("ZZZZ", 30, {}, ts)
+        n_updated = tracker.update_actuals("ZZZZ", 30, 150.0, datetime.now(timezone.utc))
+        assert n_updated == 0
+        assert tracker.pending_count("ZZZZ", 30) == 1
+        assert tracker.completed_count("ZZZZ", 30) == 0
+        assert tracker.get_skill_weights("ZZZZ", 30) == {}
 
     def test_symbol_uppercased(self, tmp_path):
         tracker = _make_tracker(tmp_path)

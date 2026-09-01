@@ -3,7 +3,11 @@ from typing import Optional, Any, Dict
 from settings import settings
 from dto_models import MacroEconomicDTO
 
-logger = logging.getLogger(__name__)
+# Kept as "InvestYo.main" (not __name__) -- these two functions were moved
+# here verbatim from main.py, which used this exact logger name, and
+# tests/test_main.py's caplog.at_level(..., logger="InvestYo.main")
+# assertions still scope to it.
+logger = logging.getLogger("InvestYo.main")
 
 def run_automated_delta_hedge_cycle(executor: Any) -> Optional[Dict[str, Any]]:
     """Resolves ONE real SPY quote and, only if available, sizes and
