@@ -8250,13 +8250,18 @@ def run_lstm_attention_forecast_endpoint(
         sector_bars = pd.DataFrame()
         
     # ASVI Data
-    trends_store = TrendsStore()
-    asvi_sym = trends_store.get_stitched_series(symbol)
-    asvi_sec = trends_store.get_stitched_series(sector_proxy)
+    with TrendsStore(readonly=True) as trends_store:
+        stitched_sym = trends_store.get_stitched_series(symbol)
+        stitched_sec = trends_store.get_stitched_series(sector_proxy)
     
-    if asvi_sym is None:
+    if stitched_sym:
+        asvi_sym = pd.Series([float(d["value"]) for d in stitched_sym], index=[d["date"] for d in stitched_sym])
+    else:
         asvi_sym = pd.Series(dtype=float)
-    if asvi_sec is None:
+        
+    if stitched_sec:
+        asvi_sec = pd.Series([float(d["value"]) for d in stitched_sec], index=[d["date"] for d in stitched_sec])
+    else:
         asvi_sec = pd.Series(dtype=float)
 
     from pilots.lstm_diagnostic import run_lstm_diagnostic

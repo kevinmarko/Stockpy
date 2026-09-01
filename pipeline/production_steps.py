@@ -735,38 +735,43 @@ def _apply_lstm_attention_forecast(dashboard_df: pd.DataFrame) -> None:
             return
             
         store = HistoricalStore()
-        trends_store = TrendsStore()
         fmp = FMPDataLoader()
         
-        for ticker in symbols:
-            try:
-                bars = store.get_bars(ticker, lookback_days=1095)
-                if bars is None or bars.empty or len(bars) < 60:
-                    continue
+        with TrendsStore(readonly=True) as trends_store:
+            for ticker in symbols:
+                try:
+                    bars = store.get_bars(ticker, lookback_days=1095)
+                    if bars is None or bars.empty or len(bars) < 60:
+                        continue
+                        
+                    fund = fmp.get_fundamentals(ticker)
+                    sector = fund.get("sector")
+                    sector_proxy = resolve_sector_proxy(sector)
                     
-                fund = fmp.get_fundamentals(ticker)
-                sector = fund.get("sector")
-                sector_proxy = resolve_sector_proxy(sector)
-                
-                sector_bars = store.get_bars(sector_proxy, lookback_days=1095)
-                if sector_bars is None:
-                    sector_bars = pd.DataFrame()
+                    sector_bars = store.get_bars(sector_proxy, lookback_days=1095)
+                    if sector_bars is None:
+                        sector_bars = pd.DataFrame()
+                        
+                    stitched_sym = trends_store.get_stitched_series(ticker)
+                    stitched_sec = trends_store.get_stitched_series(sector_proxy)
                     
-                asvi_sym = trends_store.get_stitched_series(ticker)
-                asvi_sec = trends_store.get_stitched_series(sector_proxy)
-                
-                if asvi_sym is None:
-                    asvi_sym = pd.Series(dtype=float)
-                if asvi_sec is None:
-                    asvi_sec = pd.Series(dtype=float)
-                    
-                diag = run_lstm_diagnostic(ticker, bars, sector_bars, asvi_sym, asvi_sec)
-                pred = diag.get("prediction")
-                if pred is not None and not pd.isna(pred):
-                    dashboard_df.loc[dashboard_df['Symbol'] == ticker, 'Google_Trends_LSTM_Forecast'] = float(pred)
-                    
-            except Exception as e:
-                logger.warning("LSTM Attention Forecast computation failed (non-fatal) for %s: %s", ticker, e)
+                    if stitched_sym:
+                        asvi_sym = pd.Series([float(d["value"]) for d in stitched_sym], index=[d["date"] for d in stitched_sym])
+                    else:
+                        asvi_sym = pd.Series(dtype=float)
+                        
+                    if stitched_sec:
+                        asvi_sec = pd.Series([float(d["value"]) for d in stitched_sec], index=[d["date"] for d in stitched_sec])
+                    else:
+                        asvi_sec = pd.Series(dtype=float)
+                        
+                    diag = run_lstm_diagnostic(ticker, bars, sector_bars, asvi_sym, asvi_sec)
+                    pred = diag.get("prediction")
+                    if pred is not None and not pd.isna(pred):
+                        dashboard_df.loc[dashboard_df['Symbol'] == ticker, 'Google_Trends_LSTM_Forecast'] = float(pred)
+                        
+                except Exception as e:
+                    logger.warning("LSTM Attention Forecast computation failed (non-fatal) for %s: %s", ticker, e)
                 
     except Exception as exc:
         logger.warning("LSTM Attention Forecast outer computation failed (non-fatal): %s", exc)
@@ -795,7 +800,6 @@ def _apply_google_trends_asvi(dashboard_df: pd.DataFrame) -> None:
         if not symbols:
             return
 
-        store = TrendsStore(readonly=True)
         asvi_map = {}
 
         raw_budget = getattr(settings, "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE", None)
@@ -803,33 +807,34 @@ def _apply_google_trends_asvi(dashboard_df: pd.DataFrame) -> None:
         deadline = _time.monotonic() + max_seconds
         budget_exhausted = False
 
-        for sym in symbols:
-            if not budget_exhausted and _time.monotonic() >= deadline:
-                budget_exhausted = True
-                logger.warning(
-                    "Google Trends ASVI: cycle time budget (%.0fs) reached; "
-                    "remaining symbols served from NaN only this cycle.",
-                    max_seconds,
-                )
+        with TrendsStore(readonly=True) as store:
+            for sym in symbols:
+                if not budget_exhausted and _time.monotonic() >= deadline:
+                    budget_exhausted = True
+                    logger.warning(
+                        "Google Trends ASVI: cycle time budget (%.0fs) reached; "
+                        "remaining symbols served from NaN only this cycle.",
+                        max_seconds,
+                    )
 
-            if budget_exhausted:
-                continue
+                if budget_exhausted:
+                    continue
 
-            try:
-                stitched_data = store.get_stitched_series(sym)
-                if stitched_data:
-                    dates = [d["date"] for d in stitched_data]
-                    values = [float(d["value"]) for d in stitched_data]
-                    import pandas as pd
-                    svi_series = pd.Series(values, index=dates)
-                    
-                    asvi_series = ASVICalculator.compute_asvi(svi_series)
-                    if not asvi_series.empty:
-                        valid_asvi = asvi_series.dropna()
-                        if not valid_asvi.empty:
-                            asvi_map[sym] = float(valid_asvi.iloc[-1])
-            except Exception as e:
-                logger.warning("Google Trends ASVI failed for %s: %s", sym, e)
+                try:
+                    stitched_data = store.get_stitched_series(sym)
+                    if stitched_data:
+                        dates = [d["date"] for d in stitched_data]
+                        values = [float(d["value"]) for d in stitched_data]
+                        import pandas as pd
+                        svi_series = pd.Series(values, index=dates)
+                        
+                        asvi_series = ASVICalculator.compute_asvi(svi_series)
+                        if not asvi_series.empty:
+                            valid_asvi = asvi_series.dropna()
+                            if not valid_asvi.empty:
+                                asvi_map[sym] = float(valid_asvi.iloc[-1])
+                except Exception as e:
+                    logger.warning("Google Trends ASVI failed for %s: %s", sym, e)
 
         if asvi_map:
             dashboard_df['Google_Trends_ASVI'] = dashboard_df['Symbol'].str.upper().map(asvi_map)

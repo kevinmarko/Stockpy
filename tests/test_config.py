@@ -36,9 +36,7 @@ prose summary); 58 are orchestrator-only / not advisory-populated.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -47,7 +45,6 @@ import config
 from database_setup import PANDAS_TO_SQLITE_TYPES
 from engine.advisory import Recommendation
 from reporting.sheet_publisher import rec_to_sheet_row
-
 
 # ---------------------------------------------------------------------------
 # TestColumnSchemaIntegrity
@@ -261,7 +258,6 @@ class TestAdvisoryColumnCoverage:
     KNOWN_UNMAPPED_ORCHESTRATOR_ONLY_COLUMNS = frozenset({
         "sector", "shortName", "Market Cap",
         "Google_Trends_LSTM_Forecast", "Google_Trends_ASVI",
-        "Google_Trends_LSTM_Forecast", "Google_Trends_ASVI",
         "Target_Days", "ARIMA", "MC_Target", "MC_Lower", "MC_Upper",
         "Quality Score", "Graham Num", "Gordon Fair Value", "P/E", "Book Value",
         "DPS", "Institutional Velocity", "DPH", "Leverage Distress Factor",
@@ -422,7 +418,7 @@ class TestFMPDiagnosticColumns:
     ``FMP_*_ENABLED`` gate -- see ``config.COLUMN_SCHEMA``'s "FMP DIAGNOSTIC
     FEEDS" section."""
 
-    EXPECTED: Dict[str, str] = {
+    EXPECTED: dict[str, str] = {
         "Analyst_Target_Consensus": "currency",
         "Analyst_Target_Upside": "percent",
         "Analyst_Grade_Score": "number",
@@ -490,13 +486,13 @@ class TestFMPDiagnosticColumns:
         config.DashboardSchema.validate(df, lazy=True)
 
 
-def _valid_dashboard_row_for_fmp_test() -> Dict[str, Any]:
+def _valid_dashboard_row_for_fmp_test() -> dict[str, Any]:
     """Build one schema-conformant row from config.COLUMN_SCHEMA.
 
     Mirrors tests/test_dashboard_validation.py::_valid_dashboard_row; kept
     local so this file has no cross-test-module import.
     """
-    row: Dict[str, Any] = {}
+    row: dict[str, Any] = {}
     for col in config.COLUMN_SCHEMA:
         key = col["key"]
         if key == "Symbol":

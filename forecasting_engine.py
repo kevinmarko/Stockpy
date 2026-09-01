@@ -687,16 +687,31 @@ class ForecastingEngine:
             logger.warning(f"LSTM-Attention skipped for {symbol}: Insufficient valid windows ({len(X_train)} < 30).")
             return {"prediction": float('nan'), "attention_weights": []}
 
-        from cnn_lstm_process_pool import dispatch_to_worker
+        isolation_enabled, timeout_seconds, pool_workers = self._cnn_lstm_isolation_config()
+        
         try:
-            result = dispatch_to_worker(
-                "fit_predict_lstm_attention",
-                (X_train, Y_train, predict_X_seq, 16, 2, None) # hidden_dim=16, num_heads=2
-            )
+            if isolation_enabled:
+                from cnn_lstm_process_pool import run_in_subprocess
+                from cnn_lstm_worker import fit_predict_lstm_attention
+                result = run_in_subprocess(
+                    fit_predict_lstm_attention,
+                    (X_train, Y_train, predict_X_seq, 16, 2, None), # hidden_dim=16, num_heads=2
+                    timeout_seconds=timeout_seconds,
+                    max_workers=pool_workers
+                )
+            else:
+                from cnn_lstm_worker import fit_predict_lstm_attention
+                result = fit_predict_lstm_attention(
+                    X_train, Y_train, predict_X_seq, 16, 2, None
+                )
+                
             return {
                 "prediction": float(result["predictions"][0]),
                 "attention_weights": result.get("attention_weights", [])
             }
+        except TimeoutError:
+            logger.warning(f"LSTM-Attention worker timed out for {symbol} after {timeout_seconds}s")
+            return {"prediction": float('nan'), "attention_weights": []}
         except Exception as e:
             logger.error(f"LSTM-Attention worker failed for {symbol}: {e}")
             return {"prediction": float('nan'), "attention_weights": []}

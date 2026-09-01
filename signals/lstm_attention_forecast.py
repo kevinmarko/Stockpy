@@ -24,11 +24,11 @@ class LstmAttentionForecastSignal(SignalModule):
         
         strong = expected_gain >= 1.0
         score[expected_gain.index[strong]] = 10.0
-        exps[expected_gain.index[strong]] = "+10pts: Strong ASVI LSTM projection (+" + expected_gain[strong].round(2).astype(str) + "%)"
+        exps[expected_gain.index[strong]] = expected_gain[strong].map(lambda x: f"+10pts: Strong ASVI LSTM projection (+{x:.2f}%)")
         
         mod = (expected_gain > 0) & ~strong
         score[expected_gain.index[mod]] = 5.0
-        exps[expected_gain.index[mod]] = "+5pts: Positive ASVI LSTM projection (+" + expected_gain[mod].round(2).astype(str) + "%)"
+        exps[expected_gain.index[mod]] = expected_gain[mod].map(lambda x: f"+5pts: Positive ASVI LSTM projection (+{x:.2f}%)")
         
         down = expected_gain <= 0
         score[expected_gain.index[down]] = -10.0
@@ -45,7 +45,7 @@ class LstmAttentionForecastSignal(SignalModule):
             "score": score,
             "confidence": np.where(valid, 1.0, 0.0),
             "explanation": exps,
-            "meta_label_proba": 1.0
+            "meta_label_proba": np.nan
         }, index=df.index)
 
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:

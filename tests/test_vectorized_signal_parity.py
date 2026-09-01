@@ -602,3 +602,125 @@ class TestCrossSectionalMomentumVectorizedParity:
 
         assert vectorized_results["A"][4]["cross_sectional_momentum"].score < 0
         assert vectorized_results["E"][4]["cross_sectional_momentum"].score > 0
+
+# ============================================================================
+# Section 6 -- New Modules Vectorized Parity
+# ============================================================================
+
+from signals.multifactor import MultifactorSignal
+from signals.macro_regime import MacroRegimeSignal
+from signals.sector_quality_rank import SectorNeutralQualitySignal
+from signals.lgbm_ranker import LGBMRankerSignal
+from signals.news_catalyst import NewsCatalystSignal
+from signals.lstm_attention_forecast import LstmAttentionForecastSignal
+
+class TestMultifactorVectorizedParity:
+    def test_multifactor_parity(self):
+        ctx = _signal_context()
+        ctx.multifactor_scores = {
+            "AAPL": {"Value_Z": 1.0, "Quality_Z": 1.0, "LowVol_Z": 1.0, "Size_Z": -1.0, "Multifactor_Composite": 2.0, "excluded_microcap": False},
+            "TEST": {"Value_Z": 0.0, "Quality_Z": 0.0, "LowVol_Z": 0.0, "Size_Z": 0.0, "Multifactor_Composite": 0.0, "excluded_microcap": False},
+            "MISSING": {"Value_Z": 0.0, "Quality_Z": 0.0, "LowVol_Z": 0.0, "Size_Z": 0.0, "Multifactor_Composite": float("nan"), "excluded_microcap": False},
+            "MICRO": {"Value_Z": 0.0, "Quality_Z": 0.0, "LowVol_Z": 0.0, "Size_Z": 0.0, "Multifactor_Composite": 1.0, "excluded_microcap": True},
+        }
+        module = MultifactorSignal()
+        for ticker in ["AAPL", "TEST", "MISSING", "MICRO", "NONE"]:
+            row = _realistic_row()
+            row["Symbol"] = ticker
+            scalar = module.compute(row, ctx)
+            vec = module.compute_vectorized(pd.DataFrame([row], index=[ticker]), ctx)
+            assert math.isclose(scalar.score, vec["score"].iloc[0], abs_tol=ABS_TOL)
+            assert math.isclose(scalar.confidence, vec["confidence"].iloc[0], abs_tol=ABS_TOL)
+            assert scalar.explanation == vec["explanation"].iloc[0]
+
+class TestMacroRegimeVectorizedParity:
+    def test_macro_regime_parity(self):
+        ctx = _signal_context(market_regime_inputs=(0.5, 2.0, 0.03))
+        ctx.macro.market_regime = "RECESSION"
+        module = MacroRegimeSignal()
+        
+        row_tech = _realistic_row()
+        row_tech["sector"] = "Technology"
+        row_fin = _realistic_row()
+        row_fin["sector"] = "Financial"
+        row_def = _realistic_row()
+        row_def["sector"] = "Healthcare"
+        
+        for row in [row_tech, row_fin, row_def]:
+            scalar = module.compute(row, ctx)
+            vec = module.compute_vectorized(pd.DataFrame([row]), ctx)
+            assert math.isclose(scalar.score, vec["score"].iloc[0], abs_tol=ABS_TOL)
+            assert math.isclose(scalar.confidence, vec["confidence"].iloc[0], abs_tol=ABS_TOL)
+            assert scalar.explanation == vec["explanation"].iloc[0]
+            
+        # Test no context.macro
+        ctx_none = _signal_context()
+        ctx_none.macro = None
+        scalar_none = module.compute(row_tech, ctx_none)
+        vec_none = module.compute_vectorized(pd.DataFrame([row_tech]), ctx_none)
+        assert math.isclose(scalar_none.score, vec_none["score"].iloc[0], abs_tol=ABS_TOL)
+        assert math.isclose(scalar_none.confidence, vec_none["confidence"].iloc[0], abs_tol=ABS_TOL)
+        assert scalar_none.explanation == vec_none["explanation"].iloc[0]
+
+class TestSectorQualityVectorizedParity:
+    def test_sector_quality_parity(self):
+        ctx = _signal_context()
+        ctx.sector_quality_ranks = {"AAPL": 0.9, "TEST": 0.5}
+        module = SectorNeutralQualitySignal()
+        
+        for ticker, sector in [("AAPL", "Technology"), ("TEST", "Technology"), ("NONE", "Technology"), ("TEST", float("nan"))]:
+            row = _realistic_row()
+            row["Symbol"] = ticker
+            row["sector"] = sector
+            scalar = module.compute(row, ctx)
+            vec = module.compute_vectorized(pd.DataFrame([row], index=[ticker]), ctx)
+            assert math.isclose(scalar.score, vec["score"].iloc[0], abs_tol=ABS_TOL)
+            assert math.isclose(scalar.confidence, vec["confidence"].iloc[0], abs_tol=ABS_TOL)
+            assert scalar.explanation == vec["explanation"].iloc[0]
+
+class TestLGBMRankerVectorizedParity:
+    def test_lgbm_ranker_parity(self):
+        ctx = _signal_context()
+        ctx.lgbm_scores = {"AAPL": 0.9, "TEST": 0.1, "NAN": float("nan")}
+        module = LGBMRankerSignal()
+        
+        for ticker in ["AAPL", "TEST", "NONE", "NAN"]:
+            row = _realistic_row()
+            row["Symbol"] = ticker
+            scalar = module.compute(row, ctx)
+            vec = module.compute_vectorized(pd.DataFrame([row], index=[ticker]), ctx)
+            assert math.isclose(scalar.score, vec["score"].iloc[0], abs_tol=ABS_TOL)
+            assert math.isclose(scalar.confidence, vec["confidence"].iloc[0], abs_tol=ABS_TOL)
+            assert scalar.explanation == vec["explanation"].iloc[0]
+
+class TestNewsCatalystVectorizedParity:
+    def test_news_catalyst_parity(self):
+        ctx = _signal_context()
+        module = NewsCatalystSignal()
+        module._news_scores = {"AAPL": 0.8, "TEST": -0.5}
+        module._news_archive_scores = {"AAPL": 0.8, "TEST": float("nan")}
+        module._sentiment_credibility = {"AAPL": {"credibility_weighted_sentiment": 0.4}, "TEST": {"credibility_weighted_sentiment": float("nan")}}
+        
+        for ticker in ["AAPL", "TEST", "NONE"]:
+            row = _realistic_row()
+            row["Symbol"] = ticker
+            scalar = module.compute(row, ctx)
+            vec = module.compute_vectorized(pd.DataFrame([row], index=[ticker]), ctx)
+            assert math.isclose(scalar.score, vec["score"].iloc[0], abs_tol=ABS_TOL)
+            assert math.isclose(scalar.confidence, vec["confidence"].iloc[0], abs_tol=ABS_TOL)
+            assert scalar.explanation == vec["explanation"].iloc[0]
+
+class TestLstmAttentionForecastVectorizedParity:
+    def test_lstm_attention_forecast_parity(self):
+        ctx = _signal_context()
+        module = LstmAttentionForecastSignal()
+        
+        for val in [0.02, 0.005, -0.01, float("nan")]:
+            row = _realistic_row()
+            row["Google_Trends_LSTM_Forecast"] = val
+            scalar = module.compute(row, ctx)
+            vec = module.compute_vectorized(pd.DataFrame([row]), ctx)
+            assert math.isclose(scalar.score, vec["score"].iloc[0], abs_tol=ABS_TOL)
+            assert math.isclose(scalar.confidence, vec["confidence"].iloc[0], abs_tol=ABS_TOL)
+            assert scalar.explanation == vec["explanation"].iloc[0]
+

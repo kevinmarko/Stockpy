@@ -9,11 +9,11 @@
 #              for strict type safety and data quality validation.
 # ==============================================================================
 
+import logging
+
 import pandas as pd
-import numpy as np
 import pandera.pandas as pa
 from pandera.typing import Series
-import logging
 
 # Configure module logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

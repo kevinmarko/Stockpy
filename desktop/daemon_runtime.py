@@ -937,7 +937,6 @@ class OrchestratorDaemon:
             from data.trends_store import TrendsStore
             import uuid
             
-            store = TrendsStore()
             symbols = list(getattr(settings, "DEFAULT_TICKERS", []) or [])
             if not symbols:
                 return
@@ -946,25 +945,26 @@ class OrchestratorDaemon:
             # Pull 1 year of data
             start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
 
-            for sym in symbols:
-                # fetch overlapping windows
-                series_list = fetch_overlapping_windows(sym, start_date, end_date)
-                if not series_list:
-                    continue
+            with TrendsStore() as store:
+                for sym in symbols:
+                    # fetch overlapping windows
+                    series_list = fetch_overlapping_windows(sym, start_date, end_date)
+                    if not series_list:
+                        continue
+                        
+                    window_ids = [str(uuid.uuid4()) for _ in series_list]
                     
-                window_ids = [str(uuid.uuid4()) for _ in series_list]
-                
-                # store raw
-                for i, series in enumerate(series_list):
-                    raw_data = [{"date": d.date(), "value": v} for d, v in series.items()]
-                    store.insert_raw_window(sym, window_ids[i], raw_data, datetime.now(timezone.utc))
-                    
-                # stitch and store
-                stitched = GoogleTrendsStitcher.stitch_multiple_intervals(series_list)
-                if not stitched.empty:
-                    stitched_data = [{"date": d.date(), "value": v} for d, v in stitched.items()]
-                    store.save_stitched_series(sym, stitched_data, datetime.now(timezone.utc))
-                    
+                    # store raw
+                    for i, series in enumerate(series_list):
+                        raw_data = [{"date": d.date(), "value": v} for d, v in series.items()]
+                        store.insert_raw_window(sym, window_ids[i], raw_data, datetime.now(timezone.utc))
+                        
+                    # stitch and store
+                    stitched = GoogleTrendsStitcher.stitch_multiple_intervals(series_list)
+                    if not stitched.empty:
+                        stitched_data = [{"date": d.date(), "value": v} for d, v in stitched.items()]
+                        store.save_stitched_series(sym, stitched_data, datetime.now(timezone.utc))
+                        
             self._last_google_trends_refresh = time.monotonic()
         except Exception as exc:
             logger.warning("maybe_refresh_google_trends: unexpected failure: %s", exc)

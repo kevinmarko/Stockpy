@@ -5871,3 +5871,11 @@ export interface TrendsStitchDemoResponse {
   raw_curves: TrendsCurve[];
   stitched_curve: TrendsCurve;
 }
+
+export interface LstmAttentionForecastResponse {
+  symbol: string;
+  predicted_return: number;
+  attention_weights: number[];
+  sector_proxy_used: string | null;
+  status: string;
+}

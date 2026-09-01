@@ -101,11 +101,10 @@ honest caveats baked into the catalog below:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from settings import settings
 
-__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot"]
+__all__ = ["PILOTS", "Pilot", "get_pilot", "list_pilots"]
 
 
 @dataclass(frozen=True)
@@ -140,12 +139,12 @@ class Pilot:
     name: str
     category: str
     description: str
-    weights: Dict[str, float] = field(default_factory=dict)
+    weights: dict[str, float] = field(default_factory=dict)
     long_only: bool = False
-    validation_strategy_id: Optional[str] = None
+    validation_strategy_id: str | None = None
 
 
-def _full_blend_weights() -> Dict[str, float]:
+def _full_blend_weights() -> dict[str, float]:
     """Snapshot of the platform's full default signal blend.
 
     Copied from ``settings.SIGNAL_WEIGHTS`` at import time so the ``balanced-blend``
@@ -163,7 +162,7 @@ def _full_blend_weights() -> Dict[str, float]:
 # is a verified real ``STRATEGY_REGISTRY`` key. Enforced by
 # ``tests/test_pilots_catalog.py``.
 # ---------------------------------------------------------------------------
-PILOTS: List[Pilot] = [
+PILOTS: list[Pilot] = [
     Pilot(
         id="trend-following",
         name="Trend Follower",
@@ -566,14 +565,14 @@ PILOTS: List[Pilot] = [
 
 
 # Fast id -> Pilot index (built once at import; catalog is static).
-_BY_ID: Dict[str, Pilot] = {p.id: p for p in PILOTS}
+_BY_ID: dict[str, Pilot] = {p.id: p for p in PILOTS}
 
 
-def list_pilots() -> List[Pilot]:
+def list_pilots() -> list[Pilot]:
     """Return all Pilots in catalog (marketplace) order."""
     return list(PILOTS)
 
 
-def get_pilot(pilot_id: str) -> Optional[Pilot]:
+def get_pilot(pilot_id: str) -> Pilot | None:
     """Return the Pilot with ``pilot_id``, or ``None`` if unknown."""
     return _BY_ID.get(pilot_id)

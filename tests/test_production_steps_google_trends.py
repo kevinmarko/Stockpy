@@ -42,6 +42,8 @@ def test_normal_success_writes_values(monkeypatch):
     
     class MockTrendsStore:
         def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
         def get_stitched_series(self, sym):
             if sym == "AAPL":
                 return [{"date": "2026-01-01", "value": 10}, {"date": "2026-01-02", "value": 20}]

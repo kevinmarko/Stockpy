@@ -98,10 +98,15 @@ class LGBMRankerSignal(SignalModule):
         """Map pre-computed rank percentile to [-1, +1] signal score."""
         ticker = str(row.get("Symbol", row.name if hasattr(row, "name") else ""))
         lgbm_scores: dict = getattr(context, "lgbm_scores", {})
-        rank = lgbm_scores.get(ticker, 0.5)
-
-        if rank != rank:  # NaN guard
-            rank = 0.5
+        
+        if ticker not in lgbm_scores or lgbm_scores[ticker] != lgbm_scores[ticker]:
+            return SignalOutput(
+                score=0.0,
+                confidence=0.0,
+                explanation="WARNING: LGBM scores unavailable. Score set to 0 (neutral)."
+            )
+            
+        rank = lgbm_scores[ticker]
 
         # Linear map: rank 1.0 -> +1.0, rank 0.0 -> -1.0
         score = 2.0 * (float(rank) - 0.5)
@@ -123,16 +128,21 @@ class LGBMRankerSignal(SignalModule):
             
         lgbm_scores = getattr(context, "lgbm_scores", {})
         
-        ranks = tickers.map(lgbm_scores).fillna(0.5)
+        ranks = tickers.map(lgbm_scores)
+        valid = ranks.notna()
         
-        scores = 2.0 * (ranks - 0.5)
-        scores = np.clip(scores, -1.0, 1.0)
+        scores = pd.Series(0.0, index=df.index)
+        scores[valid] = np.clip(2.0 * (ranks[valid] - 0.5), -1.0, 1.0)
         
-        explanations = ranks.map(lambda r: f"LGBM cross-sectional rank={r:.3f}")
+        confidences = pd.Series(0.0, index=df.index)
+        confidences[valid] = 1.0
+        
+        explanations = pd.Series("WARNING: LGBM scores unavailable. Score set to 0 (neutral).", index=df.index)
+        explanations[valid] = ranks[valid].map(lambda r: f"LGBM cross-sectional rank={r:.3f}")
         
         return pd.DataFrame({
             "score": scores,
-            "confidence": 1.0,
+            "confidence": confidences,
             "explanation": explanations,
             "meta_label_proba": np.nan
         }, index=df.index)

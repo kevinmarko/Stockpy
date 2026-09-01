@@ -10,6 +10,7 @@ client = TestClient(app)
 def test_get_trends_endpoint():
     with patch("data.trends_store.TrendsStore") as MockStore:
         store_instance = MockStore.return_value
+        store_instance.__enter__.return_value = store_instance
         store_instance.load_raw_windows.return_value = []
         store_instance.get_stitched_series.return_value = [{"date": datetime.now(timezone.utc).date(), "value": 100}]
         
@@ -29,6 +30,7 @@ def test_get_trends_endpoint():
 def test_get_trends_endpoint_empty():
     with patch("data.trends_store.TrendsStore") as MockStore:
         store_instance = MockStore.return_value
+        store_instance.__enter__.return_value = store_instance
         store_instance.load_raw_windows.return_value = []
         store_instance.get_stitched_series.return_value = []
         

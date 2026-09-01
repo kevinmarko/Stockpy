@@ -7,7 +7,8 @@
  *  - `value-quality` has curve:null ("no backtest series yet"), never a fake line.
  */
 
-import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
+import {
+  LstmAttentionForecastResponse, ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -8474,6 +8475,15 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
+  async postLstmAttentionForecast(symbol: string): Promise<LstmAttentionForecastResponse> {
+    return delay({
+      symbol,
+      predicted_return: 0.025,
+      attention_weights: [0.1, 0.2, 0.3, 0.4],
+      sector_proxy_used: "XLK",
+      status: "success"
+    });
+  },
   async health() {
     return delay({ status: "ok", mock: true }, 60);
   },

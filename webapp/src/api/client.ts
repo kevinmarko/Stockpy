@@ -8,7 +8,7 @@
  */
 
 import { mockApi, MOCK_META } from "./mock";
-import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
+import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse, LstmAttentionForecastResponse } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
   AgenticDiscovery,
@@ -433,6 +433,7 @@ async function http<T>(
 
 // ---- Live client (shape-identical to mockApi) ----
 const liveApi = {
+  postLstmAttentionForecast: (symbol: string) => http<LstmAttentionForecastResponse>(`/pilots/ml/lstm-attention-forecast?symbol=${symbol}`, { method: 'POST' }),
   health: () => http<{ status: string }>("/health"),
   listPilots: () => http<PilotSummary[]>("/pilots"),
   getPilot: (id: string) =>

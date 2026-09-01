@@ -361,6 +361,8 @@ class SectorNeutralQualitySignal(SignalModule):
         contrib = score * weight
 
         sector = str(row.get(SECTOR_COL, row.get(SECTOR_COL_FALLBACK, "Unknown")))
+        if sector == "nan":
+            sector = "Unknown"
         direction = "Bullish" if score > 0 else ("Bearish" if score < 0 else "Neutral")
         sign = "+" if contrib >= 0 else ""
 

@@ -46,6 +46,16 @@ class TrendsStore:
             Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
+    def dispose(self) -> None:
+        if self.engine:
+            self.engine.dispose()
+
+    def __enter__(self) -> "TrendsStore":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.dispose()
+
     def insert_raw_window(self, query_term: str, window_id: str, data: list[dict], downloaded_at: datetime) -> None:
         if self._readonly:
             raise RuntimeError("TrendsStore is read-only")

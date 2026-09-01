@@ -2334,10 +2334,9 @@ def get_trends_for_symbol(symbol: str) -> Dict[str, Any]:
     from datetime import datetime, timezone
     
     symbol = symbol.upper().strip()
-    store = TrendsStore(readonly=True)
-    
-    raw = store.load_raw_windows(symbol)
-    stitched = store.get_stitched_series(symbol)
+    with TrendsStore(readonly=True) as store:
+        raw = store.load_raw_windows(symbol)
+        stitched = store.get_stitched_series(symbol)
     
     if not raw and not stitched:
         # Fallback or just empty
