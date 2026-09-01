@@ -11,10 +11,10 @@ Responsibilities
                         function is idempotent via a root-handler guard.
 
 2. notify()          — POST a push notification to ntfy.sh using the
-                        NTFY_TOPIC env var.  Returns immediately (no-op)
-                        when NTFY_TOPIC is unset.  Network failures are
-                        caught and logged as WARNING — the app never
-                        crashes on a failed push.  Secrets MUST NOT be
+                        ALERT_NTFY_TOPIC Settings field.  Returns immediately
+                        (no-op) when ALERT_NTFY_TOPIC is unset.  Network
+                        failures are caught and logged as WARNING — the app
+                        never crashes on a failed push.  Secrets MUST NOT be
                         passed in title or message.
 
 3. summarize_run()   — return a short human-readable text summary of a

@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `b49d0f12160e69527d8223987cdaa9bb60fc0cb5`
+- Measured at commit: `c7143a664b127fc1e49a607ae98ed85e428cfdeb`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -79,14 +79,14 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1758 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5357 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4591 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L4392 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LOCAL_DATA_ROOT` | L2011 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
-| `OUTPUT_DIR` | L2028 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4743 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L2041 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L4277 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `GCLOUD_BIN` | L5370 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4604 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L4405 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L2014 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L2031 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4756 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L2054 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L4290 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -134,10 +134,10 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 | `MCP_HTTP_BEARER_TOKEN` | `settings.py:497` | no | yes | yes |
 | `MCP_OAUTH_PASSWORD` | `settings.py:545` | no | yes | yes |
 | `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:464` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4708` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4716` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4700` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4692` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4721` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4729` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4713` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4705` | no | yes | yes |
 | `SENTRY_DSN` | `settings.py:1582` | no | yes | yes |
 | `STATE_API_TOKEN` | `settings.py:456` | no | yes | yes |
 
@@ -218,20 +218,20 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **441** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **439** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **23** distinct local names
+The singleton is bound under **22** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings.settings, settings_module.settings
+_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 826 | 273 |
+| (a) `settings.KEY` | 827 | 273 |
 | (b) `getattr(settings, "KEY", default)` | 372 | 211 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |

@@ -18,8 +18,9 @@ Isolation strategy (critical — this module touches process-global state):
     rotated. Without the save/restore, clearing the root logger's handlers
     would also strip pytest's own log-capture handler for the rest of the
     session.
-  * ``notify()`` reads ``NTFY_TOPIC`` from ``os.environ`` directly (not
-    ``settings``) — tests use ``monkeypatch.delenv``/``setenv``. All
+  * ``notify()`` reads the real ``ALERT_NTFY_TOPIC`` pydantic ``Settings``
+    field (not a bare ``os.environ`` var) — tests use
+    ``monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", ...)``. All
     ``urllib.request.urlopen`` calls are faked (mirrors the pattern already
     established in ``tests/test_alerts.py``) — never a real network call.
 """

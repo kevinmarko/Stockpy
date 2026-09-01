@@ -6,9 +6,12 @@ lightweight, multi-channel notification dispatcher (ntfy.sh / email / Slack).
 
 This module is a sibling of ``observability/alerts.py`` (same failure
 domain: fire off a best-effort push/webhook/email, never let a broken
-channel propagate into the caller) but reads its configuration from plain
-``os.environ`` rather than the ``settings`` singleton, so tests here use
-``monkeypatch.setenv``/``delenv`` instead of a mock settings object.
+channel propagate into the caller) and reads its configuration from the
+real ``settings`` singleton (previously a plain ``os.environ`` read — the
+same "pydantic-settings loads .env into Settings only, never into the real
+process environment" bug class documented throughout CLAUDE.md), so tests
+here use ``monkeypatch.setattr(settings, ...)`` rather than
+``setenv``/``delenv``.
 
 Coverage
 --------

@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from settings import settings
 import re
 from dataclasses import dataclass, field
@@ -130,7 +129,7 @@ def append_symbols(
         :data:`DEFAULT_WATCHLIST_PATH`.
     watchlist_env:
         Injectable override for the ``WATCHLIST`` env var (tests). ``None`` reads
-        ``os.environ`` — matching ``main._load_watchlist()`` exactly. When
+        ``settings.WATCHLIST`` — matching ``main._load_watchlist()`` exactly. When
         non-empty, raises :class:`WatchlistEnvPrecedenceError` (the file would be
         ignored) BEFORE touching the file.
     clock:

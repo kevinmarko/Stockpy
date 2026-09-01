@@ -157,8 +157,6 @@ def _signal_symbols(snap: dict) -> List[str]:
 
 def _watchlist_symbols() -> List[str]:
     """Tickers from the ``WATCHLIST`` env var or ``watchlist.txt``."""
-    import os
-
     env_val = settings.WATCHLIST.strip()
     if env_val:
         return [t.strip().upper() for t in env_val.split(",") if t.strip()]

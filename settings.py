@@ -1793,11 +1793,14 @@ class Settings(BaseSettings):
         ),
     )
     # --- alerting_mcp/notifier.py (the standalone MCP push-notifier) --------
-    # These are read via os.getenv() inside alerting_mcp/notifier.py, which is a
-    # separate subsystem from observability/alerts.py above (note the distinct
-    # ALERT_EMAIL_SMTP_* names vs. ALERT_SMTP_* used by observability/alerts.py).
-    # Declared here for discoverability/consistency; the notifier keeps reading
-    # os.getenv directly so it stays importable without a full Settings() load.
+    # These are read via settings.settings.X inside alerting_mcp/notifier.py,
+    # which is a separate subsystem from observability/alerts.py above (note
+    # the distinct ALERT_EMAIL_SMTP_* names vs. ALERT_SMTP_* used by
+    # observability/alerts.py). The notifier used to read these via a bare
+    # os.getenv() call -- the same "pydantic-settings loads .env into Settings
+    # only, never into the real process environment" bug class documented
+    # throughout CLAUDE.md for Finnhub/EDGAR/Reddit/etc. -- and was fixed to
+    # import the real settings singleton like every other subsystem here.
     ALERT_NTFY_TOPIC: Optional[str] = Field(
         default=None,
         description="ntfy.sh topic for alerting_mcp push notifications. Unset = ntfy channel disabled.",
@@ -2034,7 +2037,17 @@ class Settings(BaseSettings):
         description=(
             "Opt-out flag for scripts/_bootstrap.py: when True, suppresses "
             "automatic re-execution under .venv's interpreter when invoked under "
-            "an external Python environment."
+            "an external Python environment. NOTE: the LIVE read of this flag "
+            "(scripts/_bootstrap.py's bootstrap()) is necessarily a raw "
+            "os.environ.get('NO_VENV_REEXEC'), never settings.settings.X -- it "
+            "runs BEFORE settings.py can safely be imported (it is the code "
+            "deciding whether to re-exec under .venv in the first place), same "
+            "category as main.py's/main_orchestrator.py's own top-of-file "
+            "reexec guards. This field's declaration here exists for GUI/docs "
+            "visibility only. tests/test_measure_settings_census.py's "
+            "TestFormDOsEnvironIsFullyAllowlisted is the enforcement mechanism "
+            "keeping this the only os.environ bypass of its kind, alongside "
+            "GCLOUD_BIN below."
         ),
     )
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
@@ -5356,18 +5369,30 @@ class Settings(BaseSettings):
     )
     GCLOUD_BIN: str = Field(
         default="gcloud",
-        description="Path to the gcloud binary for environment integrations.",
+        description=(
+            "Path to the gcloud binary for environment integrations. NOTE: "
+            "the LIVE read of this value (mcp_remote_adapter.py, a standalone "
+            "stdio-proxy script) is deliberately a raw os.environ.get("
+            "'GCLOUD_BIN'), never settings.settings.X -- that script is "
+            "explicitly configured via claude_desktop_config.json's own "
+            "'env' block, never via .env/settings.py (see its module "
+            "docstring). This field's declaration here exists for GUI/docs "
+            "visibility only. tests/test_measure_settings_census.py's "
+            "TestFormDOsEnvironIsFullyAllowlisted is the enforcement "
+            "mechanism keeping this the only other os.environ bypass of its "
+            "kind, alongside NO_VENV_REEXEC above."
+        ),
     )
     GRAVITY_REQUIRE_NATIVE: bool = Field(
         default=False,
         description="Require native implementation for Gravity Review Suite.",
     )
     QDRANT_COLLECTION: str = Field(
-        default="",
+        default="investyo_news",
         description="Qdrant collection name for RAG orchestrator.",
     )
     QDRANT_URL: str = Field(
-        default="",
+        default="http://localhost:6333",
         description="Qdrant URL for RAG orchestrator.",
     )
 
