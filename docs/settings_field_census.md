@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `b726ae0e73e1665a8c4fc36065a4ed7e866a2d5d`
+- Measured at commit: `56b2de6a02c376aabdd3a84a6db0b8d3a3d1bc8c`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -231,8 +231,8 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 802 | 263 |
-| (b) `getattr(settings, "KEY", default)` | 372 | 211 |
+| (a) `settings.KEY` | 803 | 263 |
+| (b) `getattr(settings, "KEY", default)` | 374 | 211 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
@@ -255,7 +255,7 @@ referenced by name somewhere and is probably read dynamically.
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11072` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1442`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1543`, `pilots/feature_flags.py:49` | likely read dynamically |
 
 ### Fields reachable ONLY via form (b) or (d), never via (a) — **177**
 
@@ -401,12 +401,12 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPAL_RESEARCH_MODEL` | b | 2 | 0 |
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
-| `OPTIONS_0DTE_ENABLED` | b | 5 | 0 |
+| `OPTIONS_0DTE_ENABLED` | b | 6 | 0 |
 | `OPTIONS_0DTE_HARD_EXIT_TIME` | b | 4 | 0 |
 | `OPTIONS_0DTE_PROFIT_TARGET_PCT` | b | 3 | 0 |
 | `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |
 | `OPTIONS_ALERT_WEBHOOK_URL` | b | 5 | 0 |
-| `OPTIONS_AUTO_EXIT_ENABLED` | b | 4 | 0 |
+| `OPTIONS_AUTO_EXIT_ENABLED` | b | 5 | 0 |
 | `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | b | 3 | 0 |
 | `OPTIONS_DELTA_HEDGE_ENABLED` | b | 2 | 0 |
 | `OPTIONS_EARNINGS_MIN_EDGE` | b | 1 | 0 |
