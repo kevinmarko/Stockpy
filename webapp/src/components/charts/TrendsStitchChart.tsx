@@ -8,11 +8,9 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
+import type { TrendsCurve } from "../../api/types";
 
-export interface TrendsCurve {
-  name: string;
-  data: [number, number][]; // timestamp ms, value
-}
+export type { TrendsCurve } from "../../api/types";
 
 interface TrendsStitchChartProps {
   rawCurves: TrendsCurve[];

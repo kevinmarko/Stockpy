@@ -8,6 +8,10 @@
  */
 
 import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
+import {
+  stitchMultipleIntervals,
+  type TrendsPoint,
+} from "../utils/trendsStitch";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -15353,27 +15357,81 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
   },
 
   // ---- Trends Stitching Demo ----
+  //
+  // Genuinely demonstrates the overlapping-window stitching algorithm
+  // (webapp/src/utils/trendsStitch.ts, ported from
+  // data/trends_stitcher.py::GoogleTrendsStitcher) rather than faking it:
+  // two raw "Google Trends" windows are generated on DIFFERENT absolute
+  // scales (mirroring Google Trends' own per-query 0-100 window-relative
+  // renormalization -- the exact problem the algorithm exists to solve),
+  // spanning DIFFERENT but PARTIALLY OVERLAPPING date ranges, and the
+  // "stitched" curve is the real output of `stitchIntervals` run against
+  // those two raw curves -- not a third independent random walk.
   async getTrendsStitchDemo(): Promise<TrendsStitchDemoResponse> {
     const now = Date.now();
-    const generateCurve = (startVal: number, slope: number, noise: number) => {
-      const data: [number, number][] = [];
-      let val = startVal;
-      for (let i = 0; i < 30; i++) {
-        const time = now - (30 - i) * 86400000;
-        data.push([time, val]);
-        val += slope + (Math.random() - 0.5) * noise;
-      }
-      return data;
+    const DAY_MS = 86400000;
+
+    // Deterministic pseudo-random walk generator (mulberry32) so the demo
+    // is reproducible across calls/renders rather than reseeding chaos on
+    // every fetch, while still looking like a genuine noisy SVI series.
+    const mulberry32 = (seed: number) => {
+      let a = seed;
+      return () => {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let x = Math.imul(a ^ (a >>> 15), 1 | a);
+        x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+      };
     };
+
+    const generateWindow = (
+      startDay: number,
+      endDay: number,
+      baseline: number,
+      amplitude: number,
+      seed: number,
+    ): TrendsPoint[] => {
+      const rand = mulberry32(seed);
+      const data: TrendsPoint[] = [];
+      // `startDay`/`endDay` are both "days ago" (startDay > endDay, since
+      // startDay is further in the past); iterate from the older day down
+      // to the more recent one.
+      for (let day = startDay; day >= endDay; day--) {
+        const time = now - day * DAY_MS;
+        // A gently mean-reverting walk around `baseline`, always >= 0 (SVI
+        // is a non-negative index).
+        const drift = (rand() - 0.5) * amplitude;
+        const seasonal = Math.sin(day / 9) * amplitude * 0.3;
+        const value = Math.max(0, baseline + drift + seasonal);
+        data.push([time, Math.round(value * 10) / 10]);
+      }
+      return data; // already ascending by time (oldest -> newest)
+    };
+
+    // Three overlapping windows, each on a DIFFERENT absolute scale (as if
+    // Google Trends renormalized each query window independently against
+    // its own peak) -- this is the whole reason stitching is needed:
+    //   Window A: days -100..-40, baseline ~50  (small scale)
+    //   Window B: days  -60..-15, baseline ~100 (hot scale) -- overlaps A
+    //             on days -60..-40 (~20 days)
+    //   Window C: days  -25..0,   baseline ~30  (cool scale) -- overlaps B
+    //             on days -25..-15 (~10 days)
+    const windowA = generateWindow(100, 40, 50, 12, 1);
+    const windowB = generateWindow(60, 15, 100, 15, 2);
+    const windowC = generateWindow(25, 0, 30, 8, 3);
+
+    const stitched = stitchMultipleIntervals([windowA, windowB, windowC]);
 
     return delay({
       raw_curves: [
-        { name: "Trend A (Raw)", data: generateCurve(100, 1, 5) },
-        { name: "Trend B (Raw)", data: generateCurve(130, 0.5, 3) },
+        { name: "Window A (Raw, days -100..-40)", data: windowA },
+        { name: "Window B (Raw, days -60..-15)", data: windowB },
+        { name: "Window C (Raw, days -25..0)", data: windowC },
       ],
       stitched_curve: {
         name: "Stitched Output",
-        data: generateCurve(115, 0.8, 4),
+        data: stitched,
       },
     });
   },

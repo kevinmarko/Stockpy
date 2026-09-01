@@ -1,8 +1,10 @@
 /**
- * ResearchHub.test.tsx — the Research section's landing hub: all 11 screen
+ * ResearchHub.test.tsx — the Research section's landing hub: all 12 screen
  * cards render with their label + description (Sentiment Dynamics and
  * Sector Selection closing parity gap G2 — the hub previously listed only 9
- * of the 11 screens the nav actually carries), the TAB_HELP-sourced
+ * of the 11 screens the nav actually carries; Google Trends SVI Stitching
+ * added later to close the "unreachable from any UI link" gap for
+ * /research/trends-stitcher), the TAB_HELP-sourced
  * descriptions read live off help/helpContent.ts (never a hard-coded
  * duplicate, so the test would catch drift), and clicking a card's
  * click-to-navigate body (role="button", separate from its `.drag-handle`
@@ -44,6 +46,7 @@ function renderHub(initialPath = "/research") {
         <Route path="/sector-selection" element={<Stub marker="landed:sector-selection" />} />
         <Route path="/forecast" element={<Stub marker="landed:forecast" />} />
         <Route path="/data-explorer" element={<Stub marker="landed:data-explorer" />} />
+        <Route path="/research/trends-stitcher" element={<Stub marker="landed:trends-stitcher" />} />
       </Routes>
     </MemoryRouter>
   );
@@ -58,7 +61,7 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 11 card labels", () => {
+  it("renders all 12 card labels", () => {
     renderHub();
     for (const label of [
       "Pilots",
@@ -72,6 +75,7 @@ describe("ResearchHub screen", () => {
       "Sector Selection",
       "Forecast Viewer",
       "Data Explorer",
+      "Google Trends SVI Stitching",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
@@ -101,6 +105,18 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the Google Trends SVI Stitching card's static description", () => {
+    renderHub();
+    // Not TAB_HELP-sourced (no helpContent.ts entry exists for this demo
+    // screen yet) -- static prose mirroring TrendsVisualizer.tsx's own
+    // subheading text verbatim.
+    expect(
+      screen.getByText(
+        "Demonstrates the stitching of multiple overlapping 90-day Google Trends Search Volume Index (SVI) queries into a single continuous time series."
+      )
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ["Pilots", "landed:marketplace"],
     ["Compare", "landed:compare"],
@@ -113,6 +129,7 @@ describe("ResearchHub screen", () => {
     ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
     ["Data Explorer", "landed:data-explorer"],
+    ["Google Trends SVI Stitching", "landed:trends-stitcher"],
   ])("clicking the %s card's body navigates to its route", async (label, marker) => {
     const user = userEvent.setup();
     renderHub();
