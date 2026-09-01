@@ -209,5 +209,23 @@ def build_export() -> None:
     print(f"Export written to {out_path}")
 
 if __name__ == "__main__":
+    # This script takes no CLI arguments, but the `argparse` scaffolding
+    # below is NOT dead code -- do not remove it as a cleanup.
+    #
+    # `scripts/build_command_manifest.py` (via `cli_introspect/capture.py`)
+    # introspects every entry point in `cli_introspect/targets.py` -- this
+    # script included -- by monkeypatching `ArgumentParser.parse_args` to
+    # capture the built parser and unwind BEFORE any real work runs. That
+    # harness needs `parse_args()` to actually be called at the top of
+    # `__main__`, or it falls through, `build_export()` runs for real (a live
+    # DB read + a real file write), and the target is dead-lettered out of
+    # the manifest with "parse_args was never called" -- exactly what
+    # happened when this scaffolding was previously removed as "dead" in PR
+    # #971. It's also what makes `--help` side-effect-free for a human
+    # operator, instead of silently running the real export.
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate a NotebookLM export.")
+    parser.parse_args()
+
     logging.basicConfig(level=logging.INFO)
     build_export()
