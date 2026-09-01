@@ -5363,11 +5363,11 @@ class Settings(BaseSettings):
         description="Require native implementation for Gravity Review Suite.",
     )
     QDRANT_COLLECTION: str = Field(
-        default="",
+        default="investyo_news",
         description="Qdrant collection name for RAG orchestrator.",
     )
     QDRANT_URL: str = Field(
-        default="",
+        default="http://localhost:6333",
         description="Qdrant URL for RAG orchestrator.",
     )
 
