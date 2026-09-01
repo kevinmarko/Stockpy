@@ -87,9 +87,7 @@ def _run_step(
         wl_path.write_text("\n".join(watchlist_file_tickers) + "\n")
     ctx.watchlist_file = str(wl_path)
 
-    monkeypatch.setenv("WATCHLIST", watchlist_env)
-    if not watchlist_env:
-        monkeypatch.delenv("WATCHLIST", raising=False)
+    monkeypatch.setattr("settings.settings.WATCHLIST", watchlist_env, raising=False)
 
     monkeypatch.setattr(
         "pilots.discovery.discovery",

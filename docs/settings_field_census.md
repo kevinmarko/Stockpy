@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `c42852930c7777783f6b92789b20649bf9fcf78b`
+- Measured at commit: `2930c730b8bf62b9de0b4ae019c518c563bbe641`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -79,14 +79,14 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1758 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5405 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4591 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L4392 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LOCAL_DATA_ROOT` | L2011 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
-| `OUTPUT_DIR` | L2028 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4743 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L2041 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L4277 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `GCLOUD_BIN` | L5418 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4604 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L4405 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L2014 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L2031 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4756 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L2054 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L4290 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -134,10 +134,10 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 | `MCP_HTTP_BEARER_TOKEN` | `settings.py:497` | no | yes | yes |
 | `MCP_OAUTH_PASSWORD` | `settings.py:545` | no | yes | yes |
 | `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:464` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4708` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4716` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4700` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4692` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4721` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4729` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4713` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4705` | no | yes | yes |
 | `SENTRY_DSN` | `settings.py:1582` | no | yes | yes |
 | `STATE_API_TOKEN` | `settings.py:456` | no | yes | yes |
 
@@ -231,10 +231,10 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 815 | 269 |
-| (b) `getattr(settings, "KEY", default)` | 378 | 214 |
+| (a) `settings.KEY` | 839 | 279 |
+| (b) `getattr(settings, "KEY", default)` | 376 | 214 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
-| (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
+| (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
 Fields reached by at least one form: **447** of 458.
 
@@ -257,9 +257,9 @@ referenced by name somewhere and is probably read dynamically.
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11072` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1543`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1442`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **178**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **168**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -270,12 +270,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `AI_CHAT_DEFAULT_MODEL` | b | 1 | 0 |
 | `AI_CHAT_DEFAULT_PROVIDER` | b | 2 | 0 |
 | `AI_GENERATION_API_ENABLED` | b | 1 | 0 |
-| `ALERT_CHANNELS` | d | 0 | 1 |
-| `ALERT_EMAIL_SMTP_HOST` | d | 0 | 1 |
-| `ALERT_EMAIL_SMTP_PASSWORD` | d | 0 | 1 |
-| `ALERT_EMAIL_SMTP_PORT` | d | 0 | 1 |
-| `ALERT_NTFY_TOPIC` | d | 0 | 1 |
-| `ALERT_SLACK_WEBHOOK_URL` | d | 0 | 1 |
 | `ALERT_WEBHOOK_URL` | b | 1 | 0 |
 | `ALPACA_KEY_ROTATED_DATE` | b | 1 | 0 |
 | `ATTENTION_CIRCUIT_BREAKER_THRESHOLD` | b | 1 | 0 |
@@ -317,7 +311,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FEATURE_DRIFT_PSI_ENABLED` | b | 1 | 0 |
 | `FINBERT_BATCH_SIZE` | b | 1 | 0 |
 | `FINBERT_SCORE_CACHE_ENABLED` | b | 1 | 0 |
-| `FINNHUB_RATE_LIMIT_PER_MIN` | d | 0 | 2 |
 | `FMP_ANALYST_ENABLED` | b | 2 | 0 |
 | `FMP_ANALYST_REFRESH_HOURS` | b | 1 | 0 |
 | `FMP_BARS_ENABLED` | b | 1 | 0 |
@@ -404,12 +397,12 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPAL_RESEARCH_MODEL` | b | 2 | 0 |
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
-| `OPTIONS_0DTE_ENABLED` | b | 6 | 0 |
+| `OPTIONS_0DTE_ENABLED` | b | 5 | 0 |
 | `OPTIONS_0DTE_HARD_EXIT_TIME` | b | 4 | 0 |
 | `OPTIONS_0DTE_PROFIT_TARGET_PCT` | b | 3 | 0 |
 | `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |
 | `OPTIONS_ALERT_WEBHOOK_URL` | b | 5 | 0 |
-| `OPTIONS_AUTO_EXIT_ENABLED` | b | 5 | 0 |
+| `OPTIONS_AUTO_EXIT_ENABLED` | b | 4 | 0 |
 | `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | b | 3 | 0 |
 | `OPTIONS_DELTA_HEDGE_ENABLED` | b | 2 | 0 |
 | `OPTIONS_EARNINGS_MIN_EDGE` | b | 1 | 0 |
@@ -427,8 +420,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `PAIRS_SNAPSHOT_MAX_PAIRS` | b | 1 | 0 |
 | `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | b | 2 | 0 |
 | `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` | b | 1 | 0 |
-| `QDRANT_COLLECTION` | d | 0 | 1 |
-| `QDRANT_URL` | d | 0 | 1 |
 | `RAG_EMBEDDING_PROVIDER` | b | 1 | 0 |
 | `RAG_INDEX_LOOKBACK_DAYS` | b | 1 | 0 |
 | `RAG_INDEX_MAX_DOCUMENTS` | b | 1 | 0 |
@@ -442,7 +433,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `SENTIMENT_LLM_VERIFICATION_PROVIDER` | b | 1 | 0 |
 | `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` | b | 2 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
-| `WATCHLIST` | b+d | 1 | 5 |
 
 ### Dynamic `getattr` sites (form c) — **17**
 
@@ -468,7 +458,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `runtime_flags_writer.py:774` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:783` | `getattr(settings_module.settings, key, None)` |
 
-### Fields read via `os.environ` (form d) — 18 field(s)
+### Fields read via `os.environ` (form d) — 2 field(s)
 
 `.env` is loaded into the `Settings` model directly by pydantic-settings; it is only
 copied into the real `os.environ` when something calls `load_dotenv()`. A field read
@@ -477,24 +467,8 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 
 | Field | Reads | Also read via (a) |
 |---|---|---|
-| `WATCHLIST` | 5 | **no** |
-| `FINNHUB_RATE_LIMIT_PER_MIN` | 2 | **no** |
-| `FUNDAMENTALS_CACHE_TTL_SECONDS` | 2 | yes |
-| `FUNDAMENTALS_NEG_CACHE_TTL_SECONDS` | 2 | yes |
-| `ALERT_CHANNELS` | 1 | **no** |
-| `ALERT_EMAIL_FROM` | 1 | yes |
-| `ALERT_EMAIL_SMTP_HOST` | 1 | **no** |
-| `ALERT_EMAIL_SMTP_PASSWORD` | 1 | **no** |
-| `ALERT_EMAIL_SMTP_PORT` | 1 | **no** |
-| `ALERT_EMAIL_TO` | 1 | yes |
-| `ALERT_NTFY_TOPIC` | 1 | **no** |
-| `ALERT_SLACK_WEBHOOK_URL` | 1 | **no** |
 | `GCLOUD_BIN` | 1 | **no** |
-| `LOG_LEVEL` | 1 | yes |
 | `NO_VENV_REEXEC` | 1 | **no** |
-| `PROMPT_REGISTRY_SIGNING_KEY` | 1 | yes |
-| `QDRANT_COLLECTION` | 1 | **no** |
-| `QDRANT_URL` | 1 | **no** |
 
 ---
 

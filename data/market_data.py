@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -1550,15 +1549,9 @@ class FinnhubProvider:
         # Negative (empty-dict) responses use a much shorter TTL so a symbol
         # that was rate-limited or briefly down recovers quickly instead of
         # staying "no data" for the full positive TTL.
-        ttl = cache_ttl_seconds if cache_ttl_seconds is not None else int(
-            os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")
-        )
-        neg_ttl = neg_cache_ttl_seconds if neg_cache_ttl_seconds is not None else int(
-            os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")
-        )
-        rpm = rate_limit_per_min if rate_limit_per_min is not None else int(
-            os.environ.get("FINNHUB_RATE_LIMIT_PER_MIN", "50")
-        )
+        ttl = cache_ttl_seconds if cache_ttl_seconds is not None else settings.FUNDAMENTALS_CACHE_TTL_SECONDS
+        neg_ttl = neg_cache_ttl_seconds if neg_cache_ttl_seconds is not None else settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS
+        rpm = rate_limit_per_min if rate_limit_per_min is not None else settings.FINNHUB_RATE_LIMIT_PER_MIN
         self._cache = _FundamentalsCache(ttl_seconds=ttl, neg_ttl_seconds=neg_ttl)
         self._rate_limiter = _SlidingWindowRateLimiter(
             max_calls=rpm, window_seconds=60.0
@@ -1586,12 +1579,12 @@ class FinnhubProvider:
         """
         if not hasattr(self, "_cache"):
             self._cache = _FundamentalsCache(
-                ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")),
-                neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
+                ttl_seconds=settings.FUNDAMENTALS_CACHE_TTL_SECONDS,
+                neg_ttl_seconds=settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS,
             )
         if not hasattr(self, "_rate_limiter"):
             self._rate_limiter = _SlidingWindowRateLimiter(
-                max_calls=int(os.environ.get("FINNHUB_RATE_LIMIT_PER_MIN", "50")),
+                max_calls=settings.FINNHUB_RATE_LIMIT_PER_MIN,
                 window_seconds=60.0,
             )
 

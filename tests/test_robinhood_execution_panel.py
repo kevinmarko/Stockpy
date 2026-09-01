@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from settings import settings
+
 from gui.robinhood_execution_panel import (
     EXECUTION_PLACED_PATH,
     EXECUTION_QUEUE_PATH,
@@ -391,16 +393,42 @@ class TestNotificationAge:
 
 
 class TestNtfyTopicConfigured:
+    """Regression coverage for the ALERT_NTFY_TOPIC fix.
+
+    Prior to this fix, ``ntfy_topic_configured()`` read a bare
+    ``os.environ.get("NTFY_TOPIC", "")`` — but pydantic-settings loads
+    ``.env`` into the ``Settings`` model only, never into the real process
+    environment (the same bug class documented throughout CLAUDE.md for
+    Finnhub/EDGAR/Reddit/etc.), so an operator whose only source for this
+    value was ``.env`` got a silently-always-``False`` result forever.
+    ``ALERT_NTFY_TOPIC`` is the real declared ``Settings`` field (and a
+    ``SECRET_KEYS`` member in ``env_io.py``) — these tests patch the real
+    settings singleton, not a bare env var, and confirm no bare ``NTFY_TOPIC``
+    env var is ever consulted.
+    """
+
     def test_set_returns_true(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "my-unguessable-topic")
-        assert ntfy_topic_configured() is True
+        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", "my-unguessable-topic")
+        result = ntfy_topic_configured()
+        assert result is True
+        assert isinstance(result, bool)
 
     def test_unset_returns_false(self, monkeypatch):
-        monkeypatch.delenv("NTFY_TOPIC", raising=False)
-        assert ntfy_topic_configured() is False
+        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", None)
+        result = ntfy_topic_configured()
+        assert result is False
+        assert isinstance(result, bool)
 
     def test_whitespace_only_returns_false(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "   ")
+        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", "   ")
+        assert ntfy_topic_configured() is False
+
+    def test_does_not_read_bare_ntfy_topic_env_var(self, monkeypatch):
+        """A bare ``NTFY_TOPIC`` env var (not the real ``ALERT_NTFY_TOPIC``
+        Settings field) must be completely ignored — this is the exact
+        bug being regression-tested."""
+        monkeypatch.setattr(settings, "ALERT_NTFY_TOPIC", None)
+        monkeypatch.setenv("NTFY_TOPIC", "should-be-ignored")
         assert ntfy_topic_configured() is False
 
 

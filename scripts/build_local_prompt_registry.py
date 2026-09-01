@@ -147,7 +147,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    signing_key = os.environ.get("PROMPT_REGISTRY_SIGNING_KEY")
+    # Read from settings.settings, not os.environ — pydantic-settings' env_file
+    # loading does not copy .env values into the real os.environ (see
+    # prompt_registry.registry._build_registry_from_settings's docstring for
+    # the full precedent / CLAUDE.md's 2026-07 Finnhub fix).
+    from settings import settings as _settings  # noqa: PLC0415
+
+    signing_key = _settings.PROMPT_REGISTRY_SIGNING_KEY or None
     if not signing_key:
         print(
             "Error: PROMPT_REGISTRY_SIGNING_KEY is not set.\n"

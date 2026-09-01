@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 348,
+    "live_safe": 360,
     "no_op": 0,
-    "restart_required": 110,
+    "restart_required": 98,
     "total": 458
   },
   "dynamic_sites": [
@@ -149,8 +149,16 @@
     "AI_CHAT_DEFAULT_PROVIDER",
     "AI_CHAT_TIMEOUT_SECONDS",
     "AI_GENERATION_API_ENABLED",
+    "ALERT_CHANNELS",
     "ALERT_DEDUP_WINDOW_SECONDS",
+    "ALERT_EMAIL_FROM",
+    "ALERT_EMAIL_SMTP_HOST",
+    "ALERT_EMAIL_SMTP_PASSWORD",
+    "ALERT_EMAIL_SMTP_PORT",
+    "ALERT_EMAIL_TO",
     "ALERT_FILE_PATH",
+    "ALERT_NTFY_TOPIC",
+    "ALERT_SLACK_WEBHOOK_URL",
     "ALERT_SMTP_HOST",
     "ALERT_SMTP_PASSWORD",
     "ALERT_SMTP_PORT",
@@ -398,10 +406,13 @@
     "PROMPT_REGISTRY_ENABLED",
     "PROMPT_REGISTRY_PINS",
     "PROMPT_REGISTRY_PUBLISH_TOKEN",
+    "PROMPT_REGISTRY_SIGNING_KEY",
     "PROMPT_REGISTRY_TOKEN",
     "PROMPT_REGISTRY_URL",
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "PYTRENDS_ENABLED",
+    "QDRANT_COLLECTION",
+    "QDRANT_URL",
     "QUEUE_SOURCE_MAX_AGE_SECONDS",
     "RAG_EMBEDDING_PROVIDER",
     "RAG_INDEX_LOOKBACK_DAYS",
@@ -485,6 +496,7 @@
     "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
+    "WATCHLIST",
     "WATCH_RULES_FILE",
     "WIKIPEDIA_ATTENTION_ENABLED",
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
@@ -493,16 +505,16 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 906,
+    "attr": 930,
     "factory_param": 4,
-    "getattr_const": 378,
-    "os_environ": 25
+    "getattr_const": 376,
+    "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 272,
+    "attr": 282,
     "factory_param": 4,
     "getattr_const": 214,
-    "os_environ": 18
+    "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -514,94 +526,6 @@
           "module_level"
         ],
         "site": "gui/app.py:249",
-        "via": []
-      }
-    ],
-    "ALERT_CHANNELS": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:131",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_FROM": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:63",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_SMTP_HOST": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:60",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_SMTP_PASSWORD": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:62",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_SMTP_PORT": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:61",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_TO": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:64",
-        "via": []
-      }
-    ],
-    "ALERT_NTFY_TOPIC": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:34",
-        "via": []
-      }
-    ],
-    "ALERT_SLACK_WEBHOOK_URL": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:94",
         "via": []
       }
     ],
@@ -623,9 +547,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1984",
+        "site": "data/market_data.py:1977",
         "via": [
-          1889
+          1882
         ]
       },
       {
@@ -656,9 +580,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:262",
+        "site": "data/market_data.py:261",
         "via": [
-          245
+          244
         ]
       },
       {
@@ -678,9 +602,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1985",
+        "site": "data/market_data.py:1978",
         "via": [
-          1889
+          1882
         ]
       },
       {
@@ -1767,20 +1691,20 @@
     "FINNHUB_RATE_LIMIT_PER_MIN": [
       {
         "discarded": false,
-        "form": "os_environ",
+        "form": "attr",
         "rules": [
-          "os_environ"
+          "init_body"
         ],
-        "site": "data/market_data.py:1560",
+        "site": "data/market_data.py:1554",
         "via": []
       },
       {
         "discarded": false,
-        "form": "os_environ",
+        "form": "attr",
         "rules": [
-          "os_environ"
+          "method_self_assign"
         ],
-        "site": "data/market_data.py:1594",
+        "site": "data/market_data.py:1587",
         "via": []
       }
     ],
@@ -1791,7 +1715,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1901",
+        "site": "data/market_data.py:1894",
         "via": []
       },
       {
@@ -1800,9 +1724,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1938",
+        "site": "data/market_data.py:1931",
         "via": [
-          1876
+          1869
         ]
       }
     ],
@@ -1813,9 +1737,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1949",
+        "site": "data/market_data.py:1942",
         "via": [
-          1876
+          1869
         ]
       }
     ],
@@ -1868,7 +1792,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1012",
+        "site": "data/market_data.py:1011",
         "via": []
       }
     ],
@@ -2040,29 +1964,11 @@
     "FUNDAMENTALS_CACHE_TTL_SECONDS": [
       {
         "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1554",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1589",
-        "via": []
-      },
-      {
-        "discarded": false,
         "form": "attr",
         "rules": [
-          "init_self_assign"
+          "init_body"
         ],
-        "site": "data/market_data.py:1873",
+        "site": "data/market_data.py:1552",
         "via": []
       },
       {
@@ -2071,7 +1977,25 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2463",
+        "site": "data/market_data.py:1582",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "data/market_data.py:1866",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "method_self_assign"
+        ],
+        "site": "data/market_data.py:2456",
         "via": []
       }
     ],
@@ -2082,34 +2006,16 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1437",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1557",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1590",
+        "site": "data/market_data.py:1436",
         "via": []
       },
       {
         "discarded": false,
         "form": "attr",
         "rules": [
-          "init_self_assign"
+          "init_body"
         ],
-        "site": "data/market_data.py:1874",
+        "site": "data/market_data.py:1553",
         "via": []
       },
       {
@@ -2118,7 +2024,25 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2464",
+        "site": "data/market_data.py:1583",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "data/market_data.py:1867",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "method_self_assign"
+        ],
+        "site": "data/market_data.py:2457",
         "via": []
       }
     ],
@@ -2129,7 +2053,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1899",
+        "site": "data/market_data.py:1892",
         "via": []
       }
     ],
@@ -2365,15 +2289,6 @@
     "LOG_LEVEL": [
       {
         "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting.py:120",
-        "via": []
-      },
-      {
-        "discarded": false,
         "form": "attr",
         "rules": [
           "module_level"
@@ -2389,7 +2304,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1866",
+        "site": "data/market_data.py:1859",
         "via": []
       },
       {
@@ -2398,7 +2313,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2252",
+        "site": "data/market_data.py:2245",
         "via": []
       }
     ],
@@ -2409,9 +2324,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1929",
+        "site": "data/market_data.py:1922",
         "via": [
-          1876
+          1869
         ]
       }
     ],
@@ -2422,7 +2337,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1861",
+        "site": "data/market_data.py:1854",
         "via": []
       }
     ],
@@ -3090,39 +3005,6 @@
         "via": []
       }
     ],
-    "PROMPT_REGISTRY_SIGNING_KEY": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "scripts/build_local_prompt_registry.py:150",
-        "via": []
-      }
-    ],
-    "QDRANT_COLLECTION": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "agents/rag_orchestrator.py:142",
-        "via": []
-      }
-    ],
-    "QDRANT_URL": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "agents/rag_orchestrator.py:141",
-        "via": []
-      }
-    ],
     "REGIME_SIGNAL_WEIGHTS": [
       {
         "discarded": false,
@@ -3320,53 +3202,6 @@
         "site": "api/state_api.py:94",
         "via": []
       }
-    ],
-    "WATCHLIST": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data_ws.py:255",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/portfolio_sync.py:642",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "gui/panels/_shared.py:162",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "pilots/watchlist_writer.py:147",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "pilots/watchlist_writer.py:307",
-        "via": []
-      }
     ]
   },
   "restart_required_only_import_time_discard": [
@@ -3383,11 +3218,11 @@
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 18,
     "indirect_init_helper_d1": 13,
-    "init_body": 8,
+    "init_body": 11,
     "init_self_assign": 51,
-    "method_self_assign": 4,
+    "method_self_assign": 7,
     "module_level": 79,
-    "os_environ": 25
+    "os_environ": 2
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",

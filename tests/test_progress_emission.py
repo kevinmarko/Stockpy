@@ -134,7 +134,7 @@ class TestRunOnceProgressEmission:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Any,
     ) -> None:
-        monkeypatch.setenv("WATCHLIST", _WATCHLIST)
+        monkeypatch.setattr(_settings, "WATCHLIST", _WATCHLIST)
         monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
         mock_snap.return_value = _make_snapshot()
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
@@ -168,7 +168,7 @@ class TestRunOnceProgressEmission:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Any,
     ) -> None:
-        monkeypatch.setenv("WATCHLIST", _WATCHLIST)
+        monkeypatch.setattr(_settings, "WATCHLIST", _WATCHLIST)
         monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
         mock_snap.return_value = _make_snapshot()
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
@@ -209,7 +209,7 @@ class TestRunOnceProgressEmission:
         a raise there must propagate out of run_once() uncaught. Progress
         instrumentation must mark the reporter "failed" BEFORE that exception
         escapes, never swallow it (CONSTRAINT #6)."""
-        monkeypatch.setenv("WATCHLIST", _WATCHLIST)
+        monkeypatch.setattr(_settings, "WATCHLIST", _WATCHLIST)
         monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
         mock_snap.return_value = _make_snapshot()
 

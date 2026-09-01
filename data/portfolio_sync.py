@@ -632,14 +632,12 @@ def load_env_watchlist(watchlist_file: str) -> List[str]:
     never silently swallowed) rather than entering the universe. See that
     function's docstring for the incident this protects against.
     """
-    import os
-
     # dict.fromkeys preserves first-seen order while deduping -- env-var
     # tickers first, then file tickers, matching the order each source is read.
     tickers: Dict[str, None] = {}
     rejected: List[str] = []
 
-    env_val = os.environ.get("WATCHLIST", "").strip()
+    env_val = settings.WATCHLIST.strip()
     if env_val:
         for t in env_val.split(","):
             t = t.strip().upper()

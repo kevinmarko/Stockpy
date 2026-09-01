@@ -907,14 +907,14 @@ class TestLoadEnvWatchlist:
     def test_env_var_only(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "aapl, msft")
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "aapl, msft")
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL", "MSFT"]
 
     def test_file_only(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "")
         wl = tmp_path / "watchlist.txt"
         wl.write_text("nvda\n# a comment\ntsla\n\n")
         got = ps.load_env_watchlist(str(wl))
@@ -923,7 +923,7 @@ class TestLoadEnvWatchlist:
     def test_env_and_file_merge_deduped(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "AAPL")
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "AAPL")
         wl = tmp_path / "watchlist.txt"
         wl.write_text("AAPL\nMSFT\n")
         got = ps.load_env_watchlist(str(wl))
@@ -932,7 +932,7 @@ class TestLoadEnvWatchlist:
     def test_neither_configured_returns_empty(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "")
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == []
 
@@ -944,9 +944,7 @@ class TestLoadEnvWatchlist:
         be treated as a ticker and handed to a live bars fetch."""
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv(
-            "WATCHLIST", "# Plain text comma-separated fallback ticker list"
-        )
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "# Plain text comma-separated fallback ticker list")
         with caplog.at_level("WARNING"):
             got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == []
@@ -956,14 +954,14 @@ class TestLoadEnvWatchlist:
     def test_env_var_mixed_valid_and_garbage_keeps_only_valid(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "aapl, # a stray comment fragment, msft")
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "aapl, # a stray comment fragment, msft")
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL", "MSFT"]
 
     def test_file_ticker_with_embedded_whitespace_is_rejected(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "")
         wl = tmp_path / "watchlist.txt"
         # A line that survives the '#'-prefix comment filter (doesn't start
         # with '#') but is obviously not a real ticker.
@@ -974,6 +972,6 @@ class TestLoadEnvWatchlist:
     def test_implausibly_long_candidate_is_rejected(self, monkeypatch, tmp_path):
         from data import portfolio_sync as ps
 
-        monkeypatch.setenv("WATCHLIST", "AAPL," + "X" * 40)
+        monkeypatch.setattr(ps.settings, "WATCHLIST", "AAPL," + "X" * 40)
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL"]

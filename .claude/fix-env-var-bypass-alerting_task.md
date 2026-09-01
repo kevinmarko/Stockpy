@@ -1,0 +1,5 @@
+- [x] Fix Bug 1 in `alerting.py`
+- [x] Fix Bug 2 in `alerting.py`
+- [x] Fix Bug 3 in `alerting_mcp/notifier.py` (migrated 6 email/slack config fields to `settings`)
+- [x] Fix tests
+- [x] Create PR artifacts

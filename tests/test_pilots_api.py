@@ -4968,7 +4968,7 @@ class TestAgenticWatchWrite:
         )
 
     def _post(self, symbol, tmp_path, env_watchlist=""):
-        with mock.patch.dict(os.environ, {"WATCHLIST": env_watchlist}):
+        with mock.patch.object(settings, "WATCHLIST", env_watchlist):
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
                     with self._patch_path(tmp_path):
