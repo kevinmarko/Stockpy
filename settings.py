@@ -1759,9 +1759,9 @@ class Settings(BaseSettings):
         default=None,
         description="Absolute path for JSON-lines alert log file. None = disabled.",
     )
-    ALERT_EMAIL_FROM: Optional[str] = Field(default=None, description="SMTP sender address.")
+    ALERT_EMAIL_FROM: Optional[str] = Field(default="investyo-alerts@gmail.com", description="SMTP sender address.")
     ALERT_EMAIL_TO: Optional[str] = Field(
-        default=None,
+        default="beforecoast@gmail.com",
         description="Comma-separated recipient addresses for email alerts.",
     )
     ALERT_SMTP_HOST: Optional[str] = Field(default=None, description="SMTP server hostname.")
@@ -1803,7 +1803,7 @@ class Settings(BaseSettings):
         description="ntfy.sh topic for alerting_mcp push notifications. Unset = ntfy channel disabled.",
     )
     ALERT_EMAIL_SMTP_HOST: Optional[str] = Field(
-        default=None,
+        default="smtp.gmail.com",
         description="SMTP hostname for alerting_mcp email alerts (e.g. smtp.gmail.com).",
     )
     ALERT_EMAIL_SMTP_PORT: int = Field(
@@ -1819,7 +1819,7 @@ class Settings(BaseSettings):
         description="Slack incoming-webhook URL for alerting_mcp Slack alerts. Secret; unset = Slack channel disabled.",
     )
     ALERT_CHANNELS: Optional[str] = Field(
-        default=None,
+        default="ntfy",
         description="Comma-separated active alerting_mcp channels (e.g. 'ntfy,email,slack'). Unset defaults to 'ntfy'.",
     )
     DASHBOARD_REFRESH_SECONDS: int = Field(
