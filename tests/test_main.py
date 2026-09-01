@@ -1,13 +1,14 @@
 import logging
 
 import pytest
+from execution.options_lifecycle import run_automated_options_lifecycle, run_automated_delta_hedge_cycle
 from unittest import mock
 
 import main as m
 from main import (
     _read_macro_snapshot_hint,
-    _run_automated_delta_hedge_cycle,
-    _run_automated_options_lifecycle,
+    
+    _build_macro_dto,
 )
 
 def test_read_macro_snapshot_hint_missing_file(monkeypatch):
@@ -83,12 +84,12 @@ def test_read_macro_snapshot_hint_file_io_exception(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _run_automated_delta_hedge_cycle -- regression coverage for the fabricated-
+# run_automated_delta_hedge_cycle -- regression coverage for the fabricated-
 # $500-SPY-spot / sizing-vs-fill-price-divergence bug (see
 # docs/known_issues/options_risk_fabricated_spy_spot.md).
 # ---------------------------------------------------------------------------
 
-def test_run_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both_calls():
+def testrun_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both_calls():
     """Sizing (calculate_portfolio_greeks) and fill (execute_delta_hedge) must
     be called with the IDENTICAL resolved spy_spot -- never a fabricated
     price for one and a real price for the other."""
@@ -101,7 +102,7 @@ def test_run_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both
         mock_calc_greeks.return_value = {"beta_weighted_delta_spy": 40.0}
         mock_execute_hedge.return_value = {"ok": True, "hedged": False, "action": "HOLD"}
 
-        result = _run_automated_delta_hedge_cycle(executor)
+        result = run_automated_delta_hedge_cycle(executor)
 
     mock_get_price.assert_called_once_with("SPY")
     mock_calc_greeks.assert_called_once_with(store=mock.sentinel.store, spy_spot=642.17)
@@ -113,7 +114,7 @@ def test_run_automated_delta_hedge_cycle_threads_one_resolved_spy_spot_into_both
     assert result == mock_execute_hedge.return_value
 
 
-def test_run_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog):
+def testrun_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog):
     """No live SPY quote -> the cycle is skipped entirely (fail closed) --
     neither sizing nor execution is ever attempted, and nothing is sized off
     a fabricated placeholder price."""
@@ -124,7 +125,7 @@ def test_run_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog
          mock.patch("pilots.options_risk.calculate_portfolio_greeks") as mock_calc_greeks, \
          mock.patch("pilots.options_hedging.execute_delta_hedge") as mock_execute_hedge, \
          caplog.at_level(logging.WARNING, logger="InvestYo.main"):
-        result = _run_automated_delta_hedge_cycle(executor)
+        result = run_automated_delta_hedge_cycle(executor)
 
     assert result is None
     mock_calc_greeks.assert_not_called()
@@ -132,7 +133,7 @@ def test_run_automated_delta_hedge_cycle_skips_when_spy_quote_unavailable(caplog
     assert any("no live SPY quote" in rec.message for rec in caplog.records)
 
 
-def test_run_automated_delta_hedge_cycle_logs_on_real_hedged_result(caplog):
+def testrun_automated_delta_hedge_cycle_logs_on_real_hedged_result(caplog):
     """A real hedged=True result must actually produce the confirmation INFO
     log -- regression for the dead `_hedge_res.get('executed')` /
     `_hedge_res.get('spot_price')` key-mismatch bug (execute_delta_hedge's
@@ -154,7 +155,7 @@ def test_run_automated_delta_hedge_cycle_logs_on_real_hedged_result(caplog):
          mock.patch("pilots.options_risk.calculate_portfolio_greeks", return_value={"beta_weighted_delta_spy": 40.0}), \
          mock.patch("pilots.options_hedging.execute_delta_hedge", return_value=hedge_result), \
          caplog.at_level(logging.INFO, logger="InvestYo.main"):
-        result = _run_automated_delta_hedge_cycle(executor)
+        result = run_automated_delta_hedge_cycle(executor)
 
     assert result == hedge_result
     messages = [rec.getMessage() for rec in caplog.records]
@@ -204,7 +205,7 @@ def test_options_lifecycle_runs_0dte_exits_when_only_0dte_flag_enabled(monkeypat
         "pilots.zero_dte_engine.manage_0dte_exits",
         return_value={"evaluated_count": 1, "executed_count": 1, "failed_count": 0},
     ) as mock_manage_0dte:
-        _run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
+        run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
 
     mock_executor_cls.assert_called_once()
     mock_manage_0dte.assert_called_once_with(store=mock.sentinel.store)
@@ -223,7 +224,7 @@ def test_options_lifecycle_skips_everything_when_all_flags_disabled(monkeypatch)
     ) as mock_executor_cls, mock.patch(
         "pilots.zero_dte_engine.manage_0dte_exits",
     ) as mock_manage_0dte:
-        _run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
+        run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
 
     mock_executor_cls.assert_not_called()
     mock_manage_0dte.assert_not_called()
@@ -249,7 +250,7 @@ def test_options_lifecycle_runs_exit_management_when_only_auto_exit_flag_enabled
         "pilots.zero_dte_engine.manage_0dte_exits",
         return_value={"evaluated_count": 0, "executed_count": 0, "failed_count": 0},
     ) as mock_manage_0dte:
-        _run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
+        run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
 
     mock_executor.execute_auto_exits.assert_called_once()
     mock_manage_0dte.assert_called_once_with(store=mock.sentinel.store)
@@ -272,7 +273,7 @@ def test_options_lifecycle_runs_strategy_auto_execute_when_only_that_flag_enable
         "execution.options_paper_executor.OptionsPaperExecutor",
         return_value=mock_executor,
     ), mock.patch("pilots.zero_dte_engine.manage_0dte_exits") as mock_manage_0dte:
-        _run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
+        run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
 
     mock_executor.execute_strategy_directives.assert_called_once_with(
         macro_dto=mock.sentinel.macro_dto,
@@ -285,7 +286,7 @@ def test_options_lifecycle_runs_strategy_auto_execute_when_only_that_flag_enable
 
 def test_options_lifecycle_runs_delta_hedge_when_only_that_flag_enabled(monkeypatch):
     """OPTIONS_DELTA_HEDGE_ENABLED alone must still independently trigger
-    _run_automated_delta_hedge_cycle() -- pins this branch of the OR gate."""
+    run_automated_delta_hedge_cycle() -- pins this branch of the OR gate."""
     _set_options_lifecycle_flags(monkeypatch, delta_hedge=True)
 
     mock_executor = mock.MagicMock()
@@ -297,9 +298,9 @@ def test_options_lifecycle_runs_delta_hedge_when_only_that_flag_enabled(monkeypa
     ), mock.patch(
         "pilots.zero_dte_engine.manage_0dte_exits",
     ) as mock_manage_0dte, mock.patch(
-        "main._run_automated_delta_hedge_cycle",
+        "execution.options_lifecycle.run_automated_delta_hedge_cycle",
     ) as mock_hedge_cycle:
-        _run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
+        run_automated_options_lifecycle(macro_dto=mock.sentinel.macro_dto)
 
     mock_hedge_cycle.assert_called_once_with(mock_executor)
     mock_executor.execute_auto_exits.assert_not_called()
@@ -317,6 +318,6 @@ def test_options_lifecycle_swallows_exceptions_and_logs_warning(monkeypatch, cap
         "execution.options_paper_executor.OptionsPaperExecutor",
         side_effect=RuntimeError("boom"),
     ), caplog.at_level(logging.WARNING, logger="InvestYo.main"):
-        _run_automated_options_lifecycle(macro_dto=None)  # must not raise
+        run_automated_options_lifecycle(macro_dto=None)  # must not raise
 
     assert any("non-critical" in rec.message for rec in caplog.records)

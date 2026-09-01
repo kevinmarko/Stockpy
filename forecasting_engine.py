@@ -1399,9 +1399,7 @@ class ForecastingEngine:
                 sigma = float(log_returns.std())
                 close_prices = history.values
             else:
-                mu = 0.0002
-                sigma = 0.015
-                close_prices = np.array([])
+                raise ValueError("Insufficient historical data to generate forecast")
 
             # 2. Multi-Horizon Forecasts (horizons defined up front so the
             # per-horizon GARCH sigma below can be computed for every horizon

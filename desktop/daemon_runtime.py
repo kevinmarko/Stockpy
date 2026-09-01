@@ -345,7 +345,7 @@ class OrchestratorDaemon:
         # skipped as "data still fresh".
         force = reason != "interval"
         try:
-            asyncio.run(
+            macro_dto = asyncio.run(
                 main_orchestrator._main_body(
                     self._dry_run,
                     strict=self._strict,
@@ -357,6 +357,12 @@ class OrchestratorDaemon:
             )
             state = RunState.SUCCEEDED
             error = None
+
+            try:
+                from execution.options_lifecycle import run_automated_options_lifecycle
+                run_automated_options_lifecycle(macro_dto=macro_dto)
+            except Exception as _exc:
+                logger.warning("Options lifecycle failed in daemon: %s", _exc)
             # Note: 0DTE exit-lifecycle management (manage_0dte_exits) is NOT
             # re-run here. _timer_loop already calls it on every interval wake
             # (more frequently than once per full pipeline cycle, and without

@@ -508,31 +508,31 @@ class ForecastingStep(PipelineStep):
                 return ticker, forecasts
             except Exception as ml_err:
                 telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")
-                mu = 0.0002
-                sigma = 0.015
-                if history_series is not None and len(history_series) > 1:
-                    returns = np.log(history_series / history_series.shift(1)).dropna()
-                    mu = float(returns.mean())
-                    sigma = float(returns.std())
-
-                mc_target, mc_low, mc_high = fe.run_monte_carlo(price, mu, sigma, 30)
-                mc_10, _, _ = fe.run_monte_carlo(price, mu, sigma, 10)
-                mc_60, _, _ = fe.run_monte_carlo(price, mu, sigma, 60)
-                mc_90, _, _ = fe.run_monte_carlo(price, mu, sigma, 90)
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Forecasting: {ticker} (fallback)")
+                
+                if fe._tracker is not None:
+                    try:
+                        from datetime import datetime, timezone
+                        now_utc = datetime.now(timezone.utc)
+                        for h in [10, 30, 60, 90]:
+                            fe._tracker.record_forecasts(ticker, h, {}, now_utc)
+                    except Exception:
+                        pass
+                
+                nan_val = float('nan')
                 return ticker, {
                     'Target_Days': 30,
-                    'ARIMA': price,
-                    'MC_Target': mc_target,
-                    'MC_Lower': mc_low,
-                    'MC_Upper': mc_high,
-                    'Forecast_10': mc_10,
-                    'Forecast_30': mc_target,
-                    'Forecast_60': mc_60,
-                    'Forecast_90': mc_90,
-                    'Forecast_30_Prophet_Lower': mc_low,
-                    'Forecast_30_Prophet_Upper': mc_high
+                    'ARIMA': nan_val,
+                    'MC_Target': nan_val,
+                    'MC_Lower': nan_val,
+                    'MC_Upper': nan_val,
+                    'Forecast_10': nan_val,
+                    'Forecast_30': nan_val,
+                    'Forecast_60': nan_val,
+                    'Forecast_90': nan_val,
+                    'Forecast_30_Prophet_Lower': nan_val,
+                    'Forecast_30_Prophet_Upper': nan_val
                 }
 
         workers = max(1, int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)))
