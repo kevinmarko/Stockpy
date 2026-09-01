@@ -392,15 +392,15 @@ class TestNotificationAge:
 
 class TestNtfyTopicConfigured:
     def test_set_returns_true(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "my-unguessable-topic")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "my-unguessable-topic")
         assert ntfy_topic_configured() is True
 
     def test_unset_returns_false(self, monkeypatch):
-        monkeypatch.delenv("NTFY_TOPIC", raising=False)
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", None)
         assert ntfy_topic_configured() is False
 
     def test_whitespace_only_returns_false(self, monkeypatch):
-        monkeypatch.setenv("NTFY_TOPIC", "   ")
+        monkeypatch.setattr("settings.settings.ALERT_NTFY_TOPIC", "   ")
         assert ntfy_topic_configured() is False
 
 
