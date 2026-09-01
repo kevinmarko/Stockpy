@@ -6171,6 +6171,7 @@ def get_options_earnings_crush_candidates(
     return {
         "count": len(candidates),
         "candidates": candidates,
+        "as_of": None,
         "degraded": degraded,
         "symbols_errored": diagnostics.get("symbols_errored", []),
     }
@@ -6284,6 +6285,7 @@ def get_options_flow_unusual(
         "count": len(records),
         "records": records,
         "trades": records,
+        "as_of": None,
         "degraded": degraded,
         "symbols_fetch_failed": diagnostics.get("symbols_fetch_failed", []),
     }
