@@ -5,9 +5,15 @@ Unit tests for ``scripts/jules_dispatch.py``'s argument parsing and dispatch
 logic. ``data.jules_client.list_sources``/``dispatch_session`` are mocked at
 the point they were imported into ``scripts.jules_dispatch``'s own
 namespace (``from data.jules_client import ...`` there), so these tests
-never touch the real Jules API and are correct regardless of whether the
-real (currently scaffolded/``NotImplementedError``) bodies in
-``data/jules_client.py`` have been implemented yet.
+never touch the real Jules API.
+
+``list-sources`` remains genuinely functional (read-only) and is tested as
+such. ``create-session`` is NON-FUNCTIONAL as of 2026-08-31: Jules can only
+audit/review an existing PR or codebase, not write new code or open a PR
+from a prompt alone, so ``dispatch_session`` now unconditionally raises
+``JulesCapabilityNotAvailable`` before making any network call — the
+``TestCreateSessionWithConfirm`` tests below mock that real (disabled)
+shape rather than a successful dispatch.
 
 ``main()`` returns an int exit code (see ``scripts/jules_dispatch.py``'s own
 module docstring for why), so no ``pytest.raises(SystemExit)`` is needed
@@ -21,7 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
-from data.jules_client import JulesUnavailable
+from data.jules_client import JulesCapabilityNotAvailable, JulesUnavailable
 from scripts.jules_dispatch import main
 
 
@@ -94,10 +100,21 @@ class TestCreateSessionWithoutConfirm:
 
 
 class TestCreateSessionWithConfirm:
-    def test_success_prints_confirmation_and_returns_zero(self, capsys) -> None:
-        fake_result = {"name": "sessions/abc123"}
+    def test_capability_not_available_prints_error_and_returns_one(self, capsys) -> None:
+        """``dispatch_session`` is permanently disabled — it now raises
+        ``JulesCapabilityNotAvailable`` unconditionally, as the very first
+        thing it does, before making any network call (Jules can only
+        audit/review an existing PR or codebase; it cannot write new code
+        or open a PR from a prompt alone). The CLI must surface this as a
+        clean stderr message and exit code 1, never a silent success.
+        """
         with patch(
-            "scripts.jules_dispatch.dispatch_session", return_value=fake_result
+            "scripts.jules_dispatch.dispatch_session",
+            side_effect=JulesCapabilityNotAvailable(
+                "dispatch_session() assumed Jules could write new code and "
+                "open a PR from a prompt alone. This capability does not "
+                "exist."
+            ),
         ) as mock_dispatch:
             exit_code = main(
                 [
@@ -112,6 +129,12 @@ class TestCreateSessionWithConfirm:
                 ]
             )
 
+        # dispatch_session is mocked at the point jules_dispatch imported it
+        # into its own namespace, so this call never reaches the real HTTP
+        # layer in data/jules_client.py -- asserting the mock was called
+        # (with the real kwargs) alongside a nonzero exit code is the CLI-
+        # level proof that no HTTP call was attempted: the only path to an
+        # HTTP request is inside the real (here, unexercised) function body.
         mock_dispatch.assert_called_once_with(
             prompt="fix the bug",
             source="sources/github/kevinmarko/Stockpy-live",
@@ -120,10 +143,11 @@ class TestCreateSessionWithConfirm:
             force=False,
             confirm=True,
         )
-        assert exit_code == 0
-        out = capsys.readouterr().out
-        assert "sessions/abc123" in out
-        assert "dispatched successfully" in out.lower()
+        assert exit_code == 1
+        out = capsys.readouterr()
+        assert "dispatched successfully" not in out.out.lower()
+        err = out.err
+        assert "JulesCapabilityNotAvailable" in err or "capability does not exist" in err
 
     def test_failure_prints_error_to_stderr_and_returns_one(self, capsys) -> None:
         with patch(
@@ -148,8 +172,13 @@ class TestCreateSessionWithConfirm:
         assert "unknown source" in err
 
     def test_force_flag_passed_through(self, capsys) -> None:
+        """Argument-threading test: --force must still reach ``dispatch_session``'s
+        kwargs even though the (mocked, real-shaped) call now always raises
+        ``JulesCapabilityNotAvailable`` rather than succeeding.
+        """
         with patch(
-            "scripts.jules_dispatch.dispatch_session", return_value={"name": "sessions/xyz"}
+            "scripts.jules_dispatch.dispatch_session",
+            side_effect=JulesCapabilityNotAvailable("capability does not exist"),
         ) as mock_dispatch:
             exit_code = main(
                 [
@@ -165,15 +194,20 @@ class TestCreateSessionWithConfirm:
                 ]
             )
 
-        assert exit_code == 0
+        assert exit_code == 1
         _, kwargs = mock_dispatch.call_args
         assert kwargs["force"] is True
 
     def test_custom_branch_passed_through(self) -> None:
+        """Argument-threading test: --branch must still reach ``dispatch_session``'s
+        kwargs even though the (mocked, real-shaped) call now always raises
+        ``JulesCapabilityNotAvailable`` rather than succeeding.
+        """
         with patch(
-            "scripts.jules_dispatch.dispatch_session", return_value={"name": "sessions/xyz"}
+            "scripts.jules_dispatch.dispatch_session",
+            side_effect=JulesCapabilityNotAvailable("capability does not exist"),
         ) as mock_dispatch:
-            main(
+            exit_code = main(
                 [
                     "create-session",
                     "--prompt",
@@ -188,6 +222,7 @@ class TestCreateSessionWithConfirm:
                 ]
             )
 
+        assert exit_code == 1
         _, kwargs = mock_dispatch.call_args
         assert kwargs["branch"] == "develop"
 

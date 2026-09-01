@@ -646,20 +646,29 @@ class Settings(BaseSettings):
         ),
     )
     # --- Jules coding-agent API (data/jules_client.py) --------------------
-    # Google's Jules (https://jules.googleapis.com) — an external, autonomous
-    # coding agent that can be pointed at a connected GitHub repo and, in
-    # AUTO_CREATE_PR mode, opens a real unsupervised PR when it finishes. See
-    # docs/JULES_INTEGRATION.md for the full setup/safety writeup.
+    # Google's Jules (https://jules.googleapis.com) — an external, third-party
+    # coding agent. CORRECTED CAPABILITY MODEL (2026-08-31, operator-
+    # confirmed): Jules can only audit/review an existing PR or an existing
+    # codebase — it cannot write new code or open a PR from a prompt alone.
+    # This integration's write/PR-creation dispatch path
+    # (data/jules_client.py::dispatch_session()) is now permanently disabled
+    # in code — it unconditionally raises JulesCapabilityNotAvailable, makes
+    # no network call, and cannot be re-enabled by any argument or setting.
+    # See docs/JULES_INTEGRATION.md for the full corrected capability model
+    # and setup writeup.
     JULES_API_KEY: Optional[str] = Field(
         default=None,
         description=(
             "Jules coding-agent API key (https://jules.google.com — see "
             "docs/JULES_INTEGRATION.md). SECRET — masked in the GUI, never "
             "GUI-writable (CONSTRAINT #3). When absent, data/jules_client.py "
-            "short-circuits every request with zero network cost and both "
-            "list_jules_sources/dispatch_jules_task degrade to a clear "
-            "'not configured' message — no crash. Setting it alone changes "
-            "NOTHING: JULES_ENABLED must also be explicitly turned on."
+            "short-circuits every request with zero network cost and "
+            "list_jules_sources degrades to a clear 'not configured' "
+            "message — no crash. Setting it alone changes NOTHING: "
+            "JULES_ENABLED must also be explicitly turned on. Governs only "
+            "list_sources()/list_jules_sources — dispatch_jules_task's "
+            "underlying dispatch_session() is permanently disabled in code "
+            "and raises before ever reading this key."
         ),
     )
     JULES_ENABLED: bool = Field(
@@ -668,17 +677,27 @@ class Settings(BaseSettings):
             "Master switch for the Jules coding-agent integration "
             "(data/jules_client.py, investyo_mcp_server.py's "
             "list_jules_sources/dispatch_jules_task tools, "
-            "scripts/jules_dispatch.py). Default False and deliberately NOT "
-            "covered by the 2026-08-07 'new admin/write capabilities default "
-            "True' policy: that policy applies to internal Stockpy "
-            "capabilities gated behind this platform's own command tokens; "
-            "Jules is a third-party autonomous agent that opens real PRs on "
-            "the operator's actual GitHub repo, with no internal trust "
-            "boundary standing between 'flag on' and 'PR created' beyond "
-            "each dispatch call's own confirm=True argument. This field is "
-            "also a settings_keysets.DANGEROUS_KEYS member — flipping it "
-            "requires typed confirmation through any settings editor that "
-            "exposes it, on top of the per-call confirm gate."
+            "scripts/jules_dispatch.py). As of 2026-08-31 this flag has NO "
+            "functional effect on dispatch_jules_task/dispatch_session() — "
+            "that write/PR-creation path is permanently disabled in code "
+            "(it unconditionally raises JulesCapabilityNotAvailable "
+            "regardless of this flag) because Jules never actually had a "
+            "code-writing/PR-opening capability; it can only audit/review an "
+            "existing PR or codebase. This flag still genuinely gates the "
+            "one remaining working capability: list_sources()/"
+            "list_jules_sources, a real, read-only HTTP call "
+            "(GET /sources) that lists which GitHub repos are connected to "
+            "the operator's Jules account — confirmed by reading "
+            "data/jules_client.py::list_sources(), which raises "
+            "JulesUnavailable when this flag is False. Default False and "
+            "deliberately NOT covered by the 2026-08-07 'new admin/write "
+            "capabilities default True' policy: that policy applies to "
+            "internal Stockpy capabilities gated behind this platform's own "
+            "command tokens, and this flag governs a third-party agent's "
+            "credentialed API access, not an internal one. This field "
+            "remains a settings_keysets.DANGEROUS_KEYS member — see that "
+            "module's own comment for why it stays there even though the "
+            "capability it originally gated no longer exists."
         ),
     )
     JULES_REQUEST_TIMEOUT_SECONDS: int = Field(

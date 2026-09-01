@@ -1,5 +1,16 @@
 # Stockpy Jules Queue — Review Findings & Actions Taken
 
+> **CORRECTION NOTE (2026-08-31):** this document's title and Track 2 framing
+> ("Recurring Weekly Tasks (Advice for Jules)", "Jules relies on this
+> repository's CI") were written under the same incorrect belief corrected
+> elsewhere in this codebase: that Jules can autonomously write code and open
+> PRs. Jules cannot do this — see `docs/JULES_INTEGRATION.md` for the
+> corrected capability model. The actual authorship of the branches/PRs
+> reviewed below should not be assumed from this document's "Jules Queue"
+> framing; who actually opened them was not independently re-verified as
+> part of this correction pass. Left otherwise unedited as a historical
+> record of the review findings themselves, which stand on their own merits.
+
 Based on the queue review plan, I have completed the requested audits and implemented the safe changes directly into the repository. Below is the summary of findings and the status of each item.
 
 ## Track 1 — The N+1 / Performance PRs

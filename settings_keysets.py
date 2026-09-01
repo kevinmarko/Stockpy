@@ -447,12 +447,27 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "trained on, not a config toggle."
     ),
     "JULES_ENABLED": (
-        "Enables the Jules third-party autonomous coding-agent integration "
-        "(data/jules_client.py) -- when on, dispatch_jules_task can make Jules "
-        "write code and open a real, unsupervised PR on the operator's "
-        "actual GitHub repo. Unlike the other flags in this group there is "
-        "no internal Stockpy command-token boundary protecting this action; "
-        "the per-call confirm=True argument is the only remaining gate."
+        "Gates the Jules third-party coding-agent integration "
+        "(data/jules_client.py). CORRECTED CAPABILITY MODEL (2026-08-31, "
+        "operator-confirmed): Jules can only audit/review an existing PR or "
+        "codebase -- it cannot write new code or open a PR from a prompt "
+        "alone. dispatch_jules_task's underlying dispatch_session() is now "
+        "permanently disabled in code (unconditionally raises "
+        "JulesCapabilityNotAvailable regardless of this flag or "
+        "confirm=True), so the original 'Jules can open a real, unsupervised "
+        "PR' danger this key was added to gate no longer exists. This key "
+        "is kept in DANGEROUS_KEYS anyway rather than retired outright: it "
+        "still gates the one remaining working capability, "
+        "list_sources()/list_jules_sources -- a real, credentialed HTTP call "
+        "(GET /sources, using JULES_API_KEY) that lists which GitHub repos "
+        "are connected to the operator's Jules account -- and, unlike the "
+        "other flags in this group, there is no internal Stockpy "
+        "command-token boundary protecting even that reduced action. No "
+        "precedent exists elsewhere in this repo for fully retiring a "
+        "DANGEROUS_KEYS entry once the capability it gated is removed; "
+        "leaving it here (with this comment corrected to state the truth) "
+        "is the more conservative choice than dropping the confirmation "
+        "requirement."
     ),
 }
 

@@ -51,7 +51,7 @@ plans; kept up to date as each integration evolves.
 | File | Covers |
 |------|--------|
 | [`FMP_INTEGRATION.md`](FMP_INTEGRATION.md) | Financial Modeling Prep data layer — 28-setting reference, adjustment-mode gotchas, verification checklist |
-| [`JULES_INTEGRATION.md`](JULES_INTEGRATION.md) | Google Jules autonomous coding-agent integration |
+| [`JULES_INTEGRATION.md`](JULES_INTEGRATION.md) | Google Jules coding-agent integration — audit/review only; write/PR-creation dispatch is permanently disabled in code |
 
 ## Settings census (generated + hand-maintained pair)
 

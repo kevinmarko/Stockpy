@@ -16,14 +16,26 @@ Subcommands
     ``JulesUnavailable`` — never a raw traceback.
 
 ``create-session``
-    Dispatches a new Jules session (``AUTO_CREATE_PR`` automation mode —
-    see ``data/jules_client.py``'s docstring for why that mode is
-    hardcoded, not a CLI flag). This is NOT a dry-run/preview operation: on
-    success it opens a real, unsupervised pull request against the target
-    repo. Guarded by a required ``--confirm`` flag — omitting it refuses to
-    call ``dispatch_session`` at all, exiting 1 with a clear explanation
-    on stderr. ``--force`` passes through to ``dispatch_session``'s own
-    ``force`` param, overriding its same-UTC-day duplicate-dispatch guard.
+    NON-FUNCTIONAL (corrected 2026-08-31): this subcommand was originally
+    built around the assumption that, given a prompt and a connected
+    GitHub repo/branch, Jules could write new code and open a real,
+    unsupervised pull request from scratch. That capability does not
+    exist — Jules can only audit/review an existing PR or an existing
+    codebase, confirmed by the repo operator; see
+    ``docs/JULES_INTEGRATION.md`` for the corrected capability model.
+    Invoking this subcommand still genuinely calls
+    ``data.jules_client.dispatch_session`` (behind the same required
+    ``--confirm`` flag as before — omitting it refuses to call
+    ``dispatch_session`` at all, exiting 1 with a clear explanation on
+    stderr), but that function now unconditionally raises
+    ``JulesCapabilityNotAvailable`` as the very first thing it does,
+    regardless of arguments, before making any network call. This CLI
+    catches that (alongside ``JulesUnavailable``) and prints a clean
+    stderr message with exit code 1, matching this script's existing
+    error-handling pattern, rather than a raw traceback or a silent
+    no-op. ``--force`` remains defined for interface parity with
+    ``dispatch_session``'s signature but has no effect while this
+    capability is unavailable.
 
 Convention notes
 -----------------
@@ -56,7 +68,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from data.jules_client import JulesUnavailable, dispatch_session, format_sources, list_sources
+from data.jules_client import (
+    JulesCapabilityNotAvailable,
+    JulesUnavailable,
+    dispatch_session,
+    format_sources,
+    list_sources,
+)
 
 
 def _cmd_list_sources(args: argparse.Namespace) -> int:
@@ -80,9 +98,12 @@ def _cmd_list_sources(args: argparse.Namespace) -> int:
 def _cmd_create_session(args: argparse.Namespace) -> int:
     if not args.confirm:
         print(
-            "ERROR: dispatching a Jules session opens a real, unsupervised "
-            "pull request against the target repo. Re-run with --confirm to "
-            "proceed.",
+            "ERROR: --confirm is required to attempt dispatch. NOTE: this "
+            "subcommand is currently NON-FUNCTIONAL -- Jules cannot write "
+            "new code or open a pull request from a prompt alone, so even "
+            "with --confirm this will raise JulesCapabilityNotAvailable "
+            "rather than open a PR. Re-run with --confirm to see the "
+            "underlying error.",
             file=sys.stderr,
         )
         return 1
@@ -96,7 +117,7 @@ def _cmd_create_session(args: argparse.Namespace) -> int:
             force=args.force,
             confirm=args.confirm,
         )
-    except JulesUnavailable as exc:
+    except (JulesUnavailable, JulesCapabilityNotAvailable) as exc:
         print(f"ERROR: could not dispatch Jules session: {exc}", file=sys.stderr)
         return 1
 
@@ -113,8 +134,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="jules_dispatch.py",
         description=(
-            "CLI for Google's Jules coding-agent API — list connected "
-            "sources or dispatch a new autonomous coding session."
+            "CLI for Google's Jules coding-agent API. 'list-sources' works "
+            "(read-only). 'create-session' is NON-FUNCTIONAL: Jules cannot "
+            "write new code or open a pull request from a prompt alone -- "
+            "it can only audit/review an existing PR or codebase. See "
+            "'create-session --help' for detail."
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -128,8 +152,23 @@ def _build_parser() -> argparse.ArgumentParser:
     create_session_parser = subparsers.add_parser(
         "create-session",
         help=(
-            "Dispatch a new Jules session (opens a real PR on success). "
-            "Requires --confirm."
+            "NON-FUNCTIONAL: Jules cannot write new code or open a PR from "
+            "a prompt alone. Always raises JulesCapabilityNotAvailable."
+        ),
+        description=(
+            "NON-FUNCTIONAL. This subcommand was originally built around "
+            "the assumption that Jules could write new code and open a "
+            "real, unsupervised pull request from a prompt alone -- it "
+            "cannot. Jules can only audit/review an existing PR or an "
+            "existing codebase (confirmed by the repo operator; see "
+            "docs/JULES_INTEGRATION.md for the corrected capability "
+            "model). Invoking this command genuinely calls "
+            "data.jules_client.dispatch_session(), which now "
+            "unconditionally raises JulesCapabilityNotAvailable -- with "
+            "no network call ever made -- regardless of --confirm/--force "
+            "or any other argument. This subcommand is kept (rather than "
+            "removed) so the error is clear and immediate instead of "
+            "silent."
         ),
     )
     create_session_parser.add_argument(
@@ -155,8 +194,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Required to actually dispatch — acknowledges that this opens a "
-            "real, unsupervised PR on the target repo."
+            "Required to attempt dispatch. NOTE: this subcommand is "
+            "currently NON-FUNCTIONAL -- Jules cannot write new code or "
+            "open a PR from a prompt alone, so even with --confirm this "
+            "will raise JulesCapabilityNotAvailable instead of opening a "
+            "PR."
         ),
     )
     create_session_parser.add_argument(

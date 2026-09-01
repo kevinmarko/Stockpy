@@ -1939,16 +1939,54 @@ class TestListJulesSources:
 
 
 class TestDispatchJulesTask:
-    def test_confirm_false_does_not_dispatch(self, monkeypatch):
+    """dispatch_session() (data/jules_client.py) is now PERMANENTLY DISABLED:
+    it raises JulesCapabilityNotAvailable unconditionally, as the very first
+    thing it does, regardless of any argument -- Jules cannot write new code
+    or open a PR from a prompt alone (operator-confirmed 2026-08-31). These
+    tests assert the MCP tool surfaces that as a clean string (never a raw
+    exception across the MCP boundary) and that no network call is ever
+    attempted, for both confirm=True and confirm=False.
+    """
+
+    def test_confirm_true_raises_capability_not_available_no_network_call(self, monkeypatch):
         import data.jules_client as jules_mod
 
         called = {"count": 0}
 
-        def _dispatch(*a, **k):
+        def _post(*a, **k):
             called["count"] += 1
-            return {}
+            raise AssertionError("dispatch_session must never make a network call")
 
-        monkeypatch.setattr(jules_mod, "dispatch_session", _dispatch)
+        monkeypatch.setattr(jules_mod.requests, "post", _post)
+        monkeypatch.setattr(jules_mod.requests, "get", _post)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+        )
+
+        assert isinstance(result, str)
+        assert called["count"] == 0
+        assert "cannot" in result.lower() or "permanently disabled" in result.lower()
+        assert "Jules can only audit/review an existing PR or codebase" in result
+
+    def test_confirm_false_also_raises_capability_not_available_no_network_call(self, monkeypatch):
+        """confirm no longer gates anything -- dispatch_session() raises
+        regardless of the value passed, so confirm=False must behave
+        identically to confirm=True (no special-cased pre-check message)."""
+        import data.jules_client as jules_mod
+
+        called = {"count": 0}
+
+        def _post(*a, **k):
+            called["count"] += 1
+            raise AssertionError("dispatch_session must never make a network call")
+
+        monkeypatch.setattr(jules_mod.requests, "post", _post)
+        monkeypatch.setattr(jules_mod.requests, "get", _post)
 
         result = srv.dispatch_jules_task(
             prompt="fix the bug",
@@ -1958,43 +1996,23 @@ class TestDispatchJulesTask:
             confirm=False,
         )
 
-        assert "confirmation required" in result
+        assert isinstance(result, str)
         assert called["count"] == 0
+        assert "Jules can only audit/review an existing PR or codebase" in result
 
-    def test_confirm_true_success(self, monkeypatch):
+    def test_raised_exception_is_jules_capability_not_available(self, monkeypatch):
+        """Directly confirms the underlying exception class name, independent
+        of the MCP tool's string-surfacing behavior."""
         import data.jules_client as jules_mod
 
-        fake_result = {"name": "sessions/abc123"}
-        monkeypatch.setattr(jules_mod, "dispatch_session", lambda **k: fake_result)
-
-        result = srv.dispatch_jules_task(
-            prompt="fix the bug",
-            title="Fix bug",
-            source="sources/github/acme/widgets",
-            branch="main",
-            confirm=True,
-        )
-
-        assert "sessions/abc123" in result
-        assert "dispatched successfully" in result
-
-    def test_confirm_true_unavailable_returns_string_not_exception(self, monkeypatch):
-        import data.jules_client as jules_mod
-
-        def _raise(**k):
-            raise jules_mod.JulesUnavailable("nope")
-
-        monkeypatch.setattr(jules_mod, "dispatch_session", _raise)
-
-        result = srv.dispatch_jules_task(
-            prompt="fix the bug",
-            title="Fix bug",
-            source="sources/github/acme/widgets",
-            branch="main",
-            confirm=True,
-        )
-
-        assert "nope" in result
+        with pytest.raises(jules_mod.JulesCapabilityNotAvailable):
+            jules_mod.dispatch_session(
+                prompt="fix the bug",
+                source="sources/github/acme/widgets",
+                branch="main",
+                title="Fix bug",
+                confirm=True,
+            )
 
 
 class TestTriggerEdgarBackfillTimeoutPattern:

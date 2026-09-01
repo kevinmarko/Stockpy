@@ -2,64 +2,127 @@
 
 **Source:** `data/jules_client.py`
 **Consumers:** `investyo_mcp_server.py`'s `list_jules_sources`/`dispatch_jules_task` MCP tools, `scripts/jules_dispatch.py`'s `list-sources`/`create-session` CLI subcommands.
-**Precedent this document scales down from:** `docs/FMP_INTEGRATION.md` — Jules is one capability with 3 settings, not FMP's 8+ feeds with 28+ settings, so this document is proportionally shorter, but follows the same shape and the same discipline about stating what has and hasn't actually been verified.
 
-Every setting in this document defaults to today's exact pre-Jules behavior. Nothing here is active until an operator explicitly sets `JULES_ENABLED=true` in `.env` — this document exists so that flip is an informed one.
+**Status as of this rewrite: the write/PR-creation path is permanently disabled, and no working
+capability exists in this repo for Jules's real function (auditing/reviewing an existing PR or
+codebase).** This document is a corrected reference — it replaces an earlier version built around
+a capability Jules does not actually have. Read §1 first.
 
 ---
 
-## 1. What Jules is used for
+## 1. What Jules actually does — corrected
 
-[Jules](https://jules.google.com) is Google's third-party autonomous coding agent. Given a prompt and a GitHub repo/branch already connected to the operator's Jules account, Jules writes code changes and — in the mode this integration hardcodes, `AUTO_CREATE_PR` — opens a real pull request against that repo once it finishes. There is no lower-stakes mode: Jules's `automationMode` enum has exactly two values (`AUTOMATION_MODE_UNSPECIFIED`, meaning no automation at all, and `AUTO_CREATE_PR`), and `data/jules_client.py` hardcodes the latter rather than exposing it as a parameter, precisely so the meaning of this integration's `confirm=True` gate (§4) can never drift out of sync with whether a call actually results in a PR.
+[Jules](https://jules.google.com) is Google's third-party coding agent. Its real, confirmed
+capability is **auditing and reviewing an existing PR or an existing codebase** — Jules can look at
+code that already exists and report on it.
 
-This repo wires Jules in as a **second mechanism for delegating fix-out/improvement work**, alongside the existing pattern of dispatching multiple parallel Claude Code subagents within one session. The two are not equivalent: a Claude Code subagent works inside the current session under the operator's live supervision; a dispatched Jules session runs unsupervised, outside this session entirely, on Google's infrastructure, against the operator's real GitHub repo. There is **no human review gate before the PR itself is created** — review happens at merge time, exactly like any other PR, but nothing gates Jules from opening that PR in the first place once a session is dispatched.
+**Jules cannot write new code from a prompt alone, and it cannot open a new pull request "from
+nothing."** It has no capability to take a bare instruction ("add feature X") and generate a PR
+implementing it. Any earlier description of this integration (or of Jules generally) claiming
+otherwise — that "given a prompt and a connected GitHub repo/branch, Jules writes code and opens a
+real, unsupervised PR" — was incorrect. That was this integration's original design assumption,
+not a real Jules capability, and it has been corrected.
+
+**Consequence for this codebase:** `data/jules_client.py::dispatch_session()` — the function that
+built and sent the write/PR-creation request — now unconditionally raises a new exception,
+`JulesCapabilityNotAvailable`, as the very first thing it does. No network call is ever made. This
+is a permanent disablement, not a temporary outage: the capability it targeted (autonomous
+code-writing + PR creation from a prompt) does not exist on Jules's side to call in the first
+place.
+
+**What is NOT built:** a real dispatch path for Jules's actual capability (having Jules audit or
+review an existing PR or codebase) does not exist anywhere in this repo as of this rewrite. Building
+one would be new work — new client code, a new MCP tool, new tests — none of which this pass
+attempts. Be clear about this gap rather than implying a working audit/review mechanism is already
+wired up: it is not.
+
+**What remains genuinely functional today:** `list_sources()` (`GET /sources`) and its
+`format_sources()` formatter, exposed via the `list_jules_sources` MCP tool and the
+`scripts/jules_dispatch.py list-sources` CLI subcommand. This is a plain read — it enumerates which
+GitHub repos the operator has already connected to their Jules account through Jules's own UI. It
+makes no code-writing or review claim and is unaffected by the correction above.
 
 ---
 
 ## 2. Account / auth consequences
 
-- **Auth**: every request carries an `X-Goog-Api-Key` header built from `settings.JULES_API_KEY`. Get a key from https://jules.google.com.
-- **Pricing/quota — an honest disclosed unknown.** Jules's pricing and quota model has **not been independently verified** as part of this integration. Check Google's current Jules terms/pricing before enabling `JULES_ENABLED=true` for real, ongoing use. This is stated plainly rather than guessed at, matching this repo's convention elsewhere (see `docs/FMP_INTEGRATION.md`'s §6 "Cannot be verified in this sandbox") of flagging an unverified externality instead of presenting it as confirmed.
-- **Source connection is out of scope for this integration.** `list_sources()` (`GET /sources`) only ever returns repos the operator has already connected to their Jules account through Jules's own UI/setup flow. Stockpy's client calls the API once a source is already connected — it does not, and cannot, connect a new source itself.
+- **Auth**: `list_sources()` still carries an `X-Goog-Api-Key` header built from
+  `settings.JULES_API_KEY`. Get a key from https://jules.google.com if you want to use
+  `list_jules_sources`/`list-sources`.
+- **Pricing/quota — an honest disclosed unknown.** Jules's pricing and quota model has **not been
+  independently verified** as part of this integration. This is stated plainly rather than guessed
+  at, matching this repo's convention elsewhere (see `docs/FMP_INTEGRATION.md`'s §6 "Cannot be
+  verified in this sandbox") of flagging an unverified externality instead of presenting it as
+  confirmed.
+- **Source connection is out of scope for this integration.** `list_sources()` only ever returns
+  repos the operator has already connected to their Jules account through Jules's own UI/setup
+  flow. Stockpy's client calls the API once a source is already connected — it does not, and
+  cannot, connect a new source itself.
 
 ---
 
 ## 3. Settings reference
 
-All three settings live in `settings.py` under the `# --- Jules coding-agent API (data/jules_client.py) ---` block. Purpose column summarizes each field's real `description=` in `settings.py` — see that file for the verbatim text.
+All three settings still live in `settings.py` under the
+`# --- Jules coding-agent API (data/jules_client.py) ---` block. They now only govern the
+read-only `list_sources()` path — `JULES_ENABLED`/`JULES_API_KEY` gate whether that call is even
+attempted, and `dispatch_session()` is unreachable regardless of how these are set.
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
-| `JULES_API_KEY` | `Optional[str]` | `None` | Jules API key (from https://jules.google.com). Secret — masked in the GUI, never GUI-writable. Absent → every request short-circuits with zero network cost and both MCP tools degrade to a clear "not configured" message rather than crashing. Setting this alone changes nothing; `JULES_ENABLED` must also be explicitly turned on. |
-| `JULES_ENABLED` | `bool` | `False` | Master switch for the whole integration (`data/jules_client.py`, the two MCP tools, the CLI script). Deliberately **not** covered by the 2026-08-07 "new admin/write capabilities default to True" policy that applies to this platform's own internally-token-gated capabilities — Jules is a third-party agent that opens real PRs on the operator's actual GitHub repo, with no internal Stockpy trust boundary standing between "flag on" and "PR created" beyond each individual dispatch call's own `confirm=True` argument. Also a `settings_keysets.DANGEROUS_KEYS` member: flipping it through any settings editor requires typed confirmation, on top of the per-call confirm gate. |
-| `JULES_REQUEST_TIMEOUT_SECONDS` | `int` | `30` | HTTP timeout (seconds) applied to every `data/jules_client.py` request (`list_sources`, `dispatch_session`). |
+| `JULES_API_KEY` | `Optional[str]` | `None` | Jules API key (from https://jules.google.com). Secret — masked in the GUI, never GUI-writable. Absent → `list_sources()` short-circuits with zero network cost and `list_jules_sources`/`list-sources` degrade to a clear "not configured" message rather than crashing. |
+| `JULES_ENABLED` | `bool` | `False` | Master switch gating `list_sources()` and the two `list_jules_sources`/`list-sources` entry points. Still a `settings_keysets.DANGEROUS_KEYS` member (typed confirmation required to flip it through a settings editor) — a conservative holdover from when this flag also gated the write path; there is no live-write risk left to guard against today, but the flag has not been reclassified. |
+| `JULES_REQUEST_TIMEOUT_SECONDS` | `int` | `30` | HTTP timeout (seconds) applied to `data/jules_client.py`'s `list_sources()` request. `dispatch_session()` never reaches the point of making an HTTP request, so this setting no longer affects it. |
 
 ---
 
-## 4. The confirm=True + dispatch-ledger safety model
+## 4. The disabled write/dispatch path (historical — do not follow)
 
-Two independent mechanisms guard every dispatch:
+Everything in this section describes this integration's **original, incorrect design**. It is kept
+here only so the history is legible, not as instructions to follow. None of it is functional.
 
-**Explicit per-call confirmation.** Every `dispatch_jules_task`/`create-session` invocation requires an explicit `confirm=True` (MCP tool) or `--confirm` (CLI) — omitting it dispatches nothing. This mirrors `gui/orchestrator_runner.py`'s `HIGH_STAKES_COMMANDS` gate that this codebase already uses for other irreversible actions (the global kill-switch toggle, a forced Robinhood re-login).
+The original design hardcoded Jules's `automationMode` to `AUTO_CREATE_PR` — the assumption was
+that, given a prompt and a connected GitHub repo/branch, Jules would write code and open a real
+pull request once it finished. A `confirm=True`/`--confirm` gate (mirroring
+`gui/orchestrator_runner.py`'s `HIGH_STAKES_COMMANDS` pattern) and an append-only dispatch ledger
+(`output/jules_dispatched.jsonl`, same-day dedup by `{UTC date}:{hash of source|branch|title|prompt}`)
+were both built to guard that dispatch. Both pieces of scaffolding (the ledger file format, the
+`confirm=True` parameter, the CLI's `--confirm` flag) still exist in the code, but
+`dispatch_session()` now raises `JulesCapabilityNotAvailable` before any of it is reached — the
+ledger is never written to, and no PR is ever created through this path. This is permanent: the
+capability the design assumed Jules had does not exist to build a working version of.
 
-**State this explicitly and honestly, do not paper over it: `confirm=True` here is a materially weaker gate than this repo's other precedent for an irreversible, unsupervised action.** The `robinhood-execution` skill's order-placement loop requires a live, per-order, human-narrated, explicit-affirmative back-and-forth before each individual order — a human is in the loop for every single irreversible action, in real time. `confirm=True` on a Jules dispatch is a bare boolean a single tool call or CLI invocation sets in one shot; nothing in the code enforces that a human actually reviewed *this specific prompt* before it was set. What currently closes that gap is the `.claude/skills/jules-delegation/SKILL.md` skill's prose hard-stop — "never pass `confirm=True` without the operator's explicit per-task go-ahead for THIS exact prompt" — and that is enforced by an agent reading and following the skill, not by any code-level check. A future hardening could add a stronger code-level gate (e.g. a second confirmation token, a human-readable prompt echo the operator must retype); this integration does not attempt one, and that is a known, accepted limitation rather than an oversight.
-
-**The dispatch ledger.** `output/jules_dispatched.jsonl` is an append-only JSONL file, one record per successful dispatch, mirroring `execution/receipts_store.py`'s append-only pattern in spirit (this integration has none of that module's multi-file broker-reconciliation machinery — there's nothing here to reconcile against a broker). It serves two purposes: preventing an accidental retry from firing a duplicate autonomous session against the same target on the same day (the `dedup_key` is `{UTC date}:{hash of source|branch|title|prompt}` — a different day's identical prompt is a legitimate new dispatch, not a duplicate), and giving a durable audit trail of what was actually dispatched and when. `--force`/`force=True` overrides the same-day duplicate check for a genuine intentional re-dispatch.
+If you see any earlier documentation, commit message, or comment claiming
+`automationMode: "AUTO_CREATE_PR"` results in Jules opening a real PR today, treat it as describing
+this retired design, not current behavior.
 
 ---
 
-## 5. Rollout sequencing
+## 5. What you can actually do with this integration today
 
-1. Get a real Jules API key from https://jules.google.com and connect the target GitHub repo through Jules's own UI.
-2. Add `JULES_API_KEY=<key>` to your local `.env`. Never commit it — `.env` is gitignored, and this repo's `.claude/hooks/block_env_write.sh` hook hard-denies any tool from writing `.env` directly, by design.
-3. Set `JULES_ENABLED=true` in `.env`. This is a `settings_keysets.DANGEROUS_KEYS` member — expect a typed-confirmation prompt if you flip it through a settings UI rather than hand-editing `.env`.
-4. Run `python scripts/jules_dispatch.py list-sources` (or call the `list_jules_sources` MCP tool) to confirm your connected repo actually shows up.
-5. Dispatch one low-stakes test prompt and review the resulting PR like any other PR. Jules gets PR-creation rights only, never merge rights — nothing in this integration auto-merges anything.
+1. Get a real Jules API key from https://jules.google.com and connect a target GitHub repo through
+   Jules's own UI, if you want to exercise the read path.
+2. Add `JULES_API_KEY=<key>` to your local `.env`. Never commit it — `.env` is gitignored, and this
+   repo's `.claude/hooks/block_env_write.sh` hook hard-denies any tool from writing `.env` directly,
+   by design.
+3. Set `JULES_ENABLED=true` in `.env`. This is a `settings_keysets.DANGEROUS_KEYS` member — expect a
+   typed-confirmation prompt if you flip it through a settings UI rather than hand-editing `.env`.
+4. Run `python scripts/jules_dispatch.py list-sources` (or call the `list_jules_sources` MCP tool)
+   to confirm your connected repo shows up. **This is the full extent of what this integration can
+   do today.** There is no next step that writes code, opens a PR, or triggers any kind of review —
+   calling `dispatch_jules_task`/`create-session` will raise `JulesCapabilityNotAvailable`
+   immediately.
 
 ---
 
 ## 6. Known risks / verification limitations
 
-This integration was built and verified **entirely offline**, in a sandboxed dev/CI environment with no real Jules API key and no live network access. Every test is mock-verified only (`tests/test_jules_client.py`, `tests/test_investyo_mcp_server.py`, `tests/test_jules_dispatch.py`). No live Jules API call has been made, or is possible, in that environment — this mirrors `docs/FMP_INTEGRATION.md`'s own equivalent disclosed limitation (see that document's §6, "Cannot be verified in this sandbox").
+The surviving read path (`list_sources()`) was built and verified **entirely offline**, in a
+sandboxed dev/CI environment with no real Jules API key and no live network access. Its test
+coverage (`tests/test_jules_client.py`, `tests/test_investyo_mcp_server.py`,
+`tests/test_jules_dispatch.py`) is mock-verified only; no live Jules API call has been made, or is
+possible, in that environment.
 
-The operator should perform one real end-to-end dispatch (step 5 above) before relying on this integration for real work.
+There is no operator action that "finishes" this integration the way the old §5 rollout used to
+describe — the honest next step, if this capability is wanted, is building a genuine audit/review
+dispatch path against Jules's real API, which is new work this pass does not attempt.

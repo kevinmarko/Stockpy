@@ -1,106 +1,83 @@
 ---
 name: jules-delegation
 description: >-
-  Delegate a coding task to Google's Jules autonomous agent, which will
-  write code against a connected GitHub repo and open a real PR when
-  finished. Use when the operator explicitly asks to delegate work to
-  Jules, or asks for a "fire and forget" task that doesn't need close
-  in-session supervision. Requires JULES_ENABLED=true and a real
-  JULES_API_KEY to be configured -- degrades to a clear "not configured"
-  message otherwise. NEVER dispatch (confirm=True) without the operator's
-  explicit go-ahead for that exact prompt in the current conversation.
+  Jules (Google's coding agent) can only audit/review an existing PR or
+  codebase -- it cannot write new code or open a PR from a prompt alone.
+  This skill's original write/PR-delegation capability has been permanently
+  disabled (data/jules_client.py::dispatch_session() now always raises
+  JulesCapabilityNotAvailable) and no working audit-dispatch path exists in
+  this repo yet. The only thing this skill can still do is call
+  list_jules_sources to enumerate GitHub repos connected to the operator's
+  Jules account -- a read-only listing, nothing else. Use only if the
+  operator wants that listing, or explain the situation if they ask to
+  delegate a coding task to Jules.
 ---
 
-# Jules Delegation (fire-and-forget, human-gated dispatch)
+# Jules Delegation
 
-This skill hands a coding task off to Google's Jules — a third-party
-autonomous agent that, given a prompt and a connected GitHub repo/branch,
-writes code and opens a real, unsupervised PR when it finishes. In this
-integration's hardcoded `AUTO_CREATE_PR` mode there is no human review gate
-before the PR is opened; review happens at merge time, like any other PR.
+**Current status: mostly non-functional.** Jules's real, confirmed capability is auditing/reviewing
+an existing PR or codebase — it cannot write new code or open a new pull request from a prompt
+alone, and it cannot "build something from nothing." This repo's original integration was designed
+around the opposite (incorrect) assumption — that Jules would write code and open a real,
+unsupervised PR given just a prompt and a connected repo/branch. That assumption was wrong, and the
+write/dispatch path it built (`dispatch_jules_task` / `scripts/jules_dispatch.py create-session`)
+has been permanently disabled: `data/jules_client.py::dispatch_session()` now unconditionally
+raises `JulesCapabilityNotAvailable` as the first thing it does, before any network call. Nothing
+in this repo can dispatch a Jules session that writes code or opens a PR anymore, regardless of
+`confirm=True`/`--confirm`.
 
-**Jules vs. dispatching Claude Code subagents in this session.** This exact
-repo just landed a real PR (#681) by dispatching multiple parallel Claude
-Code subagents (the `Agent` tool) within one session — that is the other way
-to delegate a coding task, and it is not the same tool for the same job.
-Contrast them honestly with the operator when the choice isn't obvious:
+**No replacement exists yet either.** There is currently no implemented path anywhere in this
+codebase for Jules's actual capability — having it audit or review an existing PR or codebase.
+Building one would be new work (new client code, a new MCP tool or CLI subcommand, new tests); this
+skill does not attempt it and should not imply otherwise.
 
-- **Jules** is fire-and-forget. Once dispatched, the session runs entirely
-  outside this conversation; there is no supervised iteration, no chance to
-  redirect it mid-task, and no visibility into its result until a PR shows
-  up on GitHub. Good when the operator explicitly wants that flavor — the
-  task should happen on Jules's own time, independent of this session's
-  lifetime, and doesn't need anyone watching it work.
-- **Claude Code subagents** (the `Agent` tool) keep the primary agent in the
-  loop for the whole task. Progress, intermediate output, and test results
-  are all visible in-session, and a subagent's work can be verified, iterated
-  on, and fixed before anything ever lands. Prefer this whenever close
-  supervision matters — which, for anything touching engines, signals,
-  execution, sizing, validation, or other runtime/trading logic per this
-  repo's own CLAUDE.md, is most of the time.
+**The one thing that still genuinely works:** `list_jules_sources` (MCP tool) /
+`scripts/jules_dispatch.py list-sources` (CLI) — a plain read that enumerates which GitHub repos are
+connected to the operator's Jules account. It makes no code-writing or review claim.
 
-Default to recommending Claude Code subagents unless the operator has a
-specific reason to want the fire-and-forget behavior Jules provides.
+## If the operator asks to delegate a coding task to Jules
 
-## Prerequisites (verify before doing anything else)
+Tell them plainly: Jules cannot write new code or open a PR from a prompt in this integration —
+that capability was based on an incorrect assumption about what Jules can do and has been disabled.
+Point them at Claude Code subagents (the `Agent` tool) instead for delegating implementation work
+within this session — see "Jules vs. Claude Code subagents," below, for how the two actually
+compare now that only one of them can do the job.
 
-1. Call `list_jules_sources`. If the response has a "not configured"
-   shape (i.e. `settings.JULES_ENABLED` is not `True`, or
-   `settings.JULES_API_KEY` is unset), **stop** and tell the operator exactly
-   what to set (`JULES_ENABLED=true` and a real `JULES_API_KEY` in `.env`) —
-   do not proceed any further into this skill.
-2. From that same `list_jules_sources` response, confirm the repo the
-   operator wants actually appears in the connected-sources list. Never call
-   `dispatch_jules_task` against a `source` you have not just seen returned
-   by `list_jules_sources` in this conversation.
+## If the operator asks Jules to audit or review something
 
-## Hard stops (refuse and explain — do not proceed)
+Say so honestly: no working dispatch path for that exists in this repo yet. It would need new code
+to build, which is out of scope for this skill as it stands today.
 
-- **Never call `dispatch_jules_task` / `create-session` with `confirm=True`
-  (or `--confirm`) unless the operator has explicitly approved THIS EXACT
-  prompt, title, branch, and target repo in the CURRENT conversation.** A
-  prior, more general instruction — "set up Jules," "go ahead and use Jules
-  for X eventually" — is **not** authorization to dispatch a specific
-  session later without asking again. Every dispatch is its own
-  explicit-permission event, the same principle as this agent's own standing
-  rule that publishing or modifying public content needs per-action
-  confirmation, never a standing blanket approval.
-- **Never dispatch against a `source` the operator didn't specify or
-  confirm.** Always show the operator what `list_jules_sources` returned and
-  let them pick or confirm it — don't guess which connected repo they mean,
-  even if only one is connected.
-- **`confirm=True` is a code-level boolean, not a substitute for actually
-  getting the operator's yes.** The tool itself doesn't force a
-  back-and-forth the way the Robinhood execution skill's per-order preview
-  loop does — treat asking as mandatory anyway, and say so plainly if the
-  operator seems to be relying on the flag alone as the safety gate. State
-  this gap honestly rather than treating the tool's own gate as sufficient.
-- **Jules opens PRs, never merges them.** Never treat a Jules-created PR as
-  pre-approved for merge — it still needs the same review any other PR in
-  this repo gets, including the branch-workflow rules in this repo's own
-  CLAUDE.md.
+## Jules vs. Claude Code subagents
 
-## Workflow
+These are no longer two ways to delegate the same kind of task — only one of them can write code
+and land it in this repo.
 
-1. **Confirm prerequisites** — run the Prerequisites checks above. Stop if
-   Jules isn't configured or the target source isn't connected.
-2. **Call `list_jules_sources`** and show the operator the connected repos.
-   Get their explicit confirmation of which one is the dispatch target.
-3. **Draft the exact prompt, title, and branch** with the operator (or per
-   their explicit instruction), then show the drafted content back to them
-   verbatim before dispatching. Do not paraphrase or summarize what will
-   actually be sent — the operator needs to approve the literal text.
-4. **Only once the operator has said yes to that exact content**, call
-   `dispatch_jules_task(prompt, title, source, branch, confirm=True)` (or
-   the CLI equivalent, `scripts/jules_dispatch.py create-session --prompt
-   ... --title ... --source ... --branch ... --confirm`).
-5. **Report the dispatch and stop there.** Tell the operator the session was
-   dispatched and that they'll need to check GitHub for the resulting PR —
-   this skill does not poll or wait for it, and no follow-up happens
-   automatically.
+- **Claude Code subagents** (the `Agent` tool) are the only in-repo mechanism for delegating
+  implementation work. Progress, intermediate output, and test results are all visible in-session,
+  and a subagent's work can be verified, iterated on, and fixed before anything ever lands. Use this
+  for anything that needs code written — which, per this repo's own CLAUDE.md, should get close
+  supervision for anything touching engines, signals, execution, sizing, validation, or other
+  runtime/trading logic.
+- **Jules**, in this repo, can currently do nothing beyond listing the operator's connected GitHub
+  sources. It is not a fire-and-forget code-delegation option here, despite how it may have been
+  described previously.
+
+## What still works: listing connected sources
+
+1. Call `list_jules_sources`. If the response has a "not configured" shape (i.e.
+   `settings.JULES_ENABLED` is not `True`, or `settings.JULES_API_KEY` is unset), tell the operator
+   what to set (`JULES_ENABLED=true` and a real `JULES_API_KEY` in `.env`) if they still want the
+   listing.
+2. Show the operator the connected repos returned. That is the full extent of what this skill can
+   do — there is no next step that writes code, opens a PR, or triggers a review of anything.
+
+## Hard stop
+
+- **Never call `dispatch_jules_task` / `create-session`, with or without `confirm=True`/`--confirm`.**
+  It will raise `JulesCapabilityNotAvailable` and accomplishes nothing — do not present calling it
+  as a real option to the operator, and do not attempt it "to see what happens."
 
 ## See also
 
-`docs/JULES_INTEGRATION.md` for the full setup/safety writeup (the file may
-not exist yet in every worktree depending on build timing, but it is the
-authoritative reference once merged).
+`docs/JULES_INTEGRATION.md` for the full corrected setup/capability writeup.

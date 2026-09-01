@@ -1083,42 +1083,40 @@ def list_jules_sources() -> str:
 @mcp.tool()
 def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "main", confirm: bool = False) -> str:
     """
-    Dispatches an autonomous Jules coding-agent session against a connected
-    GitHub repo. Jules will write code and, on completion, automatically open
-    a real PR on that repo -- UNSUPERVISED, with no human review before the PR
-    is created (review happens at merge time, same as any other PR).
+    PERMANENTLY DISABLED -- do not expect this tool to dispatch anything.
 
-    SAFETY: requires confirm=True. This must NEVER be set without the
-    operator's EXPLICIT go-ahead for this exact prompt/branch/title in the
-    current conversation -- "the operator asked me to set up Jules" earlier
-    is not blanket authorization to dispatch sessions autonomously later.
-    Also requires JULES_ENABLED=true (a dangerous/typed-confirmation-gated
-    setting) and a valid JULES_API_KEY.
+    Confirmed capability correction: Jules can only audit/review an existing
+    PR or an existing codebase. It CANNOT write new code or open a PR from a
+    prompt alone. This tool's docstring previously claimed the opposite --
+    that Jules would write code and, on completion, automatically open a
+    real PR, UNSUPERVISED, with no human review before the PR was created --
+    and that claim was wrong.
+
+    Calling this tool always raises JulesCapabilityNotAvailable, via
+    data.jules_client.dispatch_session(), which now refuses unconditionally
+    -- as the very first thing it does, regardless of arguments -- and NEVER
+    makes any network call. The tool is kept here (rather than removed) so
+    an agent that tries to call it gets a clear, informative error
+    explaining why, instead of the tool silently disappearing, which would
+    look like a connection failure rather than a deliberate correction.
+
+    For read-only enumeration of connected Jules sources/repos, which
+    remains genuinely valid, use list_jules_sources() instead.
 
     Args:
-        prompt: The task instructions for Jules.
-        title: Short title for the Jules session / resulting PR.
-        source: The Jules source name to target, e.g. "sources/github/OWNER/REPO"
-            (call list_jules_sources() first to see what's connected -- an
-            unrecognized source is rejected).
-        branch: The starting branch Jules should branch from. Default "main".
-        confirm: Must be explicitly True. Required safety gate -- see above.
+        prompt: Unused -- retained only for signature compatibility. See above.
+        title: Unused -- retained only for signature compatibility. See above.
+        source: Unused -- retained only for signature compatibility. See above.
+        branch: Unused -- retained only for signature compatibility. See above.
+        confirm: Unused -- retained only for signature compatibility. See above.
     """
-    if not confirm:
-        return (
-            "confirmation required: dispatching a Jules session opens a real, "
-            "unsupervised PR on the target repo. Re-call with confirm=True "
-            "only after the operator has explicitly approved THIS "
-            "prompt/branch/title."
-        )
-
-    from data.jules_client import dispatch_session, JulesUnavailable
+    from data.jules_client import dispatch_session, JulesUnavailable, JulesCapabilityNotAvailable
 
     try:
         result = dispatch_session(
             prompt=prompt, source=source, branch=branch, title=title, confirm=confirm
         )
-    except JulesUnavailable as e:
+    except (JulesCapabilityNotAvailable, JulesUnavailable) as e:
         return str(e)
 
     session_name = result.get("name", "unknown") if isinstance(result, dict) else "unknown"
