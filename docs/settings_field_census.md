@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `229a0fcd0de4fd5d9d835c4839461f66542b8f75`
+- Measured at commit: `708470958b5aa3285095c2056a2f564346fcf7f9`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -188,7 +188,7 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 | `/settings/etf-transmission` | PATCH | `put_settings_etf_transmission` | 5177 | yes | no | no | _(none)_ |
 | `/prompts/pin` | PUT | `put_prompts_pin` | 5448 | yes | no | no | `next_daemon_restart` |
 
-### Existing in-process hot-reload beachhead — `gui/ai_control_center.py::LIVE_PATCHABLE_KEYS`
+### Existing in-process hot-reload beachhead — `shared/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
 `PUT /llm/setting` is the only route that patches the live singleton, and it does so only
 for the **11** keys on this allowlist (all of which are real `Settings` fields:
@@ -218,7 +218,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **446** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **448** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -249,13 +249,13 @@ referenced by name somewhere and is probably read dynamically.
 |---|---|---|
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4754` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4753` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4923`, `gui/panels/settings_manager.py:126` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4895`, `gui/panels/settings_manager.py:162` | likely read dynamically |
+| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4923`, `legacy/streamlit_command_center/panels/settings_manager.py:126` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4895`, `legacy/streamlit_command_center/panels/settings_manager.py:162` | likely read dynamically |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11072` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11079` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1543`, `pilots/feature_flags.py:49` | likely read dynamically |
 
@@ -452,14 +452,14 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/pilots_api.py:4377` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
-| `gui/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
-| `gui/panels/ai_control_center.py:189` | `getattr(settings, sel_key, 'none')` |
-| `gui/panels/settings_manager.py:190` | `getattr(settings, key, fallback)` |
-| `gui/panels/settings_manager.py:207` | `getattr(settings, key, '')` |
-| `gui/panels/settings_manager.py:275` | `getattr(settings, key, [])` |
+| `legacy/streamlit_command_center/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
+| `legacy/streamlit_command_center/panels/ai_control_center.py:189` | `getattr(settings, sel_key, 'none')` |
+| `legacy/streamlit_command_center/panels/settings_manager.py:190` | `getattr(settings, key, fallback)` |
+| `legacy/streamlit_command_center/panels/settings_manager.py:207` | `getattr(settings, key, '')` |
+| `legacy/streamlit_command_center/panels/settings_manager.py:275` | `getattr(settings, key, [])` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
-| `runtime_flags_writer.py:774` | `getattr(settings_module.settings, key, None)` |
-| `runtime_flags_writer.py:783` | `getattr(settings_module.settings, key, None)` |
+| `runtime_flags_writer.py:773` | `getattr(settings_module.settings, key, None)` |
+| `runtime_flags_writer.py:782` | `getattr(settings_module.settings, key, None)` |
 
 ### Fields read via `os.environ` (form d) — 2 field(s)
 

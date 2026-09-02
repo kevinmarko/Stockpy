@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gui.panels.pairs import _signal_label, _align_closes
+from legacy.streamlit_command_center.panels.pairs import _signal_label, _align_closes
 
 
 # ── _signal_label — the current-state translator ─────────────────────────────
@@ -71,7 +71,7 @@ def test_align_closes_empty_input_safe():
 def test_pairs_panel_has_no_order_functions():
     """The Pairs tab is advisory display only — it must define no order/
     execution functions (mirrors the repo's no-order-functions guard)."""
-    src = Path("gui/panels/pairs.py").read_text(encoding="utf-8")
+    src = Path("legacy/streamlit_command_center/panels/pairs.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     banned_exact = {
         "submit_order", "buy_order", "sell_order", "place_order",

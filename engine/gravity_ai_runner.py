@@ -110,8 +110,8 @@ _STEP_FILE_MAP: Dict[int, Tuple[str, ...]] = {
         "llm/schemas.py",
         "engine/advisory.py",
         # Criterion 8.5 asks the auditor to verify OPENAI_API_KEY is
-        # SECRET_KEYS-only — the SECRET_KEYS tuple lives in gui/env_io.py.
-        "gui/env_io.py",
+        # SECRET_KEYS-only — the SECRET_KEYS tuple lives in shared/env_io.py.
+        "shared/env_io.py",
     ),
 }
 

@@ -1,13 +1,13 @@
 """
 tests/test_run_mode.py
 ========================
-Unit tests for :mod:`gui.run_mode`.
+Unit tests for :mod:`shared.run_mode`.
 
 All tests are Streamlit-free and fully offline.
 
 Verified invariants
 -------------------
-*   ``gui.run_mode`` is importable.
+*   ``shared.run_mode`` is importable.
 *   ``RunModeState`` is a frozen dataclass.
 *   ``read_active_run_mode({})`` returns ``process="idle"``.
 *   Active run handle → ``process="running"``.
@@ -36,15 +36,15 @@ import pytest
 # ===========================================================================
 
 def test_module_importable():
-    from gui import run_mode  # noqa: F401
+    from shared import run_mode  # noqa: F401
 
 
 def test_run_mode_state_importable():
-    from gui.run_mode import RunModeState  # noqa: F401
+    from shared.run_mode import RunModeState  # noqa: F401
 
 
 def test_read_active_run_mode_importable():
-    from gui.run_mode import read_active_run_mode  # noqa: F401
+    from shared.run_mode import read_active_run_mode  # noqa: F401
 
 
 # ===========================================================================
@@ -52,7 +52,7 @@ def test_read_active_run_mode_importable():
 # ===========================================================================
 
 def test_run_mode_state_frozen():
-    from gui.run_mode import RunModeState
+    from shared.run_mode import RunModeState
 
     state = RunModeState(
         mode="Simulation",
@@ -80,9 +80,9 @@ def _mock_settings(dry_run: bool, alpaca_paper: bool):
 
 
 def test_empty_session_state_is_idle():
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
-    with mock.patch("gui.run_mode._s", _mock_settings(True, True), create=True), \
+    with mock.patch("shared.run_mode._s", _mock_settings(True, True), create=True), \
          mock.patch("settings.settings", _mock_settings(True, True)):
         state = read_active_run_mode(session_state={})
 
@@ -91,7 +91,7 @@ def test_empty_session_state_is_idle():
 
 
 def test_running_handle_process():
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
     handle = mock.MagicMock()
     handle.is_running.return_value = True
@@ -106,7 +106,7 @@ def test_running_handle_process():
 
 
 def test_finished_handle_process():
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
     handle = mock.MagicMock()
     handle.is_running.return_value = False
@@ -130,7 +130,7 @@ def test_finished_handle_process():
     (False, False, "Live"),
 ])
 def test_mode_derivation(dry_run, alpaca_paper, expected_mode):
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
     with mock.patch("settings.settings", _mock_settings(dry_run, alpaca_paper)):
         state = read_active_run_mode(session_state={})
@@ -148,7 +148,7 @@ def test_mode_derivation(dry_run, alpaca_paper, expected_mode):
 # ===========================================================================
 
 def test_icon_non_empty():
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
     with mock.patch("settings.settings", _mock_settings(True, True)):
         state = read_active_run_mode({})
@@ -157,7 +157,7 @@ def test_icon_non_empty():
 
 
 def test_color_non_empty():
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
     with mock.patch("settings.settings", _mock_settings(False, True)):
         state = read_active_run_mode({})
@@ -166,7 +166,7 @@ def test_color_non_empty():
 
 
 def test_label_contains_mode():
-    from gui.run_mode import read_active_run_mode
+    from shared.run_mode import read_active_run_mode
 
     with mock.patch("settings.settings", _mock_settings(False, False)):
         state = read_active_run_mode({})
@@ -180,5 +180,5 @@ def test_label_contains_mode():
 # ===========================================================================
 
 def test_app_imports_run_mode():
-    app_src = Path("gui/app.py").read_text(encoding="utf-8")
-    assert "run_mode" in app_src, "gui/app.py must import or reference gui.run_mode"
+    app_src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
+    assert "run_mode" in app_src, "gui/app.py must import or reference shared.run_mode"

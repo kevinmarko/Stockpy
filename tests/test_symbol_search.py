@@ -1,7 +1,7 @@
 """
 tests/test_symbol_search.py
 =============================
-Unit tests for :func:`gui.symbol_search.filter_by_symbol`.
+Unit tests for :func:`shared.symbol_search.filter_by_symbol`.
 
 All tests are fully offline and Streamlit-free.
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from gui.symbol_search import filter_by_symbol
+from shared.symbol_search import filter_by_symbol
 
 
 def _df(*symbols: str | None) -> pd.DataFrame:

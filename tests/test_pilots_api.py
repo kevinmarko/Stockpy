@@ -598,7 +598,7 @@ def test_thresholds_shape_and_live_values(monkeypatch):
         PBO_MAX,
         STRESS_MAX_DRAWDOWN,
     )
-    from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+    from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
     resp = client.get("/thresholds")
     assert resp.status_code == 200
@@ -1227,7 +1227,7 @@ class TestPortfolioAttribution:
         (unset) before each test so this class's outcome doesn't depend on
         this machine's local .env, matching a fresh clone. Should be
         superseded once conftest.py's per-test settings reset is extended to
-        cover secret string fields too (see gui.env_io.SECRET_KEYS) -- kept
+        cover secret string fields too (see shared.env_io.SECRET_KEYS) -- kept
         local here per this task's scoping rules (conftest.py is out of
         bounds -- other agents own classes in the same file)."""
         monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
@@ -1638,7 +1638,7 @@ class TestModelsRegistry:
         MODEL_RETRAIN_WINDOW_DAYS constant GET /thresholds' retrain_window_days
         surfaces -- never independently re-derived/hard-coded in either place."""
         from datetime import date, datetime
-        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+        from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
         with mock.patch.object(settings, "STATE_API_TOKEN", ""):
             resp = client.get("/models")
@@ -2028,7 +2028,7 @@ class TestObservabilityLogs:
         # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
         # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+            with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
                 resp = client.get("/observability/logs")
         assert resp.status_code == 200
         body = resp.json()
@@ -2045,7 +2045,7 @@ class TestObservabilityLogs:
             encoding="utf-8",
         )
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
                 resp = client.get("/observability/logs")
         assert resp.status_code == 200
         body = resp.json()
@@ -2063,7 +2063,7 @@ class TestObservabilityLogs:
         ]
         log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
                 resp = client.get("/observability/logs?limit=2")
         assert resp.status_code == 200
         body = resp.json()
@@ -2081,7 +2081,7 @@ class TestObservabilityLogs:
     def test_read_token_gates_endpoint(self, tmp_path):
         missing = tmp_path / "investyo.log"
         with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
-            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+            with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
                 no_auth = client.get("/observability/logs")
                 wrong = client.get(
                     "/observability/logs", headers={"Authorization": "Bearer WRONG"}
@@ -2136,7 +2136,7 @@ def test_pilots_api_never_imports_heavy_engines():
     would otherwise pass while smuggling `main_orchestrator` in behind it).
     The Data & Automation feature (api/pilots_api.py's GET /automation/status)
     reaches the orchestrator daemon ONLY over loopback HTTP via
-    gui.daemon_client — never by importing the daemon object directly via
+    shared.daemon_client — never by importing the daemon object directly via
     api.control_api.get_daemon(), which only works in the single co-hosted
     deployment shape (PILOTS_API_ENABLED=True) and not the documented
     standalone one. See gui/daemon_client.py's module docstring."""
@@ -2165,17 +2165,19 @@ def test_pilots_api_never_imports_heavy_engines():
 
 
 def test_gui_package_init_stays_import_inert():
-    """api/pilots_api.py imports gui.daemon_client (GET /automation/status'
+    """api/pilots_api.py imports shared.daemon_client (GET /automation/status'
     only path to the orchestrator daemon — see the guard test above), which
-    executes gui/__init__.py as a side effect of the import. That file is
-    docstring + `__all__` (a list of strings) only today, so the import is
-    inert. If anyone ever adds a real import to gui/__init__.py, the Pilots
-    API would silently inherit it — this test pins that gui/__init__.py stays
-    free of any actual import statement, so such a change fails loudly here
-    instead of surfacing as an unexplained pilots_api import-time side effect."""
-    import gui
+    executes shared/__init__.py as a side effect of the import (was
+    gui/__init__.py before the gui/ -> shared/ + legacy/streamlit_command_center/
+    split). That file is docstring + `__all__` (a list of strings) only today,
+    so the import is inert. If anyone ever adds a real import to
+    shared/__init__.py, the Pilots API would silently inherit it — this test
+    pins that shared/__init__.py stays free of any actual import statement,
+    so such a change fails loudly here instead of surfacing as an unexplained
+    pilots_api import-time side effect."""
+    import shared
 
-    tree = ast.parse(pathlib.Path(gui.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(pathlib.Path(shared.__file__).read_text(encoding="utf-8"))
     real_imports = [
         node
         for node in ast.walk(tree)
@@ -2183,15 +2185,15 @@ def test_gui_package_init_stays_import_inert():
         and getattr(node, "module", None) != "__future__"
     ]
     assert not real_imports, (
-        f"gui/__init__.py must stay import-inert (found: {real_imports}) — "
-        "api/pilots_api.py imports gui.daemon_client and would silently "
+        f"shared/__init__.py must stay import-inert (found: {real_imports}) — "
+        "api/pilots_api.py imports shared.daemon_client and would silently "
         "inherit any real import added here."
     )
 
 
 # ---------------------------------------------------------------------------
 # GET /automation/status — the "did the pipeline run?" composite endpoint.
-# gui.daemon_client and execution.kill_switch.GlobalKillSwitch are both
+# shared.daemon_client and execution.kill_switch.GlobalKillSwitch are both
 # module-top imports on pilots_api, so both are mock.patch.object-able here.
 # ---------------------------------------------------------------------------
 
@@ -2726,7 +2728,7 @@ class TestAutomationSchedule:
 
 
 def _trigger_response(**overrides):
-    from gui.daemon_client import TriggerResponse
+    from shared.daemon_client import TriggerResponse
 
     base = dict(ok=True, run_id="orch-1", state="queued", error=None,
                 existing_run_id=None, kill_switch_reason=None)
@@ -2983,7 +2985,7 @@ class TestAutomationResume:
 
 
 def _interval_response(**overrides):
-    from gui.daemon_client import IntervalResponse
+    from shared.daemon_client import IntervalResponse
 
     base = dict(ok=False, interval_seconds=None, error="network_error")
     base.update(overrides)
@@ -3177,7 +3179,7 @@ class TestAutomationWritesInvariants:
 
 class TestExecutionModeWrite:
     """PUT /automation/execution-mode -- 1-Click Go Live toggle. Tests stub
-    ``gui.strategy_registry.set_active_mode`` (its own DRY_RUN/ALPACA_PAPER
+    ``shared.strategy_registry.set_active_mode`` (its own DRY_RUN/ALPACA_PAPER
     writes are covered by that module's own tests) and redirect
     ``env_io.ENV_PATH`` at a scratch file for the ADVISORY_ONLY write, mirroring
     ``TestAutomationIntervalWrite``.
@@ -3194,7 +3196,7 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
                     with mock.patch(
-                        "gui.strategy_registry.set_active_mode"
+                        "shared.strategy_registry.set_active_mode"
                     ) as mock_set_mode:
                         resp = client.put(
                             "/automation/execution-mode",
@@ -3227,7 +3229,7 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
                     with mock.patch(
-                        "gui.strategy_registry.set_active_mode"
+                        "shared.strategy_registry.set_active_mode"
                     ) as mock_set_mode:
                         resp = client.put(
                             "/automation/execution-mode",
@@ -3252,7 +3254,7 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(settings, "ADVISORY_ONLY", True):
                     with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                        with mock.patch("gui.strategy_registry.set_active_mode"):
+                        with mock.patch("shared.strategy_registry.set_active_mode"):
                             resp = client.put(
                                 "/automation/execution-mode",
                                 json={
@@ -3355,7 +3357,7 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                     with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                        with mock.patch("gui.strategy_registry.set_active_mode"):
+                        with mock.patch("shared.strategy_registry.set_active_mode"):
                             client.put(
                                 "/automation/execution-mode",
                                 json={
@@ -3389,7 +3391,7 @@ class TestExecutionModeConfirmation:
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                    with mock.patch("gui.strategy_registry.set_active_mode") as mocked:
+                    with mock.patch("shared.strategy_registry.set_active_mode") as mocked:
                         resp = client.put(
                             "/automation/execution-mode",
                             json=payload,
@@ -4190,7 +4192,7 @@ class TestLlmStatus:
 
 
 def test_engine_package_init_stays_import_inert():
-    """api/pilots_api.py imports gui.ai_control_center, whose
+    """api/pilots_api.py imports shared.ai_control_center, whose
     control_center_overview() calls importlib.util.find_spec on the backing
     modules -- including ``engine.gravity_ai_runner``, which imports the
     ``engine`` PACKAGE (executing engine/__init__.py) at runtime.
@@ -4215,7 +4217,7 @@ def test_engine_package_init_stays_import_inert():
     ]
     assert not real_imports, (
         f"engine/__init__.py must stay import-inert (found: {real_imports}) — "
-        "gui.ai_control_center.control_center_overview find_spec's engine.* and "
+        "shared.ai_control_center.control_center_overview find_spec's engine.* and "
         "would pull any real import here into api/pilots_api.py at status time."
     )
 
@@ -4246,7 +4248,7 @@ def test_control_center_overview_end_to_end_leaks_no_heavy_engine():
     """Stronger than test_engine_package_init_stays_import_inert (which only
     proves engine/__init__.py's SOURCE is currently empty): this actually
     DRIVES the runtime path GET /llm/status exercises —
-    gui.ai_control_center.control_center_overview() —> _module_available() —>
+    shared.ai_control_center.control_center_overview() —> _module_available() —>
     importlib.util.find_spec("engine.gravity_ai_runner") —> imports the
     `engine` package as a side effect — and confirms none of the four
     deny-listed heavy engines (processing_engine / forecasting_engine /
@@ -4260,7 +4262,7 @@ def test_control_center_overview_end_to_end_leaks_no_heavy_engine():
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
     code = (
-        "from gui.ai_control_center import control_center_overview;"
+        "from shared.ai_control_center import control_center_overview;"
         "from settings import settings;"
         "control_center_overview(settings);"  # the exact call GET /llm/status makes
         "import sys;"
@@ -4321,7 +4323,7 @@ class TestCalibrationSummaryEndpoint:
                         return_value=_EMPTY_TRACKING_REPORT,
                     ):
                         with mock.patch(
-                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                            "shared.decision_log.decisions_df", return_value=pd.DataFrame()
                         ):
                             resp = client.get("/calibration/summary")
 
@@ -4355,7 +4357,7 @@ class TestCalibrationSummaryEndpoint:
                         return_value=_EMPTY_TRACKING_REPORT,
                     ):
                         with mock.patch(
-                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                            "shared.decision_log.decisions_df", return_value=pd.DataFrame()
                         ):
                             resp = client.get("/calibration/summary")
 
@@ -4377,7 +4379,7 @@ class TestCalibrationSummaryEndpoint:
                         return_value={**_EMPTY_TRACKING_REPORT, "horizon_days": 60},
                     ) as mock_report:
                         with mock.patch(
-                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                            "shared.decision_log.decisions_df", return_value=pd.DataFrame()
                         ):
                             resp = client.get("/calibration/summary?horizon=60")
 
@@ -4405,7 +4407,7 @@ class TestCalibrationSummaryEndpoint:
                         return_value=_EMPTY_TRACKING_REPORT,
                     ):
                         with mock.patch(
-                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                            "shared.decision_log.decisions_df", return_value=pd.DataFrame()
                         ):
                             no_auth = client.get("/calibration/summary")
                             ok = client.get(
@@ -4639,7 +4641,7 @@ class TestDecisionsRead:
         degrade to [], never a 500 (CONSTRAINT #6)."""
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             with mock.patch(
-                "gui.decision_log.read_decisions", side_effect=OSError("boom")
+                "shared.decision_log.read_decisions", side_effect=OSError("boom")
             ):
                 resp = client.get("/decisions")
         assert resp.status_code == 200
@@ -4669,7 +4671,7 @@ def _fake_queue_snapshot(**overrides):
     see gui/robinhood_execution_panel.py's module-top EXECUTION_QUEUE_PATH)."""
     from datetime import datetime, timezone
 
-    from gui.robinhood_execution_panel import ExecutionQueueSnapshot
+    from shared.robinhood_execution_panel import ExecutionQueueSnapshot
 
     base = dict(
         generated_at=datetime.now(timezone.utc).isoformat(),

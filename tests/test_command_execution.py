@@ -12,7 +12,7 @@ verbatim), not against the in-progress implementation:
 *   ``settings.COMMAND_EXECUTION_ENABLED`` (default ``False``) gates the new
     job type on top of the existing ``JOBS_API_ENABLED`` +
     ``ORCHESTRATOR_DAEMON_TOKEN`` guard already on ``POST /jobs``.
-*   ``gui.orchestrator_runner.launch_manifest_command(job_id, command_name,
+*   ``shared.orchestrator_runner.launch_manifest_command(job_id, command_name,
     subcommand_name, args, *, confirm=False) -> RunHandle`` resolves the
     target via ``pilots.commands.resolve_command`` (lazy-imported), refuses
     ``DISALLOWED_EXECUTE_COMMANDS`` (``app_shell.py``) and unresolvable
@@ -53,7 +53,7 @@ from fastapi.testclient import TestClient
 from settings import settings
 import api.control_api as control_api
 import api._jobs as jobs_module
-import gui.orchestrator_runner as orchestrator_runner
+import shared.orchestrator_runner as orchestrator_runner
 
 # Starlette's TestClient defaults request.client.host to the literal string
 # "testclient" -- NOT loopback -- which would trip the command-token guard's
@@ -487,7 +487,7 @@ def test_same_resolved_command_run_twice_while_running_is_409(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Direct unit tests against gui.orchestrator_runner.launch_manifest_command
+# Direct unit tests against shared.orchestrator_runner.launch_manifest_command
 # --------------------------------------------------------------------------- #
 # Cleaner than going through the HTTP layer for precise argv-construction and
 # raise-message assertions -- mirrors tests/test_orchestrator_runner.py's

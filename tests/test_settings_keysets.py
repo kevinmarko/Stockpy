@@ -60,7 +60,7 @@ import pytest
 
 import settings_keysets as ks
 from settings import Settings
-import gui.env_io as env_io
+import shared.env_io as env_io
 import api.pilots_api as pilots_api
 
 # Keep all tests in this file on a single xdist worker so the class-scoped
@@ -168,7 +168,7 @@ class TestModuleIsADependencyFreeLeaf:
         assert not offending, (
             "settings_keysets.py must import nothing but __future__ — it is a leaf "
             "that runtime_flags.py (itself imported by settings.py) will import, so "
-            "any import of settings/gui.env_io/third-party here becomes an import "
+            "any import of settings/shared.env_io/third-party here becomes an import "
             f"cycle or a hard dependency at settings-import time. Found: {offending}"
         )
 
@@ -476,6 +476,6 @@ class TestDangerousKeysAlreadyExposedByShippedEditors:
         assert not exposed, (
             f"A pilots_api editor now exposes hand-set-only field(s) {exposed}, "
             f"which settings.py explicitly marks as never GUI-writable. This "
-            f"contradicts gui/env_io.py's EXCLUDED_FROM_GUI classification — treat "
+            f"contradicts shared/env_io.py's EXCLUDED_FROM_GUI classification — treat "
             f"as a security regression, not a test to update."
         )

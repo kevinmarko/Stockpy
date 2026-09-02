@@ -46,10 +46,10 @@ def _noop_cm(*args: Any, **kwargs: Any):
 
 class TestImport:
     def test_module_importable(self) -> None:
-        import gui.help_widgets  # noqa: F401
+        import shared.help_widgets  # noqa: F401
 
     def test_all_public_functions_callable(self) -> None:
-        from gui.help_widgets import (
+        from shared.help_widgets import (
             explain,
             glossary_chip,
             help_expander,
@@ -78,7 +78,7 @@ class TestExplain:
         monkeypatch.setattr("streamlit.expander", fake_expander)
         monkeypatch.setattr("streamlit.markdown", lambda t, **kw: markdowns.append(t))
 
-        from gui.help_widgets import explain
+        from shared.help_widgets import explain
         explain("launcher")
 
         assert len(expander_titles) == 1, "expander should be called once"
@@ -96,7 +96,7 @@ class TestExplain:
         monkeypatch.setattr("streamlit.expander", fake_expander)
         monkeypatch.setattr("streamlit.markdown", lambda t, **kw: None)
 
-        from gui.help_widgets import explain
+        from shared.help_widgets import explain
         explain("reports", expanded=True)
 
         assert expanded_values == [True]
@@ -111,7 +111,7 @@ class TestExplain:
 
         monkeypatch.setattr("streamlit.expander", fake_expander)
 
-        from gui.help_widgets import explain
+        from shared.help_widgets import explain
         explain("tab_id_that_does_not_exist_xyz")
 
         assert expander_calls == [], "expander must NOT be opened for an unknown tab"
@@ -119,7 +119,7 @@ class TestExplain:
     def test_unknown_tab_never_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("streamlit.expander", _noop_cm)
 
-        from gui.help_widgets import explain
+        from shared.help_widgets import explain
         explain("zzz_totally_unknown_tab")  # must not raise
 
 
@@ -137,7 +137,7 @@ class TestMetricWithHelp:
 
         monkeypatch.setattr("streamlit.metric", fake_metric)
 
-        from gui.help_widgets import metric_with_help
+        from shared.help_widgets import metric_with_help
         metric_with_help("Kelly Target", 0.14, "Kelly Target")
 
         assert "help" in captured, "help= kwarg should be forwarded"
@@ -152,7 +152,7 @@ class TestMetricWithHelp:
 
         monkeypatch.setattr("streamlit.metric", fake_metric)
 
-        from gui.help_widgets import metric_with_help
+        from shared.help_widgets import metric_with_help
         metric_with_help("Mystery", 42, "zzz_no_such_metric_key")
 
         assert captured.get("help") is None, "unknown key should yield help=None"
@@ -165,7 +165,7 @@ class TestMetricWithHelp:
 
         monkeypatch.setattr("streamlit.metric", fake_metric)
 
-        from gui.help_widgets import metric_with_help
+        from shared.help_widgets import metric_with_help
         metric_with_help("Label", 1, "zzz_unknown", delta=0.5)
 
         assert captured.get("delta") == 0.5, "extra kwargs must be forwarded to st.metric"
@@ -189,7 +189,7 @@ class TestHelpExpander:
         monkeypatch.setattr("streamlit.expander", fake_expander)
         monkeypatch.setattr("streamlit.markdown", lambda t, **kw: markdowns.append(t))
 
-        from gui.help_widgets import help_expander
+        from shared.help_widgets import help_expander
         help_expander("Calibration Help", "Here is what calibration means.")
 
         assert titles == ["Calibration Help"]
@@ -205,7 +205,7 @@ class TestHelpExpander:
 
         monkeypatch.setattr("streamlit.expander", fake_expander)
 
-        from gui.help_widgets import help_expander
+        from shared.help_widgets import help_expander
         help_expander("Title", "")
 
         assert titles == [], "empty body must not open expander"
@@ -220,7 +220,7 @@ class TestHelpExpander:
 
         monkeypatch.setattr("streamlit.expander", fake_expander)
 
-        from gui.help_widgets import help_expander
+        from shared.help_widgets import help_expander
         help_expander("Title", None)
 
         assert titles == [], "None body must not open expander"
@@ -242,7 +242,7 @@ class TestGlossaryChip:
         monkeypatch.setattr("streamlit.popover", fake_popover)
         monkeypatch.setattr("streamlit.caption", lambda t: captions.append(t))
 
-        from gui.help_widgets import glossary_chip
+        from shared.help_widgets import glossary_chip
         glossary_chip("VIX")
 
         assert len(captions) == 1, "plain_english should be rendered inside the popover"
@@ -257,7 +257,7 @@ class TestGlossaryChip:
 
         monkeypatch.setattr("streamlit.popover", fake_popover)
 
-        from gui.help_widgets import glossary_chip
+        from shared.help_widgets import glossary_chip
         glossary_chip("zzz_nonexistent_term_xyz")
 
         assert popovers == [], "popover must NOT be opened for an unknown term"
@@ -266,7 +266,7 @@ class TestGlossaryChip:
         monkeypatch.setattr("streamlit.popover", _noop_cm)
         monkeypatch.setattr("streamlit.caption", lambda t: None)
 
-        from gui.help_widgets import glossary_chip
+        from shared.help_widgets import glossary_chip
         glossary_chip("totally_made_up_no_match_term")  # must not raise
 
 
@@ -280,7 +280,7 @@ class TestWhyCallout:
         infos: list[str] = []
         monkeypatch.setattr("streamlit.info", lambda t: infos.append(t))
 
-        from gui.help_widgets import why_callout
+        from shared.help_widgets import why_callout
         why_callout("The VIX spiked above 30 — macro soft gate applied.")
 
         assert len(infos) == 1
@@ -290,7 +290,7 @@ class TestWhyCallout:
         infos: list[str] = []
         monkeypatch.setattr("streamlit.info", lambda t: infos.append(t))
 
-        from gui.help_widgets import why_callout
+        from shared.help_widgets import why_callout
         why_callout("")
 
         assert infos == [], "empty string must not call st.info"
@@ -299,7 +299,7 @@ class TestWhyCallout:
         infos: list[str] = []
         monkeypatch.setattr("streamlit.info", lambda t: infos.append(t))
 
-        from gui.help_widgets import why_callout
+        from shared.help_widgets import why_callout
         why_callout(None)
 
         assert infos == [], "None must not call st.info"

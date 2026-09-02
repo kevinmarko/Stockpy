@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-01T21:20:07.697554+00:00",
-  "command_count": 18,
+  "generated_at": "2026-09-01T23:18:44.633981+00:00",
+  "command_count": 17,
   "dead_letters": [],
   "commands": [
     {
@@ -119,29 +119,6 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": false
-        }
-      ],
-      "positionals": [],
-      "subcommands": []
-    },
-    {
-      "name": "app_shell.py",
-      "invocation": "python3 app_shell.py",
-      "aliases": [],
-      "description": "InvestYo native desktop supervisor (UI server + advisory engine loop).",
-      "options": [
-        {
-          "name": "--interval",
-          "aliases": [
-            "--interval"
-          ],
-          "description": "Advisory engine refresh cadence in seconds (default: 300).",
-          "default": 300,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": true
         }
       ],
       "positionals": [],
@@ -763,7 +740,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/multi-agent-test-review-d5896d/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/investyo-command-center-cleanup-e9cd33/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -799,7 +776,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/multi-agent-test-review-d5896d/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/investyo-command-center-cleanup-e9cd33/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",

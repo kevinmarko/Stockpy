@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from settings import settings
 import api.pilots_api as pilots_api
-from gui.env_io import DisallowedKeyError, SecretWriteError
+from shared.env_io import DisallowedKeyError, SecretWriteError
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -205,7 +205,7 @@ class TestLlmSettingWriteStringBooleanCoercion:
 class TestLlmSettingWriteLivePatch:
     """The whole point of this endpoint over a plain .env write: every key it
     validates against is read fresh via getattr(settings, ...) on each use
-    (never cached — see gui.ai_control_center.LIVE_PATCHABLE_KEYS), so a
+    (never cached — see shared.ai_control_center.LIVE_PATCHABLE_KEYS), so a
     successful write also setattr's the running settings singleton directly.
     Regression coverage for the "toggle writes but GET /llm/status still
     reports the old value" bug — the write landed in .env, but every reader
@@ -314,9 +314,9 @@ class TestLlmSettingWriteValidation:
 
     def test_validate_toggle_write_errors_are_env_io_classes(self):
         """Sanity: the exception classes the endpoint catches are literally the
-        ones gui.ai_control_center.validate_toggle_write raises (not a
+        ones shared.ai_control_center.validate_toggle_write raises (not a
         lookalike defined elsewhere)."""
-        from gui.ai_control_center import validate_toggle_write
+        from shared.ai_control_center import validate_toggle_write
 
         with pytest.raises(SecretWriteError):
             validate_toggle_write("ANTHROPIC_API_KEY")

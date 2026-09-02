@@ -115,4 +115,4 @@ echo "     Close this window (or press Ctrl+C) to stop."
 echo ""
 
 # ── Launch the Streamlit Command Center ───────────────────────────────────────
-streamlit run gui/app.py
+streamlit run legacy/streamlit_command_center/app.py

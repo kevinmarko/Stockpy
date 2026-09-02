@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from gui.observability_telemetry import (
+from shared.observability_telemetry import (
     HeartbeatSample,
     HeartbeatTrendStore,
     LogEntry,

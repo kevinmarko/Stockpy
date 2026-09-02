@@ -222,14 +222,14 @@ from data.market_data import MarketDataError, get_provider
 from execution.kill_switch import GlobalKillSwitch
 
 # The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
-# orchestrator daemon ONLY over loopback HTTP via gui.daemon_client — never by
+# orchestrator daemon ONLY over loopback HTTP via shared.daemon_client — never by
 # importing the daemon object directly (api.control_api.get_daemon() only
 # works in the single co-hosted-process deployment shape, not the documented
 # standalone one; see gui/daemon_client.py's module docstring). ``desktop.*``
 # is a forbidden import for this module (see this file's AST guard test)
 # precisely because it would pull main_orchestrator in transitively. Imported
 # at module top, aliased, so tests can ``mock.patch.object(pilots_api, "daemon_client", ...)``.
-import gui.daemon_client as daemon_client
+import shared.daemon_client as daemon_client
 # The interval WRITE (PUT /automation/schedule/interval) goes through the same
 # allowlist-bounded .env writer the GUI Settings tab uses — NOT a bespoke file
 # write — so it inherits the exact same ALLOWED_KEYS/SECRET_KEYS enforcement
@@ -239,7 +239,7 @@ import gui.daemon_client as daemon_client
 # business living inside the decommissioned gui/ package) has imports that
 # are stdlib + dotenv only (see this file's gui-import-inertness test's
 # sibling reasoning).
-import env_io
+import shared.env_io as env_io
 from reporting.progress import read_progress
 
 # Brokerage-connect credential intake — read-only verification + the dedicated,
@@ -271,7 +271,7 @@ import api._rh_login as rh_login
 # `mock.patch.object(pilots_api, "forecast_backfill_job", ...)`.
 import ml.forecast_backfill_job as forecast_backfill_job
 
-# LLM configuration status (GET /llm/status). `gui.ai_control_center` is
+# LLM configuration status (GET /llm/status). `shared.ai_control_center` is
 # stdlib-only + Streamlit-free (the headless status logic); `llm.status_store`
 # is a leaf module that imports no SDK. Neither is on the AST-guard deny-list.
 # NOTE: control_center_overview() calls importlib.util.find_spec on the backing
@@ -279,18 +279,18 @@ import ml.forecast_backfill_job as forecast_backfill_job
 # — kept import-inert by tests precisely so this stays safe (see the
 # test_engine_package_init_stays_import_inert guard). Imported at module top so
 # tests can `mock.patch.object(pilots_api, ...)`.
-import gui.ai_control_center as ai_control_center
+import shared.ai_control_center as ai_control_center
 import llm.status_store as llm_status_store
 
-# AI Gravity audit runner READ side (GET /gravity/audit-status). `gui.gravity_ai_panel`
+# AI Gravity audit runner READ side (GET /gravity/audit-status). `shared.gravity_ai_panel`
 # is Streamlit-free + dependency-light by design (json/logging/dataclasses/pathlib/
 # typing at module top; `settings` imported lazily inside each function) — the SAME
-# reasoning as `gui.ai_control_center` above, so it's imported directly here rather
+# reasoning as `shared.ai_control_center` above, so it's imported directly here rather
 # than duplicated under `pilots/`. It never constructs a provider or makes a network
 # call; it only reads `output/gravity_ai_audit.json` (written by a separate, opt-in
 # CLI/GUI-triggered run — this API exposes no trigger for it, see the endpoint's own
 # docstring). Imported at module top so tests can `mock.patch.object(pilots_api, ...)`.
-import gui.gravity_ai_panel as gravity_ai_panel
+import shared.gravity_ai_panel as gravity_ai_panel
 
 # Robinhood execution-queue READ side (GET /execution-queue). Reuses the
 # existing Streamlit-free, dependency-light reader the GUI Launcher tab already
@@ -301,7 +301,7 @@ import gui.gravity_ai_panel as gravity_ai_panel
 # module docstring: a live Claude Code agent session is the ONLY actor that
 # ever calls the MCP place_equity_order tool. Imported at module top so tests
 # can `mock.patch.object(pilots_api, "execution_panel", ...)`.
-import gui.robinhood_execution_panel as execution_panel
+import shared.robinhood_execution_panel as execution_panel
 
 # Portfolio-aware RAG query (POST /rag/query). agents/rag_orchestrator.py's
 # own optional heavy deps (langgraph, qdrant_client, sentence-transformers)
@@ -895,10 +895,10 @@ class LlmSettingUpdateRequest(BaseModel):
     ``LLM_COMMENTARY_RATIONALE_PROVIDER`` -> ``"claude"``/``"gemini"``/``"none"``).
     Unlike ``PUT /strategy/modules`` this is NOT a multi-key atomic write — each
     AI-capability toggle/selector is an independent scalar, so
-    ``gui.env_io.write_setting`` (single-key) is the right primitive, not
+    ``shared.env_io.write_setting`` (single-key) is the right primitive, not
     ``write_many_atomic``. ``key`` is validated against
-    ``gui.ai_control_center.validate_toggle_write`` (CONSTRAINT #3: secret keys
-    are rejected, as is any key outside ``gui.env_io.ALLOWED_KEYS``) before the
+    ``shared.ai_control_center.validate_toggle_write`` (CONSTRAINT #3: secret keys
+    are rejected, as is any key outside ``shared.env_io.ALLOWED_KEYS``) before the
     write is attempted."""
 
     key: str = Field(..., min_length=1)
@@ -1836,10 +1836,10 @@ def get_observability_summary(
     dashboard — severity-classified, 24h-deduped trips with
     threshold/observed values and a counts-by-severity KPI strip, ported from
     ``gui/panels/gravity_audit.py::_render_circuit_breaker_dashboard`` via
-    ``gui.circuit_breakers`` (see ``pilots/observability.py
+    ``shared.circuit_breakers`` (see ``pilots/observability.py
     ::circuit_breaker_summary`` — no new endpoint, this rides the existing
     composite), host/process **system telemetry** (CPU/memory/disk
-    %, load average, process RSS/CPU%/threads) via ``gui.observability_telemetry
+    %, load average, process RSS/CPU%/threads) via ``shared.observability_telemetry
     .collect_system_telemetry`` (see ``pilots/observability.py
     ::system_telemetry_summary`` — also rides the existing composite, since
     it's a cheap, scalar-only, point-in-time sample), the per-symbol **data
@@ -1853,7 +1853,7 @@ def get_observability_summary(
     cap-event audit trail** (``sizing_cap_audit``, reusing ``sizing
     .cap_audit_store.CapAuditStore`` directly), the **ETF volatility
     transmission** per-symbol diagnostic view (``etf_transmission``, reusing
-    ``gui.observability_panel_helpers.etf_transmission_rows`` directly), the
+    ``shared.observability_panel_helpers.etf_transmission_rows`` directly), the
     CURRENT **heartbeat age** + freshness classification (``heartbeat`` —
     deliberately no trend/history; see ``pilots/observability.py
     ::heartbeat_summary``'s docstring for why the legacy Streamlit sparkline
@@ -1909,13 +1909,13 @@ def put_macro_gate(body: MacroGateUpdateRequest) -> Dict[str, Any]:
     credit-event BUY veto; see ``risk_gate.py`` and CLAUDE.md). This is the
     webapp port of the Streamlit Command Center's Observability tab toggle
     (``gui/panels/observability.py`` lines 131-195), which has written this
-    same key via ``gui.env_io.write_setting`` for a long time — this endpoint
+    same key via ``shared.env_io.write_setting`` for a long time — this endpoint
     is a NEW write path onto an EXISTING GUI-writable key, gated by its own
     dedicated ``MACRO_GATE_WRITES_ENABLED`` flag (see that flag's docstring in
     ``settings.py`` for why it is not allowed to ride in on any sibling
     writes-enabled flag).
 
-    Single-key ``.env``-ONLY write via ``gui.env_io.write_setting`` (does NOT
+    Single-key ``.env``-ONLY write via ``shared.env_io.write_setting`` (does NOT
     patch the running ``settings`` singleton), so ``applies`` is always
     ``"next_daemon_restart"`` and the echoed ``enabled`` reflects the REQUEST
     BODY, not ``settings`` (which would return the stale pre-write value and
@@ -2043,7 +2043,7 @@ def get_thresholds() -> Dict[str, float]:
 
     ``retrain_window_days`` backs the Models screen's "Needs Retrain" badge
     (webapp porting backlog rider 13b) — imported live from
-    ``gui.help_content.MODEL_RETRAIN_WINDOW_DAYS`` (the same constant
+    ``shared.help_content.MODEL_RETRAIN_WINDOW_DAYS`` (the same constant
     ``ml.meta_labeling.MetaLabeler.needs_retrain()`` uses), never re-typed as
     a literal, so ``Models.tsx``'s static explainer text can quote the window
     the same way it already quotes ``dsr_min``/``pbo_max``. ``GET /models``
@@ -2053,7 +2053,7 @@ def get_thresholds() -> Dict[str, float]:
 
     These are config constants, not persisted pipeline state — always
     available, no cold-start empty case, never 404s/500s."""
-    from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+    from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
     return {
         "pbo_max": PBO_MAX,
@@ -2351,8 +2351,8 @@ def get_gravity_audit_status() -> Dict[str, Any]:
       that live tail either.
 
     Both surfaces read only already-persisted artifacts:
-    ``output/gravity_ai_audit.json`` (via ``gui.gravity_ai_panel`` — Streamlit-
-    free by design, same posture as ``gui.ai_control_center`` above) and the
+    ``output/gravity_ai_audit.json`` (via ``shared.gravity_ai_panel`` — Streamlit-
+    free by design, same posture as ``shared.ai_control_center`` above) and the
     trailing JSON verdict in ``output/gravity_run.log`` (via
     ``pilots.gravity_audit.legacy_audit_status`` — see that module's docstring
     for why the log is durable across restarts, not merely Streamlit session
@@ -2436,11 +2436,11 @@ def get_decisions(
     ``[]``, never a 404 (CONSTRAINT #6). Distinct from ``GET /calibration/summary``'s
     bundled ``recent_decisions`` (a fixed-size portfolio-wide preview): this is
     the standalone, paginated, symbol-filterable read a symbol detail page
-    needs. ``gui.decision_log.read_decisions`` already tolerates a missing
+    needs. ``shared.decision_log.read_decisions`` already tolerates a missing
     file / corrupt lines internally; the ``try/except`` here is a second
     dead-letter layer for an unexpected read failure (e.g. a permissions
     error)."""
-    from gui.decision_log import read_decisions
+    from shared.decision_log import read_decisions
 
     try:
         entries = read_decisions(_decision_log_path())
@@ -2494,7 +2494,7 @@ def create_decision(body: DecisionCreateRequest) -> Dict[str, Any]:
             },
         )
 
-    from gui.decision_log import log_decision
+    from shared.decision_log import log_decision
     from transactions_store import TransactionsStore
 
     # READ-ONLY store — used only to link an "acted" decision to an existing
@@ -2637,7 +2637,7 @@ def get_agentic_status() -> Dict[str, Any]:
 
     Composes FOUR already-imported, dependency-light sources exactly like
     ``GET /automation/status`` does (no monolithic ``pilots/*.py`` helper
-    needed — each piece already has one): ``gui.robinhood_execution_panel``
+    needed — each piece already has one): ``shared.robinhood_execution_panel``
     for the gated execution queue, ``pilots.follows_store.FollowsStore`` for
     active Pilot follows, ``execution.kill_switch.GlobalKillSwitch`` for the
     kill switch, and ``pilots.agentic.agent_loop_status`` (the one piece with
@@ -3071,7 +3071,7 @@ def get_llm_status() -> Dict[str, Any]:
     writable = bool(settings.LLM_WRITES_ENABLED)
     return {
         "capabilities": rows,
-        "capabilities_source": "gui.ai_control_center.control_center_overview",
+        "capabilities_source": "shared.ai_control_center.control_center_overview",
         "providers": last_calls,
         "providers_source": "llm.status_store.read_all",
         "telemetry_note": llm_status_store.LLM_STATUS_ADVISORY_NOTE,
@@ -3103,7 +3103,7 @@ def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
     ``provider_selector_setting`` (str value) from ``GET /llm/status``'s
     ``capabilities`` rows — validated via
     ``ai_control_center.validate_toggle_write`` (CONSTRAINT #3: a secret key
-    is refused with 403, as is any key outside ``gui.env_io.ALLOWED_KEYS``)
+    is refused with 403, as is any key outside ``shared.env_io.ALLOWED_KEYS``)
     before ``env_io.write_setting`` performs the actual (re-validated) write.
 
     Unlike ``PUT /strategy/modules`` (a multi-key sizing/signal-weight write
@@ -3394,7 +3394,7 @@ def get_automation_status() -> Dict[str, Any]:
     Composes FIVE independent sources and NAMES which one supplied each field
     — the honesty contract this endpoint exists for:
 
-    * ``daemon`` — ``gui.daemon_client.get_status()`` (live, over loopback
+    * ``daemon`` — ``shared.daemon_client.get_status()`` (live, over loopback
       HTTP to the Control API) when reachable (``source: "control_api"``);
       falls back to ``output/daemon.json`` (written at daemon startup, and
       again with ``state: "stopped"`` at a graceful teardown) when it isn't
@@ -3413,7 +3413,7 @@ def get_automation_status() -> Dict[str, Any]:
       would promote an unverifiable self-report (which a SIGKILLed process
       can never correct) into the API response, reintroducing the exact
       staleness problem ``pid_alive`` exists to remove.
-    * ``last_run`` — ``gui.daemon_client.get_latest_run()``. ``None`` (with
+    * ``last_run`` — ``shared.daemon_client.get_latest_run()``. ``None`` (with
       ``last_run_source: "state_snapshot"``) when the daemon has never
       triggered a run this process lifetime (a fresh restart with an empty
       in-memory ring) — NOTHING is synthesized in that case; the caller must
@@ -3632,7 +3632,7 @@ _TRIGGER_ERROR_STATUS: Dict[str, int] = {
 @app.post("/automation/run", dependencies=[Depends(require_command_token)])
 def trigger_automation_run() -> JSONResponse:
     """Trigger an immediate pipeline cycle. Pure proxy over
-    ``gui.daemon_client.trigger_run()`` — no new orchestration logic here, all
+    ``shared.daemon_client.trigger_run()`` — no new orchestration logic here, all
     single-flight/kill-switch/auth enforcement already lives in
     ``desktop/daemon_runtime.py`` and ``api/control_api.py``.
 
@@ -3646,7 +3646,7 @@ def trigger_automation_run() -> JSONResponse:
 
     Requires the operator to have set BOTH ``FOLLOW_API_TOKEN`` (browser to
     this API) and ``ORCHESTRATOR_DAEMON_TOKEN`` (this API to the Control API,
-    read live by ``gui.daemon_client._auth_headers()``) — same host, same
+    read live by ``shared.daemon_client._auth_headers()``) — same host, same
     ``.env``."""
     result = daemon_client.trigger_run()
     if result.ok:
@@ -3729,10 +3729,10 @@ def resume_automation(body: ResumeRequest) -> Dict[str, Any]:
 )
 def set_automation_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
     """Write ``ORCHESTRATOR_INTERVAL_SECONDS`` to ``.env`` via the SAME
-    allowlist-bounded writer (``gui.env_io.write_setting``) the GUI Settings
+    allowlist-bounded writer (``shared.env_io.write_setting``) the GUI Settings
     tab uses — not a bespoke file write, so it inherits CONSTRAINT #3's
     enforcement for free. THEN attempts a LIVE apply against a running
-    daemon over loopback HTTP (``gui.daemon_client.set_interval`` ->
+    daemon over loopback HTTP (``shared.daemon_client.set_interval`` ->
     ``api/control_api.py``'s ``PUT /interval`` ->
     ``desktop.daemon_runtime.OrchestratorDaemon.set_interval``).
 
@@ -3901,7 +3901,7 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     """1-Click Go Live / Execution Mode Toggle. Sets ``ADVISORY_ONLY`` and,
     unless ``mode == "advisory"`` (which carries no ``DRY_RUN``/``ALPACA_PAPER``
     pairing of its own), the ``DRY_RUN``/``ALPACA_PAPER`` pair via
-    ``gui.strategy_registry.set_active_mode`` (see its docstring for the
+    ``shared.strategy_registry.set_active_mode`` (see its docstring for the
     mode -> env-var mapping). ``written`` always reflects exactly which keys
     this call touched -- never a fixed list -- so the response can't claim a
     write that didn't happen (CONSTRAINT #4).
@@ -3919,7 +3919,7 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     confirmation -- an Alpaca-specific paper/live account selector, not a
     broker-agnostic quarantine like ``ADVISORY_ONLY``/``DRY_RUN``, and
     deliberately not hardened further here (operator decision, 2026-08-04)."""
-    from gui import strategy_registry
+    from shared import strategy_registry
 
     dangerous_keys = ["ADVISORY_ONLY"]
     if body.mode != "advisory":
@@ -3961,7 +3961,7 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
 # them in ITS OWN _SETTINGS_LAYOUT (general Settings Manager), so they belong
 # here too.
 #
-# Backed ENTIRELY by the existing allowlist-bounded gui.env_io write layer — no
+# Backed ENTIRELY by the existing allowlist-bounded shared.env_io write layer — no
 # bespoke .env logic here — so writes inherit its ALLOWED_KEYS/SECRET_KEYS
 # enforcement (CONSTRAINT #3) for free, exactly like PUT /strategy/modules and
 # PUT /automation/schedule/interval. `_TUNABLE_GROUPS` carries ONLY UI metadata
@@ -4007,7 +4007,7 @@ _KIND_TO_TYPE: Dict[str, str] = {
 #
 # Ordered (group -> fields) layout. Each field: (key, kind, extras) where extras
 # may hold min/max/step (number kinds) or options (enum). Self-contained: NOT an
-# import of gui.panels.settings_manager's _SETTINGS_LAYOUT (mirrors its intent).
+# import of legacy.streamlit_command_center.panels.settings_manager's _SETTINGS_LAYOUT (mirrors its intent).
 _TUNABLE_GROUPS: List[tuple] = [
     (
         "Financial Constants",
@@ -4490,7 +4490,7 @@ def _validate_and_write_payload(
     **This gate is scoped to writes through THIS function, but is no longer
     the only DANGEROUS_KEYS-confirming write path.** ``PUT
     /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
-    ``gui.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
+    ``shared.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
     directly and predates this function; it now enforces the SAME echo-the-
     name contract independently, via its own ``_require_dangerous_
     confirmation`` (below) rather than routing through this one — a
@@ -5185,7 +5185,7 @@ def put_settings_etf_transmission(body: TunablesUpdateRequest) -> Dict[str, Any]
 #
 # ``pilots/reports.py`` and ``pilots/dead_letter.py`` are new, dependency-light
 # (stdlib + ``settings`` only) read helpers — see their own module docstrings.
-# Imported LAZILY per function (matching ``gui.decision_log``/
+# Imported LAZILY per function (matching ``shared.decision_log``/
 # ``pilots.watchlist_writer`` elsewhere in this file) rather than added to the
 # multi-line ``from pilots import (...)`` block above, so this block stays a
 # self-contained append with no edit to that shared block.
@@ -5212,7 +5212,7 @@ def require_dead_letter_retry_enabled() -> None:
 class DeadLetterRetryRequest(BaseModel):
     """Body for ``POST /dead-letter/retry``. Re-runs ``main.py``
     (advisory-only — no orders) for exactly ONE symbol via
-    ``gui.orchestrator_runner.launch_symbol_retry``, the SAME subprocess
+    ``shared.orchestrator_runner.launch_symbol_retry``, the SAME subprocess
     launcher the Streamlit Launcher tab's dead-letter Retry button already
     uses (``gui/panels/launcher.py::_render_dead_letter_queue``). ``symbol``
     shape is re-validated by the endpoint against
@@ -5301,7 +5301,7 @@ def post_dead_letter_retry(body: DeadLetterRetryRequest) -> Dict[str, Any]:
     behind ``require_command_token`` STACKED with the dedicated
     ``require_dead_letter_retry_enabled`` master switch (same "auth tier AND
     feature flag" pattern as ``PUT /strategy/modules`` / ``POST
-    /agentic/watch``). Reuses ``gui.orchestrator_runner.launch_symbol_retry``
+    /agentic/watch``). Reuses ``shared.orchestrator_runner.launch_symbol_retry``
     — the SAME launcher the Streamlit Launcher tab's per-symbol Retry button
     already calls — rather than re-implementing the subprocess spawn.
 
@@ -5314,7 +5314,7 @@ def post_dead_letter_retry(body: DeadLetterRetryRequest) -> Dict[str, Any]:
     advisory-only, no-order diagnostic run (``main.py`` submits no orders),
     never applied retroactively (``applies: "immediately"`` describes the
     subprocess launch itself, not any order submission — there is none)."""
-    from gui.orchestrator_runner import launch_symbol_retry
+    from shared.orchestrator_runner import launch_symbol_retry
     from pilots.watchlist_writer import _SYMBOL_RE
 
     symbol = body.symbol.strip().upper()
@@ -5447,7 +5447,7 @@ def get_prompt(prompt_id: str, version: Optional[str] = Query(default=None)) -> 
 )
 def put_prompts_pin(body: PromptPinRequest) -> Dict[str, Any]:
     """Pin (or, when ``version`` is omitted, clear the pin for) one prompt ID
-    in ``PROMPT_REGISTRY_PINS`` -> ``.env`` via ``gui.env_io.write_setting``.
+    in ``PROMPT_REGISTRY_PINS`` -> ``.env`` via ``shared.env_io.write_setting``.
 
     Fail-closed command token (``require_command_token``, i.e.
     ``FOLLOW_API_TOKEN``) STACKED with the dedicated

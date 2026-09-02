@@ -71,7 +71,7 @@ _FINGERPRINT_LEN = 12  # hex chars → 48 bits: enough to detect rotation, not a
 
 # The three providers this platform can call, and the settings attribute
 # holding each one's key. Duplicated here (not imported from
-# gui.ai_control_center) to keep this a leaf module with no llm/gui deps.
+# shared.ai_control_center) to keep this a leaf module with no llm/gui deps.
 PROVIDERS: Tuple[str, ...] = ("claude", "gemini", "openai")
 _PROVIDER_KEY_ATTR: Dict[str, str] = {
     "claude": "ANTHROPIC_API_KEY",

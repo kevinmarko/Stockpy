@@ -1766,7 +1766,7 @@ def check_calibration_drift() -> CheckResult:
     try:
         # Fast path: recommendation_tracking_report() immediately returns
         # zero rows whenever the decision log doesn't exist yet
-        # (gui.decision_log.read_decisions degrades a missing file to []
+        # (shared.decision_log.read_decisions degrades a missing file to []
         # rather than raising — see its own docstring) — the common state
         # on a fresh deployment or CI sandbox with no live trading history.
         # Importing evaluation_engine (which pulls in pandas transitively —

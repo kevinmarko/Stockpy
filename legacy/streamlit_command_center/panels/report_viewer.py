@@ -1,0 +1,1281 @@
+"""InvestYo Command Center — Report Viewer tab. Surfaces evaluation-engine analytics (portfolio heat / edge / Brinson-Fachler attribution), LLM commentary, and report export/download."""
+
+from __future__ import annotations
+
+from __future__ import annotations
+import io
+import json
+import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
+import pandas as pd
+import streamlit as st
+from settings import settings
+from shared import env_io, orchestrator_runner, help_widgets
+from shared.symbol_search import filter_by_symbol
+from shared.orchestrator_runner import StageStatus
+from legacy.streamlit_command_center.panels._shared import (  # noqa: E402
+    GICS_SECTORS,
+    _BF_EDITOR_COLUMNS,
+    _REPO_ROOT,
+    _active_symbols,
+    _held_symbols,
+    _kill_switch,
+    _signal_symbols,
+    _watchlist_symbols,
+    load_block_log,
+    logger,
+)
+from legacy.streamlit_command_center.panels import load_state_snapshot
+from legacy.streamlit_command_center.panels.launcher import _render_report_provenance_banner
+from shared.progress_ui import busy
+from shared.report_viewer_helpers import (
+    build_brinson_fachler_inputs,
+    build_cluster_assignment_frame,
+    build_cluster_concentration_rows,
+    build_hidden_fields_frame,
+    build_mfe_mae_scatter_frame,
+    build_tactical_ranges_frame,
+    calibration_summary_stats,
+    compute_brinson_fachler,
+    default_brinson_fachler_frame,
+    format_tracking_pct,
+    heavy_concentration_clusters,
+    parse_pasted_sector_matrix,
+    shape_sector_details_frame,
+    tracking_delta_label,
+    validate_brinson_fachler_weights,
+)
+
+
+# ===========================================================================
+# Tier 9 — Claude analyst commentary button (Reports tab drill-down)
+# ===========================================================================
+
+
+def _render_llm_commentary_button(
+    row: dict, symbol: str, key_prefix: str = "reports"
+) -> None:
+    """Render the on-demand Claude analyst commentary control.
+
+    Three render paths driven by :func:`shared.llm_commentary_panel.commentary_status`:
+
+    * ``disabled`` — master switch off; renders a single info caption with the
+      .env knob needed to enable.  No button shown.
+    * ``missing_key`` — master switch on but ANTHROPIC_API_KEY unset; renders
+      a warning + a disabled button so the operator sees the seam exists.
+    * ``ready`` — master switch on AND key configured; renders an enabled
+      button.  On click, results are cached in ``st.session_state`` keyed by
+      the same UTC-day + score-bucket convention as :mod:`llm.cache`, so
+      repeat clicks within the same trading day never re-spend tokens.
+
+    ``key_prefix`` namespaces the Streamlit widget key by call site (Reports
+    tab, AI Insights tab, AI Control Center tab, ...). Streamlit executes
+    every ``st.tabs()`` body on each rerun regardless of which tab is
+    visually active, and this helper is called from three different tabs —
+    without a per-call-site prefix, two tabs showing the same symbol at the
+    same score bucket would derive the identical widget key (since
+    :func:`shared.llm_commentary_panel.commentary_state_key` is intentionally
+    tab-agnostic, so the cached LLM response is shared/reused across tabs)
+    and raise Streamlit's duplicate-key error. The ``session_state`` cache
+    slot (``session_slot``) deliberately does NOT get this prefix, so the
+    cache stays shared across tabs.
+
+    Soft-fail (CONSTRAINT #6): every failure path (enricher raises, provider
+    returns None, schema mismatch) ends in
+    :func:`shared.llm_commentary_panel.format_rationale_markdown` rendering the
+    "unavailable" sentinel.  The deterministic ``row["advisory_rationale"]``
+    above this button is the source of truth and is never replaced.
+    """
+    try:
+        from shared.llm_commentary_panel import (
+            commentary_state_key,
+            commentary_status,
+            format_rationale_markdown,
+            generate_for_symbol_row,
+        )
+    except Exception as exc:  # pragma: no cover - import-time degrade
+        st.caption(f"(LLM commentary helpers unavailable: {exc})")
+        return
+
+    status = commentary_status(settings)
+    st.markdown("---")
+    st.markdown("**🤖 Claude analyst commentary**")
+
+    if status == "disabled":
+        help_widgets.section_caption("report_viewer.llm_commentary_off")
+        return
+
+    if status == "missing_key":
+        st.warning(
+            "`LLM_COMMENTARY_ENABLED=true` but `ANTHROPIC_API_KEY` is unset — "
+            "set the key in `.env` and relaunch."
+        )
+        st.button(
+            "🤖 Generate analyst commentary",
+            key=f"llm_cmt_btn_{key_prefix}_{symbol}",
+            disabled=True,
+            width="stretch",
+        )
+        return
+
+    # status == "ready"
+    score_for_key = 0.0
+    try:
+        score_for_key = float(row.get("score", row.get("advisory_score", 0.0)) or 0.0)
+    except Exception:
+        pass
+    action_for_key = str(
+        row.get("action", row.get("advisory_action", "HOLD")) or "HOLD"
+    ).upper()
+    cache_key = commentary_state_key(
+        symbol=symbol, score=score_for_key, action=action_for_key
+    )
+    session_slot = f"llm_cmt_payload_{cache_key}"
+
+    # Tier 9 Scope 4 reuse path: if the operator already generated an Opal
+    # research brief for this symbol (the dedicated "Opal research brief"
+    # button on the AI Insights tab caches its payload here), thread it into
+    # Claude's prompt for FREE — clicking the Claude button never triggers a
+    # fresh Opal/OpenAI call (enrich_with_llm_rationale runs with run_opal=False).
+    cached_opal_brief = st.session_state.get(f"ai_insights_opal_payload_{symbol}")
+
+    if st.button(
+        "🤖 Generate analyst commentary",
+        key=f"llm_cmt_btn_{key_prefix}_{cache_key}",
+        width="stretch",
+    ):
+        with st.status(f"Asking Claude about {symbol}…", expanded=True) as status:
+            try:
+                payload = generate_for_symbol_row(row, research_brief=cached_opal_brief)
+            except Exception as exc:
+                status.update(
+                    label=f"❌ Claude analysis failed: {exc}", state="error"
+                )
+                st.error(f"Claude analysis failed: {exc}")
+                raise
+            st.session_state[session_slot] = payload
+            # Mirror into a symbol-keyed map (separate from the cache-key-keyed
+            # session_slot above) so cross-tab aggregate views — the AI Insights
+            # tab's Claude-vs-Gemini disagreement table — can look up the latest
+            # Claude payload for this symbol without knowing the cache-key hash.
+            # Mirrors the analogous gemini_by_symbol map in
+            # _render_gemini_chart_section.
+            claude_mirror = st.session_state.get("ai_insights_claude_by_symbol", {})
+            if payload is not None:
+                claude_mirror[symbol] = payload
+            else:
+                claude_mirror.pop(symbol, None)
+            st.session_state["ai_insights_claude_by_symbol"] = claude_mirror
+            status.update(
+                label=f"✅ Claude analysis ready for {symbol}", state="complete"
+            )
+
+    cached = st.session_state.get(session_slot)
+    if cached is not None or session_slot in st.session_state:
+        st.markdown(format_rationale_markdown(cached))
+
+
+# ===========================================================================
+# Signal Decision Journal — Streamlit section (Reports tab, Tier 1 / 1.3)
+# ===========================================================================
+
+
+def _render_decision_journal_section(signals: list) -> None:
+    """Let the operator log whether they acted on, passed, or modified a signal.
+
+    Renders a compact form with three decision buttons per symbol.  Entries
+    are appended to ``output/decision_log.jsonl`` via ``shared.decision_log``.
+    The optional trade join (``"acted"`` path) links the entry to the nearest
+    ``TransactionsStore`` record within 24 hours so the calibration tracker
+    (1.2) can filter to signals the operator actually executed.
+
+    Also renders a collapsible past-decisions log so the operator can verify
+    what has been recorded.
+    """
+    st.markdown("**Signal Decision Journal** — log what you decided to do with each signal")
+
+    if not signals:
+        st.caption("No signals yet — run the advisory engine from the Launcher tab.")
+        return
+
+    from shared.decision_log import (
+        ActionTaken,
+        decisions_df,
+        log_decision,
+    )
+
+    log_path = settings.OUTPUT_DIR / "decision_log.jsonl"
+
+    # ── Symbol selector ──────────────────────────────────────────────────────
+    sym_options = sorted({str(s.get("symbol", "")).upper() for s in signals if s.get("symbol")})
+    if not sym_options:
+        st.caption("Signal list has no symbol column.")
+        return
+
+    dj_sym = st.selectbox(
+        "Symbol to journal",
+        options=sym_options,
+        key="dj_selected_symbol",
+        help="Pick the ticker whose signal you want to record a decision for.",
+    )
+
+    # Pull the matching signal dict so we can show context
+    sig_match = next(
+        (s for s in signals if str(s.get("symbol", "")).upper() == dj_sym),
+        {},
+    )
+    sig_action = (
+        sig_match.get("advisory_action")
+        or sig_match.get("action")
+        or "—"
+    )
+    sig_conviction = sig_match.get("advisory_conviction") or sig_match.get("conviction")
+    sig_ts = sig_match.get("timestamp", "")
+
+    # ── Signal context strip ─────────────────────────────────────────────────
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("System recommendation", sig_action)
+    sc2.metric(
+        "Conviction",
+        f"{float(sig_conviction):.0%}" if sig_conviction is not None else "—",
+    )
+    sc3.metric("Symbol", dj_sym)
+
+    # ── Notes (visible for all actions; mandatory prompt for "modified") ──────
+    dj_notes = st.text_area(
+        "Notes (optional — required context when modifying a signal)",
+        value="",
+        key="dj_notes",
+        height=68,
+        placeholder="e.g. 'Size halved — position already large', 'Used limit instead of market'",
+    )
+
+    # ── Three decision buttons ────────────────────────────────────────────────
+    st.caption("Log your decision:")
+    b1, b2, b3 = st.columns(3)
+
+    _LOG_KWARGS: dict = dict(
+        signal_action=sig_action,
+        conviction=float(sig_conviction) if sig_conviction is not None else None,
+        notes=dj_notes.strip(),
+        signal_ts=sig_ts,
+        log_path=log_path,
+    )
+
+    def _do_log(action: ActionTaken) -> None:
+        try:
+            from transactions_store import TransactionsStore
+            ts_store: object | None = TransactionsStore()
+        except Exception:
+            ts_store = None
+        entry = log_decision(
+            symbol=dj_sym,
+            action_taken=action,
+            transactions_store=ts_store,
+            **_LOG_KWARGS,
+        )
+        st.session_state["dj_last_result"] = (action, entry.symbol, entry.trade_id)
+
+    with b1:
+        if st.button("✅ Acted", key="dj_btn_acted", use_container_width=True,
+                     help="You placed this trade (or are about to)"):
+            _do_log("acted")
+    with b2:
+        if st.button("⏭ Passed", key="dj_btn_passed", use_container_width=True,
+                     help="You reviewed but skipped this signal"):
+            _do_log("passed")
+    with b3:
+        if st.button("🔁 Modified", key="dj_btn_modified", use_container_width=True,
+                     help="You acted but changed size, limit price, or timing"):
+            if not dj_notes.strip():
+                st.warning("Please add a note describing how you modified the signal.")
+            else:
+                _do_log("modified")
+
+    # ── Success feedback ──────────────────────────────────────────────────────
+    if "dj_last_result" in st.session_state:
+        action_done, sym_done, trade_id_done = st.session_state["dj_last_result"]
+        icon = {"acted": "✅", "passed": "⏭", "modified": "🔁"}.get(action_done, "")
+        join_note = (
+            f" · linked to trade #{trade_id_done}"
+            if trade_id_done is not None
+            else " · no trade match found within 24 h"
+            if action_done == "acted"
+            else ""
+        )
+        st.success(f"Logged: **{sym_done}** → {icon} {action_done}{join_note}")
+
+    # ── Past decisions (collapsible) ──────────────────────────────────────────
+    with st.expander("📋 Past decisions log"):
+        try:
+            hist_df = decisions_df(log_path)
+        except Exception as exc:
+            st.caption(f"(log unavailable: {exc})")
+            return
+
+        if hist_df.empty:
+            st.caption("No decisions logged yet.")
+            return
+
+        # Show most recent first; drop the internal-only notes-empty rows
+        hist_display = hist_df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+        st.dataframe(hist_display, hide_index=True)
+
+        st.download_button(
+            "⬇️ Export decision log (CSV)",
+            data=hist_display.to_csv(index=False).encode("utf-8"),
+            file_name="decision_log.csv",
+            mime="text/csv",
+        )
+
+
+# ===========================================================================
+# Correlation Cluster Section — Streamlit section (Tier 2.5, Reports tab)
+# ===========================================================================
+
+
+def _render_correlation_cluster_section(signals: list) -> None:
+    """Hierarchical clustering of symbol returns — on-demand in the Reports tab.
+
+    Fetches 60-day returns for the current signal universe via yfinance,
+    computes pairwise correlation clusters (Lopez de Prado distance + Ward
+    linkage), and renders:
+
+    * **Cluster assignments** table: Symbol, Cluster ID, Avg Intra-Cluster
+      Correlation.
+    * **Cluster Concentration** bar: per-cluster aggregate position weight (%)
+      so the operator can see "you'd be 40% in the mega-cap-tech cluster if
+      you take all these BUYs".
+
+    No live data is fetched until the operator clicks the "Compute clusters"
+    button (on-demand, never automatic).
+    """
+    with st.expander("📊 Correlation Cluster Awareness (Tier 2.5)", expanded=False):
+        if not signals:
+            st.info("No signals available. Run the pipeline from the Launcher tab first.")
+            return
+
+        syms = sorted({str(s.get("symbol", "")).upper() for s in signals if s.get("symbol")})
+        if not syms:
+            st.caption("Signal frame has no 'symbol' field — cannot cluster.")
+            return
+
+        st.caption(
+            f"{len(syms)} symbol(s) in current signal universe. "
+            "Clustering uses 60-day yfinance returns (fetched on demand)."
+        )
+
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            lookback = st.slider(
+                "Return lookback (days)",
+                min_value=20,
+                max_value=252,
+                value=int(settings.CORRELATION_CLUSTER_LOOKBACK_DAYS),
+                step=5,
+                key="cluster_lookback",
+            )
+        with col2:
+            threshold = st.slider(
+                "Distance threshold",
+                min_value=0.1,
+                max_value=1.0,
+                value=float(settings.CORRELATION_CLUSTER_THRESHOLD),
+                step=0.05,
+                key="cluster_threshold",
+                help="d=sqrt(0.5*(1-ρ)). At 0.4 → stocks with |ρ|>0.68 merge.",
+            )
+
+        if st.button("🔗 Compute Clusters", key="compute_clusters_btn"):
+            with st.status(
+                f"Computing correlation clusters for {len(syms)} symbols…",
+                expanded=True,
+            ) as status:
+                try:
+                    from research_engine import fetch_returns_for_clustering, compute_correlation_clusters
+                    status.update(
+                        label=f"Fetching {lookback}-day returns for {len(syms)} symbols…",
+                        state="running",
+                    )
+                    returns_df = fetch_returns_for_clustering(syms, lookback_days=lookback)
+                    if returns_df.empty:
+                        st.warning("Could not fetch returns data. Check network connectivity.")
+                        status.update(
+                            label="⚠️ Could not fetch returns data", state="error"
+                        )
+                        return
+                    status.update(
+                        label="Computing correlation clusters…", state="running"
+                    )
+                    labels, summary = compute_correlation_clusters(
+                        returns_df, distance_threshold=threshold
+                    )
+                    st.session_state["cluster_labels"] = labels
+                    st.session_state["cluster_summary"] = summary
+                    st.session_state["cluster_signals"] = signals
+                    status.update(
+                        label=f"✅ Clustered {len(syms)} symbols", state="complete"
+                    )
+                except Exception as exc:
+                    st.error(f"Clustering failed: {exc}")
+                    status.update(
+                        label=f"❌ Clustering failed: {exc}", state="error"
+                    )
+                    return
+
+        labels = st.session_state.get("cluster_labels")
+        summary = st.session_state.get("cluster_summary")
+        cached_signals = st.session_state.get("cluster_signals", [])
+
+        if labels is None or summary is None:
+            st.caption("Click 'Compute Clusters' to run the analysis.")
+            return
+
+        # ── Cluster assignment table ──────────────────────────────────────────
+        st.markdown("**Symbol → Cluster Assignments**")
+        sig_map = {
+            str(s.get("symbol", "")).upper(): s
+            for s in cached_signals if s.get("symbol")
+        }
+        assign_df = build_cluster_assignment_frame(labels, sig_map)
+        st.dataframe(assign_df, width="stretch", hide_index=True)
+
+        # ── Cluster concentration ─────────────────────────────────────────────
+        if not summary.empty:
+            st.markdown("**Per-Cluster Concentration (sum of Kelly Targets)**")
+            conc_rows = build_cluster_concentration_rows(summary, sig_map)
+            conc_df = pd.DataFrame(conc_rows).sort_values("Cluster ID")
+            st.dataframe(conc_df, width="stretch", hide_index=True)
+
+            # Highlight clusters with heavy concentration
+            heavy = heavy_concentration_clusters(conc_rows)
+            if heavy:
+                names = ", ".join(f"Cluster {r['Cluster ID']}" for r in heavy)
+                st.warning(
+                    f"⚠️ High concentration: {names} together exceed 30% of total "
+                    "Kelly-weighted position. Consider diversifying across clusters "
+                    "before acting on all BUY signals simultaneously."
+                )
+
+
+# ===========================================================================
+# Recommendation Tracking — Streamlit section (Tier 4.1)
+# ===========================================================================
+
+
+def _render_recommendation_tracking_section() -> None:
+    """Tier 4.1 — Recommendation tracking error: model vs. operator decisions.
+
+    Joins the 1.3 decision journal with historical prices to compare:
+    * **Model return** — paper-equivalent return for every logged BUY signal
+      held exactly ``horizon_days``, weighted by published conviction.
+    * **Operator return** — actual return from closed trades where the operator
+      chose to act (``action_taken="acted"``).
+
+    The delta tells the operator whether their judgment additions to the model
+    (e.g. "I passed on that BUY because earnings were next week") are helping
+    or hurting alpha over the model's mechanical baseline.
+    """
+    import math as _math
+
+    st.markdown("---")
+    st.markdown("### 📊 Recommendation Tracking vs. Actual Decisions")
+    help_widgets.section_caption("recommendation_tracking")
+
+    try:
+        from evaluation_engine import recommendation_tracking_report
+        from transactions_store import TransactionsStore
+        from shared.decision_log import DEFAULT_LOG_PATH
+    except ImportError as exc:
+        st.caption(f"(recommendation tracking unavailable: {exc})")
+        return
+
+    horizon = st.slider(
+        "Return horizon (calendar days)",
+        min_value=5, max_value=90, value=30, step=5,
+        key="rec_tracking_horizon",
+        help="How many calendar days after the signal to measure the model's paper return.",
+    )
+
+    @st.cache_data(ttl=300)
+    def _load_tracking(h: int) -> Dict[str, Any]:
+        try:
+            store = TransactionsStore()
+            return recommendation_tracking_report(
+                log_path=DEFAULT_LOG_PATH,
+                transactions_store=store,
+                horizon_days=h,
+            )
+        except Exception as exc:
+            logger.warning("_render_recommendation_tracking_section: %s", exc)
+            return {
+                "rows": [], "model_return_30d": float("nan"),
+                "operator_return_30d": float("nan"), "delta": float("nan"),
+                "n_signals": 0, "n_acted": 0, "n_completed": 0,
+                "n_with_exit": 0, "horizon_days": h,
+            }
+
+    rpt = _load_tracking(horizon)
+
+    n_sig = rpt["n_signals"]
+    if n_sig == 0:
+        st.info(
+            "No BUY signals in the decision log yet.  "
+            "Use the **Signal Decision Journal** section above to log decisions, "
+            "then return here after the horizon elapses to see the tracking report."
+        )
+        return
+
+    model_ret = rpt["model_return_30d"]
+    op_ret = rpt["operator_return_30d"]
+    delta = rpt["delta"]
+    n_completed = rpt["n_completed"]
+    n_with_exit = rpt["n_with_exit"]
+
+    # Pure formatters extracted to shared.report_viewer_helpers; aliased locally
+    # so the rest of this render body is unchanged.
+    _pct = format_tracking_pct
+    _delta_label = tracking_delta_label
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "BUY Signals Logged", n_sig,
+        help=f"{n_completed} completed (horizon elapsed); {n_sig - n_completed} pending.",
+    )
+    c2.metric(
+        f"Model {horizon}d Return", _pct(model_ret),
+        help=(
+            f"Conviction-weighted {horizon}-day paper return across {n_completed} "
+            "completed BUY signals (acted + passed)."
+        ),
+    )
+    c3.metric(
+        "Operator Return", _pct(op_ret),
+        help=f"Simple-mean actual return from {n_with_exit} acted+closed trades.",
+    )
+    c4.metric("Delta (Op − Model)", _delta_label(delta))
+
+    # Narrative summary
+    if not _math.isnan(model_ret) and not _math.isnan(op_ret):
+        st.markdown(
+            f"> **If you'd taken every BUY signal at the published conviction-weighted "
+            f"size and held {horizon} days:** paper return = **{_pct(model_ret)}**  \n"
+            f"> **Your actual closed-trade decisions returned:** **{_pct(op_ret)}**  \n"
+            f"> **Judgment edge:** **{_delta_label(delta)}**"
+        )
+    elif n_completed == 0:
+        st.info(
+            f"No BUY signals have reached the {horizon}-day horizon yet.  "
+            "Check back once the horizon elapses for the first signals you logged."
+        )
+    elif n_with_exit == 0:
+        st.info(
+            "Model returns are ready but no acted signals have closed trades yet.  "
+            "Once linked trades are closed in the Transactions Store the operator "
+            "return will populate automatically."
+        )
+
+    # Per-signal breakdown table
+    if rpt["rows"]:
+        with st.expander(f"Per-signal breakdown ({len(rpt['rows'])} BUY signals logged)"):
+            raw_df = pd.DataFrame(rpt["rows"])
+            display_cols = [
+                "symbol", "signal_action", "conviction", "action_taken",
+                "model_return", "actual_return", "days_held", "completed",
+            ]
+            show_cols = [c for c in display_cols if c in raw_df.columns]
+            fmt = raw_df[show_cols].copy()
+            for col in ("model_return", "actual_return"):
+                if col in fmt.columns:
+                    fmt[col] = fmt[col].apply(
+                        lambda v: (
+                            f"{v * 100:+.2f}%"
+                            if isinstance(v, float) and not _math.isnan(v)
+                            else "—"
+                        )
+                    )
+            if "conviction" in fmt.columns:
+                fmt["conviction"] = fmt["conviction"].apply(
+                    lambda v: f"{v:.2f}" if isinstance(v, float) else str(v)
+                )
+            st.dataframe(fmt, use_container_width=True, hide_index=True)
+
+
+# ===========================================================================
+# Conviction Calibration — Streamlit section (consumed by Reports tab, 1.2)
+# ===========================================================================
+
+
+def _render_calibration_section() -> None:
+    """Reliability diagram: conviction score vs actual win rate.
+
+    "When the system says 0.80, does it actually win 80% of the time?"
+    Uses matplotlib embedded via st.pyplot for the diagonal reference line
+    that a native st.bar_chart cannot render.
+    """
+    st.markdown("**Conviction Calibration** — does model confidence track real outcomes?")
+
+    try:
+        from evaluation_engine import calibration_curve
+        from transactions_store import TransactionsStore
+        cal_df = calibration_curve(TransactionsStore())
+    except Exception as exc:
+        st.caption(f"(calibration unavailable: {exc})")
+        return
+
+    scored = cal_df.dropna(subset=["win_rate"])
+    if cal_df.empty or scored.empty:
+        st.info(
+            "No conviction data yet. Conviction scores are stored when trades are recorded "
+            "via `TransactionsStore.record_trade(conviction=...)`. They will appear here "
+            "after the advisory engine has closed trades with conviction annotations."
+        )
+        return
+
+    stats = calibration_summary_stats(cal_df)
+    total = stats["total"]
+    overall_wr = stats["overall_win_rate"]
+    cal_error = stats["calibration_error"]
+
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    kc1.metric("Trades w/ Conviction", str(total))
+    kc2.metric("Overall Win Rate", f"{overall_wr:.1%}" if overall_wr == overall_wr else "—")
+    kc3.metric(
+        "Calibration Error (MAE)", f"{cal_error:.3f}",
+        help="Mean |actual_win_rate − conviction_bin_center|. 0 = perfect calibration.",
+    )
+    kc4.metric("Bins w/ Data", str(len(scored)))
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(
+        scored["bin_center"], scored["win_rate"],
+        width=0.09, alpha=0.75, color="#4c8cff", label="Actual win rate",
+    )
+    ax.plot([0, 1], [0, 1], "k--", linewidth=1.2, label="Perfect calibration")
+    ax.set_xlabel("Conviction (model output)")
+    ax.set_ylabel("Win rate (actual)")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_title("Reliability Diagram")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+    with st.expander("📊 Calibration table"):
+        st.dataframe(cal_df, hide_index=True)
+
+
+# ===========================================================================
+# Brinson-Fachler attribution — Streamlit section (consumed by Reports tab)
+# ===========================================================================
+
+
+def _render_brinson_fachler_section() -> None:
+    """Render the interactive Brinson-Fachler attribution UI.
+
+    Layout (top → bottom):
+      1. **Editable sector matrix** (``st.data_editor``) seeded with GICS 11 —
+         operator types or pastes weights & returns directly.
+      2. **Bulk paste** — a textarea accepting CSV or TSV from a spreadsheet,
+         with a "Parse pasted data" button that replaces the editor contents.
+      3. **Validation chips** — warn on weights that don't sum to ~100 % or any
+         negative weight (long-only attribution convention).
+      4. **Compute attribution** — runs
+         :func:`compute_brinson_fachler` which delegates to
+         ``EvaluationEngine.calculate_brinson_fachler``.
+      5. **Result panel** — top-line metrics (portfolio/benchmark/active
+         returns, allocation/selection/interaction effects), per-sector
+         breakdown table, and an effects bar chart.  CSV download buttons let
+         the operator persist the editor input and the per-sector breakdown.
+
+    All editor + result state lives in ``st.session_state`` keys prefixed with
+    ``bf_`` so swapping tabs doesn't lose work.
+    """
+    st.markdown("---")
+    st.markdown("### 📊 Brinson-Fachler Attribution Analysis")
+    st.caption(
+        "Decompose active return into **allocation effect** (sector weighting) "
+        "and **selection effect** (stock picking) via "
+        "`EvaluationEngine.calculate_brinson_fachler`. Edit the matrix below, "
+        "or bulk-paste TSV/CSV from a spreadsheet."
+    )
+
+    # ── 1. Editor frame in session state ─────────────────────────────────────
+    if "bf_editor_df" not in st.session_state:
+        st.session_state["bf_editor_df"] = default_brinson_fachler_frame()
+
+    edited = st.data_editor(
+        st.session_state["bf_editor_df"],
+        key="bf_editor_widget",
+        width="stretch",
+        num_rows="dynamic",
+        hide_index=True,
+        column_config={
+            "Sector": st.column_config.TextColumn(
+                "Sector", required=True, help="Sector label (free-form)."
+            ),
+            "Portfolio Weight (%)": st.column_config.NumberColumn(
+                "Portfolio Weight (%)", format="%.4f",
+                help="Portfolio weight in this sector, in percent (0–100).",
+            ),
+            "Portfolio Return (%)": st.column_config.NumberColumn(
+                "Portfolio Return (%)", format="%.4f",
+                help="Portfolio return contributed by this sector, in percent.",
+            ),
+            "Benchmark Weight (%)": st.column_config.NumberColumn(
+                "Benchmark Weight (%)", format="%.4f",
+                help="Benchmark weight in this sector, in percent (0–100).",
+            ),
+            "Benchmark Return (%)": st.column_config.NumberColumn(
+                "Benchmark Return (%)", format="%.4f",
+                help="Benchmark return for this sector, in percent.",
+            ),
+        },
+    )
+    # Persist the latest edit so reruns survive.
+    st.session_state["bf_editor_df"] = edited
+
+    # ── 2. Bulk paste fallback ────────────────────────────────────────────────
+    with st.expander("📋 Bulk paste from spreadsheet (TSV / CSV)"):
+        st.caption(
+            "Copy a 5-column block (Sector, P-Weight%, P-Return%, B-Weight%, "
+            "B-Return%) from Excel / Google Sheets and paste here. The header "
+            "row is optional."
+        )
+        pasted = st.text_area(
+            "Paste data here", value="", height=140, key="bf_paste_area",
+            placeholder="Sector\tPortfolio Weight (%)\tPortfolio Return (%)\tBenchmark Weight (%)\tBenchmark Return (%)\nInformation Technology\t28\t12.4\t26\t10.1",
+        )
+        c_paste, c_reset = st.columns(2)
+        with c_paste:
+            if st.button("📥 Parse pasted data", key="bf_paste_btn"):
+                try:
+                    with busy("Parsing pasted sector matrix…"):
+                        parsed = parse_pasted_sector_matrix(pasted)
+                        st.session_state["bf_editor_df"] = parsed
+                    st.success(f"Parsed {len(parsed)} sector row(s) — editor refreshed.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001 - user-facing parse error
+                    st.error(f"Could not parse pasted data: {exc}")
+        with c_reset:
+            if st.button("♻️ Reset to GICS 11 default", key="bf_reset_btn"):
+                with busy("Resetting to GICS 11 default…"):
+                    st.session_state["bf_editor_df"] = default_brinson_fachler_frame()
+                st.rerun()
+
+    # ── 3. Validation chips ───────────────────────────────────────────────────
+    warnings = validate_brinson_fachler_weights(edited)
+    if warnings:
+        for w in warnings:
+            st.warning(f"⚠️ {w}")
+    else:
+        st.success("✅ Weights validated (portfolio + benchmark each sum to ~100%).")
+
+    # ── 4. Compute attribution ───────────────────────────────────────────────
+    if st.button("▶️ Compute Brinson-Fachler attribution",
+                 type="primary", key="bf_compute_btn"):
+        try:
+            with busy("Computing Brinson-Fachler attribution…"):
+                result = compute_brinson_fachler(edited)
+            st.session_state["bf_result"] = result
+        except Exception as exc:  # noqa: BLE001 - surface engine error inline
+            logger.exception("Brinson-Fachler attribution failed")
+            st.error(f"Attribution failed: {exc}")
+            st.session_state["bf_result"] = None
+
+    # ── 5. Result panel ──────────────────────────────────────────────────────
+    result = st.session_state.get("bf_result")
+    if result:
+        st.markdown("#### 📈 Attribution result")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Portfolio Return",  f"{float(result.get('Portfolio Return', 0.0))*100:.3f}%")
+        m2.metric("Benchmark Return",  f"{float(result.get('Benchmark Return', 0.0))*100:.3f}%")
+        m3.metric("Active Return",     f"{float(result.get('Active Return', 0.0))*100:.3f}%")
+
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric("Allocation Effect",
+                  f"{float(result.get('Allocation Effect', 0.0))*100:.3f}%",
+                  help="Active return from sector weighting decisions.")
+        e2.metric("Selection Effect",
+                  f"{float(result.get('Selection Effect', 0.0))*100:.3f}%",
+                  help="Active return from stock-picking within sectors.")
+        e3.metric("Interaction Effect",
+                  f"{float(result.get('Interaction Effect', 0.0))*100:.3f}%",
+                  help="Cross-term: (Δweight) × (Δreturn).")
+        e4.metric("Attribution Sum",
+                  f"{float(result.get('Attribution Sum', 0.0))*100:.3f}%",
+                  help="Allocation + Selection + Interaction (should ≈ Active Return).")
+
+        sector_details = result.get("Sector Details") or {}
+        if sector_details:
+            sector_df = shape_sector_details_frame(sector_details)
+
+            st.markdown("**Per-sector breakdown**")
+            st.dataframe(sector_df, width="stretch", hide_index=True)
+
+            # Bar chart of allocation vs. selection by sector — vectorized, no
+            # extra dependencies (st.bar_chart consumes a DataFrame directly).
+            chart_df = sector_df.set_index("sector")[
+                [c for c in ("allocation_effect", "selection_effect") if c in sector_df.columns]
+            ]
+            st.markdown("**Allocation vs. Selection effect by sector**")
+            st.bar_chart(chart_df)
+
+            st.download_button(
+                "⬇️ Download per-sector breakdown (CSV)",
+                data=sector_df.to_csv(index=False).encode("utf-8"),
+                file_name="brinson_fachler_breakdown.csv",
+                mime="text/csv",
+                key="bf_download_sector",
+            )
+
+        st.download_button(
+            "⬇️ Download editor input (CSV)",
+            data=edited.to_csv(index=False).encode("utf-8"),
+            file_name="brinson_fachler_input.csv",
+            mime="text/csv",
+            key="bf_download_input",
+        )
+
+
+# ===========================================================================
+# Hidden-fields surfacing — Task C1 (Reports tab)
+# ===========================================================================
+
+
+def _render_hidden_fields_section(signals: list) -> None:
+    """Surface multifactor z-scores + cross-sectional momentum ranks.
+
+    These fields (``Value_Z``, ``Quality_Z``, ``LowVol_Z``, ``Size_Z``,
+    ``Multifactor_Composite``, ``XSec_12_1M``, ``XSec_Momentum_Rank``) are
+    computed every cycle by ``signals/multifactor.py`` and
+    ``main_orchestrator.compute_xsec_momentum_ranks()`` into
+    ``dashboard_df`` / ``config.COLUMN_SCHEMA`` but were never threaded
+    through to ``state_snapshot.json`` until this section's companion change
+    in ``main_orchestrator._write_state_snapshot`` — so no GUI surface could
+    previously display them.
+
+    Only populated when the pipeline ran via ``main_orchestrator.py`` (the
+    full async orchestrator that runs ``global_registry.run_pre_compute()``);
+    the lighter ``main.py`` advisory loop does not compute these factors, so
+    rows from that entry point show "—" here rather than a fabricated value.
+    """
+    st.markdown("---")
+    st.markdown("### 🧮 Multifactor & Cross-Sectional Momentum")
+    st.caption(
+        "Value / Quality / Low-Vol / Size z-scores (Fama-French-style, "
+        "`signals/multifactor.py`) and the 12-1 month cross-sectional momentum "
+        "rank (Jegadeesh-Titman, `main_orchestrator.compute_xsec_momentum_ranks`). "
+        "Only populated when the last run went through `main_orchestrator.py` "
+        "(the full async pipeline) — the lighter advisory loop in `main.py` "
+        "does not compute these cross-sectional factors."
+    )
+
+    if not signals:
+        st.info("No pipeline signals yet — run the orchestrator from the Launcher tab.")
+        return
+
+    factor_df, any_populated = build_hidden_fields_frame(signals)
+
+    if not any_populated:
+        st.caption(
+            "No multifactor/cross-sectional data in the last snapshot — most "
+            "likely the last run used `main.py`'s advisory loop rather than "
+            "`main_orchestrator.py`. Run the full orchestrator from the "
+            "Launcher tab to populate this section."
+        )
+        return
+
+    st.dataframe(factor_df, width="stretch", hide_index=True)
+
+
+# ===========================================================================
+# Trade-Quality & Post-Trade Analytics — Task C3 (Reports tab)
+# ===========================================================================
+
+
+def _render_trade_quality_section(signals: list) -> None:
+    """MFE-vs-MAE scatter (current signals) + edge-ratio-by-strategy (closed trades).
+
+    Two independent sub-sections, each degrading gracefully to a friendly
+    empty-state message rather than crashing (CONSTRAINT #6):
+
+    1. **MFE vs. MAE scatter** — one point per symbol in the last snapshot,
+       sourced from the ``mfe``/``mae`` fields this task's companion change
+       added to ``state_snapshot.json`` (via
+       ``EvaluationEngine.evaluate_portfolio()``). Point size reflects
+       ``advisory_conviction`` when available (falls back to a fixed size);
+       color reflects ``action`` (a reasonable proxy for "entry regime" since
+       no entry-time regime label is persisted per signal — see caption).
+    2. **Edge-ratio-by-signal-module** — on-demand (button-triggered, like the
+       Correlation Cluster section) recomputation of MFE/MAE/Edge Ratio for
+       every CLOSED trade in ``TransactionsStore``, grouped by the
+       ``strategy`` column each trade was tagged with at entry. Requires
+       fetching historical OHLC bars per symbol via
+       ``HistoricalStore.get_bars()`` — deferred behind a button so the tab
+       doesn't do that work on every rerun.
+    """
+    st.markdown("---")
+    st.markdown("### 🎯 Trade Quality — MFE / MAE / Edge Ratio")
+    st.caption(
+        "Maximum Favorable/Adverse Excursion and Edge Ratio "
+        "(`evaluation_engine.EvaluationEngine`), surfaced for the first time in "
+        "this GUI. MFE/MAE are fractions of entry price (e.g. 0.05 = 5%)."
+    )
+
+    # ── 1. MFE vs MAE scatter (current signals) ──────────────────────────────
+    st.markdown("**MFE vs. MAE — current signals**")
+    scatter_df = build_mfe_mae_scatter_frame(signals)
+    if scatter_df.empty:
+        st.info(
+            "No MFE/MAE data in the last snapshot yet. These populate once a "
+            "symbol has trade history in `TransactionsStore` "
+            "(`EvaluationEngine.evaluate_portfolio()` computes them from the "
+            "most recent trade per symbol). Run the orchestrator after your "
+            "first recorded trade to see points here."
+        )
+    else:
+        try:
+            import altair as alt  # bundled with streamlit — no new dependency
+
+            has_conviction = scatter_df["conviction"].notna().any()
+            enc_size = (
+                alt.Size("conviction:Q", title="Conviction", scale=alt.Scale(range=[40, 400]))
+                if has_conviction else alt.value(120)
+            )
+            chart = (
+                alt.Chart(scatter_df)
+                .mark_circle(opacity=0.75)
+                .encode(
+                    x=alt.X("mae:Q", title="MAE (adverse excursion, fraction)"),
+                    y=alt.Y("mfe:Q", title="MFE (favorable excursion, fraction)"),
+                    size=enc_size,
+                    color=alt.Color("action:N", title="Action Signal"),
+                    tooltip=["symbol", "mfe", "mae", "edge_ratio", "conviction", "action"],
+                )
+                .interactive()
+            )
+            st.altair_chart(chart, use_container_width=True)
+            st.caption(
+                "Point size = conviction (when available). Color = current action "
+                "signal — used as a proxy for 'entry regime' since no per-signal "
+                "entry-time regime label is persisted; a real entry-regime tag "
+                "would need `market_regime` recorded per closed trade, which "
+                "`TransactionsStore.Trade` does not currently carry (known "
+                "follow-up, not fabricated here)."
+            )
+        except Exception as exc:  # noqa: BLE001 — plain fallback, never crash
+            logger.debug("Altair scatter failed, falling back to table: %s", exc)
+            st.dataframe(scatter_df, width="stretch", hide_index=True)
+
+    # ── 2. Edge-ratio-by-signal-module (on-demand, closed trades) ────────────
+    st.markdown("**Edge Ratio by Strategy / Signal Module — closed trades**")
+    st.caption(
+        "On-demand: recomputes MFE/MAE/Edge Ratio for every closed trade via "
+        "`HistoricalStore.get_bars()` + `EvaluationEngine.calculate_edge_ratio()`, "
+        "grouped by the `strategy` tag recorded on each trade at entry."
+    )
+
+    if st.button("📐 Compute edge ratio by strategy", key="edge_by_strategy_btn"):
+        try:
+            with busy("Computing edge ratio by strategy…"):
+                from transactions_store import TransactionsStore
+                from evaluation_engine import EvaluationEngine
+                from data.historical_store import HistoricalStore
+
+                store = TransactionsStore()
+                closed = store.closed_trades_df()
+                if closed.empty:
+                    st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+                else:
+                    ee_local = EvaluationEngine()
+                    hstore = HistoricalStore()
+                    per_trade_rows = []
+                    bars_cache: Dict[str, pd.DataFrame] = {}
+                    for _, trade in closed.iterrows():
+                        sym = str(trade.get("symbol", "")).upper()
+                        if not sym:
+                            continue
+                        if sym not in bars_cache:
+                            try:
+                                bars_cache[sym] = hstore.get_bars(sym, lookback_days=756)
+                            except Exception:
+                                bars_cache[sym] = pd.DataFrame()
+                        bars = bars_cache[sym]
+                        if bars.empty:
+                            continue
+                        entry_price = trade.get("entry_price")
+                        entry_ts = trade.get("entry_ts")
+                        exit_ts = trade.get("exit_ts")
+                        if pd.isna(entry_price) or pd.isna(entry_ts) or pd.isna(exit_ts):
+                            continue
+                        edge = ee_local.calculate_edge_ratio(bars, float(entry_price), entry_ts, exit_ts)
+                        per_trade_rows.append({
+                            "strategy": trade.get("strategy") or "(untagged)",
+                            "symbol": sym,
+                            "MFE": edge["MFE"],
+                            "MAE": edge["MAE"],
+                            "Edge Ratio": edge["Edge Ratio"],
+                        })
+                    per_trade_df = pd.DataFrame(per_trade_rows)
+                    if per_trade_df.empty:
+                        st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+                    else:
+                        summary = (
+                            per_trade_df.dropna(subset=["Edge Ratio"])
+                            .groupby("strategy")
+                            .agg(
+                                n_trades=("Edge Ratio", "count"),
+                                mean_edge_ratio=("Edge Ratio", "mean"),
+                                median_edge_ratio=("Edge Ratio", "median"),
+                                mean_mfe=("MFE", "mean"),
+                                mean_mae=("MAE", "mean"),
+                            )
+                            .reset_index()
+                            .sort_values("mean_edge_ratio", ascending=False)
+                        )
+                        st.session_state["edge_by_strategy_result"] = summary
+        except Exception as exc:  # noqa: BLE001 — surface, never crash the tab
+            st.error(f"Edge-ratio-by-strategy computation failed: {exc}")
+            st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+
+    result = st.session_state.get("edge_by_strategy_result")
+    if result is None:
+        st.caption("Click the button above to compute this table.")
+    elif result.empty:
+        st.info(
+            "No closed trades with recoverable OHLC history yet. This table "
+            "populates once trades close and historical bars are cached via "
+            "`HistoricalStore`."
+        )
+    else:
+        st.dataframe(result, width="stretch", hide_index=True)
+
+
+# ===========================================================================
+# Tab 1 — Launcher & Orchestration
+# ===========================================================================
+
+
+def render_report_viewer() -> None:
+    """Surface evaluation_engine / research_engine analytics + report exports.
+
+    Visual cues
+    -----------
+    Every section of this tab is tagged Blue (Live) or Grey (Backtested /
+    Simulated) so the operator cannot mistake one for the other. The
+    classification rules:
+
+    * **Blue / Live** — data sourced from ``output/state_snapshot.json``
+      written by the most recent orchestrator / advisory run AND the active
+      execution mode is :data:`ExecutionMode.PAPER` or
+      :data:`ExecutionMode.LIVE`.
+    * **Grey / Backtested** — data sourced from CSV uploads, validation
+      reports, or anything authored under ``DRY_RUN=true`` (simulation mode).
+
+    Drill-down: every metric tile has a "🔬 Inspect" expander revealing the
+    underlying trade log, per-symbol contribution table, or raw signal row so
+    the operator can see *why* a number is what it is rather than only *what*
+    it is.
+    """
+    help_widgets.explain("reports")
+    st.subheader("📈 Interactive Report Viewer")
+
+    snap = load_state_snapshot()
+    signals = snap.get("signals", [])
+
+    _render_report_provenance_banner(snap)
+
+    # Freshness badge (Task C5): flags in red when the snapshot this whole
+    # tab reads from is older than the dashboard refresh TTL.
+    try:
+        from shared.styling import freshness_badge
+        _snap_ts_raw = snap.get("timestamp")
+        _snap_ts = datetime.fromisoformat(_snap_ts_raw.replace("Z", "+00:00")) if _snap_ts_raw else None
+        st.caption(freshness_badge(
+            _snap_ts, ttl_seconds=settings.DASHBOARD_REFRESH_SECONDS, label="Snapshot",
+        ))
+    except Exception as exc:  # noqa: BLE001 — cosmetic only, never block the tab
+        logger.debug("freshness badge unavailable: %s", exc)
+
+    # ── Portfolio heat + edge from the engine ────────────────────────────────
+    from evaluation_engine import EvaluationEngine
+
+    ee = EvaluationEngine(max_portfolio_heat=settings.MAX_PORTFOLIO_HEAT)
+
+    st.markdown("**Portfolio risk snapshot**")
+    if signals:
+        sig_df = pd.DataFrame(signals)
+        # Build a minimal positions frame the heat calc understands; degrade
+        # gracefully when the expected columns are absent.
+        pos_df = pd.DataFrame(
+            {
+                "Symbol": sig_df.get("symbol", pd.Series(dtype=str)),
+                "Kelly Target": sig_df.get("kelly_target", pd.Series(dtype=float)),
+            }
+        )
+        try:
+            heat = ee.calculate_portfolio_heat(pos_df)
+        except Exception as exc:
+            logger.warning("portfolio heat failed: %s", exc)
+            heat = float("nan")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            heat_icon = "🔴" if (heat == heat and heat > settings.MAX_PORTFOLIO_HEAT) else "🟢"
+            st.metric("Portfolio Heat", f"{heat_icon} {heat:.2%}" if heat == heat else "—")
+        with c2:
+            st.metric("Heat Limit", f"{settings.MAX_PORTFOLIO_HEAT:.0%}")
+        with c3:
+            st.metric("Active Signals", str(len(signals)))
+    else:
+        st.info("No pipeline signals yet — run the orchestrator from the Launcher tab.")
+
+    # ── MFE/MAE & Edge Ratio chart ───────────────────────────────────────────
+    st.markdown("**MFE / MAE / Edge Ratio (latest signals)**")
+    if signals:
+        sig_df = pd.DataFrame(signals)
+        # Symbol search filter
+        report_sym_query = st.text_input(
+            "🔍 Filter by symbol",
+            value="",
+            key="report_symbol_search",
+            placeholder="e.g. AAPL",
+            help="Case-insensitive prefix/contains match — leave blank to show all.",
+        )
+        sig_df_display = filter_by_symbol(sig_df, report_sym_query, column="symbol")
+        chart_cols = [c for c in ["symbol", "score", "kelly_target"] if c in sig_df_display.columns]
+        if chart_cols and not sig_df_display.empty:
+            st.bar_chart(sig_df_display.set_index("symbol")[[c for c in chart_cols if c != "symbol"]])
+
+        # Severity coloring (Task C5): Kelly Target red at/near the advisory
+        # ceiling, conviction green/yellow/red — see gui/styling.py for the
+        # exact thresholds (sourced from engine.advisory.CONFIG).
+        try:
+            from shared.styling import style_severity
+            st.dataframe(
+                style_severity(
+                    sig_df_display,
+                    kelly_cols=("kelly_target",),
+                    conviction_cols=("advisory_conviction",),
+                ),
+                width="stretch",
+            )
+        except Exception as exc:  # noqa: BLE001 — never let styling break the table
+            logger.debug("severity styling unavailable: %s", exc)
+            st.dataframe(sig_df_display, width="stretch")
+
+        # ── Drill-down: pick a symbol → see its full signal row + recent
+        #    closed trades from the TransactionsStore. Click-to-explain "why
+        #    is this score what it is" rather than scrolling the wide table.
+        with st.expander("🔬 Drill down by symbol"):
+            if "symbol" in sig_df.columns:
+                pick = st.selectbox(
+                    "Symbol",
+                    options=sorted(sig_df["symbol"].astype(str).unique()),
+                    key="report_drilldown_symbol",
+                )
+                if pick:
+                    row = sig_df[sig_df["symbol"].astype(str) == pick].iloc[0].to_dict()
+                    st.markdown(f"**Signal row for `{pick}`**")
+                    st.json(row)
+
+                    # Trade-log drill-down via TransactionsStore (CONSTRAINT
+                    # #7: integrate, don't reinvent — read the existing
+                    # ledger directly).
+                    try:
+                        from transactions_store import TransactionsStore
+                        ts = TransactionsStore()
+                        closed = ts.closed_trades_df()
+                        if (not closed.empty
+                                and "symbol" in closed.columns):
+                            sym_trades = closed[
+                                closed["symbol"].astype(str) == pick
+                            ].sort_values("exit_ts", ascending=False).head(20)
+                            if not sym_trades.empty:
+                                st.markdown(f"**Closed trades for `{pick}` "
+                                            f"(latest {len(sym_trades)})**")
+                                st.dataframe(sym_trades, width="stretch",
+                                             hide_index=True)
+                            else:
+                                st.caption(
+                                    f"No closed trades for `{pick}` yet — "
+                                    "score-only drill-down."
+                                )
+                    except Exception as exc:  # noqa: BLE001 — degrade
+                        st.caption(f"(transactions store unavailable: {exc})")
+
+                    # Tier 9 — on-demand Claude analyst commentary button.
+                    # Renders the same `enrich_with_llm_rationale` seam the
+                    # CLI exposes, with a session-state cache keyed by the
+                    # same UTC date + score bucket as llm.cache so repeat
+                    # clicks within a trading day are free.
+                    _render_llm_commentary_button(row, pick)
+            else:
+                st.caption("Signal frame has no `symbol` column to drill into.")
+    else:
+        st.caption("MFE/MAE/Edge populate once closed trades and signals exist.")
+
+    # ── Buy Range / Sell Range side-by-side (Task C1) ────────────────────────
+    # buyRange has long been in the wide signals table above; sellRange
+    # (strategy_engine.apply_sell_side_range) is equally always-populated but
+    # easy to miss buried in that wide table — call it out explicitly here.
+    st.markdown("**Tactical Ranges — Buy Zone vs. Sell Zone**")
+    if signals:
+        st.dataframe(build_tactical_ranges_frame(signals), width="stretch", hide_index=True)
+    else:
+        st.caption("Buy/Sell ranges populate once pipeline signals exist.")
+
+    # ── Multifactor z-scores + cross-sectional momentum (Task C1) ────────────
+    _render_hidden_fields_section(signals)
+
+    # ── Trade quality: MFE/MAE scatter + edge-ratio-by-strategy (Task C3) ────
+    _render_trade_quality_section(signals)
+
+    # ── Correlation Cluster Awareness (Tier 2.5) ─────────────────────────────
+    _render_correlation_cluster_section(signals)
+
+    # ── Signal decision journal (1.3) ────────────────────────────────────────
+    _render_decision_journal_section(signals)
+
+    # ── Recommendation tracking: model vs. operator (4.1) ───────────────────
+    _render_recommendation_tracking_section()
+
+    # ── Brinson-Fachler attribution (interactive section) ───────────────────
+    _render_brinson_fachler_section()
+
+    # ── Conviction calibration (1.2) ─────────────────────────────────────────
+    _render_calibration_section()
+
+    # ── Existing HTML report export ──────────────────────────────────────────
+    st.markdown("**Generated reports**")
+    html_report = settings.OUTPUT_DIR / "daily_report_dashboard.html"
+    if html_report.exists():
+        st.download_button(
+            "⬇️ Download daily HTML report",
+            data=html_report.read_bytes(),
+            file_name="daily_report_dashboard.html",
+            mime="text/html",
+            width="stretch",
+        )
+    else:
+        st.caption("No HTML report yet — generated at the end of an orchestrator run.")
+
+    if signals:
+        st.download_button(
+            "⬇️ Export latest signals (CSV)",
+            data=pd.DataFrame(signals).to_csv(index=False).encode("utf-8"),
+            file_name="latest_signals.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+
+

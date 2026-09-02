@@ -22,7 +22,7 @@ import pytest
 
 class TestPanelsSnapshotFreshness:
     def test_loader_forwards_changing_mtime(self, monkeypatch, tmp_path) -> None:
-        import gui.panels as panels
+        import legacy.streamlit_command_center.panels as panels
 
         monkeypatch.setattr(panels.settings, "OUTPUT_DIR", tmp_path, raising=False)
         snap = tmp_path / "state_snapshot.json"
@@ -54,7 +54,7 @@ class TestPanelsSnapshotFreshness:
         assert calls[-1][1] != m1
 
     def test_inner_cached_reads_by_path(self, monkeypatch, tmp_path) -> None:
-        import gui.panels as panels
+        import legacy.streamlit_command_center.panels as panels
 
         snap = tmp_path / "state_snapshot.json"
         snap.write_text(json.dumps({"vix": 21.0}), encoding="utf-8")

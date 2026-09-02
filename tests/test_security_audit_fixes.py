@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gui.orchestrator_runner import launch_train_meta_labelers, launch_validation_run
+from shared.orchestrator_runner import launch_train_meta_labelers, launch_validation_run
 from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS
 from pilots.prompt_registry import get_prompt_body
 from pilots.run_status import parse_crontab_status
@@ -84,8 +84,8 @@ class TestLaunchValidationInputValidation:
             launch_validation_run([bad_strat], start="2024-01-01", end="2024-12-31")
 
     def test_valid_input_succeeds_with_mocked_popen(self) -> None:
-        with patch("gui.orchestrator_runner.subprocess.Popen") as mock_popen, \
-             patch("gui.orchestrator_runner.open", create=True):
+        with patch("shared.orchestrator_runner.subprocess.Popen") as mock_popen, \
+             patch("shared.orchestrator_runner.open", create=True):
             mock_proc = MagicMock()
             mock_proc.pid = 12345
             mock_popen.return_value = mock_proc
@@ -139,8 +139,8 @@ class TestLaunchTrainMetaLabelersInputValidation:
             launch_train_meta_labelers(signal=bad_signal)
 
     def test_valid_signal_succeeds_with_mocked_popen(self) -> None:
-        with patch("gui.orchestrator_runner.subprocess.Popen") as mock_popen, \
-             patch("gui.orchestrator_runner.open", create=True):
+        with patch("shared.orchestrator_runner.subprocess.Popen") as mock_popen, \
+             patch("shared.orchestrator_runner.open", create=True):
             mock_proc = MagicMock()
             mock_proc.pid = 12345
             mock_popen.return_value = mock_proc
@@ -156,8 +156,8 @@ class TestLaunchTrainMetaLabelersInputValidation:
             assert "timeseries_momentum" in META_LABELED_SIGNAL_IDS
 
     def test_no_signal_succeeds_with_mocked_popen(self) -> None:
-        with patch("gui.orchestrator_runner.subprocess.Popen") as mock_popen, \
-             patch("gui.orchestrator_runner.open", create=True):
+        with patch("shared.orchestrator_runner.subprocess.Popen") as mock_popen, \
+             patch("shared.orchestrator_runner.open", create=True):
             mock_proc = MagicMock()
             mock_proc.pid = 12346
             mock_popen.return_value = mock_proc

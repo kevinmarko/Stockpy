@@ -9,7 +9,7 @@ per-signal MFE/MAE points, edge-ratio-by-strategy, and the recent-decisions tail
 
 All engine/DB dependencies are monkeypatched at their SOURCE module
 (``transactions_store.TransactionsStore``, ``evaluation_engine.*``,
-``data.historical_store.HistoricalStore``, ``gui.decision_log.*``) rather than
+``data.historical_store.HistoricalStore``, ``shared.decision_log.*``) rather than
 on ``pilots.calibration`` itself, since that module does lazy (inside-function)
 imports — mirroring ``tests/test_pilots_observability.py``'s convention.
 """
@@ -350,7 +350,7 @@ class TestEdgeByStrategyView:
 class TestRecentDecisionsView:
     def test_empty_log(self, tmp_path):
         with mock.patch(
-            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+            "shared.decision_log.decisions_df", return_value=pd.DataFrame()
         ):
             out = cal.recent_decisions_view(log_path=tmp_path / "missing.jsonl")
         assert out["decisions"] == []
@@ -369,7 +369,7 @@ class TestRecentDecisionsView:
                 "trade_id": pd.array([7, None], dtype="Int64"),
             }
         )
-        with mock.patch("gui.decision_log.decisions_df", return_value=df):
+        with mock.patch("shared.decision_log.decisions_df", return_value=df):
             out = cal.recent_decisions_view(log_path=tmp_path / "log.jsonl")
 
         assert len(out["decisions"]) == 2
@@ -407,7 +407,7 @@ class TestCalibrationSummaryComposite:
                 },
             ):
                 with mock.patch(
-                    "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                    "shared.decision_log.decisions_df", return_value=pd.DataFrame()
                 ):
                     out = cal.calibration_summary(horizon_days=30, snapshot=None)
 

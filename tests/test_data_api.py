@@ -568,7 +568,7 @@ def test_put_universe_requires_token_even_when_unset(monkeypatch):
     GET endpoints on this API — it uses require_write_token, which fails
     CLOSED when STATE_API_TOKEN is unset (the opposite of every read
     endpoint's fail-open default)."""
-    monkeypatch.setattr("env_io.write_setting", lambda key, value: ".env")
+    monkeypatch.setattr("shared.env_io.write_setting", lambda key, value: ".env")
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.put("/data/universe", json=["aapl", " nvda ", ""])
     assert resp.status_code == 403
@@ -582,7 +582,7 @@ def test_put_universe_writes_default_tickers(monkeypatch):
         written["value"] = value
         return ".env"
 
-    monkeypatch.setattr("env_io.write_setting", _fake_write)
+    monkeypatch.setattr("shared.env_io.write_setting", _fake_write)
     with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
         resp = client.put(
             "/data/universe",
@@ -982,7 +982,7 @@ class TestUniverseSyncInvariants:
         key (POST /data/sync remains gated independently by STATE_API_TOKEN via
         require_write_token, so this flag's own writability is not the sole
         safeguard)."""
-        from gui import env_io
+        from shared import env_io
 
         assert "UNIVERSE_SYNC_ENABLED" in env_io.ALLOWED_KEYS
         assert "UNIVERSE_SYNC_ENABLED" not in env_io.SECRET_KEYS

@@ -6,13 +6,13 @@ Unit tests for the Launcher-tab **Maintenance & Diagnostics** section
 
 Verified invariants
 -------------------
-*   ``_render_maintenance_diagnostics`` exists in ``gui.panels.launcher`` and is
+*   ``_render_maintenance_diagnostics`` exists in ``legacy.streamlit_command_center.panels.launcher`` and is
     callable (imported directly from the submodule — no ``__init__`` re-export
     is required, keeping ``gui/panels/__init__.py`` single-owner).
 *   The function's no-click path (every ``st.button`` returns ``False``) runs
     without raising when Streamlit is stubbed with a minimal fake module — the
     defensive ``try/except ImportError`` guards mean it does not depend on the
-    parallel-built ``gui.command_runner`` / ``launch_pytest`` / ``launch_verify``
+    parallel-built ``shared.command_runner`` / ``launch_pytest`` / ``launch_verify``
     contracts existing yet.
 *   ``render_launcher`` actually wires the section in (source-level guard).
 
@@ -86,18 +86,18 @@ def _make_fake_streamlit() -> types.ModuleType:
 # ===========================================================================
 
 def test_render_maintenance_diagnostics_importable():
-    from gui.panels.launcher import _render_maintenance_diagnostics
+    from legacy.streamlit_command_center.panels.launcher import _render_maintenance_diagnostics
     assert _render_maintenance_diagnostics is not None
 
 
 def test_render_maintenance_diagnostics_callable():
-    from gui.panels.launcher import _render_maintenance_diagnostics
+    from legacy.streamlit_command_center.panels.launcher import _render_maintenance_diagnostics
     assert callable(_render_maintenance_diagnostics)
 
 
 def test_launcher_module_imports_cleanly():
     """The whole submodule imports without error."""
-    import gui.panels.launcher as launcher_mod
+    import legacy.streamlit_command_center.panels.launcher as launcher_mod
     assert launcher_mod is not None
 
 
@@ -112,7 +112,7 @@ def test_no_click_path_does_not_raise():
     the click branches (which import the parallel-built runner modules) run —
     exercising the idle render path deterministically and offline.
     """
-    import gui.panels.launcher as launcher_mod
+    import legacy.streamlit_command_center.panels.launcher as launcher_mod
 
     fake_st = _make_fake_streamlit()
     with mock.patch.object(launcher_mod, "st", fake_st):
@@ -122,7 +122,7 @@ def test_no_click_path_does_not_raise():
 
 def test_no_click_path_with_finished_handle_does_not_raise():
     """A finished (not-running) handle in session_state renders without raising."""
-    import gui.panels.launcher as launcher_mod
+    import legacy.streamlit_command_center.panels.launcher as launcher_mod
 
     fake_st = _make_fake_streamlit()
 
@@ -143,7 +143,7 @@ def test_no_click_path_with_finished_handle_does_not_raise():
 
 def test_render_launcher_wires_maintenance_section():
     """render_launcher must invoke _render_maintenance_diagnostics()."""
-    from gui.panels.launcher import render_launcher
+    from legacy.streamlit_command_center.panels.launcher import render_launcher
 
     src = inspect.getsource(render_launcher)
     assert "_render_maintenance_diagnostics()" in src, (

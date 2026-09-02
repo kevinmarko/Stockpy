@@ -1,7 +1,7 @@
 """
 tests/test_llm_commentary_panel.py
 ====================================
-Unit tests for ``gui.llm_commentary_panel`` — the Streamlit-free helpers
+Unit tests for ``shared.llm_commentary_panel`` — the Streamlit-free helpers
 that back the on-demand Claude analyst commentary button on the Reports tab.
 
 All tests run headlessly — no Streamlit, no real LLM provider, no network.
@@ -24,7 +24,7 @@ TestGenerateForSymbolRow   — enricher returns None → returns None;
                              enricher returns valid payload → llm_rationale dict;
                              enricher raises → returns None (CONSTRAINT #6);
                              missing symbol → returns None without calling enricher.
-TestPanelsWiring           — gui.panels exports _render_llm_commentary_button
+TestPanelsWiring           — legacy.streamlit_command_center.panels exports _render_llm_commentary_button
                              AND render_report_viewer calls it (source grep).
 """
 
@@ -37,7 +37,7 @@ from unittest import mock
 
 import pytest
 
-from gui.llm_commentary_panel import (
+from shared.llm_commentary_panel import (
     commentary_state_key,
     commentary_status,
     format_rationale_markdown,
@@ -277,7 +277,7 @@ class TestGenerateForSymbolRow:
 
 class TestPanelsWiring:
     def test_render_button_helper_is_exported(self):
-        from gui import panels
+        from legacy.streamlit_command_center import panels
 
         assert hasattr(panels, "_render_llm_commentary_button")
         assert callable(panels._render_llm_commentary_button)
@@ -285,18 +285,18 @@ class TestPanelsWiring:
     def test_render_report_viewer_calls_button_helper(self):
         # Source-grep guards against an accidental drop of the wiring in
         # the drill-down expander.
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "report_viewer.py"
+        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "report_viewer.py"
         src = path.read_text(encoding="utf-8")
         assert "_render_llm_commentary_button(row, pick)" in src
 
     def test_helper_imports_from_panel_module(self):
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "report_viewer.py"
+        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "report_viewer.py"
         src = path.read_text(encoding="utf-8")
-        assert "from gui.llm_commentary_panel import" in src
+        assert "from shared.llm_commentary_panel import" in src
         for name in (
             "commentary_state_key",
             "commentary_status",
             "format_rationale_markdown",
             "generate_for_symbol_row",
         ):
-            assert name in src, f"helper {name} missing from gui/panels/report_viewer.py"
+            assert name in src, f"helper {name} missing from legacy/streamlit_command_center/panels/report_viewer.py"

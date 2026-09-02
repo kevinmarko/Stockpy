@@ -1,7 +1,7 @@
 """
 tests/test_sector_backtest_settings.py
 =======================================
-Unit tests for the settings.py / gui.env_io wiring behind the empirical
+Unit tests for the settings.py / shared.env_io wiring behind the empirical
 per-sector forecast model/horizon feature (replacing the hardcoded
 per-sector heuristic in forecasting_engine.py with one derived from an
 offline walk-forward backtest — see validation/sector_forecast_backtest.py).
@@ -170,27 +170,27 @@ def test_validator_import_error_via_missing_sys_modules_entry(monkeypatch):
 # =============================================================================
 class TestEnvIoAllowlist:
     def test_config_path_in_allowed_keys(self):
-        from gui.env_io import ALLOWED_KEYS
+        from shared.env_io import ALLOWED_KEYS
 
         assert "SECTOR_FORECAST_CONFIG_PATH" in ALLOWED_KEYS
 
     def test_configs_in_allowed_keys(self):
-        from gui.env_io import ALLOWED_KEYS
+        from shared.env_io import ALLOWED_KEYS
 
         assert "SECTOR_FORECAST_CONFIGS" in ALLOWED_KEYS
 
     def test_configs_is_json_key(self):
-        from gui.env_io import _JSON_KEYS
+        from shared.env_io import _JSON_KEYS
 
         assert "SECTOR_FORECAST_CONFIGS" in _JSON_KEYS
 
     def test_config_path_is_not_json_key(self):
-        from gui.env_io import _JSON_KEYS
+        from shared.env_io import _JSON_KEYS
 
         assert "SECTOR_FORECAST_CONFIG_PATH" not in _JSON_KEYS
 
     def test_neither_key_is_secret(self):
-        from gui.env_io import SECRET_KEYS
+        from shared.env_io import SECRET_KEYS
 
         assert "SECTOR_FORECAST_CONFIG_PATH" not in SECRET_KEYS
         assert "SECTOR_FORECAST_CONFIGS" not in SECRET_KEYS
@@ -199,8 +199,7 @@ class TestEnvIoAllowlist:
 @pytest.fixture()
 def temp_env(tmp_path, monkeypatch):
     """Point env_io at an isolated temp .env (mirrors tests/test_gui_env_io.py)."""
-    import env_io
-
+    import shared.env_io as env_io
     env_file = tmp_path / ".env"
     env_file.write_text(
         "# InvestYo config (test fixture)\nRISK_FREE_RATE=0.045\n",
@@ -211,8 +210,7 @@ def temp_env(tmp_path, monkeypatch):
 
 
 def test_sector_forecast_configs_json_roundtrip(temp_env):
-    import env_io
-
+    import shared.env_io as env_io
     configs = {"Technology": {"days": 30, "model": "MC"}, "Energy": {"days": 60, "model": "ARIMA"}}
     env_io.write_setting("SECTOR_FORECAST_CONFIGS", configs)
     raw = env_io.get_value("SECTOR_FORECAST_CONFIGS")
@@ -220,15 +218,13 @@ def test_sector_forecast_configs_json_roundtrip(temp_env):
 
 
 def test_sector_forecast_config_path_scalar_roundtrip(temp_env):
-    import env_io
-
+    import shared.env_io as env_io
     env_io.write_setting("SECTOR_FORECAST_CONFIG_PATH", "forecasting/custom_configs.json")
     assert env_io.get_value("SECTOR_FORECAST_CONFIG_PATH") == "forecasting/custom_configs.json"
 
 
 def test_write_many_includes_both_new_keys(temp_env):
-    import env_io
-
+    import shared.env_io as env_io
     written = env_io.write_many(
         {
             "SECTOR_FORECAST_CONFIG_PATH": "forecasting/sector_configs.json",

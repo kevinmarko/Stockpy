@@ -13,7 +13,7 @@
 # The module composes on top of:
 #   * `main.run_once()`              — produces a fresh RunResult per cycle
 #   * `watch_engine.evaluate_*`      — already fires per-cycle edge alerts
-#   * `gui.decision_log.read_*`      — tracks what the operator actually did
+#   * `shared.decision_log.read_*`      — tracks what the operator actually did
 #   * `alerting.notify()`            — ntfy push channel
 #
 # What it ADDS that does not already exist:
@@ -487,7 +487,7 @@ def update_backlog(
         must expose `.symbol`, `.action`, `.conviction` (duck-typed to keep
         this module decoupled from the heavy `engine.advisory` import).
     decision_log_entries :
-        Iterable of `gui.decision_log.DecisionEntry`-shaped objects.  Each
+        Iterable of `shared.decision_log.DecisionEntry`-shaped objects.  Each
         must expose `.symbol` (case-insensitive) and `.timestamp` (ISO string).
         Only entries whose `action_taken == "acted"` are considered.
     now_utc :

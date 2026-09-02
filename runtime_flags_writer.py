@@ -186,8 +186,7 @@ from typing import Any, Iterable, Mapping, Optional
 import runtime_flags
 import settings as settings_module
 import settings_keysets
-import env_io
-
+import shared.env_io as env_io
 logger = logging.getLogger(__name__)
 
 __all__ = [

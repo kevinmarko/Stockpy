@@ -21,7 +21,7 @@ Design invariants (identical to the rest of the Pilots read layer):
 and ``age_days`` are computed HERE (not left as raw date math for the
 frontend) because this module already has the per-model ``trained_date`` in
 hand. ``MODEL_RETRAIN_WINDOW_DAYS`` is imported live from
-``gui.help_content`` — the SAME 30-day constant
+``shared.help_content`` — the SAME 30-day constant
 ``ml.meta_labeling.MetaLabeler.needs_retrain()`` uses and the existing
 "Needs Retrain"/"Model Freshness" glossary entries already cite — never
 re-typed as a literal here (mirrors this file's own "thresholds are live-
@@ -117,7 +117,7 @@ def _parse_registry_dict(raw: dict) -> List[Dict[str, Any]]:
 
     # Lazy import (mirrors this codebase's HistoricalStore/etc. convention)
     try:
-        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+        from shared.help_content import MODEL_RETRAIN_WINDOW_DAYS
     except Exception as exc:  # noqa: BLE001 — dead-letter (CONSTRAINT #6)
         logger.debug("MODEL_RETRAIN_WINDOW_DAYS unavailable: %s", exc)
         MODEL_RETRAIN_WINDOW_DAYS = None  # type: ignore[assignment]

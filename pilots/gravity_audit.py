@@ -8,16 +8,16 @@ tab) has TWO independent Gravity-audit surfaces:
 1.  The AI Gravity audit runner (``engine.gravity_ai_runner`` — Claude auditor
     + Gemini cross-checker) persists a structured JSON report to
     ``output/gravity_ai_audit.json``. That side is read directly via
-    ``gui.gravity_ai_panel`` (already Streamlit-free + dependency-light —
+    ``shared.gravity_ai_panel`` (already Streamlit-free + dependency-light —
     imported straight into ``api/pilots_api.py``, mirroring how
-    ``gui.ai_control_center`` is already imported there) — no reader module
+    ``shared.ai_control_center`` is already imported there) — no reader module
     needed for it.
 2.  The legacy, PURELY STRUCTURAL ``Gravity AI Review Suite.py`` (Pandera
     schema conformance, lookahead-bias perturbation, signal-registry health,
     sizing/risk gates — no LLM calls despite the filename) is launched as a
-    DETACHED SUBPROCESS by ``gui.orchestrator_runner.launch_gravity_audit()``
+    DETACHED SUBPROCESS by ``shared.orchestrator_runner.launch_gravity_audit()``
     and streamed to a durable log file, ``output/gravity_run.log``
-    (``gui.orchestrator_runner.GRAVITY_LOG_PATH``) — truncated only when a NEW
+    (``shared.orchestrator_runner.GRAVITY_LOG_PATH``) — truncated only when a NEW
     run is launched, so the last completed (or last in-progress, if read
     mid-run) run's content survives across GUI/API restarts. THIS module
     parses that log's trailing JSON verdict, porting the exact same
@@ -26,7 +26,7 @@ tab) has TWO independent Gravity-audit surfaces:
 
 Deliberately READ-ONLY — no trigger endpoint. See the PR that added this
 module for the full reasoning; in short: (a) the subprocess launcher/live-log
-UX (``gui.orchestrator_runner.launch_gravity_audit`` + ``st.fragment`` polling
+UX (``shared.orchestrator_runner.launch_gravity_audit`` + ``st.fragment`` polling
 every 3s) has no request/response equivalent without new async-job
 infrastructure this API doesn't have, (b) the run itself can take up to ~10
 minutes (the exact reason the legacy blocking ``subprocess.run(timeout=600)``

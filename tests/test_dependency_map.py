@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from gui.dependency_map import (
+from shared.dependency_map import (
     CONSUMERS,
     Consumer,
     DataSource,

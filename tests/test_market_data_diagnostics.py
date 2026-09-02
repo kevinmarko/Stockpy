@@ -23,7 +23,7 @@ from typing import List
 import pytest
 
 from data.market_data import MarketDataError, Quote
-from gui.market_data_diagnostics import (
+from shared.market_data_diagnostics import (
     BatchQuoteFetcher,
     BatchResult,
     ErrorCategory,

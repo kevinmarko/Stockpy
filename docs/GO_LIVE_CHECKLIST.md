@@ -106,7 +106,7 @@
   ```
 - [ ] Command Center launches without errors and the Observability tab renders:
   ```
-  streamlit run gui/app.py
+  streamlit run legacy/streamlit_command_center/app.py
   ```
 - [ ] Heartbeat file refreshes every 60 s: `ls -la ~/.stockpy_local/output/heartbeat.txt`
   (or `$LOCAL_DATA_ROOT/output/heartbeat.txt` if you've overridden the default — not a

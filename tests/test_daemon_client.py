@@ -1,7 +1,7 @@
 """Fully offline unit tests for gui/daemon_client.py.
 
 Every test monkeypatches ``urllib.request.urlopen`` (patched at
-``gui.daemon_client.urllib.request.urlopen`` since the module imports
+``shared.daemon_client.urllib.request.urlopen`` since the module imports
 ``urllib.request`` and calls it via that qualified path) to return canned
 responses or raise canned exceptions -- no real network I/O, no real daemon
 process. Mirrors the "patch the network call, assert the function degrades
@@ -17,8 +17,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import gui.daemon_client as daemon_client
-from gui.daemon_client import IntervalResponse, TriggerResponse
+import shared.daemon_client as daemon_client
+from shared.daemon_client import IntervalResponse, TriggerResponse
 from settings import settings
 
 
@@ -78,12 +78,12 @@ def _reset_settings():
 class TestDaemonAvailable:
     def test_true_on_healthy_response(self):
         resp = _make_response(200, {"status": "ok", "daemon_alive": True})
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             assert daemon_client.daemon_available() is True
 
     def test_false_on_connection_refused(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("connection refused"),
         ):
             # Called with no surrounding try/except -- must not raise.
@@ -93,24 +93,24 @@ class TestDaemonAvailable:
         import socket
 
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=socket.timeout("timed out"),
         ):
             assert daemon_client.daemon_available() is False
 
     def test_false_on_malformed_json(self):
         resp = _make_response(200, b"not json{{{")
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             assert daemon_client.daemon_available() is False
 
     def test_false_when_daemon_alive_false(self):
         resp = _make_response(200, {"status": "ok", "daemon_alive": False})
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             assert daemon_client.daemon_available() is False
 
     def test_false_on_non_200_status(self):
         resp = _make_response(500, {"status": "error"})
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             assert daemon_client.daemon_available() is False
 
     def test_no_auth_header_sent(self):
@@ -123,7 +123,7 @@ class TestDaemonAvailable:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.daemon_available()
         assert "Authorization" not in captured["req"].headers
         assert "authorization" not in captured["req"].headers
@@ -144,13 +144,13 @@ class TestGetStatus:
             "engines_warm": True,
         }
         resp = _make_response(200, payload)
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.get_status()
         assert result == payload
 
     def test_none_on_connection_refused(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("refused"),
         ):
             assert daemon_client.get_status() is None
@@ -159,19 +159,19 @@ class TestGetStatus:
         import socket
 
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=socket.timeout("timed out"),
         ):
             assert daemon_client.get_status() is None
 
     def test_none_on_malformed_json(self):
         resp = _make_response(200, b"{not valid json")
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             assert daemon_client.get_status() is None
 
     def test_none_on_401(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(401, {"detail": "Invalid or missing bearer token"}),
         ):
             assert daemon_client.get_status() is None
@@ -185,7 +185,7 @@ class TestGetStatus:
 class TestTriggerRun:
     def test_ok_on_202(self):
         resp = _make_response(202, {"run_id": "run-123", "state": "queued"})
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.trigger_run()
         assert result == TriggerResponse(
             ok=True, run_id="run-123", state="queued", error=None
@@ -194,7 +194,7 @@ class TestTriggerRun:
     def test_already_running_on_409(self):
         body = {"detail": "A run is already in flight.", "run_id": "existing-run-1"}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(409, body),
         ):
             result = daemon_client.trigger_run()
@@ -208,7 +208,7 @@ class TestTriggerRun:
             "kill_switch_reason": "manual pause by operator",
         }
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(423, body),
         ):
             result = daemon_client.trigger_run()
@@ -219,7 +219,7 @@ class TestTriggerRun:
     def test_unauthorized_on_401(self):
         body = {"detail": "Invalid or missing bearer token"}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(401, body),
         ):
             result = daemon_client.trigger_run()
@@ -231,7 +231,7 @@ class TestTriggerRun:
             "detail": "Command endpoint disabled: ORCHESTRATOR_DAEMON_TOKEN not configured."
         }
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(403, body),
         ):
             result = daemon_client.trigger_run()
@@ -241,7 +241,7 @@ class TestTriggerRun:
     def test_unavailable_on_503(self):
         body = {"detail": "Daemon not available."}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(503, body),
         ):
             result = daemon_client.trigger_run()
@@ -250,7 +250,7 @@ class TestTriggerRun:
 
     def test_network_error_on_connection_failure(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("connection refused"),
         ):
             # No surrounding try/except: must not raise.
@@ -262,7 +262,7 @@ class TestTriggerRun:
         import socket
 
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=socket.timeout("timed out"),
         ):
             result = daemon_client.trigger_run()
@@ -271,7 +271,7 @@ class TestTriggerRun:
 
     def test_never_raises_on_malformed_json_success_body(self):
         resp = _make_response(202, b"not json at all")
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.trigger_run()
         assert result.ok is False
         assert result.error == "network_error"
@@ -284,7 +284,7 @@ class TestTriggerRun:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.trigger_run()
         assert captured["req"].get_method() == "POST"
 
@@ -297,14 +297,14 @@ class TestTriggerRun:
 class TestSetInterval:
     def test_ok_on_200(self):
         resp = _make_response(200, {"interval_seconds": 300})
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.set_interval(300)
         assert result == IntervalResponse(ok=True, interval_seconds=300, error=None)
 
     def test_invalid_interval_on_422(self):
         body = {"detail": "interval_seconds must be 0 or in [60, 86400], got 59"}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(422, body),
         ):
             result = daemon_client.set_interval(59)
@@ -315,7 +315,7 @@ class TestSetInterval:
     def test_unauthorized_on_401(self):
         body = {"detail": "Invalid or missing bearer token"}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(401, body),
         ):
             result = daemon_client.set_interval(300)
@@ -327,7 +327,7 @@ class TestSetInterval:
             "detail": "Command endpoint disabled: ORCHESTRATOR_DAEMON_TOKEN not configured."
         }
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(403, body),
         ):
             result = daemon_client.set_interval(300)
@@ -337,7 +337,7 @@ class TestSetInterval:
     def test_unavailable_on_503(self):
         body = {"detail": "Daemon not available."}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(503, body),
         ):
             result = daemon_client.set_interval(300)
@@ -346,7 +346,7 @@ class TestSetInterval:
 
     def test_network_error_on_connection_failure(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("connection refused"),
         ):
             # No surrounding try/except: must not raise.
@@ -358,7 +358,7 @@ class TestSetInterval:
         import socket
 
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=socket.timeout("timed out"),
         ):
             result = daemon_client.set_interval(300)
@@ -367,14 +367,14 @@ class TestSetInterval:
 
     def test_never_raises_on_malformed_json_success_body(self):
         resp = _make_response(200, b"not json at all")
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.set_interval(300)
         assert result.ok is False
         assert result.error == "network_error"
 
     def test_unexpected_2xx_status_is_unexpected_response(self):
         resp = _make_response(201, {"interval_seconds": 300})
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.set_interval(300)
         assert result.ok is False
         assert result.error == "unexpected_response"
@@ -387,7 +387,7 @@ class TestSetInterval:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.set_interval(300)
         assert captured["req"].get_method() == "PUT"
 
@@ -399,7 +399,7 @@ class TestSetInterval:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.set_interval(300)
         req = captured["req"]
         assert req.headers.get("Content-type") == "application/json"
@@ -413,7 +413,7 @@ class TestSetInterval:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.set_interval(300)
         assert captured["req"].full_url.endswith("/interval")
 
@@ -426,7 +426,7 @@ class TestSetInterval:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.set_interval(300)
         assert captured["req"].headers.get("Authorization") == "Bearer my-secret-token"
 
@@ -439,7 +439,7 @@ class TestSetInterval:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.set_interval(300)
         assert "Authorization" not in captured["req"].headers
         assert "authorization" not in captured["req"].headers
@@ -453,7 +453,7 @@ class TestSetInterval:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.set_interval(300)
         assert "127.0.0.1:7777" in captured["req"].full_url
 
@@ -475,7 +475,7 @@ class TestGetRunStatus:
             "reason": "manual",
         }
         resp = _make_response(200, payload)
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.get_run_status("run-abc")
         assert result == payload
         assert result["finished_at"] is None
@@ -483,21 +483,21 @@ class TestGetRunStatus:
 
     def test_none_on_404(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(404, {"detail": "No such run."}),
         ):
             assert daemon_client.get_run_status("unknown-run") is None
 
     def test_none_on_connection_failure(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("refused"),
         ):
             assert daemon_client.get_run_status("run-1") is None
 
     def test_none_on_malformed_json(self):
         resp = _make_response(200, b"{{malformed")
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             assert daemon_client.get_run_status("run-1") is None
 
     def test_url_includes_run_id(self):
@@ -508,7 +508,7 @@ class TestGetRunStatus:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.get_run_status("abc-123")
         assert "/run/abc-123/status" in captured["req"].full_url
 
@@ -525,21 +525,21 @@ class TestGetLatestRun:
             "reason": "manual",
         }
         resp = _make_response(200, payload)
-        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
             result = daemon_client.get_latest_run()
         assert result == payload
 
     def test_none_on_404(self):
         body = {"detail": "No completed run yet — trigger one via POST /run."}
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=_http_error(404, body),
         ):
             assert daemon_client.get_latest_run() is None
 
     def test_none_on_connection_failure(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("refused"),
         ):
             assert daemon_client.get_latest_run() is None
@@ -560,7 +560,7 @@ class TestHeaderConstruction:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.get_status()
         assert captured["req"].headers.get("Authorization") == "Bearer my-secret-token"
 
@@ -573,7 +573,7 @@ class TestHeaderConstruction:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.get_status()
         assert "Authorization" not in captured["req"].headers
         assert "authorization" not in captured["req"].headers
@@ -587,7 +587,7 @@ class TestHeaderConstruction:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.trigger_run()
         assert captured["req"].headers.get("Authorization") == "Bearer token-abc"
 
@@ -607,7 +607,7 @@ class TestPortConstruction:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.get_status()
         assert "127.0.0.1:9999" in captured["req"].full_url
 
@@ -620,7 +620,7 @@ class TestPortConstruction:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.daemon_available()
         assert "127.0.0.1:12345" in captured["req"].full_url
 
@@ -633,7 +633,7 @@ class TestPortConstruction:
             captured["req"] = req
             return resp
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
             daemon_client.trigger_run()
         assert "127.0.0.1:5555" in captured["req"].full_url
 
@@ -646,7 +646,7 @@ class TestPortConstruction:
 class TestNeverRaises:
     def test_connection_refused_across_all_functions(self):
         with patch(
-            "gui.daemon_client.urllib.request.urlopen",
+            "shared.daemon_client.urllib.request.urlopen",
             side_effect=urllib.error.URLError("connection refused"),
         ):
             assert daemon_client.daemon_available() is False
@@ -662,7 +662,7 @@ class TestNeverRaises:
         def _malformed(*args, **kwargs):
             return _make_response(200, b"totally not json {{{")
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_malformed):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_malformed):
             assert daemon_client.daemon_available() is False
             assert daemon_client.get_status() is None
             assert daemon_client.get_run_status("any-id") is None
@@ -673,6 +673,6 @@ class TestNeverRaises:
         def _malformed_202(*args, **kwargs):
             return _make_response(202, b"totally not json {{{")
 
-        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_malformed_202):
+        with patch("shared.daemon_client.urllib.request.urlopen", side_effect=_malformed_202):
             result = daemon_client.trigger_run()
             assert result.ok is False

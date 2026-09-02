@@ -1,7 +1,7 @@
 """
 tests/test_ai_insights_panel.py
 ================================
-Unit tests for ``gui.ai_insights_panel`` (Tier 9 Scope 3) — Streamlit-free
+Unit tests for ``shared.ai_insights_panel`` (Tier 9 Scope 3) — Streamlit-free
 helpers behind the AI Insights tab.
 
 Coverage
@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from gui.ai_insights_panel import (
+from shared.ai_insights_panel import (
     DisagreementRow,
     derive_disagreement_overview,
     disagreement_summary,
@@ -294,14 +294,14 @@ class TestLatestVerdictMapsFromCache:
 
 class TestPanelWiring:
     def test_render_ai_insights_exported(self):
-        from gui import panels
+        from legacy.streamlit_command_center import panels
 
         assert hasattr(panels, "render_ai_insights")
         assert callable(panels.render_ai_insights)
         assert hasattr(panels, "_render_gemini_chart_section")
 
     def test_app_py_registers_thirteenth_tab(self):
-        path = Path(__file__).resolve().parents[1] / "gui" / "app.py"
+        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "app.py"
         src = path.read_text(encoding="utf-8")
         assert "🪄 AI Insights" in src
         assert "panels.render_ai_insights" in src
@@ -311,9 +311,9 @@ class TestPanelWiring:
         # Lives in gui/panels/ai_insights.py post-refactor (Phase 4a extracted
         # gui/panels/__init__.py into per-tab modules; __init__.py is now a
         # thin re-export stub).
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "ai_insights.py"
+        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
-        assert "from gui.ai_insights_panel import" in src
+        assert "from shared.ai_insights_panel import" in src
         for name in (
             "derive_disagreement_overview",
             "disagreement_summary",
@@ -338,7 +338,7 @@ class TestOpalIndependentGating:
     def _render_ai_insights_body(self) -> str:
         # Lives in gui/panels/ai_insights.py post-refactor (see
         # test_panel_imports_helper_module for the rationale).
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "ai_insights.py"
+        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         start = src.index("def render_ai_insights")
         end = src.index("\ndef ", start + 1)

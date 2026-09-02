@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gui.decision_log import (
+from shared.decision_log import (
     DEFAULT_LOG_PATH,
     ActionTaken,
     DecisionEntry,

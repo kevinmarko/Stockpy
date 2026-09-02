@@ -1,8 +1,8 @@
 """
 tests/test_pipeline_stage_status.py
 =====================================
-Unit tests for :class:`gui.orchestrator_runner.StageStatus` and the updated
-:func:`gui.orchestrator_runner.compute_stage_status`.
+Unit tests for :class:`shared.orchestrator_runner.StageStatus` and the updated
+:func:`shared.orchestrator_runner.compute_stage_status`.
 
 Verified invariants
 -------------------
@@ -30,19 +30,19 @@ import pytest
 # ===========================================================================
 
 def test_stage_status_is_str_subclass():
-    from gui.orchestrator_runner import StageStatus
+    from shared.orchestrator_runner import StageStatus
     assert issubclass(StageStatus, str)
 
 
 def test_stage_status_members_exist():
-    from gui.orchestrator_runner import StageStatus
+    from shared.orchestrator_runner import StageStatus
     required = {"SUCCESS", "ACTIVE", "ERROR", "PENDING", "SKIPPED"}
     assert required.issubset({m.name for m in StageStatus})
 
 
 def test_stage_status_string_equality_legacy():
     """StageStatus members must == their string values (backwards compat)."""
-    from gui.orchestrator_runner import StageStatus
+    from shared.orchestrator_runner import StageStatus
     assert StageStatus.SUCCESS == "success"
     assert StageStatus.ACTIVE == "active"
     assert StageStatus.ERROR == "error"
@@ -52,7 +52,7 @@ def test_stage_status_string_equality_legacy():
 
 def test_stage_status_in_dict_lookup():
     """StageStatus values work as dict keys interchangeably with strings."""
-    from gui.orchestrator_runner import StageStatus
+    from shared.orchestrator_runner import StageStatus
     d = {"success": "S", "active": "A"}
     assert d[StageStatus.SUCCESS] == "S"
     assert d[StageStatus.ACTIVE] == "A"
@@ -63,12 +63,12 @@ def test_stage_status_in_dict_lookup():
 # ===========================================================================
 
 def test_stages_has_four_elements():
-    from gui.orchestrator_runner import STAGES
+    from shared.orchestrator_runner import STAGES
     assert len(STAGES) == 4
 
 
 def test_stages_labels():
-    from gui.orchestrator_runner import STAGES
+    from shared.orchestrator_runner import STAGES
     labels = [s[0] for s in STAGES]
     assert "Data Acquisition" in labels
     assert "Processing" in labels
@@ -100,7 +100,7 @@ def _make_handle(
 
 
 def test_compute_stage_status_none_handle():
-    from gui.orchestrator_runner import StageStatus, compute_stage_status
+    from shared.orchestrator_runner import StageStatus, compute_stage_status
 
     result = compute_stage_status(None)
     assert all(v == StageStatus.PENDING for v in result.values())
@@ -108,7 +108,7 @@ def test_compute_stage_status_none_handle():
 
 def test_compute_stage_status_no_log(tmp_path):
     """No log file → all PENDING."""
-    from gui.orchestrator_runner import StageStatus, compute_stage_status
+    from shared.orchestrator_runner import StageStatus, compute_stage_status
 
     handle = _make_handle(is_running=True, log_path=tmp_path / "missing.txt")
     result = compute_stage_status(handle)
@@ -117,7 +117,7 @@ def test_compute_stage_status_no_log(tmp_path):
 
 def test_compute_stage_status_finished_clean(tmp_path):
     """Finished rc=0 + fresh snapshot → all SUCCESS."""
-    from gui.orchestrator_runner import StageStatus, compute_stage_status
+    from shared.orchestrator_runner import StageStatus, compute_stage_status
     from settings import settings
 
     log = tmp_path / "run.log"
@@ -136,7 +136,7 @@ def test_compute_stage_status_finished_clean(tmp_path):
 
 def test_compute_stage_status_dry_run_execution_skipped(tmp_path):
     """dry_run=True + orchestrator → Execution stage is SKIPPED."""
-    from gui.orchestrator_runner import StageStatus, compute_stage_status
+    from shared.orchestrator_runner import StageStatus, compute_stage_status
     from settings import settings
 
     log = tmp_path / "run.log"
@@ -161,7 +161,7 @@ def test_compute_stage_status_dry_run_execution_skipped(tmp_path):
 
 def test_compute_stage_status_error_sets_error_status(tmp_path):
     """rc != 0 and last active stage → ERROR; prior stages → SUCCESS."""
-    from gui.orchestrator_runner import StageStatus, compute_stage_status
+    from shared.orchestrator_runner import StageStatus, compute_stage_status
     from settings import settings
 
     log = tmp_path / "run.log"

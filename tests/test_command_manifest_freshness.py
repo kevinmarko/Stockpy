@@ -94,7 +94,9 @@ def test_manifest_commands_match_targets():
     from cli_introspect.targets import TARGETS
     data = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
     manifest_commands = {cmd["name"] for cmd in data.get("commands", [])}
-    manifest_dead_letters = {dl["name"] for dl in data.get("dead_letters", [])}
+    # dead_letters is a plain list[str] of TARGETS names (build_command_manifest.py's
+    # own type annotation), not a list of dicts -- unlike `commands`.
+    manifest_dead_letters = set(data.get("dead_letters", []))
     all_manifest_names = manifest_commands | manifest_dead_letters
     
     target_names = {t.name for t in TARGETS}

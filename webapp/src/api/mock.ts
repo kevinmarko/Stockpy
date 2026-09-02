@@ -1949,7 +1949,7 @@ function mockLlmStatus(): LlmStatus {
 
   return {
     capabilities,
-    capabilities_source: "gui.ai_control_center.control_center_overview",
+    capabilities_source: "shared.ai_control_center.control_center_overview",
     providers: {
       claude: llmNoCallTelemetry("claude"),
       gemini: llmNoCallTelemetry("gemini"),
@@ -5528,7 +5528,7 @@ function mockRollingBeta(ticker: string, window = 60): RollingBeta {
   return { symbol: sym, window: win, series, reason: null };
 }
 
-// Rider 13b (Needs Retrain age flag): mirrors gui.help_content.
+// Rider 13b (Needs Retrain age flag): mirrors shared.help_content.
 // MODEL_RETRAIN_WINDOW_DAYS (30) -- the mock has no live Python process to
 // import from, so this is the fixture layer's honest snapshot of that
 // constant, not an invented number. daysSinceTrained/age_days/needs_retrain

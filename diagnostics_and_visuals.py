@@ -874,14 +874,14 @@ HTML_REPORT_TEMPLATE = """
 def _resolve_report_provenance() -> Dict[str, Any]:
     """Classify this HTML report as Live vs Backtested/simulated.
 
-    Static-report equivalent of ``gui.panels.launcher._render_report_provenance_banner``:
-    same source of truth (``gui.strategy_registry.read_active_mode``), same
+    Static-report equivalent of ``legacy.streamlit_command_center.panels.launcher._render_report_provenance_banner``:
+    same source of truth (``shared.strategy_registry.read_active_mode``), same
     PAPER/LIVE -> Live, SIMULATION (``DRY_RUN=true``) -> Backtested split.
     Imported lazily so the core reporting path never pays for the ``gui``
     package unless a report is actually being rendered.
     """
     try:
-        from gui.strategy_registry import ExecutionMode, read_active_mode
+        from shared.strategy_registry import ExecutionMode, read_active_mode
 
         mode_state = read_active_mode()
         is_live = mode_state.mode in (ExecutionMode.PAPER, ExecutionMode.LIVE)

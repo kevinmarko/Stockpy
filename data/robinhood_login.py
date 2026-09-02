@@ -9,7 +9,7 @@ side-effecting operation (it may leave a real Robinhood session
 authenticated) that needs its own dedicated, immediately-killable process
 and a SIGTERM-then-SIGKILL grace period around that one specific attempt --
 not a warm process reused across many calls. This follows
-``gui.orchestrator_runner``'s detached-``Popen`` + SIGTERM-then-SIGKILL
+``shared.orchestrator_runner``'s detached-``Popen`` + SIGTERM-then-SIGKILL
 pattern instead, one fresh process per attempt.
 
 Credentials cross the process boundary over an anonymous pipe only — never

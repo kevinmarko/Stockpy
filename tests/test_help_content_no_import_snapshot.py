@@ -22,7 +22,7 @@ sync with live config, not be a one-time snapshot.
 Two layers of guard, in order of importance:
 
 1. **Behavioral** (the one that actually matters) — monkeypatch a live
-   ``settings.X`` value *after* ``gui.help_content`` has already been
+   ``settings.X`` value *after* ``shared.help_content`` has already been
    imported (no ``importlib.reload``), and assert the text returned by the
    module's public accessors NOW reflects the new value. This is direct
    proof of the fix: against the pre-fix code, every assertion below would
@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pytest
 
-_HELP_CONTENT_PATH = Path(__file__).parent.parent / "gui" / "help_content.py"
+_HELP_CONTENT_PATH = Path(__file__).parent.parent / "shared" / "help_content.py"
 
 
 # ---------------------------------------------------------------------------
@@ -54,9 +54,9 @@ _HELP_CONTENT_PATH = Path(__file__).parent.parent / "gui" / "help_content.py"
 
 class TestSettingsChangesReflectedWithoutReimport:
     """Each case monkeypatches the *live* ``settings.settings`` singleton
-    object that ``gui.help_content`` already holds a reference to (via its
+    object that ``shared.help_content`` already holds a reference to (via its
     own ``from settings import settings`` at module scope) — deliberately
-    with NO ``importlib.reload``. If ``gui.help_content`` baked the old value
+    with NO ``importlib.reload``. If ``shared.help_content`` baked the old value
     into a module-level constant at import time, the constant would never
     see the monkeypatched value and every assertion below would fail.
 
@@ -70,7 +70,7 @@ class TestSettingsChangesReflectedWithoutReimport:
     def test_kelly_cap_pct_in_glossary_and_metric_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         new_value = 0.37
         monkeypatch.setattr("settings.settings.KELLY_CAP", new_value)
@@ -82,7 +82,7 @@ class TestSettingsChangesReflectedWithoutReimport:
         assert f"{expected_pct}%" in hc.metric_help("Kelly Target")
 
     def test_kelly_fraction_in_glossary(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         new_value = 0.777
         monkeypatch.setattr("settings.settings.KELLY_FRACTION", new_value)
@@ -92,7 +92,7 @@ class TestSettingsChangesReflectedWithoutReimport:
         assert f"{new_value}" in entry.resolved_plain_english()
 
     def test_conviction_delta_in_glossary(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         new_value = 0.4242
         monkeypatch.setattr(
@@ -106,7 +106,7 @@ class TestSettingsChangesReflectedWithoutReimport:
     def test_robinhood_max_notional_in_metric_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         new_value = 987.65
         monkeypatch.setattr(
@@ -119,7 +119,7 @@ class TestSettingsChangesReflectedWithoutReimport:
     def test_progress_poll_seconds_in_section_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         new_value = 42
         monkeypatch.setattr("settings.settings.PROGRESS_POLL_SECONDS", new_value)
@@ -130,7 +130,7 @@ class TestSettingsChangesReflectedWithoutReimport:
     def test_sizing_cap_settings_in_section_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         alert_pct = 0.61
         threshold_cycles = 13
@@ -154,7 +154,7 @@ class TestSettingsChangesReflectedWithoutReimport:
     def test_etf_transmission_settings_in_section_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         max_derate = 0.61
         ownership_ref = 0.44
@@ -180,7 +180,7 @@ class TestSettingsChangesReflectedWithoutReimport:
         """Not just 'can pick up one new value' — must keep tracking, so a
         second change (not only the first) is also reflected, proving there
         is no caching/memoization anywhere in the read path either."""
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         monkeypatch.setattr("settings.settings.KELLY_CAP", 0.11)
         assert "11%" in hc.metric_help("Kelly Target")
@@ -261,7 +261,7 @@ class TestNoModuleScopeSettingsSnapshot:
         because nothing in the file reads settings.X at all anymore — it
         should find the def-wrapped helpers and confirm they DO read
         settings.X (just deferred, inside the def body)."""
-        import gui.help_content as hc
+        import shared.help_content as hc
 
         assert callable(hc._kelly_cap_pct)  # noqa: SLF001
         assert isinstance(hc._kelly_cap_pct(), int)

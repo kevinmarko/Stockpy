@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from gui.circuit_breakers import (
+from shared.circuit_breakers import (
     CircuitBreakerTrip,
     collect_circuit_breaker_trips,
     derive_block_log_trips,

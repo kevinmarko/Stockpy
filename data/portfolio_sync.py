@@ -44,7 +44,7 @@ Public API
 
 - :func:`async_sync_now(...)` — async wrapper around ``build_sync_report`` that
   also persists the resulting universe to ``DEFAULT_TICKERS`` via
-  :mod:`gui.env_io` so the operator's GUI choice survives the next launch.
+  :mod:`shared.env_io` so the operator's GUI choice survives the next launch.
 
 CONSTRAINTS honoured
 --------------------
@@ -899,7 +899,7 @@ async def async_sync_now(
     ----------
     persist_default_tickers:
         When ``True`` the resulting full universe is written to ``.env`` as
-        ``DEFAULT_TICKERS`` via :func:`gui.env_io.write_setting` so the
+        ``DEFAULT_TICKERS`` via :func:`shared.env_io.write_setting` so the
         operator's discovered universe survives the next launch.  Set ``False``
         to dry-run the sync without touching ``.env`` (used in tests and from
         CI).  Secret-write/disallowed-key errors from env_io are caught and
@@ -926,7 +926,7 @@ async def async_sync_now(
 
     if persist_default_tickers:
         try:
-            from env_io import write_setting
+            from shared.env_io import write_setting
 
             # Only the symbols we actually probed (or pre-classified) — sorted
             # for diff-friendliness. Recently-closed retention symbols

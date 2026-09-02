@@ -1,7 +1,7 @@
 """
 tests/test_preflight_runner.py
 ================================
-Unit tests for :mod:`gui.preflight_runner`.
+Unit tests for :mod:`shared.preflight_runner`.
 
 All network / subprocess calls are monkeypatched.
 
@@ -17,7 +17,7 @@ Verified invariants
 *   Empty stdout → ``all_passed=False``.
 *   Non-zero exit code → ``all_passed=False`` (even with valid JSON).
 *   Zero exit code + all passing → ``all_passed=True``.
-*   :func:`_render_preflight_panel` exists in ``gui.panels``.
+*   :func:`_render_preflight_panel` exists in ``legacy.streamlit_command_center.panels``.
 *   ``render_launcher`` references ``_render_preflight_panel`` (wiring check).
 """
 
@@ -38,11 +38,11 @@ import pytest
 # ===========================================================================
 
 def test_preflight_runner_importable():
-    from gui import preflight_runner  # noqa: F401
+    from shared import preflight_runner  # noqa: F401
 
 
 def test_preflight_check_frozen():
-    from gui.preflight_runner import PreflightCheck
+    from shared.preflight_runner import PreflightCheck
 
     pc = PreflightCheck(name="x", passed=True, reason="ok")
     with pytest.raises((AttributeError, TypeError)):
@@ -50,7 +50,7 @@ def test_preflight_check_frozen():
 
 
 def test_preflight_report_frozen():
-    from gui.preflight_runner import PreflightReport
+    from shared.preflight_runner import PreflightReport
 
     pr = PreflightReport(all_passed=True)
     with pytest.raises((AttributeError, TypeError)):
@@ -75,7 +75,7 @@ def _good_result(returncode: int = 0, checks_json: str | None = None):
 
 
 def test_run_preflight_returns_typed_report():
-    from gui.preflight_runner import PreflightReport, run_preflight
+    from shared.preflight_runner import PreflightReport, run_preflight
 
     with mock.patch("subprocess.run", return_value=_good_result(0)):
         report = run_preflight(timeout=5.0)
@@ -87,7 +87,7 @@ def test_run_preflight_returns_typed_report():
 
 
 def test_run_preflight_checks_are_typed():
-    from gui.preflight_runner import PreflightCheck, run_preflight
+    from shared.preflight_runner import PreflightCheck, run_preflight
 
     with mock.patch("subprocess.run", return_value=_good_result(0)):
         report = run_preflight()
@@ -102,7 +102,7 @@ def test_run_preflight_checks_are_typed():
 def test_run_preflight_non_zero_exit_sets_all_passed_false():
     """Non-zero exit → all_passed=False even with valid JSON."""
     with mock.patch("subprocess.run", return_value=_good_result(returncode=1)):
-        from gui.preflight_runner import run_preflight
+        from shared.preflight_runner import run_preflight
         report = run_preflight()
     assert report.all_passed is False
     assert report.returncode == 1
@@ -114,7 +114,7 @@ def test_run_preflight_non_zero_exit_sets_all_passed_false():
 
 def test_run_preflight_timeout_returns_all_passed_false():
     """Timeout → all_passed=False (CONSTRAINT #4 — no fabricated success)."""
-    from gui.preflight_runner import run_preflight
+    from shared.preflight_runner import run_preflight
 
     with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 5.0)):
         report = run_preflight(timeout=5.0)
@@ -126,9 +126,9 @@ def test_run_preflight_timeout_returns_all_passed_false():
 
 def test_run_preflight_missing_script_returns_false(tmp_path, monkeypatch):
     """Non-existent script → all_passed=False (CONSTRAINT #4)."""
-    from gui import preflight_runner
+    from shared import preflight_runner
     monkeypatch.setattr(preflight_runner, "_PREFLIGHT_SCRIPT", tmp_path / "no_such.py")
-    from gui.preflight_runner import run_preflight
+    from shared.preflight_runner import run_preflight
     report = run_preflight()
     assert report.all_passed is False
 
@@ -141,7 +141,7 @@ def test_run_preflight_corrupt_json_returns_false():
     bad.stderr = ""
 
     with mock.patch("subprocess.run", return_value=bad):
-        from gui.preflight_runner import run_preflight
+        from shared.preflight_runner import run_preflight
         report = run_preflight()
 
     assert report.all_passed is False
@@ -156,7 +156,7 @@ def test_run_preflight_empty_stdout_returns_false():
     empty.stderr = "something went wrong"
 
     with mock.patch("subprocess.run", return_value=empty):
-        from gui.preflight_runner import run_preflight
+        from shared.preflight_runner import run_preflight
         report = run_preflight()
 
     assert report.all_passed is False
@@ -165,7 +165,7 @@ def test_run_preflight_empty_stdout_returns_false():
 def test_run_preflight_subprocess_exception_returns_false():
     """Subprocess launch failure → all_passed=False."""
     with mock.patch("subprocess.run", side_effect=OSError("binary not found")):
-        from gui.preflight_runner import run_preflight
+        from shared.preflight_runner import run_preflight
         report = run_preflight()
 
     assert report.all_passed is False
@@ -173,24 +173,24 @@ def test_run_preflight_subprocess_exception_returns_false():
 
 
 # ===========================================================================
-# Wiring checks — gui.panels
+# Wiring checks — legacy.streamlit_command_center.panels
 # ===========================================================================
 
 def test_render_preflight_panel_exists_in_panels():
-    import gui.panels as panels
+    import legacy.streamlit_command_center.panels as panels
     assert hasattr(panels, "_render_preflight_panel"), (
-        "_render_preflight_panel must be defined in gui.panels"
+        "_render_preflight_panel must be defined in legacy.streamlit_command_center.panels"
     )
 
 
 def test_render_preflight_panel_callable():
-    import gui.panels as panels
+    import legacy.streamlit_command_center.panels as panels
     assert callable(panels._render_preflight_panel)
 
 
 def test_render_launcher_calls_preflight_panel():
     """render_launcher must call _render_preflight_panel."""
-    import gui.panels as panels
+    import legacy.streamlit_command_center.panels as panels
 
     src = inspect.getsource(panels.render_launcher)
     assert "_render_preflight_panel" in src, (

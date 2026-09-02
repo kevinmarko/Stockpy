@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`gui.report_viewer_helpers`.
+"""Unit tests for :mod:`shared.report_viewer_helpers`.
 
 These cover the pure data-shaping helpers extracted out of
 ``gui/panels/report_viewer.py`` (Agent G1 hardening refactor). Every helper is
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gui.report_viewer_helpers import (
+from shared.report_viewer_helpers import (
     build_brinson_fachler_inputs,
     build_cluster_assignment_frame,
     build_cluster_concentration_rows,
@@ -35,8 +35,9 @@ from gui.report_viewer_helpers import (
     shape_sector_details_frame,
     tracking_delta_label,
     validate_brinson_fachler_weights,
+    GICS_SECTORS,
+    _BF_EDITOR_COLUMNS,
 )
-from gui.panels._shared import GICS_SECTORS, _BF_EDITOR_COLUMNS
 
 
 # ===========================================================================

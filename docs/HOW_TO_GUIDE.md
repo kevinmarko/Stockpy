@@ -197,10 +197,10 @@ refreshed, so you always know at a glance whether what you're looking at is curr
 Under the hood, `launch_app.command` runs:
 
 ```bash
-python3 app_shell.py [--interval N]
+python3 -m legacy.streamlit_command_center.app_shell [--interval N]
 ```
 
-`app_shell.py` opens `gui/app.py` in a native window (via `pywebview`) and supervises the
+`legacy/streamlit_command_center/app_shell.py` opens `legacy/streamlit_command_center/app.py` in a native window (via `pywebview`) and supervises the
 background refresh loop tied to that window's lifecycle. Everything described below for
 the browser-tab Command Center — the eighteen tabs, the Launcher, Settings, Strategy
 Matrix, and so on — is the same GUI, just hosted in a native window instead of your
@@ -249,7 +249,7 @@ REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
 The **Command Center** is a graphical front-end over the same pipeline, ideal if you prefer clicking to typing. The recommended way to open it is `launch_app.command` (see above), which hosts it in a native desktop window. If you'd rather have it in a browser tab instead (e.g. for headless/dev use), double-click **`launch_gui.command`** (macOS) or run:
 
 ```bash
-streamlit run gui/app.py
+streamlit run legacy/streamlit_command_center/app.py
 ```
 
 Either way it's the same GUI, with eighteen tabs:
@@ -636,9 +636,9 @@ Or use `launchd` on macOS (more reliable than cron for Mac):
 
 ### Monitor while running
 
-Open the Command Center (`launch_app.command`, or `launch_gui.command` / `streamlit run gui/app.py`) and go to the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks — see [§12 The Observability Dashboard](#12-the-observability-dashboard) for the full panel breakdown (now folded into this tab; the standalone `streamlit run observability/dashboard.py` app has been retired).
+Open the Command Center (`launch_app.command`, or `launch_gui.command` / `streamlit run legacy/streamlit_command_center/app.py`) and go to the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks — see [§12 The Observability Dashboard](#12-the-observability-dashboard) for the full panel breakdown (now folded into this tab; the standalone `streamlit run observability/dashboard.py` app has been retired).
 ```bash
-streamlit run gui/app.py
+streamlit run legacy/streamlit_command_center/app.py
 ```
 
 Opens the Command Center at `http://localhost:8501` — open the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks (see [§12](#12-the-observability-dashboard)).
@@ -654,7 +654,7 @@ The preflight check requires **90 days** of continuous paper trading before goin
 > **The standalone `streamlit run observability/dashboard.py` app has been retired.**
 > Everything described in this section now lives in the Command Center's **📊 Observability**
 > tab — open it via `launch_app.command` (recommended; native desktop window, always-on
-> background refresh) or `launch_gui.command` / `streamlit run gui/app.py` (browser tab).
+> background refresh) or `launch_gui.command` / `streamlit run legacy/streamlit_command_center/app.py` (browser tab).
 > There is no longer a second app to separately launch or keep running.
 
 Inside the Command Center, the Observability tab auto-refreshes alongside the rest of
@@ -663,7 +663,7 @@ keeps this tab's data current for as long as the window stays open; when running
 browser-tab GUI, use the tab's own refresh control to force an immediate update without
 waiting for the next auto-refresh.
 ```bash
-streamlit run gui/app.py
+streamlit run legacy/streamlit_command_center/app.py
 ```
 
 Open the **📊 Observability** tab. This tab is the platform's single
@@ -1203,7 +1203,7 @@ The Safety tab now leads with two new sections before the Gravity audit launcher
    now (Alpaca, Finnhub, FRED, Robinhood, etc.) and the panel lists every
    strategy/tab/report that loses coverage. Useful both as documentation
    (read-only) and as triage during an outage. The map lives in
-   `gui/dependency_map.py`; extend it there as new consumers come online.
+   `shared/dependency_map.py`; extend it there as new consumers come online.
 
 When the orchestrator vetoes orders unexpectedly:
 1. Open the Safety tab.
@@ -1224,7 +1224,7 @@ account.
 | Layer | Behaviour |
 |-------|-----------|
 | `main_orchestrator._execute_broker_orders` | Returns immediately with an INFO log — no broker imports reached |
-| `gui/app.py` header | Shows `📋 ADVISORY MODE` banner instead of Simulation / Paper / Live badge |
+| `legacy/streamlit_command_center/app.py` header | Shows `📋 ADVISORY MODE` banner instead of Simulation / Paper / Live badge |
 | Strategy Matrix mode toggle | Suppressed — replaced by a read-only caption showing underlying flags |
 | `scripts/preflight_check.py` | Eight broker/advisory-false-positive checks auto-skip; `advisory_only_active` = PASS-loud; `robinhood_execution_mode` and `state_snapshot_fresh` always run |
 | Kill switch sentinel | Repurposes as a pause-recommendations gate (see §15) |
@@ -1256,7 +1256,7 @@ reappears automatically once `ADVISORY_ONLY=false`.
 > when `ADVISORY_ONLY=false`. See [Advisory-Only Mode](#advisory-only-mode) above.
 
 The Strategy Matrix (Control) tab leads with a **🎚️ Global Execution Mode**
-selector backed by `gui/strategy_registry.py`. Three modes:
+selector backed by `shared/strategy_registry.py`. Three modes:
 
 | Mode | DRY_RUN | ALPACA_PAPER | What happens |
 |---|---|---|---|
@@ -1266,7 +1266,7 @@ selector backed by `gui/strategy_registry.py`. Three modes:
 
 **Setting takes effect on the next orchestrator/advisory launch.** We never
 mutate a running `settings.Settings`. The writer goes through the allowlist-
-bounded `gui/env_io.write_setting` so the GUI cannot flip a half-state (only
+bounded `shared/env_io.write_setting` so the GUI cannot flip a half-state (only
 ALPACA_PAPER without DRY_RUN, for example) — both flags are written together.
 
 Below the mode selector is the **📜 Strategy Version Registry**: a table of
@@ -1596,7 +1596,7 @@ queue after a partial session never double-fills.
 
 ### The Robinhood panel in the Command Center
 
-The GUI Command Center (`streamlit run gui/app.py`) has a **Robinhood** panel
+The GUI Command Center (`streamlit run legacy/streamlit_command_center/app.py`) has a **Robinhood** panel
 that gives you a single read-only view of the whole execution loop:
 
 - **Queue** — the current `output/execution_queue.json`: each proposed intent,
@@ -1617,7 +1617,7 @@ window into the queue, the outcomes, and the reconciliation.
 
 ## In-App Help & Glossary
 
-The **❓ Help tab** in the Command Center (`streamlit run gui/app.py`) gives instant access
+The **❓ Help tab** in the Command Center (`streamlit run legacy/streamlit_command_center/app.py`) gives instant access
 to every concept in this guide without leaving the browser window.
 
 ### What you'll find
@@ -1645,10 +1645,10 @@ file (`output/.gui_onboarded`). Delete that file to reset the tour.
 ### Help-key convention
 
 Metric tooltips are looked up via keys of the form `"<tab>.<metric_name>"` in
-`gui/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
+`shared/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
 — it **never raises** (CONSTRAINT #6). All operator-facing definitions live in
-`gui/help_content.py`; never hard-code explainer prose directly in the `gui/panels/`
-per-tab modules.
+`shared/help_content.py`; never hard-code explainer prose directly in the
+`legacy/streamlit_command_center/panels/` per-tab modules.
 
 ### Anchor-contract invariant
 
@@ -1658,7 +1658,7 @@ this file. The contract is enforced by:
 - `tests/test_help_content.py::TestAnchorValidity` (runs in CI on every push).
 - Gravity step 68 check 3.
 
-If you rename any heading in this file, search for the old slug in `gui/help_content.py`
+If you rename any heading in this file, search for the old slug in `shared/help_content.py`
 and update it to match the new slug; otherwise the anchor test will fail.
 
 ## §16 Remote Prompt Updates (Prompt Registry)
@@ -1680,7 +1680,7 @@ or the broker execution surface.
 | `prompt_registry/baseline/` | Git-committed fallback bodies (always available, no network) |
 | `output/prompt_cache/` | Signed on-disk cache of fetched versions (rollback depth = 5 by default) |
 | `prompt_registry/__main__.py` | CLI: `list`, `get`, `sync`, `pin`, `rollback`, `diff`, `verify`, `publish` |
-| `gui/app.py` tab "📝 Prompts" | GUI: resolved version / source per ID, Sync, diff viewer, Rollback |
+| `legacy/streamlit_command_center/app.py` tab "📝 Prompts" | GUI: resolved version / source per ID, Sync, diff viewer, Rollback |
 
 ### Resolution order (CONSTRAINT #4 — never empty)
 
@@ -1728,7 +1728,7 @@ Requires `PROMPT_REGISTRY_URL` and `PROMPT_REGISTRY_SIGNING_KEY` set in `.env`.
 python -m prompt_registry pin master_preprompt 1.1.0
 ```
 
-Writes `PROMPT_REGISTRY_PINS={"master_preprompt": "1.1.0"}` to `.env` (via `gui/env_io`).
+Writes `PROMPT_REGISTRY_PINS={"master_preprompt": "1.1.0"}` to `.env` (via `shared/env_io`).
 Effective on the **next** launch — never hot-swaps a running process.
 
 #### Rolling back to the previous cached version
@@ -1791,7 +1791,7 @@ unchanged.
 | `PROMPT_MAX_CHARS` | No | `50000` | Max body size enforced by guardrails |
 
 The four secret keys are masked in the GUI Settings tab and raise `SecretWriteError` if a write
-is attempted through the `gui/env_io` path (CONSTRAINT #3).  Edit them by hand in `.env` only.
+is attempted through the `shared/env_io` path (CONSTRAINT #3).  Edit them by hand in `.env` only.
 
 ### Troubleshooting
 

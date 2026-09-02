@@ -36,7 +36,7 @@ import math
 import pandas as pd
 import pytest
 
-from gui.panels import (
+from shared.report_viewer_helpers import (
     GICS_SECTORS,
     build_brinson_fachler_inputs,
     compute_brinson_fachler,

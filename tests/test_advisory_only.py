@@ -88,9 +88,11 @@ def test_strategy_mode_toggle_source_references_advisory_only():
     # gui/panels.py was converted to a package (Phase 4a extracted
     # gui/panels/__init__.py into per-tab modules; __init__.py is now a
     # thin re-export stub). ``_render_strategy_mode_toggle`` now lives in
-    # gui/panels/strategy_matrix.py — see tests/test_ai_insights_panel.py
-    # for the same fix pattern applied to the AI Insights tab.
-    src = Path("gui/panels/strategy_matrix.py").read_text(encoding="utf-8")
+    # legacy/streamlit_command_center/panels/strategy_matrix.py (formerly
+    # gui/panels/strategy_matrix.py, moved by the gui -> shared/legacy split)
+    # — see tests/test_ai_insights_panel.py for the same fix pattern applied
+    # to the AI Insights tab.
+    src = Path("legacy/streamlit_command_center/panels/strategy_matrix.py").read_text(encoding="utf-8")
     # The function must contain BOTH the setting reference and the explicit
     # caller-visible "Advisory mode — broker execution disabled" banner string.
     assert 'ADVISORY_ONLY' in src
@@ -100,7 +102,7 @@ def test_strategy_mode_toggle_source_references_advisory_only():
 def test_app_banner_advisory_only_branch_present():
     """``gui/app.py`` must render an ADVISORY MODE banner when the flag is
     True.  Source-grep guard."""
-    src = Path("gui/app.py").read_text(encoding="utf-8")
+    src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
     assert "ADVISORY_ONLY" in src
     assert "ADVISORY MODE" in src
 

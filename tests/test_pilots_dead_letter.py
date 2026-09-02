@@ -10,7 +10,7 @@ file degrades to an honest empty shape with ``is_clean: None`` (CONSTRAINT #4:
 "no run yet" is not the same claim as "the last run was clean") — never an
 exception (CONSTRAINT #6).
 
-``POST /dead-letter/retry`` reuses ``gui.orchestrator_runner.launch_symbol_retry``
+``POST /dead-letter/retry`` reuses ``shared.orchestrator_runner.launch_symbol_retry``
 (the SAME launcher the Streamlit Launcher tab's dead-letter Retry button
 already calls) behind ``require_command_token`` STACKED with the dedicated
 ``DEAD_LETTER_RETRY_ENABLED`` master flag.
@@ -153,7 +153,7 @@ class TestDeadLetterRetryWrite:
     def _post(self, symbol):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", True):
-                with mock.patch("gui.orchestrator_runner.launch_symbol_retry") as m:
+                with mock.patch("shared.orchestrator_runner.launch_symbol_retry") as m:
                     m.return_value = mock.Mock(pid=4242, log_path="output/gui_retry.log")
                     resp = client.post(
                         "/dead-letter/retry", json={"symbol": symbol}, headers=self._auth()

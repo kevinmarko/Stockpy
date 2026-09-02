@@ -20,8 +20,8 @@ an HTML report.
 >
 > **Web app is the primary interface; the desktop app is decommissioned.** All
 > new UI development targets the [Pilots PWA](webapp/README.md) (`webapp/`). The
-> Streamlit "InvestYo Command Center" (`gui/`) and its native desktop wrapper
-> (`app_shell.py`, `launch_app.command`, `launch_gui.command`) are frozen/legacy —
+> Streamlit "InvestYo Command Center" (`legacy/streamlit_command_center/`) and its native
+> desktop wrapper (`launch_app.command`, `launch_gui.command`) are frozen/legacy —
 > they still run for existing setups, but get no new tabs, panels, or features.
 > See "Launching" below.
 
@@ -184,9 +184,10 @@ backend service does.
 
 Both still run for existing local setups (see `docs/RUNBOOK.md` §0 for `launch_app.command`'s
 exact startup behavior), but the platform's frontend strategy has moved to the web app above.
-`gui/` (the Streamlit Command Center's 18 tabs) and `app_shell.py`/`desktop/`'s native-window
-support code (`net_util.py`, `ui_server.py`, `engine_supervisor.py`) get no new tabs, panels,
-or capability going forward — new UI work goes into `webapp/`.
+`legacy/streamlit_command_center/` (the Streamlit Command Center's 18 tabs, `app_shell.py`,
+and its native-window support code under `desktop_shell/` — `net_util.py`, `ui_server.py`,
+`engine_supervisor.py`) gets no new tabs, panels, or capability going forward — new UI work
+goes into `webapp/`.
 
 ---
 
@@ -254,7 +255,7 @@ pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
 make smoke                                  # same
 python scripts/bug_hunter.py                # unified bug hunter scan (AST audit, webapp parity, pytest)
 python scripts/bug_hunter.py --quick        # fast bug hunter scan (AST audit + webapp typecheck)
-streamlit run gui/app.py                    # legacy Command Center GUI (10 tabs, incl. Observability) — decommissioned, see "Launching"
+streamlit run legacy/streamlit_command_center/app.py                    # legacy Command Center GUI (10 tabs, incl. Observability) — decommissioned, see "Launching"
 python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
 python scripts/preflight_check.py --json    # machine-readable output
 python -m execution.kill_switch --status    # check / toggle the advisory pause gate

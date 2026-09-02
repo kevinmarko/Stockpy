@@ -353,7 +353,7 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
 
     // Only the CRITICAL entry survives the level threshold, PLUS the
     // unparsed traceback line (unparsed entries are exempt from the level
-    // filter, matching gui.observability_telemetry.filter_log_entries).
+    // filter, matching shared.observability_telemetry.filter_log_entries).
     const rows = await screen.findAllByTestId("log-entry-row");
     expect(rows.length).toBe(2);
     expect(screen.getByText(/FRED unavailable/)).toBeInTheDocument();

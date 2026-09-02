@@ -221,7 +221,7 @@ def test_ai_generation_api_enabled_is_gui_writable():
     confirmation required on write); the three /data/ai/* endpoints it
     guards remain independently gated by STATE_API_TOKEN + each generator's
     own capability flag regardless."""
-    from gui import env_io
+    from shared import env_io
 
     assert "AI_GENERATION_API_ENABLED" in env_io.ALLOWED_KEYS
     assert "AI_GENERATION_API_ENABLED" not in env_io.SECRET_KEYS

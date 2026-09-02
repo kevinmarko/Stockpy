@@ -784,7 +784,7 @@ class TestRiskGateBlockLog:
 
 # ---------------------------------------------------------------------------
 # circuit_breaker_summary — merged kill-switch + risk-gate-block severity view
-# (calls gui.circuit_breakers directly; see that module's own
+# (calls shared.circuit_breakers directly; see that module's own
 # tests/test_circuit_breakers.py for the underlying derivation logic).
 # ---------------------------------------------------------------------------
 
@@ -851,7 +851,7 @@ class TestCircuitBreakerSummary:
     def test_missing_threshold_never_leaks_a_fabricated_nan(self, tmp_path):
         """Regression companion to tests/test_circuit_breakers.py's own NaN
         test — confirms the fix is actually visible through this composite
-        reader's full round-trip, not just at gui.circuit_breakers directly."""
+        reader's full round-trip, not just at shared.circuit_breakers directly."""
         now = datetime.now(timezone.utc)
         log_path = tmp_path / "risk_gate_blocks.jsonl"
         log_path.write_text(
@@ -870,7 +870,7 @@ class TestCircuitBreakerSummary:
     def test_import_failure_degrades_to_empty(self, tmp_path):
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             with mock.patch(
-                "gui.circuit_breakers.collect_circuit_breaker_trips",
+                "shared.circuit_breakers.collect_circuit_breaker_trips",
                 side_effect=RuntimeError("boom"),
             ):
                 out = obs.circuit_breaker_summary()
@@ -881,7 +881,7 @@ class TestCircuitBreakerSummary:
 
 # ---------------------------------------------------------------------------
 # system_telemetry_summary — host + current-process CPU/memory/disk snapshot
-# (calls gui.observability_telemetry.collect_system_telemetry directly; see
+# (calls shared.observability_telemetry.collect_system_telemetry directly; see
 # tests/test_observability_telemetry.py for the underlying psutil-sampling
 # logic itself).
 # ---------------------------------------------------------------------------
@@ -889,7 +889,7 @@ class TestCircuitBreakerSummary:
 
 class TestSystemTelemetrySummary:
     def test_warm_path_maps_every_field(self):
-        from gui.observability_telemetry import SystemTelemetry
+        from shared.observability_telemetry import SystemTelemetry
 
         sampled_at = datetime(2026, 7, 26, 12, 0, 0, tzinfo=timezone.utc)
         fake = SystemTelemetry(
@@ -900,7 +900,7 @@ class TestSystemTelemetrySummary:
             sampled_at=sampled_at, psutil_available=True,
         )
         with mock.patch(
-            "gui.observability_telemetry.collect_system_telemetry", return_value=fake
+            "shared.observability_telemetry.collect_system_telemetry", return_value=fake
         ):
             out = obs.system_telemetry_summary()
 
@@ -921,9 +921,9 @@ class TestSystemTelemetrySummary:
         assert out["reason"] is None
 
     def test_psutil_unavailable_degrades_to_honest_none(self):
-        """Mirrors gui.observability_telemetry._nan_telemetry's own NaN/-1
+        """Mirrors shared.observability_telemetry._nan_telemetry's own NaN/-1
         shape -- must round-trip to None here, never a fabricated 0."""
-        from gui.observability_telemetry import SystemTelemetry
+        from shared.observability_telemetry import SystemTelemetry
 
         nan = float("nan")
         fake = SystemTelemetry(
@@ -934,7 +934,7 @@ class TestSystemTelemetrySummary:
             sampled_at=datetime.now(timezone.utc), psutil_available=False,
         )
         with mock.patch(
-            "gui.observability_telemetry.collect_system_telemetry", return_value=fake
+            "shared.observability_telemetry.collect_system_telemetry", return_value=fake
         ):
             out = obs.system_telemetry_summary()
 
@@ -948,7 +948,7 @@ class TestSystemTelemetrySummary:
 
     def test_sampling_exception_degrades_to_empty(self):
         with mock.patch(
-            "gui.observability_telemetry.collect_system_telemetry",
+            "shared.observability_telemetry.collect_system_telemetry",
             side_effect=RuntimeError("boom"),
         ):
             out = obs.system_telemetry_summary()
@@ -957,7 +957,7 @@ class TestSystemTelemetrySummary:
         assert out["reason"]
 
     def test_import_failure_degrades_to_empty(self):
-        with mock.patch.dict("sys.modules", {"gui.observability_telemetry": None}):
+        with mock.patch.dict("sys.modules", {"shared.observability_telemetry": None}):
             out = obs.system_telemetry_summary()
         assert out["psutil_available"] is False
         assert out["reason"]
@@ -1039,7 +1039,7 @@ class TestLatencyHeatmapSummary:
 class TestLogAggregation:
     def test_missing_file_is_honest_empty(self, tmp_path):
         missing = tmp_path / "investyo.log"
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+        with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
             out = obs.log_aggregation()
         assert out["entries"] == []
         assert out["total_lines"] == 0
@@ -1062,7 +1062,7 @@ class TestLogAggregation:
         ]
         log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+        with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
             out = obs.log_aggregation(limit=10)
 
         assert out["reason"] is None
@@ -1088,7 +1088,7 @@ class TestLogAggregation:
         ]
         log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+        with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
             out = obs.log_aggregation(limit=3)
 
         assert out["total_lines"] == 10
@@ -1105,7 +1105,7 @@ class TestLogAggregation:
             "  File \"main.py\", line 12, in <module>\n",
             encoding="utf-8",
         )
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+        with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
             out = obs.log_aggregation()
         assert out["total_lines"] == 2
         assert out["tally"]["UNPARSED"] == 1
@@ -1113,7 +1113,7 @@ class TestLogAggregation:
         assert out["entries"][-1]["level"] is None
 
     def test_import_failure_degrades_to_empty(self):
-        with mock.patch.dict("sys.modules", {"gui.observability_telemetry": None}):
+        with mock.patch.dict("sys.modules", {"shared.observability_telemetry": None}):
             out = obs.log_aggregation()
         assert out["entries"] == []
         assert out["reason"]
@@ -1121,9 +1121,9 @@ class TestLogAggregation:
     def test_read_log_tail_exception_degrades_to_empty(self, tmp_path):
         log_path = tmp_path / "investyo.log"
         log_path.write_text("irrelevant", encoding="utf-8")
-        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+        with mock.patch("shared.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
             with mock.patch(
-                "gui.observability_telemetry.read_log_tail",
+                "shared.observability_telemetry.read_log_tail",
                 side_effect=OSError("disk error"),
             ):
                 out = obs.log_aggregation()
@@ -1187,7 +1187,7 @@ class TestObservabilitySummary:
         assert out["regime"]["reason"] is None
         assert out["risk_gate_blocks"]["count"] == 1
         # circuit_breakers also reads risk_gate_blocks.jsonl directly (via
-        # gui.circuit_breakers), independent of HistoricalStore/ForecastTracker
+        # shared.circuit_breakers), independent of HistoricalStore/ForecastTracker
         # too -- the fixture's block has no "check_name", so it's skipped, but
         # the section still degrades honestly rather than raising.
         assert out["circuit_breakers"]["trips"] == []
@@ -1261,7 +1261,7 @@ class TestSizingCapAuditSummary:
 
 
 # ---------------------------------------------------------------------------
-# etf_transmission_summary — reuses gui.observability_panel_helpers
+# etf_transmission_summary — reuses shared.observability_panel_helpers
 # .etf_transmission_rows directly.
 # ---------------------------------------------------------------------------
 
@@ -1317,7 +1317,7 @@ class TestEtfTransmissionSummary:
 
 class TestHeartbeatSummary:
     def test_no_heartbeat_file_is_honest_empty(self):
-        with mock.patch("gui.orchestrator_runner.heartbeat_age_seconds", return_value=None):
+        with mock.patch("shared.orchestrator_runner.heartbeat_age_seconds", return_value=None):
             out = obs.heartbeat_summary()
         assert out["age_seconds"] is None
         assert out["status"] == "⚪ No heartbeat"
@@ -1326,7 +1326,7 @@ class TestHeartbeatSummary:
         assert out["reason"]
 
     def test_fresh_heartbeat_reports_status(self):
-        with mock.patch("gui.orchestrator_runner.heartbeat_age_seconds", return_value=12.5):
+        with mock.patch("shared.orchestrator_runner.heartbeat_age_seconds", return_value=12.5):
             out = obs.heartbeat_summary()
         assert out["age_seconds"] == pytest.approx(12.5)
         assert out["status"] == "🟢 Fresh"
@@ -1334,14 +1334,14 @@ class TestHeartbeatSummary:
         assert out["reason"] is None
 
     def test_stale_heartbeat_reports_status(self):
-        with mock.patch("gui.orchestrator_runner.heartbeat_age_seconds", return_value=200.0):
+        with mock.patch("shared.orchestrator_runner.heartbeat_age_seconds", return_value=200.0):
             out = obs.heartbeat_summary()
         assert out["status"] == "🔴 Stale"
 
     def test_import_failure_degrades_to_empty(self):
         with mock.patch.dict(
             "sys.modules",
-            {"gui.orchestrator_runner": None},
+            {"shared.orchestrator_runner": None},
         ):
             out = obs.heartbeat_summary()
         assert out["age_seconds"] is None

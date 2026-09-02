@@ -5,12 +5,12 @@ Unit tests for the Launcher-tab safety controls.
 
 Verified invariants
 -------------------
-*   ``_render_launcher_safety_controls`` exists in ``gui.panels``.
+*   ``_render_launcher_safety_controls`` exists in ``legacy.streamlit_command_center.panels``.
 *   Safe Mode is DERIVED (kill_switch active AND DRY_RUN=true) — no new env var.
-*   ``DRY_RUN`` can be toggled via :func:`gui.env_io.write_setting` without
+*   ``DRY_RUN`` can be toggled via :func:`shared.env_io.write_setting` without
     introducing a ``SAFE_MODE`` env var.
 *   Kill-switch activation / deactivation round-trip (isolated to a temp dir).
-*   ``gui.env_io.ALLOWED_KEYS`` does NOT contain ``SAFE_MODE``.
+*   ``shared.env_io.ALLOWED_KEYS`` does NOT contain ``SAFE_MODE``.
 """
 
 from __future__ import annotations
@@ -29,23 +29,23 @@ def _make_env_io(tmp_env: Path) -> object:
     """Return a fresh ``env_io`` module bound to ``tmp_env``."""
     import importlib
     with mock.patch.dict(os.environ, {}, clear=False):
-        import gui.env_io as _env_io
+        import shared.env_io as _env_io
         return _env_io
 
 
 # ===========================================================================
-# gui.panels API surface
+# legacy.streamlit_command_center.panels API surface
 # ===========================================================================
 
 def test_render_launcher_safety_controls_exists():
-    import gui.panels as panels
+    import legacy.streamlit_command_center.panels as panels
     assert hasattr(panels, "_render_launcher_safety_controls"), (
-        "_render_launcher_safety_controls must be defined in gui.panels"
+        "_render_launcher_safety_controls must be defined in legacy.streamlit_command_center.panels"
     )
 
 
 def test_render_launcher_safety_controls_callable():
-    import gui.panels as panels
+    import legacy.streamlit_command_center.panels as panels
     assert callable(panels._render_launcher_safety_controls)
 
 
@@ -55,7 +55,7 @@ def test_render_launcher_safety_controls_callable():
 
 def test_safe_mode_not_in_allowed_keys():
     """Safe Mode is derived — it must not be a writable env var (CONSTRAINT #3)."""
-    from gui.env_io import ALLOWED_KEYS
+    from shared.env_io import ALLOWED_KEYS
     assert "SAFE_MODE" not in ALLOWED_KEYS, (
         "SAFE_MODE must not appear in ALLOWED_KEYS — it is a derived state, "
         "not a stored setting."
@@ -63,7 +63,7 @@ def test_safe_mode_not_in_allowed_keys():
 
 
 def test_safe_mode_not_in_secret_keys():
-    from gui.env_io import SECRET_KEYS
+    from shared.env_io import SECRET_KEYS
     assert "SAFE_MODE" not in SECRET_KEYS
 
 
@@ -72,7 +72,7 @@ def test_safe_mode_not_in_secret_keys():
 # ===========================================================================
 
 def test_dry_run_in_allowed_keys():
-    from gui.env_io import ALLOWED_KEYS
+    from shared.env_io import ALLOWED_KEYS
     assert "DRY_RUN" in ALLOWED_KEYS, "DRY_RUN must be in ALLOWED_KEYS for the toggle to work"
 
 
@@ -81,8 +81,8 @@ def test_dry_run_write_true(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DRY_RUN=false\n", encoding="utf-8")
 
-    with mock.patch("env_io.ENV_PATH", env_file):
-        from gui import env_io
+    with mock.patch("shared.env_io.ENV_PATH", env_file):
+        from shared import env_io
         env_io.write_setting("DRY_RUN", "true")
         result = env_io.read_settings()
     assert result.get("DRY_RUN") == "true"
@@ -92,8 +92,8 @@ def test_dry_run_write_false(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DRY_RUN=true\n", encoding="utf-8")
 
-    with mock.patch("env_io.ENV_PATH", env_file):
-        from gui import env_io
+    with mock.patch("shared.env_io.ENV_PATH", env_file):
+        from shared import env_io
         env_io.write_setting("DRY_RUN", "false")
         result = env_io.read_settings()
     assert result.get("DRY_RUN") == "false"

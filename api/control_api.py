@@ -68,7 +68,7 @@ Endpoints
   POST /daemon/restart        -> command-token guarded. 409 while
                                 daemon.is_running (a @property on
                                 OrchestratorDaemon -- read WITHOUT parens;
-                                confusable with gui.orchestrator_runner.
+                                confusable with shared.orchestrator_runner.
                                 RunHandle.is_running(), which IS a method
                                 and is called correctly elsewhere in this
                                 file). On success arms
@@ -537,7 +537,7 @@ def restart_daemon() -> Dict[str, Any]:
     (``Restart=always``) and ``scripts/com.investyo.stack.plist``
     (``KeepAlive``) both respawn on exit. The plain desktop-shell path
     (``app_shell.py`` spawning ``desktop/orchestrator_daemon.py`` via
-    ``gui.orchestrator_runner.launch_daemon_engine`` — a bare
+    ``shared.orchestrator_runner.launch_daemon_engine`` — a bare
     ``subprocess.Popen`` with no restart-on-death watchdog) does NOT: this
     call simply stops the daemon until the operator relaunches the app. This
     endpoint has no way to know which case it's in, so it cannot promise a
@@ -552,7 +552,7 @@ def restart_daemon() -> Dict[str, Any]:
     # desktop/orchestrator_daemon.py's set_daemon() wiring right after
     # daemon.start()). Read it as a plain attribute. Do NOT "fix" the
     # ``rec.handle.is_running()`` calls elsewhere in this file to match -- those
-    # are gui.orchestrator_runner.RunHandle, where is_running() IS a method.
+    # are shared.orchestrator_runner.RunHandle, where is_running() IS a method.
     if daemon is not None and daemon.is_running:
         raise HTTPException(
             status_code=409,

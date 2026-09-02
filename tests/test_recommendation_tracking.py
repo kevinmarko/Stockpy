@@ -32,7 +32,7 @@ import pandas as pd
 import pytest
 
 from evaluation_engine import recommendation_tracking_report
-from gui.decision_log import DecisionEntry
+from shared.decision_log import DecisionEntry
 
 
 # ---------------------------------------------------------------------------

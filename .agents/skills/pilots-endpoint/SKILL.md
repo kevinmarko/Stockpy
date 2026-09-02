@@ -51,7 +51,7 @@ Add your new `pilots/*.py` module to the parametrized allowlist test if one exis
 
 ## 4. Write-endpoint specifics
 
-- **Multi-key writes that are one logical unit** (e.g. weights + a disabled-set, where a half-applied combination is worse than an all-or-nothing failure) go through `gui.env_io.write_many_atomic`, not `write_setting`/`write_many` called separately — see its docstring for why (`write_many` is intentionally left non-atomic for independent scalars).
+- **Multi-key writes that are one logical unit** (e.g. weights + a disabled-set, where a half-applied combination is worse than an all-or-nothing failure) go through `shared.env_io.write_many_atomic`, not `write_setting`/`write_many` called separately — see its docstring for why (`write_many` is intentionally left non-atomic for independent scalars).
 - **Echo the request body's values in the response, not `settings`.** `settings` is a process-lifetime singleton; a `.env` write does not reach it. Echoing `settings` after a successful write returns the OLD values and looks like the write silently failed.
 - **`applies` must say `"next_daemon_restart"`, never imply an immediate effect** — there is no live setter for `.env`-sourced config in this codebase yet.
 - Consider whether the read-side `GET` companion needs an `env_drift` field (compares on-disk `.env` vs. the running `settings` value) so a pending, not-yet-applied write is visible rather than looking like a failure on the next read — see `GET /strategy/matrix`'s `env_drift` for the pattern.

@@ -1,7 +1,7 @@
 """
 tests/test_analytics_signals.py — owning tests for gui/panels/analytics_signals.py
 ===================================================================================
-``gui.panels.analytics_signals`` (the read-only ML-registry / news-sentiment /
+``legacy.streamlit_command_center.panels.analytics_signals`` (the read-only ML-registry / news-sentiment /
 slippage-CoVaR Analytics-tab helpers) previously had no dedicated owning test —
 its pure helpers were only exercised incidentally by
 ``tests/test_gui_analytics_panels.py``. This file is the owning test and, in
@@ -20,7 +20,7 @@ import os
 
 import pytest
 
-from gui.panels import analytics_signals as asig
+from legacy.streamlit_command_center.panels import analytics_signals as asig
 
 
 # ── caching: the registry loader is @st.cache_data-wrapped ───────────────────

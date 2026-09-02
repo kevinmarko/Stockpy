@@ -1,7 +1,7 @@
 """
 tests/test_strategy_health.py
 ================================
-Unit tests for :mod:`gui.strategy_health`.
+Unit tests for :mod:`shared.strategy_health`.
 
 All tests are fully offline (no network, no Streamlit).
 
@@ -38,11 +38,11 @@ import pytest
 # ===========================================================================
 
 def test_module_importable():
-    from gui import strategy_health  # noqa: F401
+    from shared import strategy_health  # noqa: F401
 
 
 def test_public_api():
-    from gui.strategy_health import (  # noqa: F401
+    from shared.strategy_health import (  # noqa: F401
         DeployabilityGate,
         StrategyHealth,
         evaluate_gate,
@@ -55,7 +55,7 @@ def test_public_api():
 # ===========================================================================
 
 def test_deployability_gate_frozen():
-    from gui.strategy_health import DeployabilityGate
+    from shared.strategy_health import DeployabilityGate
 
     g = DeployabilityGate(metric="PBO", value=0.3, threshold=0.5, direction="below", passed=True)
     with pytest.raises((AttributeError, TypeError)):
@@ -63,7 +63,7 @@ def test_deployability_gate_frozen():
 
 
 def test_strategy_health_frozen():
-    from gui.strategy_health import StrategyHealth
+    from shared.strategy_health import StrategyHealth
 
     sh = StrategyHealth(
         strategy_id="X", deployable=True, gates=[], is_options_selling=False,
@@ -78,14 +78,14 @@ def test_strategy_health_frozen():
 # ===========================================================================
 
 def test_missing_file_returns_empty():
-    from gui.strategy_health import read_gravity_report
+    from shared.strategy_health import read_gravity_report
 
     result = read_gravity_report(path=Path("/tmp/__no_gravity_report__.json"))
     assert result == []
 
 
 def test_corrupt_json_returns_empty():
-    from gui.strategy_health import read_gravity_report
+    from shared.strategy_health import read_gravity_report
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write("{corrupt!!!")
@@ -100,7 +100,7 @@ def test_corrupt_json_returns_empty():
 
 
 def test_non_dict_root_returns_empty():
-    from gui.strategy_health import read_gravity_report
+    from shared.strategy_health import read_gravity_report
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump([1, 2, 3], f)
@@ -115,7 +115,7 @@ def test_non_dict_root_returns_empty():
 
 
 def test_strategies_not_list_returns_empty():
-    from gui.strategy_health import read_gravity_report
+    from shared.strategy_health import read_gravity_report
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump({"strategies": "not a list"}, f)
@@ -130,7 +130,7 @@ def test_strategies_not_list_returns_empty():
 
 
 def test_valid_file_returns_strategies():
-    from gui.strategy_health import read_gravity_report
+    from shared.strategy_health import read_gravity_report
 
     strategies = [
         {"strategy_id": "S1", "pbo": 0.2, "dsr": 1.1, "net_sharpe": 0.7,
@@ -177,7 +177,7 @@ def _strategy(
 
 
 def test_evaluate_gate_returns_strategy_health():
-    from gui.strategy_health import StrategyHealth, evaluate_gate
+    from shared.strategy_health import StrategyHealth, evaluate_gate
 
     health = evaluate_gate(_strategy(pbo=0.2, dsr=1.1, net_sharpe=0.7, max_drawdown=0.15, deployable=True))
     assert isinstance(health, StrategyHealth)
@@ -185,7 +185,7 @@ def test_evaluate_gate_returns_strategy_health():
 
 
 def test_evaluate_gate_all_pass():
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
     from validation.thresholds import DSR_MIN, MAX_DRAWDOWN_MAX, NET_SHARPE_MIN, PBO_MAX
 
     health = evaluate_gate(_strategy(
@@ -199,7 +199,7 @@ def test_evaluate_gate_all_pass():
 
 
 def test_evaluate_gate_pbo_fail():
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
     from validation.thresholds import PBO_MAX
 
     health = evaluate_gate(_strategy(pbo=PBO_MAX + 0.01))
@@ -208,7 +208,7 @@ def test_evaluate_gate_pbo_fail():
 
 
 def test_evaluate_gate_dsr_fail():
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
     from validation.thresholds import DSR_MIN
 
     health = evaluate_gate(_strategy(dsr=DSR_MIN - 0.01))
@@ -218,7 +218,7 @@ def test_evaluate_gate_dsr_fail():
 
 def test_evaluate_gate_missing_metric_is_none():
     """Missing metric → gate.passed=None — CONSTRAINT #4, never fabricated."""
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
 
     health = evaluate_gate({"strategy_id": "T"})  # no metrics provided
     for g in health.gates:
@@ -227,7 +227,7 @@ def test_evaluate_gate_missing_metric_is_none():
 
 def test_evaluate_gate_nan_metric_is_none():
     """NaN metric → gate.passed=None."""
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
 
     health = evaluate_gate(_strategy(pbo=float("nan")))
     pbo_gate = next(g for g in health.gates if g.metric == "PBO")
@@ -236,7 +236,7 @@ def test_evaluate_gate_nan_metric_is_none():
 
 def test_evaluate_gate_mirrors_report_deployable():
     """``deployable`` mirrors the report field — not re-derived from gates."""
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
 
     # Even if all gates would pass, mirror what the report says
     health = evaluate_gate(_strategy(
@@ -246,7 +246,7 @@ def test_evaluate_gate_mirrors_report_deployable():
 
 
 def test_evaluate_gate_options_selling_stress_passed():
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
 
     health = evaluate_gate(_strategy(
         is_options_selling=True,
@@ -258,7 +258,7 @@ def test_evaluate_gate_options_selling_stress_passed():
 
 
 def test_evaluate_gate_options_selling_stress_failed():
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
 
     health = evaluate_gate(_strategy(
         is_options_selling=True,
@@ -269,7 +269,7 @@ def test_evaluate_gate_options_selling_stress_failed():
 
 
 def test_evaluate_gate_stress_none_when_not_options():
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
 
     health = evaluate_gate(_strategy(is_options_selling=False))
     assert health.stress_passed is None
@@ -281,7 +281,7 @@ def test_evaluate_gate_stress_none_when_not_options():
 
 def test_gate_uses_validation_thresholds():
     """The gates' thresholds must match validation.thresholds exactly."""
-    from gui.strategy_health import evaluate_gate
+    from shared.strategy_health import evaluate_gate
     from validation.thresholds import DSR_MIN, MAX_DRAWDOWN_MAX, NET_SHARPE_MIN, PBO_MAX
 
     health = evaluate_gate(_strategy(pbo=0.1, dsr=1.0, net_sharpe=0.6, max_drawdown=0.2))

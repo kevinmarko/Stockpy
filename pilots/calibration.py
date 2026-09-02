@@ -37,7 +37,7 @@ precedent):
   (JSON ``null``), never a guessed number. Genuine zeros (e.g. a strategy that
   really won 0% of trades) stay real zeros.
 * Imports ``evaluation_engine``, ``transactions_store``,
-  ``data.historical_store``, and ``gui.decision_log`` — NONE of which are on
+  ``data.historical_store``, and ``shared.decision_log`` — NONE of which are on
   ``api/pilots_api.py``'s AST-guard denylist (only ``processing_engine``,
   ``strategy_engine``, ``forecasting_engine``, ``macro_engine``,
   ``technical_options_engine``, ``main_orchestrator``, ``desktop`` are
@@ -79,7 +79,7 @@ def _finite_or_none(value: Any) -> Optional[float]:
 def _decision_log_path() -> Path:
     """Resolve ``output/decision_log.jsonl`` from live settings per call.
 
-    Resolves from ``settings.OUTPUT_DIR`` (not ``gui.decision_log.DEFAULT_LOG_PATH``'s
+    Resolves from ``settings.OUTPUT_DIR`` (not ``shared.decision_log.DEFAULT_LOG_PATH``'s
     hardcoded relative ``Path("output/...")``) so it matches the write side
     (``POST /decisions``) and stays isolatable under a tests-patched OUTPUT_DIR —
     mirrors ``pilots/observability.py::risk_gate_block_log``'s settings-resolution."""
@@ -465,7 +465,7 @@ def recent_decisions_view(limit: int = 50, *, log_path: Optional[Path] = None) -
     try:
         import pandas as pd
 
-        from gui.decision_log import decisions_df
+        from shared.decision_log import decisions_df
     except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
         logger.debug("recent_decisions_view import failed: %s", exc)
         return {"decisions": [], "reason": "Decision log unavailable."}

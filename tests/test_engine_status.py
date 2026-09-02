@@ -3,9 +3,9 @@ tests/test_engine_status.py
 ============================
 Unit tests for ``gui/engine_status.py``'s sidebar liveness badge.
 
-All tests monkeypatch both ``gui.orchestrator_runner.heartbeat_age_seconds``
+All tests monkeypatch both ``shared.orchestrator_runner.heartbeat_age_seconds``
 (main_orchestrator.py-only signal) and
-``gui.orchestrator_runner.state_snapshot_age_seconds`` (written by every
+``shared.orchestrator_runner.state_snapshot_age_seconds`` (written by every
 main.py run_once() cycle AND main_orchestrator.py) so no filesystem or
 process state is touched -- the badge logic is a pure function of whatever
 those two lookups return, taking whichever signal is freshest.
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from gui import engine_status as engine_status_module
-from gui.engine_status import engine_status
+from shared import engine_status as engine_status_module
+from shared.engine_status import engine_status
 
 
 def _patch_signals(monkeypatch, *, heartbeat=None, snapshot=None, paused_for_market_hours=False):

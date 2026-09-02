@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from env_io import SECRET_KEYS
+from shared.env_io import SECRET_KEYS
 from settings import settings
 
 # Generic patterns for API keys, Bearer tokens, secrets, and auth headers

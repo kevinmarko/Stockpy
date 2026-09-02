@@ -27,7 +27,10 @@ TARGETS: list[Target] = [
     Target("path", "main.py", "main.py", "python3 main.py"),
     Target("path", "main_orchestrator.py", "main_orchestrator.py", "python3 main_orchestrator.py"),
     Target("path", "universe_engine.py", "universe_engine.py", "python3 universe_engine.py"),
-    Target("path", "app_shell.py", "app_shell.py", "python3 app_shell.py"),
+    # app_shell.py (the frozen, decommissioned Streamlit native-shell wrapper —
+    # see CLAUDE.md's "Frontend strategy" section) is deliberately NOT offered
+    # here: a decommissioned entry point shouldn't be runnable from the
+    # webapp Commands screen.
     Target("module", "execution.kill_switch", "execution.kill_switch", "python -m execution.kill_switch"),
     Target("module", "validation.harness", "validation.harness", "python -m validation.harness"),
     Target("module", "prompt_registry", "prompt_registry", "python -m prompt_registry"),

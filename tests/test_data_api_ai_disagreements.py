@@ -8,7 +8,7 @@ Claude vs Gemini disagreement" table (G15 of the GUI->webapp parity effort).
 Unlike the legacy tab (which reads two ``st.session_state`` mirrors that only
 exist within one browser session), this endpoint reconstructs the same
 {symbol: verdict} maps from the DURABLE on-disk LLM commentary cache
-(``llm/cache.py``) via ``gui.ai_insights_panel.latest_verdict_maps_from_cache``.
+(``llm/cache.py``) via ``shared.ai_insights_panel.latest_verdict_maps_from_cache``.
 
 ``load_snapshot`` and ``llm.cache.read_all_entries`` are both monkeypatched at
 the ``api.data_api`` import site (or their source module for the lazy
@@ -79,7 +79,7 @@ def test_warm_path_surfaces_agreement_and_disagreement_from_the_durable_cache():
     # headline/why_now/key_risks/invalidation fields (llm/schemas.py) -- it
     # never carries `trend_direction` in real data, so the Claude side's
     # direction comes from the heuristic headline scan
-    # (gui.ai_insights_panel._heuristic_direction_from_rationale), not an
+    # (shared.ai_insights_panel._heuristic_direction_from_rationale), not an
     # explicit field. Headlines below are chosen to hit that heuristic.
     entries = [
         _cache_entry(

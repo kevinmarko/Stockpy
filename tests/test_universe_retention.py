@@ -250,7 +250,7 @@ class TestAsyncSyncNowDefaultTickersLeak:
         def _fake_write_setting(key, value):
             written[key] = value
 
-        monkeypatch.setattr("env_io.write_setting", _fake_write_setting)
+        monkeypatch.setattr("shared.env_io.write_setting", _fake_write_setting)
 
         # A real held position so DEFAULT_TICKERS has something to persist --
         # otherwise (retention as the ONLY source) the "if tickers:" guard

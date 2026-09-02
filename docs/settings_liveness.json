@@ -13,8 +13,8 @@
   ],
   "counts": {
     "live_safe": 360,
-    "no_op": 0,
-    "restart_required": 101,
+    "no_op": 5,
+    "restart_required": 96,
     "total": 461
   },
   "dynamic_sites": [
@@ -83,35 +83,35 @@
     },
     {
       "expr": "getattr(settings, tkey, False)",
-      "file": "gui/panels/ai_control_center.py",
+      "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
       "line": 164,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, sel_key, 'none')",
-      "file": "gui/panels/ai_control_center.py",
+      "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
       "line": 189,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, fallback)",
-      "file": "gui/panels/settings_manager.py",
+      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
       "line": 190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, '')",
-      "file": "gui/panels/settings_manager.py",
+      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
       "line": 207,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, [])",
-      "file": "gui/panels/settings_manager.py",
+      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
       "line": 275,
       "resolved_by_factory": null,
       "rules": []
@@ -126,19 +126,19 @@
     {
       "expr": "getattr(settings_module.settings, key, None)",
       "file": "runtime_flags_writer.py",
-      "line": 774,
+      "line": 773,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings_module.settings, key, None)",
       "file": "runtime_flags_writer.py",
-      "line": 783,
+      "line": 782,
       "resolved_by_factory": null,
       "rules": []
     }
   ],
-  "files_scanned": 446,
+  "files_scanned": 448,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -502,7 +502,13 @@
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
     "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
-  "no_op": [],
+  "no_op": [
+    "GOOGLE_TRENDS_OVERLAP_DAYS",
+    "GOOGLE_TRENDS_WINDOW_DAYS",
+    "OPTIONS_EARNINGS_CRUSH_ENABLED",
+    "PROMPT_MAX_CHARS",
+    "SENTIMENT_PIT_MIN_MONTHS"
+  ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
     "attr": 934,
@@ -525,7 +531,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:249",
+        "site": "legacy/streamlit_command_center/app.py:251",
         "via": []
       }
     ],
@@ -735,7 +741,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:146",
+        "site": "legacy/streamlit_command_center/app.py:148",
         "via": []
       },
       {
@@ -745,7 +751,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/__init__.py:96",
+        "site": "legacy/streamlit_command_center/panels/__init__.py:96",
         "via": []
       },
       {
@@ -755,7 +761,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/ai_insights.py:36",
+        "site": "legacy/streamlit_command_center/panels/ai_insights.py:36",
         "via": []
       },
       {
@@ -765,7 +771,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:153",
+        "site": "legacy/streamlit_command_center/panels/analytics.py:153",
         "via": []
       },
       {
@@ -775,7 +781,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:212",
+        "site": "legacy/streamlit_command_center/panels/analytics.py:212",
         "via": []
       },
       {
@@ -785,7 +791,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:247",
+        "site": "legacy/streamlit_command_center/panels/analytics.py:247",
         "via": []
       },
       {
@@ -795,7 +801,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics_signals.py:104",
+        "site": "legacy/streamlit_command_center/panels/analytics_signals.py:104",
         "via": []
       },
       {
@@ -805,7 +811,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/gravity_audit.py:50",
+        "site": "legacy/streamlit_command_center/panels/gravity_audit.py:50",
         "via": []
       },
       {
@@ -815,7 +821,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/gravity_audit.py:73",
+        "site": "legacy/streamlit_command_center/panels/gravity_audit.py:73",
         "via": []
       },
       {
@@ -825,7 +831,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/live_inventory.py:51",
+        "site": "legacy/streamlit_command_center/panels/live_inventory.py:51",
         "via": []
       },
       {
@@ -835,7 +841,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/market_data.py:51",
+        "site": "legacy/streamlit_command_center/panels/market_data.py:51",
         "via": []
       },
       {
@@ -845,7 +851,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/observability.py:861",
+        "site": "legacy/streamlit_command_center/panels/observability.py:861",
         "via": []
       },
       {
@@ -855,7 +861,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/options_matrix.py:75",
+        "site": "legacy/streamlit_command_center/panels/options_matrix.py:75",
         "via": []
       },
       {
@@ -865,7 +871,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/pairs.py:147",
+        "site": "legacy/streamlit_command_center/panels/pairs.py:147",
         "via": []
       }
     ],
@@ -1586,7 +1592,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:151",
+        "site": "legacy/streamlit_command_center/app.py:153",
         "via": []
       },
       {
@@ -1595,7 +1601,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:153",
+        "site": "legacy/streamlit_command_center/app.py:155",
         "via": []
       }
     ],
@@ -1606,7 +1612,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:145",
+        "site": "legacy/streamlit_command_center/app.py:147",
         "via": []
       }
     ],
@@ -1619,15 +1625,6 @@
         ],
         "site": "api/pilots_api.py:4754",
         "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:539",
-        "via": []
       }
     ],
     "EDGAR_FULLTEXT_FORMS": [
@@ -1638,15 +1635,6 @@
           "dynamic_name_literal_unattributable"
         ],
         "site": "api/pilots_api.py:4753",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:538",
         "via": []
       }
     ],
@@ -1666,25 +1654,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:385",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:940",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "gui/panels/settings_manager.py:126",
+        "site": "legacy/streamlit_command_center/panels/settings_manager.py:126",
         "via": []
       }
     ],
@@ -1783,16 +1753,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:444",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "gui/panels/settings_manager.py:162",
+        "site": "legacy/streamlit_command_center/panels/settings_manager.py:162",
         "via": []
       }
     ],
@@ -2103,28 +2064,6 @@
         "via": []
       }
     ],
-    "GOOGLE_TRENDS_OVERLAP_DAYS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:556",
-        "via": []
-      }
-    ],
-    "GOOGLE_TRENDS_WINDOW_DAYS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:555",
-        "via": []
-      }
-    ],
     "HMM_COVARIANCE_TYPE": [
       {
         "discarded": false,
@@ -2263,15 +2202,6 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:150",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
         "site": "ml/data/store.py:27",
         "via": []
       },
@@ -2317,6 +2247,15 @@
         "rules": [
           "module_level"
         ],
+        "site": "shared/orchestrator_runner.py:150",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
         "site": "universe_engine.py:40",
         "via": []
       }
@@ -2328,7 +2267,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:83",
+        "site": "legacy/streamlit_command_center/app.py:85",
         "via": []
       }
     ],
@@ -2566,7 +2505,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6088",
+        "site": "investyo_mcp_server.py:6087",
         "via": []
       }
     ],
@@ -2586,7 +2525,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6040",
+        "site": "investyo_mcp_server.py:6039",
         "via": []
       }
     ],
@@ -2626,7 +2565,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6048",
+        "site": "investyo_mcp_server.py:6047",
         "via": []
       }
     ],
@@ -2682,17 +2621,6 @@
           "module_level"
         ],
         "site": "ml/drl_market_maker.py:109",
-        "via": []
-      }
-    ],
-    "OPTIONS_EARNINGS_CRUSH_ENABLED": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:736",
         "via": []
       }
     ],
@@ -2794,15 +2722,6 @@
         "discarded": false,
         "form": "attr",
         "rules": [
-          "module_level"
-        ],
-        "site": "desktop/ui_server.py:40",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
           "init_self_assign"
         ],
         "site": "execution/dynamic_circuit_breaker.py:314",
@@ -2832,7 +2751,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:144",
+        "site": "legacy/streamlit_command_center/app.py:146",
         "via": []
       },
       {
@@ -2841,124 +2760,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/decision_log.py:47",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:81",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:87",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:90",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:97",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:102",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:107",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:113",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:119",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:125",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:130",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:139",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:145",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:1104",
+        "site": "legacy/streamlit_command_center/desktop_shell/ui_server.py:44",
         "via": []
       },
       {
@@ -2996,6 +2798,132 @@
         ],
         "site": "reporting/progress.py:239",
         "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/decision_log.py:47",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:81",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:87",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:90",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:97",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:102",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:107",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:119",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:125",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:130",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:139",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:145",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:1104",
+        "via": []
       }
     ],
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": [
@@ -3009,17 +2937,6 @@
         "via": []
       }
     ],
-    "PROMPT_MAX_CHARS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:636",
-        "via": []
-      }
-    ],
     "PROMPT_REGISTRY_REFRESH_SECONDS": [
       {
         "discarded": false,
@@ -3027,16 +2944,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11072",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:637",
+        "site": "Gravity AI Review Suite.py:11079",
         "via": []
       }
     ],
@@ -3163,17 +3071,6 @@
         "via": []
       }
     ],
-    "SENTIMENT_PIT_MIN_MONTHS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:508",
-        "via": []
-      }
-    ],
     "SENTIMENT_SOURCES": [
       {
         "discarded": false,
@@ -3251,7 +3148,7 @@
     "cross_module_init_helper": 91,
     "decorator_arg": 13,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 18,
+    "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 14,
     "init_body": 12,
     "init_self_assign": 51,
@@ -3264,12 +3161,7 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
-    "GOOGLE_TRENDS_OVERLAP_DAYS",
-    "GOOGLE_TRENDS_WINDOW_DAYS",
-    "OPTIONS_EARNINGS_CRUSH_ENABLED",
-    "PROMPT_MAX_CHARS",
-    "PROMPT_REGISTRY_REFRESH_SECONDS",
-    "SENTIMENT_PIT_MIN_MONTHS"
+    "PROMPT_REGISTRY_REFRESH_SECONDS"
   ],
   "status": "ok"
 }

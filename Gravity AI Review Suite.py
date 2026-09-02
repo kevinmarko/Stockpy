@@ -4242,9 +4242,9 @@ class GravityAIAuditor:
         Verifies the security-critical contract of the new on-demand Streamlit
         operational suite (gui/app.py and helpers):
 
-        1.  ``gui.env_io`` never returns a secret in cleartext and refuses to
+        1.  ``shared.env_io`` never returns a secret in cleartext and refuses to
             write any key in ``SECRET_KEYS`` (CONSTRAINT #3).
-        2.  ``gui.env_io.write_setting`` rejects keys outside ``ALLOWED_KEYS``.
+        2.  ``shared.env_io.write_setting`` rejects keys outside ``ALLOWED_KEYS``.
         3.  ``settings.DISABLED_SIGNAL_MODULES`` actually drops a module from
             ``SignalAggregator.aggregate()`` — the Strategy Matrix toggle has
             real effect, not just display.
@@ -4263,7 +4263,7 @@ class GravityAIAuditor:
             from pathlib import Path as _Path
             from datetime import datetime as _dt
 
-            from gui import env_io as _env_io
+            from shared import env_io as _env_io
             from settings import settings as _settings, Settings as _Settings
 
             # 1. Secret protection: masking + write refusal.
@@ -4351,15 +4351,22 @@ class GravityAIAuditor:
             _chk("default_disabled_list_empty", _Settings().DISABLED_SIGNAL_MODULES == [],
                  "fresh Settings() must default to no disabled modules")
 
-            # 4. No order functions defined in the gui/ package.
+            # 4. No order functions defined in what used to be the gui/ package
+            # (now split: live modules in shared/, the archived Streamlit
+            # entry point in legacy/streamlit_command_center/ — same shallow,
+            # non-recursive scan scope as before the split).
             import re as _re
-            gui_dir = _Path(__file__).resolve().parent / "gui"
+            gui_successor_dirs = [
+                _Path(__file__).resolve().parent / "shared",
+                _Path(__file__).resolve().parent / "legacy" / "streamlit_command_center",
+            ]
             order_pat = _re.compile(r"^\s*def\s+(submit_order|place_order|place_equity_order|"
                                     r"place_option_order|buy_order|sell_order|place_\w+)", _re.MULTILINE)
             offenders = []
-            for pyf in gui_dir.glob("*.py"):
-                if order_pat.search(pyf.read_text(encoding="utf-8")):
-                    offenders.append(pyf.name)
+            for gui_dir in gui_successor_dirs:
+                for pyf in gui_dir.glob("*.py"):
+                    if order_pat.search(pyf.read_text(encoding="utf-8")):
+                        offenders.append(pyf.name)
             _chk("gui_has_no_order_functions", not offenders,
                  f"order functions found in: {offenders}" if offenders else "clean")
 
@@ -4709,8 +4716,8 @@ class GravityAIAuditor:
             immediately (without touching ``context.macro``) when the setting is False.
         3.  ``execution.risk_gate.PreTradeRiskGate.macro_kill_switch_check`` blocks a
             BUY when the setting is True and ``MacroEconomicDTO.killSwitch`` is active.
-        4.  ``gui.env_io.ALLOWED_KEYS`` contains ``MACRO_REGIME_GATE_ENABLED``.
-        5.  ``gui.env_io.SECRET_KEYS`` does NOT contain ``MACRO_REGIME_GATE_ENABLED``
+        4.  ``shared.env_io.ALLOWED_KEYS`` contains ``MACRO_REGIME_GATE_ENABLED``.
+        5.  ``shared.env_io.SECRET_KEYS`` does NOT contain ``MACRO_REGIME_GATE_ENABLED``
             (it is a toggle, not a credential).
         6.  ``scripts.preflight_check.check_macro_regime_gate_enabled`` fails when
             gate is off and ALPACA_PAPER is False (live-trading safety guard).
@@ -4826,10 +4833,10 @@ class GravityAIAuditor:
         # Check 4 — ALLOWED_KEYS includes the toggle
         # ------------------------------------------------------------------
         try:
-            from gui import env_io
+            from shared import env_io
             passed = "MACRO_REGIME_GATE_ENABLED" in env_io.ALLOWED_KEYS
             audit["checks"].append({
-                "check": "gui.env_io.ALLOWED_KEYS contains MACRO_REGIME_GATE_ENABLED",
+                "check": "shared.env_io.ALLOWED_KEYS contains MACRO_REGIME_GATE_ENABLED",
                 "passed": passed,
                 "detail": f"in ALLOWED_KEYS: {passed}",
             })
@@ -4901,7 +4908,7 @@ class GravityAIAuditor:
             import re
             # render_observability now lives in gui/panels/observability.py
             # (post gui/panels refactor, 2026-06-29 — see gui/panels/__init__.py).
-            with open("gui/panels/observability.py", encoding="utf-8") as fh:
+            with open("legacy/streamlit_command_center/panels/observability.py", encoding="utf-8") as fh:
                 panels_src = fh.read()
             # Extract from render_observability start to the next def (or EOF)
             obs_match = re.search(
@@ -4950,7 +4957,7 @@ class GravityAIAuditor:
               data/portfolio_sync.py source (it MUST be advisory only — the
               orchestrator owns broker contact via execution/order_manager.py).
           (i) async_sync_now(persist_default_tickers=False) does NOT call
-              gui.env_io.write_setting (dry-run honours the flag).
+              shared.env_io.write_setting (dry-run honours the flag).
         """
         audit: dict = {
             "step": "step_35_portfolio_sync_audit",
@@ -5087,7 +5094,7 @@ class GravityAIAuditor:
 
             # ── (i) Dry-run sync skips env writes ────────────────────────
             import asyncio
-            import gui.env_io as env_io
+            import shared.env_io as env_io
 
             write_calls: list = []
             class _FakeSnap2:
@@ -5727,7 +5734,7 @@ class GravityAIAuditor:
             import math
             import pandas as pd
 
-            from gui.panels import (
+            from shared.report_viewer_helpers import (
                 GICS_SECTORS,
                 build_brinson_fachler_inputs,
                 compute_brinson_fachler,
@@ -5879,7 +5886,7 @@ class GravityAIAuditor:
             import os
             import time as _time
 
-            from gui import orchestrator_runner as runner
+            from shared import orchestrator_runner as runner
 
             # 1. Missing env var → False
             os.environ.pop("__GRAVITY_BF_TEST_KEY__", None)
@@ -6005,7 +6012,7 @@ class GravityAIAuditor:
             from datetime import datetime, timezone
 
             from data.market_data import MarketDataError, Quote
-            from gui.market_data_diagnostics import (
+            from shared.market_data_diagnostics import (
                 BatchQuoteFetcher,
                 ErrorCategory,
                 FetchHealthTracker,
@@ -6161,7 +6168,7 @@ class GravityAIAuditor:
             import sys as _sys
             from datetime import datetime, timedelta, timezone
 
-            from gui import observability_telemetry as ot
+            from shared import observability_telemetry as ot
 
             # 1. Happy-path telemetry has finite host metrics.
             t = ot.collect_system_telemetry()
@@ -6313,7 +6320,7 @@ class GravityAIAuditor:
             sha256 prefix that CHANGES when the file content changes.
         5.  ``strategy_registry.read_active_mode`` resolves the mode truth
             table correctly (DRY_RUN > ALPACA_PAPER).
-        6.  ``gui.env_io.ALLOWED_KEYS`` includes ``ALPACA_PAPER`` so the
+        6.  ``shared.env_io.ALLOWED_KEYS`` includes ``ALPACA_PAPER`` so the
             Strategy Matrix mode toggle can persist the flag.
         """
         audit: dict = {"step": "step_44_safety_analytics_control_audit",
@@ -6325,10 +6332,10 @@ class GravityAIAuditor:
             import json as _json
             import tempfile
 
-            from gui import circuit_breakers as cb
-            from gui import dependency_map as dm
-            from gui import env_io
-            from gui import strategy_registry as sr
+            from shared import circuit_breakers as cb
+            from shared import dependency_map as dm
+            from shared import env_io
+            from shared import strategy_registry as sr
 
             # 1. Kill switch derivation
             with tempfile.TemporaryDirectory() as td:
@@ -6717,17 +6724,17 @@ class GravityAIAuditor:
 
         Checks
         ------
-        1.  ``gui.dead_letter.read_dead_letter`` returns ``None`` on missing file.
-        2.  ``gui.dead_letter.DeadLetterReport.is_clean`` is True for empty entries.
-        3.  ``gui.dead_letter.DeadLetterReport.symbols`` lists ticker strings.
-        4.  ``gui.observability_telemetry.extract_symbol_from_message`` extracts
+        1.  ``shared.dead_letter.read_dead_letter`` returns ``None`` on missing file.
+        2.  ``shared.dead_letter.DeadLetterReport.is_clean`` is True for empty entries.
+        3.  ``shared.dead_letter.DeadLetterReport.symbols`` lists ticker strings.
+        4.  ``shared.observability_telemetry.extract_symbol_from_message`` extracts
             the ticker from a "Dead-lettered HKIT" message.
         5.  ``classify_log_entry`` returns ``"symbol_specific"`` for a dead-lettered
             ticker message (symbol-specific WINS over logger-name systemic match).
         6.  ``classify_log_entry`` returns ``"systemic"`` for a pipeline-crash message
             that contains no ticker.
         7.  ``HeartbeatTrendStore`` ring buffer rolls off oldest samples when full.
-        8.  ``gui.orchestrator_runner.launch_symbol_retry`` exists and is callable
+        8.  ``shared.orchestrator_runner.launch_symbol_retry`` exists and is callable
             (structural check — does not spawn a process).
         9.  ``main_orchestrator.run_pipeline`` source contains the dead-letter try/except
             block and the dead-letter JSON write.
@@ -6749,7 +6756,7 @@ class GravityAIAuditor:
             from pathlib import Path
 
             # -- Dead-letter module API ----------------------------------------
-            from gui.dead_letter import (
+            from shared.dead_letter import (
                 DeadLetterEntry,
                 DeadLetterReport,
                 read_dead_letter,
@@ -6790,7 +6797,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c3
 
             # -- Contextual error classification --------------------------------
-            from gui.observability_telemetry import (
+            from shared.observability_telemetry import (
                 LogEntry,
                 classify_log_entry,
                 extract_symbol_from_message,
@@ -6843,7 +6850,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c6
 
             # -- HeartbeatTrendStore ring buffer --------------------------------
-            from gui.observability_telemetry import HeartbeatTrendStore
+            from shared.observability_telemetry import HeartbeatTrendStore
 
             store = HeartbeatTrendStore(max_samples=3)
             for i in range(5):
@@ -6858,7 +6865,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c7
 
             # Check 8: launch_symbol_retry exists and is callable (structural)
-            from gui import orchestrator_runner
+            from shared import orchestrator_runner
             c8 = callable(getattr(orchestrator_runner, "launch_symbol_retry", None))
             audit["checks"].append({
                 "check": "orchestrator_runner.launch_symbol_retry is callable",
@@ -6915,8 +6922,8 @@ class GravityAIAuditor:
 
         Checks
         ------
-        1.  ``gui.panels`` imports ``GlobalKillSwitch`` (via ``_kill_switch``).
-        2.  ``_render_launcher_safety_controls`` exists in ``gui.panels``.
+        1.  ``legacy.streamlit_command_center.panels`` imports ``GlobalKillSwitch`` (via ``_kill_switch``).
+        2.  ``_render_launcher_safety_controls`` exists in ``legacy.streamlit_command_center.panels``.
         3.  The safe-mode toggle writes BOTH ``DRY_RUN`` and the kill-switch
             sentinel atomically (AST-grep for both calls in the toggle handler).
         4.  Safe Mode is DERIVED (ON iff kill_active AND DRY_RUN=true) — no new env var.
@@ -6938,11 +6945,11 @@ class GravityAIAuditor:
             # gui/panels package refactor, 2026-06-29 — gui/panels/__init__.py
             # itself is now just a re-export stub, so inspect the actual
             # function object rather than the package module source).
-            import gui.panels as _panels_mod
+            import legacy.streamlit_command_center.panels as _panels_mod
             kill_switch_src = inspect.getsource(_panels_mod._kill_switch)
             c1 = "GlobalKillSwitch" in kill_switch_src
             audit["checks"].append({
-                "check": "gui.panels references GlobalKillSwitch",
+                "check": "legacy.streamlit_command_center.panels references GlobalKillSwitch",
                 "passed": c1,
             })
             all_pass = all_pass and c1
@@ -6950,7 +6957,7 @@ class GravityAIAuditor:
             # Check 2: _render_launcher_safety_controls exists
             c2 = hasattr(_panels_mod, "_render_launcher_safety_controls")
             audit["checks"].append({
-                "check": "_render_launcher_safety_controls exists in gui.panels",
+                "check": "_render_launcher_safety_controls exists in legacy.streamlit_command_center.panels",
                 "passed": c2,
             })
             all_pass = all_pass and c2
@@ -6982,7 +6989,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c3
 
             # Check 4: Safe Mode env var not present in ALLOWED_KEYS
-            from gui.env_io import ALLOWED_KEYS
+            from shared.env_io import ALLOWED_KEYS
             c4 = "SAFE_MODE" not in ALLOWED_KEYS
             audit["checks"].append({
                 "check": "SAFE_MODE is not a new env var (Safe Mode is derived)",
@@ -7013,10 +7020,10 @@ class GravityAIAuditor:
 
         Checks
         ------
-        1.  ``gui.preflight_runner`` is importable.
+        1.  ``shared.preflight_runner`` is importable.
         2.  ``run_preflight()`` returns a typed ``PreflightReport``.
         3.  Timeout path returns ``all_passed=False`` (CONSTRAINT #4 — never fabricate success).
-        4.  ``gui.panels._render_preflight_panel`` exists and is wired into ``render_launcher``.
+        4.  ``legacy.streamlit_command_center.panels._render_preflight_panel`` exists and is wired into ``render_launcher``.
         5.  ``tests/test_preflight_runner.py`` exists.
         """
         audit: dict = {
@@ -7034,18 +7041,18 @@ class GravityAIAuditor:
 
             # Check 1: module importable
             try:
-                from gui import preflight_runner
+                from shared import preflight_runner
                 c1 = True
             except ImportError as e:
                 c1 = False
-                audit["checks"].append({"check": "gui.preflight_runner importable", "passed": False, "detail": str(e)})
+                audit["checks"].append({"check": "shared.preflight_runner importable", "passed": False, "detail": str(e)})
                 all_pass = False
             if c1:
-                audit["checks"].append({"check": "gui.preflight_runner importable", "passed": True})
+                audit["checks"].append({"check": "shared.preflight_runner importable", "passed": True})
 
             if c1:
                 # Check 2: run_preflight returns typed PreflightReport
-                from gui.preflight_runner import run_preflight, PreflightReport
+                from shared.preflight_runner import run_preflight, PreflightReport
                 mock_result = MagicMock()
                 mock_result.returncode = 0
                 mock_result.stdout = '[{"name":"fred_key_configured","passed":true,"reason":"ok","warning":false}]'
@@ -7076,7 +7083,7 @@ class GravityAIAuditor:
             # Both now live in gui/panels/launcher.py (post gui/panels package
             # refactor, 2026-06-29) — inspect the function object directly
             # rather than the (now-stub) package __init__ source.
-            import gui.panels as _panels_mod
+            import legacy.streamlit_command_center.panels as _panels_mod
             c4a = hasattr(_panels_mod, "_render_preflight_panel")
             launcher_src = inspect.getsource(_panels_mod.render_launcher)
             # Check it's referenced in render_launcher
@@ -7121,10 +7128,10 @@ class GravityAIAuditor:
 
         Checks
         ------
-        1.  ``gui.run_mode`` is importable.
+        1.  ``shared.run_mode`` is importable.
         2.  ``read_active_run_mode()`` exists and returns a typed ``RunModeState``.
         3.  No session_state → ``idle`` mode (neutral default, no crash).
-        4.  ``gui.app`` imports ``gui.run_mode`` (header is rendered app-wide).
+        4.  ``legacy.streamlit_command_center.app`` imports ``shared.run_mode`` (header is rendered app-wide).
         5.  ``tests/test_run_mode.py`` exists.
         """
         audit: dict = {
@@ -7140,18 +7147,18 @@ class GravityAIAuditor:
 
             # Check 1: importable
             try:
-                from gui import run_mode
+                from shared import run_mode
                 c1 = True
             except ImportError as e:
                 c1 = False
-                audit["checks"].append({"check": "gui.run_mode importable", "passed": False, "detail": str(e)})
+                audit["checks"].append({"check": "shared.run_mode importable", "passed": False, "detail": str(e)})
                 all_pass = False
             if c1:
-                audit["checks"].append({"check": "gui.run_mode importable", "passed": True})
+                audit["checks"].append({"check": "shared.run_mode importable", "passed": True})
 
             if c1:
                 # Check 2: read_active_run_mode exists + returns RunModeState
-                from gui.run_mode import read_active_run_mode, RunModeState
+                from shared.run_mode import read_active_run_mode, RunModeState
                 c2 = callable(read_active_run_mode)
                 audit["checks"].append({
                     "check": "read_active_run_mode is callable and RunModeState is defined",
@@ -7169,11 +7176,11 @@ class GravityAIAuditor:
                 })
                 all_pass = all_pass and c3
 
-            # Check 4: gui.app imports gui.run_mode
-            app_src = Path("gui/app.py").read_text(encoding="utf-8")
+            # Check 4: legacy.streamlit_command_center.app imports shared.run_mode
+            app_src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
             c4 = "run_mode" in app_src
             audit["checks"].append({
-                "check": "gui/app.py imports/references gui.run_mode",
+                "check": "gui/app.py imports/references shared.run_mode",
                 "passed": c4,
             })
             all_pass = all_pass and c4
@@ -7202,7 +7209,7 @@ class GravityAIAuditor:
         ------
         1.  ``validation.thresholds`` exists and exports the five canonical constants.
         2.  ``validation.harness`` imports from ``validation.thresholds``.
-        3.  ``gui.strategy_health`` is importable.
+        3.  ``shared.strategy_health`` is importable.
         4.  ``read_gravity_report`` returns ``[]`` on a missing file (no fabrication).
         5.  Corrupt JSON → ``[]`` (CONSTRAINT #4 — never fabricate success).
         6.  ``output/gravity_verification_report.json`` is written atomically by
@@ -7247,19 +7254,19 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c2
 
-            # Check 3: gui.strategy_health importable
+            # Check 3: shared.strategy_health importable
             try:
-                from gui import strategy_health as _sh
+                from shared import strategy_health as _sh
                 c3 = True
             except ImportError as e:
                 c3 = False
-                audit["checks"].append({"check": "gui.strategy_health importable", "passed": False, "detail": str(e)})
+                audit["checks"].append({"check": "shared.strategy_health importable", "passed": False, "detail": str(e)})
                 all_pass = False
             if c3:
-                audit["checks"].append({"check": "gui.strategy_health importable", "passed": True})
+                audit["checks"].append({"check": "shared.strategy_health importable", "passed": True})
 
             if c3:
-                from gui.strategy_health import read_gravity_report
+                from shared.strategy_health import read_gravity_report
 
                 # Check 4: missing file → []
                 # Bandit B108: same deliberately-nonexistent negative-test
@@ -7707,7 +7714,7 @@ class GravityAIAuditor:
 
         Checks
         ------
-        1.  ``gui.decision_log`` is importable.
+        1.  ``shared.decision_log`` is importable.
         2.  ``DecisionEntry`` is a frozen dataclass with correct fields.
         3.  ``append_decision`` / ``read_decisions`` round-trip (tmp file).
         4.  ``decisions_df`` returns correct schema on empty / missing log.
@@ -7734,7 +7741,7 @@ class GravityAIAuditor:
 
             # ── 1. Import ────────────────────────────────────────────────────
             try:
-                from gui.decision_log import (
+                from shared.decision_log import (
                     DecisionEntry,
                     _SCHEMA,
                     append_decision,
@@ -7745,11 +7752,11 @@ class GravityAIAuditor:
                 )
                 import_ok = True
             except ImportError as exc:
-                audit["checks"].append({"check": "gui.decision_log importable", "passed": False, "detail": str(exc)})
+                audit["checks"].append({"check": "shared.decision_log importable", "passed": False, "detail": str(exc)})
                 audit["status"] = "FAILED"
                 self.report["step_53_decision_log_audit"] = audit
                 return
-            audit["checks"].append({"check": "gui.decision_log importable", "passed": True})
+            audit["checks"].append({"check": "shared.decision_log importable", "passed": True})
 
             # ── 2. DecisionEntry is frozen dataclass ──────────────────────────
             e = DecisionEntry("AAPL", "acted", "BUY", 0.8, "", "2026-06-26T12:00:00+00:00", "")
@@ -8197,7 +8204,7 @@ class GravityAIAuditor:
             # ``_render_strategy_mode_toggle`` now lives in
             # gui/panels/strategy_matrix.py (post gui/panels package refactor,
             # 2026-06-29) — gui/panels/__init__.py only re-exports it.
-            panels_src = Path("gui/panels/strategy_matrix.py").read_text(encoding="utf-8")
+            panels_src = Path("legacy/streamlit_command_center/panels/strategy_matrix.py").read_text(encoding="utf-8")
             c3 = (
                 "ADVISORY_ONLY" in panels_src
                 and "Advisory mode — broker execution disabled" in panels_src
@@ -8209,7 +8216,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c3
 
             # Check 4: GUI app banner (source-grep)
-            app_src = Path("gui/app.py").read_text(encoding="utf-8")
+            app_src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
             c4 = "ADVISORY_ONLY" in app_src and "ADVISORY MODE" in app_src
             audit["checks"].append({
                 "check": "gui/app.py renders ADVISORY MODE banner",
@@ -8321,10 +8328,10 @@ class GravityAIAuditor:
         ext_pass = True
         try:
             # Check: StageStatus enum exists in orchestrator_runner
-            from gui.orchestrator_runner import StageStatus
+            from shared.orchestrator_runner import StageStatus
             c_enum = issubclass(StageStatus, str)
             checks.append({
-                "check": "StageStatus is a str-subclassed enum in gui.orchestrator_runner",
+                "check": "StageStatus is a str-subclassed enum in shared.orchestrator_runner",
                 "passed": c_enum,
             })
             ext_pass = ext_pass and c_enum
@@ -8347,7 +8354,7 @@ class GravityAIAuditor:
             ext_pass = ext_pass and c_compat
 
             # Check: compute_stage_status returns a 4-stage map
-            from gui.orchestrator_runner import compute_stage_status, STAGES
+            from shared.orchestrator_runner import compute_stage_status, STAGES
             c_four = len(STAGES) == 4
             checks.append({
                 "check": "STAGES list has exactly 4 pipeline stages",
@@ -8386,14 +8393,14 @@ class GravityAIAuditor:
         try:
             import ast
             import inspect
-            import gui.panels as _panels_mod
+            import legacy.streamlit_command_center.panels as _panels_mod
 
             # Check: _render_launcher_safety_controls exists (works via the
             # gui/panels/__init__.py re-export regardless of which submodule
             # actually defines it).
             has_helper = hasattr(_panels_mod, "_render_launcher_safety_controls")
             checks.append({
-                "check": "Launcher-tab _render_launcher_safety_controls exists in gui.panels",
+                "check": "Launcher-tab _render_launcher_safety_controls exists in legacy.streamlit_command_center.panels",
                 "passed": has_helper,
             })
             ext_pass = ext_pass and has_helper
@@ -10094,7 +10101,7 @@ class GravityAIAuditor:
             # 9. render_live_inventory references watchlist.txt write
             try:
                 import inspect
-                from gui.panels import render_live_inventory
+                from legacy.streamlit_command_center.panels import render_live_inventory
                 src = inspect.getsource(render_live_inventory)
                 ok9 = "watchlist.txt" in src and ("Add to watchlist" in src or "watchlist_add" in src)
             except Exception:
@@ -10284,7 +10291,7 @@ class GravityAIAuditor:
             # 2026-06-29) — gui/panels/__init__.py itself is just a re-export
             # stub and no longer contains this reference.
             try:
-                panels_src = (_repo / "gui" / "panels" / "report_viewer.py").read_text(encoding="utf-8")
+                panels_src = (_repo / "legacy" / "streamlit_command_center" / "panels" / "report_viewer.py").read_text(encoding="utf-8")
                 ok9 = "recommendation_tracking_report" in panels_src
             except Exception:
                 ok9 = False
@@ -10993,7 +11000,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c4
 
             # ── Check 5: 4 secrets in SECRET_KEYS and NOT in ALLOWED_KEYS ───
-            from gui.env_io import SECRET_KEYS, ALLOWED_KEYS
+            from shared.env_io import SECRET_KEYS, ALLOWED_KEYS
             _secret_keys = [
                 "PROMPT_REGISTRY_URL",
                 "PROMPT_REGISTRY_TOKEN",
@@ -11750,10 +11757,10 @@ class GravityAIAuditor:
               non-empty dict, and every key is a ``str`` (resilient to the exact
               expanded strategy-ids being unknown to this audit).
           2.  ``scripts/refresh_validations.py`` source exposes the ``--json`` flag.
-          3.  ``render_validation_lab`` importable from ``gui.panels`` and callable.
+          3.  ``render_validation_lab`` importable from ``legacy.streamlit_command_center.panels`` and callable.
           4.  ``🔬 Validation Lab`` appears in ``gui/app.py``'s ``tab_labels``.
-          5.  ``gui.orchestrator_runner.launch_validation_run`` exists and is callable.
-          6.  ``gui.orchestrator_runner.VALIDATION_LOG_PATH`` is defined.
+          5.  ``shared.orchestrator_runner.launch_validation_run`` exists and is callable.
+          6.  ``shared.orchestrator_runner.VALIDATION_LOG_PATH`` is defined.
         """
         audit = {
             "step": "step_73_validation_lab_audit",
@@ -11802,15 +11809,15 @@ class GravityAIAuditor:
 
             # 3. render_validation_lab importable + callable.
             try:
-                from gui.panels import render_validation_lab
+                from legacy.streamlit_command_center.panels import render_validation_lab
                 ok3 = callable(render_validation_lab)
             except Exception as exc:
                 ok3 = False
-            all_pass = _chk("gui.panels.render_validation_lab importable and callable", ok3) and all_pass
+            all_pass = _chk("legacy.streamlit_command_center.panels.render_validation_lab importable and callable", ok3) and all_pass
 
             # 4. "🔬 Validation Lab" registered as a tab in gui/app.py.
             try:
-                app_src = (_repo / "gui" / "app.py").read_text(encoding="utf-8")
+                app_src = (_repo / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
                 ok4 = "🔬 Validation Lab" in app_src
             except Exception:
                 ok4 = False
@@ -11818,18 +11825,18 @@ class GravityAIAuditor:
 
             # 5. launch_validation_run exists and is callable.
             try:
-                import gui.orchestrator_runner as _orr
+                import shared.orchestrator_runner as _orr
                 ok5 = hasattr(_orr, "launch_validation_run") and callable(_orr.launch_validation_run)
             except Exception:
                 ok5 = False
-            all_pass = _chk("gui.orchestrator_runner.launch_validation_run exists and callable", ok5) and all_pass
+            all_pass = _chk("shared.orchestrator_runner.launch_validation_run exists and callable", ok5) and all_pass
 
             # 6. VALIDATION_LOG_PATH defined.
             try:
                 ok6 = hasattr(_orr, "VALIDATION_LOG_PATH")
             except Exception:
                 ok6 = False
-            all_pass = _chk("gui.orchestrator_runner.VALIDATION_LOG_PATH defined", ok6) and all_pass
+            all_pass = _chk("shared.orchestrator_runner.VALIDATION_LOG_PATH defined", ok6) and all_pass
 
             audit["overall_pass"] = all_pass
             audit["status"] = "PASSED" if all_pass else "FAILED"
@@ -11857,8 +11864,8 @@ class GravityAIAuditor:
 
         Because this step may run before every sibling agent's branch has
         merged, EVERY check below is independently try/except-guarded so a
-        missing sibling module (``reporting.progress``, ``gui.orchestrator_runner``
-        additions, ``gui.progress_ui``) degrades to a soft/noted check rather
+        missing sibling module (``reporting.progress``, ``shared.orchestrator_runner``
+        additions, ``shared.progress_ui``) degrades to a soft/noted check rather
         than crashing the whole step or failing the audit outright. Only the two
         checks this file's owner is directly responsible for (the
         ``PROGRESS_POLL_SECONDS`` allowlist entry and the ``settings`` field)
@@ -11871,11 +11878,11 @@ class GravityAIAuditor:
               ``None``, never a fabricated progress dict (CONSTRAINT #4) (soft).
           3.  ``compute_percent(0,0,0,0)==0.0`` and ``compute_percent(6,6,0,0)==100.0``
               — clamped, no div-by-zero (soft).
-          4.  ``gui.orchestrator_runner.compute_run_progress`` importable
+          4.  ``shared.orchestrator_runner.compute_run_progress`` importable
               (Agent 3's function) (soft).
-          5.  ``gui.progress_ui.busy`` importable (Agent 4's helper) (soft).
-          6.  ``"PROGRESS_POLL_SECONDS"`` is in ``gui.env_io.ALLOWED_KEYS`` and
-              NOT in ``gui.env_io.SECRET_KEYS`` (hard).
+          5.  ``shared.progress_ui.busy`` importable (Agent 4's helper) (soft).
+          6.  ``"PROGRESS_POLL_SECONDS"`` is in ``shared.env_io.ALLOWED_KEYS`` and
+              NOT in ``shared.env_io.SECRET_KEYS`` (hard).
           7.  ``settings.PROGRESS_POLL_SECONDS`` exists and is an ``int`` (hard).
         """
         audit = {
@@ -11957,27 +11964,27 @@ class GravityAIAuditor:
                     False, "skipped — reporting.progress not present", soft=True,
                 )
 
-            # 4. gui.orchestrator_runner.compute_run_progress (Agent 3's fn) — soft-guard.
+            # 4. shared.orchestrator_runner.compute_run_progress (Agent 3's fn) — soft-guard.
             try:
-                import gui.orchestrator_runner as _orr  # type: ignore
+                import shared.orchestrator_runner as _orr  # type: ignore
                 ok4 = hasattr(_orr, "compute_run_progress") and callable(_orr.compute_run_progress)
                 detail4 = "" if ok4 else "compute_run_progress not yet defined (Agent 3 branch not merged?)"
             except Exception as exc:
                 ok4, detail4 = False, str(exc)
-            _chk("gui.orchestrator_runner.compute_run_progress importable", ok4, detail4, soft=True)
+            _chk("shared.orchestrator_runner.compute_run_progress importable", ok4, detail4, soft=True)
 
-            # 5. gui.progress_ui.busy (Agent 4's helper) — soft-guard.
+            # 5. shared.progress_ui.busy (Agent 4's helper) — soft-guard.
             try:
-                import gui.progress_ui as _pui  # type: ignore
+                import shared.progress_ui as _pui  # type: ignore
                 ok5 = hasattr(_pui, "busy") and callable(_pui.busy)
                 detail5 = "" if ok5 else "busy not yet defined"
             except Exception as exc:
-                ok5, detail5 = False, f"gui.progress_ui not importable (not yet merged?): {exc}"
-            _chk("gui.progress_ui.busy importable", ok5, detail5, soft=True)
+                ok5, detail5 = False, f"shared.progress_ui not importable (not yet merged?): {exc}"
+            _chk("shared.progress_ui.busy importable", ok5, detail5, soft=True)
 
             # 6. PROGRESS_POLL_SECONDS allowlisted, not a secret — this file's owner (hard).
             try:
-                import gui.env_io as _env_io
+                import shared.env_io as _env_io
                 ok6 = (
                     "PROGRESS_POLL_SECONDS" in _env_io.ALLOWED_KEYS
                     and "PROGRESS_POLL_SECONDS" not in _env_io.SECRET_KEYS
@@ -11986,7 +11993,7 @@ class GravityAIAuditor:
             except Exception as exc:
                 ok6, detail6 = False, str(exc)
             hard_pass = _chk(
-                "PROGRESS_POLL_SECONDS in gui.env_io.ALLOWED_KEYS and not in SECRET_KEYS",
+                "PROGRESS_POLL_SECONDS in shared.env_io.ALLOWED_KEYS and not in SECRET_KEYS",
                 ok6, detail6,
             ) and hard_pass
 
@@ -12192,20 +12199,20 @@ class GravityAIAuditor:
         audit: Dict[str, Any] = {"checks": [], "overall_pass": True}
         all_pass = True
         try:
-            # C1 — gui.help_content importable
-            from gui.help_content import GLOSSARY, TAB_HELP, METRIC_HELP, metric_help
+            # C1 — shared.help_content importable
+            from shared.help_content import GLOSSARY, TAB_HELP, METRIC_HELP, metric_help
             c1 = bool(GLOSSARY) and bool(TAB_HELP) and callable(metric_help)
             audit["checks"].append({"check": "help_content_importable", "pass": c1})
             all_pass = all_pass and c1
 
-            # C2 — gui.help_widgets importable
-            from gui.help_widgets import explain, metric_with_help, why_callout
+            # C2 — shared.help_widgets importable
+            from shared.help_widgets import explain, metric_with_help, why_callout
             c2 = callable(explain) and callable(metric_with_help) and callable(why_callout)
             audit["checks"].append({"check": "help_widgets_importable", "pass": c2})
             all_pass = all_pass and c2
 
-            # C3 — gui.onboarding importable
-            from gui.onboarding import should_show_tour, mark_onboarded
+            # C3 — shared.onboarding importable
+            from shared.onboarding import should_show_tour, mark_onboarded
             c3 = callable(should_show_tour) and callable(mark_onboarded)
             audit["checks"].append({"check": "onboarding_importable", "pass": c3})
             all_pass = all_pass and c3
@@ -12224,7 +12231,7 @@ class GravityAIAuditor:
 
         Checks (from docs/GUI_HELP_EXPLAINERS_PLAN.md §7)
         ---------------------------------------------------
-        1.  ``gui.help_content`` exports: GLOSSARY, TAB_HELP, SECTION_HELP,
+        1.  ``shared.help_content`` exports: GLOSSARY, TAB_HELP, SECTION_HELP,
             METRIC_HELP, metric_help.
         2.  All 10 tab IDs present in TAB_HELP.
         3.  Every guide_anchor in GLOSSARY + TAB_HELP resolves to a real heading
@@ -12234,8 +12241,8 @@ class GravityAIAuditor:
         5.  Nine required glossary terms present: kelly target, pbo, dsr, sahm rule,
             iv rank (or ivr), hmm, advisory mode, conviction, calibration.
         6.  No duplicate keys in GLOSSARY.
-        7.  ``gui.help_widgets.explain`` is callable.
-        8.  ``gui.onboarding.mark_onboarded`` / ``should_show_tour`` round-trip:
+        7.  ``shared.help_widgets.explain`` is callable.
+        8.  ``shared.onboarding.mark_onboarded`` / ``should_show_tour`` round-trip:
             True → mark → False, marker file created, ``.tmp`` sibling gone.
         9.  ``gui/panels.py`` contains ≥ 10 ``help_widgets.explain(`` calls and
             each of the 10 tab IDs appears in at least one such call.
@@ -12252,7 +12259,7 @@ class GravityAIAuditor:
             # ----------------------------------------------------------------
             # C1 — help_content exports
             # ----------------------------------------------------------------
-            from gui.help_content import (
+            from shared.help_content import (
                 GLOSSARY, TAB_HELP, SECTION_HELP, METRIC_HELP, metric_help,
             )
             c1 = (
@@ -12356,9 +12363,9 @@ class GravityAIAuditor:
             all_pass = all_pass and c6
 
             # ----------------------------------------------------------------
-            # C7 — gui.help_widgets.explain is callable
+            # C7 — shared.help_widgets.explain is callable
             # ----------------------------------------------------------------
-            from gui.help_widgets import explain
+            from shared.help_widgets import explain
             c7 = callable(explain)
             audit["checks"].append({"check": "explain_callable", "pass": bool(c7)})
             all_pass = all_pass and c7
@@ -12366,7 +12373,7 @@ class GravityAIAuditor:
             # ----------------------------------------------------------------
             # C8 — mark_onboarded / should_show_tour round-trip
             # ----------------------------------------------------------------
-            from gui.onboarding import should_show_tour, mark_onboarded
+            from shared.onboarding import should_show_tour, mark_onboarded
             with tempfile.TemporaryDirectory() as td:
                 marker = Path(td) / ".gui_onboarded"
                 tmp_sibling = marker.with_suffix(".tmp")
@@ -12401,7 +12408,7 @@ class GravityAIAuditor:
             # (does the *panels package* wire up help text everywhere it
             # should) still holds.
             # ----------------------------------------------------------------
-            panels_dir = Path("gui/panels")
+            panels_dir = Path("legacy/streamlit_command_center/panels")
             panels_src = "\n".join(
                 p.read_text(encoding="utf-8")
                 for p in sorted(panels_dir.glob("*.py"))
@@ -13390,7 +13397,7 @@ class GravityAIAuditor:
             # glossary) and the help_content glossary terms so docs cannot
             # silently drift from the code.  Pure source-grep — no imports.
             guide = Path("docs/HOW_TO_GUIDE.md").read_text(encoding="utf-8")
-            help_src = Path("gui/help_content.py").read_text(encoding="utf-8")
+            help_src = Path("shared/help_content.py").read_text(encoding="utf-8")
             guide_ok = all(h in guide for h in (
                 "## Autonomous Advisory Agent",
                 "## Trade-Signal Alerts",
@@ -13503,7 +13510,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c2
 
             # ── Check 3: SECRET_KEYS / ALLOWED_KEYS classification ───────────
-            from gui.env_io import ALLOWED_KEYS as _AK, SECRET_KEYS as _SK
+            from shared.env_io import ALLOWED_KEYS as _AK, SECRET_KEYS as _SK
             c3a = "ANTHROPIC_API_KEY" in _SK and "GEMINI_API_KEY" in _SK
             c3b = "ANTHROPIC_API_KEY" not in _AK and "GEMINI_API_KEY" not in _AK
             c3 = c3a and c3b
@@ -13843,7 +13850,7 @@ class GravityAIAuditor:
         6.  Opt-in: ``generate_chart_pattern_read`` returns ``None`` when
             ``LLM_COMMENTARY_ENABLED`` is False (default).
         7.  No fabricated direction:
-            :func:`gui.ai_insights_panel.derive_disagreement_overview`
+            :func:`shared.ai_insights_panel.derive_disagreement_overview`
             NEVER flags ``disagreement=True`` when one side is missing
             (CONSTRAINT #4).
         8.  Tab registration: ``gui/app.py`` references
@@ -13928,7 +13935,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c4
 
             # ── 5. no order-submission verbs in either Scope 3 file ────────
-            panel_src = (repo_root / "gui" / "ai_insights_panel.py").read_text(encoding="utf-8")
+            panel_src = (repo_root / "shared" / "ai_insights_panel.py").read_text(encoding="utf-8")
             forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
                          "place_equity_order", "place_option_order")
             c5_chart = not any(p in chart_src for p in forbidden)
@@ -13957,7 +13964,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c6
 
             # ── 7. no fabricated direction in disagreement view ────────────
-            from gui.ai_insights_panel import derive_disagreement_overview
+            from shared.ai_insights_panel import derive_disagreement_overview
             rows = derive_disagreement_overview(
                 [{"symbol": "AAPL", "action": "BUY"}],
                 claude_map={"AAPL": {"trend_direction": "bullish"}},
@@ -13975,7 +13982,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c7
 
             # ── 8. tab registration in gui/app.py ──────────────────────────
-            app_src = (repo_root / "gui" / "app.py").read_text(encoding="utf-8")
+            app_src = (repo_root / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
             c8 = (
                 "panels.render_ai_insights" in app_src
                 and "🪄 AI Insights" in app_src
@@ -14033,7 +14040,7 @@ class GravityAIAuditor:
             ``OPAL_RESEARCH_ENABLED=False``.
         8.  Threading: ``_format_rationale_user_prompt`` references
             ``research_brief`` (source grep).
-        9.  ``OPENAI_API_KEY`` is in ``gui.env_io.SECRET_KEYS`` and NOT in
+        9.  ``OPENAI_API_KEY`` is in ``shared.env_io.SECRET_KEYS`` and NOT in
             ``ALLOWED_KEYS``.
         10. All five Opal test files exist.
         """
@@ -14202,10 +14209,10 @@ class GravityAIAuditor:
             all_pass = all_pass and c8
 
             # ── 9. OPENAI_API_KEY secret-only ────────────────────────────────
-            from gui.env_io import SECRET_KEYS as _SK, ALLOWED_KEYS as _AK
+            from shared.env_io import SECRET_KEYS as _SK, ALLOWED_KEYS as _AK
             c9 = "OPENAI_API_KEY" in _SK and "OPENAI_API_KEY" not in _AK
             audit["checks"].append({
-                "check": "OPENAI_API_KEY is gui.env_io.SECRET_KEYS-only (CONSTRAINT #3)",
+                "check": "OPENAI_API_KEY is shared.env_io.SECRET_KEYS-only (CONSTRAINT #3)",
                 "passed": bool(c9),
             })
             all_pass = all_pass and c9
@@ -14251,10 +14258,10 @@ class GravityAIAuditor:
         byte-for-byte unchanged, and its continued passing IS the additivity
         proof:
 
-        1.  ``gui.ai_control_center`` importable; ``CAPABILITIES`` covers the
+        1.  ``shared.ai_control_center`` importable; ``CAPABILITIES`` covers the
             five expected keys.
         2.  ``GRAVITY_AI_RUNNER_ENABLED`` + the three ``OPAL_RESEARCH_*``
-            toggles are in ``gui.env_io.ALLOWED_KEYS``.
+            toggles are in ``shared.env_io.ALLOWED_KEYS``.
         3.  ``OPENAI_API_KEY`` is in ``SECRET_KEYS`` AND NOT in ``ALLOWED_KEYS``
             (CONSTRAINT #3).
         4.  ``capability_status`` truth table — ready / disabled / missing_key
@@ -14315,7 +14322,7 @@ class GravityAIAuditor:
 
         try:
             # ── 1. module surface + CAPABILITIES completeness ──────────────
-            from gui.ai_control_center import (
+            from shared.ai_control_center import (
                 AICapability,
                 CAPABILITIES,
                 capability_status,
@@ -14331,14 +14338,14 @@ class GravityAIAuditor:
             c1 = expected.issubset(cap_keys) and callable(capability_status) \
                 and callable(control_center_overview)
             audit["checks"].append({
-                "check": "gui.ai_control_center importable + CAPABILITIES covers 5 options",
+                "check": "shared.ai_control_center importable + CAPABILITIES covers 5 options",
                 "passed": bool(c1),
                 "detail": f"keys={sorted(cap_keys)}",
             })
             all_pass = all_pass and c1
 
             # ── 2. new toggles in ALLOWED_KEYS ─────────────────────────────
-            from gui.env_io import ALLOWED_KEYS, SECRET_KEYS
+            from shared.env_io import ALLOWED_KEYS, SECRET_KEYS
             need_allowed = (
                 "GRAVITY_AI_RUNNER_ENABLED", "OPAL_RESEARCH_ENABLED",
                 "OPAL_RESEARCH_PROVIDER", "OPAL_RESEARCH_MODEL",
@@ -14407,7 +14414,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c4
 
             # ── 5. scheduling launcher exists ──────────────────────────────
-            from gui import orchestrator_runner as _orr
+            from shared import orchestrator_runner as _orr
             c5 = callable(getattr(_orr, "launch_scheduled_advisory", None)) \
                 and callable(getattr(_orr, "stop_run", None))
             audit["checks"].append({
@@ -14417,7 +14424,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c5
 
             # ── 6. operator-triggered only (no autonomous scheduler) ───────
-            orr_src = (repo_root / "gui" / "orchestrator_runner.py").read_text(encoding="utf-8")
+            orr_src = (repo_root / "shared" / "orchestrator_runner.py").read_text(encoding="utf-8")
             c6 = (
                 "subprocess" in orr_src
                 and "threading.Timer" not in orr_src
@@ -14431,7 +14438,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c6
 
             # ── 7. tab registration in gui/app.py ──────────────────────────
-            app_src = (repo_root / "gui" / "app.py").read_text(encoding="utf-8")
+            app_src = (repo_root / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
             c7 = (
                 "panels.render_ai_control_center" in app_src
                 and "AI Control Center" in app_src
@@ -14443,7 +14450,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c7
 
             # ── 8. toggle-write guard rejects secret + disallowed keys ─────
-            from gui.env_io import SecretWriteError, DisallowedKeyError
+            from shared.env_io import SecretWriteError, DisallowedKeyError
             try:
                 validate_toggle_write("OPENAI_API_KEY")
                 c8a = False
@@ -14539,7 +14546,7 @@ class GravityAIAuditor:
             #        invalid_key; a rate-limit is NOT a key problem; a rotated
             #        verdict is not claimed. (Check 4 above stays byte-for-byte
             #        unchanged — its passing IS the additivity proof.)
-            from gui.ai_control_center import status_badge as _status_badge
+            from shared.ai_control_center import status_badge as _status_badge
             _keyed = _NS(
                 LLM_COMMENTARY_ENABLED=True,
                 LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
@@ -14574,7 +14581,7 @@ class GravityAIAuditor:
             # ── 13. ADDITIVE proof — status with last_calls=None is identical
             #        to the no-kwarg status for every capability, and all four
             #        ORIGINAL badge tokens survive the 5th entry.
-            from gui.ai_control_center import STATUS_BADGE as _BADGES
+            from shared.ai_control_center import STATUS_BADGE as _BADGES
             _matrix = (_NS(), _keyed)
             additive = all(
                 capability_status(s, c)["status"] == capability_status(s, c, last_calls=None)["status"]
@@ -16089,21 +16096,21 @@ class GravityAIAuditor:
 
             # ── 5: representative call sites pass readonly=True in source ────
             _sources = {
-                "gui/panels/observability.py": Path("gui/panels/observability.py").read_text(encoding="utf-8"),
+                "legacy/streamlit_command_center/panels/observability.py": Path("legacy/streamlit_command_center/panels/observability.py").read_text(encoding="utf-8"),
                 "api/pilots_api.py": Path("api/pilots_api.py").read_text(encoding="utf-8"),
                 "api/state_api.py": Path("api/state_api.py").read_text(encoding="utf-8"),
-                "gui/panels/analytics.py": Path("gui/panels/analytics.py").read_text(encoding="utf-8"),
+                "legacy/streamlit_command_center/panels/analytics.py": Path("legacy/streamlit_command_center/panels/analytics.py").read_text(encoding="utf-8"),
                 "pilots/forecast_skill.py": Path("pilots/forecast_skill.py").read_text(encoding="utf-8"),
             }
             expected_counts = {
-                "gui/panels/observability.py": [
+                "legacy/streamlit_command_center/panels/observability.py": [
                     ("TransactionsStore(readonly=True)", 5),
                     ("ForecastTracker(db_path=db_path, readonly=True)", 1),
                     ("ForecastTracker(readonly=True)", 1),
                 ],
                 "api/pilots_api.py": [("HistoricalStore(readonly=True)", 6)],
                 "api/state_api.py": [("TransactionsStore(readonly=True)", 1)],
-                "gui/panels/analytics.py": [("HistoricalStore(readonly=True)", 1)],
+                "legacy/streamlit_command_center/panels/analytics.py": [("HistoricalStore(readonly=True)", 1)],
                 "pilots/forecast_skill.py": [("ForecastTracker(readonly=True)", 1)],
             }
             mismatches = []

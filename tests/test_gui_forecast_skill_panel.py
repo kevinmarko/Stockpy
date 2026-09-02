@@ -10,7 +10,7 @@ accuracy and fill the Settings-Manager widget gaps.
   per-model RMSE, proving the query column names actually match the
   ``forecast_errors`` schema and it is not silently returning empty).
 * The 8 previously-invisible settings keys are now in ``_SETTINGS_LAYOUT`` AND in
-  ``gui.env_io.ALLOWED_KEYS`` (so a Settings-Manager write can't raise
+  ``shared.env_io.ALLOWED_KEYS`` (so a Settings-Manager write can't raise
   ``DisallowedKeyError``).
 """
 
@@ -22,9 +22,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from forecasting.forecast_tracker import ForecastTracker
-from gui.panels.observability import _forecast_rmse_by_model
-from gui.panels.settings_manager import _SETTINGS_LAYOUT
-from gui import env_io
+from legacy.streamlit_command_center.panels.observability import _forecast_rmse_by_model
+from legacy.streamlit_command_center.panels.settings_manager import _SETTINGS_LAYOUT
+from shared import env_io
 
 
 # ── The 8 settings gaps we just wired ────────────────────────────────────────

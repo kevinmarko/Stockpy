@@ -1,11 +1,11 @@
 """
 api/_jobs.py
 ============
-Job execution adapter over gui.orchestrator_runner for non-orchestrator
+Job execution adapter over shared.orchestrator_runner for non-orchestrator
 background process execution (preflight, pytest, validation, verify, gravity,
 advisory, orchestrator).
 
-``gui.orchestrator_runner.RunHandle`` exposes only ``is_running()`` and
+``shared.orchestrator_runner.RunHandle`` exposes only ``is_running()`` and
 ``returncode()`` — it has no ``status``/``exit_code()`` of its own. Job status
 strings (``running``/``success``/``failed``/``cancelled``/``unknown``) are
 derived here rather than invented on the handle, so this module is the single
@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from gui.orchestrator_runner import (
+from shared.orchestrator_runner import (
     RunHandle,
     launch_advisory_main,
     launch_gravity_audit,

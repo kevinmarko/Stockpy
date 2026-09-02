@@ -862,11 +862,11 @@ class TestDaemonRestart:
 # ---------------------------------------------------------------------------
 
 import api._jobs as jobs_module
-from gui.orchestrator_runner import StopOutcome
+from shared.orchestrator_runner import StopOutcome
 
 
 class _FakeHandle:
-    """Stands in for gui.orchestrator_runner.RunHandle: only is_running(),
+    """Stands in for shared.orchestrator_runner.RunHandle: only is_running(),
     returncode(), log_path, and backend are ever touched by api/_jobs.py."""
 
     def __init__(self, *, running=True, rc=None, backend="subprocess", log_path=None):
@@ -1434,7 +1434,7 @@ def test_daemon_properties_are_never_called_as_methods():
     hardcoded list), then AST-scans api/control_api.py for a Call on one of
     those names against a daemon-ish Name receiver.
 
-    Scoped to ast.Name receivers on purpose: gui.orchestrator_runner.
+    Scoped to ast.Name receivers on purpose: shared.orchestrator_runner.
     RunHandle.is_running() IS a method (gui/orchestrator_runner.py), and its
     call sites here (`rec.handle.is_running()`) have an ast.Attribute
     receiver, so they are correctly never matched. Known limitation,

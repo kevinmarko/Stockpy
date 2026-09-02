@@ -1208,7 +1208,7 @@ def _run_agent_loop(run_cycle) -> None:
             # ── (3) Refresh backlog from latest recommendations + decision log
             decision_entries: List[Any] = []
             try:
-                from gui.decision_log import read_decisions  # noqa: PLC0415
+                from shared.decision_log import read_decisions  # noqa: PLC0415
                 decision_entries = read_decisions()
             except Exception as exc:
                 logger.debug("decision_log read failed (%s); backlog clear step skipped", exc)

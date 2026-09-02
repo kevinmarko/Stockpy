@@ -12,7 +12,7 @@ PR5 — persistent-daemon GUI cutover, behind settings.ORCHESTRATOR_DAEMON_ENABL
 
 2. launch_orchestrator()'s flag-gated HTTP fast path — the Launcher tab's
    manual "Run Pipeline" button triggers a cycle against an already-running
-   daemon via gui.daemon_client instead of spawning a subprocess, producing
+   daemon via shared.daemon_client instead of spawning a subprocess, producing
    a backend="daemon" RunHandle. This DOES need dual-backend logic:
    RunHandle.is_running()/returncode(), stop_run(), read_log_tail(), and
    compute_stage_status() all branch on handle.backend.
@@ -32,8 +32,8 @@ import pytest
 
 @pytest.fixture()
 def runner(monkeypatch, tmp_path):
-    """Import gui.orchestrator_runner with all FS paths sandboxed to tmp_path."""
-    from gui import orchestrator_runner as runner
+    """Import shared.orchestrator_runner with all FS paths sandboxed to tmp_path."""
+    from shared import orchestrator_runner as runner
 
     monkeypatch.setattr(runner, "RUN_LOG_PATH", tmp_path / "gui_run.log")
     monkeypatch.setattr(runner, "DAEMON_LOG_PATH", tmp_path / "gui_daemon.log")
@@ -129,8 +129,8 @@ class TestLaunchDaemonEngine:
 
 class TestEngineSupervisorFlagBranching:
     def test_flag_off_routes_to_launch_scheduled_advisory(self, monkeypatch):
-        import gui.orchestrator_runner as orchestrator_runner
-        from desktop.engine_supervisor import start_engine
+        import shared.orchestrator_runner as orchestrator_runner
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine
 
         monkeypatch.setattr(orchestrator_runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
         sentinel = object()
@@ -154,8 +154,8 @@ class TestEngineSupervisorFlagBranching:
         assert result is sentinel
 
     def test_flag_on_routes_to_launch_daemon_engine(self, monkeypatch):
-        import gui.orchestrator_runner as orchestrator_runner
-        from desktop.engine_supervisor import start_engine
+        import shared.orchestrator_runner as orchestrator_runner
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine
 
         monkeypatch.setattr(orchestrator_runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
         sentinel = object()
@@ -187,8 +187,8 @@ class TestEngineSupervisorFlagBranching:
         see tests/test_engine_supervisor.py's dedicated coverage for that.
         This test only pins the narrower, still-true claim: an explicit
         caller-supplied timeout is never second-guessed)."""
-        import gui.orchestrator_runner as orchestrator_runner
-        from desktop.engine_supervisor import stop_engine
+        import shared.orchestrator_runner as orchestrator_runner
+        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
 
         captured = {}
 
@@ -263,9 +263,9 @@ class TestRunHandleDaemonBackend:
         assert handle.returncode() is None
 
     def test_daemon_run_status_never_raises_on_client_exception(self, runner, monkeypatch):
-        """_daemon_run_status must swallow any gui.daemon_client exception
+        """_daemon_run_status must swallow any shared.daemon_client exception
         (CONSTRAINT #6) rather than propagate it into is_running()/returncode()."""
-        import gui.daemon_client as daemon_client
+        import shared.daemon_client as daemon_client
 
         def _boom(_run_id, timeout=2.0):
             raise RuntimeError("network exploded")
@@ -317,7 +317,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         launch with no per-trigger override."""
         monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
 
-        import gui.daemon_client as daemon_client
+        import shared.daemon_client as daemon_client
 
         def _should_not_be_called(*a, **k):
             raise AssertionError("daemon_available() must not be called when dry_run=True")
@@ -335,7 +335,7 @@ class TestLaunchOrchestratorDaemonFastPath:
     def test_flag_on_daemon_available_and_trigger_succeeds(self, monkeypatch, runner):
         monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
 
-        import gui.daemon_client as daemon_client
+        import shared.daemon_client as daemon_client
 
         monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: True)
         monkeypatch.setattr(
@@ -360,7 +360,7 @@ class TestLaunchOrchestratorDaemonFastPath:
     def test_flag_on_daemon_unavailable_falls_back_to_subprocess(self, monkeypatch, runner):
         monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
 
-        import gui.daemon_client as daemon_client
+        import shared.daemon_client as daemon_client
 
         monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: False)
 
@@ -376,7 +376,7 @@ class TestLaunchOrchestratorDaemonFastPath:
     def test_flag_on_trigger_fails_falls_back_to_subprocess(self, monkeypatch, runner):
         monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
 
-        import gui.daemon_client as daemon_client
+        import shared.daemon_client as daemon_client
 
         monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: True)
         monkeypatch.setattr(
@@ -401,7 +401,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         block a manual run (CONSTRAINT #6)."""
         monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
 
-        import gui.daemon_client as daemon_client
+        import shared.daemon_client as daemon_client
 
         def _boom(timeout=0.5):
             raise RuntimeError("unexpected failure")

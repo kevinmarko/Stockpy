@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from gui.panels import (
+from legacy.streamlit_command_center.panels import (
     ai_insights,
     analytics,
     analytics_signals,

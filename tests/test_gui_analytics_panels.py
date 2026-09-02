@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gui.panels import analytics, analytics_signals
+from legacy.streamlit_command_center.panels import analytics, analytics_signals
 
 
 # ── analytics._read_alert_tail (recent-alerts feed) ──────────────────────────

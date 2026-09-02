@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import pytest
 
-from gui.panels.gravity_audit import _derive_step_status, _parse_trailing_json
+from legacy.streamlit_command_center.panels.gravity_audit import _derive_step_status, _parse_trailing_json
 
 
 # ---------------------------------------------------------------------------

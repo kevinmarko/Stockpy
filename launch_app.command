@@ -185,7 +185,7 @@ echo ""
 
 # ── Launch the unified desktop app ────────────────────────────────────────────
 mkdir -p "$(dirname "$PID_FILE")"
-python app_shell.py &
+python -m legacy.streamlit_command_center.app_shell &
 APP_PID=$!
 echo "$APP_PID" > "$PID_FILE"
 wait "$APP_PID"

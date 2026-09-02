@@ -13,7 +13,7 @@ display layer, even though the very same 0.0 is correctly preserved
 everywhere else (dashboard_df, state_snapshot.json -- see
 tests/test_state_snapshot_parity.py::TestSizingQuartetNullHonesty).
 """
-from gui.panels.strategy_matrix import _or_neutral
+from legacy.streamlit_command_center.panels.strategy_matrix import _or_neutral
 
 
 class TestOrNeutral:

@@ -1,7 +1,7 @@
 """
 tests/test_gui_env_io_atomic_write.py
 =====================================
-Tests for ``gui.env_io.write_many_atomic`` — the all-or-nothing multi-key ``.env``
+Tests for ``shared.env_io.write_many_atomic`` — the all-or-nothing multi-key ``.env``
 writer used by ``PUT /strategy/modules`` to write SIGNAL_WEIGHTS +
 DISABLED_SIGNAL_MODULES as ONE logical unit.
 
@@ -22,9 +22,7 @@ from unittest import mock
 import pytest
 from dotenv import dotenv_values
 
-import env_io
-
-
+import shared.env_io as env_io
 @pytest.fixture()
 def temp_env(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
