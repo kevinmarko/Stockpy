@@ -294,6 +294,15 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "BLOCKING pre-live failure when ALPACA_PAPER=False, which is the "
         "repo's own statement that this is not a routine toggle."
     ),
+    "OFI_SHIELD_ENABLED": (
+        "Fail-closed extension to the Flash Crash (OFI+VPIN) circuit-breaker "
+        "shield (execution/dynamic_circuit_breaker.py) — when True, a "
+        "missing VPIN reading forces an unconditional SOFT_HALT that blocks "
+        "all risk-increasing BUY orders platform-wide via the same "
+        "GlobalKillSwitch surface MACRO_REGIME_GATE_ENABLED gates. A silent "
+        "flip via a settings-editor write changes live order-blocking "
+        "behavior the same way that flag does."
+    ),
     "BROKER_BACKEND": (
         "Selects which broker actually receives orders: 'alpaca' (real "
         "broker) vs. 'fmp_paper' (a local SQLite paper ledger via "

@@ -135,6 +135,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+    "OFI_SHIELD_ENABLED",
     # Meta-labeling
     "META_LABEL_MIN_CONFIDENCE",
     # Input-feature (PSI) drift detection (validation/covariate_drift.py,
@@ -753,6 +754,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # anything dangerous.
     "FIX_GATEWAY_ENABLED",
     "FIX_HEARTBEAT_INTERVAL_SECONDS",
+    "FIX_MOCK_VENUES_ENABLED",
+    "FIX_VENUES_CONFIG_PATH",
     "WS_RISK_STREAM_INTERVAL_SECONDS",
     # --- Sentry error-tracking instrumentation (observability/sentry_integration.py) ---
     # Non-secret tunables only -- SENTRY_DSN is the one credential-shaped field
