@@ -36,6 +36,12 @@ def run_automated_delta_hedge_cycle(
             from execution.options_paper_executor import OptionsPaperExecutor
             executor = OptionsPaperExecutor()
 
+        # Cheap pre-check (no live quote fetch) -- skip the SPY quote call
+        # entirely when the paper book holds no position at all, so this
+        # never hammers the quote provider on a cycle with nothing to hedge.
+        if not executor.store.has_any_open_position():
+            return None
+
         from pilots.options_hedging import execute_delta_hedge
         from pilots.options_risk import calculate_portfolio_greeks
         from pilots.price_provider import get_current_price

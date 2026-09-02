@@ -175,13 +175,13 @@ def compute_ofi(
 def compute_ofi_from_quotes(
     bids: Sequence[Tuple[float, float]],
     asks: Sequence[Tuple[float, float]],
-) -> float:
+) -> Optional[float]:
     """
     Computes cumulative Order Flow Imbalance across quote level updates.
     Each item is (price, size). Cont, Kukanov, Stoikov (2014) formulation.
     """
     if len(bids) < 2 or len(asks) < 2:
-        return 0.0
+        return None
 
     ofi_total = 0.0
     for i in range(1, min(len(bids), len(asks))):
@@ -214,7 +214,7 @@ def compute_ofi_from_quotes(
 def compute_vpin(
     buy_volumes: Sequence[float],
     sell_volumes: Sequence[float],
-) -> float:
+) -> Optional[float]:
     """
     Computes VPIN (Volume-Synchronized Probability of Toxicity) across volume buckets:
     VPIN = Σ |V_b - V_s| / Σ (V_b + V_s) ∈ [0, 1].
@@ -223,12 +223,12 @@ def compute_vpin(
     buys = np.asarray(buy_volumes, dtype=float)
     sells = np.asarray(sell_volumes, dtype=float)
     if len(buys) == 0 or len(sells) == 0 or len(buys) != len(sells):
-        return 0.0
+        return None
 
     total_imbalance = np.sum(np.abs(buys - sells))
     total_volume = np.sum(buys + sells)
     if total_volume <= 0:
-        return 0.0
+        return None
     return float(np.clip(total_imbalance / total_volume, 0.0, 1.0))
 
 
@@ -460,7 +460,11 @@ class DynamicCircuitBreaker:
                         state = CircuitBreakerState.CAUTION
                         reasons.append(f"Elevated volatility Z-score: {volatility_zscore:.2f}")
 
-                # 3. Flash crash shield (OFI & VPIN)
+                # 3. Flash crash shield (OFI & VPIN). Evaluated unconditionally
+                # whenever BOTH signals are actually present -- independent of
+                # OFI_SHIELD_ENABLED -- so real, dangerous data always trips
+                # the shield rather than the shield being inert unless an
+                # operator also opts in via the flag.
                 if ofi is not None and vpin is not None:
                     fc_triggered, fc_reason = self.check_flash_crash_shield(ofi, vpin)
                     if fc_triggered and fc_reason:
@@ -470,6 +474,21 @@ class DynamicCircuitBreaker:
                         if state != CircuitBreakerState.SOFT_HALT:
                             state = CircuitBreakerState.CAUTION
                             reasons.append(f"Elevated VPIN toxicity: {vpin:.2f}")
+                elif getattr(settings, "OFI_SHIELD_ENABLED", False) and vpin is None:
+                    # Fail closed only on a genuine VPIN data gap. OFI is
+                    # architecturally never supplied by the daemon's one live
+                    # caller (see docs/architecture/execution.md's
+                    # dynamic_circuit_breaker.py entry) -- failing closed on
+                    # OFI's routine absence alone would make this flag
+                    # permanently SOFT_HALT every tick the moment it's
+                    # enabled, which is not a targeted response to missing
+                    # data, it's a structural, permanent halt.
+                    state = CircuitBreakerState.SOFT_HALT
+                    reasons.append("FLASH_CRASH_SHIELD_HALT (FAIL CLOSED): Missing data for VPIN")
+                elif vpin is not None and vpin > self.vpin_threshold:
+                    if state != CircuitBreakerState.SOFT_HALT:
+                        state = CircuitBreakerState.CAUTION
+                        reasons.append(f"Elevated VPIN toxicity: {vpin:.2f}")
 
         now_str = datetime.now(timezone.utc).isoformat()
         final_reason = "; ".join(reasons) if reasons else "Normal market conditions"

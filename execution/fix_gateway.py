@@ -2323,7 +2323,7 @@ class MultiVenueAggregator:
     def __init__(self, venues: Optional[Dict[str, VenueConfig]] = None):
         if venues is not None:
             self.venues = venues
-        else:
+        elif getattr(settings, "FIX_MOCK_VENUES_ENABLED", False):
             self.venues = {
                 "CBOE": VenueConfig("CBOE", base_latency_ms=1.2, liquidity_depth=1000.0, fee_per_contract=0.45, maker_fee=0.15, taker_fee=0.45),
                 "MIAX": VenueConfig("MIAX", base_latency_ms=0.8, liquidity_depth=500.0, fee_per_contract=0.25, maker_fee=-0.20, taker_fee=0.25, maker_rebate=0.20),
@@ -2332,6 +2332,34 @@ class MultiVenueAggregator:
                 "ARCA": VenueConfig("ARCA", base_latency_ms=1.0, liquidity_depth=700.0, fee_per_contract=0.35, maker_fee=-0.25, taker_fee=0.35, maker_rebate=0.25),
                 "EDGX": VenueConfig("EDGX", base_latency_ms=0.6, liquidity_depth=450.0, fee_per_contract=0.30, maker_fee=-0.40, taker_fee=0.30, maker_rebate=0.40),
             }
+        else:
+            self.venues = self._load_configured_venues()
+
+    def _load_configured_venues(self) -> Dict[str, VenueConfig]:
+        import os, json
+        config_path = getattr(settings, "FIX_VENUES_CONFIG_PATH", "output/fix_venues.json")
+        if not os.path.exists(config_path):
+            logger.warning(f"FIX Venues config not found at {config_path}. Degrading to HALTED state (no venues).")
+            return {}
+        try:
+            with open(config_path, "r") as f:
+                data = json.load(f)
+            loaded = {}
+            for k, v in data.items():
+                loaded[k] = VenueConfig(
+                    name=k,
+                    base_latency_ms=v["base_latency_ms"],
+                    liquidity_depth=v["liquidity_depth"],
+                    fee_per_contract=v["fee_per_contract"],
+                    maker_fee=v["maker_fee"],
+                    taker_fee=v["taker_fee"],
+                    maker_rebate=v.get("maker_rebate", 0.0),
+                    quote_spread_cents=v["quote_spread_cents"]
+                )
+            return loaded
+        except Exception as e:
+            logger.error(f"Malformed FIX Venues config at {config_path}: {e}. Degrading to HALTED state (no venues).")
+            return {}
 
     def synthesize_nbbo(self, symbol: str, reference_price: float = 100.0) -> Dict[str, Any]:
         """
@@ -2440,6 +2468,31 @@ class MultiVenueAggregator:
                 policy_str = pol_raw
             else:
                 policy_str = RoutingPolicy.SMART_SWEEP.value
+
+        # Fail Closed: Reject if no venues available
+        if not self.venues:
+            logger.error("SOR HALTED: No available execution venues configured or venues dropped. Rejecting order.")
+            if detailed:
+                return {
+                    "symbol": symbol,
+                    "side": side_str,
+                    "quantity": float(qty),
+                    "limit_price": float(limit_price),
+                    "routing_policy": policy_str,
+                    "status": "REJECTED",
+                    "total_filled_qty": 0.0,
+                    "leaves_qty": float(qty),
+                    "weighted_avg_price": float(limit_price),
+                    "total_net_fee": 0.0,
+                    "total_rebates": 0.0,
+                    "total_cost": 0.0,
+                    "avg_latency_ms": 0.0,
+                    "max_latency_ms": 0.0,
+                    "fills": [],
+                    "nbbo": {},
+                    "fix_audit_log": [],
+                }
+            return []
 
         # Collect quotes across venues
         quotes = []

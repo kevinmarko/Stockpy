@@ -531,6 +531,24 @@ class PaperAccountStore:
 
         return AccountSnapshot(equity=equity, cash=cash, buying_power=cash)
 
+    def has_any_open_position(self) -> bool:
+        """Cheap existence check -- does NOT resolve current prices for any
+        position (unlike `get_open_positions()`, which does a live-quote
+        round trip for every held position). Callers that only need to know
+        "is there anything open at all" before deciding whether a more
+        expensive step (e.g. a live quote fetch) is worth doing should use
+        this instead of `bool(get_open_positions())`.
+        """
+        if self._readonly:
+            try:
+                insp = inspect(self.engine)
+                if not insp.has_table("paper_positions"):
+                    return False
+            except Exception:
+                return False
+        with session_scope(self.Session) as session:
+            return session.query(PaperPosition.id).filter(PaperPosition.qty != 0).first() is not None
+
     def get_open_positions(self) -> List[PositionSnapshot]:
         if self._readonly:
             try:
