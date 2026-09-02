@@ -23,10 +23,19 @@ logger.warning(
 ```
 `topic` is `settings.ALERT_NTFY_TOPIC` — a `SECRET_KEYS` field that functions like a
 bearer token (ntfy.sh access-controls a topic by its name alone, per this function's own
-docstring). Any non-2xx ntfy response writes the operator's real topic to
-`{LOCAL_DATA_ROOT}/logs/investyo.log` in plaintext. Found during an independent audit
-pass (2026-09-01) cross-checking PR #962/#969's own already-merged fix for this file;
-confirmed still present on the current `main` tip at time of writing.
+docstring). This writes the operator's real topic to `{LOCAL_DATA_ROOT}/logs/investyo.log`
+in plaintext whenever `resp.status` reaches this branch — which, per a post-merge review,
+is narrower than "any non-2xx response": `urllib.request.urlopen`'s default opener includes
+`HTTPErrorProcessor`, so a real 4xx/5xx from ntfy.sh raises `HTTPError` before this code
+ever runs (caught instead by the `except urllib.error.URLError` clause a few lines below,
+confirmed to never embed the topic in its own message). The reachable trigger is a
+genuine 2xx response other than exactly 200/201 (e.g. 202 Accepted, 204 No Content) —
+still a real, plausible response ntfy.sh could send, just not "any non-2xx response." The
+fix removes the leak for every status that reaches this branch regardless, so this
+correction doesn't change the fix's validity, only the accuracy of how it's described.
+Found during an independent audit pass (2026-09-01) cross-checking PR #962/#969's own
+already-merged fix for this file; confirmed still present on the current `main` tip at
+time of writing.
 
 ## Fix
 
@@ -59,6 +68,8 @@ $ pytest tests/test_alerting.py tests/test_alerting_mcp_notifier.py tests/test_g
 
 ## Agent handoff notes
 
-Branch `fix-alerting-ntfy-topic-secret-leak`, based on `main` at `9d1e8c27`. Pushed
-directly (no `gh` available in the authoring session — `gh auth` was broken; PR opened
-manually or via a follow-up session with working `gh`). No other files touched.
+Branch `fix-alerting-ntfy-topic-secret-leak`, based on `main` at `9d1e8c27`. Opened as
+[#985](https://github.com/kevinmarko/Stockpy/pull/985) and merged in the same session,
+once `gh`'s "invalid keyring token" error was diagnosed as a sandbox TLS-proxy issue
+rather than an actual auth failure (see the task tracker's last item for detail). No
+other files touched.

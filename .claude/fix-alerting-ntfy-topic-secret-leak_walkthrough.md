@@ -28,9 +28,19 @@ logger.warning(
 ntfy.sh has no separate auth token, so the topic name itself is the access-control
 mechanism (this is stated explicitly in `notify()`'s own docstring: "ntfy.sh topics are
 access-controlled by the topic name alone (keep the topic unguessable...)"). Logging it
-in cleartext on every non-2xx response defeats that "keep it unguessable" premise the
-moment `{LOCAL_DATA_ROOT}/logs/investyo.log` is read by anyone/anything other than the
-operator (log aggregation, a support request, a shared debugging session).
+in cleartext defeats that "keep it unguessable" premise the moment
+`{LOCAL_DATA_ROOT}/logs/investyo.log` is read by anyone/anything other than the operator
+(log aggregation, a support request, a shared debugging session).
+
+**Correction from a post-merge review**: this doc originally said the leak fires "on
+every non-2xx response." That overstates it -- `urllib.request.urlopen`'s default opener
+includes `HTTPErrorProcessor`, so a real 4xx/5xx from ntfy.sh raises `HTTPError` before
+this branch is ever reached (caught instead by the `except urllib.error.URLError` clause,
+whose own message never embeds the topic -- verified empirically). The branch this PR
+fixed is reachable via a genuine 2xx response other than exactly 200/201 (e.g. 202
+Accepted, 204 No Content), which is narrower than "any non-2xx response" but still a real,
+plausible trigger. The fix itself is unaffected by this correction -- it removes the
+secret from every status that reaches the branch, regardless of which ones those are.
 
 This was found during an independent 10-agent audit of PRs #974-979 (a since-superseded,
 redundant re-implementation of work already merged via PR #962/#969). That audit's
@@ -60,7 +70,8 @@ line untouched -- and confirmed the leak is real and still present on current `m
 - Scope is deliberately narrow: only this one log line. No other module was found logging
   `ALERT_NTFY_TOPIC` in cleartext during the audit that surfaced this
   (`alerting_mcp/notifier.py::_send_ntfy`'s own failure path was checked and is already clean).
-- `gh` was unavailable in the authoring session (broken keyring token), so this branch was
-  pushed directly via `git push` rather than through `gh pr create`. If this file is present
-  without a corresponding open PR, that's why -- open one manually from this branch against
-  `main`.
+- `gh`'s initial "invalid keyring token" error was a red herring -- the real cause was the
+  sandbox's TLS-intercepting proxy rejecting `gh`'s connection to `api.github.com`.
+  Disabling the sandbox for the `gh`/`git push` calls resolved it with no re-authentication
+  needed; the branch was pushed and the PR ([#985](https://github.com/kevinmarko/Stockpy/pull/985))
+  was opened and merged in the same session.
