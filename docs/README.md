@@ -51,6 +51,7 @@ plans; kept up to date as each integration evolves.
 | File | Covers |
 |------|--------|
 | [`FMP_INTEGRATION.md`](FMP_INTEGRATION.md) | Financial Modeling Prep data layer — 28-setting reference, adjustment-mode gotchas, verification checklist |
+| [`GOOGLE_NOTEBOOK_INTEGRATION.md`](GOOGLE_NOTEBOOK_INTEGRATION.md) | Google Notebook & NotebookLM data pipeline — architecture, export scripts, multi-source knowledge pack roadmap |
 | [`JULES_INTEGRATION.md`](JULES_INTEGRATION.md) | Google Jules autonomous coding-agent integration |
 
 ## Settings census (generated + hand-maintained pair)
