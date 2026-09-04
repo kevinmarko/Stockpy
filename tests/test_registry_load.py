@@ -481,3 +481,76 @@ def test_load_registry_round_trips_owner_and_materiality_tier(tmp_path, monkeypa
     assert reloaded["models"]["test_model"]["owner"] == "TBD"
     assert reloaded["models"]["test_model"]["materiality_tier"] == "experimental"
 
+
+def test_load_registry_smart_merge_preserves_fields_missing_from_the_newer_source(tmp_path, monkeypatch):
+    """Regression for the exact incident that broke this test's sibling above
+    in production: a bare machine-global ``LOCAL_DATA_ROOT/ml_models/registry.yaml``
+    (populated only by ``update_model_metrics``'s dual-persistence write, never
+    hand-edited) has no ``owner``/``materiality_tier`` keys at all. The old
+    merge wholesale-replaced the repo entry with the local one whenever local's
+    ``trained_date`` was newer-or-equal -- silently deleting owner/
+    materiality_tier from the merged (and self-synced-back-to-disk) result the
+    very next time that model retrained. The fix must merge field-by-field:
+    the newer source wins on a genuine conflict, but a key that exists ONLY in
+    the older source must survive."""
+    from ml import registry_io
+    from ml.registry_io import load_registry
+    from settings import settings
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    # Local is newer, but -- exactly like a real bare local registry -- has
+    # neither owner nor materiality_tier.
+    local_reg = models_dir / "registry.yaml"
+    local_reg.write_text(
+        """
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-09-04'
+    cpcv_dsr: 0.5
+    pbo: 0.2
+    n_train: 460
+    deployable: false
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    fake_repo_data = {
+        "models": {
+            "lgbm_ranker": {
+                "role": "cross_sectional_ranker",
+                "owner": "quant-team",
+                "materiality_tier": "experimental",
+                "path": "ml/models/lgbm_latest.pkl",
+                "trained_date": "2026-08-24",
+                "cpcv_dsr": 0.024,
+                "pbo": 0.2,
+                "n_train": 450,
+                "deployable": False,
+            }
+        }
+    }
+    _real_load_yaml_file = registry_io._load_yaml_file
+
+    def _fake_load_yaml_file(path):
+        if path == registry_io._DEFAULT_REGISTRY_PATH:
+            return fake_repo_data
+        return _real_load_yaml_file(path)
+
+    monkeypatch.setattr(registry_io, "_load_yaml_file", _fake_load_yaml_file)
+
+    data = load_registry()
+    entry = data["models"]["lgbm_ranker"]
+    # Local (newer) wins on the fields both sources carry.
+    assert entry["trained_date"] == "2026-09-04"
+    assert entry["cpcv_dsr"] == 0.5
+    assert entry["n_train"] == 460
+    # Repo-only fields must survive the merge, not be silently dropped.
+    assert entry["owner"] == "quant-team"
+    assert entry["materiality_tier"] == "experimental"
+
