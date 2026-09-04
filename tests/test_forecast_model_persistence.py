@@ -25,6 +25,7 @@ Covers:
 
 from __future__ import annotations
 
+import math
 import pickle
 import time
 from pathlib import Path
@@ -315,17 +316,19 @@ class TestCnnLstmPersistenceDisabledByDefault:
 
 
 class TestCnnLstmTensorFlowUnavailableSafety:
-    def test_persistence_enabled_but_tf_absent_returns_zero_result(self, engine, monkeypatch):
+    def test_persistence_enabled_but_tf_absent_returns_nan_result(self, engine, monkeypatch):
         """TENSORFLOW_AVAILABLE is checked BEFORE any persistence logic runs --
-        enabling the flag with no TF installed must be byte-identical to the
-        pre-PR-C contract (never raises, never fabricates a value)."""
+        enabling the flag with no TF installed must never raise and must
+        degrade to an honest NaN, not a fabricated 0.0 forecast
+        (CONSTRAINT #4)."""
         monkeypatch.setattr(forecasting_engine, "TENSORFLOW_AVAILABLE", False)
         with mock.patch("settings.settings.FORECAST_MODEL_PERSISTENCE_ENABLED", True):
             df = _bars_df(100)
             result = engine.run_cnn_lstm_forecast(
                 df, horizons=(10, 30, 60, 90), ticker="AAPL"
             )
-        assert result == {10: 0.0, 30: 0.0, 60: 0.0, 90: 0.0}
+        assert set(result.keys()) == {10, 30, 60, 90}
+        assert all(math.isnan(v) for v in result.values())
 
 
 class TestCnnLstmCacheHit:

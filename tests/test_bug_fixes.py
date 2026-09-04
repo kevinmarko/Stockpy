@@ -228,10 +228,12 @@ class TestGordonFairValueSymmetricG:
         )
         assert result != buggy_value, "Bug-3 regression: numerator must use capped g"
 
-    def test_gordon_returns_zero_for_negative_dividend_yield(self):
+    def test_gordon_returns_nan_for_non_positive_dividend_yield(self):
+        """CONSTRAINT #4: a non-positive dividend yield makes the Gordon model
+        undefined, not a fabricated 0.0 fair value."""
         pe = self._engine()
-        assert pe.calculate_gordon_fair_value(100.0, 0.0, 0.04) == 0.0
-        assert pe.calculate_gordon_fair_value(100.0, -0.01, 0.04) == 0.0
+        assert math.isnan(pe.calculate_gordon_fair_value(100.0, 0.0, 0.04))
+        assert math.isnan(pe.calculate_gordon_fair_value(100.0, -0.01, 0.04))
 
     def test_gordon_returns_zero_when_g_exceeds_r(self):
         """r == g after capping triggers the guard → return 0.0 (no infinite val)."""

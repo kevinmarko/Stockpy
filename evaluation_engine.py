@@ -456,7 +456,14 @@ class EvaluationEngine:
 
             total_capital = positions_df['position_size'].sum()
             if total_capital == 0:
-                return float('nan')
+                # Genuinely zero capital deployed (a watchlist-only/no-holdings
+                # cycle) is a measured "no open risk", not missing data --
+                # matches this same zero-positions scenario's sibling
+                # BF_Allocation/BF_Selection/BF_Interaction convention (see
+                # evaluate_portfolio's Brinson-Fachler skip below), unlike the
+                # missing-columns/exception branches above and below, which
+                # really can't compute anything and stay NaN.
+                return 0.0
 
             # Open Risk per position = Position Size * Stop Loss Penalty
             positions_df['open_risk'] = positions_df['position_size'] * positions_df['stop_loss_pct']

@@ -552,10 +552,15 @@ class TestPortfolioHeat:
         df = pd.DataFrame({"position_size": [10000.0]})
         assert math.isnan(eng.calculate_portfolio_heat(df))
 
-    def test_zero_total_capital_returns_nan(self):
+    def test_zero_total_capital_returns_zero(self):
+        """Genuinely zero capital deployed (watchlist-only/no holdings) is a
+        measured "no open risk", not missing data -- matches the sibling
+        BF_Allocation/BF_Selection/BF_Interaction convention for this same
+        zero-positions scenario (tests/test_evaluate_portfolio_zero_positions.py),
+        unlike the missing-column/exception branches, which stay NaN."""
         eng = _engine()
         df = pd.DataFrame({"position_size": [0.0, 0.0], "stop_loss_pct": [0.05, 0.03]})
-        assert math.isnan(eng.calculate_portfolio_heat(df))
+        assert eng.calculate_portfolio_heat(df) == 0.0
 
     def test_rounded_to_four_places(self):
         eng = _engine()
