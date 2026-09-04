@@ -208,10 +208,29 @@ def load_registry(path: Optional[Path] = None) -> dict:
                 d_local = _parse_entry_date(local_spec.get("trained_date"))
                 d_repo = _parse_entry_date(repo_spec.get("trained_date")) if isinstance(repo_spec, dict) else None
 
-                # If local has a newer or equal date (or repo has none), local wins
+                # Field-level merge, not a wholesale dict swap: whichever source
+                # has the newer (or equal) trained_date wins on a per-key
+                # conflict, but a key that exists ONLY in the older source
+                # (e.g. owner/materiality_tier, which a bare machine-global
+                # retrain run may never have populated) must still survive.
+                # A prior wholesale-replace here silently dropped owner/
+                # materiality_tier from the repo-tracked registry.yaml the
+                # first time a model retrained with a newer-or-equal date
+                # while the local registry.yaml lacked those fields --
+                # see tests/test_registry_load.py::
+                # test_load_registry_round_trips_owner_and_materiality_tier.
+                base_spec = repo_spec if isinstance(repo_spec, dict) else {}
                 if d_local is not None and (d_repo is None or d_local >= d_repo):
-                    merged_models[model_key] = local_spec
-                # Otherwise, repo wins (e.g. freshly pulled commit has newer trained_date)
+                    # Local has the newer (or equal) date: local's values win
+                    # on conflicts, repo-only keys are preserved.
+                    merged_entry = dict(base_spec)
+                    merged_entry.update(local_spec)
+                else:
+                    # Repo has the newer date (e.g. freshly pulled commit):
+                    # repo's values win on conflicts, local-only keys survive.
+                    merged_entry = dict(local_spec)
+                    merged_entry.update(base_spec)
+                merged_models[model_key] = merged_entry
 
     merged["models"] = merged_models
 

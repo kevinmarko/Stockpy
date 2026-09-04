@@ -240,9 +240,20 @@ def _resolve_symbols(explicit: Optional[List[str]]) -> List[str]:
     """Symbol resolution for the WS subscription. Explicit list wins; else
     ``settings.MARKET_DATA_WS_SYMBOLS`` (comma-separated); else the
     ``WATCHLIST`` env var (same convention ``main.py`` reads); else empty
-    (no-op, logged -- never raises)."""
+    (no-op, logged -- never raises).
+
+    Every candidate from the two env-derived sources is filtered through
+    ``data.portfolio_sync._is_plausible_ticker`` before being returned. Both
+    ``MARKET_DATA_WS_SYMBOLS`` and ``WATCHLIST`` are documented (CLAUDE.md,
+    ``docs/known_issues/watchlist_env_inline_comment_hang.md``) as vulnerable
+    to python-dotenv silently folding a trailing inline ``# comment`` into an
+    otherwise-blank ``.env`` value -- without this filter, that comment text
+    resolves as one bogus "symbol" and this function reports "configured"
+    when the operator's intent was an empty/disabled WS subscription."""
     if explicit:
         return [s.strip().upper() for s in explicit if s.strip()]
+
+    from data.portfolio_sync import _is_plausible_ticker
 
     try:
         from settings import settings as _settings
@@ -250,11 +261,29 @@ def _resolve_symbols(explicit: Optional[List[str]]) -> List[str]:
     except Exception:
         configured = None
     if configured:
-        return [s.strip().upper() for s in str(configured).split(",") if s.strip()]
+        candidates = [s.strip().upper() for s in str(configured).split(",") if s.strip()]
+        plausible = [s for s in candidates if _is_plausible_ticker(s)]
+        if plausible:
+            return plausible
+        if candidates:
+            logger.warning(
+                "market_data_ws: MARKET_DATA_WS_SYMBOLS resolved to no plausible "
+                "ticker (got %r) -- check for a malformed .env inline comment.",
+                configured,
+            )
 
     watchlist = settings.WATCHLIST
     if watchlist:
-        return [s.strip().upper() for s in watchlist.split(",") if s.strip()]
+        candidates = [s.strip().upper() for s in watchlist.split(",") if s.strip()]
+        plausible = [s for s in candidates if _is_plausible_ticker(s)]
+        if plausible:
+            return plausible
+        if candidates:
+            logger.warning(
+                "market_data_ws: WATCHLIST resolved to no plausible ticker (got %r) "
+                "-- check for a malformed .env inline comment.",
+                watchlist,
+            )
 
     return []
 
