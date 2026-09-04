@@ -493,7 +493,7 @@
   "no_op": [],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 905,
+    "attr": 908,
     "factory_param": 4,
     "getattr_const": 376,
     "os_environ": 25

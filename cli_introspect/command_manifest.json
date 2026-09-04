@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-01T02:17:13.381120+00:00",
+  "generated_at": "2026-09-04T14:16:59.114459+00:00",
   "command_count": 18,
   "dead_letters": [],
   "commands": [
@@ -1068,8 +1068,67 @@
       "name": "export_notebooklm.py",
       "invocation": "python scripts/export_notebooklm.py",
       "aliases": [],
-      "description": "Generate a NotebookLM export.",
-      "options": [],
+      "description": "Generate Google NotebookLM export documents.",
+      "options": [
+        {
+          "name": "--output-dir",
+          "aliases": [
+            "--output-dir"
+          ],
+          "description": "Target output directory (defaults to settings.OUTPUT_DIR)",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--modular-only",
+          "aliases": [
+            "--modular-only"
+          ],
+          "description": "Generate only the modular output/notebooklm/*.md files",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--consolidated-only",
+          "aliases": [
+            "--consolidated-only"
+          ],
+          "description": "Generate only the consolidated notebooklm_source.md file",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--section",
+          "aliases": [
+            "--section"
+          ],
+          "description": "Generate only a specific modular source",
+          "default": null,
+          "choices": [
+            "macro",
+            "portfolio",
+            "signals",
+            "trades",
+            "options"
+          ],
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
       "positionals": [],
       "subcommands": []
     }

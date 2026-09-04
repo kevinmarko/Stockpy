@@ -17,26 +17,46 @@ The Google Notebook pipeline allows the operator to export structured, verified 
 
 ---
 
-## 2. Current Implementation (Phase 1)
+## 2. Current Implementation
 
 ### 2.1 Backend Pipeline Script (`scripts/export_notebooklm.py`)
 - **Location**: [`scripts/export_notebooklm.py`](../scripts/export_notebooklm.py)
-- **Output File**: `~/.stockpy_local/output/notebooklm_source.md` (resolved via `settings.OUTPUT_DIR`)
-- **Invocation**:
+- **Output Files**:
+  - Consolidated Document: `output/notebooklm_source.md` (single-file upload)
+  - Modular Knowledge Pack: `output/notebooklm/*.md` (multi-source upload)
+- **Invocation & CLI Options**:
   ```bash
-  python scripts/export_notebooklm.py
-  # Or via uv:
-  uv run python scripts/export_notebooklm.py
+  python scripts/export_notebooklm.py                      # Generates both consolidated & modular pack
+  python scripts/export_notebooklm.py --modular-only       # Generates only output/notebooklm/*.md
+  python scripts/export_notebooklm.py --consolidated-only  # Generates only output/notebooklm_source.md
+  python scripts/export_notebooklm.py --section macro      # Generates only 01_macro_and_regime.md
+  python scripts/export_notebooklm.py --output-dir /path   # Custom target output directory
   ```
 
-#### Extracted Data Layers:
-1. **Macro Context**: Trailing VIX, 10Y-2Y yield curve spread, and BAML High Yield OAS credit spreads queried from `HistoricalStore(readonly=True).get_macro()`.
-2. **Current Portfolio**: Point-in-time account snapshot from `HistoricalStore.latest_account_snapshot()` mapped via `_serialize_portfolio` (Total Equity, Buying Power, Position Quantities, Cost Basis, and Market Value).
-3. **Active Strategy Follows**: Active strategy subscriptions, allocated capital, and status from `FollowsStore().list_active()`.
+#### Modular Source Documents in `output/notebooklm/`:
+1. **`01_macro_and_regime.md`**:
+   - Executive classification: Market Regime, Gaussian HMM state, HMM Risk-On probability, Macro Kill-Switch status, Macro Gate protection mode.
+   - Economic indicators: VIX (CBOE Volatility Index), 10Y-2Y yield curve spread, High Yield OAS credit spread, Sahm Rule recession indicator.
+2. **`02_portfolio_and_greeks.md`**:
+   - Capital summary: Total Equity, Buying Power, Cash/Dividends, Snapshot As-Of timestamp and staleness.
+   - Net portfolio Greeks: Net Delta ($\Delta_{\$}$ and shares), Net Gamma ($\Gamma$), Net Daily Theta ($\Theta_{\text{daily}}$), Net Vega ($\mathcal{V}_{\text{1\%}}$), $\beta$-Weighted SPY Delta, SPY spot price, and missing/estimated beta disclosures.
+   - Detailed holdings table: Symbol, Company Name, Quantity, Cost Basis, Current Price, Market Value, and Unrealized P&L.
+3. **`03_strategy_signals_and_picks.md`**:
+   - Active strategy subscriptions (Pilots): Pilot ID, allocated capital, status.
+   - Tactical execution signals: Symbol, Action (BUY/SELL/HOLD), Conviction, `buyRange`, `sellRange`, Kelly sizing target (%), and Final Score.
+   - Multifactor Z-Score attribution: Value, Quality, Momentum (XSec), LowVol, Size, and Composite z-scores.
+   - Sizing guardrail telemetry: `sizing_was_capped`, `binding_constraint`, and ETF transmission multiplier.
+4. **`04_trade_journal_and_ledger.md`**:
+   - FIFO-reconstructed trading KPIs: Total closed trades count, Win Rate (%), Profit Factor, Total Realized P&L, Gross Profit/Loss, Average Win/Loss, Average Return %, Average Holding Duration (Days), and Best/Worst Trade P&L.
+   - Chronological closed trades ledger: Symbol, Quantity, Entry/Exit Dates, Holding Days, Entry/Exit Prices, Realized P&L, and Return %.
+5. **`05_options_directives_and_matrix.md`**:
+   - Options regime: Target DTE, Reference VIX, Market Regime, Total Directives count.
+   - Quantitative directives: Call/Put Credit Spreads, Iron Condors, Spot Price, Short/Long strike deltas, Net Premium, IV Rank (`True_IVR` / `IVR_Proxy`), and Trend Bias.
+   - Fundamental health & news catalysts: Altman Z-Score, Piotroski F-Score, Days to Earnings, Earnings Risk flag, and recent company news headlines.
 
 ### 2.2 CLI Introspection & PWA Command Runner
 - Registered in [`cli_introspect/targets.py`](../cli_introspect/targets.py) and compiled into [`cli_introspect/command_manifest.json`](../cli_introspect/command_manifest.json).
-- Executable as a background job directly from the **Pilots PWA Commands Screen** (`webapp/src/screens/Commands.tsx`).
+- Supports all CLI options (`--output-dir`, `--modular-only`, `--consolidated-only`, `--section`) directly from the **Pilots PWA Commands Screen** (`webapp/src/screens/Commands.tsx`).
 
 ### 2.3 Webapp Dashboard Widget (`webapp/src/components/NotebookMLExport.tsx`)
 - Provides on-demand JSON clipboard copy and file download for quick ad-hoc exports from the browser.
@@ -48,12 +68,15 @@ The Google Notebook pipeline allows the operator to export structured, verified 
 1. **CONSTRAINT #4 — Never Fabricate Data**:
    - Missing, uncomputable, or cold-start metrics format as `"N/A"`, `null`, or explicit notice banners — **never coerced to `$0` or placeholder defaults**.
    - NotebookLM treats `$0` as a verified holding or zero-risk metric; maintaining explicit `"N/A"` ensures the LLM grounds its reasoning accurately.
+   - A genuine `$0.00` (e.g. liquidated account or zero buying power) is preserved and distinguished from missing data.
 2. **Read-Only Fail-Safe (CONSTRAINT #6)**:
-   - Database operations use `HistoricalStore(readonly=True)` and fail-safe exception blocks so export execution never impacts core trading engines or locks SQLite WAL files.
+   - Database operations use `HistoricalStore(readonly=True)` and `BrokerFillsStore(readonly=True)`.
+   - Lazy imports are strictly used for heavy components (`pilots_api`, `options_risk`, `trade_history`, `broker_fills_store`) so that an import failure in an optional subsystem never halts the execution of independent sections.
+   - Every file write uses atomic replacement (`.tmp` + rename).
 
 ---
 
-## 4. Expansion Roadmap (Phases 2 – 6)
+## 4. Expansion Roadmap (Phases 3 – 6)
 
 ```mermaid
 graph TD
@@ -78,17 +101,6 @@ graph TD
     I --> J[Google NotebookLM Sources]
     G --> K[Interactive Colab .ipynb]
 ```
-
-### Phase 2: Modular Multi-Source Knowledge Pack (`output/notebooklm/`)
-NotebookLM supports up to **50 individual sources** per notebook and cross-references multi-document repositories significantly better than large monolithic files.
-
-| File | Content | Primary Data Sources |
-|---|---|---|
-| `01_macro_and_regime.md` | Gaussian HMM regime state, transition probabilities, Sahm Rule, inflation, credit spreads | `HistoricalStore.get_macro()`, `regime/hmm_regime.py` |
-| `02_portfolio_and_greeks.md` | Holdings, position weights, net Greeks ($\Delta_{\$}, \Gamma, \Theta, \mathcal{V}, \beta\text{-weighted }\Delta_{\text{SPY}}$), margin usage | `HistoricalStore`, `pilots/options_risk.py` |
-| `03_strategy_signals_and_picks.md` | Daily BUY/SELL/HOLD ratings, conviction scores, `buyRange`/`sellRange`, Kelly sizing, Multifactor z-scores (Value, Quality, Momentum, LowVol) | `signals/`, `StrategyEngine`, `sizing/position_sizer.py` |
-| `04_trade_journal_and_ledger.md` | Closed trade log, FIFO win rates, profit factor, average holding duration, MAE/MFE edge ratios | `data/broker_fills_store.py`, `PaperAccountStore` |
-| `05_options_directives_and_matrix.md` | Premium selling directives (Put Credit Spreads, Iron Condors, 0DTE setups), IV Rank, VRP cones | `technical_options_engine.py`, `pilots/volatility_surface.py` |
 
 ### Phase 3: Daemon & Orchestrator Automated Hook
 - **Continuous Generation**: Wire the export routine into `desktop/daemon_runtime.py`'s `_timer_loop` and `main_orchestrator.py` post-run steps.

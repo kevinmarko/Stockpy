@@ -26,6 +26,7 @@ This mirrors ``tests/test_backfill_edgar_fundamentals.py``'s import style.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -468,3 +469,250 @@ class TestNeverFabricates:
         text = _read_export(tmp_path)
 
         assert "**TSLA** (Tesla Inc.): N/A shares @ N/A (Market Value: N/A)" in text
+
+
+# ---------------------------------------------------------------------------
+# Modular Multi-Source Tests (Phase 2)
+# ---------------------------------------------------------------------------
+
+class TestModularExportOutputs:
+    def test_build_export_generates_all_five_modular_files_by_default(
+        self, tmp_path: Path, monkeypatch
+    ):
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore(
+                get_macro=lambda s: _macro_series(15.0),
+                latest_account_snapshot=_real_snapshot,
+            )
+        )
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        notebooklm.build_export()
+
+        # Check consolidated
+        assert (tmp_path / "notebooklm_source.md").exists()
+
+        # Check modular directory and all 5 files
+        mod_dir = tmp_path / "notebooklm"
+        assert mod_dir.is_dir()
+        expected_files = [
+            "01_macro_and_regime.md",
+            "02_portfolio_and_greeks.md",
+            "03_strategy_signals_and_picks.md",
+            "04_trade_journal_and_ledger.md",
+            "05_options_directives_and_matrix.md",
+        ]
+        for fname in expected_files:
+            p = mod_dir / fname
+            assert p.exists(), f"Expected {fname} to be written"
+            content = p.read_text(encoding="utf-8")
+            assert len(content) > 20, f"{fname} should have substantial content"
+
+    def test_modular_only_flag_skips_consolidated(self, tmp_path: Path, monkeypatch):
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
+        )
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        notebooklm.build_export(modular=True, consolidated=False)
+
+        assert not (tmp_path / "notebooklm_source.md").exists()
+        assert (tmp_path / "notebooklm" / "01_macro_and_regime.md").exists()
+
+    def test_consolidated_only_flag_skips_modular(self, tmp_path: Path, monkeypatch):
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
+        )
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        notebooklm.build_export(modular=False, consolidated=True)
+
+        assert (tmp_path / "notebooklm_source.md").exists()
+        assert not (tmp_path / "notebooklm" / "01_macro_and_regime.md").exists()
+
+    def test_section_filtering_generates_only_requested_section(
+        self, tmp_path: Path, monkeypatch
+    ):
+        _patch_output_dir(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
+        )
+        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
+
+        notebooklm.build_export(section="macro")
+
+        mod_dir = tmp_path / "notebooklm"
+        assert (mod_dir / "01_macro_and_regime.md").exists()
+        assert not (mod_dir / "02_portfolio_and_greeks.md").exists()
+        assert not (mod_dir / "03_strategy_signals_and_picks.md").exists()
+        assert not (mod_dir / "04_trade_journal_and_ledger.md").exists()
+        assert not (mod_dir / "05_options_directives_and_matrix.md").exists()
+
+
+class TestModularGenerators:
+    def test_generate_macro_regime_source_with_state_snapshot(
+        self, tmp_path: Path, monkeypatch
+    ):
+        ss_file = tmp_path / "state_snapshot.json"
+        ss_file.write_text(
+            '{"market_regime": "BULL", "hmm_regime_state": "bull_trend", "hmm_risk_on_probability": 0.85, "macro_kill_switch": false, "sahm_rule": 0.12}'
+        )
+        fake_store = _FakeHistoricalStore(
+            get_macro=lambda s: _macro_series(16.5) if s == "VIXCLS" else pd.Series(dtype=float)
+        )
+
+        md = notebooklm.generate_macro_regime_source(fake_store, output_dir=tmp_path)
+        assert "# Market Regime & Macroeconomic Risk Assessment" in md
+        assert "**Market Regime**: BULL" in md
+        assert "**HMM Regime State**: bull_trend" in md
+        assert "**HMM Risk-On Probability**: 85.00%" in md
+        assert "**VIX (CBOE Volatility Index)**: 16.5" in md
+        assert "**Sahm Rule Indicator**: 0.12" in md
+
+    def test_generate_portfolio_greeks_source(self, tmp_path: Path, monkeypatch):
+        fake_store = _FakeHistoricalStore(latest_account_snapshot=_real_snapshot)
+        fake_greeks = {
+            "net_delta_shares": 10.0,
+            "net_dollar_delta": 1750.0,
+            "net_gamma": 0.05,
+            "net_theta_daily": -12.5,
+            "net_vega_1pct": 45.0,
+            "beta_weighted_delta_spy": 8.5,
+            "spy_spot": 500.0,
+            "positions_with_missing_data": [],
+            "symbols_with_estimated_beta": ["AAPL"],
+        }
+        monkeypatch.setattr(
+            "pilots.options_risk.calculate_portfolio_greeks", lambda: fake_greeks
+        )
+
+        md = notebooklm.generate_portfolio_greeks_source(fake_store, output_dir=tmp_path)
+        assert "# Portfolio Holdings, Allocation & Net Risk Greeks" in md
+        assert "**Total Equity**: $6,750.00" in md
+        assert "**Net Delta (Shares)**: 10.0" in md
+        assert "**Net Dollar Delta ($)**: $1,750.00" in md
+        assert "**Net Daily Theta ($/day)**: $-12.50" in md
+        assert "**Beta-Weighted SPY Delta**: 8.5" in md
+        assert "**Symbols Using Estimated Beta (1.0)**: AAPL" in md
+        assert "**AAPL** (Apple Inc.)" in md
+
+    def test_generate_signals_picks_source(self, tmp_path: Path, monkeypatch):
+        ss_file = tmp_path / "state_snapshot.json"
+        ss_file.write_text(
+            json.dumps({
+                "signals": [
+                    {
+                        "symbol": "NVDA",
+                        "action": "STRONG BUY",
+                        "conviction": 0.9,
+                        "buy_range": "$120 - $125",
+                        "sell_range": "$140 - $145",
+                        "kelly_target": 0.15,
+                        "score": 88.5,
+                        "value_z": 0.5,
+                        "quality_z": 1.8,
+                        "xsec_12_1m": 2.1,
+                        "lowvol_z": -0.2,
+                        "size_z": 1.5,
+                        "multifactor_composite": 1.25,
+                        "sizing_was_capped": True,
+                        "sizing_binding_constraint": "kelly_cap",
+                        "etf_transmission_multiplier": 0.95,
+                    }
+                ]
+            })
+        )
+        monkeypatch.setattr(
+            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(
+                rows=[{"pilot_id": "trend-pilot", "amount": 1500.0, "status": "active"}]
+            )
+        )
+
+        md = notebooklm.generate_signals_picks_source(output_dir=tmp_path)
+        assert "# Quantitative Strategy Signals, Tactical Execution & Pilot Follows" in md
+        assert "**trend-pilot** | $1,500.00 | active" in md
+        assert "**NVDA** | STRONG BUY | 0.9 | $120 - $125 | $140 - $145 | 15.00% | 88.5" in md
+        assert "| **NVDA** | 0.5 | 1.8 | 2.1 | -0.2 | 1.5 | 1.25 |" in md
+        assert "| **NVDA** | True | kelly_cap | 0.95 |" in md
+
+    def test_generate_trade_journal_source(self, tmp_path: Path, monkeypatch):
+        fake_th = {
+            "summary": {
+                "n_trades": 10,
+                "win_rate": 0.70,
+                "profit_factor": 2.5,
+                "total_realized_pnl": 500.0,
+                "gross_profit": 800.0,
+                "gross_loss": -300.0,
+                "avg_win": 114.29,
+                "avg_loss": -100.0,
+                "avg_return_pct": 5.2,
+                "avg_holding_days": 14.3,
+                "best_trade_pnl": 250.0,
+                "worst_trade_pnl": -150.0,
+            },
+            "trades": [
+                {
+                    "symbol": "MSFT",
+                    "quantity": 5.0,
+                    "entry_ts": "2026-08-01T10:00:00",
+                    "exit_ts": "2026-08-15T15:00:00",
+                    "holding_days": 14.2,
+                    "entry_price": 400.0,
+                    "exit_price": 420.0,
+                    "realized_pnl": 100.0,
+                    "return_pct": 5.0,
+                }
+            ],
+        }
+        monkeypatch.setattr("pilots.trade_history.trade_history_view", lambda **kwargs: fake_th)
+
+        md = notebooklm.generate_trade_journal_source(output_dir=tmp_path)
+        assert "# Quantitative Trade Journal & Realized Performance" in md
+        assert "**Total Closed Trades**: 10" in md
+        assert "**Win Rate**: 70.00%" in md
+        assert "**Profit Factor**: 2.50" in md
+        assert "**Total Realized P&L**: $500.00" in md
+        assert "| **MSFT** | 5.0 | 2026-08-01 | 2026-08-15 | 14.2 | $400.00 | $420.00 | $100.00 | 5.00% |" in md
+
+    def test_generate_options_matrix_source(self, tmp_path: Path):
+        om_file = tmp_path / "options_matrix.json"
+        om_file.write_text(
+            json.dumps({
+                "target_dte": 30,
+                "vix": 19.5,
+                "market_regime": "RISK_ON",
+                "directives": [
+                    {
+                        "Symbol": "SPY",
+                        "Strategy": "Put Credit Spread",
+                        "Action": "Sell to Open",
+                        "Price": 500.0,
+                        "Short_Strike": 490.0,
+                        "Short_Delta": -0.25,
+                        "Long_Strike": 480.0,
+                        "Long_Delta": -0.10,
+                        "Net_Premium": 1.85,
+                        "True_IVR": 65.4,
+                        "Trend_Bias": "Bullish",
+                        "Altman_Z_Score": 3.2,
+                        "Piotroski_F_Score": 8,
+                        "Days_To_Earnings": None,
+                        "Earnings_Risk": False,
+                        "News_Snippets": [{"title": "Markets rally on macro data"}],
+                    }
+                ]
+            })
+        )
+
+        md = notebooklm.generate_options_matrix_source(output_dir=tmp_path)
+        assert "# Options Strategy Directives & Volatility Matrix" in md
+        assert "**Target DTE**: 30 days" in md
+        assert "**Reference VIX**: 19.5" in md
+        assert "| **SPY** | Put Credit Spread | Sell to Open | $500.00 | 490.0 (Δ -0.25) | 480.0 (Δ -0.1) | $1.85 | 65.40% | Bullish |" in md
+        assert "Altman Z-Score: 3.2" in md
+        assert "Markets rally on macro data" in md
+
