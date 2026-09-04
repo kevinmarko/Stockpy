@@ -111,7 +111,7 @@ class TestBuildFrames:
         }]
         portfolio_df, benchmark_df = build_brinson_fachler_frames(rows)
         assert math.isnan(portfolio_df["portfolio_weight"].iloc[0])
-        assert portfolio_df["portfolio_return"].iloc[0] == 0.0
+        assert math.isnan(portfolio_df["portfolio_return"].iloc[0])
 
 
 # ---------------------------------------------------------------------------

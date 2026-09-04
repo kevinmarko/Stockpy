@@ -5933,37 +5933,15 @@ def tune_strategy_parameters(
         sma_window: Trend filter lookback window (20-200).
         stop_loss: Position stop-loss percentage (1.0-15.0).
     """
-    import json
-
-    # Sensitivity response modeling
+    # This tool used to render a "Strategy Tuner" widget off sensitivity
+    # numbers derived from a fixed formula on the input parameters alone
+    # (e.g. `base_sharpe + 0.08` for an RSI band in a "good" range) --
+    # plausible-looking output with no actual backtest behind it. Refusing
+    # outright (CONSTRAINT #4: never fabricate a metric) rather than serving
+    # a fabricated Sharpe/MaxDD/win-rate is the correct behavior until this
+    # is wired to a real backtest (e.g. `validation.harness`); a fabricated
+    # response would be strictly worse than an honest refusal.
     raise RuntimeError("Constraint #4: Cannot fabricate parameters for tune_strategy_parameters. Actual backtest required.")
-    sim_max_dd = round(max(8.0, 15.0 - (stop_loss * 0.4)), 1)
-    win_rate = round(60.0 + (rsi_lower * 0.2), 1)
-
-    payload = {
-        "strategy_name": strategy_name,
-        "rsi_lower": rsi_lower,
-        "rsi_upper": rsi_upper,
-        "sma_window": sma_window,
-        "stop_loss": stop_loss,
-        "simulated_sharpe": sim_sharpe,
-        "simulated_max_dd_pct": sim_max_dd,
-        "simulated_win_rate_pct": win_rate,
-    }
-
-    lines = [
-        f"# Strategy Parameter Sensitivity: `{strategy_name}`\n",
-        f"- **RSI Bounds**: [{rsi_lower}, {rsi_upper}]",
-        f"- **SMA Trend Window**: {sma_window} bars",
-        f"- **Stop Loss**: {stop_loss}%",
-        f"- **Simulated Sharpe Ratio**: **{sim_sharpe}**",
-        f"- **Simulated Max Drawdown**: **{sim_max_dd}%**",
-        f"- **Win Rate**: **{win_rate}%**",
-        "\n```json",
-        json.dumps(payload, indent=2),
-        "```",
-    ]
-    return "\n".join(lines)
 
 
 # ==========================================

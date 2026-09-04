@@ -756,30 +756,14 @@ class TestAnalyticsWidgetsSmoke:
         assert "requests" in payload
         assert isinstance(payload["requests"], list)
 
-    def test_tune_strategy_parameters_emits_json_matching_widget_schema(self):
+    def test_tune_strategy_parameters_refuses_to_fabricate(self):
+        """CONSTRAINT #4: this tool has no real backtest behind it, so it must
+        raise rather than serve a fabricated Sharpe/MaxDD/win-rate derived
+        from a fixed formula on the input parameters alone."""
         import investyo_mcp_server as srv
 
-        result = srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=20, rsi_upper=80)
-        assert "```json" in result
-        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
-        assert payload["strategy_name"] == "rsi2_mean_reversion"
-        assert "simulated_sharpe" in payload
-        assert "simulated_max_dd_pct" in payload
-
-    def test_tune_strategy_parameters_parameter_bounds(self):
-        """Validates sensitivity responses across tight vs loose parameter bounds."""
-        import investyo_mcp_server as srv
-
-        res_tight = srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=25, rsi_upper=75, stop_loss=3.0)
-        payload_tight = json.loads(res_tight.split("```json", 1)[1].split("```", 1)[0])
-
-        res_loose = srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=10, rsi_upper=90, stop_loss=12.0)
-        payload_loose = json.loads(res_loose.split("```json", 1)[1].split("```", 1)[0])
-
-        # Tight parameter boundaries should yield higher simulated Sharpe than loose
-        assert payload_tight["simulated_sharpe"] > payload_loose["simulated_sharpe"]
-        # Tighter stop loss should result in lower simulated max drawdown
-        assert payload_tight["simulated_max_dd_pct"] > payload_loose["simulated_max_dd_pct"] or payload_tight["simulated_max_dd_pct"] <= 15.0
+        with pytest.raises(RuntimeError, match="Constraint #4"):
+            srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=20, rsi_upper=80)
 
     def test_get_pit_coverage_report_emits_json_matching_widget_schema(self, monkeypatch):
         import investyo_mcp_server as srv

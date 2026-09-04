@@ -83,11 +83,13 @@ _REQUIRED_KEYS = (
 
 
 def _coerce_float(value: Any) -> float:
-    """Coerce ``value`` to a finite float, defaulting to ``0.0`` on failure.
+    """Coerce ``value`` to a finite float, defaulting to ``NaN`` on failure.
 
-    Mirrors ``gui/report_viewer_helpers.py::parse_pasted_sector_matrix``'s own
-    "unparseable cell -> 0.0" normalization so a stray blank/non-numeric entry
-    degrades to a neutral no-op contribution rather than raising mid-request.
+    A stray blank/non-numeric cell degrades to an honest "unmeasurable" NaN
+    (CONSTRAINT #4) rather than a fabricated ``0.0`` neutral no-op — see
+    ``validate_brinson_fachler_rows``'s explicit NaN handling below for why an
+    exact-equality/threshold check downstream must never assume this can't be
+    NaN.
     """
     try:
         f = float(value)
