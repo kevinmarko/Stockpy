@@ -367,3 +367,112 @@ class TestRequireSetting:
         )
         result = _require_setting("RH_USERNAME")
         assert result == "someone@example.com"
+
+
+# ===========================================================================
+# Settings._strip_dangling_env_inline_comments — see
+# docs/known_issues/watchlist_env_inline_comment_hang.md's "Systemic fix
+# shipped" section. python-dotenv (used internally by both `load_dotenv()`
+# and pydantic-settings' own env-file source -- verified directly against
+# pydantic_settings/sources/providers/dotenv.py) does NOT strip a trailing
+# `# comment` from an unquoted, otherwise-blank .env value; it strips the
+# surrounding whitespace but keeps the comment text as the literal value.
+# This repo's .env/.env.example document nearly every optional field in the
+# `KEY=                    # description` style, so a genuinely-blank field
+# silently resolves to the comment text instead of "". These tests exercise
+# the real Settings() construction path against a real temp .env file, not
+# just the validator function in isolation, since the corruption happens
+# during pydantic-settings' own dotenv_values() parse.
+# ===========================================================================
+
+class TestStripDanglingEnvInlineComments:
+    def _settings_from_env_file(self, tmp_path: Path, env_body: str):
+        import settings as settings_module
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(env_body, encoding="utf-8")
+        return settings_module.Settings(_env_file=str(env_file))
+
+    def test_blank_value_with_trailing_comment_resolves_to_empty_string(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._settings_from_env_file(
+            tmp_path,
+            "WATCHLIST=                    # Plain text comma-separated fallback ticker list\n",
+        )
+        assert s.WATCHLIST == ""
+
+    def test_minimal_whitespace_before_hash_also_resolves_to_empty_string(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact live-`.env` shape this incident was found with -- a
+        single space between `=` and `#`, not a wide comment-aligning gap."""
+        s = self._settings_from_env_file(
+            tmp_path,
+            "WATCHLIST= # Plain text comma-separated fallback ticker list\n",
+        )
+        assert s.WATCHLIST == ""
+
+    def test_optional_field_also_resolves_to_empty_string_not_the_comment(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._settings_from_env_file(
+            tmp_path,
+            "MARKET_DATA_WS_SYMBOLS=                 "
+            "# Comma-separated symbol override for WS subscription (unset = WATCHLIST)\n",
+        )
+        assert s.MARKET_DATA_WS_SYMBOLS == ""
+
+    def test_a_genuinely_populated_value_is_left_untouched(self, tmp_path: Path) -> None:
+        s = self._settings_from_env_file(tmp_path, "WATCHLIST=AAPL,MSFT\n")
+        assert s.WATCHLIST == "AAPL,MSFT"
+
+    def test_a_genuinely_populated_value_with_its_own_trailing_comment_is_unaffected(
+        self, tmp_path: Path
+    ) -> None:
+        """python-dotenv already strips a trailing `# comment` correctly
+        when the value portion is genuinely non-blank -- the bug (and this
+        validator's fix) is specific to an otherwise-blank value. Pins that
+        this validator doesn't regress the already-working case."""
+        s = self._settings_from_env_file(
+            tmp_path,
+            "WATCHLIST=AAPL,MSFT   # our two core holdings\n",
+        )
+        assert s.WATCHLIST == "AAPL,MSFT"
+
+    def test_all_ten_known_affected_fields_resolve_to_empty_not_the_comment(
+        self, tmp_path: Path
+    ) -> None:
+        """The full set of fields this doc's "Wider blast radius" section
+        found corrupted on a real operator .env, reproduced in one temp
+        file so a future regression across the whole set is caught."""
+        body = "\n".join(
+            [
+                "WATCHLIST=                              # Plain text comma-separated fallback ticker list",
+                "MARKET_DATA_WS_SYMBOLS=                 # Comma-separated symbol override for WS subscription (unset = WATCHLIST)",
+                "REDDIT_CLIENT_ID=                       # Reddit API OAuth2 script-app client ID (empty disables RedditSource)",
+                "REDDIT_CLIENT_SECRET=                   # Reddit API OAuth2 script-app client secret",
+                "MCP_DATABASE_URL_RO=                    # Read-only Postgres DSN for restricted MCP query surface",
+                "ALERT_CHANNELS=                         # Comma-separated active alerting_mcp channels",
+                "ALERT_NTFY_TOPIC=                       # ntfy.sh topic for alerting_mcp push notifications",
+                "ALERT_SLACK_WEBHOOK_URL=                # Slack incoming-webhook URL for alerting_mcp Slack alerts",
+                "ALERT_EMAIL_SMTP_HOST=                  # SMTP hostname for alerting_mcp email alerts",
+                "ALERT_EMAIL_SMTP_PASSWORD=               # SMTP app-password for alerting_mcp email alerts",
+                "",
+            ]
+        )
+        s = self._settings_from_env_file(tmp_path, body)
+        for field in (
+            "WATCHLIST",
+            "MARKET_DATA_WS_SYMBOLS",
+            "REDDIT_CLIENT_ID",
+            "REDDIT_CLIENT_SECRET",
+            "MCP_DATABASE_URL_RO",
+            "ALERT_CHANNELS",
+            "ALERT_NTFY_TOPIC",
+            "ALERT_SLACK_WEBHOOK_URL",
+            "ALERT_EMAIL_SMTP_HOST",
+            "ALERT_EMAIL_SMTP_PASSWORD",
+        ):
+            value = getattr(s, field)
+            assert value == "" or value is None, f"{field} still corrupted: {value!r}"

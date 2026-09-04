@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
@@ -138,6 +138,61 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_dangling_env_inline_comments(cls, values: Any) -> Any:
+        """Close the systemic `.env` inline-comment corruption at its root.
+
+        pydantic-settings resolves ``.env`` values via python-dotenv's own
+        ``dotenv_values()`` (verified directly against the installed
+        library -- see ``pydantic_settings/sources/providers/dotenv.py``),
+        which does NOT strip a trailing ``# comment`` from an unquoted,
+        otherwise-blank value -- it strips the surrounding whitespace
+        (confirmed directly: ``MARKET_DATA_WS_SYMBOLS=      # comment``
+        resolves to the value ``"# comment"``, not ``"      # comment"``)
+        but keeps the comment text itself as the literal value. This repo's
+        ``.env``/``.env.example`` files document nearly every optional field
+        in the style ``KEY=                    # description of the key`` --
+        correct for a field with a real value, but for one left genuinely
+        blank the literal comment text becomes that field's value instead
+        of ``""``.
+
+        Confirmed live against this machine's real ``.env``: ``WATCHLIST``,
+        ``MARKET_DATA_WS_SYMBOLS``, ``REDDIT_CLIENT_SECRET``,
+        ``MCP_DATABASE_URL_RO``, and ``ALERT_EMAIL_SMTP_PASSWORD`` were
+        silently non-empty this way, each defeating that field's own
+        empty-string-disables-the-integration convention (five more --
+        ``REDDIT_CLIENT_ID``, ``ALERT_CHANNELS``, ``ALERT_NTFY_TOPIC``,
+        ``ALERT_SLACK_WEBHOOK_URL``, ``ALERT_EMAIL_SMTP_HOST`` -- were
+        already fixed by hand on this machine since
+        ``docs/known_issues/watchlist_env_inline_comment_hang.md`` first
+        flagged the pattern). One confirmed, reproduced consequence:
+        ``data/market_data_ws.py`` read the corrupted ``settings.WATCHLIST``
+        as a "configured" watchlist and hung on a bad-symbol network fetch
+        -- see that doc, which named this exact systemic fix as a
+        deliberate, scoped-out follow-up.
+
+        Runs BEFORE any field-level validation/coercion, over every
+        string-typed raw value regardless of field name, so this closes the
+        bug class for every current field and any field added in the
+        future -- not just the ones already found by hand. Strips a value
+        to ``""`` whenever it consists ENTIRELY of a ``#``-led comment
+        (after stripping surrounding whitespace) -- there is no dangling-
+        whitespace signal left to key off by the time this validator sees
+        the value, since python-dotenv already consumed it. No field in
+        this codebase has (or is expected to have) a genuine value that
+        starts with a literal ``#`` once trimmed, so this is not narrowed
+        further.
+        """
+        if not isinstance(values, dict):
+            return values
+        for key, value in list(values.items()):
+            if not isinstance(value, str):
+                continue
+            if value.strip().startswith("#"):
+                values[key] = ""
+        return values
 
     # =========================================================================
     # FIELD SECTIONS (in declaration order below)

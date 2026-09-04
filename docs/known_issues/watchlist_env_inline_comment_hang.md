@@ -3,12 +3,14 @@
 ## Status
 **Fixed** (this PR) for the specific failure mode that hung the pipeline —
 `load_env_watchlist()` now rejects implausible ticker strings before they can
-reach a live fetch. **Not fixed**: the actual live `.env` file still has the
-malformed line (operators must edit `.env` themselves — Claude Code is
-hard-blocked from writing it, `.claude/hooks/block_env_write.sh`), and the
-same root-cause class (python-dotenv silently folding a trailing inline
-comment into an otherwise-blank value) affects at least 9 *other* settings in
-this repo's live `.env` — see "Wider blast radius, not fixed" below.
+reach a live fetch. **Fixed at the root (2026-09-04 follow-up)** — see
+"Systemic fix shipped" below — for every field read via `settings.X`,
+current and future. **Not fixed**: the actual live `.env` file still has
+some of the malformed lines (operators must edit `.env` themselves — Claude
+Code is hard-blocked from writing it, `.claude/hooks/block_env_write.sh`),
+and any code that still reads one of these keys via a raw `os.environ.get(...)`
+instead of `settings.X` remains exposed — see "Wider blast radius, not
+fixed" below for what that follow-up found on this machine's real `.env`.
 
 ## Symptom
 Operator reported: "it looks like the pipeline isn't working... I wasn't able
@@ -136,9 +138,45 @@ the way `WATCHLIST` did (no confirmed unbounded-network-call path behind any
 of them the way bars-backfill was behind `WATCHLIST`), but the corruption
 itself is real and live, not hypothetical.
 
-**Deliberately out of scope for this PR**: a systemic fix (stripping inline
-comments at the `.env`-loading layer itself, in `settings.py`'s
-pydantic-settings config and every `load_dotenv()` call site) touches every
-setting read from `.env`, not just the one causing today's incident, and
-needs its own scoped implementation plan and testing pass rather than being
+**2026-09-04 re-check**: of the 9 keys named above, `REDDIT_CLIENT_ID`,
+`ALERT_CHANNELS`, `ALERT_NTFY_TOPIC`, `ALERT_SLACK_WEBHOOK_URL`, and
+`ALERT_EMAIL_SMTP_HOST` had since been hand-fixed in the live `.env` (their
+lines no longer carry a trailing inline comment). `REDDIT_CLIENT_SECRET`,
+`MCP_DATABASE_URL_RO`, and `ALERT_EMAIL_SMTP_PASSWORD` were still corrupted
+— confirmed live, alongside `WATCHLIST` and `MARKET_DATA_WS_SYMBOLS`
+themselves, which remain corrupted in the live `.env` too (the code-level
+fixes above make that corruption harmless for these two specific fields,
+but the `.env` file itself was never edited, per this doc's own "Claude
+Code is hard-blocked from writing it" constraint).
+
+## Systemic fix shipped (2026-09-04 follow-up)
+The systemic fix this section originally deferred is now in place:
+`settings.py`'s `Settings` class has a `model_validator(mode="before")`,
+`_strip_dangling_env_inline_comments`, that strips ANY string-typed raw
+value down to `""` whenever it consists entirely of a `#`-led comment
+(after trimming whitespace) — regardless of field name — before any
+field-level validation runs. This closes the bug class for every field
+read via `settings.X`, current and future, not just the ones found by
+hand above; verified live against this machine's real (still-uncorrected)
+`.env` that all 10 previously-corrupted fields now resolve to `""`.
+
+**Residual scope, disclosed, not closed by this fix**: this only protects
+reads that go through `settings.X` — the sanctioned path per this repo's
+own "credential reads MUST go through settings.X, never os.environ
+directly" convention. A read via a raw `os.environ.get(...)` for one of
+these keys (populated separately by whichever `load_dotenv()` call site
+ran in that process, using the same underlying python-dotenv parser) is
+NOT covered and would still see the corrupted comment text. No such bypass
+is currently known for any of the 10 keys named in this doc (`WATCHLIST`
+and `MARKET_DATA_WS_SYMBOLS` are both read via `settings.X` throughout —
+see `data/portfolio_sync.py::load_env_watchlist` and
+`data/market_data_ws.py::_resolve_symbols`), but this was not re-audited
+across the whole codebase as part of this fix.
+
+Tests: `settings.py`'s validator is exercised end-to-end by
+`tests/test_market_data_ws.py`/`tests/test_portfolio_sync.py`'s existing
+`WATCHLIST`-corruption regression cases now passing without needing the
+per-key `_is_plausible_ticker` guard at all (that guard remains as
+defense-in-depth for the two consuming modules above, not the only line of
+defense it originally was).
 folded into a pipeline-hang bugfix. Filed as a follow-up.
