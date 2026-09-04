@@ -192,21 +192,22 @@ class TestDividendPremiumSpread:
 
 
 class TestInstitutionalVelocity:
-    """Explicit, documented neutral 0.0 (not a crash, not a fabricated
-    nonzero directional reading) for missing/NaN/unparseable inputs."""
+    """Honest NaN (not a crash, not a fabricated 0.0 "no signal" reading)
+    for missing/NaN/unparseable inputs -- CONSTRAINT #4: a real 0.0 quarterly
+    change is valid data and must stay distinguishable from missing data."""
 
     @pytest.mark.parametrize("inst_own,quarterly_change", [
         (None, None),
         (float("nan"), 0.01),
         (0.5, float("nan")),
     ])
-    def test_missing_or_nan_inputs_yield_neutral_zero(self, research_engine, inst_own, quarterly_change):
+    def test_missing_or_nan_inputs_yield_nan(self, research_engine, inst_own, quarterly_change):
         result = research_engine.calculate_institutional_velocity(inst_own, quarterly_change)
-        assert result == 0.0
+        assert math.isnan(result)
 
-    def test_unparseable_string_input_yields_neutral_zero_not_raise(self, research_engine):
+    def test_unparseable_string_input_yields_nan_not_raise(self, research_engine):
         result = research_engine.calculate_institutional_velocity("N/A%", "garbage")
-        assert result == 0.0
+        assert math.isnan(result)
 
 
 class TestDividendPaybackHorizon:
@@ -248,26 +249,24 @@ class TestLeverageDistressFactor:
 
 
 class TestRelativeStrengthMomentumSlope:
-    """None/insufficient-length series degrade to a documented 0.0 -- the
-    test docstring flags this as borderline w.r.t. CONSTRAINT #4's spirit
-    (0.0 is indistinguishable from 'no momentum' vs 'no data'); pinning
-    current behavior, not asserting it's ideal."""
+    """None/insufficient-length series degrade to an honest NaN, per
+    CONSTRAINT #4 -- distinguishable from a genuine 0.0 (flat) slope."""
 
-    def test_none_series_returns_documented_zero(self, research_engine):
+    def test_none_series_returns_nan(self, research_engine):
         result = research_engine.calculate_relative_strength_momentum_slope(None, pd.Series([1.0, 2.0]))
-        assert result == 0.0
+        assert math.isnan(result)
 
-    def test_series_below_thirty_day_minimum_returns_zero(self, research_engine):
+    def test_series_below_thirty_day_minimum_returns_nan(self, research_engine):
         short = pd.Series(np.linspace(100, 110, 29))  # one below the 30-day floor
         spy = pd.Series(np.linspace(400, 410, 29))
         result = research_engine.calculate_relative_strength_momentum_slope(short, spy)
-        assert result == 0.0
+        assert math.isnan(result)
 
-    def test_mismatched_length_series_returns_zero(self, research_engine):
+    def test_mismatched_length_series_returns_nan(self, research_engine):
         asset = pd.Series(np.linspace(100, 110, 50))
         spy = pd.Series(np.linspace(400, 410, 20))
         result = research_engine.calculate_relative_strength_momentum_slope(asset, spy)
-        assert result == 0.0
+        assert math.isnan(result)
 
 
 class TestOptionsVolatilityEdge:

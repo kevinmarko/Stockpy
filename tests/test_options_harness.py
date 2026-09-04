@@ -6,6 +6,8 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from pilots.options_risk import calculate_black_scholes_greeks
+
 
 from validation.options_harness import (
     OptionLegSpec,
@@ -13,8 +15,6 @@ from validation.options_harness import (
     OptionsTradeRecord,
     OptionsValidationHarness,
     STANDARD_OPTIONS_STRATEGIES,
-    _black_scholes_delta,
-    _black_scholes_price,
     _lookup_vix,
     _trailing_ivr,
 )
@@ -22,12 +22,12 @@ from validation.options_harness import (
 
 def test_black_scholes_pricing_intrinsic_at_expiration():
     # Call intrinsic
-    assert _black_scholes_price(110.0, 100.0, 0.0, 0.20, option_type="call") == 10.0
-    assert _black_scholes_price(90.0, 100.0, 0.0, 0.20, option_type="call") == 0.0
+    assert calculate_black_scholes_greeks(110.0, 100.0, 0.0, 0.20, option_type="call", r=0.045)["price"] == 10.0
+    assert calculate_black_scholes_greeks(90.0, 100.0, 0.0, 0.20, option_type="call", r=0.045)["price"] == 0.0
 
     # Put intrinsic
-    assert _black_scholes_price(90.0, 100.0, 0.0, 0.20, option_type="put") == 10.0
-    assert _black_scholes_price(110.0, 100.0, 0.0, 0.20, option_type="put") == 0.0
+    assert calculate_black_scholes_greeks(90.0, 100.0, 0.0, 0.20, option_type="put", r=0.045)["price"] == 10.0
+    assert calculate_black_scholes_greeks(110.0, 100.0, 0.0, 0.20, option_type="put", r=0.045)["price"] == 0.0
 
 
 def test_black_scholes_pricing_positive_time():
@@ -37,8 +37,8 @@ def test_black_scholes_pricing_positive_time():
     sigma = 0.25
     r = 0.05
 
-    call_p = _black_scholes_price(spot, strike, t_years, sigma, r, option_type="call")
-    put_p = _black_scholes_price(spot, strike, t_years, sigma, r, option_type="put")
+    call_p = calculate_black_scholes_greeks(spot, strike, t_years, sigma, option_type="call", r=r)["price"]
+    put_p = calculate_black_scholes_greeks(spot, strike, t_years, sigma, option_type="put", r=r)["price"]
 
     # Put-Call Parity: C - P = S - K * exp(-r*T)
     disc_k = strike * math.exp(-r * t_years)
@@ -144,14 +144,14 @@ def _flat_vix_series(df: pd.DataFrame, base: float = 18.0) -> pd.Series:
 
 def test_black_scholes_delta_bounds_and_signs():
     # Deep ITM call -> delta near 1.0; deep OTM call -> near 0.0
-    assert _black_scholes_delta(150.0, 100.0, 0.1, 0.20, option_type="call") > 0.9
-    assert _black_scholes_delta(60.0, 100.0, 0.1, 0.20, option_type="call") < 0.1
+    assert calculate_black_scholes_greeks(150.0, 100.0, 0.1, 0.20, option_type="call", r=0.045)["delta"] > 0.9
+    assert calculate_black_scholes_greeks(60.0, 100.0, 0.1, 0.20, option_type="call", r=0.045)["delta"] < 0.1
     # Deep ITM put -> delta near -1.0; deep OTM put -> near 0.0
-    assert _black_scholes_delta(60.0, 100.0, 0.1, 0.20, option_type="put") < -0.9
-    assert _black_scholes_delta(150.0, 100.0, 0.1, 0.20, option_type="put") > -0.1
+    assert calculate_black_scholes_greeks(60.0, 100.0, 0.1, 0.20, option_type="put", r=0.045)["delta"] < -0.9
+    assert calculate_black_scholes_greeks(150.0, 100.0, 0.1, 0.20, option_type="put", r=0.045)["delta"] > -0.1
     # At expiration, delta collapses to the ITM indicator
-    assert _black_scholes_delta(110.0, 100.0, 0.0, 0.20, option_type="call") == 1.0
-    assert _black_scholes_delta(90.0, 100.0, 0.0, 0.20, option_type="call") == 0.0
+    assert calculate_black_scholes_greeks(110.0, 100.0, 0.0, 0.20, option_type="call", r=0.045)["delta"] == 1.0
+    assert calculate_black_scholes_greeks(90.0, 100.0, 0.0, 0.20, option_type="call", r=0.045)["delta"] == 0.0
 
 
 def test_trailing_ivr_none_below_min_obs():

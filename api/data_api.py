@@ -638,27 +638,27 @@ def get_universe() -> Dict[str, Any]:
 
     * ``effective_symbols`` / ``effective_count``: the result of running the
       SAME ``compute_tracked_universe()`` fallback logic the daemon uses,
-      fed with the cheap, network-free inputs available to a read HTTP
-      endpoint (env/`watchlist.txt` via ``load_env_watchlist``, and cached
-      scan-discovery candidates via ``pilots.discovery.discovery()`` — no
-      live provider or broker call). Held Robinhood positions are NOT
-      included (this endpoint deliberately never touches the broker — see
-      below), so this is a **conservative** approximation: the real per-cycle
-      universe can only be equal to or LARGER than ``effective_symbols``.
-    * ``default_tickers_is_fallback``: ``True`` when ``watchlist``/
-      ``discovered`` were both empty in this cheap check, i.e. DEFAULT_TICKERS
-      is very likely what the daemon is actually using this cycle (held
-      positions could still add to it, but never suppress the fallback).
-      ``False`` means DEFAULT_TICKERS is DEFINITELY not the effective
-      universe — the daemon is using ``effective_symbols`` (or a superset of
-      it, once held positions are unioned in) instead.
+      fed with cheap, network-free inputs (env/`watchlist.txt` via
+      ``load_env_watchlist``, cached scan-discovery candidates via
+      ``pilots.discovery.discovery()``, and held Robinhood positions read
+      from the LOCAL cache only via ``fetch_account_snapshot(allow_live_fetch
+      =False)`` — never a live broker call). Because a live-fetch failure or
+      a cold cache degrades the held-positions read to empty rather than
+      raising, this can still under-count a genuinely-held symbol the cache
+      hasn't captured yet, so treat it as a best-effort preview, not a
+      guaranteed exact match to the real per-cycle universe.
+    * ``default_tickers_is_fallback``: ``True`` when ``held``/``watchlist``/
+      ``discovered`` were all empty in this check, i.e. DEFAULT_TICKERS is
+      what the daemon is actually using this cycle. ``False`` means
+      DEFAULT_TICKERS is NOT the effective universe — the daemon is using
+      ``effective_symbols`` instead.
     * ``note``: a plain-English one-liner surfacing the above so a screen can
       show it directly without re-deriving it.
 
-    We deliberately do NOT call ``data.robinhood_client.discover_universe``
-    or fetch a live Robinhood snapshot here: either would risk an
-    interactive Robinhood/MFA login or broker network call, which is
-    inappropriate for a read HTTP endpoint.
+    We deliberately do NOT trigger a live Robinhood fetch here (only a
+    cached-snapshot read): a live fetch would risk an interactive
+    Robinhood/MFA login or broker network call, which is inappropriate for a
+    read HTTP endpoint.
     """
     from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
 
@@ -682,16 +682,27 @@ def get_universe() -> Dict[str, Any]:
         logger.warning("data_api: get_universe discovery read failed: %s", exc)
         discovered_symbols = []
 
-    default_tickers_is_fallback = not (watchlist_symbols or discovered_symbols)
+    try:
+        # allow_live_fetch=False: cache-only, never a live broker/MFA call --
+        # see the docstring above. Raises only when no cache exists at all.
+        snapshot = fetch_account_snapshot(allow_live_fetch=False)
+        held_symbols = list((snapshot.positions or {}).keys())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("data_api: get_universe held-positions read failed: %s", exc)
+        held_symbols = []
+
+    default_tickers_is_fallback = not (held_symbols or watchlist_symbols or discovered_symbols)
 
     try:
         effective_symbols = compute_tracked_universe(
+            held=held_symbols,
             watchlist=watchlist_symbols,
             discovered=discovered_symbols,
             default_tickers=symbols,
-            # Cheap, side-effect-free preview for a read endpoint -- skip the
-            # SymbolRatingStore DB round-trip the real per-cycle call makes.
-            apply_rating_exclusion=False,
+            # Match the real per-cycle default so a rating-excluded symbol
+            # doesn't appear here when the daemon would actually drop it —
+            # see docs/known_issues/universe_count_reporting_mismatch.md.
+            apply_rating_exclusion=True,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("data_api: get_universe effective-universe computation failed: %s", exc)
@@ -699,18 +710,16 @@ def get_universe() -> Dict[str, Any]:
 
     if default_tickers_is_fallback:
         note = (
-            f"DEFAULT_TICKERS ({len(symbols)} symbol(s)) is very likely the effective "
-            "per-cycle universe right now (no watchlist/discovery symbols configured), "
-            "though held Robinhood positions -- not reflected here -- are unioned on "
-            "top of it at run time and are never suppressed by it."
+            f"DEFAULT_TICKERS ({len(symbols)} symbol(s)) is the effective "
+            "per-cycle universe right now (no held positions, watchlist, or "
+            "discovery symbols configured)."
         )
     else:
         note = (
             f"DEFAULT_TICKERS ({len(symbols)} symbol(s)) is NOT the effective per-cycle "
-            f"universe: {len(effective_symbols)} symbol(s) from your watchlist/discovery "
-            "take precedence, and DEFAULT_TICKERS is not consulted at all this cycle. "
-            "Held Robinhood positions (not reflected here) may add further symbols on "
-            "top of this."
+            f"universe: {len(effective_symbols)} symbol(s) from your held positions/"
+            "watchlist/discovery take precedence, and DEFAULT_TICKERS is not consulted "
+            "at all this cycle."
         )
 
     return {

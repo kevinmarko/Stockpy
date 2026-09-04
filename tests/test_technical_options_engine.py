@@ -71,7 +71,10 @@ class TestBlackScholesPricingAndGreeks:
         rec = OptionsPricingRecommender(stock_price=110.0)
         result = rec.black_scholes_pricing_and_greeks(K=100.0, T=0.0, sigma=0.25, option_type="call")
         assert result["Price"] == 10.0  # max(0, 110-100)
-        assert result == {**result, "Delta": 0.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
+        # Delta collapses to the ITM indicator at expiration (1.0 -- this
+        # call is in the money), not a hardcoded 0.0; Gamma/Vega/Theta still
+        # decay to 0 since there's no time value left.
+        assert result == {**result, "Delta": 1.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
 
     def test_zero_time_to_expiry_put_returns_intrinsic_value(self):
         rec = OptionsPricingRecommender(stock_price=90.0)
@@ -96,7 +99,10 @@ class TestBlackScholesPricingAndGreeks:
         rec = OptionsPricingRecommender(stock_price=110.0)
         result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.0, option_type="call")
         assert result["Price"] == 10.0  # max(0, 110-100)
-        assert result == {**result, "Delta": 0.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
+        # Delta collapses to the ITM indicator (1.0 -- this call is in the
+        # money) rather than a hardcoded 0.0; Gamma/Vega/Theta still decay to
+        # 0 since a degenerate volatility carries no real time value.
+        assert result == {**result, "Delta": 1.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
 
     def test_negative_sigma_treated_same_as_zero(self):
         rec = OptionsPricingRecommender(stock_price=90.0)

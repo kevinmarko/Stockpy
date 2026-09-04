@@ -17,6 +17,7 @@ behavior (tests/test_cnn_lstm_worker.py).
 
 from __future__ import annotations
 
+import math
 from unittest import mock
 
 import numpy as np
@@ -99,18 +100,20 @@ class TestFreshFitIsolationDispatch:
         assert save_path is not None
         assert "ISOTEST" in str(save_path) or "cnn_lstm" in str(save_path)
 
-    def test_subprocess_failure_degrades_to_zero_result(self, engine):
+    def test_subprocess_failure_degrades_to_nan_result(self, engine):
         """Timeout / BrokenWorkerPool / a real training exception inside the
-        worker must never crash the pipeline -- CONSTRAINT #6. The existing
-        outer try/except in run_cnn_lstm_forecast already covers this; this
-        test proves the isolation dispatch doesn't bypass it."""
+        worker must never crash the pipeline -- CONSTRAINT #6 -- and must
+        degrade to an honest NaN, not a fabricated 0.0 (CONSTRAINT #4). The
+        existing outer try/except in run_cnn_lstm_forecast already covers
+        this; this test proves the isolation dispatch doesn't bypass it."""
         horizons = (10, 30, 60, 90)
         with mock.patch("settings.settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", True), \
              mock.patch("cnn_lstm_process_pool.run_in_subprocess", side_effect=TimeoutError("stuck")):
             df = _bars_df(340)
             result = engine.run_cnn_lstm_forecast(df, horizons=horizons)
 
-        assert result == {h: 0.0 for h in horizons}
+        assert set(result.keys()) == set(horizons)
+        assert all(math.isnan(v) for v in result.values())
 
     def test_isolation_enabled_by_default_dispatches_to_subprocess(self, engine):
         """As of 2026-07-31 (docs/known_issues/cnn_lstm_tf_deadlock.md, Round

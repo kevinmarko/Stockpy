@@ -6409,7 +6409,10 @@ def post_options_multi_leg_price(body: MultiLegStructurePricingRequest) -> Dict[
 
     spot = body.underlying_price
     if spot is None or spot <= 0:
-        spot = get_latest_price(body.symbol) or 100.0
+        spot = get_latest_price(body.symbol)
+        if spot is None or spot <= 0:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Underlying price could not be resolved and is required.")
 
     specs = [
         OptionLegSpec(

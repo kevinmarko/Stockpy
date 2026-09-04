@@ -38,6 +38,7 @@ from unittest import mock
 
 import pandas as pd
 import pytest
+import math
 from fastapi.testclient import TestClient
 
 from settings import settings
@@ -100,7 +101,7 @@ class TestBuildFrames:
         portfolio_df, _ = build_brinson_fachler_frames(rows)
         assert len(portfolio_df) == 2  # the two blank/malformed entries are dropped
 
-    def test_unparseable_numeric_defaults_to_zero(self):
+    def test_unparseable_numeric_defaults_to_nan(self):
         rows = [{
             "sector": "Energy",
             "portfolio_weight_pct": "not-a-number",
@@ -109,8 +110,8 @@ class TestBuildFrames:
             "benchmark_return_pct": 2.0,
         }]
         portfolio_df, benchmark_df = build_brinson_fachler_frames(rows)
-        assert portfolio_df["portfolio_weight"].iloc[0] == 0.0
-        assert portfolio_df["portfolio_return"].iloc[0] == 0.0
+        assert math.isnan(portfolio_df["portfolio_weight"].iloc[0])
+        assert math.isnan(portfolio_df["portfolio_return"].iloc[0])
 
 
 # ---------------------------------------------------------------------------

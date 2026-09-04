@@ -17,7 +17,11 @@ from datetime import datetime, date, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+from pilots.options_risk import calculate_black_scholes_greeks
+
 import pandas as pd
+from pilots.volatility_surface import get_vrp
+
 import yfinance as yf
 
 from execution.cost_model import TieredCostModel
@@ -185,64 +189,6 @@ STANDARD_OPTIONS_STRATEGIES: Dict[str, OptionsStrategySpec] = {
 }
 
 
-def _black_scholes_price(
-    spot: float, strike: float, t_years: float, sigma: float, r: float = 0.045, option_type: str = "call"
-) -> float:
-    """Standard Black-Scholes analytical option pricing formula."""
-    if spot <= 0 or strike <= 0:
-        return 0.0
-    if t_years <= 1e-5:
-        # At expiration intrinsic value
-        if option_type.lower() == "call":
-            return max(0.0, spot - strike)
-        else:
-            return max(0.0, strike - spot)
-
-    sigma = max(1e-4, sigma)
-    sqrt_t = math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
-    d2 = d1 - sigma * sqrt_t
-
-    def norm_cdf(x: float) -> float:
-        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-    if option_type.lower() == "call":
-        price = spot * norm_cdf(d1) - strike * math.exp(-r * t_years) * norm_cdf(d2)
-    else:
-        price = strike * math.exp(-r * t_years) * norm_cdf(-d2) - spot * norm_cdf(-d1)
-
-    return max(0.0, price)
-
-
-def _black_scholes_delta(
-    spot: float, strike: float, t_years: float, sigma: float, r: float = 0.045, option_type: str = "call"
-) -> float:
-    """Standard Black-Scholes analytical option delta (signed: positive for
-    calls, negative for puts). Callers wanting the conventional |delta|
-    magnitude (e.g. "a 0.30-delta short leg") should take ``abs()`` of the
-    result."""
-    if spot <= 0 or strike <= 0:
-        return 0.0
-    if t_years <= 1e-5:
-        # At expiration, delta is the indicator of being in-the-money.
-        if option_type.lower() == "call":
-            return 1.0 if spot > strike else 0.0
-        else:
-            return -1.0 if spot < strike else 0.0
-
-    sigma = max(1e-4, sigma)
-    sqrt_t = math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
-
-    def norm_cdf(x: float) -> float:
-        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-    if option_type.lower() == "call":
-        return norm_cdf(d1)
-    else:
-        return norm_cdf(d1) - 1.0
-
-
 def _trailing_ivr(iv_window: pd.Series, current_iv: float, min_obs: int = 20) -> Optional[float]:
     """Real percentile rank (0-100) of ``current_iv`` within its own trailing
     window -- a causal, no-lookahead IVR proxy (the window is data up to and
@@ -384,13 +330,7 @@ class OptionsValidationHarness:
                 # Mark to market current value of all legs
                 current_legs_value = 0.0
                 for leg in active_trade["legs"]:
-                    p = _black_scholes_price(
-                        spot=spot,
-                        strike=leg["strike"],
-                        t_years=t_years_left,
-                        sigma=iv,
-                        option_type=leg["option_type"],
-                    )
+                    p = calculate_black_scholes_greeks(spot=spot, strike=leg["strike"], t_years=t_years_left, sigma=iv, option_type=leg["option_type"], r=0.045)["price"]
                     # For long leg: value is +price; for short leg: value is -price
                     multiplier = 1.0 if leg["side"] == "buy" else -1.0
                     current_legs_value += multiplier * p * 100.0 * leg["ratio"]
@@ -458,13 +398,7 @@ class OptionsValidationHarness:
                     short_leg_delta: Optional[float] = None
                     for leg_spec in spec.legs:
                         strike = round(spot * (1.0 + leg_spec.strike_offset_pct), 2)
-                        p = _black_scholes_price(
-                            spot=spot,
-                            strike=strike,
-                            t_years=t_years,
-                            sigma=iv,
-                            option_type=leg_spec.option_type,
-                        )
+                        p = calculate_black_scholes_greeks(spot=spot, strike=strike, t_years=t_years, sigma=iv, option_type=leg_spec.option_type, r=0.045)["price"]
                         multiplier = 1.0 if leg_spec.side == "buy" else -1.0
                         net_entry_value += multiplier * p * 100.0 * leg_spec.ratio
                         legs_info.append({
@@ -479,10 +413,7 @@ class OptionsValidationHarness:
                         # metric. None (never fabricated) when the strategy
                         # has no short leg at all (e.g. Long Straddle).
                         if leg_spec.side == "sell" and short_leg_delta is None:
-                            short_leg_delta = abs(_black_scholes_delta(
-                                spot=spot, strike=strike, t_years=t_years, sigma=iv,
-                                option_type=leg_spec.option_type,
-                            ))
+                            short_leg_delta = abs(calculate_black_scholes_greeks(spot=spot, strike=strike, t_years=t_years, sigma=iv, option_type=leg_spec.option_type, r=0.045)["delta"])
 
                     # Sizing: determine contracts based on capital allocation
                     target_budget = capital * allocation_pct
@@ -501,7 +432,7 @@ class OptionsValidationHarness:
                     # already computed above at this exact point in time,
                     # never fabricated.
                     entry_ivr = _trailing_ivr(iv_series.iloc[max(0, i - 251): i + 1], current_iv=iv)
-                    entry_vrp = iv - float(rolling_hv.iloc[i])
+                    entry_vrp = get_vrp("mock", iv, float(rolling_hv.iloc[i]))
                     # net_entry_value is already scaled by the *100 per-contract
                     # multiplier (see the legs loop above); spread_width is a
                     # raw per-share strike distance, so it needs the same *100
@@ -591,7 +522,7 @@ class OptionsValidationHarness:
                 oos_s.append([oos_sr if not np.isnan(oos_sr) else 0.0])
             pbo_val = probability_of_backtest_overfitting(np.array(is_s), np.array(oos_s))
         else:
-            pbo_val = 0.0
+            pbo_val = float("nan")
 
 
         # Stress testing across shock windows

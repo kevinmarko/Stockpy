@@ -45,6 +45,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import pytest
+import math
 import transactions_store
 
 from evaluation_engine import EvaluationEngine
@@ -324,11 +325,15 @@ class TestExcursionMetrics:
 
     def test_invalid_entry_price_zero(self):
         eng = _engine()
-        assert eng.calculate_excursion_metrics(0.0, 110.0, 95.0, "long") == (0.0, 0.0)
+        result = eng.calculate_excursion_metrics(0.0, 110.0, 95.0, "long")
+        assert math.isnan(result[0])
+        assert math.isnan(result[1])
 
     def test_invalid_entry_price_nan(self):
         eng = _engine()
-        assert eng.calculate_excursion_metrics(float("nan"), 110.0, 95.0, "long") == (0.0, 0.0)
+        result = eng.calculate_excursion_metrics(float("nan"), 110.0, 95.0, "long")
+        assert math.isnan(result[0])
+        assert math.isnan(result[1])
 
     def test_no_adverse_move_clamps_mae_to_zero(self):
         eng = _engine()
@@ -360,18 +365,18 @@ class TestRealizedSlippage:
         eng = _engine()
         assert eng.calculate_realized_slippage(98.0, 100.0) == pytest.approx(-0.02, abs=1e-9)
 
-    def test_nan_entry_returns_zero(self):
+    def test_nan_entry_returns_nan(self):
         eng = _engine()
-        assert eng.calculate_realized_slippage(float("nan"), 100.0) == 0.0
+        assert math.isnan(eng.calculate_realized_slippage(float("nan"), 100.0))
 
-    def test_nan_expected_returns_zero(self):
+    def test_nan_expected_returns_nan(self):
         eng = _engine()
-        assert eng.calculate_realized_slippage(100.0, float("nan")) == 0.0
+        assert math.isnan(eng.calculate_realized_slippage(100.0, float("nan")))
 
-    def test_non_positive_expected_returns_zero(self):
+    def test_non_positive_expected_returns_nan(self):
         eng = _engine()
-        assert eng.calculate_realized_slippage(100.0, 0.0) == 0.0
-        assert eng.calculate_realized_slippage(100.0, -5.0) == 0.0
+        assert math.isnan(eng.calculate_realized_slippage(100.0, 0.0))
+        assert math.isnan(eng.calculate_realized_slippage(100.0, -5.0))
 
     def test_rounded_to_four_places(self):
         eng = _engine()
@@ -396,13 +401,13 @@ class TestTailDependency:
         # hedge asset (beta<0) → 0 systemic tail drag
         assert eng.calculate_tail_dependency(-0.10, -0.5) == 0.0
 
-    def test_nan_var_returns_zero(self):
+    def test_nan_var_returns_nan(self):
         eng = _engine()
-        assert eng.calculate_tail_dependency(float("nan"), 1.2) == 0.0
+        assert math.isnan(eng.calculate_tail_dependency(float("nan"), 1.2))
 
-    def test_nan_beta_returns_zero(self):
+    def test_nan_beta_returns_nan(self):
         eng = _engine()
-        assert eng.calculate_tail_dependency(-0.05, float("nan")) == 0.0
+        assert math.isnan(eng.calculate_tail_dependency(-0.05, float("nan")))
 
     def test_positive_var_uses_absolute_value(self):
         eng = _engine()
@@ -537,17 +542,22 @@ class TestPortfolioHeat:
         # (10000*0.05 + 10000*0.03) / 20000 = 800/20000 = 0.04
         assert eng.calculate_portfolio_heat(df) == pytest.approx(0.04, abs=1e-9)
 
-    def test_missing_position_size_column_returns_zero(self):
+    def test_missing_position_size_column_returns_nan(self):
         eng = _engine()
         df = pd.DataFrame({"stop_loss_pct": [0.05]})
-        assert eng.calculate_portfolio_heat(df) == 0.0
+        assert math.isnan(eng.calculate_portfolio_heat(df))
 
-    def test_missing_stop_loss_column_returns_zero(self):
+    def test_missing_stop_loss_column_returns_nan(self):
         eng = _engine()
         df = pd.DataFrame({"position_size": [10000.0]})
-        assert eng.calculate_portfolio_heat(df) == 0.0
+        assert math.isnan(eng.calculate_portfolio_heat(df))
 
     def test_zero_total_capital_returns_zero(self):
+        """Genuinely zero capital deployed (watchlist-only/no holdings) is a
+        measured "no open risk", not missing data -- matches the sibling
+        BF_Allocation/BF_Selection/BF_Interaction convention for this same
+        zero-positions scenario (tests/test_evaluate_portfolio_zero_positions.py),
+        unlike the missing-column/exception branches, which stay NaN."""
         eng = _engine()
         df = pd.DataFrame({"position_size": [0.0, 0.0], "stop_loss_pct": [0.05, 0.03]})
         assert eng.calculate_portfolio_heat(df) == 0.0

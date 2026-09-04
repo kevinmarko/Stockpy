@@ -224,35 +224,15 @@ def _calculate_atm_iv_from_chain(chain: Any, spot_price: float) -> float:
         return float('nan')
 
 
+from pilots.volatility_surface import calculate_true_ivr as _calc_ivr, get_vrp as _get_vrp
+
 def calculate_true_ivr(ticker: str, current_iv: float, as_of_date: Any, store: IVHistoryStore, lookback_days: int = 252) -> float:
-    """
-    Calculates Implied Volatility Rank (IVR) strictly using historical IV prior to as_of_date.
-    Formula: IVR = (current_iv - min_252d) / (max_252d - min_252d) * 100.
-    Returns float(nan) if history is empty.
-    """
-    if math.isnan(current_iv) or current_iv <= 0:
-        return float('nan')
-        
-    history = store.get_historical_ivs(ticker, as_of_date, lookback_days)
-    if not history:
-        return float('nan')
-        
-    # We include current_iv in the min/max calculation to establish current boundaries
-    all_ivs = history + [current_iv]
-    min_iv = min(all_ivs)
-    max_iv = max(all_ivs)
-    
-    if max_iv == min_iv:
-        return 50.0  # neutral rank when range is zero
-        
-    ivr = (current_iv - min_iv) / (max_iv - min_iv) * 100.0
-    return float(max(0.0, min(100.0, ivr)))
+    return _calc_ivr(ticker, current_iv, as_of_date, store, lookback_days)
 
 
 def get_vrp(ticker: str, current_iv: float, garch_vol: float) -> float:
     """
     Calculates Volatility Risk Premium: implied volatility minus realized forecast volatility.
+    Delegates to the canonical pilots.volatility_surface implementation (SSOT).
     """
-    if math.isnan(current_iv) or math.isnan(garch_vol):
-        return float('nan')
-    return float(current_iv - garch_vol)
+    return _get_vrp(ticker, current_iv, garch_vol)

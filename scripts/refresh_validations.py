@@ -3145,7 +3145,10 @@ def _build_pairs_trading_adapter(
         uptrend = (spy_close > spy_sma200).astype(float)
         trend_gate = uptrend.shift(1).fillna(0.0) > 0.5
         daily_returns = daily_returns.where(trend_gate, 0.0)
-        valid_idx = spy_sma200.dropna().index.intersection(signals_df.dropna(subset=["spread"]).index)
+        # Drop rows where any required copula metric is genuinely missing instead of fabricating zeros (Constraint #4)
+        valid_idx = spy_sma200.dropna().index.intersection(
+            signals_df.dropna(subset=["spread", "z_score", "beta", "position"]).index
+        )
     else:
         # Drop rows where any required copula metric is genuinely missing instead of fabricating zeros (Constraint #4)
         valid_idx = signals_df.dropna(subset=["spread", "z_score", "beta", "position"]).index

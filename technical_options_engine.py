@@ -12,6 +12,8 @@ import logging
 import math
 import numpy as np
 import pandas as pd
+from pilots.options_risk import calculate_black_scholes_greeks
+
 import pandas_ta_classic as ta
 from typing import Dict, Any, List, Optional, Sequence
 from scipy.stats import norm
@@ -77,95 +79,48 @@ class OptionsPricingRecommender:
     def black_scholes_pricing_and_greeks(self, K: float, T: float, sigma: float, option_type: str = 'call') -> dict:
         """
         Analytically computes the theoretical option price and Greeks using the Black-Scholes PDE.
-
-        Also computes **Chance of Profit** (PoP) — the risk-neutral probability that the
-        option position is profitable at expiration, accounting for the premium paid.
-
-        Derivation (call):
-            Break-Even = K + Premium
-            d2_be = [ln(S / Break-Even) + (r - 0.5σ²)T] / (σ√T)
-            PoP = N(d2_be)
-
-        Derivation (put):
-            Break-Even = K - Premium
-            d2_be = [ln(S / Break-Even) + (r - 0.5σ²)T] / (σ√T)
-            PoP = N(-d2_be)
-
-        This is equivalent to the probability that S_T finishes beyond the break-even
-        price under the risk-neutral measure (Black-Scholes, 1973).
-
-        Variables:
-        K (float): Strike Price
-        T (float): Time to Expiration (in years)
-        sigma (float): Annualized Implied Volatility
-        option_type (str): 'call' or 'put'
+        Delegates to the canonical pilots.options_risk implementation.
         """
-        # Prevent division by zero errors for expired options
-        if T <= 0:
-            return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S),
-                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
-
-        # Prevent division by zero / NaN propagation when volatility is zero,
-        # negative, or unavailable (e.g. a degenerate upstream IV/GARCH read).
-        # Degrades to the same intrinsic-value, zero-Greeks shape as the T<=0
-        # branch above rather than crashing (CONSTRAINT #6).
-        if sigma <= 0 or np.isnan(sigma):
-            return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S),
-                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
-
-        d1 = (np.log(self.S / K) + (self.r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-        d2 = d1 - sigma * np.sqrt(T)
-        
-        if option_type.lower() == 'call':
-            price = self.S * norm.cdf(d1) - K * np.exp(-self.r * T) * norm.cdf(d2)
-            delta = norm.cdf(d1)
-        elif option_type.lower() == 'put':
-            price = K * np.exp(-self.r * T) * norm.cdf(-d2) - self.S * norm.cdf(-d1)
-            delta = norm.cdf(d1) - 1.0
-        else:
+        if option_type.lower() not in ['call', 'put']:
             raise ValueError("option_type must be 'call' or 'put'")
 
-        gamma = norm.pdf(d1) / (self.S * sigma * np.sqrt(T))
-        vega = self.S * norm.pdf(d1) * np.sqrt(T)
+        # Prevent division by zero errors for expired options. Delta collapses
+        # to the ITM indicator (matching pilots/options_risk.py's canonical
+        # 0DTE/degenerate-sigma branches) rather than being hardcoded to 0.0.
+        if T <= 0:
+            delta = 1.0 if (option_type.lower() == 'call' and self.S > K) else (-1.0 if (option_type.lower() == 'put' and self.S < K) else 0.0)
+            return {'Price': max(0.0, self.S - K) if option_type.lower() == 'call' else max(0.0, K - self.S),
+                    'Delta': delta, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
+
+        if sigma <= 0 or np.isnan(sigma):
+            delta = 1.0 if (option_type.lower() == 'call' and self.S > K) else (-1.0 if (option_type.lower() == 'put' and self.S < K) else 0.0)
+            return {'Price': max(0.0, self.S - K) if option_type.lower() == 'call' else max(0.0, K - self.S),
+                    'Delta': delta, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
+
+        greeks = calculate_black_scholes_greeks(spot=self.S, strike=K, t_years=T, sigma=sigma, option_type=option_type.lower(), r=self.r)
         
-        # Theta calculated as annual decay, divided by 252 for daily representation
-        theta_annual = -(self.S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T))
+        # Chance of Profit (Probability of exceeding Break-Even)
+        chance_of_profit = 0.0
+        price = greeks['price']
         if option_type.lower() == 'call':
-            theta_annual -= self.r * K * np.exp(-self.r * T) * norm.cdf(d2)
-            rho = K * T * np.exp(-self.r * T) * norm.cdf(d2) / 100.0
-            
-            # Chance of Profit (Probability of exceeding Break-Even)
             break_even = K + price
             d2_be = (np.log(self.S / break_even) + (self.r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
             chance_of_profit = norm.cdf(d2_be)
         else:
-            theta_annual += self.r * K * np.exp(-self.r * T) * norm.cdf(-d2)
-            rho = -K * T * np.exp(-self.r * T) * norm.cdf(-d2) / 100.0
-            
-            # Chance of Profit (Probability of falling below Break-Even)
             break_even = K - price
-            # Protect against negative break-even
             if break_even <= 0:
                 chance_of_profit = 1.0
             else:
                 d2_be = (np.log(self.S / break_even) + (self.r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
                 chance_of_profit = norm.cdf(-d2_be)
-            
+
         return {
-            'Price': price,
-            'Delta': delta,
-            'Gamma': gamma,
-            # NOTE: raw Black-Scholes vega (per 1.00/100% change in IV), NOT the
-            # "per 1% IV" convention brokers usually display. Keep this shared
-            # engine primitive on its original scale -- `ATM_Vega` in
-            # build_premium_directive() below already consumes this field on
-            # that scale, and rescaling it here would silently drop that
-            # existing, already-recorded metric by 100x. Callers that want the
-            # per-1%-IV display convention (e.g. the options-chain API) should
-            # divide by 100 themselves at their own boundary.
-            'Vega': vega,
-            'Theta_Daily': theta_annual / TRADING_DAYS_PER_YEAR,
-            'Rho': rho,
+            'Price': greeks['price'],
+            'Delta': greeks['delta'],
+            'Gamma': greeks['gamma'],
+            'Vega': greeks['vega_raw'],
+            'Theta_Daily': greeks['theta_daily'],
+            'Rho': greeks['rho'],
             'ChanceOfProfit': chance_of_profit
         }
 
@@ -251,6 +206,9 @@ class OptionsPricingRecommender:
             # truth is "not computed for this strategy" (CONSTRAINT #4).
             "Realizable_Daily_Theta": float("nan"),
         }
+
+        if not math.isfinite(current_iv) or not math.isfinite(true_ivr):
+            return directive
 
         # Defined Risk Parameters (Standard Target Deltas). ``delta_target_scale``
         # (default 1.0 → byte-identical) widens/narrows the short/long leg deltas;
