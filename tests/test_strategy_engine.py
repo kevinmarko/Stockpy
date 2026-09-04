@@ -235,8 +235,8 @@ class TestSizingWiring:
 
     def test_neutral_multiplier_when_hmm_absent(self):
         out = self._run(hmm=None)
-        assert out["Regime_Multiplier"] == pytest.approx(0.5)
-        assert out["Kelly_Target_Post_Regime"] == pytest.approx(out["Kelly_Target_Pre_Regime"] * 0.5)
+        assert out["Regime_Multiplier"] == pytest.approx(1.0)
+        assert out["Kelly_Target_Post_Regime"] == pytest.approx(out["Kelly_Target_Pre_Regime"])
 
     def test_regime_multiplier_scales_kelly_target(self):
         """hmm_risk_on_probability=0.5 -> Regime_Multiplier==0.5, Post = Pre * 0.5."""

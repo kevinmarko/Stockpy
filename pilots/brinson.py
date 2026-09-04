@@ -232,9 +232,13 @@ def validate_brinson_fachler_rows(rows: List[Dict[str, Any]]) -> List[str]:
     p_sum = sum(_coerce_float(r.get("portfolio_weight_pct")) for r in valid_rows)
     b_sum = sum(_coerce_float(r.get("benchmark_weight_pct")) for r in valid_rows)
 
-    if abs(p_sum - 100.0) > 1.0:
+    # NaN (an unparseable/invalid weight value, per _coerce_float's CONSTRAINT
+    # #4 fallback) must not silently pass this check -- `nan > 1.0` and
+    # `nan == 0.0` are both False in Python, so an exact `abs(...) > 1.0`
+    # comparison alone would let a malformed row through undetected.
+    if math.isnan(p_sum) or abs(p_sum - 100.0) > 1.0:
         warnings.append(f"Portfolio weights sum to {p_sum:.2f}% (expected ~100%).")
-    if abs(b_sum - 100.0) > 1.0:
+    if math.isnan(b_sum) or abs(b_sum - 100.0) > 1.0:
         warnings.append(f"Benchmark weights sum to {b_sum:.2f}% (expected ~100%).")
 
     if any(_coerce_float(r.get("portfolio_weight_pct")) < 0 for r in valid_rows):

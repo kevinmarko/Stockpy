@@ -87,19 +87,21 @@ async def analyze_sentiment(ticker: str) -> Dict[str, Any]:
                 result = data.model_dump() if hasattr(data, "model_dump") else data.dict()
                 
                 # Compute credibility via SSOT
+                from datetime import datetime, timezone
                 from signals.credibility import score_documents, SentimentDocument
                 from signals.news_catalyst import fetch_company_headlines
-                import time
-                
+
                 news_items = fetch_company_headlines(ticker, lookback_days=7)
                 if news_items:
                     docs = []
                     for item in news_items:
                         docs.append(SentimentDocument(
-                            id=str(item.get("id", time.time())),
-                            author=str(item.get("author", "unknown")),
-                            text=str(item.get("headline", "")),
-                            timestamp=float(item.get("datetime", 0.0))
+                            as_of=datetime.fromtimestamp(float(item.get("datetime", 0.0)), tz=timezone.utc),
+                            symbol=ticker,
+                            source_name=str(item.get("_provider", "unknown")),
+                            text_content=str(item.get("headline", "")),
+                            raw_sentiment_score=0.0,
+                            author_handle=item.get("author"),
                         ))
                     cred_scores = score_documents(docs)
                     avg_cred = sum(c.S_total for c in cred_scores) / len(cred_scores) if cred_scores else 0.5

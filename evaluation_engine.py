@@ -213,7 +213,7 @@ class EvaluationEngine:
         """
         try:
             if pd.isna(entry_price) or entry_price <= 0:
-                return float('nan'), 0.0
+                return float('nan'), float('nan')
 
             if position_type == 'long':
                 # MAE: how far price fell below entry — positive loss magnitude
@@ -233,7 +233,7 @@ class EvaluationEngine:
             return round(mae, 4), round(mfe, 4)
         except Exception as e:
             logger.error(f"Error calculating excursion metrics: {e}")
-            return float('nan'), 0.0
+            return float('nan'), float('nan')
 
     def calculate_realized_slippage(self, entry_price: float, expected_price: float) -> float:
         """

@@ -54,8 +54,8 @@ class RegimeMultiplierSignal(SignalModule):
         if hmm_p is None:
             return SignalOutput(
                 score=0.0,
-                confidence=0.5,
-                explanation="DETAIL: regime_multiplier: HMM unavailable this cycle; sizing multiplier=0.5 (neutral).",
+                confidence=1.0,
+                explanation="DETAIL: regime_multiplier: HMM unavailable this cycle; sizing multiplier=1.0 (neutral).",
             )
 
         multiplier = float(hmm_p)

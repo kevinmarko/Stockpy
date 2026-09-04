@@ -233,7 +233,6 @@ def calculate_true_ivr(ticker: str, current_iv: float, as_of_date: Any, store: I
 def get_vrp(ticker: str, current_iv: float, garch_vol: float) -> float:
     """
     Calculates Volatility Risk Premium: implied volatility minus realized forecast volatility.
+    Delegates to the canonical pilots.volatility_surface implementation (SSOT).
     """
-    if math.isnan(current_iv) or math.isnan(garch_vol):
-        return float('nan')
-    return float(current_iv - garch_vol)
+    return _get_vrp(ticker, current_iv, garch_vol)

@@ -105,8 +105,10 @@ class AdvancedResearchEngine:
         """
         try:
             # --- FIX: Handle missing data gracefully without defaulting to 0 immediately ---
-            if not inst_own_raw or not quarterly_change_raw or pd.isna(inst_own_raw) or pd.isna(quarterly_change_raw):
-                return 0.0000
+            # `is None`/`pd.isna(...)`, NOT a falsy check -- a real 0.0 reading
+            # (e.g. 0% institutional ownership) is valid data, not missing data.
+            if inst_own_raw is None or quarterly_change_raw is None or pd.isna(inst_own_raw) or pd.isna(quarterly_change_raw):
+                return float('nan')
                 
             # Strip percentage formatting and convert to decimal
             inst_own = float(str(inst_own_raw).replace("%", "").strip())
@@ -185,7 +187,7 @@ class AdvancedResearchEngine:
         Calculated as the linear slope of the Relative Strength ratio over 20 days.
         """
         if asset_closes is None or spy_closes is None or len(asset_closes) < 30 or len(spy_closes) < 30:
-            return 0.0000
+            return float('nan')
             
         try:
             # Standardize timelines and calculate ratio

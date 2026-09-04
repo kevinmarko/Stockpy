@@ -327,13 +327,13 @@ class TestExcursionMetrics:
         eng = _engine()
         result = eng.calculate_excursion_metrics(0.0, 110.0, 95.0, "long")
         assert math.isnan(result[0])
-        assert result[1] == 0.0
+        assert math.isnan(result[1])
 
     def test_invalid_entry_price_nan(self):
         eng = _engine()
         result = eng.calculate_excursion_metrics(float("nan"), 110.0, 95.0, "long")
         assert math.isnan(result[0])
-        assert result[1] == 0.0
+        assert math.isnan(result[1])
 
     def test_no_adverse_move_clamps_mae_to_zero(self):
         eng = _engine()

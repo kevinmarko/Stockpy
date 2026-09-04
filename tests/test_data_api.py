@@ -497,7 +497,8 @@ def test_get_universe_reports_default_tickers_as_fallback_when_no_watchlist_or_d
     with mock.patch.object(settings, "STATE_API_TOKEN", None), \
          mock.patch.object(settings, "DEFAULT_TICKERS", ["AAPL", "MSFT", "IBM"]), \
          mock.patch("data.portfolio_sync.load_env_watchlist", return_value=[]), \
-         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}):
+         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}), \
+         mock.patch("api.data_api.fetch_account_snapshot", side_effect=RuntimeError("no cache")):
         resp = client.get("/data/universe")
     assert resp.status_code == 200
     body = resp.json()
@@ -520,7 +521,8 @@ def test_get_universe_reports_default_tickers_not_effective_when_watchlist_prese
     with mock.patch.object(settings, "STATE_API_TOKEN", None), \
          mock.patch.object(settings, "DEFAULT_TICKERS", wide_default), \
          mock.patch("data.portfolio_sync.load_env_watchlist", return_value=narrow_watchlist), \
-         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}):
+         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}), \
+         mock.patch("api.data_api.fetch_account_snapshot", side_effect=RuntimeError("no cache")):
         resp = client.get("/data/universe")
     assert resp.status_code == 200
     body = resp.json()
@@ -531,6 +533,35 @@ def test_get_universe_reports_default_tickers_not_effective_when_watchlist_prese
     assert "NOT the effective per-cycle universe" in body["note"]
 
 
+def test_get_universe_held_positions_suppress_the_fallback():
+    """Held positions alone (no watchlist/discovery) must ALSO suppress the
+    DEFAULT_TICKERS fallback, matching compute_tracked_universe()'s real
+    held ∪ watchlist ∪ discovered semantics -- an operator with open
+    positions and a wide DEFAULT_TICKERS list must not be told
+    DEFAULT_TICKERS is the effective universe when it isn't."""
+    from data.robinhood_portfolio import AccountSnapshot
+    from datetime import datetime, timezone
+
+    snapshot = AccountSnapshot(
+        positions={"AAPL": mock.Mock(), "MSFT": mock.Mock()},
+        buying_power=0.0, total_equity=0.0, total_dividends=0.0,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    wide_default = [f"SYM{i}" for i in range(50)]
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "DEFAULT_TICKERS", wide_default), \
+         mock.patch("data.portfolio_sync.load_env_watchlist", return_value=[]), \
+         mock.patch("pilots.discovery.discovery", return_value={"candidates": []}), \
+         mock.patch("api.data_api.fetch_account_snapshot", return_value=snapshot):
+        resp = client.get("/data/universe")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 50
+    assert body["default_tickers_is_fallback"] is False
+    assert sorted(body["effective_symbols"]) == ["AAPL", "MSFT"]
+    assert "NOT the effective per-cycle universe" in body["note"]
+
+
 def test_get_universe_effective_universe_includes_discovery_candidates():
     with mock.patch.object(settings, "STATE_API_TOKEN", None), \
          mock.patch.object(settings, "DEFAULT_TICKERS", ["SPY"]), \
@@ -538,7 +569,8 @@ def test_get_universe_effective_universe_includes_discovery_candidates():
          mock.patch(
              "pilots.discovery.discovery",
              return_value={"candidates": [{"symbol": "nvda"}, {"symbol": "tsla"}]},
-         ):
+         ), \
+         mock.patch("api.data_api.fetch_account_snapshot", side_effect=RuntimeError("no cache")):
         resp = client.get("/data/universe")
     assert resp.status_code == 200
     body = resp.json()
@@ -547,12 +579,14 @@ def test_get_universe_effective_universe_includes_discovery_candidates():
 
 
 def test_get_universe_diagnostic_reads_never_500_on_failure():
-    """A watchlist-read or discovery-read failure must degrade the new
-    diagnostic fields, never crash the whole endpoint (CONSTRAINT #6)."""
+    """A watchlist-read, discovery-read, or held-positions-read failure must
+    degrade the new diagnostic fields, never crash the whole endpoint
+    (CONSTRAINT #6)."""
     with mock.patch.object(settings, "STATE_API_TOKEN", None), \
          mock.patch.object(settings, "DEFAULT_TICKERS", ["AAPL"]), \
          mock.patch("data.portfolio_sync.load_env_watchlist", side_effect=RuntimeError("boom")), \
-         mock.patch("pilots.discovery.discovery", side_effect=RuntimeError("boom")):
+         mock.patch("pilots.discovery.discovery", side_effect=RuntimeError("boom")), \
+         mock.patch("api.data_api.fetch_account_snapshot", side_effect=RuntimeError("boom")):
         resp = client.get("/data/universe")
     assert resp.status_code == 200
     body = resp.json()

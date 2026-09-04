@@ -84,14 +84,18 @@ class OptionsPricingRecommender:
         if option_type.lower() not in ['call', 'put']:
             raise ValueError("option_type must be 'call' or 'put'")
 
-        # Prevent division by zero errors for expired options
+        # Prevent division by zero errors for expired options. Delta collapses
+        # to the ITM indicator (matching pilots/options_risk.py's canonical
+        # 0DTE/degenerate-sigma branches) rather than being hardcoded to 0.0.
         if T <= 0:
+            delta = 1.0 if (option_type.lower() == 'call' and self.S > K) else (-1.0 if (option_type.lower() == 'put' and self.S < K) else 0.0)
             return {'Price': max(0.0, self.S - K) if option_type.lower() == 'call' else max(0.0, K - self.S),
-                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
+                    'Delta': delta, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
 
         if sigma <= 0 or np.isnan(sigma):
+            delta = 1.0 if (option_type.lower() == 'call' and self.S > K) else (-1.0 if (option_type.lower() == 'put' and self.S < K) else 0.0)
             return {'Price': max(0.0, self.S - K) if option_type.lower() == 'call' else max(0.0, K - self.S),
-                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
+                    'Delta': delta, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
 
         greeks = calculate_black_scholes_greeks(spot=self.S, strike=K, t_years=T, sigma=sigma, option_type=option_type.lower(), r=self.r)
         
