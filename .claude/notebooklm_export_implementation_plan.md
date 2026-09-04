@@ -36,11 +36,6 @@ We can add this new script to the `TARGETS` list so it can be run as a Backgroun
 ### Automated Tests
 - Run `make verify` and test the script execution using `uv run python scripts/export_notebooklm.py`.
 - Assert that the output Markdown file exists in `output/notebooklm_source.md`.
-- `tests/test_export_notebooklm.py` — happy path, per-section degraded paths, and honest-zero-vs-N/A coverage.
 
 ### Manual Verification
 - Manually review the generated `output/notebooklm_source.md` to ensure it formats nulls/NaNs correctly as "N/A" and reads as a clean document.
-
-## Documentation Update Step
-
-Checked `docs/README.md`, `docs/architecture/webapp-and-gui.md`, `docs/HOW_TO_GUIDE.md`, `CLAUDE.md`, and `AGENTS.md`. **No doc file needs a change for this script.** Reasoning: comparably-sized, single-purpose `scripts/*.py` entry points already in `cli_introspect/targets.py` — `daily_briefing.py`, `track_record_status.py`, `repair_price_bars_adjustment.py` — have no dedicated documentation anywhere in `docs/architecture/`; they're only named in passing where directly relevant to another writeup. This script (no new setting, no behavior change to an existing subsystem, no bug fix) fits that same no-dedicated-bullet tier. `docs/README.md` only indexes doc files, not individual scripts, so it's unaffected either way. This conclusion was reached and stated explicitly per CLAUDE.md's requirement that every Implementation Plan include this step even when the answer is "nothing to change."
