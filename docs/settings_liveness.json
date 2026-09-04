@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 337,
-    "no_op": 0,
-    "restart_required": 108,
-    "total": 445
+    "live_safe": 360,
+    "no_op": 5,
+    "restart_required": 96,
+    "total": 461
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3207,
+      "line": 3166,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4313,
+      "line": 4272,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4418,
+      "line": 4377,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -83,35 +83,35 @@
     },
     {
       "expr": "getattr(settings, tkey, False)",
-      "file": "gui/panels/ai_control_center.py",
+      "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
       "line": 164,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, sel_key, 'none')",
-      "file": "gui/panels/ai_control_center.py",
+      "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
       "line": 189,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, fallback)",
-      "file": "gui/panels/settings_manager.py",
+      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
       "line": 190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, '')",
-      "file": "gui/panels/settings_manager.py",
+      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
       "line": 207,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, [])",
-      "file": "gui/panels/settings_manager.py",
+      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
       "line": 275,
       "resolved_by_factory": null,
       "rules": []
@@ -126,19 +126,19 @@
     {
       "expr": "getattr(settings_module.settings, key, None)",
       "file": "runtime_flags_writer.py",
-      "line": 774,
+      "line": 773,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings_module.settings, key, None)",
       "file": "runtime_flags_writer.py",
-      "line": 783,
+      "line": 782,
       "resolved_by_factory": null,
       "rules": []
     }
   ],
-  "files_scanned": 438,
+  "files_scanned": 448,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -149,8 +149,16 @@
     "AI_CHAT_DEFAULT_PROVIDER",
     "AI_CHAT_TIMEOUT_SECONDS",
     "AI_GENERATION_API_ENABLED",
+    "ALERT_CHANNELS",
     "ALERT_DEDUP_WINDOW_SECONDS",
+    "ALERT_EMAIL_FROM",
+    "ALERT_EMAIL_SMTP_HOST",
+    "ALERT_EMAIL_SMTP_PASSWORD",
+    "ALERT_EMAIL_SMTP_PORT",
+    "ALERT_EMAIL_TO",
     "ALERT_FILE_PATH",
+    "ALERT_NTFY_TOPIC",
+    "ALERT_SLACK_WEBHOOK_URL",
     "ALERT_SMTP_HOST",
     "ALERT_SMTP_PASSWORD",
     "ALERT_SMTP_PORT",
@@ -274,7 +282,6 @@
     "FORECAST_SKILL_WEIGHTING_ENABLED",
     "FORECAST_SKILL_WINDOW_DAYS",
     "FORECAST_USE_GARCH_SIGMA",
-    "FRED_API_KEY",
     "FRED_KEY_ROTATED_DATE",
     "FRED_REQUEST_TIMEOUT_SECONDS",
     "FUNDAMENTALS_REFRESH_DAYS",
@@ -290,6 +297,13 @@
     "GEMINI_LIVE_VOICE_NAME",
     "GENERAL_SETTINGS_WRITES_ENABLED",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
+    "GOOGLE_TRENDS_COOLDOWN_SECONDS",
+    "GOOGLE_TRENDS_COOLDOWN_THRESHOLD",
+    "GOOGLE_TRENDS_ENABLED",
+    "GOOGLE_TRENDS_MAX_RETRIES",
+    "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE",
+    "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS",
+    "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
     "GRAVITY_AI_RUNNER_ENABLED",
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "GRAVITY_REQUIRE_NATIVE",
@@ -343,6 +357,7 @@
     "NEWS_HISTORY_CAPTURE_ENABLED",
     "NEWS_LOOKBACK_DAYS",
     "NTFY_DASHBOARD_URL",
+    "OFI_SHIELD_ENABLED",
     "OPAL_RESEARCH_ENABLED",
     "OPAL_RESEARCH_MODEL",
     "OPAL_RESEARCH_PROVIDER",
@@ -391,10 +406,13 @@
     "PROMPT_REGISTRY_ENABLED",
     "PROMPT_REGISTRY_PINS",
     "PROMPT_REGISTRY_PUBLISH_TOKEN",
+    "PROMPT_REGISTRY_SIGNING_KEY",
     "PROMPT_REGISTRY_TOKEN",
     "PROMPT_REGISTRY_URL",
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "PYTRENDS_ENABLED",
+    "QDRANT_COLLECTION",
+    "QDRANT_URL",
     "QUEUE_SOURCE_MAX_AGE_SECONDS",
     "RAG_EMBEDDING_PROVIDER",
     "RAG_INDEX_LOOKBACK_DAYS",
@@ -453,6 +471,10 @@
     "SENTIMENT_LLM_VERIFICATION_PROVIDER",
     "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
     "SENTIMENT_SOCIAL_BLEND_WEIGHT",
+    "SENTRY_DSN",
+    "SENTRY_ENABLED",
+    "SENTRY_ENVIRONMENT",
+    "SENTRY_TRACES_SAMPLE_RATE",
     "SIZING_CAP_ALERT_ENABLED",
     "SIZING_CAP_ALERT_THRESHOLD_PCT",
     "SIZING_CAP_AUDIT_ENABLED",
@@ -474,24 +496,31 @@
     "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
+    "WATCHLIST",
     "WATCH_RULES_FILE",
     "WIKIPEDIA_ATTENTION_ENABLED",
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
     "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
-  "no_op": [],
+  "no_op": [
+    "GOOGLE_TRENDS_OVERLAP_DAYS",
+    "GOOGLE_TRENDS_WINDOW_DAYS",
+    "OPTIONS_EARNINGS_CRUSH_ENABLED",
+    "PROMPT_MAX_CHARS",
+    "SENTIMENT_PIT_MIN_MONTHS"
+  ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 883,
+    "attr": 934,
     "factory_param": 4,
-    "getattr_const": 374,
-    "os_environ": 25
+    "getattr_const": 381,
+    "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 262,
+    "attr": 282,
     "factory_param": 4,
-    "getattr_const": 211,
-    "os_environ": 18
+    "getattr_const": 217,
+    "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -502,95 +531,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:249",
-        "via": []
-      }
-    ],
-    "ALERT_CHANNELS": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:131",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_FROM": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:63",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_SMTP_HOST": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:60",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_SMTP_PASSWORD": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:62",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_SMTP_PORT": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:61",
-        "via": []
-      }
-    ],
-    "ALERT_EMAIL_TO": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:64",
-        "via": []
-      }
-    ],
-    "ALERT_NTFY_TOPIC": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:34",
-        "via": []
-      }
-    ],
-    "ALERT_SLACK_WEBHOOK_URL": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting_mcp/notifier.py:94",
+        "site": "legacy/streamlit_command_center/app.py:251",
         "via": []
       }
     ],
@@ -612,9 +553,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1984",
+        "site": "data/market_data.py:1977",
         "via": [
-          1889
+          1882
         ]
       },
       {
@@ -645,9 +586,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:262",
+        "site": "data/market_data.py:261",
         "via": [
-          245
+          244
         ]
       },
       {
@@ -667,9 +608,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1985",
+        "site": "data/market_data.py:1978",
         "via": [
-          1889
+          1882
         ]
       },
       {
@@ -760,7 +701,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:330",
+        "site": "api/pilots_api.py:331",
         "via": []
       },
       {
@@ -800,7 +741,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:146",
+        "site": "legacy/streamlit_command_center/app.py:148",
         "via": []
       },
       {
@@ -810,7 +751,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/__init__.py:96",
+        "site": "legacy/streamlit_command_center/panels/__init__.py:96",
         "via": []
       },
       {
@@ -820,7 +761,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/ai_insights.py:36",
+        "site": "legacy/streamlit_command_center/panels/ai_insights.py:36",
         "via": []
       },
       {
@@ -830,7 +771,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:153",
+        "site": "legacy/streamlit_command_center/panels/analytics.py:153",
         "via": []
       },
       {
@@ -840,7 +781,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:212",
+        "site": "legacy/streamlit_command_center/panels/analytics.py:212",
         "via": []
       },
       {
@@ -850,7 +791,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:247",
+        "site": "legacy/streamlit_command_center/panels/analytics.py:247",
         "via": []
       },
       {
@@ -860,7 +801,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics_signals.py:104",
+        "site": "legacy/streamlit_command_center/panels/analytics_signals.py:104",
         "via": []
       },
       {
@@ -870,7 +811,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/gravity_audit.py:50",
+        "site": "legacy/streamlit_command_center/panels/gravity_audit.py:50",
         "via": []
       },
       {
@@ -880,7 +821,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/gravity_audit.py:73",
+        "site": "legacy/streamlit_command_center/panels/gravity_audit.py:73",
         "via": []
       },
       {
@@ -890,7 +831,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/live_inventory.py:51",
+        "site": "legacy/streamlit_command_center/panels/live_inventory.py:51",
         "via": []
       },
       {
@@ -900,7 +841,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/market_data.py:51",
+        "site": "legacy/streamlit_command_center/panels/market_data.py:51",
         "via": []
       },
       {
@@ -910,7 +851,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/observability.py:861",
+        "site": "legacy/streamlit_command_center/panels/observability.py:861",
         "via": []
       },
       {
@@ -920,7 +861,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/options_matrix.py:75",
+        "site": "legacy/streamlit_command_center/panels/options_matrix.py:75",
         "via": []
       },
       {
@@ -930,7 +871,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/pairs.py:147",
+        "site": "legacy/streamlit_command_center/panels/pairs.py:147",
         "via": []
       }
     ],
@@ -987,6 +928,15 @@
           "cross_module_init_helper"
         ],
         "site": "data/sector_correlation_store.py:64",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:42",
         "via": []
       },
       {
@@ -1187,6 +1137,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/sector_correlation_store.py:70",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:48",
         "via": []
       },
       {
@@ -1449,6 +1417,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/trends_store.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/trends_store.py:48",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "desktop/run_history_store.py:67",
         "via": []
       },
@@ -1606,7 +1592,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:151",
+        "site": "legacy/streamlit_command_center/app.py:153",
         "via": []
       },
       {
@@ -1615,7 +1601,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:153",
+        "site": "legacy/streamlit_command_center/app.py:155",
         "via": []
       }
     ],
@@ -1626,7 +1612,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:145",
+        "site": "legacy/streamlit_command_center/app.py:147",
         "via": []
       }
     ],
@@ -1637,16 +1623,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4795",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:538",
+        "site": "api/pilots_api.py:4754",
         "via": []
       }
     ],
@@ -1657,16 +1634,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4794",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:537",
+        "site": "api/pilots_api.py:4753",
         "via": []
       }
     ],
@@ -1677,7 +1645,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4964",
+        "site": "api/pilots_api.py:4923",
         "via": []
       },
       {
@@ -1686,46 +1654,52 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:384",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:914",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "gui/panels/settings_manager.py:126",
+        "site": "legacy/streamlit_command_center/panels/settings_manager.py:126",
         "via": []
       }
     ],
     "FINNHUB_RATE_LIMIT_PER_MIN": [
       {
         "discarded": false,
-        "form": "os_environ",
+        "form": "attr",
         "rules": [
-          "os_environ"
+          "init_body"
         ],
-        "site": "data/market_data.py:1560",
+        "site": "data/market_data.py:1554",
         "via": []
       },
       {
         "discarded": false,
-        "form": "os_environ",
+        "form": "attr",
         "rules": [
-          "os_environ"
+          "method_self_assign"
         ],
-        "site": "data/market_data.py:1594",
+        "site": "data/market_data.py:1587",
         "via": []
+      }
+    ],
+    "FIX_MOCK_VENUES_ENABLED": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_body"
+        ],
+        "site": "execution/fix_gateway.py:2326",
+        "via": []
+      }
+    ],
+    "FIX_VENUES_CONFIG_PATH": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "indirect_init_helper_d1"
+        ],
+        "site": "execution/fix_gateway.py:2340",
+        "via": [
+          2336
+        ]
       }
     ],
     "FMP_API_KEY": [
@@ -1735,7 +1709,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1901",
+        "site": "data/market_data.py:1894",
         "via": []
       },
       {
@@ -1744,9 +1718,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1938",
+        "site": "data/market_data.py:1931",
         "via": [
-          1876
+          1869
         ]
       }
     ],
@@ -1757,9 +1731,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1949",
+        "site": "data/market_data.py:1942",
         "via": [
-          1876
+          1869
         ]
       }
     ],
@@ -1770,7 +1744,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4936",
+        "site": "api/pilots_api.py:4895",
         "via": []
       },
       {
@@ -1779,16 +1753,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "env_io.py:443",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "gui/panels/settings_manager.py:162",
+        "site": "legacy/streamlit_command_center/panels/settings_manager.py:162",
         "via": []
       }
     ],
@@ -1812,7 +1777,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1012",
+        "site": "data/market_data.py:1011",
         "via": []
       }
     ],
@@ -1823,7 +1788,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:640",
+        "site": "api/pilots_api.py:641",
         "via": []
       }
     ],
@@ -1981,32 +1946,25 @@
         "via": []
       }
     ],
-    "FUNDAMENTALS_CACHE_TTL_SECONDS": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1554",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1589",
-        "via": []
-      },
+    "FRED_API_KEY": [
       {
         "discarded": false,
         "form": "attr",
         "rules": [
-          "init_self_assign"
+          "method_self_assign"
         ],
-        "site": "data/market_data.py:1873",
+        "site": "scripts/export_notebooklm.py:55",
+        "via": []
+      }
+    ],
+    "FUNDAMENTALS_CACHE_TTL_SECONDS": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_body"
+        ],
+        "site": "data/market_data.py:1552",
         "via": []
       },
       {
@@ -2015,7 +1973,25 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2463",
+        "site": "data/market_data.py:1582",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "data/market_data.py:1866",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "method_self_assign"
+        ],
+        "site": "data/market_data.py:2456",
         "via": []
       }
     ],
@@ -2026,34 +2002,16 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1437",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1557",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data.py:1590",
+        "site": "data/market_data.py:1436",
         "via": []
       },
       {
         "discarded": false,
         "form": "attr",
         "rules": [
-          "init_self_assign"
+          "init_body"
         ],
-        "site": "data/market_data.py:1874",
+        "site": "data/market_data.py:1553",
         "via": []
       },
       {
@@ -2062,7 +2020,25 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2464",
+        "site": "data/market_data.py:1583",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "data/market_data.py:1867",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "method_self_assign"
+        ],
+        "site": "data/market_data.py:2457",
         "via": []
       }
     ],
@@ -2073,7 +2049,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1899",
+        "site": "data/market_data.py:1892",
         "via": []
       }
     ],
@@ -2226,15 +2202,6 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:150",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
         "site": "ml/data/store.py:27",
         "via": []
       },
@@ -2280,18 +2247,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "universe_engine.py:40",
-        "via": []
-      }
-    ],
-    "LOG_LEVEL": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "alerting.py:120",
+        "site": "shared/orchestrator_runner.py:150",
         "via": []
       },
       {
@@ -2300,7 +2256,18 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:83",
+        "site": "universe_engine.py:40",
+        "via": []
+      }
+    ],
+    "LOG_LEVEL": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "legacy/streamlit_command_center/app.py:85",
         "via": []
       }
     ],
@@ -2311,7 +2278,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1866",
+        "site": "data/market_data.py:1859",
         "via": []
       },
       {
@@ -2320,7 +2287,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2252",
+        "site": "data/market_data.py:2245",
         "via": []
       }
     ],
@@ -2331,9 +2298,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1929",
+        "site": "data/market_data.py:1922",
         "via": [
-          1876
+          1869
         ]
       }
     ],
@@ -2344,7 +2311,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1861",
+        "site": "data/market_data.py:1854",
         "via": []
       }
     ],
@@ -2464,6 +2431,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/trends_store.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "desktop/run_history_store.py:67",
         "via": []
       },
@@ -2529,7 +2505,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6077",
+        "site": "investyo_mcp_server.py:6054",
         "via": []
       }
     ],
@@ -2549,7 +2525,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6029",
+        "site": "investyo_mcp_server.py:6006",
         "via": []
       }
     ],
@@ -2589,7 +2565,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6037",
+        "site": "investyo_mcp_server.py:6014",
         "via": []
       }
     ],
@@ -2645,17 +2621,6 @@
           "module_level"
         ],
         "site": "ml/drl_market_maker.py:109",
-        "via": []
-      }
-    ],
-    "OPTIONS_EARNINGS_CRUSH_ENABLED": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:720",
         "via": []
       }
     ],
@@ -2721,7 +2686,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "desktop/orchestrator_daemon.py:607",
+        "site": "desktop/orchestrator_daemon.py:610",
         "via": []
       }
     ],
@@ -2757,15 +2722,6 @@
         "discarded": false,
         "form": "attr",
         "rules": [
-          "module_level"
-        ],
-        "site": "desktop/ui_server.py:40",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
           "init_self_assign"
         ],
         "site": "execution/dynamic_circuit_breaker.py:314",
@@ -2795,7 +2751,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/app.py:144",
+        "site": "legacy/streamlit_command_center/app.py:146",
         "via": []
       },
       {
@@ -2804,124 +2760,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/decision_log.py:47",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:81",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:87",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:90",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:97",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:102",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:107",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:113",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:119",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:125",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:130",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:139",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:145",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:1104",
+        "site": "legacy/streamlit_command_center/desktop_shell/ui_server.py:44",
         "via": []
       },
       {
@@ -2959,6 +2798,132 @@
         ],
         "site": "reporting/progress.py:239",
         "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/decision_log.py:47",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:81",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:87",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:90",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:97",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:102",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:107",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:119",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:125",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:130",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:139",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:145",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "shared/orchestrator_runner.py:1104",
+        "via": []
       }
     ],
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": [
@@ -2972,17 +2937,6 @@
         "via": []
       }
     ],
-    "PROMPT_MAX_CHARS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:620",
-        "via": []
-      }
-    ],
     "PROMPT_REGISTRY_REFRESH_SECONDS": [
       {
         "discarded": false,
@@ -2990,49 +2944,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11072",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:621",
-        "via": []
-      }
-    ],
-    "PROMPT_REGISTRY_SIGNING_KEY": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "scripts/build_local_prompt_registry.py:150",
-        "via": []
-      }
-    ],
-    "QDRANT_COLLECTION": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "agents/rag_orchestrator.py:142",
-        "via": []
-      }
-    ],
-    "QDRANT_URL": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "agents/rag_orchestrator.py:141",
+        "site": "Gravity AI Review Suite.py:11079",
         "via": []
       }
     ],
@@ -3159,17 +3071,6 @@
         "via": []
       }
     ],
-    "SENTIMENT_PIT_MIN_MONTHS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "env_io.py:507",
-        "via": []
-      }
-    ],
     "SENTIMENT_SOURCES": [
       {
         "discarded": false,
@@ -3221,7 +3122,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:635",
+        "site": "api/pilots_api.py:636",
         "via": []
       },
       {
@@ -3231,53 +3132,6 @@
           "module_level"
         ],
         "site": "api/state_api.py:94",
-        "via": []
-      }
-    ],
-    "WATCHLIST": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/market_data_ws.py:255",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "data/portfolio_sync.py:642",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "gui/panels/_shared.py:162",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "pilots/watchlist_writer.py:147",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "pilots/watchlist_writer.py:307",
         "via": []
       }
     ]
@@ -3291,26 +3145,23 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 85,
+    "cross_module_init_helper": 91,
     "decorator_arg": 13,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 16,
-    "indirect_init_helper_d1": 13,
-    "init_body": 8,
+    "dynamic_name_literal_unattributable": 7,
+    "indirect_init_helper_d1": 14,
+    "init_body": 12,
     "init_self_assign": 51,
-    "method_self_assign": 4,
+    "method_self_assign": 8,
     "module_level": 79,
-    "os_environ": 25
+    "os_environ": 2
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
-    "OPTIONS_EARNINGS_CRUSH_ENABLED",
-    "PROMPT_MAX_CHARS",
-    "PROMPT_REGISTRY_REFRESH_SECONDS",
-    "SENTIMENT_PIT_MIN_MONTHS"
+    "PROMPT_REGISTRY_REFRESH_SECONDS"
   ],
   "status": "ok"
 }

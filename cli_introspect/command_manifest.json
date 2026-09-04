@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-04T12:22:56.953390+00:00",
+  "generated_at": "2026-09-04T14:37:56.007690+00:00",
   "command_count": 17,
   "dead_letters": [],
   "commands": [
@@ -119,29 +119,6 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": false
-        }
-      ],
-      "positionals": [],
-      "subcommands": []
-    },
-    {
-      "name": "app_shell.py",
-      "invocation": "python3 app_shell.py",
-      "aliases": [],
-      "description": "InvestYo native desktop supervisor (UI server + advisory engine loop).",
-      "options": [
-        {
-          "name": "--interval",
-          "aliases": [
-            "--interval"
-          ],
-          "description": "Advisory engine refresh cadence in seconds (default: 300).",
-          "default": 300,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": true
         }
       ],
       "positionals": [],
@@ -1061,6 +1038,15 @@
           "takes_value": true
         }
       ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "export_notebooklm.py",
+      "invocation": "python scripts/export_notebooklm.py",
+      "aliases": [],
+      "description": "Generate a NotebookLM export.",
+      "options": [],
       "positionals": [],
       "subcommands": []
     }
