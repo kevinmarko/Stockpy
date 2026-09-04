@@ -118,7 +118,7 @@ def _max_notional() -> float:
         from settings import settings
         return max(0.0, _f(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0)))
     except Exception:
-        return 0.0
+        return float('nan')
 
 
 def _build_risk_context(snapshot: Any, now: datetime, *, macro_dto: Optional[Any] = None) -> RiskContext:

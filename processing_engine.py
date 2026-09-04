@@ -46,13 +46,13 @@ class ProcessingEngine:
         """
         try:
             if eps is None or book_value is None or pd.isna(eps) or pd.isna(book_value):
-                return 0.0
+                return float('nan')
             if eps <= 0 or book_value <= 0:
-                return 0.0
+                return float('nan')
             return round(math.sqrt(22.5 * eps * book_value), 2)
         except Exception as e:
             logging.error(f"Graham Number error: {e}")
-            return 0.0
+            return float('nan')
 
     def calculate_gordon_fair_value(self, current_price: float, dividend_yield: float, div_growth_rate: float) -> float:
         """
@@ -61,7 +61,7 @@ class ProcessingEngine:
         """
         try:
             if dividend_yield is None or pd.isna(dividend_yield) or dividend_yield <= 0:
-                return 0.0
+                return float('nan')
             if div_growth_rate is None or pd.isna(div_growth_rate):
                 div_growth_rate = 0.0
 
@@ -73,7 +73,7 @@ class ProcessingEngine:
             g = min(div_growth_rate, self.required_return_rate - 0.01)
 
             if self.required_return_rate <= g:
-                return 0.0
+                return float('nan')
 
             annual_dividend = current_price * dividend_yield
             expected_dividend_next_year = annual_dividend * (1 + g)
@@ -82,7 +82,7 @@ class ProcessingEngine:
             return round(gordon_value, 2)
         except Exception as e:
             logging.error(f"Gordon Fair Value error: {e}")
-            return 0.0
+            return float('nan')
 
 
     # ==========================================================================

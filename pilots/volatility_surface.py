@@ -1382,3 +1382,25 @@ def get_volatility_surface_data(
         spot_price=spot_price,
         generate_parametric=True,
     )
+
+def get_vrp(ticker: str, current_iv: float, garch_vol: float) -> float:
+    return float(current_iv - garch_vol)
+
+def calculate_true_ivr(ticker: str, current_iv: float, as_of_date: Any, store: Any, lookback_days: int = 252) -> float:
+    import math
+    if math.isnan(current_iv) or current_iv <= 0:
+        return float('nan')
+        
+    history = store.get_historical_ivs(ticker, as_of_date, lookback_days)
+    if not history:
+        return float('nan')
+        
+    all_ivs = history + [current_iv]
+    min_iv = min(all_ivs)
+    max_iv = max(all_ivs)
+    
+    if max_iv == min_iv:
+        return 50.0
+        
+    ivr = (current_iv - min_iv) / (max_iv - min_iv) * 100.0
+    return float(max(0.0, min(100.0, ivr)))

@@ -213,7 +213,7 @@ class EvaluationEngine:
         """
         try:
             if pd.isna(entry_price) or entry_price <= 0:
-                return 0.0, 0.0
+                return float('nan'), 0.0
 
             if position_type == 'long':
                 # MAE: how far price fell below entry — positive loss magnitude
@@ -233,7 +233,7 @@ class EvaluationEngine:
             return round(mae, 4), round(mfe, 4)
         except Exception as e:
             logger.error(f"Error calculating excursion metrics: {e}")
-            return 0.0, 0.0
+            return float('nan'), 0.0
 
     def calculate_realized_slippage(self, entry_price: float, expected_price: float) -> float:
         """
@@ -243,14 +243,14 @@ class EvaluationEngine:
         """
         try:
             if pd.isna(entry_price) or pd.isna(expected_price) or expected_price <= 0:
-                return 0.0
+                return float('nan')
             
             # Positive slippage means we paid more than expected (drag on returns)
             slippage = (entry_price - expected_price) / expected_price
             return round(slippage, 4)
         except Exception as e:
             logger.error(f"Error calculating realized slippage: {e}")
-            return 0.0
+            return float('nan')
 
     def calculate_tail_dependency(self, var_95: float, beta: float) -> float:
         """
@@ -260,7 +260,7 @@ class EvaluationEngine:
         """
         try:
             if pd.isna(var_95) or pd.isna(beta):
-                return 0.0
+                return float('nan')
             
             # CoVaR Proxy: absolute VaR scaled by Beta. 
             # Negative Beta assets act as hedges, so we floor beta at 0.0 to represent 0 systemic tail drag.
@@ -268,7 +268,7 @@ class EvaluationEngine:
             return round(covar, 4)
         except Exception as e:
             logger.error(f"Error calculating tail dependency risk: {e}")
-            return 0.0
+            return float('nan')
 
     def calculate_brinson_fachler(self, portfolio_weights, benchmark_weights,
                                   portfolio_returns=None, benchmark_returns=None):
@@ -452,11 +452,11 @@ class EvaluationEngine:
         """
         try:
             if 'position_size' not in positions_df.columns or 'stop_loss_pct' not in positions_df.columns:
-                return 0.0
+                return float('nan')
 
             total_capital = positions_df['position_size'].sum()
             if total_capital == 0:
-                return 0.0
+                return float('nan')
 
             # Open Risk per position = Position Size * Stop Loss Penalty
             positions_df['open_risk'] = positions_df['position_size'] * positions_df['stop_loss_pct']
@@ -466,7 +466,7 @@ class EvaluationEngine:
             return round(portfolio_heat, 4)
         except Exception as e:
             logger.error(f"Error calculating portfolio heat: {e}")
-            return 0.0
+            return float('nan')
 
     def evaluate_portfolio(
         self,

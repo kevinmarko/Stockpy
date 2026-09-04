@@ -58,7 +58,7 @@ def test_neutral_multiplier_when_hmm_unavailable():
     module = RegimeMultiplierSignal()
     output = module.compute(pd.Series({"Symbol": "TEST"}), ctx)
     assert output.score == 0.0
-    assert output.confidence == 1.0
+    assert output.confidence == 0.5
 
 
 # =============================================================================

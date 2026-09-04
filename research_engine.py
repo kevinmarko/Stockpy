@@ -120,7 +120,7 @@ class AdvancedResearchEngine:
             velocity = change * (1.0 + inst_own)
             return round(velocity, 4) # Maintain granularity
         except Exception:
-            return 0.0000
+            return float('nan')
 
     # EXPLANATION: Estimate the payback period based on compounded dividend growth, handling scale mismatches.
     def calculate_dividend_payback_horizon(self, price: float, annual_div: float, dgr_5y: float) -> float:
@@ -197,7 +197,7 @@ class AdvancedResearchEngine:
             slope, _ = np.polyfit(x, y, 1)
             return round(float(slope * 1000), 4) # Scaling for readable spreadsheet formats
         except Exception:
-            return 0.0000
+            return float('nan')
 
     # EXPLANATION: Calculate average execution slippage in basis points, returning a float directly instead of a dictionary.
     # Cleans formatting like dollar signs and commas, and matches Trans Code case-insensitively.

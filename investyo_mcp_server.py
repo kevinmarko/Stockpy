@@ -5936,18 +5936,7 @@ def tune_strategy_parameters(
     import json
 
     # Sensitivity response modeling
-    base_sharpe = 1.35
-    sharpe_adj = 0.0
-    if 20 <= rsi_lower <= 30:
-        sharpe_adj += 0.08
-    if 70 <= rsi_upper <= 80:
-        sharpe_adj += 0.05
-    if 40 <= sma_window <= 60:
-        sharpe_adj += 0.06
-    if 3.0 <= stop_loss <= 7.0:
-        sharpe_adj += 0.04
-
-    sim_sharpe = round(base_sharpe + sharpe_adj, 2)
+    raise RuntimeError("Constraint #4: Cannot fabricate parameters for tune_strategy_parameters. Actual backtest required.")
     sim_max_dd = round(max(8.0, 15.0 - (stop_loss * 0.4)), 1)
     win_rate = round(60.0 + (rsi_lower * 0.2), 1)
 

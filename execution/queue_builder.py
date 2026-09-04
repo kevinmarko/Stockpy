@@ -141,10 +141,10 @@ def _max_notional() -> float:
         from settings import settings
         return max(0.0, _f(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0)))
     except Exception:
-        return 0.0
+        return float('nan')
 
 
-def _limit_buffer_bps() -> int:
+def _limit_buffer_bps() -> float:
     """Return the configured limit-order buffer in basis points (>=0).
 
     0 (default) → MARKET orders, byte-identical to the legacy behaviour.
@@ -156,7 +156,7 @@ def _limit_buffer_bps() -> int:
         from settings import settings
         return max(0, int(_f(getattr(settings, "ROBINHOOD_LIMIT_BUFFER_BPS", 0))))
     except Exception:
-        return 0
+        return float('nan')
 
 
 def _build_risk_context(snapshot: Any, now: datetime, *, macro_dto: Optional[Any] = None) -> RiskContext:

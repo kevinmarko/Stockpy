@@ -102,7 +102,7 @@ module, and now documents this repo's actual 3 separate alert systems
 instead of 1 invented one). YAML frontmatter validated to parse cleanly on
 all 5.
 
-## Phase 4: Execution boundary (`broker_live_execution_mcp.py`, was `robinhood_execution_mcp.py`)
+## Phase 4: Execution boundary (`broker_live_execution_mcp.py`, was `robinhood_execution_mcp.py`) — SHIPPED
 
 Renamed from `robinhood_execution_mcp.py` — despite the old name, this file
 places orders through `AlpacaBroker`/`FMPPaperBroker`, never Robinhood, so

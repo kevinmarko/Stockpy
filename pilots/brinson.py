@@ -92,9 +92,9 @@ def _coerce_float(value: Any) -> float:
     try:
         f = float(value)
     except (TypeError, ValueError):
-        return 0.0
+        return float('nan')
     if f != f or f in (float("inf"), float("-inf")):  # NaN / inf guard
-        return 0.0
+        return float('nan')
     return f
 
 

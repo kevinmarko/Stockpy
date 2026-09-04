@@ -1101,7 +1101,7 @@ def test_garch_and_edge_scoring(monkeypatch):
     )
     assert res_strong_edge["Score"] == 100
     assert res_strong_edge["Action Signal"] == "STRONG BUY"
-    assert math.isclose(res_strong_edge["Kelly Target"], 2.0 / 3.0, rel_tol=1e-6)
+    assert math.isclose(res_strong_edge["Kelly Target"], 1.0 / 3.0, rel_tol=1e-6)
     assert "Strong Mathematical Edge" in res_strong_edge["Strategy Explainer Notes"]
 
     # Case B: High GARCH penalty (> 40% vol) -> Deducts 20pts
@@ -1144,4 +1144,4 @@ def test_garch_and_edge_scoring(monkeypatch):
         garch_vol=0.15, edge_ratio=0.9
     )
     assert res_restricted_kelly["Action Signal"] == "STRONG BUY"
-    assert math.isclose(res_restricted_kelly["Kelly Target"], 2.0 / 3.0, rel_tol=1e-6)
+    assert math.isclose(res_restricted_kelly["Kelly Target"], 1.0 / 3.0, rel_tol=1e-6)

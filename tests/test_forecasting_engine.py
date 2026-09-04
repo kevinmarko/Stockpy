@@ -13,7 +13,7 @@ the gaps identified in the test-coverage analysis:
     exception-path fallbacks (never fabricate a confident price; degrade to
     0.0 / last-observed value per the documented contract).
   * _blend_with_skill — the Tier 2.2 skill-weighted ensemble blend, its
-    "never return 0.0" contract (CONSTRAINT #4), and the static
+    "never return float('nan')" contract (CONSTRAINT #4), and the static
     sector-preference fallback it reproduces when skill data is absent.
   * generate_forecast end-to-end: zero-price short-circuit, tracker wiring
     (update_actuals -> get_skill_weights -> blend -> record_forecasts), and
@@ -33,6 +33,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 import pytest
+import math
 
 import forecasting_engine
 from forecasting_engine import ForecastingEngine
@@ -150,20 +151,20 @@ class TestRunMonteCarlo:
 # ============================================================================
 
 class TestRunArima:
-    def test_short_history_returns_zero(self, engine):
+    def test_short_history_returns_nan(self, engine):
         history = np.linspace(100, 110, 20)  # < 30
-        assert engine.run_arima(history, days_forward=10) == 0.0
+        assert math.isnan(engine.run_arima(history, days_forward=10))
 
     def test_sufficient_history_returns_a_float(self, engine):
         history = _price_series(80, seed=1).values
         result = engine.run_arima(history, days_forward=5)
         assert isinstance(result, float)
 
-    def test_fit_exception_returns_zero_not_raises(self, engine):
+    def test_fit_exception_returns_nan_not_raises(self, engine):
         history = _price_series(80, seed=2).values
         with mock.patch("forecasting_engine.ARIMA", side_effect=RuntimeError("fit failed")):
             result = engine.run_arima(history, days_forward=5)
-        assert result == 0.0
+        assert math.isnan(result)
 
 
 # ============================================================================
@@ -171,9 +172,9 @@ class TestRunArima:
 # ============================================================================
 
 class TestRunHoltWinters:
-    def test_short_history_returns_zero(self, engine):
+    def test_short_history_returns_nan(self, engine):
         history = np.linspace(100, 110, 20)
-        assert engine.run_holt_winters_grid_search(history, days_forward=10) == 0.0
+        assert math.isnan(engine.run_holt_winters_grid_search(history, days_forward=10))
 
     def test_sufficient_history_returns_a_float(self, engine):
         history = _price_series(80, seed=3).values
@@ -207,7 +208,7 @@ class TestRunProphetForecast:
 # ============================================================================
 
 class TestRunCnnLstmForecastDegradation:
-    def test_returns_zero_dict_when_tensorflow_unavailable(self, engine, monkeypatch):
+    def test_returns_nan_dict_when_tensorflow_unavailable(self, engine, monkeypatch):
         monkeypatch.setattr(forecasting_engine, "TENSORFLOW_AVAILABLE", False)
         df = pd.DataFrame(
             {"Open": [1] * 100, "High": [1] * 100, "Low": [1] * 100,
@@ -215,9 +216,9 @@ class TestRunCnnLstmForecastDegradation:
             index=pd.date_range("2023-01-01", periods=100, freq="B"),
         )
         result = engine.run_cnn_lstm_forecast(df, horizons=(10, 30, 60, 90))
-        assert result == {10: 0.0, 30: 0.0, 60: 0.0, 90: 0.0}
+        assert all(math.isnan(v) for v in result.values())
 
-    def test_returns_zero_float_when_days_forward_specified_and_unavailable(self, engine, monkeypatch):
+    def test_returns_nan_float_when_days_forward_specified_and_unavailable(self, engine, monkeypatch):
         monkeypatch.setattr(forecasting_engine, "TENSORFLOW_AVAILABLE", False)
         df = pd.DataFrame(
             {"Open": [1] * 100, "High": [1] * 100, "Low": [1] * 100,
@@ -225,16 +226,16 @@ class TestRunCnnLstmForecastDegradation:
             index=pd.date_range("2023-01-01", periods=100, freq="B"),
         )
         result = engine.run_cnn_lstm_forecast(df, days_forward=30)
-        assert result == 0.0
+        assert math.isnan(result)
 
-    def test_insufficient_history_returns_zero_result(self, engine):
+    def test_insufficient_history_returns_nan_result(self, engine):
         df = pd.DataFrame(
             {"Open": [1] * 10, "High": [1] * 10, "Low": [1] * 10,
              "Close": [100.0] * 10, "Volume": [1000] * 10},
             index=pd.date_range("2023-01-01", periods=10, freq="B"),
         )
         result = engine.run_cnn_lstm_forecast(df, horizons=(10, 30))
-        assert result == {10: 0.0, 30: 0.0}
+        assert all(math.isnan(v) for v in result.values())
 
 
 # ============================================================================

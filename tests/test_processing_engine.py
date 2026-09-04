@@ -22,6 +22,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 import pytest
+import math
 
 from dto_models import FundamentalDataDTO, MacroEconomicDTO
 from processing_engine import ProcessingEngine
@@ -123,20 +124,20 @@ class TestGrahamNumber:
         assert result == expected
 
     @pytest.mark.parametrize("eps,bv", [(0.0, 12.0), (-1.0, 12.0), (5.0, 0.0), (5.0, -2.0)])
-    def test_non_positive_inputs_return_zero(self, engine, eps, bv):
-        assert engine.calculate_graham_number(eps=eps, book_value=bv) == 0.0
+    def test_non_positive_inputs_return_nan(self, engine, eps, bv):
+        assert math.isnan(engine.calculate_graham_number(eps=eps, book_value=bv))
 
-    def test_none_inputs_return_zero(self, engine):
-        assert engine.calculate_graham_number(eps=None, book_value=12.0) == 0.0
-        assert engine.calculate_graham_number(eps=5.0, book_value=None) == 0.0
+    def test_none_inputs_return_nan(self, engine):
+        assert math.isnan(engine.calculate_graham_number(eps=None, book_value=12.0))
+        assert math.isnan(engine.calculate_graham_number(eps=5.0, book_value=None))
 
-    def test_nan_inputs_return_zero(self, engine):
-        assert engine.calculate_graham_number(eps=float("nan"), book_value=12.0) == 0.0
-        assert engine.calculate_graham_number(eps=5.0, book_value=float("nan")) == 0.0
+    def test_nan_inputs_return_nan(self, engine):
+        assert math.isnan(engine.calculate_graham_number(eps=float("nan"), book_value=12.0))
+        assert math.isnan(engine.calculate_graham_number(eps=5.0, book_value=float("nan")))
 
-    def test_exception_path_returns_zero_not_raises(self, engine):
+    def test_exception_path_returns_nan_not_raises(self, engine):
         # A non-numeric type triggers the except branch rather than propagating.
-        assert engine.calculate_graham_number(eps="not-a-number", book_value=12.0) == 0.0
+        assert math.isnan(engine.calculate_graham_number(eps="not-a-number", book_value=12.0))
 
 
 # ============================================================================
@@ -167,10 +168,10 @@ class TestGordonFairValueEdgeCases:
         expected = round((100.0 * 0.05 * 1.09) / (0.10 - 0.09), 2)
         assert math.isclose(result, expected, rel_tol=1e-5)
 
-    def test_exception_path_returns_zero(self):
+    def test_exception_path_returns_nan(self):
         pe = ProcessingEngine()
         result = pe.calculate_gordon_fair_value("bad", 0.05, 0.04)
-        assert result == 0.0
+        assert math.isnan(result)
 
 
 # ============================================================================

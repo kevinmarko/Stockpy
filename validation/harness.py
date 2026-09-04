@@ -832,9 +832,9 @@ class StrategyValidationHarness:
                 turnover = best_trial.get("turnover", 0.05)
                 net_test_returns = self._apply_cost_model(best_trial["test_returns"], turnover=turnover)
                 wf_sr = sharpe_ratio(net_test_returns, freq=inferred_freq)
-                wf_sharpes[split_pct] = wf_sr if not np.isnan(wf_sr) else 0.0
+                wf_sharpes[split_pct] = wf_sr if not np.isnan(wf_sr) else float("nan")
             else:
-                wf_sharpes[split_pct] = 0.0
+                wf_sharpes[split_pct] = float("nan")
 
         # settings.VALIDATION_HARNESS_OOS_GATE_ENABLED (opt-in, default False —
         # see settings.py for the full honesty writeup): when True, CPCV's own

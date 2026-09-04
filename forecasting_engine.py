@@ -229,12 +229,12 @@ class ForecastingEngine:
         """Forecasts from a pre-fitted ARIMA model. None -> 0.0 (matches run_arima's
         insufficient-history / fit-failure sentinel)."""
         if fitted is None:
-            return 0.0
+            return float('nan')
         try:
             forecast = fitted.forecast(steps=days_forward)
             return self._get_last_forecast_value(forecast)
         except Exception:
-            return 0.0
+            return float('nan')
 
     def run_arima(self, history: np.ndarray, days_forward: int, order=(1,1,1)) -> float:
         """Runs ARIMA model. Returns forecast price.
@@ -318,7 +318,7 @@ class ForecastingEngine:
         NOT float(history[-1])), keeping output identical to the pre-split path.
         """
         if len(history) < 30:
-            return 0.0
+            return float('nan')
         return self.forecast_from_hw_fit(self.run_holt_winters_fit(history), days_forward, history)
 
     def run_prophet_forecast(self, history_series: pd.Series, days_forward: int, ticker: Optional[str] = None) -> Tuple[float, float, float]:
@@ -742,10 +742,10 @@ class ForecastingEngine:
         """
         if days_forward is not None:
             horizons = (int(days_forward),)
-            zero_result: Union[float, Dict[int, float]] = 0.0
+            zero_result: Union[float, Dict[int, float]] = float('nan')
         else:
             horizons = tuple(int(h) for h in horizons)
-            zero_result = {h: 0.0 for h in horizons}
+            zero_result = {h: float('nan') for h in horizons}
 
         if not TENSORFLOW_AVAILABLE:
             return zero_result
@@ -1171,7 +1171,7 @@ class ForecastingEngine:
             Blended forecast price.
         """
         if not model_forecasts:
-            return current_price  # no models produced output; never return 0.0
+            return current_price  # no models produced output; never return float('nan')
 
         # Skill-weighted blend: restrict to models in both dicts
         if skill_weights:
