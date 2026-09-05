@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-04T14:37:56.007690+00:00",
+  "generated_at": "2026-09-05T18:26:29.310507+00:00",
   "command_count": 17,
   "dead_letters": [],
   "commands": [
@@ -740,7 +740,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/audit_strategy_registry_compliance/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/stockpy-implementation-plan-c1cabd/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -776,7 +776,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/audit_strategy_registry_compliance/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/stockpy-implementation-plan-c1cabd/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -1045,8 +1045,67 @@
       "name": "export_notebooklm.py",
       "invocation": "python scripts/export_notebooklm.py",
       "aliases": [],
-      "description": "Generate a NotebookLM export.",
-      "options": [],
+      "description": "Generate a NotebookLM modular knowledge-pack export.",
+      "options": [
+        {
+          "name": "--output-dir",
+          "aliases": [
+            "--output-dir"
+          ],
+          "description": "Override the output directory (defaults to settings.OUTPUT_DIR).",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--modular-only",
+          "aliases": [
+            "--modular-only"
+          ],
+          "description": "Only generate the 5 modular notebooklm/0N_*.md files; skip the consolidated export.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--consolidated-only",
+          "aliases": [
+            "--consolidated-only"
+          ],
+          "description": "Only generate the consolidated notebooklm_source.md; skip the 5 modular files.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--section",
+          "aliases": [
+            "--section"
+          ],
+          "description": "Generate only this one modular section (implies --modular-only for that section).",
+          "default": null,
+          "choices": [
+            "macro",
+            "portfolio",
+            "signals",
+            "trades",
+            "options"
+          ],
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
       "positionals": [],
       "subcommands": []
     }
