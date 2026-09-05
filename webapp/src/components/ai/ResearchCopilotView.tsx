@@ -427,7 +427,7 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
         >
           {synthesizeMutation.pending ? (
             <>
-              <RefreshCw size={15} className="animate-spin" />
+              <RefreshCw size={15} className="icon-spin" />
               Synthesizing Alpha AST...
             </>
           ) : (
@@ -639,7 +639,7 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
             >
               {backtestMutation.pending ? (
                 <>
-                  <RefreshCw size={15} className="animate-spin" />
+                  <RefreshCw size={15} className="icon-spin" />
                   Running Combinatorial Purged-CV...
                 </>
               ) : (

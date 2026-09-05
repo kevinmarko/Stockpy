@@ -70,7 +70,7 @@ export const SecRule606ReportView: React.FC<SecRule606ReportViewProps> = ({
   if (loading && !report) {
     return (
       <div style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>
-        <RefreshCw size={20} className="animate-spin" style={{ display: "inline-block", marginRight: 8 }} />
+        <RefreshCw size={20} className="icon-spin" style={{ display: "inline-block", marginRight: 8 }} />
         Loading SEC Rule 606 Execution Quality report...
       </div>
     );
