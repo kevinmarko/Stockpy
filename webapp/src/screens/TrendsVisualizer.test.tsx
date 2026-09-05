@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { TrendsVisualizer } from './TrendsVisualizer';
 import { useApi } from '../hooks/useApi';
 
@@ -65,5 +65,51 @@ describe('TrendsVisualizer', () => {
 
     expect(screen.getByText(/SPY Volume Proxy/)).toBeInTheDocument();
     expect(screen.getByText(/never presented as real search-volume data/)).toBeInTheDocument();
+  });
+
+  it('renders a loading indicator and withholds the chart while data is loading', () => {
+    vi.mocked(useApi).mockReturnValue({
+      data: null,
+      loading: true,
+      error: null,
+      status: null,
+      stale: false,
+      cachedAt: null,
+      reload: vi.fn(),
+    });
+
+    const { container } = render(<TrendsVisualizer />);
+
+    // The heading renders regardless of load state.
+    expect(screen.getByText('SVI Stitching Algorithm Demo')).toBeInTheDocument();
+    // The real chart (and error state) must not appear while loading.
+    expect(screen.queryByTestId('trends-stitch-chart')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't load/i)).not.toBeInTheDocument();
+    // `Loading` (components/ui.tsx) renders `lines` skeleton placeholder divs
+    // with no distinguishing testid/role/text -- assert on its stable
+    // `.skeleton` class instead.
+    expect(container.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
+  });
+
+  it('renders the error message and calls reload when Retry is clicked', () => {
+    const reload = vi.fn();
+    vi.mocked(useApi).mockReturnValue({
+      data: null,
+      loading: false,
+      error: 'Something broke',
+      status: 500,
+      stale: false,
+      cachedAt: null,
+      reload,
+    });
+
+    render(<TrendsVisualizer />);
+
+    expect(screen.getByText('Something broke')).toBeInTheDocument();
+    expect(screen.queryByTestId('trends-stitch-chart')).not.toBeInTheDocument();
+
+    const retryButton = screen.getByRole('button', { name: /retry/i });
+    fireEvent.click(retryButton);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

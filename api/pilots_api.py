@@ -8185,30 +8185,37 @@ def run_lstm_attention_forecast_endpoint(
     """Diagnostic endpoint to trigger the LSTM-Attention Phase 4 forecaster."""
     from data.historical_store import HistoricalStore
     from data.trends_store import TrendsStore
-    from data.trends_stitcher import FMPDataLoader
     from ml.asvi_feature_engineering import resolve_sector_proxy
     import numpy as np
     import pandas as pd
     from fastapi import HTTPException
-    
+
     try:
         # Fetch 3 years to ensure enough sliding windows
         bars = HistoricalStore().get_bars(symbol, lookback_days=1095)
     except Exception:
         bars = None
-        
+
     if bars is None or bars.empty or len(bars) < 60:
         raise HTTPException(
             status_code=422,
             detail={"error": f"Insufficient history for {symbol}"}
         )
-        
+
     # Technical indicators
-    
+
     # Sector Proxy
-    fmp = FMPDataLoader()
+    #
+    # data.trends_stitcher.FMPDataLoader has no get_fundamentals method at all
+    # (it only generates synthetic OHLCV bars for the standalone stitching
+    # demo/tests) -- calling it here always raised AttributeError, silently
+    # swallowed by the bare except below, so `sector` was unconditionally
+    # None and every real forecast quietly used SPY as its sector proxy
+    # regardless of the target symbol's actual sector. The real, cached
+    # fundamentals provider is data.market_data.get_provider() (already
+    # imported at module top and used elsewhere in this file).
     try:
-        fund = fmp.get_fundamentals(symbol)
+        fund = get_provider().get_fundamentals(symbol)
         sector = fund.get("sector")
     except Exception:
         sector = None

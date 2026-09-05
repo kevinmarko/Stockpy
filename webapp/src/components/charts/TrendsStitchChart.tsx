@@ -9,6 +9,8 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import type { TrendsCurve } from "../../api/types";
+import { theme } from "../../theme";
+import { chartAxisTick, chartAxisLine, chartTooltipStyle } from "../charts";
 
 export type { TrendsCurve } from "../../api/types";
 
@@ -55,52 +57,61 @@ export const TrendsStitchChart: React.FC<TrendsStitchChartProps> = ({ rawCurves,
   const dateFormatter = formatUtcDate;
 
   return (
-    <div className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-4 shadow-sm h-[400px]">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-          <XAxis 
-            dataKey="timestamp" 
-            tickFormatter={dateFormatter} 
-            type="number"
-            domain={['dataMin', 'dataMax']}
-            stroke="#a1a1aa"
-            tick={{ fill: '#a1a1aa', fontSize: 12, fontFamily: '"JetBrains Mono", monospace' }}
-          />
-          <YAxis 
-            stroke="#a1a1aa" 
-            tick={{ fill: '#a1a1aa', fontSize: 12, fontFamily: '"JetBrains Mono", monospace' }}
-          />
-          <Tooltip 
-            labelFormatter={dateFormatter}
-            contentStyle={{ backgroundColor: '#18181b', borderColor: '#27272a', color: '#f4f4f5', fontFamily: '"DM Sans", sans-serif' }}
-            itemStyle={{ color: '#e4e4e7', fontFamily: '"DM Sans", sans-serif' }}
-          />
-          <Legend wrapperStyle={{ paddingTop: '10px', fontFamily: '"DM Sans", sans-serif', color: '#e4e4e7' }} />
-          
-          {rawCurves.map((curve) => (
+    <div className="card card-pad">
+      {/* Fixed pixel height (matching AccountPerformanceChart.tsx's own
+          convention), not height:'100%' -- Recharts' ResponsiveContainer
+          measures its own container via ResizeObserver and needs a DEFINITE
+          (non-percentage) height somewhere in its immediate ancestry to
+          resolve against. A percentage/class-based height (e.g. Tailwind's
+          h-[400px], which this codebase has no generated CSS for) silently
+          measures 0x0 and never renders (see PR #846). */}
+      <div style={{ width: '100%', height: 400 }}>
+        <ResponsiveContainer>
+          <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={dateFormatter}
+              type="number"
+              domain={['dataMin', 'dataMax']}
+              {...chartAxisLine}
+              tick={chartAxisTick}
+            />
+            <YAxis
+              {...chartAxisLine}
+              tick={chartAxisTick}
+            />
+            <Tooltip
+              labelFormatter={dateFormatter}
+              contentStyle={chartTooltipStyle}
+              itemStyle={{ color: theme.textSecondary }}
+            />
+            <Legend wrapperStyle={{ paddingTop: '10px', color: theme.textSecondary }} />
+
+            {rawCurves.map((curve) => (
+              <Line
+                key={curve.name}
+                type="monotone"
+                dataKey={curve.name}
+                stroke={theme.textMuted}
+                strokeDasharray="5 5"
+                strokeOpacity={0.4}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+            ))}
+
             <Line
-              key={curve.name}
               type="monotone"
-              dataKey={curve.name}
-              stroke="#a1a1aa"
-              strokeDasharray="5 5"
-              strokeOpacity={0.4}
-              strokeWidth={1.5}
+              dataKey={stitchedCurve.name}
+              stroke={theme.accent}
+              strokeWidth={3}
               dot={false}
               isAnimationActive={false}
             />
-          ))}
-          
-          <Line
-            type="monotone"
-            dataKey={stitchedCurve.name}
-            stroke="#3b82f6"
-            strokeWidth={3}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 };
