@@ -2,7 +2,7 @@ import React from "react";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { TransformerForecastResponse } from "../../api/types";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 
 interface Props {
   symbol: string;
@@ -20,7 +20,14 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
 
   if (loading) {
     return (
-      <div className="p-4 text-gray-400 animate-pulse bg-gray-800 rounded-lg border border-gray-700">
+      <div
+        className="card card-pad"
+        style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", color: theme.textSecondary, fontSize: "var(--t-body)" }}
+      >
+        {/* .pulse-dot (index.css) replaces the dead Tailwind `animate-pulse` this
+            used to carry -- this webapp has no Tailwind build, so that class
+            produced no CSS at all and the loading state never pulsed. */}
+        <span className="pulse-dot" aria-hidden="true" />
         Loading AI Vol Forecast...
       </div>
     );
@@ -28,7 +35,15 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
 
   if (error) {
     return (
-      <div className="p-4 text-red-400 bg-red-950/40 rounded-lg border border-red-800/60 text-sm">
+      <div
+        className="card card-pad"
+        style={{
+          color: theme.decline,
+          background: alpha(theme.decline, "15"),
+          border: `1px solid ${alpha(theme.decline, "40")}`,
+          fontSize: "var(--t-body)",
+        }}
+      >
         {String(error)}
       </div>
     );
@@ -92,41 +107,72 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
   const medianPath = `M ${medianPoints.join(" L ")}`;
 
   return (
-    <div className="bg-gray-800 p-5 rounded-lg shadow-lg border border-gray-700">
+    <div className="card card-pad">
       {/* Header with Title and Conditioning Badges */}
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-4 pb-3 border-b border-gray-700/80">
-        <div className="flex items-center gap-2">
-          <h3 className="text-lg font-bold text-white tracking-wide">
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "var(--s-2)",
+          marginBottom: "var(--s-4)",
+          paddingBottom: "var(--s-3)",
+          borderBottom: `1px solid ${theme.border}`,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: theme.textPrimary, letterSpacing: "0.01em", margin: 0 }}>
             🤖 Transformer Volatility Forecast: {data.symbol}
           </h3>
           {data.macro_conditioned && (
             <span
-              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-950 text-emerald-400 border border-emerald-700/60 shadow-sm"
+              className="badge badge-good"
               data-testid="macro-conditioned-badge"
               title="Conditioned on FRED macro series (VIXCLS, T10Y2Y, BAMLC0A0CM, FEDFUNDS)"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="pulse-dot" aria-hidden="true" />
               Macro-Conditioned
             </span>
           )}
         </div>
         {data.trained_samples !== undefined && data.trained_samples > 0 && (
-          <span className="text-xs text-gray-400 bg-gray-900/60 px-2.5 py-1 rounded border border-gray-700/50">
-            Trained on <span className="text-gray-200 font-medium">{data.trained_samples}</span> causal windows
+          <span className="chip">
+            Trained on <span style={{ color: theme.textPrimary, fontWeight: 600, margin: "0 4px" }}>{data.trained_samples}</span> causal windows
           </span>
         )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "var(--s-5)" }}>
         {/* Multi-Horizon Volatility Cone / Breakdown */}
-        <div className="bg-gray-900/90 p-4 rounded-lg border border-gray-700 flex flex-col justify-between">
+        <div
+          style={{
+            background: theme.base,
+            padding: "var(--s-4)",
+            borderRadius: "var(--r-md)",
+            border: `1px solid ${theme.border}`,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+          }}
+        >
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-semibold text-gray-200">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-2)" }}>
+              <h4 style={{ fontSize: "0.85rem", fontWeight: 600, color: theme.textSecondary, margin: 0 }}>
                 Multi-Horizon Volatility Forecast
               </h4>
               {hasQuantiles && (
-                <span className="text-xs text-sky-400 font-medium bg-sky-950/60 px-2 py-0.5 rounded border border-sky-800/40">
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    color: theme.accent,
+                    background: alpha(theme.accent, "15"),
+                    border: `1px solid ${alpha(theme.accent, "35")}`,
+                    padding: "2px 8px",
+                    borderRadius: "var(--r-xs)",
+                  }}
+                >
                   Probabilistic Cone (q₁₀ - q₉₀)
                 </span>
               )}
@@ -134,10 +180,19 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
 
             {/* SVG Cone Visualization when Quantiles Available */}
             {hasQuantiles ? (
-              <div className="my-2 bg-gray-950/80 p-2 rounded border border-gray-800 overflow-x-auto">
+              <div
+                style={{
+                  margin: "var(--s-2) 0",
+                  background: theme.base,
+                  padding: "var(--s-2)",
+                  borderRadius: "var(--r-xs)",
+                  border: `1px solid ${theme.border}`,
+                  overflowX: "auto",
+                }}
+              >
                 <svg
                   viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                  className="w-full h-auto max-h-[160px] select-none"
+                  style={{ width: "100%", height: "auto", maxHeight: 160, userSelect: "none" }}
                   aria-label="Multi-horizon volatility probabilistic cone"
                 >
                   {/* Grid Lines */}
@@ -233,7 +288,7 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
             ) : null}
 
             {/* Horizon Metric Detail Rows */}
-            <div className="mt-3 flex flex-col gap-2">
+            <div style={{ marginTop: "var(--s-3)", display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
               {horizons.map((h) => {
                 const v = data.forecast[h];
                 const q = quantileForecast?.[h];
@@ -242,39 +297,54 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
                 return (
                   <div
                     key={h}
-                    className="p-2 rounded bg-gray-800/60 border border-gray-700/50 flex flex-col gap-1.5"
+                    style={{
+                      padding: "var(--s-2)",
+                      borderRadius: "var(--r-xs)",
+                      background: theme.surface2,
+                      border: `1px solid ${theme.border}`,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "var(--s-1-5)",
+                    }}
                   >
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-gray-200 w-8">{h}</span>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+                        <span style={{ fontWeight: 600, color: theme.textSecondary, width: 32, display: "inline-block" }}>{h}</span>
                         {q && (
-                          <span className="text-[11px] text-gray-400">
-                            q₁₀: <span className="text-gray-300">{(q.q10 * 100).toFixed(1)}%</span> — q₉₀:{" "}
-                            <span className="text-gray-300">{(q.q90 * 100).toFixed(1)}%</span>
+                          <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
+                            q₁₀: <span style={{ color: theme.textSecondary }}>{(q.q10 * 100).toFixed(1)}%</span> — q₉₀:{" "}
+                            <span style={{ color: theme.textSecondary }}>{(q.q90 * 100).toFixed(1)}%</span>
                           </span>
                         )}
                       </div>
-                      <span className="text-sm font-bold text-sky-400">
+                      <span style={{ fontSize: "0.8rem", fontWeight: 700, color: theme.accent }}>
                         {(v * 100).toFixed(1)}%
                       </span>
                     </div>
 
                     {/* Visual Bar Track */}
-                    <div className="h-2 bg-gray-700/70 rounded-full overflow-hidden relative">
+                    <div style={{ height: 8, background: theme.surface3, borderRadius: "var(--r-pill)", overflow: "hidden", position: "relative" }}>
                       {q ? (
                         <>
                           {/* Shaded interval [q10, q90] */}
                           <div
-                            className="absolute h-full bg-sky-500/30 rounded-full"
                             style={{
+                              position: "absolute",
+                              height: "100%",
+                              background: alpha(theme.accent, "30"),
+                              borderRadius: "var(--r-pill)",
                               left: `${Math.max(0, (q.q10 / yUpper) * 100)}%`,
                               width: `${Math.min(100, ((q.q90 - q.q10) / yUpper) * 100)}%`,
                             }}
                           />
                           {/* Median point indicator */}
                           <div
-                            className="absolute h-full w-1.5 bg-sky-400 rounded-full shadow"
                             style={{
+                              position: "absolute",
+                              height: "100%",
+                              width: 6,
+                              background: theme.accent,
+                              borderRadius: "var(--r-pill)",
                               left: `${Math.max(0, Math.min(98, (q.q50 / yUpper) * 100))}%`,
                             }}
                             title={`Median: ${(q.q50 * 100).toFixed(1)}%`}
@@ -282,8 +352,7 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
                         </>
                       ) : (
                         <div
-                          className="h-full bg-blue-500 rounded-full"
-                          style={{ width: `${widthPct}%` }}
+                          style={{ height: "100%", background: theme.accent, borderRadius: "var(--r-pill)", width: `${widthPct}%` }}
                           title={`${h}: ${(v * 100).toFixed(1)}%`}
                         />
                       )}
@@ -294,47 +363,87 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
             </div>
           </div>
 
-          <div className="mt-3 pt-2 border-t border-gray-800 text-[11px] text-gray-400 flex items-center justify-between">
+          <div
+            style={{
+              marginTop: "var(--s-3)",
+              paddingTop: "var(--s-2)",
+              borderTop: `1px solid ${theme.border}`,
+              fontSize: "0.68rem",
+              color: theme.textMuted,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
             <span>Probabilistic Cone: 10th – 90th percentile bounds</span>
-            <span className="text-gray-300">Annualized Volatility (σ)</span>
+            <span style={{ color: theme.textSecondary }}>Annualized Volatility (σ)</span>
           </div>
         </div>
 
         {/* Attention Heatmap Card */}
-        <div className="bg-gray-900/90 p-4 rounded-lg border border-gray-700 flex flex-col justify-between">
+        <div
+          style={{
+            background: theme.base,
+            padding: "var(--s-4)",
+            borderRadius: "var(--r-md)",
+            border: `1px solid ${theme.border}`,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+          }}
+        >
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <h4 className="text-sm font-semibold text-gray-200">Attention Heatmap</h4>
-              <span className="text-[11px] text-gray-400">Self-Attention Matrix</span>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-1)" }}>
+              <h4 style={{ fontSize: "0.85rem", fontWeight: 600, color: theme.textSecondary, margin: 0 }}>Attention Heatmap</h4>
+              <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>Self-Attention Matrix</span>
             </div>
-            <p className="text-[11px] text-gray-400 mb-3">
+            <p style={{ fontSize: "0.68rem", color: theme.textMuted, marginBottom: "var(--s-3)" }}>
               Captures temporal dependency across sequence steps in the TFT causal attention head.
             </p>
 
             {heatmap.length === 0 ? (
-              <div className="text-xs text-gray-400 py-8 text-center bg-gray-950/50 rounded border border-gray-800">
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  color: theme.textMuted,
+                  padding: "var(--s-6) 0",
+                  textAlign: "center",
+                  background: theme.base,
+                  borderRadius: "var(--r-xs)",
+                  border: `1px solid ${theme.border}`,
+                }}
+              >
                 No attention data available.
               </div>
             ) : (
-              <div className="p-2.5 bg-gray-950/90 rounded border border-gray-800 flex justify-center">
+              <div
+                style={{
+                  padding: "var(--s-2-5)",
+                  background: theme.base,
+                  borderRadius: "var(--r-xs)",
+                  border: `1px solid ${theme.border}`,
+                  display: "flex",
+                  justifyContent: "center",
+                }}
+              >
                 <div
-                  className="flex flex-col gap-[1.5px]"
+                  style={{ display: "flex", flexDirection: "column", gap: 1.5 }}
                   data-testid="attention-heatmap"
                   role="img"
                   aria-label="Temporal Self-Attention Matrix Heatmap"
                 >
                   {heatmap.map((row, i) => (
-                    <div key={i} className="flex gap-[1.5px]">
+                    <div key={i} style={{ display: "flex", gap: 1.5 }}>
                       {row.map((v, j) => {
                         const intensity = Math.min(1, Math.abs(v) / heatmapMax);
                         return (
                           <div
                             key={j}
                             title={`Step (${i}, ${j}): ${v.toFixed(3)}`}
-                            className="rounded-[1px] transition-opacity hover:opacity-80"
                             style={{
                               width: heatmap.length > 20 ? 4 : 14,
                               height: heatmap.length > 20 ? 4 : 14,
+                              borderRadius: 1,
                               background: `rgba(56, 189, 248, ${Math.max(0.06, intensity).toFixed(2)})`,
                             }}
                           />
@@ -347,11 +456,30 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
             )}
           </div>
 
-          <div className="mt-3 pt-2 border-t border-gray-800 flex items-center justify-between text-[11px] text-gray-400">
+          <div
+            style={{
+              marginTop: "var(--s-3)",
+              paddingTop: "var(--s-2)",
+              borderTop: `1px solid ${theme.border}`,
+              fontSize: "0.68rem",
+              color: theme.textMuted,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
             <span>Lookback Attention Scale</span>
-            <div className="flex items-center gap-1.5">
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
               <span>Low</span>
-              <div className="w-16 h-2 rounded-full bg-gradient-to-r from-sky-950 via-sky-700 to-sky-400 border border-gray-700/50" />
+              <div
+                style={{
+                  width: 64,
+                  height: 8,
+                  borderRadius: "var(--r-pill)",
+                  background: `linear-gradient(to right, ${alpha(theme.accent, "10")}, ${alpha(theme.accent, "60")}, ${theme.accent})`,
+                  border: `1px solid ${theme.border}`,
+                }}
+              />
               <span>High</span>
             </div>
           </div>
@@ -360,4 +488,3 @@ export const TransformerVolForecastView: React.FC<Props> = ({ symbol }) => {
     </div>
   );
 };
-

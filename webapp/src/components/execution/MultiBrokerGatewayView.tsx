@@ -113,7 +113,7 @@ export const MultiBrokerGatewayView: React.FC<MultiBrokerGatewayViewProps> = ({
   if (loading && !status) {
     return (
       <div style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>
-        <RefreshCw size={20} className="animate-spin" style={{ display: "inline-block", marginRight: 8 }} />
+        <RefreshCw size={20} className="icon-spin" style={{ display: "inline-block", marginRight: 8 }} />
         Loading Multi-Broker Gateway status...
       </div>
     );
@@ -222,7 +222,10 @@ export const MultiBrokerGatewayView: React.FC<MultiBrokerGatewayViewProps> = ({
         <div>
           <div style={{ fontSize: "0.72rem", color: theme.textSecondary }}>Active Primary Gateway</div>
           <div style={{ fontSize: "1.15rem", fontWeight: 800, color: activeBrokerId ? theme.growth : theme.decline, display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-            <Radio size={16} className="animate-pulse" />
+            {/* index.css's pulse-dot-anim keyframe (used directly rather than the
+                .pulse-dot class, which also hardcodes a 6px dot size) replaces
+                the dead Tailwind `animate-pulse` this icon used to carry. */}
+            <Radio size={16} style={{ animation: "pulse-dot-anim 2s infinite" }} />
             {activeBrokerId ? activeBrokerId.toUpperCase() : "NONE ACTIVE"}
           </div>
           <div style={{ fontSize: "0.68rem", color: theme.textSecondary, marginTop: 2 }}>

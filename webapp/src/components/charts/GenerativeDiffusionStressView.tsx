@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../api/client";
 import { DiffusionStressRequest, DiffusionStressResponse } from "../../api/types";
-import { theme } from "../../theme";
+import { theme, alpha } from "../../theme";
 
 interface Props {
   symbol: string;
@@ -140,7 +140,7 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
       const stepValues = paths.map((p) => p[t] ?? spotPriceInput).sort((a, b) => a - b);
       minPerStep.push(stepValues[0]);
       maxPerStep.push(stepValues[stepValues.length - 1]);
-      
+
       const midIdx = Math.floor(stepValues.length / 2);
       medianPerStep.push(
         stepValues.length % 2 === 0
@@ -219,46 +219,74 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
   const currentRegimeMeta = REGIME_OPTIONS.find((r) => r.id === regime) ?? REGIME_OPTIONS[0];
 
   return (
-    <div className="bg-gray-800 p-5 rounded-lg shadow-lg border border-gray-700 font-sans text-gray-200">
+    <div className="card card-pad">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-gray-700/80">
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "var(--s-3)",
+          marginBottom: "var(--s-4)",
+          paddingBottom: "var(--s-3)",
+          borderBottom: `1px solid ${theme.border}`,
+        }}
+      >
         <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xl" role="img" aria-label="tornado">🌪️</span>
-            <h3 className="text-lg font-bold text-white tracking-wide">
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+            <span style={{ fontSize: "1.2rem" }} role="img" aria-label="tornado">🌪️</span>
+            <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: theme.textPrimary, letterSpacing: "0.01em", margin: 0 }}>
               Generative Diffusion Stress Test: {symbol}
             </h3>
           </div>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <p style={{ fontSize: "0.75rem", color: theme.textMuted, marginTop: 2, marginBottom: 0 }}>
             Score-based stochastic reverse SDE diffusion with Classifier-Free Guidance (CFG)
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <span
-            className="px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wider"
             style={{
-              backgroundColor: `${currentRegimeMeta.color}22`,
+              padding: "4px 10px",
+              borderRadius: "var(--r-xs)",
+              fontSize: "0.7rem",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+              backgroundColor: alpha(currentRegimeMeta.color, "20"),
               color: currentRegimeMeta.color,
-              border: `1px solid ${currentRegimeMeta.color}44`,
+              border: `1px solid ${alpha(currentRegimeMeta.color, "50")}`,
             }}
           >
             {currentRegimeMeta.badge}
           </span>
           {data?.trained_windows && (
-            <span className="px-2 py-0.5 rounded text-xs bg-gray-700/80 text-gray-300 border border-gray-600">
-              {data.trained_windows} Windows Fitted
-            </span>
+            <span className="chip">{data.trained_windows} Windows Fitted</span>
           )}
         </div>
       </div>
 
       {/* Regime Conditioning Selector */}
-      <div className="mb-4">
-        <label className="block text-xs font-medium text-gray-300 uppercase tracking-wider mb-2">
+      <div style={{ marginBottom: "var(--s-4)" }}>
+        <label
+          style={{
+            display: "block",
+            fontSize: "0.7rem",
+            fontWeight: 600,
+            color: theme.textSecondary,
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+            marginBottom: "var(--s-2)",
+          }}
+        >
           Macro Stress Regime Conditioning
         </label>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2" role="radiogroup" aria-label="Stress Regime">
+        <div
+          style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2)" }}
+          role="radiogroup"
+          aria-label="Stress Regime"
+        >
           {REGIME_OPTIONS.map((opt) => {
             const isSelected = regime === opt.id;
             return (
@@ -268,22 +296,33 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
                 role="radio"
                 aria-checked={isSelected}
                 onClick={() => setRegime(opt.id)}
-                className={`p-2.5 rounded-lg text-left transition-all border ${
-                  isSelected
-                    ? "bg-gray-700/90 border-accent shadow-sm"
-                    : "bg-gray-900/60 border-gray-700/80 hover:bg-gray-700/50 hover:border-gray-600"
-                }`}
+                style={{
+                  padding: "var(--s-2-5)",
+                  borderRadius: "var(--r-md)",
+                  textAlign: "left",
+                  border: `1px solid ${isSelected ? theme.accent : theme.border}`,
+                  background: isSelected ? theme.surface3 : theme.base,
+                  cursor: "pointer",
+                }}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-semibold ${isSelected ? "text-white" : "text-gray-300"}`}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontSize: "0.75rem", fontWeight: 600, color: isSelected ? theme.textPrimary : theme.textSecondary }}>
                     {opt.name}
                   </span>
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: opt.color }}
-                  />
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: opt.color, flexShrink: 0 }} />
                 </div>
-                <p className="text-[11px] text-gray-400 line-clamp-2 leading-tight">
+                <p
+                  style={{
+                    fontSize: "0.68rem",
+                    color: theme.textMuted,
+                    lineHeight: 1.3,
+                    margin: 0,
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }}
+                >
                   {opt.description}
                 </p>
               </button>
@@ -293,51 +332,62 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
       </div>
 
       {/* Simulation Controls & Parameters */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-5 p-3.5 bg-gray-900/60 rounded-lg border border-gray-700/70">
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          gap: "var(--s-3)",
+          marginBottom: "var(--s-5)",
+          padding: "var(--s-3-5)",
+          background: theme.base,
+          borderRadius: "var(--r-md)",
+          border: `1px solid ${theme.border}`,
+        }}
+      >
         <div>
-          <label htmlFor="diff-spot-price" className="block text-xs text-gray-400 mb-1">
+          <label htmlFor="diff-spot-price" style={{ display: "block", fontSize: "0.7rem", color: theme.textMuted, marginBottom: "var(--s-1)" }}>
             Spot Price ($)
           </label>
           <input
             id="diff-spot-price"
             type="number"
             step="0.01"
-            className="w-full bg-gray-800 border border-gray-600 p-1.5 rounded text-sm text-white focus:border-accent focus:outline-none"
+            className="input"
             value={spotPriceInput}
             onChange={(e) => setSpotPriceInput(parseFloat(e.target.value) || 0)}
           />
         </div>
 
         <div>
-          <label htmlFor="diff-volatility" className="block text-xs text-gray-400 mb-1">
+          <label htmlFor="diff-volatility" style={{ display: "block", fontSize: "0.7rem", color: theme.textMuted, marginBottom: "var(--s-1)" }}>
             Volatility (Ann.)
           </label>
           <input
             id="diff-volatility"
             type="number"
             step="0.01"
-            className="w-full bg-gray-800 border border-gray-600 p-1.5 rounded text-sm text-white focus:border-accent focus:outline-none"
+            className="input"
             value={volatility}
             onChange={(e) => setVolatility(parseFloat(e.target.value) || 0)}
           />
         </div>
 
         <div>
-          <label htmlFor="diff-drift" className="block text-xs text-gray-400 mb-1">
+          <label htmlFor="diff-drift" style={{ display: "block", fontSize: "0.7rem", color: theme.textMuted, marginBottom: "var(--s-1)" }}>
             Drift (Ann.)
           </label>
           <input
             id="diff-drift"
             type="number"
             step="0.01"
-            className="w-full bg-gray-800 border border-gray-600 p-1.5 rounded text-sm text-white focus:border-accent focus:outline-none"
+            className="input"
             value={drift}
             onChange={(e) => setDrift(parseFloat(e.target.value) || 0)}
           />
         </div>
 
         <div>
-          <label htmlFor="diff-horizon" className="block text-xs text-gray-400 mb-1">
+          <label htmlFor="diff-horizon" style={{ display: "block", fontSize: "0.7rem", color: theme.textMuted, marginBottom: "var(--s-1)" }}>
             Horizon (Days)
           </label>
           <input
@@ -347,18 +397,18 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
             min="5"
             max="35"
             title="The calibration fix is only verified well-calibrated up to a 30-35 day horizon; the backend now rejects requests outside this range."
-            className="w-full bg-gray-800 border border-gray-600 p-1.5 rounded text-sm text-white focus:border-accent focus:outline-none"
+            className="input"
             value={horizonDays}
             onChange={(e) => setHorizonDays(parseInt(e.target.value, 10) || 30)}
           />
         </div>
 
-        <div className="lg:col-span-1">
-          <div className="flex items-center justify-between mb-1">
-            <label htmlFor="diff-guidance-scale" className="text-xs text-gray-400">
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-1)" }}>
+            <label htmlFor="diff-guidance-scale" style={{ fontSize: "0.7rem", color: theme.textMuted }}>
               Guidance (s)
             </label>
-            <span className="text-xs font-mono font-semibold text-accent">
+            <span style={{ fontSize: "0.7rem", fontFamily: "monospace", fontWeight: 600, color: theme.accent }}>
               {guidanceScale.toFixed(1)}x
             </span>
           </div>
@@ -369,23 +419,42 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
             max="5.0"
             step="0.1"
             aria-label="Classifier-Free Guidance Scale"
-            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-sky-400 mt-2"
+            style={{ width: "100%", marginTop: "var(--s-2)", accentColor: theme.accent, cursor: "pointer" }}
             value={guidanceScale}
             onChange={(e) => setGuidanceScale(parseFloat(e.target.value))}
           />
         </div>
 
-        <div className="flex items-end">
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
           <button
             onClick={runSimulation}
             disabled={loading}
-            className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-medium py-1.5 px-3 rounded shadow transition-colors flex items-center justify-center gap-1 text-sm"
+            style={{
+              width: "100%",
+              background: theme.decline,
+              color: "#fff",
+              fontWeight: 600,
+              padding: "8px 12px",
+              borderRadius: "var(--r-sm)",
+              border: "none",
+              boxShadow: "var(--shadow-card)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "var(--s-1-5)",
+              fontSize: "var(--t-body)",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+            }}
           >
             {loading ? (
               <>
-                <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                {/* .icon-spin (index.css) replaces the dead Tailwind `animate-spin`
+                    -- this Tailwind-free webapp generated no CSS for it, so the
+                    "Running..." state never actually spun. */}
+                <svg className="icon-spin" style={{ height: 16, width: 16, color: "#fff" }} fill="none" viewBox="0 0 24 24">
+                  <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
                 <span>Running...</span>
               </>
@@ -397,86 +466,103 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
       </div>
 
       {error && (
-        <div className="p-3 bg-red-950/60 border border-red-800 text-red-300 rounded-lg text-sm mb-4 flex items-center justify-between">
+        <div
+          style={{
+            padding: "var(--s-3)",
+            background: alpha(theme.decline, "15"),
+            border: `1px solid ${alpha(theme.decline, "40")}`,
+            color: theme.decline,
+            borderRadius: "var(--r-md)",
+            fontSize: "var(--t-body)",
+            marginBottom: "var(--s-4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--s-2)",
+          }}
+        >
           <span>{error}</span>
-          <button onClick={runSimulation} className="text-xs underline text-red-200 hover:text-white">
+          <button
+            onClick={runSimulation}
+            style={{ fontSize: "0.7rem", textDecoration: "underline", color: theme.decline, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          >
             Retry
           </button>
         </div>
       )}
 
       {data && (
-        <div className="space-y-4">
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           {/* Dynamic Risk Gauge KPI Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-gray-900/80 p-3.5 rounded-lg border border-red-900/40">
-              <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Value at Risk (95%)</div>
-              <div className="text-lg font-bold text-red-400">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-3)" }}>
+            <div style={{ background: theme.base, padding: "var(--s-3-5)", borderRadius: "var(--r-md)", border: `1px solid ${alpha(theme.decline, "25")}` }}>
+              <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.03em", color: theme.textMuted, marginBottom: 2 }}>Value at Risk (95%)</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: theme.decline }}>
                 ${data.VaR_95.toFixed(2)}
               </div>
-              <div className="text-[11px] text-gray-500 mt-0.5">
+              <div style={{ fontSize: "0.68rem", color: theme.textMuted, marginTop: 2 }}>
                 -{((data.VaR_95 / spotPriceInput) * 100).toFixed(1)}% Max Loss @ 95%
               </div>
             </div>
 
-            <div className="bg-gray-900/80 p-3.5 rounded-lg border border-red-900/40">
-              <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Conditional VaR (95%)</div>
-              <div className="text-lg font-bold text-red-400">
+            <div style={{ background: theme.base, padding: "var(--s-3-5)", borderRadius: "var(--r-md)", border: `1px solid ${alpha(theme.decline, "25")}` }}>
+              <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.03em", color: theme.textMuted, marginBottom: 2 }}>Conditional VaR (95%)</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: theme.decline }}>
                 ${data.CVaR_95.toFixed(2)}
               </div>
-              <div className="text-[11px] text-gray-500 mt-0.5">
+              <div style={{ fontSize: "0.68rem", color: theme.textMuted, marginTop: 2 }}>
                 -{((data.CVaR_95 / spotPriceInput) * 100).toFixed(1)}% Expected Shortfall
               </div>
             </div>
 
-            <div className="bg-gray-900/80 p-3.5 rounded-lg border border-red-800/60 bg-red-950/20">
-              <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Value at Risk (99%)</div>
-              <div className="text-lg font-bold text-red-300">
+            <div style={{ background: alpha(theme.decline, "08"), padding: "var(--s-3-5)", borderRadius: "var(--r-md)", border: `1px solid ${alpha(theme.decline, "35")}` }}>
+              <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.03em", color: theme.textMuted, marginBottom: 2 }}>Value at Risk (99%)</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: theme.decline }}>
                 ${(data.VaR_99 ?? data.VaR_95 * 1.3).toFixed(2)}
               </div>
-              <div className="text-[11px] text-gray-500 mt-0.5">
+              <div style={{ fontSize: "0.68rem", color: theme.textMuted, marginTop: 2 }}>
                 Extreme Tail Cutoff
               </div>
             </div>
 
-            <div className="bg-gray-900/80 p-3.5 rounded-lg border border-red-800/60 bg-red-950/20">
-              <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Conditional VaR (99%)</div>
-              <div className="text-lg font-bold text-red-300">
+            <div style={{ background: alpha(theme.decline, "08"), padding: "var(--s-3-5)", borderRadius: "var(--r-md)", border: `1px solid ${alpha(theme.decline, "35")}` }}>
+              <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.03em", color: theme.textMuted, marginBottom: 2 }}>Conditional VaR (99%)</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: theme.decline }}>
                 ${(data.CVaR_99 ?? data.CVaR_95 * 1.4).toFixed(2)}
               </div>
-              <div className="text-[11px] text-gray-500 mt-0.5">
+              <div style={{ fontSize: "0.68rem", color: theme.textMuted, marginTop: 2 }}>
                 Severe Crisis Shortfall
               </div>
             </div>
           </div>
 
           {/* SVG Multi-path Simulation Fan Chart */}
-          <div className="bg-gray-900/90 p-4 rounded-lg border border-gray-700/80">
-            <div className="flex items-center justify-between mb-2">
+          <div style={{ background: theme.base, padding: "var(--s-4)", borderRadius: "var(--r-md)", border: `1px solid ${theme.border}` }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
               <div>
-                <h4 className="text-sm font-semibold text-white">
+                <h4 style={{ fontSize: "0.85rem", fontWeight: 600, color: theme.textPrimary, margin: 0 }}>
                   Guided SDE Simulation Cloud ({numPaths} Paths)
                 </h4>
-                <p className="text-xs text-gray-400">
+                <p style={{ fontSize: "0.75rem", color: theme.textMuted, margin: 0, marginTop: 2 }}>
                   Reverse Ornstein-Uhlenbeck trajectory with {guidanceScale.toFixed(1)}x {currentRegimeMeta.name} steering
                 </p>
               </div>
-              <div className="flex items-center gap-3 text-xs text-gray-400">
-                <span className="flex items-center gap-1">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-red-500/20 border border-red-500/60" />
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "var(--s-3)", fontSize: "0.7rem", color: theme.textMuted }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: alpha(theme.decline, "20"), border: `1px solid ${alpha(theme.decline, "60")}` }} />
                   10th-90th Cone
                 </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-3 h-0.5 bg-sky-400" />
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 12, height: 2, background: theme.accent, display: "inline-block" }} />
                   Median Path
                 </span>
               </div>
             </div>
 
-            <div className="w-full overflow-x-auto">
+            <div style={{ width: "100%", overflowX: "auto" }}>
               <svg
                 viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                className="w-full h-auto max-h-64 select-none"
+                style={{ width: "100%", height: "auto", maxHeight: 256, userSelect: "none" }}
                 role="img"
                 aria-label="Simulation Paths Chart"
               >
@@ -587,14 +673,14 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
           </div>
 
           {/* Bottom Breakdown: Crash Probabilities & Terminal Distribution */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--s-4)" }}>
             {/* Crash Probabilities */}
-            <div className="bg-gray-900/80 p-4 rounded-lg border border-gray-700/80">
-              <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center justify-between">
+            <div style={{ background: theme.base, padding: "var(--s-4)", borderRadius: "var(--r-md)", border: `1px solid ${theme.border}` }}>
+              <h4 style={{ fontSize: "0.85rem", fontWeight: 600, color: theme.textSecondary, marginBottom: "var(--s-3)", marginTop: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span>Crash Probabilities</span>
-                <span className="text-xs text-gray-400 font-normal">Empirical Path Frequencies</span>
+                <span style={{ fontSize: "0.7rem", color: theme.textMuted, fontWeight: 400 }}>Empirical Path Frequencies</span>
               </h4>
-              <div className="space-y-2.5">
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2-5)" }}>
                 {crashProbabilities.map(({ pct, prob }) => {
                   const pctLabel = Math.abs(pct * 100).toFixed(0);
                   const probPct = (prob * 100).toFixed(1);
@@ -607,16 +693,18 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
 
                   return (
                     <div key={pct}>
-                      <div className="flex justify-between text-xs text-gray-300 mb-1">
-                        <span className="font-medium">≥ {pctLabel}% Drawdown</span>
-                        <span className="font-mono font-semibold" style={{ color: barColor }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: theme.textSecondary, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600 }}>≥ {pctLabel}% Drawdown</span>
+                        <span style={{ fontFamily: "monospace", fontWeight: 700, color: barColor }}>
                           {probPct}%
                         </span>
                       </div>
-                      <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
+                      <div style={{ width: "100%", height: 8, background: theme.surface2, borderRadius: "var(--r-pill)", overflow: "hidden", border: `1px solid ${theme.border}` }}>
                         <div
-                          className="h-full rounded-full transition-all duration-500"
                           style={{
+                            height: "100%",
+                            borderRadius: "var(--r-pill)",
+                            transition: "width 0.4s ease",
                             width: `${Math.min(100, Math.max(0, prob * 100))}%`,
                             backgroundColor: barColor,
                           }}
@@ -629,13 +717,13 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
             </div>
 
             {/* Terminal Price Distribution */}
-            <div className="bg-gray-900/80 p-4 rounded-lg border border-gray-700/80">
-              <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center justify-between">
+            <div style={{ background: theme.base, padding: "var(--s-4)", borderRadius: "var(--r-md)", border: `1px solid ${theme.border}` }}>
+              <h4 style={{ fontSize: "0.85rem", fontWeight: 600, color: theme.textSecondary, marginBottom: "var(--s-3)", marginTop: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span>Terminal Price Distribution</span>
-                <span className="text-xs text-gray-400 font-normal">Monte Carlo Density</span>
+                <span style={{ fontSize: "0.7rem", color: theme.textMuted, fontWeight: 400 }}>Monte Carlo Density</span>
               </h4>
-              <div className="h-32 flex flex-col justify-end">
-                <div className="flex items-end justify-between px-1 h-full gap-1">
+              <div style={{ height: 128, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "0 4px", height: "100%", gap: 4 }}>
                   {Array.from({ length: 20 }).map((_, i) => {
                     const min = Math.min(...terminalPrices, spotPriceInput * 0.5);
                     const max = Math.max(...terminalPrices, spotPriceInput * 1.5);
@@ -648,8 +736,11 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
                     return (
                       <div
                         key={i}
-                        className="w-full rounded-t transition-all duration-300"
                         style={{
+                          width: "100%",
+                          borderTopLeftRadius: 3,
+                          borderTopRightRadius: 3,
+                          transition: "height 0.3s ease",
                           height: `${Math.max(4, h)}%`,
                           backgroundColor: isLossBin ? "rgba(239, 68, 68, 0.6)" : "rgba(56, 189, 248, 0.6)",
                           borderTop: `1px solid ${isLossBin ? theme.decline : theme.accent}`,
@@ -659,9 +750,20 @@ export const GenerativeDiffusionStressView: React.FC<Props> = ({ symbol, spotPri
                     );
                   })}
                 </div>
-                <div className="flex justify-between text-[10px] text-gray-500 font-mono mt-1.5 pt-1 border-t border-gray-800">
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: "0.62rem",
+                    color: theme.textMuted,
+                    fontFamily: "monospace",
+                    marginTop: 6,
+                    paddingTop: 4,
+                    borderTop: `1px solid ${theme.border}`,
+                  }}
+                >
                   <span>${(Math.min(...terminalPrices, spotPriceInput * 0.5) || 0).toFixed(0)}</span>
-                  <span className="text-gray-400">Spot ${spotPriceInput.toFixed(0)}</span>
+                  <span style={{ color: theme.textSecondary }}>Spot ${spotPriceInput.toFixed(0)}</span>
                   <span>${(Math.max(...terminalPrices, spotPriceInput * 1.5) || 0).toFixed(0)}</span>
                 </div>
               </div>
