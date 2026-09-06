@@ -122,4 +122,5 @@ files this change edits. Zero regressions introduced.
 
 ## PR
 
-<!-- PR_URL_PLACEHOLDER -->
+https://github.com/kevinmarko/Stockpy/pull/1003 (left open for review — this is a genuine
+judgment call, not merged by the agent).

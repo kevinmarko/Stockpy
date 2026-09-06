@@ -30,5 +30,5 @@
 - [x] Lint: `ruff check . --select=F821,F822,F823,E9` clean.
 - [x] Full offline test suite (`pytest -m "not network and not slow"`) — run and recorded in
       the walkthrough.
-- [ ] Push branch + open PR (left open for review — this is a judgment call, not merged by
-      the agent).
+- [x] Push branch + open PR: https://github.com/kevinmarko/Stockpy/pull/1003 (left open for
+      review — this is a judgment call, not merged by the agent).
