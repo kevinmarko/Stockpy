@@ -36,7 +36,7 @@ COLUMN_SCHEMA = [
     {"header": "Target Days", "key": "Target_Days", "format": "number"},
     {"header": "ARIMA Target", "key": "ARIMA", "format": "currency"},
     {"header": "Monte Carlo Target", "key": "MC_Target", "format": "currency"},
-    {"header": "MC Lower 95%", "key": "MC_Lower", "format": "currency"},
+    {"header": "MC Lower 5%", "key": "MC_Lower", "format": "currency"},
     {"header": "MC Upper 95%", "key": "MC_Upper", "format": "currency"},
     
     # --- SYSTEMIC MACRO & FUNDAMENTAL ---

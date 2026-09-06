@@ -95,18 +95,18 @@ ALL_MODEL_NAMES = (
     MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA,
 )
 
-# Minimum positive RMSE to prevent division-by-zero when a model is extremely
-# accurate over a stretch (a $0.01 RMSE cap avoids assigning infinite weight).
-_MIN_RMSE = 0.01
+# Minimum positive MSE to prevent division-by-zero when a model is extremely
+# accurate over a stretch.
+_MIN_MSE = 0.0001
 
 
 def compute_skill_weights_from_stats(
     model_stats: Dict[str, Tuple[int, float]],
     min_obs: int,
 ) -> Dict[str, float]:
-    """Pure function: normalized inverse-RMSE weights from per-model (n, mse).
+    """Pure function: normalized inverse-MSE weights from per-model (n, mse).
 
-    Single source of truth for the cold-start / inverse-RMSE / graduated-
+    Single source of truth for the cold-start / inverse-MSE / graduated-
     degrade formula, shared by ForecastTracker.get_skill_weights and
     pilots/observability.py's two bulk-SQL siblings (_portfolio_forecast_stats,
     _forecast_stats_by_symbol) -- eliminating the "three copies must stay in
@@ -115,7 +115,7 @@ def compute_skill_weights_from_stats(
     1. If NO model has n >= min_obs (nobody is mature yet): equal weights
        across EVERY model in model_stats -- the genuine full-cold-start case,
        UNCHANGED from prior behavior.
-    2. If ANY model is mature: inverse-RMSE weights computed over the MATURE
+    2. If ANY model is mature: inverse-MSE weights computed over the MATURE
        SUBSET ONLY, normalized to sum to 1.0. Immature models are ABSENT
        from the returned dict (not weight 0.0) -- one cold model no longer
        drags N-1 warm models back to uniform.
@@ -132,17 +132,17 @@ def compute_skill_weights_from_stats(
         n_models = len(model_stats)
         return {name: 1.0 / n_models for name in model_stats}
 
-    inv_rmse: Dict[str, float] = {}
+    inv_mse: Dict[str, float] = {}
     for name, (_, mse) in mature.items():
-        rmse = math.sqrt(mse) if mse >= 0 else 0.0
-        inv_rmse[name] = 1.0 / max(rmse, _MIN_RMSE)
+        mse = max(0.0, mse)
+        inv_mse[name] = 1.0 / max(mse, _MIN_MSE)
 
-    total = sum(inv_rmse.values())
+    total = sum(inv_mse.values())
     if total <= 0:
-        n_mature = len(inv_rmse)
-        return {name: 1.0 / n_mature for name in inv_rmse}
+        n_mature = len(inv_mse)
+        return {name: 1.0 / n_mature for name in inv_mse}
 
-    return {name: w / total for name, w in inv_rmse.items()}
+    return {name: w / total for name, w in inv_mse.items()}
 
 
 class ForecastTracker:
@@ -403,7 +403,8 @@ class ForecastTracker:
         try:
             # A forecast made on day T is "due" when the full horizon has
             # elapsed: now >= T + horizon. Equivalently: T <= now - horizon.
-            cutoff_dt = as_of - timedelta(days=max(0, horizon_days))
+            # (Horizon units are trading days, so we offset by BDay, not timedelta calendar days).
+            cutoff_dt = pd.Timestamp(as_of) - pd.offsets.BDay(max(0, horizon_days))
             cutoff_iso = cutoff_dt.isoformat()
 
             with self._lock:

@@ -107,43 +107,50 @@ class TestRunMonteCarlo:
     def test_exception_path_returns_start_price_triple_never_raises(self, engine):
         """Dead-letter contract: any internal failure must degrade to the
         start price, never propagate (CONSTRAINT #6)."""
-        with mock.patch("numpy.random.normal", side_effect=RuntimeError("rng failure")):
+        with mock.patch("numpy.random.default_rng", side_effect=RuntimeError("rng failure")):
             result = engine.run_monte_carlo(150.0, 0.0003, 0.015, 30)
         assert result == (150.0, 150.0, 150.0)
 
+    def test_monte_carlo_drift_and_expectation(self, engine):
+        """Simulate a known iid log-return process.
+        The recovered mean must match S0*exp((mu + 0.5*sigma^2)*T)."""
+        mu = 0.0003
+        sigma = 0.015
+        S0 = 100.0
+        T = 30
+        
+        # Ensure shrinkage is off for this test
+        from unittest import mock
+        engine.settings = mock.Mock(FORECAST_DRIFT_SHRINKAGE=0.0)
+        
+        # Use a large number of simulations for stability, with a fixed seed
+        mean, low, high = engine.run_monte_carlo(
+            S0, mu, sigma, days_forward=T, simulations=20000, seed=42
+        )
+        
+        expected_mean = S0 * np.exp((mu + 0.5 * sigma**2) * T)
+        
+        # If F1 is present (double subtraction), it would be S0*exp((mu - 0.5*sigma**2 + 0.5*sigma**2)*T) = S0*exp(mu*T)
+        # S0*exp(mu*T) = 100 * exp(0.009) = 100.904
+        # S0*exp((mu + 0.5*sigma^2)*T) = 100 * exp((0.0003 + 0.0001125)*30) = 100 * exp(0.012375) = 101.245
+        
+        assert math.isclose(mean, expected_mean, rel_tol=1e-3)
+
     def test_annualized_mu_sigma_are_normalized_to_daily(self, engine):
-        """F-05 guard: when |mu| > 0.05 (a value that can only realistically
-        be an annualized figure mistakenly passed as daily), the engine must
-        divide mu by 252 and sigma by sqrt(252) BEFORE simulating — otherwise
-        drift would compound 252x and the output would explode to a price
-        many multiples of the start price over a 30-day horizon."""
-        # Deterministic: silence the stochastic shock so only drift matters.
+        """F-05 guard: when |mu| > 0.05 or sigma > 0.20, normalize."""
         annualized_mu, annualized_sigma = 0.20, 0.30
-        with mock.patch("numpy.random.normal", return_value=np.zeros((10, 30))):
-            mean, low, high = engine.run_monte_carlo(
-                100.0, annualized_mu, annualized_sigma, days_forward=30, simulations=10
-            )
+        from unittest import mock
+        engine.settings = mock.Mock(FORECAST_DRIFT_SHRINKAGE=0.0)
+        
+        mean, low, high = engine.run_monte_carlo(
+            100.0, annualized_mu, annualized_sigma, days_forward=30, simulations=10000, seed=42
+        )
 
         daily_mu = annualized_mu / 252
         daily_sigma = annualized_sigma / np.sqrt(252)
-        expected_drift = (daily_mu - 0.5 * daily_sigma ** 2) * 30
-        expected_price = 100.0 * np.exp(expected_drift)
+        expected_mean = 100.0 * np.exp((daily_mu + 0.5 * daily_sigma ** 2) * 30)
 
-        assert math.isclose(mean, expected_price, rel_tol=1e-6)
-        # Sanity bound: without normalization the naive (un-normalized) drift
-        # of 0.20*30 = 6.0 would yield exp(6.0) ~ 403x blow-up. The corrected
-        # result must stay within a realistic band around the start price.
-        assert 50.0 < mean < 200.0
-
-    def test_small_daily_mu_sigma_are_not_renormalized(self, engine):
-        """Values already within daily range (|mu| <= 0.05) must pass through
-        unchanged -- the guard must not double-divide legitimate daily inputs."""
-        daily_mu, daily_sigma = 0.0003, 0.015
-        with mock.patch("numpy.random.normal", return_value=np.zeros((5, 10))):
-            mean, _, _ = engine.run_monte_carlo(100.0, daily_mu, daily_sigma, days_forward=10, simulations=5)
-        expected_drift = (daily_mu - 0.5 * daily_sigma ** 2) * 10
-        expected_price = 100.0 * np.exp(expected_drift)
-        assert math.isclose(mean, expected_price, rel_tol=1e-6)
+        assert math.isclose(mean, expected_mean, rel_tol=1e-2)
 
 
 # ============================================================================
@@ -181,14 +188,14 @@ class TestRunHoltWinters:
         result = engine.run_holt_winters_grid_search(history, days_forward=5)
         assert isinstance(result, float)
 
-    def test_total_fit_failure_falls_back_to_last_observed_value(self, engine):
+    def test_total_fit_failure_falls_back_to_nan(self, engine):
         """When both the grid-search fit AND the final default fit raise,
-        the documented last-resort fallback is the last historical value --
+        the documented last-resort fallback is NaN (CONSTRAINT #4) --
         never a fabricated number, never an exception."""
         history = _price_series(80, seed=4).values
         with mock.patch("forecasting_engine.ExponentialSmoothing", side_effect=RuntimeError("boom")):
             result = engine.run_holt_winters_grid_search(history, days_forward=5)
-        assert result == float(history[-1])
+        assert np.isnan(result)
 
 
 # ============================================================================

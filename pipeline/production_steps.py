@@ -530,8 +530,8 @@ class ForecastingStep(PipelineStep):
                 return ticker, forecasts
             except Exception as ml_err:
                 telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")
-                mu = 0.0002
-                sigma = 0.015
+                mu = float('nan')
+                sigma = float('nan')
                 if history_series is not None and len(history_series) > 1:
                     returns = np.log(history_series / history_series.shift(1)).dropna()
                     mu = float(returns.mean())
@@ -553,8 +553,11 @@ class ForecastingStep(PipelineStep):
                     'Forecast_30': mc_target,
                     'Forecast_60': mc_60,
                     'Forecast_90': mc_90,
-                    'Forecast_30_Prophet_Lower': mc_low,
-                    'Forecast_30_Prophet_Upper': mc_high,
+                    # Deliberately no Forecast_30_Prophet_Lower/_Upper here --
+                    # these are MC percentiles, not Prophet output, and
+                    # writing them under the Prophet name was a mislabeling
+                    # bug fixed as part of the forecast-math audit (see
+                    # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md).
                     # The full ForecastingEngine blew up (ml_err above) and
                     # this whole row is a coarse single-model Monte Carlo
                     # recovery, not the real ARIMA/HW/CNN-LSTM/Prophet

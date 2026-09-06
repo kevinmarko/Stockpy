@@ -174,7 +174,7 @@ class ForecastingEngine:
     # CORE MODELS
     # =========================================================================
     
-    def run_monte_carlo(self, start_price: float, mu: float, sigma: float, days_forward: int, simulations: int = 1000):
+    def run_monte_carlo(self, start_price: float, mu: float, sigma: float, days_forward: int, simulations: int = 4000, seed: Optional[int] = None):
         """
         Runs Geometric Brownian Motion simulations.
 
@@ -188,26 +188,42 @@ class ForecastingEngine:
         in the expected terminal price (prevents naive flatline / drift collapse).
         """
         try:
+            import config
             if days_forward <= 0 or simulations <= 0:
                 return start_price, start_price, start_price
 
             # F-05 GUARD: if mu looks annualized (|mu| >> typical daily range),
             # normalize to daily to prevent silent 252x drift explosion.
+            # Decoupled checks for mu and sigma.
             if abs(mu) > 0.05:
                 logger.warning(
                     f"Monte Carlo: mu={mu:.4f} appears annualized. "
                     f"Normalizing to daily (dividing by 252)."
                 )
-                mu    = mu    / 252
+                mu = mu / 252
+            if sigma > 0.20:
+                logger.warning(
+                    f"Monte Carlo: sigma={sigma:.4f} appears annualized. "
+                    f"Normalizing to daily (dividing by sqrt(252))."
+                )
                 sigma = sigma / np.sqrt(252)
 
             # dt = 1 trading day (mu and sigma are daily)
             dt = 1
 
-            # Ito structural drift: (mu - 0.5*sigma^2) per day — prevents naive upward bias
-            daily_drift     = (mu - 0.5 * sigma ** 2) * dt            # scalar, per day
-            shock           = np.random.normal(0, 1, (simulations, days_forward))
-            daily_diffusion = sigma * np.sqrt(dt) * shock             # shape: (sims, days)
+            shrinkage = getattr(config, 'FORECAST_DRIFT_SHRINKAGE', getattr(self, 'settings', type('mock', (), {'FORECAST_DRIFT_SHRINKAGE': 1.0})).FORECAST_DRIFT_SHRINKAGE)
+            
+            # Apply drift shrinkage (0.0 means no shrinkage, 1.0 means zero drift)
+            mu = mu * (1.0 - float(shrinkage))
+
+            # The mean of log returns is mu.
+            # So E[S_T] = S_0 * exp((mu + 0.5 * sigma**2) * T).
+            # The terminal return is drawn from N(mu*T, sigma^2*T) -> drift is simply mu.
+            daily_drift = mu * dt
+
+            rng = np.random.default_rng(seed)
+            shock = rng.normal(0, 1, (simulations, days_forward))
+            daily_diffusion = sigma * np.sqrt(dt) * shock
 
             # Terminal log-return = sum over T days
             total_log_return = (daily_drift * days_forward) + np.sum(daily_diffusion, axis=1)
@@ -319,15 +335,14 @@ class ForecastingEngine:
                 return None
 
     def forecast_from_hw_fit(self, fitted, days_forward: int, history: np.ndarray) -> float:
-        """Forecasts from a pre-fitted Holt-Winters model. None -> float(history[-1])
-        (matches run_holt_winters_grid_search's terminal fallback)."""
+        """Forecasts from a pre-fitted Holt-Winters model. None -> float('nan')"""
         if fitted is None:
-            return float(history[-1])
+            return float('nan')
         try:
             forecast = fitted.forecast(days_forward)
             return self._get_last_forecast_value(forecast)
         except Exception:
-            return float(history[-1])
+            return float('nan')
 
     def run_holt_winters_grid_search(self, history: np.ndarray, days_forward: int) -> float:
         """
@@ -562,6 +577,7 @@ class ForecastingEngine:
         X_seq: np.ndarray,
         Y_seq: np.ndarray,
         lookback: int,
+        max_h: int,
         val_fraction: float = 0.2,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Purge overlapping windows at the internal train/validation boundary.
@@ -589,9 +605,10 @@ class ForecastingEngine:
         n_total = len(X_seq)
         n_val = max(1, int(round(n_total * val_fraction)))
         val_start = max(0, n_total - n_val)
-        embargo = max(0, lookback - 1)
+        embargo = max(0, lookback - 1 + max_h)
         train_end = val_start - embargo
         if train_end <= 0:
+            logger.warning('Purged split exhausted training data. Falling back to unpurged split, accepting lookahead leak.')
             train_end = val_start
         return X_seq[:train_end], Y_seq[:train_end], X_seq[val_start:], Y_seq[val_start:]
 
@@ -926,7 +943,7 @@ class ForecastingEngine:
                 save_path = keras_path if persistence_enabled else None
                 result = run_in_subprocess(
                     fit_predict_cnn_lstm,
-                    (X_seq, Y_seq, last_window, len(horizons), save_path),
+                    (X_seq, Y_seq, last_window, len(horizons), max(horizons), save_path),
                     timeout_seconds=timeout_seconds,
                     max_workers=pool_workers,
                 )
@@ -953,7 +970,7 @@ class ForecastingEngine:
                 # would leave the last lookback-1 training windows overlapping
                 # the first validation windows almost entirely.
                 X_tr, Y_tr, X_val, Y_val = self.purged_train_val_split(
-                    X_seq, Y_seq, lookback
+                    X_seq, Y_seq, lookback, max(horizons)
                 )
                 model.fit(
                     X_tr, Y_tr,
@@ -1458,8 +1475,11 @@ class ForecastingEngine:
             if len(close_prices) > 30:
                 results['ARIMA'] = self.forecast_from_arima_fit(arima_fit, target_days)
 
+            import config
+            mc_seed = getattr(config, 'FORECAST_MC_RANDOM_SEED', getattr(self, 'settings', type('mock', (), {'FORECAST_MC_RANDOM_SEED': 42})).FORECAST_MC_RANDOM_SEED)
             mc_mean, mc_low, mc_high = self.run_monte_carlo(
-                current_price, mu, mc_sigma_by_horizon[target_days], target_days
+                current_price, mu, mc_sigma_by_horizon[target_days], target_days,
+                seed=mc_seed
             )
             results['MC_Target'] = mc_mean
             results['MC_Lower'] = mc_low
@@ -1545,7 +1565,9 @@ class ForecastingEngine:
                     a_res = self.forecast_from_arima_fit(arima_fit, h)
                     h_res = self.forecast_from_hw_fit(hw_fit, h, close_prices)
 
-                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma_by_horizon[h], days_forward=h)
+                import config
+                mc_seed = getattr(config, 'FORECAST_MC_RANDOM_SEED', getattr(self, 'settings', type('mock', (), {'FORECAST_MC_RANDOM_SEED': 42})).FORECAST_MC_RANDOM_SEED)
+                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma_by_horizon[h], days_forward=h, seed=mc_seed)
 
                 # Collect per-model prices for skill tracking and skill-weighted blend.
                 # Only include models that produced a positive price (CONSTRAINT #4).

@@ -68,6 +68,7 @@ def _purged_train_val_split(
     X_seq: np.ndarray,
     Y_seq: np.ndarray,
     lookback: int,
+    max_h: int,
     val_fraction: float = 0.2,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Mirrors ForecastingEngine.purged_train_val_split (forecasting_engine.py)
@@ -81,9 +82,11 @@ def _purged_train_val_split(
     n_total = len(X_seq)
     n_val = max(1, int(round(n_total * val_fraction)))
     val_start = max(0, n_total - n_val)
-    embargo = max(0, lookback - 1)
+    embargo = max(0, lookback - 1 + max_h)
+    # Note: Duplicated from forecasting_engine.py to avoid circular imports
     train_end = val_start - embargo
     if train_end <= 0:
+        print("WARNING: Purged split exhausted training data. Falling back to unpurged split, accepting lookahead leak.")
         train_end = val_start
     return X_seq[:train_end], Y_seq[:train_end], X_seq[val_start:], Y_seq[val_start:]
 
@@ -99,6 +102,7 @@ def fit_predict_cnn_lstm(
     Y_seq: np.ndarray,
     last_window: np.ndarray,
     num_horizons: int,
+    max_h: int,
     keras_save_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build, compile, fit, and predict the direct multi-step CNN-LSTM model.
@@ -132,7 +136,7 @@ def fit_predict_cnn_lstm(
     ])
     model.compile(optimizer='adam', loss='mse')
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-    X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps)
+    X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps, max_h)
     model.fit(
         X_tr, Y_tr,
         validation_data=(X_val, Y_val),
@@ -225,7 +229,7 @@ def fit_predict_or_infer_lstm(
         if Y_seq is None:
             raise ValueError("Y_seq is required when weights is None (fit mode)")
         early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-        X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps)
+        X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps, max_h=1)
         model.fit(
             X_tr, Y_tr,
             validation_data=(X_val, Y_val),

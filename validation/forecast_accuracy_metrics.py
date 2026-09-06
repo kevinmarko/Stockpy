@@ -82,3 +82,45 @@ def rmse_from_errors(errors: Sequence[ForecastError]) -> float:
     y_true = np.array([e.y_true for e in errors], dtype=float)
     y_pred = np.array([e.y_pred for e in errors], dtype=float)
     return rmse(y_true, y_pred)
+
+
+def interval_coverage(y_true: np.ndarray, y_lower: np.ndarray, y_upper: np.ndarray) -> float:
+    """Empirical interval coverage: the fraction of realized values falling within the bounds."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_lower = np.asarray(y_lower, dtype=float)
+    y_upper = np.asarray(y_upper, dtype=float)
+    if not (y_true.shape == y_lower.shape == y_upper.shape):
+        raise ValueError("shape mismatch between true values and bounds")
+    mask = np.isfinite(y_true) & np.isfinite(y_lower) & np.isfinite(y_upper)
+    if not np.any(mask):
+        return float("nan")
+    covered = (y_true[mask] >= y_lower[mask]) & (y_true[mask] <= y_upper[mask])
+    return float(np.mean(covered))
+
+
+def pinball_loss(y_true: np.ndarray, y_pred: np.ndarray, alpha: float) -> float:
+    """Proper scoring rule for quantile forecasts (pinball/quantile loss)."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.shape != y_pred.shape:
+        raise ValueError(f"shape mismatch: y_true{y_true.shape} vs y_pred{y_pred.shape}")
+    mask = np.isfinite(y_true) & np.isfinite(y_pred)
+    if not np.any(mask):
+        return float("nan")
+    e = y_true[mask] - y_pred[mask]
+    loss = np.maximum(alpha * e, (alpha - 1.0) * e)
+    return float(np.mean(loss))
+
+
+def naive_volatility_baseline(train_prices: np.ndarray, window: int = 20) -> float:
+    """Naive baseline for volatility forecasting: realized volatility of the trailing window."""
+    prices = np.asarray(train_prices, dtype=float)
+    prices = prices[np.isfinite(prices)]
+    if len(prices) < 2:
+        return _MIN_SCALE
+    rets = np.diff(prices) / prices[:-1]
+    if len(rets) < window:
+        vol = float(np.std(rets, ddof=1) * np.sqrt(252))
+    else:
+        vol = float(np.std(rets[-window:], ddof=1) * np.sqrt(252))
+    return vol if vol > _MIN_SCALE else _MIN_SCALE

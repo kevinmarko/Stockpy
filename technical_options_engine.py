@@ -537,11 +537,11 @@ class TechnicalOptionsEngine:
 
         df_clean = self.sanitize_ohlcv(df)
         if len(df_clean) < 22:
-            return {h: 0.20 for h in horizons}  # Neutral 20% default fallback
+            return None
 
         returns = df_clean['Close'].pct_change().dropna()
         if len(returns) < 10:
-            return {h: 0.20 for h in horizons}
+            return None
 
         # Try GJR-GARCH fitting if arch library is available
         if ARCH_AVAILABLE:

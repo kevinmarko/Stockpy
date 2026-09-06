@@ -607,7 +607,7 @@ def build_causal_vol_features(
     feats["price_z_10"] = _safe_zscore(close, close.rolling(10).mean(), close.rolling(10).std())
     feats["price_z_20"] = _safe_zscore(close, close.rolling(20).mean(), close.rolling(20).std())
     feats["volume_z_20"] = _safe_zscore(volume, volume.rolling(20).mean(), volume.rolling(20).std())
-    feats["hl_range"] = (high - low) / close
+    feats["hl_range"] = (high - low) / close.replace(0.0, np.nan)
     feats["hl_range_mean_10"] = feats["hl_range"].rolling(10).mean()
     feats["oc_range"] = (close - open_) / open_.replace(0.0, np.nan)
     feats["skew_20"] = ret_1d.rolling(20).skew()
@@ -703,7 +703,7 @@ def build_training_windows(
             if len(future_rets) != h:
                 valid_row = False
                 break
-            y_row.append(float(np.std(future_rets, ddof=0) * np.sqrt(252)))
+            y_row.append(float(np.std(future_rets, ddof=1) * np.sqrt(252)))
         if not valid_row:
             continue
         X_list.append(window)
