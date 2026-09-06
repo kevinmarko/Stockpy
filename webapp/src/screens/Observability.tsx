@@ -26,7 +26,7 @@ import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
-import { fmtNum, fmtPct, timeAgo } from "../format";
+import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import MacroSentimentDashboard from "../components/MacroSentimentDashboard";
 
@@ -459,6 +459,15 @@ function ForecastSkillSection({
   );
 }
 
+/** Color for a decay_pct reading: positive = degrading (bad), negative =
+ * improving (good) — the inverse polarity of `pnlColor` in ../theme, so kept
+ * local rather than reusing that helper against its own convention. */
+function decayColor(pct: number): string {
+  if (pct > 0) return theme.decline;
+  if (pct < 0) return theme.growth;
+  return theme.textSecondary;
+}
+
 /**
  * ForecastSkillBySymbolSection — the per-symbol breakdown the portfolio-wide
  * ForecastSkillSection above doesn't carry (rank 7 of the published Mission
@@ -470,6 +479,17 @@ function ForecastSkillSection({
  * symbol with zero completed forecasts still gets a row (Pending/Completed
  * counts, "—" for the model) rather than being silently dropped — see
  * pilots/observability.py::forecast_skill_by_symbol_summary's own contract.
+ *
+ * Two diagnostic columns beyond the original five: "Skill Decay" (how much
+ * this symbol's pooled forecast skill has degraded/improved vs. an older
+ * baseline sub-window) and "MC Band Coverage" (whether the platform's own
+ * published Monte Carlo forecast band is actually well-calibrated — the
+ * empirical hit rate against its 90% advertised coverage, plus the
+ * Gneiting-Raftery interval score as a tightness measure). Both are
+ * secondary diagnostic detail, not this row's headline metric, so they
+ * render smaller/muted; both honestly degrade to their `*_reason` string
+ * (visible, not hidden behind a hover-only tooltip) rather than a blank
+ * cell or a fabricated number when there isn't enough history yet.
  */
 function ForecastSkillBySymbolSection({
   bySymbol,
@@ -489,19 +509,56 @@ function ForecastSkillBySymbolSection({
             <th className="num">Completed</th>
             <th>Top model</th>
             <th className="num">Weight</th>
+            <th className="num">Skill decay</th>
+            <th>MC band coverage</th>
           </tr>
         </thead>
         <tbody>
           {bySymbol.rows.map((row) => {
             const ranked = Object.entries(row.skill_weights).sort((a, b) => b[1] - a[1]);
             const top = ranked[0];
+            const topN = top ? row.n_by_model?.[top[0]] : undefined;
             return (
               <tr key={row.symbol} data-testid="forecast-skill-symbol-row">
                 <td>{row.symbol}</td>
                 <td className="num">{row.pending}</td>
                 <td className="num">{row.completed}</td>
-                <td>{top ? top[0] : "—"}</td>
+                <td title={topN != null ? `${topN} completed forecasts backing this weight` : undefined}>
+                  {top ? top[0] : "—"}
+                </td>
                 <td className="num">{top ? fmtPct(top[1], 0, { fromFraction: true }) : "—"}</td>
+                <td className="num" data-testid="forecast-skill-decay-cell">
+                  {row.decay_pct == null ? (
+                    <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)", maxWidth: 200, marginLeft: "auto", textAlign: "right" }}>
+                      {row.decay_reason ?? "Insufficient history."}
+                    </div>
+                  ) : (
+                    <span style={{ color: decayColor(row.decay_pct), fontWeight: 600 }}>
+                      {fmtPct(row.decay_pct, 1, { signed: true })}
+                    </span>
+                  )}
+                </td>
+                <td data-testid="forecast-skill-mc-coverage-cell">
+                  {row.mc_coverage_pct == null ? (
+                    <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)", maxWidth: 220 }}>
+                      {row.mc_coverage_reason ?? "Insufficient history."}
+                    </div>
+                  ) : (
+                    <div>
+                      <span>
+                        {fmtPct(row.mc_coverage_pct, 1)}{" "}
+                        <span style={{ color: theme.textMuted }}>
+                          (target {fmtPct(row.mc_nominal_coverage_pct, 0)}, n={row.mc_coverage_n})
+                        </span>
+                      </span>
+                      {row.mc_interval_score != null && (
+                        <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginTop: 2 }}>
+                          Interval score: {fmtUsd(row.mc_interval_score)} (lower = tighter)
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -1278,7 +1335,7 @@ export function Observability() {
               </div>
               <ForecastSkillSection skill={data.forecast_skill} />
 
-              <SectionHeading title="Forecast skill by symbol" sub="Leading model per symbol" />
+              <SectionHeading title="Forecast skill by symbol" sub="Leading model per symbol" helpKey="mc band coverage" thresholds={thresholds} />
               <ForecastSkillBySymbolSection bySymbol={data.forecast_skill_by_symbol} />
 
               <SectionHeading id="circuit-breakers" title="Circuit breakers" sub="Kill switch + risk-gate blocks" helpKey="circuit breaker" thresholds={thresholds} />

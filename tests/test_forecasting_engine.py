@@ -435,6 +435,74 @@ class TestGenerateForecast:
         assert tracker.record_forecasts.call_count == 4
         tracker.get_skill_weights.assert_not_called()
 
+    def test_monte_carlo_bounds_are_recorded_for_each_horizon(self, engine):
+        """WP6 of the forecast-math audit (see
+        docs/known_issues/forecast_ito_double_correction_and_horizon_units.md):
+        record_forecasts must receive the genuine Monte Carlo prediction-
+        interval bounds (the 5th/95th percentile run_monte_carlo already
+        computes) as model_bounds={"monte_carlo": (lo, hi)} so
+        ForecastTracker.coverage_report()/interval_score_stats() have real
+        data to measure calibration against. With 90 days of real history,
+        Monte Carlo's point forecast is always > 0, so every horizon's
+        primary record_forecasts call (the `recordable_forecasts` one, not
+        the separate bert_lla-ablations call) must carry bounds."""
+        tracker = mock.MagicMock()
+        tracker.get_skill_weights.return_value = {}
+        engine._tracker = tracker
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(90, seed=14)
+        engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
+
+        calls_with_bounds = [
+            call for call in tracker.record_forecasts.call_args_list
+            if call.kwargs.get("model_bounds")
+        ]
+        assert len(calls_with_bounds) == 4
+        for call in calls_with_bounds:
+            bounds = call.kwargs["model_bounds"]
+            assert set(bounds.keys()) == {"monte_carlo"}
+            lo, hi = bounds["monte_carlo"]
+            assert lo <= hi
+            # model_bounds must be a KEYWORD arg, not a 5th positional one --
+            # so pre-existing positional-arg assertions (e.g. call.args[2] for
+            # the recorded price dict) keep working unchanged.
+            assert len(call.args) == 4
+
+    def test_no_bounds_recorded_for_non_monte_carlo_models(self, engine):
+        """Every non-Monte-Carlo model (arima, holt_winters, cnn_lstm,
+        prophet, naive, bert_lla ablations) has no genuine published
+        prediction interval and must never receive fabricated bounds --
+        model_bounds must have at most the single "monte_carlo" key on
+        every record_forecasts call, including the separate bert_lla-
+        ablations call which must never carry bounds at all."""
+        tracker = mock.MagicMock()
+        tracker.get_skill_weights.return_value = {}
+        engine._tracker = tracker
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(90, seed=15)
+        engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
+
+        assert tracker.record_forecasts.call_count > 0
+        for call in tracker.record_forecasts.call_args_list:
+            bounds = call.kwargs.get("model_bounds")
+            if bounds is not None:
+                assert set(bounds.keys()) <= {"monte_carlo"}
+
+    def test_no_bounds_recorded_when_monte_carlo_point_forecast_rejected(self, engine):
+        """Thin history: even Monte Carlo's own terminal price is NaN
+        (fails the `> 0` gate), so model_bounds must be None rather than
+        carrying bounds for a point forecast that was itself rejected."""
+        tracker = mock.MagicMock()
+        tracker.get_skill_weights.return_value = {}
+        engine._tracker = tracker
+        row = pd.Series({"sector": "Technology", "Symbol": "NEWIPO"})
+        history = pd.Series([42.0], index=pd.date_range("2026-01-01", periods=1, freq="B"))
+        engine.generate_forecast(row, current_price=42.0, history_series=history)
+
+        assert tracker.record_forecasts.call_count > 0
+        for call in tracker.record_forecasts.call_args_list:
+            assert call.kwargs.get("model_bounds") is None
+
     def test_blend_is_byte_identical_whether_or_not_tracker_is_attached_when_flag_off(self, monkeypatch, tmp_path):
         """With FORECAST_SKILL_WEIGHTING_ENABLED off (the default), attaching
         a REAL ForecastTracker -- as every production call site now always

@@ -467,6 +467,42 @@ def _make_forecast_db(path, rows):
     conn.close()
 
 
+def _make_forecast_db_with_bounds(path, rows):
+    """Like ``_make_forecast_db`` but also populates ``forecast_lower``/
+    ``forecast_upper`` — the two columns ``_forecast_coverage_stats_by_symbol``
+    reads.
+
+    ``rows``: list of (symbol, model_name, horizon_days, forecast_ts_iso,
+    forecast_price, actual_price, squared_error, forecast_lower,
+    forecast_upper, recorded_at_iso).
+    """
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        """CREATE TABLE forecast_errors (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol         TEXT    NOT NULL,
+            model_name     TEXT    NOT NULL,
+            horizon_days   INTEGER NOT NULL,
+            forecast_ts    TEXT    NOT NULL,
+            forecast_price REAL    NOT NULL,
+            actual_price   REAL,
+            squared_error  REAL,
+            forecast_lower REAL,
+            forecast_upper REAL,
+            recorded_at    TEXT    NOT NULL
+        )"""
+    )
+    conn.executemany(
+        """INSERT INTO forecast_errors
+           (symbol, model_name, horizon_days, forecast_ts, forecast_price,
+            actual_price, squared_error, forecast_lower, forecast_upper, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
 def _tracker_factory_for(db_path):
     """Build a ``ForecastTracker`` factory bound to a fixed db_path — patched
     onto ``forecasting.forecast_tracker.ForecastTracker`` so
@@ -643,6 +679,11 @@ class TestForecastSkillBySymbol:
             "n_by_model": {},
             "decay_pct": None,
             "decay_reason": mock.ANY,
+            "mc_coverage_n": 0,
+            "mc_coverage_pct": None,
+            "mc_nominal_coverage_pct": pytest.approx(90.0),
+            "mc_interval_score": None,
+            "mc_coverage_reason": mock.ANY,
         }
 
     def test_graduated_degrade_excludes_immature_model_per_symbol(self, tmp_path):
@@ -738,6 +779,216 @@ class TestForecastSkillBySymbol:
 
         assert len(out["rows"]) == 30
         assert {r["symbol"] for r in out["rows"]} == set(symbols[:30])
+
+    def test_mc_coverage_keys_present_with_known_fraction(self, tmp_path):
+        """The 5 new mc_* keys land in each row with the correct values,
+        computed via the SAME (actual_price, forecast_lower, forecast_upper)
+        rows compute_coverage_and_interval_score would score directly."""
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = []
+        # AAPL/monte_carlo: 6 covered + 2 missed (out of the published
+        # interval) -> a known 75% empirical coverage.
+        for j in range(6):
+            ts = _iso(now - timedelta(days=10 + j))
+            rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 100.0, 0.0, 90.0, 110.0, ts))
+        for j in range(2):
+            ts = _iso(now - timedelta(days=20 + j))
+            rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 100.0, 0.0, 95.0, 99.0, ts))
+        _make_forecast_db_with_bounds(db_path, rows)
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["AAPL"]), horizon_days=30, window_days=90
+            )
+
+        row = out["rows"][0]
+        assert row["mc_coverage_n"] == 8
+        assert row["mc_coverage_pct"] == pytest.approx(75.0)
+        assert row["mc_nominal_coverage_pct"] == pytest.approx(90.0)
+        assert row["mc_interval_score"] == pytest.approx(21.0)
+        assert row["mc_coverage_reason"] is None
+
+    def test_mc_coverage_cold_start_degrades_honestly(self, tmp_path):
+        """A symbol with no bounded forecast history yet gets the same honest
+        degrade as the existing decay_pct cold-start case -- never a
+        fabricated coverage/interval-score number (CONSTRAINT #4)."""
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        # AAPL has ordinary (unbounded) arima history so the symbol clears
+        # the "any_history" bar and its row is actually returned, but zero
+        # monte_carlo rows with published bounds.
+        rows = []
+        for j in range(12):
+            ts = _iso(now - timedelta(days=5 + j))
+            rows.append(("AAPL", "arima", 30, ts, 100.0, 101.0, 1.0, ts))
+        _make_forecast_db(db_path, rows)
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["AAPL"]), horizon_days=30, window_days=90, min_obs=10
+            )
+
+        row = out["rows"][0]
+        assert row["mc_coverage_n"] == 0
+        assert row["mc_coverage_pct"] is None
+        assert row["mc_interval_score"] is None
+        assert row["mc_nominal_coverage_pct"] == pytest.approx(90.0)
+        assert row["mc_coverage_reason"]
+
+    def test_mc_coverage_via_real_forecast_tracker_record_and_update(self, tmp_path):
+        """End-to-end through the REAL ForecastTracker.record_forecasts(...,
+        model_bounds=...) + update_actuals(...) API (not a hand-built sqlite
+        fixture) -- proves the wiring works against genuinely-written rows,
+        not just a hand-shaped table."""
+        from forecasting.forecast_tracker import ForecastTracker
+
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        tracker = ForecastTracker(db_path=str(db_path))
+
+        # 6 rows whose published interval contains the eventual actual price
+        # (covered), 2 whose interval does not (missed) -- comfortably past
+        # the 30-day horizon relative to `now` so update_actuals treats every
+        # row as due. 30 horizon_days is BUSINESS days (~42 calendar days),
+        # so offsets need real margin past that, not just "> 30 days".
+        for j in range(6):
+            ts = now - timedelta(days=55 + j)
+            tracker.record_forecasts(
+                "ZZTEST", 30, {"monte_carlo": 100.0}, forecast_ts=ts,
+                model_bounds={"monte_carlo": (90.0, 110.0)},
+            )
+        for j in range(2):
+            ts = now - timedelta(days=65 + j)
+            tracker.record_forecasts(
+                "ZZTEST", 30, {"monte_carlo": 100.0}, forecast_ts=ts,
+                model_bounds={"monte_carlo": (95.0, 99.0)},
+            )
+
+        # Force the fallback-price path (deterministic actual_price for every
+        # row) rather than a real HistoricalStore due-date-close lookup,
+        # which would depend on real market data this unit test must not
+        # touch.
+        with mock.patch.object(settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", False):
+            updated = tracker.update_actuals("ZZTEST", 30, actual_price=100.0, as_of=now)
+        assert updated == 8
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["ZZTEST"]), horizon_days=30, window_days=90
+            )
+
+        row = out["rows"][0]
+        assert row["mc_coverage_n"] == 8
+        assert row["mc_coverage_pct"] == pytest.approx(75.0)
+        assert row["mc_interval_score"] == pytest.approx(21.0)
+        assert row["mc_coverage_reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# _forecast_coverage_stats_by_symbol (direct)
+# ---------------------------------------------------------------------------
+
+
+class TestForecastCoverageStatsBySymbol:
+    """Direct tests of ``_forecast_coverage_stats_by_symbol`` -- the bulk-SQL
+    sibling of ``ForecastTracker.coverage_report``/``interval_score_stats``."""
+
+    def test_known_coverage_fraction(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = []
+        for j in range(6):
+            ts = _iso(now - timedelta(days=10 + j))
+            rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 100.0, 0.0, 90.0, 110.0, ts))
+        for j in range(2):
+            ts = _iso(now - timedelta(days=20 + j))
+            rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 100.0, 0.0, 95.0, 99.0, ts))
+        _make_forecast_db_with_bounds(db_path, rows)
+
+        result = obs._forecast_coverage_stats_by_symbol(str(db_path), ["AAPL"], 30, 90)
+
+        assert result["AAPL"]["n"] == 8
+        assert result["AAPL"]["coverage_pct"] == pytest.approx(75.0)
+        assert result["AAPL"]["interval_score"] == pytest.approx(21.0)
+        assert result["AAPL"]["reason"] is None
+
+    def test_below_min_obs_is_honest_none(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = []
+        for j in range(3):  # below _MC_COVERAGE_MIN_OBS (5)
+            ts = _iso(now - timedelta(days=10 + j))
+            rows.append(("MSFT", "monte_carlo", 30, ts, 100.0, 100.0, 0.0, 90.0, 110.0, ts))
+        _make_forecast_db_with_bounds(db_path, rows)
+
+        result = obs._forecast_coverage_stats_by_symbol(str(db_path), ["MSFT"], 30, 90)
+
+        assert result["MSFT"]["n"] == 3
+        assert result["MSFT"]["coverage_pct"] is None
+        assert result["MSFT"]["interval_score"] is None
+        assert "insufficient_history" in result["MSFT"]["reason"]
+        assert "n=3" in result["MSFT"]["reason"]
+        assert "min_obs=5" in result["MSFT"]["reason"]
+
+    def test_symbol_with_zero_rows_still_present(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = [
+            ("AAPL", "monte_carlo", 30, _iso(now - timedelta(days=j)), 100.0, 100.0, 0.0, 90.0, 110.0, _iso(now))
+            for j in range(6)
+        ]
+        _make_forecast_db_with_bounds(db_path, rows)
+
+        result = obs._forecast_coverage_stats_by_symbol(str(db_path), ["AAPL", "GOOG"], 30, 90)
+
+        assert set(result) == {"AAPL", "GOOG"}
+        assert result["GOOG"] == {
+            "n": 0,
+            "coverage_pct": None,
+            "interval_score": None,
+            "reason": "insufficient_history (n=0 < min_obs=5)",
+        }
+
+    def test_empty_symbols_list_returns_empty_dict(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        _make_forecast_db_with_bounds(db_path, [])
+        assert obs._forecast_coverage_stats_by_symbol(str(db_path), [], 30, 90) == {}
+
+    def test_rows_missing_bounds_or_actual_are_excluded(self, tmp_path):
+        """A row with no published interval (point-forecast model) or no
+        actualized price yet must never count toward n / coverage -- these
+        are structurally different from "the interval missed" (CONSTRAINT #4)."""
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = []
+        # 5 fully-qualified monte_carlo rows -> exactly clears min_obs.
+        for j in range(5):
+            ts = _iso(now - timedelta(days=10 + j))
+            rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 100.0, 0.0, 90.0, 110.0, ts))
+        # A point-forecast model with no bounds at all -- must be excluded.
+        for j in range(5):
+            ts = _iso(now - timedelta(days=10 + j))
+            rows.append(("AAPL", "arima", 30, ts, 100.0, 100.0, 0.0, None, None, ts))
+        # A pending (not yet actualized) monte_carlo row -- must be excluded.
+        ts = _iso(now - timedelta(days=1))
+        rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, None, None, 90.0, 110.0, ts))
+        _make_forecast_db_with_bounds(db_path, rows)
+
+        result = obs._forecast_coverage_stats_by_symbol(str(db_path), ["AAPL"], 30, 90)
+
+        assert result["AAPL"]["n"] == 5
+        assert result["AAPL"]["coverage_pct"] == pytest.approx(100.0)
+        assert result["AAPL"]["reason"] is None
 
 
 # ---------------------------------------------------------------------------

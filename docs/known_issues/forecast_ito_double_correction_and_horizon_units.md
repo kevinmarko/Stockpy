@@ -5,7 +5,9 @@
 A math/calibration audit of the forecasting and LLM subsystems found seven verified bugs (F1-F7)
 plus a structural gap: nothing in the repo had ever measured whether any forecast was any good. This
 document covers the forecast-math findings (F1, F2, F4, F5, F6, F7) and the measurement layer added to
-catch this class of bug going forward (WP6). The LLM-layer findings (options meta-labeler calibration,
+catch this class of bug going forward (WP6, now complete — see its own section below: a naive
+random-walk baseline, plus real interval-coverage/proper-scoring-rule measurement of the published
+Monte Carlo band, surfaced on Mission Control). The LLM-layer findings (options meta-labeler calibration,
 LLM sizing input, ResearchCopilot validation naming) are tracked separately in this same audit's PR
 description and in `ml/options_meta_labeler.py`'s own docstrings — this file is scoped to the
 forecast-math half plus one directly-coupled options-engine regression the fix surfaced.
@@ -75,21 +77,41 @@ forecast-math half plus one directly-coupled options-engine regression the fix s
   realized-vol label from a single return is not a meaningful training target); the remaining labels'
   `ddof` was changed `0 → 1` to match the `ddof=1` rolling features it's regressed against.
 
-### WP6 — measurement layer (partial; this is the reason none of the above was caught)
+### WP6 — measurement layer (now complete)
 
 - **Naive baseline (shipped):** a zero-cost `"naive"` pseudo-model (`forecasting/forecast_tracker.py`'s
   `MODEL_NAIVE`) is recorded at every horizon alongside the real models, via the SAME
   `record_forecasts` call (added to a copy of `model_forecasts`, never to `model_forecasts` itself, so
   it can never enter the blend). This makes "does any model beat *price stays flat*?" answerable for
   the first time.
-- **Interval coverage / CRPS / pinball loss on tracker output (deliberately deferred):** a genuine
-  coverage report needs the published `Forecast_h_Lower/Upper` band persisted alongside each point
-  forecast — an additive `forecast_errors` schema change (`forecast_lower`/`forecast_upper` columns)
-  plus new call-site wiring in `forecasting_engine.py`'s per-horizon loop. `pinball_loss` and
-  `interval_coverage` already exist as pure functions (`validation/forecast_accuracy_metrics.py`) but
-  are not yet wired to `ForecastTracker`'s own realized rows or surfaced on Mission Control's Forecast
-  Skill section. Left as an explicit, disclosed follow-up rather than a rushed, undertested schema
-  migration in the same pass as the correctness fixes above.
+- **Interval coverage + a genuine proper scoring rule (shipped):** `forecast_errors` gained two
+  additive, nullable columns — `forecast_lower`/`forecast_upper` (an `ALTER TABLE ADD COLUMN`
+  migration guarded by `PRAGMA table_info`, matching `data/historical_store.py`'s established
+  convention) — persisting the published Monte Carlo band (`run_monte_carlo`'s 5th/95th simulated-path
+  percentiles) alongside each point forecast. `record_forecasts()` gained an optional `model_bounds`
+  parameter, threaded from `forecasting_engine.py`'s per-horizon loop for the `monte_carlo` model only
+  (the only model with a genuine published interval today; every other model's bounds stay `NULL`,
+  never fabricated). Two new `ForecastTracker` methods, `coverage_report()`/`interval_score_stats()`,
+  answer "is the published 90% band actually covering ~90% of realized outcomes?" and "how tight is
+  it?" — both backed by a single shared pure function, `compute_coverage_and_interval_score()`, so the
+  formula can't drift into three independently-maintained copies (the same "one formula, not three"
+  precedent `compute_skill_weights_from_stats` already established for skill weights). Deliberately
+  **not** called CRPS: a true CRPS needs the full predictive distribution (every simulated Monte Carlo
+  path), which this table doesn't persist; the metric actually implemented is the Gneiting & Raftery
+  (2007) interval score, a genuine, honestly-named proper scoring rule computable from just the two
+  published quantile bounds and the realized price. Both are surfaced on Mission Control's
+  per-symbol Forecast Skill section (`pilots/observability.py::forecast_skill_by_symbol_summary`'s
+  new `mc_coverage_pct`/`mc_nominal_coverage_pct`/`mc_interval_score`/`mc_coverage_reason` fields,
+  rendered in `webapp/src/screens/Observability.tsx`'s `ForecastSkillBySymbolSection`) — closing the
+  original audit's own framing of this gap almost verbatim: a synthetic-ground-truth statistical test
+  (`tests/test_forecast_tracker.py::TestCoverageWithKnownGroundTruth`) proves a correctly-calibrated
+  90% band measures within tolerance of 0.90 empirical coverage on 500 independent draws from a known
+  distribution, and that a deliberately-miscalibrated (too-narrow) band is correctly flagged as
+  measuring well outside that tolerance — the coverage check the plan asked for that would have caught
+  this whole class of bug, now real. `pending`/`completed`/`n_by_model`/`decay_pct`/`decay_reason` were
+  ALSO wired into the webapp for the first time in the same pass — the backend already computed all
+  three but the frontend type/component never rendered them, a real, separate, pre-existing mock/live
+  parity gap found and closed while touching this exact section.
 
 ### A regression this fix surfaced and also fixed: GARCH `None` cascading into unrelated indicators
 
@@ -164,3 +186,12 @@ operator (not the agent — matching the precedent in
 - `pytest tests/test_technical_options_engine.py tests/test_forecasting_improvements.py
   tests/test_forecast_skill_uplift.py tests/test_cnn_lstm_worker.py tests/test_forecast_accuracy_metrics.py
   tests/test_pilots_api.py` — full regression sweep of every touched module.
+- `pytest tests/test_forecast_tracker.py -k "CoverageReport or IntervalScoreStats or ModelBounds or
+  SchemaMigration or ComputeCoverageAndIntervalScore or KnownGroundTruth"` — WP6's measurement layer:
+  schema migration idempotency, `record_forecasts(model_bounds=...)`, both new `ForecastTracker`
+  methods, the shared pure-function formula, and the synthetic-ground-truth statistical test.
+- `pytest tests/test_pilots_observability.py -k "CoverageStatsBySymbol or ForecastSkillBySymbol"` —
+  the bulk-SQL sibling and its wiring into the Mission Control composite summary.
+- `cd webapp && npm run typecheck && npx vitest run src/screens/Observability.test.tsx` — the frontend
+  rendering of the new fields (and the `decay_pct`/`n_by_model` fields that existed in the backend but
+  were never wired to the UI until this pass).

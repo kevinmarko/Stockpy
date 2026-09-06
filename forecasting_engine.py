@@ -1650,7 +1650,10 @@ class ForecastingEngine:
                     recordable_forecasts["naive"] = current_price
                 if self._tracker is not None and recordable_forecasts:
                     try:
-                        self._tracker.record_forecasts(symbol, h, recordable_forecasts, now_utc)
+                        self._tracker.record_forecasts(
+                            symbol, h, recordable_forecasts, now_utc,
+                            model_bounds={"monte_carlo": (mc_lo, mc_hi)} if m_res > 0 else None,
+                        )
                     except Exception as _exc:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
 
