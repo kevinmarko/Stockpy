@@ -131,6 +131,14 @@ If you omit `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, the pipeline still runs full
 | `FORECAST_USE_GARCH_SIGMA` | `true` | Use the GJR-GARCH(1,1) volatility (annualized, converted to daily via ÷√252) as the Monte Carlo sigma, so the MC confidence band widens in turbulent regimes and tightens in calm ones. `false` restores the naive historical-stdev sigma |
 | `FORECAST_PROPHET_WEIGHT` | `0.25` | Weight `w` given to the Prophet 30-day forecast when blending it into the 30-day ensemble: `final = base*(1-w) + prophet*w`. `0.0` disables Prophet's influence on the blend (Prophet must also be installed to have any effect) |
 
+### Exploring Platform Settings (Settings Reference & Dictionary)
+
+In the Pilots PWA under **Settings → Modules & Integrations → Settings Reference** (`/settings/reference`), you can inspect the complete dictionary of all 464 platform configuration fields organized across 14 functional domains:
+- **Search and Filter**: Filter settings by keyword or functional domain (e.g., Risk & Circuit Breakers, Options Desk & Volatility, LLM & AI Services).
+- **Liveness Indicators**: Each setting displays whether updates apply immediately or require an engine/daemon restart, plus any active capture sites.
+- **Direct Navigation**: If a setting is exposed in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP, ETF Transmission, Cache Long/Short), an **Edit here →** button navigates directly to that editor.
+- **Secret Protection**: API keys and passwords are masked (`•••• (set)` or `(not set)`) and can never be leaked or edited through the browser.
+
 ---
 
 ## 4. Choosing Your Ticker Universe

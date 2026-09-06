@@ -9,6 +9,7 @@ export function EtfTransmissionSettings() {
       backTo="/settings"
       fetchSettings={() => api.getEtfTransmissionSettings()}
       updateSettings={(values, confirm) => api.updateEtfTransmissionSettings(values, confirm)}
+      tabGuideKey="settings-etf-transmission"
     />
   );
 }

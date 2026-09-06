@@ -9,6 +9,7 @@ export function SectorSelectionSettings() {
       backTo="/settings"
       fetchSettings={() => api.getSectorSelectionSettings()}
       updateSettings={(values, confirm) => api.updateSectorSelectionSettings(values, confirm)}
+      tabGuideKey="settings-sector-selection"
     />
   );
 }

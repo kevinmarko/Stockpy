@@ -222,6 +222,10 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The market's forward-looking expectation of the underlying's annualized volatility, backed out of the option's current market price via the Black-Scholes model. Higher IV means pricier options.",
   "chance of profit":
     "The estimated probability that an option position is profitable at expiration, accounting for the premium paid. Derived from Black-Scholes: for a call, it is N(d2) where d2 uses the break-even price (strike + premium) instead of the strike alone.",
+  liveness:
+    "How and when a settings change takes effect: immediately (live in the running process), on next daemon restart (captured by runtime code or components), no effect (unreferenced setting), or env pinned (overridden by an active shell environment variable).",
+  "settings reference":
+    "A read-only comprehensive directory and explainer for all platform configuration settings, documenting default values, current values, safety categories, and liveness behavior.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -478,6 +482,54 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Admin and execution capabilities, grouped into two kinds. Write & Execution Gates enable or disable writes, live trading execution, AI generation APIs, and critical automation loops — some require typed confirmation before toggling because they can fundamentally change platform behavior from 'advisory-only' to 'live trading execution'. Diagnostic & Data Features are read-only measurement/data-source switches with no execution risk of their own.",
     keyConcepts: ["advisory only", "kill switch"],
+  },
+  "settings-tunables": {
+    title: "Runtime Tunables",
+    description:
+      "General platform settings governing position sizing, risk limits, HMM regime detection, forecasting models, and operations. All modifications are advisory only — tuning changes what the platform computes and suggests, never placing broker orders automatically.",
+    keyConcepts: ["kelly target", "regime multiplier", "risk gate", "circuit breaker"],
+  },
+  "settings-cache-long-short": {
+    title: "Cache Long/Short Settings",
+    description:
+      "Configuration for the Cache Long/Short tax-loss harvesting engine. Controls scan frequency, maximum beta drift, proxy hedge correlation thresholds, and wash-sale safety windows.",
+    keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
+  },
+  "settings-paper-broker": {
+    title: "Paper Broker Settings",
+    description:
+      "Configuration for the simulated execution backend. Governs starting cash balance, commission schedules, slippage modeling, and paper trade persistence in SQLite.",
+    keyConcepts: ["paper broker", "tiered cost model", "slippage"],
+  },
+  "settings-sentiment": {
+    title: "Sentiment & News Ingestion Settings",
+    description:
+      "Parameters for news ingestion pipelines and sentiment scoring. Manages active news providers (FMP, StockTwits, Reddit, EDGAR, GDELT), FinBERT model batching, and attention proxy feeds.",
+    keyConcepts: ["finbert classification", "news provider", "sentiment score"],
+  },
+  "settings-sector-selection": {
+    title: "Sector Selection Settings",
+    description:
+      "Configuration for thematic and sector-based rotation. Controls semantic embedding models, business description similarity lookbacks, and GDELT sector heat factor weighting.",
+    keyConcepts: ["sector heat factor", "semantic similarity", "correlation cluster"],
+  },
+  "settings-fmp": {
+    title: "Financial Modeling Prep Settings",
+    description:
+      "API keys, rate limits, endpoints, and adjustment modes for the primary market data provider (FMP). Ensure FMP_BARS_ADJUSTMENT matches your analytical expectations (dividend-adjusted vs. unadjusted).",
+    keyConcepts: ["advisory only", "auto-refresh", "safety telemetry"],
+  },
+  "settings-etf-transmission": {
+    title: "ETF Volatility Transmission Settings",
+    description:
+      "Measurement and risk overlay settings for ETF arbitrage volatility transmission (Ben-David, Franzoni & Moussawi 2018). Controls ownership reference thresholds, comovement R² windows, and sizing derate bounds.",
+    keyConcepts: ["etf transmission", "market session", "risk gate"],
+  },
+  "settings-reference": {
+    title: "Settings Reference",
+    description:
+      "A complete read-only catalog of all 464 platform configuration settings across 14 functional domains. Surfaces default values, live process values (secrets masked), liveness behavior (immediately, restart required, no-op, or env-pinned), and direct links to active settings editor screens.",
+    keyConcepts: ["advisory only", "liveness", "settings reference"],
   },
   "symbol-detail": {
     title: "Symbol Detail",

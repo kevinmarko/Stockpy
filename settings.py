@@ -1878,23 +1878,50 @@ class Settings(BaseSettings):
     )
 
     # --- Financial constants ---
-    RISK_FREE_RATE: float = 0.045
-    MARKET_RISK_PREMIUM: float = 0.055
-    REQUIRED_RETURN_RATE: float = 0.08
-    MAX_PORTFOLIO_HEAT: float = 0.06
+    RISK_FREE_RATE: float = Field(
+        default=0.045,
+        description="The annualized risk-free interest rate benchmark (e.g. 0.045 for 4.5%) used across valuation, Sharpe ratios, and options pricing.",
+    )
+    MARKET_RISK_PREMIUM: float = Field(
+        default=0.055,
+        description="Expected equity market risk premium over the risk-free rate used for discount rates and CAPM calculations.",
+    )
+    REQUIRED_RETURN_RATE: float = Field(
+        default=0.08,
+        description="Minimum acceptable rate of return (hurdle rate) for evaluating security and investment prospects.",
+    )
+    MAX_PORTFOLIO_HEAT: float = Field(
+        default=0.06,
+        description="Maximum fraction of portfolio equity permitted to be at risk across all open trades simultaneously.",
+    )
 
     # --- Position sizing (sizing/kelly.py, sizing/vol_target.py) ---
-    KELLY_FRACTION: float = 0.5   # half-Kelly
-    KELLY_CAP: float = 0.20
-    VOL_TARGET: float = 0.10
-    MAX_LEVERAGE: float = 2.0
+    KELLY_FRACTION: float = Field(
+        default=0.5,
+        description="Fractional Kelly sizing multiplier (e.g. 0.5 for half-Kelly) applied to reduce volatility and avoid overbetting.",
+    )
+    KELLY_CAP: float = Field(
+        default=0.20,
+        description="Upper ceiling on raw unconstrained Kelly position weight (e.g. 0.20 for 20% of capital) for any single asset.",
+    )
+    VOL_TARGET: float = Field(
+        default=0.10,
+        description="Annualized target portfolio volatility (e.g. 0.10 for 10%) used for inverse-volatility fallback sizing.",
+    )
+    MAX_LEVERAGE: float = Field(
+        default=2.0,
+        description="Maximum portfolio leverage ratio permissible under volatility targeting and leveraged position sizing.",
+    )
     # Hard ceiling on any single-name position weight, applied as a final clamp
     # in StrategyEngine._calculate_kelly_sizing regardless of sizing path (Kelly
     # or volatility-target fallback). Chosen as the middle ground between the
     # old score-bracket system's hard 25% cap and the new vol-target fallback's
     # uncapped-up-to-MAX_LEVERAGE (2.0x) behavior: 1.0 = up to 100% of capital
     # in one name, but no added leverage on top of full allocation.
-    MAX_POSITION_WEIGHT: float = 1.0
+    MAX_POSITION_WEIGHT: float = Field(
+        default=1.0,
+        description="Hard ceiling on any single-name position weight, applied as a final clamp in StrategyEngine._calculate_kelly_sizing.",
+    )
 
     # --- Portfolio-level gross exposure cap (sizing/position_sizer.py) ---
     # Applied ACROSS a cycle's whole universe (after every name's own
@@ -1908,7 +1935,10 @@ class Settings(BaseSettings):
     # in execution mode with high Kelly allocations across >8 concurrent names,
     # it applies a uniform scalar reducing leverage to 2.0x while preserving
     # relative cross-sectional signal conviction.
-    MAX_PORTFOLIO_GROSS: float = 2.0
+    MAX_PORTFOLIO_GROSS: float = Field(
+        default=2.0,
+        description="Portfolio-level gross exposure cap across the cycle universe (after per-name clamps), preserving relative cross-sectional conviction.",
+    )
 
     # --- Cap-aware escalation (sizing/position_sizer.py + sizing/cap_audit_store.py) ---
     # Opt-in (default False): a name that binds the same hard sizing ceiling
@@ -1916,15 +1946,27 @@ class Settings(BaseSettings):
     # its weight further scaled by SIZING_CAP_ESCALATION_FACTOR. Disabled by
     # default so existing deployments see no behavior change until an
     # operator explicitly enables it.
-    SIZING_CAP_ESCALATION_ENABLED: bool = False
-    SIZING_CAP_ESCALATION_THRESHOLD_CYCLES: int = 5
-    SIZING_CAP_ESCALATION_FACTOR: float = 0.5
+    SIZING_CAP_ESCALATION_ENABLED: bool = Field(
+        default=False,
+        description="Opt-in: reduces position weight when an asset repeatedly binds the hard sizing ceiling for consecutive cycles.",
+    )
+    SIZING_CAP_ESCALATION_THRESHOLD_CYCLES: int = Field(
+        default=5,
+        description="Number of consecutive cycles binding the sizing cap before escalation haircut applies.",
+    )
+    SIZING_CAP_ESCALATION_FACTOR: float = Field(
+        default=0.5,
+        description="Haircut scalar applied to sizing weight for an asset under active cap-escalation penalty.",
+    )
 
     # --- Cap-event audit + alerting (sizing/cap_audit_store.py) ---
     # Durable log of every cycle's capping events, independent of the
     # in-memory dashboard_df. Best-effort write (see RunHistoryStore
     # precedent): a DB failure only logs a warning, never blocks a run.
-    SIZING_CAP_AUDIT_ENABLED: bool = True
+    SIZING_CAP_AUDIT_ENABLED: bool = Field(
+        default=True,
+        description="Enables durable database logging of every cycle's position capping events to SQLite/Postgres.",
+    )
     # Opt-in (default False): KELLY_CAP binding is a routine, expected event
     # for an established aggregate-Kelly book, not itself a new risk signal --
     # an unconditional alert here would start emitting brand-new WARNING
@@ -1934,26 +1976,38 @@ class Settings(BaseSettings):
     # always-on, independent of whether discord/slack/email are configured).
     # Mirrors this repo's convention for new default-off behavior toggles
     # (FORECAST_SKILL_WEIGHTING_ENABLED, ORCHESTRATOR_DAEMON_ENABLED, etc.).
-    SIZING_CAP_ALERT_ENABLED: bool = False
+    SIZING_CAP_ALERT_ENABLED: bool = Field(
+        default=False,
+        description="Opt-in: fires alert notifications when the fraction of capped names in a cycle exceeds threshold.",
+    )
     # Fires observability.alerts.send_alert("WARNING", ...) -- the platform's
     # unified multi-channel dispatcher (console/file always-on, plus
     # discord/slack/email when configured; NOT the separate legacy
     # ALERT_WEBHOOK_URL POST, which is order_manager.py's reconciliation-drift-
     # specific mechanism) -- when SIZING_CAP_ALERT_ENABLED is True AND the
     # fraction of names capped in one cycle meets or exceeds this threshold.
-    SIZING_CAP_ALERT_THRESHOLD_PCT: float = 0.30
+    SIZING_CAP_ALERT_THRESHOLD_PCT: float = Field(
+        default=0.30,
+        description="Fraction of universe names binding sizing caps in one cycle required to trigger sizing-cap alert.",
+    )
 
     # --- Symbol rating history (rating/symbol_rating.py, rating/symbol_rating_store.py) ---
     # Durable per-symbol GOOD/BAD rating history, built on top of the
     # existing per-cycle final_score / Action Signal. Diagnostic-only by
     # default -- mirrors SIZING_CAP_AUDIT_ENABLED -- no symbol is ever
     # excluded from tracking/buying by this flag alone.
-    SYMBOL_RATING_ENABLED: bool = True
+    SYMBOL_RATING_ENABLED: bool = Field(
+        default=True,
+        description="Tracks durable per-symbol GOOD/BAD rating history based on per-cycle final scores.",
+    )
     # A symbol's final_score below this is classified BAD this cycle.
     # Matches strategy_engine.py's own RISK REDUCE cutoff -- the existing
     # single source of truth for "this score is bad", not a fresh
     # independent threshold.
-    SYMBOL_RATING_BAD_SCORE_THRESHOLD: float = 35.0
+    SYMBOL_RATING_BAD_SCORE_THRESHOLD: float = Field(
+        default=35.0,
+        description="Final composite score cutoff below which a ticker is rated BAD for the cycle.",
+    )
     # Opt-in (default False): when True, a non-held symbol rated BAD for
     # SYMBOL_RATING_DROP_THRESHOLD_CYCLES consecutive cycles is subtracted
     # from the resolved tracked universe (data/portfolio_sync.py::resolve_universe,
@@ -1963,11 +2017,17 @@ class Settings(BaseSettings):
     # so nothing changes silently on a git pull for a live capital account.
     # A currently-held position is NEVER excluded regardless of this flag --
     # see rating/symbol_rating.py::should_exclude.
-    SYMBOL_RATING_AUTO_DROP_ENABLED: bool = False
+    SYMBOL_RATING_AUTO_DROP_ENABLED: bool = Field(
+        default=False,
+        description="Opt-in: automatically subtracts persistently BAD-rated unheld symbols from the resolved tracked universe.",
+    )
     # Consecutive BAD-rated cycles (non-held symbols only) before auto-drop,
     # when SYMBOL_RATING_AUTO_DROP_ENABLED is True. Mirrors
     # SIZING_CAP_ESCALATION_THRESHOLD_CYCLES's default.
-    SYMBOL_RATING_DROP_THRESHOLD_CYCLES: int = 5
+    SYMBOL_RATING_DROP_THRESHOLD_CYCLES: int = Field(
+        default=5,
+        description="Consecutive BAD-rated cycles required for an unheld symbol to be auto-dropped from tracking.",
+    )
 
     # --- ETF volatility-transmission sizing derate (risk/etf_transmission.py) ---
     # Ben-David, Franzoni & Moussawi (2018, JF): ETF arbitrage transmits a
@@ -2063,7 +2123,10 @@ class Settings(BaseSettings):
             "GCLOUD_BIN below."
         ),
     )
-    DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
+    DEFAULT_TICKERS: list[str] = Field(
+        default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"],
+        description="Default baseline stock universe tracked and analyzed when no other watchlist or held positions are discovered.",
+    )
     SYNC_WATCHLIST_FILES: Optional[str] = Field(
         default=None,
         description=(
@@ -2092,7 +2155,10 @@ class Settings(BaseSettings):
             '["http://localhost:3000", "https://app.example.com"].'
         ),
     )
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = Field(
+        default="INFO",
+        description="Global system logging verbosity level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
+    )
     # Number of worker threads for the per-symbol advisory loop in main.run_once().
     # Each engine.advisory.evaluate() call is independent (per-call engine
     # construction, read-only shared inputs), so the loop parallelizes safely.

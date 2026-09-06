@@ -9,6 +9,7 @@ export function SettingsCacheLongShort() {
       backTo="/settings"
       fetchSettings={() => api.getCacheLongShortSettings()}
       updateSettings={(values, confirm) => api.updateCacheLongShortSettings(values, confirm)}
+      tabGuideKey="settings-cache-long-short"
     />
   );
 }

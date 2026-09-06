@@ -1,0 +1,43 @@
+# Task tracker: Settings & Flags Audit → Fix Drift, Build Settings Reference Explainer, Expose Promoted Subset
+
+- [x] **WP1: Fix Feature Flags mock/live parity bug**
+  - [x] Added 11 missing feature flags + `MULTI_BROKER_GATEWAY_ENABLED` to `FEATURE_FLAGS_TUNABLE_DEFS` in `webapp/src/api/mock.ts`.
+  - [x] Added regression test `test_mock_ts_feature_flags_parity` in `tests/test_feature_flags_registry.py`.
+- [x] **WP2: Wire up orphaned TabGuide + add missing entries**
+  - [x] Added `tabGuideKey?: string` prop to `GenericSettingsEditor.tsx` rendering `<TabGuide>`.
+  - [x] Wired `tabGuideKey` to all 8 settings wrapper screens (`FeatureFlagsScreen`, `SettingsManager`, `SettingsCacheLongShort`, `SettingsPaperBroker`, `SentimentSettings`, `SectorSelectionSettings`, `FmpSettings`, `EtfTransmissionSettings`).
+  - [x] Added glossary terms (`"liveness"`, `"settings reference"`) and 8 `TAB_HELP` entries in `webapp/src/help/helpContent.ts`.
+  - [x] Verified `webapp/src/help/helpContent.test.ts` (13/13 passing).
+- [x] **WP3: Backend `GET /settings/reference` endpoint**
+  - [x] Created `pilots/settings_domains.py` mapping all 464 `settings.py` fields across 14 domains without heavy engine imports.
+  - [x] Backfilled 22 missing `Field(description=...)` entries in `settings.py` (100% of 464 fields documented).
+  - [x] Implemented `_build_editable_at_index()` and `GET /settings/reference` in `api/pilots_api.py`.
+  - [x] Masked secrets as `"•••• (set)"` / `"(not set)"` (fail-closed, never leaked).
+  - [x] Sourced runtime liveness metadata directly from `pilots/settings_meta.py::field_metadata()`.
+- [x] **WP4: Backend Options Desk Automation Tunables group**
+  - [x] Added "Options Desk Automation" group (13 fields) to `_TUNABLE_GROUPS` in `api/pilots_api.py`.
+  - [x] Excluded `OPTIONS_EARNINGS_CRUSH_ENABLED` (confirmed `no_op`).
+- [x] **WP5: Backend Circuit Breaker group + misc fold-ins**
+  - [x] Added "Circuit Breaker" group (6 fields) to `_TUNABLE_GROUPS` in `api/pilots_api.py`.
+  - [x] Bounded `CIRCUIT_BREAKER_OFI_THRESHOLD` with upper bound `10000.0`.
+  - [x] Folded 6 fields into "Financial Constants" and "Runtime & Ops".
+  - [x] Added `MULTI_BROKER_GATEWAY_ENABLED` to `pilots/feature_flags.py::WRITE_GATE_REASONS`.
+- [x] **WP6: Frontend Settings Reference screen**
+  - [x] Added `SettingsReferenceField` and `SettingsReferenceResponse` to `webapp/src/api/types.ts`.
+  - [x] Added `getSettingsReference()` to `client.ts` (`liveApi`) and `mock.ts` (`mockApi`).
+  - [x] Built representative multi-domain mock fixture in `mock.ts`.
+  - [x] Created `webapp/src/screens/SettingsReference.tsx` at `/settings/reference` with search, domain filter dropdown, secret masking, liveness badges, and "Edit here →" navigation.
+  - [x] Added `SettingsReferenceLink` card to `webapp/src/screens/SettingsModules.tsx`.
+  - [x] Registered route in `webapp/src/App.tsx`.
+- [x] **WP7: Frontend mock parity for promoted fields + tests**
+  - [x] Updated `TUNABLE_DEFS` in `mock.ts` with all ~25 newly promoted fields.
+  - [x] Created `webapp/src/screens/SettingsReference.test.tsx` (3 tests).
+  - [x] Updated `SettingsModules.test.tsx` and `SettingsPaperBroker.test.tsx` mocks.
+  - [x] Verified `npm run --prefix webapp typecheck` clean (0 errors).
+  - [x] Verified all 177 webapp Vitest test suites (1957 tests) passing.
+- [x] **WP8: Documentation + backend tests**
+  - [x] Created `tests/test_settings_reference.py` with 7 comprehensive tests (auth, secret masking, 464-key completeness, editable_at, no-op guardrail).
+  - [x] Updated `tests/test_pilots_api_tunables.py` and `tests/test_feature_flags_registry.py` (all 150 tests passing).
+  - [x] Updated `docs/architecture/webapp-and-gui.md`.
+  - [x] Updated `docs/HOW_TO_GUIDE.md`.
+  - [x] Updated `CLAUDE.md` and synced to `AGENTS.md`.

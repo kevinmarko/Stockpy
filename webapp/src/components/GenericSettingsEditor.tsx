@@ -25,6 +25,7 @@ import {
 import { Toggle } from "./Toggle";
 import { TunableGroupCard } from "./TunableGroupCard";
 import { Modal } from "./Modal";
+import { TabGuide } from "./TabGuide";
 import { theme } from "../theme";
 import { TagInput } from "./TagInput";
 import {
@@ -121,6 +122,8 @@ export interface GenericSettingsEditorProps {
    * four editors pass nothing and render nothing extra, exactly as before.
    */
   dangerZone?: ReactNode;
+  /** Optional TabGuide key into TAB_HELP for instructional panel. */
+  tabGuideKey?: string;
 }
 
 export function GenericSettingsEditor({
@@ -133,6 +136,7 @@ export function GenericSettingsEditor({
   emptyTitle = "No settings exposed",
   emptyHint = "The backend returned no editable settings for this section.",
   dangerZone,
+  tabGuideKey,
 }: GenericSettingsEditorProps) {
   const nav = useNavigate();
   const { data, loading, error, status, reload } = useApi<TunablesResponse>(fetchSettings, []);
@@ -172,6 +176,12 @@ export function GenericSettingsEditor({
           <p className="screen-sub" style={{ marginTop: "var(--s-1)" }}>{subtitle}</p>
         </div>
       </div>
+
+      {tabGuideKey && (
+        <div style={{ marginTop: "var(--s-2)", marginBottom: "var(--s-3)" }}>
+          <TabGuide tabKey={tabGuideKey} />
+        </div>
+      )}
 
       {appliesNotice && (
         <Notice

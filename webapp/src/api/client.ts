@@ -85,6 +85,7 @@ import type { StrategyReportCardSnapshot,
   SentimentHistory,
   TunablesResponse,
   TunablesUpdateResult,
+  SettingsReferenceResponse,
   SettingsConfirmMap,
   SymbolDetail,
   SymbolCompareResponse,
@@ -836,6 +837,7 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  getSettingsReference: () => http<SettingsReferenceResponse>("/settings/reference"),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {

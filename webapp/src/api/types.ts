@@ -2006,6 +2006,27 @@ export interface TunablesUpdateResult {
   note?: string;
 }
 
+/** One field row in GET /settings/reference. */
+export interface SettingsReferenceField {
+  key: string;
+  category: "allowed" | "secret" | "excluded";
+  value: number | boolean | string | null;
+  default: number | boolean | string | null;
+  type: TunableFieldType;
+  description: string | null;
+  domain: string;
+  dangerous: boolean;
+  liveness: TunableLiveness;
+  editable_at: string | null;
+}
+
+/** GET /settings/reference — platform-wide settings catalog with metadata. */
+export interface SettingsReferenceResponse {
+  fields: SettingsReferenceField[];
+  total: number;
+  domains: string[];
+}
+
 // ---------------------------------------------------------------------------
 // GET /strategy/health — catalog-wide deployability-gate breakdown. A bird's-
 // eye view across EVERY Pilot of WHY its underlying validated strategy is or
