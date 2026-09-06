@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "31917d5ccfe266846fd9046eff9850da08e84a67",
+    "git_commit": "8556bf259b663271e4f0c0cb297dfc81051fa9c6",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4287,7 +4287,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 384,
+      "total_reads": 385,
       "distinct_fields": 220,
       "counts": {
         "FMP_API_KEY": 11,
@@ -4306,13 +4306,13 @@
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 5,
         "ANTHROPIC_API_KEY": 4,
         "DATA_FETCH_MAX_CONCURRENCY": 4,
+        "FMP_BARS_ADJUSTMENT": 4,
         "FMP_MAX_SECONDS_PER_CYCLE": 4,
         "FMP_SCREENER_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
         "OPTIONS_0DTE_HARD_EXIT_TIME": 4,
         "ROBINHOOD_EXECUTION_MODE": 4,
-        "FMP_BARS_ADJUSTMENT": 3,
         "FMP_NEWS_MAX_PAGES": 3,
         "FMP_NEWS_PAGE_LIMIT": 3,
         "FORECAST_BACKFILL_HORIZONS": 3,
