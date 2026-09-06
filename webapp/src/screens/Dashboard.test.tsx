@@ -136,7 +136,7 @@ function makePilot(overrides: Partial<PilotSummary> & Pick<PilotSummary, "id" | 
     top_holdings: [],
     aum_proxy: 0,
     followers_proxy: 0,
-    long_only: true,
+    long_only: true, followable: true,
     ...overrides,
   };
 }

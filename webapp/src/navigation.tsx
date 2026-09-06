@@ -90,6 +90,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/compare", label: "Compare", ico: Scale, match: (p) => p.startsWith("/compare"), section: "research" },
   { to: "/models", label: "Models", ico: BrainCircuit, match: (p) => p.startsWith("/models"), section: "research" },
   { to: "/strategy-health", label: "Strategy Health", ico: Shield, match: (p) => p.startsWith("/strategy-health"), section: "research" },
+  { to: "/strategy-report-card", label: "Strategy Report Card", ico: Shield, match: (p) => p.startsWith("/strategy-report-card"), section: "research" },
   { to: "/pairs", label: "Pairs radar", ico: Link, match: (p) => p.startsWith("/pairs"), section: "research" },
   { to: "/options", label: "Options", ico: Target, match: (p) => p.startsWith("/options"), section: "research" },
   { to: "/signals", label: "Signal Breakdown", ico: Dna, match: (p) => p.startsWith("/signals"), section: "research" },

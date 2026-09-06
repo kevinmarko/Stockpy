@@ -76,7 +76,8 @@ export type PilotCategory =
   | "Macro"
   | "Risk"
   | "Sentiment"
-  | "Forecast";
+  | "Forecast"
+  | "Options";
 
 /**
  * Honest, PBO/DSR-gated backtest headline from reports/<id>_validation_summary.json.
@@ -107,6 +108,7 @@ export interface PilotSummary {
   aum_proxy: number; // derived from follows.json (honest, local)
   followers_proxy: number;
   long_only: boolean;
+  followable: boolean;
 }
 
 export interface Holding {
@@ -5894,3 +5896,38 @@ export interface TrendsStitchDemoResponse {
   raw_curves: TrendsCurve[];
   stitched_curve: TrendsCurve;
 }
+
+export interface StrategyReportCardPredicted {
+  sharpe: number | null;
+  max_drawdown: number | null;
+  pbo: number | null;
+  dsr: number | null;
+  deployable: boolean | null;
+  reason: string | null;
+  n_trials: number | null;
+  is_options_selling: boolean | null;
+  stress_gate_passed: boolean | null;
+  report_date: string | null;
+}
+
+export interface StrategyReportCardActual {
+  trade_count: number;
+  win_rate: number | null;
+  avg_realized_pnl_pct: number | null;
+  realized_sharpe_proxy: number | null;
+  max_cumulative_drawdown_usd: number | null;
+  total_realized_pnl_usd: number | null;
+  first_exit_ts: string | null;
+  last_exit_ts: string | null;
+  reason: string | null;
+}
+
+export interface StrategyReportCardRow {
+  pilot_id: string;
+  name: string;
+  category: string;
+  is_pilot: boolean;
+  predicted: StrategyReportCardPredicted;
+  actual: StrategyReportCardActual;
+}
+

@@ -21,6 +21,7 @@ from execution.options_queue_builder import (
     _resolve_symbols,
     passes_premium_gate,
 )
+from pilots.catalog import OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID
 from pilots.options_risk import parse_option_symbol
 from pilots.order_sizing import calculate_multi_leg_option_sizing
 from settings import settings
@@ -337,6 +338,7 @@ class OptionsPaperExecutor:
             target_dte = item.get("target_dte", 30)
 
             strategy_id = item.get("strategy_id", strategy)
+            strategy_id = OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.get(strategy_id, strategy_id)
             pilot_id = item.get("pilot_id")
             experiment_arm = item.get("experiment_arm")
 
@@ -748,6 +750,7 @@ class OptionsPaperExecutor:
             net_cash_impact = candidate.get("net_cash_impact", 0.0)
             commission = candidate.get("commission", 0.0)
             reason = candidate.get("trigger_reason")
+            # Leave fallback untouched since exit trades must trace back exactly to whatever ID the entry actually used
             strategy_id = candidate.get("strategy_id", strategy)
             pilot_id = candidate.get("pilot_id")
             experiment_arm = candidate.get("experiment_arm")
@@ -853,6 +856,9 @@ class OptionsPaperExecutor:
         earnings_date = candidate.get("earnings_date")
         effective_strategy_name = strategy_name if strategy_name is not None else "Earnings Crush"
         strategy_id = candidate.get("strategy_id", effective_strategy_name)
+        strategy_id = OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.get(strategy_id, strategy_id)
+        if strategy_id == "Earnings Crush":
+            strategy_id = "earnings-crush"
         pilot_id = candidate.get("pilot_id")
         experiment_arm = candidate.get("experiment_arm")
         target_dte = candidate.get("target_dte", 7)
@@ -1032,7 +1038,7 @@ class OptionsPaperExecutor:
             ec_orders = (
                 session.query(PaperOrder)
                 .filter(
-                    (PaperOrder.strategy_id == "Earnings Crush")
+                    (PaperOrder.strategy_id.in_(["Earnings Crush", "earnings-crush"]))
                     | ((PaperOrder.client_order_id.like("EC-%")) & (~PaperOrder.client_order_id.like("%_L%")))
                 )
                 .filter(

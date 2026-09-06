@@ -107,6 +107,7 @@ def test_multi_leg_option_order_fills_debit_spread(mock_store_cls):
     assert kwargs["contracts"] == 2
     assert len(kwargs["legs"]) == 2
     assert kwargs["commission_and_fees"] == 2 * 2 * 0.65  # $2.60
+    assert kwargs["strategy_id"] == "Manual Trade"
 
 
 @patch("pilots.paper_broker_options_order.PaperAccountStore")
@@ -134,6 +135,7 @@ def test_multi_leg_option_order_fills_credit_spread(mock_store_cls):
     mock_store.apply_multi_leg_fill.assert_called_once()
     _, kwargs = mock_store.apply_multi_leg_fill.call_args
     assert kwargs["net_cash_impact"] > 0  # Net proceeds
+    assert kwargs["strategy_id"] == "Manual Trade"
 
 
 @patch("pilots.paper_broker_options_order.PaperAccountStore")

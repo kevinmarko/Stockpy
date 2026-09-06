@@ -179,6 +179,7 @@ from pilots import (
     simulation,
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
+    strategy_report_card,
     symbols,
     trade_history,
     validation_trend as validation_trend_reader,
@@ -1010,6 +1011,7 @@ def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) ->
         "aum_proxy": store.aum_for(pilot.id),
         "followers_proxy": store.followers_for(pilot.id),
         "long_only": pilot.long_only,
+        "followable": getattr(pilot, "followable", True),
     }
 
 
@@ -2272,6 +2274,14 @@ def get_strategy_matrix() -> Dict[str, Any]:
     )
     payload["env_drift"] = _env_drift()
     return payload
+
+
+@app.get("/strategy/report-card", dependencies=[Depends(require_read_token)])
+def get_strategy_report_card() -> List[Dict[str, Any]]:
+    """Performance grades and metrics for EVERY catalog Pilot's underlying
+    validated strategy. Surfaces the full suite of out-of-sample metrics from
+    the latest validation report."""
+    return strategy_report_card.strategy_report_card_rows()
 
 
 @app.get("/strategy/health", dependencies=[Depends(require_read_token)])

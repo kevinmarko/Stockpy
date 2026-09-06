@@ -107,6 +107,10 @@ as Branch Workflow above: no per-agent carve-out.
 
 InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative analysis pipeline: fetches market/macro data, computes technical & fundamental indicators, runs multi-horizon forecasts, backtests strategies, persists signals to SQLite, and publishes results to Google Sheets / an HTML report.
 
+### Changelog
+
+- **2026-09-06: Paper-Trade `strategy_id` Vocabulary Standardization (Phase 1)**: Resolved the long-standing vocabulary mismatch between PnL attribution and the `signals.registry` by forcing every explicit write site to use the registry keys (`macd_trend`, `rsi2_mean_reversion`, etc.). `weights={}` and `followable=False` were used for the 10 new Pilot models to keep them out of the live capital allocation while preserving them in the registry. We discovered that `iron_condor` (and other options strategies) have no registry keys; thus, options strategies remain untagged for now and options-desk writers use specific strategy IDs (`short_put`, `short_call`, etc.). A `MIN_TRADES_FOR_VERDICT=10` threshold was introduced in the Strategy Report Card to ensure PnL stats aren't fabricated or noisy on tiny sample sizes. Explicitly out of scope for this pass: `main_pipeline` attribution, `queue_builder.py` advisory buckets, and existing `Manual Trade` / `Delta Hedge` / `untagged` positions which remain legitimate non-Pilot buckets.
+
 ### Key documentation files
 | File | Purpose |
 |------|---------|

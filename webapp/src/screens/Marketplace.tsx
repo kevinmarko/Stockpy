@@ -176,6 +176,13 @@ export function Marketplace() {
             <h2>Explore</h2>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "var(--s-3)" }}>
+            <Link to="/strategy-report-card" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🛡️</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Report Card</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
+                Predicted vs Actual
+              </div>
+            </Link>
             <Link to="/models" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧠</div>
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>The models</div>

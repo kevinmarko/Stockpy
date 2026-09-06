@@ -105,7 +105,7 @@ from typing import Dict, List, Optional
 
 from settings import settings
 
-__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot"]
+__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot", "OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID"]
 
 
 @dataclass(frozen=True)
@@ -119,7 +119,7 @@ class Pilot:
     name:
         Human-friendly display name (e.g. ``"Trend Follower"``).
     category:
-        One of ``"Momentum" | "Mean Reversion" | "Factor" | "Blend"`` — a
+        One of ``"Momentum" | "Mean Reversion" | "Factor" | "Blend" | "Options"`` — a
         rendering hint for marketplace grouping.
     description:
         Retail-friendly 1-2 sentence explainer.
@@ -134,6 +134,8 @@ class Pilot:
         Join key into ``scripts.refresh_validations.STRATEGY_REGISTRY`` for the
         Pilot's honest, PBO/DSR-gated backtest, or ``None`` when no honest match
         exists.
+    followable:
+        Whether the Pilot can be followed by a user.
     """
 
     id: str
@@ -143,6 +145,7 @@ class Pilot:
     weights: Dict[str, float] = field(default_factory=dict)
     long_only: bool = False
     validation_strategy_id: Optional[str] = None
+    followable: bool = True
 
 
 def _full_blend_weights() -> Dict[str, float]:
@@ -569,8 +572,108 @@ PILOTS: List[Pilot] = [
         long_only=False,
         validation_strategy_id="options_flow_sentiment",
     ),
+    Pilot(
+        id="earnings-crush",
+        name="Earnings Volatility Crush",
+        category="Options",
+        description="Sells inflated premium into scheduled earnings binary events.",
+        weights={},
+        followable=False,
+        validation_strategy_id=None,
+    ),
+    Pilot(
+        id="dispersion-trading",
+        name="Dispersion Trading",
+        category="Options",
+        description="Trades index volatility against single-name volatility components.",
+        weights={},
+        followable=False,
+        validation_strategy_id=None,
+    ),
+    Pilot(
+        id="zero-dte-momentum-breakout",
+        name="0DTE Momentum Breakout",
+        category="Options",
+        description="Intraday momentum strategy using same-day expirations.",
+        weights={},
+        followable=False,
+        validation_strategy_id=None,
+    ),
+    Pilot(
+        id="copula-stat-arb",
+        name="Copula Stat Arb",
+        category="Options",
+        description="Statistical arbitrage using copula-derived joint probabilities.",
+        weights={},
+        followable=False,
+        validation_strategy_id="copula_stat_arb",
+    ),
+    Pilot(
+        id="put-credit-spread",
+        name="Put Credit Spread",
+        category="Options",
+        description="Defined-risk bullish/neutral premium selling strategy.",
+        weights={},
+        followable=False,
+        validation_strategy_id="put_credit_spread",
+    ),
+    Pilot(
+        id="call-credit-spread",
+        name="Call Credit Spread",
+        category="Options",
+        description="Defined-risk bearish/neutral premium selling strategy.",
+        weights={},
+        followable=False,
+        validation_strategy_id="call_credit_spread",
+    ),
+    Pilot(
+        id="call-debit-spread",
+        name="Call Debit Spread",
+        category="Options",
+        description="Defined-risk bullish directional strategy.",
+        weights={},
+        followable=False,
+        validation_strategy_id="call_debit_spread",
+    ),
+    Pilot(
+        id="put-debit-spread",
+        name="Put Debit Spread",
+        category="Options",
+        description="Defined-risk bearish directional strategy.",
+        weights={},
+        followable=False,
+        validation_strategy_id="put_debit_spread",
+    ),
+    Pilot(
+        id="covered-call",
+        name="Covered Call",
+        category="Options",
+        description="Yield enhancement strategy against existing long stock positions.",
+        weights={},
+        followable=False,
+        validation_strategy_id="covered_call",
+    ),
+    Pilot(
+        id="iron-condor",
+        name="Iron Condor",
+        category="Options",
+        description="Range-bound premium selling strategy combining credit spreads.",
+        weights={},
+        followable=False,
+        validation_strategy_id=None,
+    ),
 ]
 
+
+# Mapping of OptionsDirective strategy strings to catalog Pilot IDs
+OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID = {
+    "PUT_CREDIT_SPREAD": "put-credit-spread",
+    "CALL_CREDIT_SPREAD": "call-credit-spread",
+    "CALL_DEBIT_SPREAD": "call-debit-spread",
+    "PUT_DEBIT_SPREAD": "put-debit-spread",
+    "COVERED_CALL": "covered-call",
+    "IRON_CONDOR": "iron-condor",
+}
 
 # Fast id -> Pilot index (built once at import; catalog is static).
 _BY_ID: Dict[str, Pilot] = {p.id: p for p in PILOTS}

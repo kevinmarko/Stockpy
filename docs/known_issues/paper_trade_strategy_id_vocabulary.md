@@ -1,7 +1,7 @@
 # Paper-Trade `strategy_id` Vocabulary Is Not Standardized
 
-**Status**: Disclosed, not fixed — deferred to a future pass
-**Date**: 2026-08-24
+**Status**: Fixed (options-desk writers + 10 catalog entries + write-site renames). `main_pipeline` and the `queue_builder.py` advisory bucket remain deliberately out of scope. `Manual Trade`, `untagged`, and `Delta Hedge` remain legitimate non-Pilot buckets.
+**Date**: 2026-09-06
 **Incident Level**: Low/informational (measurement-quality gap, not a correctness bug)
 
 ## Root Cause
@@ -122,7 +122,9 @@ refactor that risks behavior changes well outside a targeted bug-fix pass —
 it would touch every writer's call signature, `transactions_store` query
 call sites, and any existing Kelly warm-up history already accumulated under
 the old labels (a silent historical-data migration question, not just a
-code change). This doc records the landscape so that future work has an
+code change). Specifically, `main_pipeline` attribution and the `queue_builder.py`
+advisory buckets remain deliberately out of scope for this vocabulary standardization.
+This doc records the landscape so that future work has an
 accurate map instead of having to re-derive it.
 
 ## Suggested direction for a future pass

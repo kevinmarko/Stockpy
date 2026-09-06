@@ -97,7 +97,7 @@ def test_pilots_list_shape(monkeypatch):
     assert set(tf.keys()) == {
         "id", "name", "category", "description",
         "headline", "holdings_count", "top_holdings", "aum_proxy", "followers_proxy",
-        "long_only",
+        "long_only", "followable"
     }
     assert tf["long_only"] is False
     # Headline comes from tests/fixtures/timeseries_momentum_validation_summary.json.
@@ -3871,6 +3871,88 @@ class TestStrategyHealth:
         assert by_key["dsr"] == thresholds.DSR_MIN
         assert by_key["sharpe"] == thresholds.NET_SHARPE_MIN
         assert by_key["max_drawdown"] == thresholds.MAX_DRAWDOWN_MAX
+
+
+class TestStrategyReportCard:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
+    def test_shape_and_values(self, monkeypatch):
+        class _MockPaperAccountStore:
+            def __init__(self, *args, **kwargs):
+                pass
+            def get_full_closed_trades(self, limit):
+                return []
+                
+        class _MockValidationHistoryStore:
+            def __init__(self, *args, **kwargs):
+                pass
+            def get_latest_per_strategy(self):
+                return {
+                    "timeseries_momentum": {
+                        "deployable": True,
+                        "pbo": 0.18,
+                        "dsr": 0.972,
+                        "sharpe": 1.14,
+                        "max_drawdown": 0.176,
+                        "n_trials": 200,
+                        "is_options_selling": False,
+                        "stress_gate_passed": True,
+                        "report_date": "2026-06-15",
+                    }
+                }
+        
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore", _MockPaperAccountStore):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore", _MockValidationHistoryStore):
+                resp = client.get("/strategy/report-card")
+            
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) >= len(catalog.list_pilots())
+        
+        row = next(r for r in body if r["pilot_id"] == "trend-following")
+        assert row["name"] == "Trend Follower"
+        assert row["is_pilot"] is True
+        
+        pred = row["predicted"]
+        assert pred["deployable"] is True
+        assert pred["sharpe"] == 1.14
+        
+        act = row["actual"]
+        assert act["trade_count"] == 0
+        assert act["reason"] == "insufficient sample (n=0)"
+
+    def test_pilot_without_backtest_is_honest_never_fabricated(self, monkeypatch):
+        class _MockValidationHistoryStore:
+            def __init__(self, *args, **kwargs):
+                pass
+            def get_latest_per_strategy(self):
+                return {}
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore", _MockValidationHistoryStore):
+                resp = client.get("/strategy/report-card")
+        assert resp.status_code == 200
+        row = next(r for r in resp.json() if r["pilot_id"] == "news-catalyst")
+        assert row["predicted"]["deployable"] is None
+        assert row["predicted"]["reason"] == "no validated backtest for this pilot"
+
+    def test_fail_open_read_with_no_token(self, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore"):
+                with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                    resp = client.get("/strategy/report-card")
+                assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore"):
+                with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+                    resp = client.get("/strategy/report-card", headers={"Authorization": "Bearer wrong"})
+                assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------

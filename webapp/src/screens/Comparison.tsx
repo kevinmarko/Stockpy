@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Notice, DeployableBadge } from "../components/ui";
+import { ErrorState, Loading, InfoTip, Notice, DeployableBadge } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
@@ -503,14 +503,27 @@ export function Comparison() {
                         <div role="cell" style={{ ...stickyColStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>Actions</div>
                         {selectedPilots.map(p => (
                           <div role="cell" key={`act-${p.id}`} style={{ ...cellStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>
-                            <button
-                              className="btn btn-primary"
-                              onClick={() => setFollowPilot(p)}
-                              style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
-                              data-testid={`follow-pilot-btn-${p.id}`}
-                            >
-                              Follow
-                            </button>
+                            {!p.followable ? (
+                              <InfoTip content="This pilot is currently restricted from accepting new allocations.">
+                                <button
+                                  className="btn btn-primary"
+                                  disabled
+                                  style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
+                                  data-testid={`follow-pilot-btn-${p.id}-disabled`}
+                                >
+                                  Restricted
+                                </button>
+                              </InfoTip>
+                            ) : (
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => setFollowPilot(p)}
+                                style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
+                                data-testid={`follow-pilot-btn-${p.id}`}
+                              >
+                                Follow
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>

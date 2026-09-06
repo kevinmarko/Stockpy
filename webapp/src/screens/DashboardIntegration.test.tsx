@@ -36,7 +36,7 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     const pilot = (id: string, name: string, sharpe: number): PilotSummary => ({
       id, name, category: "Momentum", description: "",
       headline: { sharpe, dsr: 0.97, pbo: 0.3, max_drawdown: -0.15, deployable: true },
-      holdings_count: 0, top_holdings: [], aum_proxy: 0, followers_proxy: 0, long_only: true,
+      holdings_count: 0, top_holdings: [], aum_proxy: 0, followers_proxy: 0, long_only: true, followable: true,
     });
     vi.spyOn(api, "listPilots").mockResolvedValue([
       pilot("trend-following", "Trend Follower", 1.12),

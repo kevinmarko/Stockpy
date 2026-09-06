@@ -11,7 +11,7 @@ from scripts.refresh_validations import STRATEGY_REGISTRY
 from settings import settings
 
 from pilots import Pilot, get_pilot, list_pilots
-from pilots.catalog import PILOTS
+from pilots.catalog import PILOTS, OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID
 
 
 def test_catalog_non_empty():
@@ -33,6 +33,8 @@ def test_pilot_ids_kebab_case():
 def test_weights_keys_are_real_signal_modules():
     valid = set(settings.SIGNAL_WEIGHTS)
     for p in list_pilots():
+        if not p.followable:
+            continue
         assert p.weights, f"{p.id!r} has empty weights"
         unknown = set(p.weights) - valid
         assert not unknown, f"{p.id!r} references unknown signal modules: {unknown}"
@@ -53,7 +55,7 @@ def test_validation_ids_are_real_or_none():
 def test_categories_are_known():
     allowed = {
         "Momentum", "Mean Reversion", "Factor", "Blend",
-        "Macro", "Risk", "Sentiment", "Forecast",
+        "Macro", "Risk", "Sentiment", "Forecast", "Options",
     }
     for p in list_pilots():
         assert p.category in allowed, f"{p.id!r} has unknown category {p.category!r}"
@@ -89,3 +91,27 @@ def test_balanced_blend_matches_full_signal_weights():
 def test_at_least_one_validated_pilot():
     # Sanity: the honest join is actually exercised somewhere.
     assert any(p.validation_strategy_id is not None for p in list_pilots())
+
+
+def test_non_followable_pilots():
+    for p in list_pilots():
+        if not p.followable:
+            assert p.weights == {}, f"{p.id!r} has weights but is not followable"
+            assert len(p.description.strip()) > 0, f"{p.id!r} needs a description"
+
+
+def test_options_directive_strategy_mapping():
+    expected_keys = {
+        "PUT_CREDIT_SPREAD",
+        "CALL_CREDIT_SPREAD",
+        "CALL_DEBIT_SPREAD",
+        "PUT_DEBIT_SPREAD",
+        "COVERED_CALL",
+        "IRON_CONDOR",
+    }
+    assert set(OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.keys()) == expected_keys
+    
+    catalog_ids = {p.id for p in list_pilots()}
+    for k, v in OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.items():
+        assert v in catalog_ids, f"Mapped value {v!r} for key {k!r} is not a valid Pilot ID"
+

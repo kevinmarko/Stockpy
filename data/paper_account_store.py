@@ -484,7 +484,9 @@ class PaperAccountStore:
 
                     # Standard Black-Scholes pricing
                     import math
-                    from scipy.stats import norm
+
+                    def norm_cdf(x):
+                        return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
 
                     r = 0.04
                     sigma = 0.30  # baseline implied volatility estimate
@@ -492,9 +494,9 @@ class PaperAccountStore:
                     d2 = d1 - sigma * math.sqrt(t_years)
 
                     if opt_type == "call":
-                        bs_price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
+                        bs_price = spot * norm_cdf(d1) - strike * math.exp(-r * t_years) * norm_cdf(d2)
                     else:
-                        bs_price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
+                        bs_price = strike * math.exp(-r * t_years) * norm_cdf(-d2) - spot * norm_cdf(-d1)
 
                     # Option contract unit price is $/share * 100
                     unit_mark = max(0.01, round(bs_price, 4)) * 100.0

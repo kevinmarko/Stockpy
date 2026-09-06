@@ -494,8 +494,8 @@ def test_execute_copula_spread_trade_atomic_execution():
     # LONG_SPREAD => Buy Y (EWA), Sell X (EWC).
     assert ewa.qty > 0
     assert ewc.qty < 0
-    assert ewa.strategy_id == "Copula Stat Arb"
-    assert ewc.strategy_id == "Copula Stat Arb"
+    assert ewa.strategy_id == "copula-stat-arb"
+    assert ewc.strategy_id == "copula-stat-arb"
     assert ewa.avg_entry_price == pytest.approx(25.0)
     assert ewc.avg_entry_price == pytest.approx(30.0)
 
@@ -528,8 +528,8 @@ def test_execute_copula_spread_trade_short_spread_sides():
     pep = next(p for p in positions if p.symbol == "PEP")
     assert ko.qty < 0
     assert pep.qty > 0
-    assert ko.strategy_id == "Copula Stat Arb"
-    assert pep.strategy_id == "Copula Stat Arb"
+    assert ko.strategy_id == "copula-stat-arb"
+    assert pep.strategy_id == "copula-stat-arb"
 
 
 def test_execute_copula_spread_trade_insufficient_funds_leaves_no_naked_leg():

@@ -12,7 +12,7 @@ import {
   stitchMultipleIntervals,
   type TrendsPoint,
 } from "../utils/trendsStitch";
-import type {
+import type { StrategyReportCardRow,
   AgenticDiscovery,
   AgenticStatus,
   AgentLoopStatus,
@@ -505,6 +505,7 @@ const RAW: Array<{
   // Optional; defaults to true (a distinct SPY macro overlay is available).
   // Set false to model the honest redundancy case (underlying already IS SPY).
   macroBenchmark?: boolean;
+  followable?: boolean;
 }> = [
   {
     id: "trend-following",
@@ -714,6 +715,7 @@ const RAW: Array<{
     id: "regime-navigator",
     name: "Regime Navigator",
     category: "Macro",
+    followable: false,
     description:
       "Top-down macro regime read — leans defensive in Recession/Credit-Event regimes and rotates toward risk-on sectors when the systemic backdrop clears.",
     headline: h(null, null, null, null, false, false),
@@ -898,6 +900,7 @@ const CATALOG: MockPilot[] = RAW.map((r) => {
     aum_proxy: r.aum,
     followers_proxy: r.followers,
     long_only: r.long_only,
+    followable: r.followable ?? true,
   };
   return {
     summary,
@@ -8486,6 +8489,185 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
+    getStrategyReportCard: async (): Promise<StrategyReportCardRow[]> => {
+    await delay(600);
+    return [
+      {
+        pilot_id: "trend-following",
+        name: "Trend Follower",
+        category: "Momentum",
+        is_pilot: true,
+        predicted: {
+          sharpe: 1.12,
+          max_drawdown: 0.19,
+          pbo: 0.31,
+          dsr: 1.8,
+          deployable: true,
+          reason: null,
+          n_trials: 1500,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: 0.95,
+          max_cumulative_drawdown_usd: 12500,
+          trade_count: 42,
+          win_rate: 0.55,
+          avg_realized_pnl_pct: 0.02,
+          total_realized_pnl_usd: 15000,
+          first_exit_ts: "2024-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        pilot_id: "copula-stat-arb",
+        name: "Copula Stat Arb",
+        category: "Mean Reversion",
+        is_pilot: true,
+        predicted: {
+          sharpe: 0.65,
+          max_drawdown: 0.28,
+          pbo: 0.82,
+          dsr: 0.9,
+          deployable: false,
+          reason: "PBO > 0.5 (Overfit)",
+          n_trials: 2500,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: 0.12,
+          max_cumulative_drawdown_usd: 45000,
+          trade_count: 118,
+          win_rate: 0.45,
+          avg_realized_pnl_pct: -0.01,
+          total_realized_pnl_usd: -5000,
+          first_exit_ts: "2024-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        pilot_id: "iron-condor",
+        name: "Iron Condor Harvest",
+        category: "Options",
+        is_pilot: true,
+        predicted: {
+          sharpe: null,
+          max_drawdown: null,
+          pbo: null,
+          dsr: null,
+          deployable: null,
+          reason: "Requires intraday options data",
+          n_trials: null,
+          is_options_selling: true,
+          stress_gate_passed: null,
+          report_date: null,
+        },
+        actual: {
+          realized_sharpe_proxy: 1.35,
+          max_cumulative_drawdown_usd: 8400,
+          trade_count: 56,
+          win_rate: 0.75,
+          avg_realized_pnl_pct: 0.05,
+          total_realized_pnl_usd: 25000,
+          first_exit_ts: "2024-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        pilot_id: "zero-trade",
+        name: "Zero Trade Strategy",
+        category: "Other",
+        is_pilot: false,
+        predicted: {
+          sharpe: 1.5,
+          max_drawdown: 0.1,
+          pbo: 0.1,
+          dsr: 2.0,
+          deployable: true,
+          reason: null,
+          n_trials: 500,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: null,
+          max_cumulative_drawdown_usd: null,
+          trade_count: 0,
+          win_rate: null,
+          avg_realized_pnl_pct: null,
+          total_realized_pnl_usd: null,
+          first_exit_ts: null,
+          last_exit_ts: null,
+          reason: "insufficient sample (n=0)",
+        },
+      },
+      {
+        pilot_id: "non-pilot-bucket",
+        name: "Legacy Discretionary",
+        category: "Other",
+        is_pilot: false,
+        predicted: {
+          sharpe: null,
+          max_drawdown: null,
+          pbo: null,
+          dsr: null,
+          deployable: null,
+          reason: "Not model-driven",
+          n_trials: null,
+          is_options_selling: null,
+          stress_gate_passed: null,
+          report_date: null,
+        },
+        actual: {
+          realized_sharpe_proxy: 0.88,
+          max_cumulative_drawdown_usd: 22000,
+          trade_count: 315,
+          win_rate: 0.65,
+          avg_realized_pnl_pct: 0.03,
+          total_realized_pnl_usd: 45000,
+          first_exit_ts: "2023-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        pilot_id: "new-strategy",
+        name: "New Strategy",
+        category: "Other",
+        is_pilot: false,
+        predicted: {
+          sharpe: 2.1,
+          max_drawdown: 0.05,
+          pbo: 0.15,
+          dsr: 2.5,
+          deployable: true,
+          reason: null,
+          n_trials: 800,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: null,
+          max_cumulative_drawdown_usd: null,
+          trade_count: 7,
+          win_rate: null,
+          avg_realized_pnl_pct: null,
+          total_realized_pnl_usd: null,
+          first_exit_ts: null,
+          last_exit_ts: null,
+          reason: "insufficient sample (n=7)",
+        },
+      }
+    ];
+  },
   async health() {
     return delay({ status: "ok", mock: true }, 60);
   },

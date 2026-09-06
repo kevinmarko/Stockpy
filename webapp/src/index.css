@@ -78,6 +78,7 @@
   --cat-risk: #a16207;
   --cat-sentiment: #c026d3;
   --cat-forecast: #65a30d;
+  --cat-options: #8b5cf6;
 }
 
 :root[data-theme="light"] {
@@ -155,6 +156,7 @@
   --cat-risk: #b45309; /* amber-700 */
   --cat-sentiment: #c026d3; /* fuchsia-600 */
   --cat-forecast: #4d7c0f; /* lime-700 */
+  --cat-options: #7c3aed;
 }
 
 :root {

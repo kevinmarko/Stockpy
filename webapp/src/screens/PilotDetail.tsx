@@ -294,13 +294,27 @@ export function PilotDetail() {
           marginTop: "var(--s-2)",
         }}
       >
-        <button
-          className="btn btn-primary btn-block"
-          style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: theme.growth + "33 0 8px 24px" }}
-          onClick={() => setShowFollow(true)}
-        >
-          Follow · allocate {pilot.headline.sharpe != null ? `${fmtNum(pilot.headline.sharpe, 2)} Sharpe` : ""}
-        </button>
+        {!pilot.followable ? (
+          <InfoTip content="This pilot is currently restricted from accepting new allocations.">
+            <div style={{ width: "100%" }}>
+              <button
+                className="btn btn-primary btn-block"
+                style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: "none" }}
+                disabled
+              >
+                Follow (Restricted)
+              </button>
+            </div>
+          </InfoTip>
+        ) : (
+          <button
+            className="btn btn-primary btn-block"
+            style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: theme.growth + "33 0 8px 24px" }}
+            onClick={() => setShowFollow(true)}
+          >
+            Follow · allocate {pilot.headline.sharpe != null ? `${fmtNum(pilot.headline.sharpe, 2)} Sharpe` : ""}
+          </button>
+        )}
       </div>
 
       {showFollow && (

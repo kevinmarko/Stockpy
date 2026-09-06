@@ -1500,7 +1500,7 @@ def execute_copula_spread_trade(
         net_cash_impact=net_cash_impact,
         commission_and_fees=0.0,
         status=OrderStatus.FILLED,
-        strategy_id=strategy_name,
+        strategy_id="copula-stat-arb",
     )
 
     # Atomicity by construction: apply_multi_leg_fill commits both legs in one
