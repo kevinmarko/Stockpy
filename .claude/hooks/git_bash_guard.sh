@@ -6,6 +6,17 @@
 # exclude specific flags on its own) -- see code-review findings #1-#3 on
 # PR #960. This hook is the flag-level backstop those allowlist entries can't
 # express, mirroring block_env_write.sh's PreToolUse deny-output contract.
+#
+# `git stash` (any subcommand) is ALSO denied here, independent of any
+# allowlist entry -- refs/stash is a single ref shared across every git
+# worktree in this repo (many concurrent agent sessions each in their own
+# `.claude/worktrees/` checkout), so a concurrent session's push/pop can
+# silently swap uncommitted changes between unrelated worktrees. Confirmed
+# empirically THREE times (see the `git-stash-shared-across-worktrees`
+# project memory) -- including once by the same agent that already had this
+# memory loaded, which is why this is now a hard hook gate rather than
+# relying on remembering to check memory before reaching for a familiar
+# git command under time pressure.
 set -uo pipefail
 
 input=""
@@ -38,6 +49,7 @@ read -r -a tokens <<< "$command"
 is_git_commit=false
 is_git_add=false
 is_ruff_check=false
+is_git_stash=false
 for i in "${!tokens[@]}"; do
   if [ "${tokens[$i]}" = "git" ] && [ "${tokens[$((i + 1))]:-}" = "commit" ]; then
     is_git_commit=true
@@ -48,7 +60,14 @@ for i in "${!tokens[@]}"; do
   if [ "${tokens[$i]}" = "ruff" ] && [ "${tokens[$((i + 1))]:-}" = "check" ]; then
     is_ruff_check=true
   fi
+  if [ "${tokens[$i]}" = "git" ] && [ "${tokens[$((i + 1))]:-}" = "stash" ]; then
+    is_git_stash=true
+  fi
 done
+
+if $is_git_stash; then
+  deny "git stash is dangerous in this repo -- refs/stash is shared across every git worktree here (many concurrent agent sessions each in their own worktree checkout), so a concurrent session's push/pop can silently swap uncommitted changes between unrelated worktrees. Confirmed empirically three times. Use 'git diff > \"\$TMPDIR/x.patch\"' + 'git restore' (or a scratch branch/temp commit) instead of 'stash to temporarily clear the working tree'. If this is deliberate, careful recovery from an already-suspected stash collision (e.g. 'git stash apply <captured-sha>', never 'pop'), run it yourself or ask for explicit confirmation."
+fi
 
 if $is_git_commit; then
   for t in "${tokens[@]}"; do
