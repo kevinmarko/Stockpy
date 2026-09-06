@@ -966,7 +966,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "forecasting/forecast_tracker.py:225",
+        "site": "forecasting/forecast_tracker.py:297",
         "via": []
       },
       {
@@ -2196,7 +2196,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "forecasting/forecast_tracker.py:229",
+        "site": "forecasting/forecast_tracker.py:301",
         "via": []
       },
       {
