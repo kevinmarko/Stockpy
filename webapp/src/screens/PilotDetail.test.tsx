@@ -81,6 +81,16 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(document.querySelector(".recharts-area")).not.toBeInTheDocument();
   });
 
+  it("iron-condor (Options, followable:false) renders a disabled, explained Follow CTA -- never a silently hidden button", async () => {
+    renderDetail("iron-condor");
+
+    await screen.findByRole("heading", { name: "Iron Condor" });
+    const restrictedBtn = screen.getByRole("button", { name: /Follow \(Restricted\)/ });
+    expect(restrictedBtn).toBeDisabled();
+    // No active (non-restricted) Follow button also renders for this pilot.
+    expect(screen.queryByRole("button", { name: /^Follow ·/ })).not.toBeInTheDocument();
+  });
+
   it("momentum-burst renders its 'Not deployable' badge plainly, never hidden or softened", async () => {
     renderDetail("momentum-burst");
 

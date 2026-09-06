@@ -5,6 +5,7 @@ from pilots.strategy_report_card import (
     _normalize_strategy_id,
     strategy_report_card_rows,
     MIN_TRADES_FOR_VERDICT,
+    LEGACY_STRATEGY_ID_ALIASES,
 )
 from pilots.catalog import Pilot, list_pilots
 
@@ -16,6 +17,41 @@ def test_normalize_strategy_id():
     assert _normalize_strategy_id("Follow:trend-following") == "trend-following"
     # standard
     assert _normalize_strategy_id("trend-following") == "trend-following"
+
+
+def test_all_legacy_aliases_are_present_and_correct():
+    """Every one of the 10 documented LEGACY_STRATEGY_ID_ALIASES entries must
+    map to the exact, real canonical pilots.catalog id -- not a partial set,
+    not a plausible-looking-but-wrong misspelling. A wrong value here would
+    silently ORPHAN historical paper-trade data into its own made-up
+    non-Pilot bucket instead of joining the real Pilot's row (this is exactly
+    how "Dispersion Arbitrage" -> "dispersion-arbitrage" and "0DTE Momentum
+    Breakout" -> "0dte-momentum-breakout" were previously wrong: neither
+    value was a real pilots.catalog id)."""
+    expected = {
+        "Dispersion Arbitrage": "dispersion-trading",
+        "Copula Stat Arb": "copula-stat-arb",
+        "0DTE Momentum Breakout": "zero-dte-momentum-breakout",
+        "Earnings Crush": "earnings-crush",
+        "Put Credit Spread": "put-credit-spread",
+        "Call Credit Spread": "call-credit-spread",
+        "Iron Condor": "iron-condor",
+        "Call Debit Spread": "call-debit-spread",
+        "Put Debit Spread": "put-debit-spread",
+        "Covered Call": "covered-call",
+    }
+    assert LEGACY_STRATEGY_ID_ALIASES == expected
+
+    # Belt-and-suspenders: every alias VALUE must resolve to a real,
+    # currently-registered pilots.catalog Pilot id -- catches a future
+    # catalog rename that silently orphans this alias map too.
+    real_pilot_ids = {p.id for p in list_pilots()}
+    for legacy, canonical in LEGACY_STRATEGY_ID_ALIASES.items():
+        assert canonical in real_pilot_ids, (
+            f"LEGACY_STRATEGY_ID_ALIASES[{legacy!r}] = {canonical!r} does not "
+            "match any real pilots.catalog Pilot id -- this would silently "
+            "orphan historical paper-trade data into its own bucket."
+        )
 
 
 @patch("pilots.strategy_report_card.ValidationHistoryStore")
@@ -82,8 +118,22 @@ def test_strategy_report_card_rows(mock_paper, mock_validation):
         for _ in range(10)
     ]
 
+    # 8. two more legacy-string DB rows that must resolve through the alias
+    # map into their REAL canonical Pilot bucket, not an orphaned bucket
+    # keyed by the stale/wrong alias value (the exact class of bug this
+    # module previously shipped for both of these two entries).
+    dispersion_legacy_trades = [
+        {"strategy_id": "Dispersion Arbitrage", "realized_pnl": 25.0, "realized_pnl_pct": 0.03, "exit_ts": "2026-01-01"}
+        for _ in range(10)
+    ]
+    zero_dte_legacy_trades = [
+        {"strategy_id": "0DTE Momentum Breakout", "realized_pnl": 15.0, "realized_pnl_pct": 0.02, "exit_ts": "2026-01-01"}
+        for _ in range(10)
+    ]
+
     mock_paper_store.get_full_closed_trades.return_value = (
         trend_trades + delta_hedge_trades + copula_trades + pilot_9 + pilot_10
+        + dispersion_legacy_trades + zero_dte_legacy_trades
     )
 
     rows = strategy_report_card_rows()
@@ -137,3 +187,25 @@ def test_strategy_report_card_rows(mock_paper, mock_validation):
     csa = rows_by_id["copula-stat-arb"]
     assert csa["actual"]["trade_count"] == 10
     assert csa["actual"]["total_realized_pnl_usd"] == 500.0
+
+    # 8. "Dispersion Arbitrage" (legacy free-text label) must resolve to the
+    # REAL canonical "dispersion-trading" Pilot bucket -- not an orphaned
+    # "Dispersion Arbitrage"/"dispersion-arbitrage" non-Pilot row.
+    assert "Dispersion Arbitrage" not in rows_by_id
+    assert "dispersion-arbitrage" not in rows_by_id
+    assert "dispersion-trading" in rows_by_id
+    disp = rows_by_id["dispersion-trading"]
+    assert disp["is_pilot"] is True
+    assert disp["actual"]["trade_count"] == 10
+    assert disp["actual"]["total_realized_pnl_usd"] == 250.0
+
+    # "0DTE Momentum Breakout" (legacy free-text label) must resolve to the
+    # REAL canonical "zero-dte-momentum-breakout" Pilot bucket -- not an
+    # orphaned "0DTE Momentum Breakout"/"0dte-momentum-breakout" non-Pilot row.
+    assert "0DTE Momentum Breakout" not in rows_by_id
+    assert "0dte-momentum-breakout" not in rows_by_id
+    assert "zero-dte-momentum-breakout" in rows_by_id
+    zdte = rows_by_id["zero-dte-momentum-breakout"]
+    assert zdte["is_pilot"] is True
+    assert zdte["actual"]["trade_count"] == 10
+    assert zdte["actual"]["total_realized_pnl_usd"] == 150.0

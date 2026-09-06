@@ -7,6 +7,9 @@ backtest.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from scripts.refresh_validations import STRATEGY_REGISTRY
 from settings import settings
 
@@ -101,17 +104,41 @@ def test_non_followable_pilots():
 
 
 def test_options_directive_strategy_mapping():
+    # Keys must be the exact Title-Case strings technical_options_engine.py's
+    # generate_strategy_pricing_matrix writes to directive["Strategy"] --
+    # NOT the UPPER_SNAKE_CASE structure_type convention used elsewhere
+    # (e.g. pilots/multi_leg_pricing.py's "IRON_CONDOR", a different field).
+    # execution/options_paper_executor.py looks up a live directive's
+    # strategy string against this dict verbatim, so a wrong-cased key here
+    # would silently no-op the normalization for every real trade.
     expected_keys = {
-        "PUT_CREDIT_SPREAD",
-        "CALL_CREDIT_SPREAD",
-        "CALL_DEBIT_SPREAD",
-        "PUT_DEBIT_SPREAD",
-        "COVERED_CALL",
-        "IRON_CONDOR",
+        "Put Credit Spread",
+        "Call Credit Spread",
+        "Iron Condor",
+        "Call Debit Spread",
+        "Put Debit Spread",
+        "Covered Call",
     }
     assert set(OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.keys()) == expected_keys
-    
+
     catalog_ids = {p.id for p in list_pilots()}
     for k, v in OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.items():
         assert v in catalog_ids, f"Mapped value {v!r} for key {k!r} is not a valid Pilot ID"
+
+
+def test_options_directive_strategy_mapping_matches_technical_options_engine():
+    """Drift guard: every key here must be a real Title-Case ``Strategy``
+    value technical_options_engine.py actually assigns to a live directive
+    (grepped from its own source, not re-typed by hand), so this dict can
+    never silently drift out of sync with the live engine's strings again.
+    """
+    src = Path(__file__).resolve().parent.parent / "technical_options_engine.py"
+    text = src.read_text(encoding="utf-8")
+    real_strategy_strings = set(re.findall(r'directive\["Strategy"\]\s*=\s*"([^"]+)"', text))
+
+    for key in OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID:
+        assert key in real_strategy_strings, (
+            f"{key!r} is not a real directive['Strategy'] value emitted by "
+            f"technical_options_engine.py; real values: {sorted(real_strategy_strings)}"
+        )
 

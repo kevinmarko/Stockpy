@@ -12,7 +12,7 @@ import {
   stitchMultipleIntervals,
   type TrendsPoint,
 } from "../utils/trendsStitch";
-import type { StrategyReportCardRow,
+import type { StrategyReportCardSnapshot,
   AgenticDiscovery,
   AgenticStatus,
   AgentLoopStatus,
@@ -883,6 +883,53 @@ const RAW: Array<{
       ["META", 26, 0.55],
       ["AMZN", 22, 0.48],
       ["ADBE", 18, 0.4],
+    ],
+  },
+  // Two real "Options"-category catalog Pilots (mirrors pilots/catalog.py --
+  // EVERY Options Pilot there is followable=False, since these are
+  // manually-executed options structures, not a simple auto-follow blend).
+  // Exercises: (a) the "Options" PilotCategory value actually appearing in
+  // Marketplace's category filter/rail with a real member, and (b) the
+  // followable:false disabled-Follow-button branch on PilotDetail/Comparison
+  // for an Options pilot specifically (previously only "regime-navigator",
+  // a Macro pilot, exercised followable:false at all).
+  {
+    id: "iron-condor",
+    name: "Iron Condor",
+    category: "Options",
+    description:
+      "Range-bound premium selling strategy combining credit spreads. No validated backtest exists for this structure yet -- metrics shown honestly as unavailable.",
+    followable: false,
+    headline: h(null, null, null, null, false, false),
+    long_only: false,
+    aum: 31800,
+    followers: 14,
+    hasCurve: false,
+    drift: 0,
+    vol: 0,
+    syms: [["SPY", 100, 0.5]],
+  },
+  {
+    id: "copula-stat-arb",
+    name: "Copula Stat Arb",
+    category: "Options",
+    description:
+      "Statistical arbitrage using copula-derived joint probabilities (KO/PEP pair). Honest FAIL: overfitting gate not cleared -- see Strategy Report Card for the full predicted-vs-actual detail.",
+    followable: false,
+    // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-19):
+    // Sharpe -0.455, PBO 0.000, DSR 0.246, MaxDD 35.1% -- worst drawdown lands
+    // on 2008-10-13 (the GFC). deployable=false is a genuine, documented FAIL,
+    // never softened.
+    headline: h(-0.455, 0.246, 0.0, 0.351, false, false),
+    long_only: false,
+    aum: 9600,
+    followers: 5,
+    hasCurve: true,
+    drift: -0.02,
+    vol: 0.31,
+    syms: [
+      ["KO", 50, 0.5],
+      ["PEP", 50, 0.48],
     ],
   },
 ];
@@ -8489,7 +8536,7 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
-    getStrategyReportCard: async (): Promise<StrategyReportCardRow[]> => {
+    getStrategyReportCard: async (): Promise<StrategyReportCardSnapshot> => {
     await delay(600);
     return [
       {
@@ -8524,15 +8571,22 @@ export const mockApi = {
       {
         pilot_id: "copula-stat-arb",
         name: "Copula Stat Arb",
-        category: "Mean Reversion",
+        category: "Options",
         is_pilot: true,
         predicted: {
-          sharpe: 0.65,
-          max_drawdown: 0.28,
-          pbo: 0.82,
-          dsr: 0.9,
+          // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md
+          // 2026-08-19): an honest, documented FAIL -- worst drawdown lands
+          // on 2008-10-13 (the GFC). `reason` is null here (not a fabricated
+          // "why" string) because the backend's `_predicted_side` only ever
+          // populates `reason` when a validated backtest is MISSING for this
+          // pilot -- when one exists (as it does here), `deployable: false`
+          // speaks for itself.
+          sharpe: -0.455,
+          max_drawdown: 0.351,
+          pbo: 0.0,
+          dsr: 0.246,
           deployable: false,
-          reason: "PBO > 0.5 (Overfit)",
+          reason: null,
           n_trials: 2500,
           is_options_selling: false,
           stress_gate_passed: null,
@@ -8552,18 +8606,23 @@ export const mockApi = {
       },
       {
         pilot_id: "iron-condor",
-        name: "Iron Condor Harvest",
+        name: "Iron Condor",
         category: "Options",
         is_pilot: true,
+        // No registry key (`validation_strategy_id=None` in
+        // pilots/catalog.py) -- the backend's `_predicted_side` returns the
+        // fully-nulled shape with this EXACT reason string; every other
+        // field (including `is_options_selling`) is null too, never a
+        // fabricated `true` while the rest of the row is honestly unknown.
         predicted: {
           sharpe: null,
           max_drawdown: null,
           pbo: null,
           dsr: null,
           deployable: null,
-          reason: "Requires intraday options data",
+          reason: "no validated backtest for this pilot",
           n_trials: null,
-          is_options_selling: true,
+          is_options_selling: null,
           stress_gate_passed: null,
           report_date: null,
         },
@@ -8580,10 +8639,15 @@ export const mockApi = {
         },
       },
       {
+        // Real Pilot with a genuine validated backtest but zero paper trades
+        // yet -- `is_pilot: true` on purpose: a non-Pilot bucket row can
+        // NEVER carry populated `predicted` metrics in the real backend (see
+        // "Legacy Discretionary" below), so a deployable=true predicted side
+        // only ever appears alongside `is_pilot: true`.
         pilot_id: "zero-trade",
         name: "Zero Trade Strategy",
-        category: "Other",
-        is_pilot: false,
+        category: "Momentum",
+        is_pilot: true,
         predicted: {
           sharpe: 1.5,
           max_drawdown: 0.1,
@@ -8609,6 +8673,10 @@ export const mockApi = {
         },
       },
       {
+        // Non-Pilot bucket: a strategy_id seen in closed paper trades that
+        // has no matching entry in pilots/catalog.py's list_pilots(). The
+        // real backend hardcodes this EXACT reason string ("non-pilot
+        // bucket") for every such row -- never a per-row custom explanation.
         pilot_id: "non-pilot-bucket",
         name: "Legacy Discretionary",
         category: "Other",
@@ -8619,7 +8687,7 @@ export const mockApi = {
           pbo: null,
           dsr: null,
           deployable: null,
-          reason: "Not model-driven",
+          reason: "non-pilot bucket",
           n_trials: null,
           is_options_selling: null,
           stress_gate_passed: null,
@@ -8638,10 +8706,13 @@ export const mockApi = {
         },
       },
       {
+        // Real Pilot, real backtest, just launched -- below the live
+        // honesty floor (n=7 < MIN_TRADES_FOR_VERDICT=10) on the actual
+        // side. `is_pilot: true` for the same reason as "zero-trade" above.
         pilot_id: "new-strategy",
         name: "New Strategy",
-        category: "Other",
-        is_pilot: false,
+        category: "Blend",
+        is_pilot: true,
         predicted: {
           sharpe: 2.1,
           max_drawdown: 0.05,

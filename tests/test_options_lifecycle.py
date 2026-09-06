@@ -409,9 +409,14 @@ def test_settle_post_earnings_trades(store, executor):
     # All positions must be cleanly closed
     assert len(store.get_open_positions()) == 0
 
-    # Verify orders recorded in store
+    # Verify orders recorded in store. `strategy_id` now standardizes on the
+    # canonical Pilot id "earnings-crush" (see
+    # execution/options_paper_executor.py::execute_earnings_crush_trade /
+    # OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID) rather than the legacy
+    # Title-Case "Earnings Crush" label -- the display label surfaced via
+    # `res["strategy"]` above is unaffected and stays "Earnings Crush".
     orders = store.get_full_orders()
-    nvda_ec_orders = [o for o in orders if o["symbol"] == "NVDA" and o.get("strategy_id") == "Earnings Crush" and o.get("order_kind") == "parent"]
+    nvda_ec_orders = [o for o in orders if o["symbol"] == "NVDA" and o.get("strategy_id") == "earnings-crush" and o.get("order_kind") == "parent"]
     assert len(nvda_ec_orders) == 2, f"Expected 2 parent orders for NVDA EC, found {len(nvda_ec_orders)}"
 
 

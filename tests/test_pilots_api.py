@@ -3939,7 +3939,6 @@ class TestStrategyReportCard:
         assert row["predicted"]["reason"] == "no validated backtest for this pilot"
 
     def test_fail_open_read_with_no_token(self, monkeypatch):
-        _point_reports_at_fixtures(monkeypatch)
         with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
             with mock.patch("pilots.strategy_report_card.ValidationHistoryStore"):
                 with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -3947,12 +3946,42 @@ class TestStrategyReportCard:
                 assert resp.status_code == 200
 
     def test_401_on_wrong_read_token(self, monkeypatch):
-        _point_reports_at_fixtures(monkeypatch)
         with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
             with mock.patch("pilots.strategy_report_card.ValidationHistoryStore"):
                 with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
                     resp = client.get("/strategy/report-card", headers={"Authorization": "Bearer wrong"})
                 assert resp.status_code == 401
+
+    def test_cold_start_empty_db_degrades_honestly_never_500(self):
+        """No mocking at all -- relies on the repo's own session-wide autouse
+        isolation fixtures (conftest.py's ``_isolate_validation_runs_db_in_tests``
+        / ``_isolate_paper_and_transactions_db_in_tests``) to point
+        ``ValidationHistoryStore``/``PaperAccountStore`` at a genuinely fresh,
+        empty per-test database -- the real "brand new checkout, pipeline never
+        run, no paper trades yet" cold-start shape, not a simulated one.
+
+        Every catalog Pilot must still come back with a 200 and an honest,
+        never-fabricated degrade: a Pilot with a real ``validation_strategy_id``
+        but no row in the (empty) validation-history table reports
+        ``predicted.reason == "missing"`` (CONSTRAINT #4 -- distinct from
+        ``pilot.validation_strategy_id is None``'s own
+        "no validated backtest for this pilot" reason, covered by
+        ``test_pilot_without_backtest_is_honest_never_fabricated`` above), and
+        the ``actual`` side reports ``trade_count == 0`` with an honest
+        "insufficient sample" reason rather than a fabricated zero-metric
+        verdict."""
+        resp = client.get("/strategy/report-card")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) >= len(catalog.list_pilots())
+
+        row = next(r for r in body if r["pilot_id"] == "trend-following")
+        assert row["predicted"]["deployable"] is None
+        assert row["predicted"]["reason"] == "missing"
+        assert row["actual"]["trade_count"] == 0
+        assert row["actual"]["reason"] == "insufficient sample (n=0)"
+        assert row["actual"]["win_rate"] is None
 
 
 # ---------------------------------------------------------------------------

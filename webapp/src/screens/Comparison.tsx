@@ -504,16 +504,28 @@ export function Comparison() {
                         {selectedPilots.map(p => (
                           <div role="cell" key={`act-${p.id}`} style={{ ...cellStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>
                             {!p.followable ? (
-                              <InfoTip content="This pilot is currently restricted from accepting new allocations.">
+                              // The InfoTip trigger sits BESIDE the disabled
+                              // button, never wrapping it -- an InfoTip whose
+                              // own trigger is a real <button> must not nest
+                              // a second native <button> inside it (invalid
+                              // HTML, breaks keyboard/screen-reader focus).
+                              <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
                                 <button
                                   className="btn btn-primary"
                                   disabled
                                   style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
                                   data-testid={`follow-pilot-btn-${p.id}-disabled`}
+                                  title="This pilot is currently restricted from accepting new allocations."
                                 >
                                   Restricted
                                 </button>
-                              </InfoTip>
+                                <InfoTip
+                                  triggerClassName="chip"
+                                  content="This pilot is currently restricted from accepting new allocations."
+                                >
+                                  ?
+                                </InfoTip>
+                              </div>
                             ) : (
                               <button
                                 className="btn btn-primary"

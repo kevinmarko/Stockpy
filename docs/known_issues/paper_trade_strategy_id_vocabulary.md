@@ -1,6 +1,6 @@
 # Paper-Trade `strategy_id` Vocabulary Is Not Standardized
 
-**Status**: Fixed (options-desk writers + 10 catalog entries + write-site renames). `main_pipeline` and the `queue_builder.py` advisory bucket remain deliberately out of scope. `Manual Trade`, `untagged`, and `Delta Hedge` remain legitimate non-Pilot buckets.
+**Status**: Fixed for the options desk (2026-09-06 pass) — the automated writers for `dispersion-trading`, `copula-stat-arb`, `zero-dte-momentum-breakout`, `earnings-crush`, `put-credit-spread`, `call-credit-spread`, `call-debit-spread`, `put-debit-spread`, `covered-call`, and `iron-condor` now stamp their matching `pilots.catalog` Pilot `id` (see the table below). `main_pipeline` and the `queue_builder.py` advisory bucket remain deliberately out of scope. `Manual Trade`, `untagged`, and `Delta Hedge` remain legitimate non-Pilot buckets.
 **Date**: 2026-09-06
 **Incident Level**: Low/informational (measurement-quality gap, not a correctness bug)
 
@@ -107,25 +107,70 @@ spelled across writers).
 
 ## What was fixed in this pass, and what wasn't
 
-Fixed (see the accompanying PR 872 remediation commit): three genuinely wrong
-hardcodes were corrected —
+**2026-08-24 pass** (see the accompanying PR 872 remediation commit): three
+genuinely wrong hardcodes were corrected —
 `execution/options_paper_executor.py`'s `Close Earnings Crush` path used
 `dict.get(key, default)`, which does not fall back on an explicitly-`None`
 value (fixed to `dict.get(key) or default`); `pilots/zero_dte_engine.py`'s
 0DTE exit path re-hardcoded `"0DTE Momentum Breakout"` instead of reading the
 position's own `strategy_id` (fixed to thread the real tag through, so a
-custom-named 0DTE entry now closes under the SAME tag it opened with).
+custom-named 0DTE entry now closes under the SAME tag it opened with). This
+pass did NOT touch what label any writer stamps going forward — only how
+faithfully an *exit* preserved whatever label the *entry* used.
 
-**Not fixed, deliberately out of scope for this pass**: forcing every writer
-onto one shared vocabulary (e.g. the pilot-registry `id` slugs) is a larger
-refactor that risks behavior changes well outside a targeted bug-fix pass —
-it would touch every writer's call signature, `transactions_store` query
-call sites, and any existing Kelly warm-up history already accumulated under
-the old labels (a silent historical-data migration question, not just a
-code change). Specifically, `main_pipeline` attribution and the `queue_builder.py`
-advisory buckets remain deliberately out of scope for this vocabulary standardization.
-This doc records the landscape so that future work has an
-accurate map instead of having to re-derive it.
+**2026-09-06 pass (this feature — Strategy Report Card + vocabulary
+standardization, Phase 1)**: the options-desk automated writers named in
+finding #2 above were moved off their free-text Title Case labels onto
+`pilots.catalog`'s kebab-case Pilot `id` slugs — the exact direction this
+doc's own "Suggested direction for a future pass" section below recommends.
+Ten new catalog Pilots (`category="Options"`, `weights={}`,
+`followable=False` — see `docs/architecture/webapp-and-gui.md`) were added to
+`pilots/catalog.py`, and each write site now stamps the matching id instead
+of its old label:
+
+| Writer | Old label | New `strategy_id` |
+|---|---|---|
+| `pilots/dispersion_trading.py::execute_dispersion_trade` | `"Dispersion Arbitrage"` | `"dispersion-trading"` |
+| `pilots/copula_stat_arb.py::execute_copula_spread_trade` | `"Copula Stat Arb"` | `"copula-stat-arb"` |
+| `pilots/zero_dte_engine.py` (`execute_0dte_trade`'s default, `evaluate_0dte_exits`'s fallback, `ZeroDteExitSignal.strategy_id`'s default) | `"0DTE Momentum Breakout"` | `"zero-dte-momentum-breakout"` |
+| `execution/options_paper_executor.py`'s Earnings Crush entry/close paths | `"Earnings Crush"` | `"earnings-crush"` (the close-side query now matches EITHER label, so a position opened before this pass still closes under the correct bucket) |
+| `execution/options_paper_executor.py`'s directive-driven multi-leg entries, via the new `pilots.catalog.OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID` lookup keyed on `technical_options_engine.py`'s real `directive["Strategy"]` string | *(previously untagged / passed through verbatim)* | `"put-credit-spread"` / `"call-credit-spread"` / `"call-debit-spread"` / `"put-debit-spread"` / `"covered-call"` / `"iron-condor"` |
+
+`pilots/paper_broker_options_order.py::execute_paper_order`'s single-leg
+branch also now passes an explicit `strategy_id="Manual Trade"` — a read-side
+clarity fix, not a Pilot-id rename (a human-placed order has no Pilot to
+attribute to). It previously fell back to the store's own `"untagged"`
+column default, so a manual single-leg order now consistently reads
+`"Manual Trade"` instead of sometimes `"untagged"` depending on which branch
+handled it; the multi-leg branch's own separate `"untagged"` gap (finding #4
+above) is **not** fixed by this pass.
+
+A new read-side helper, `pilots/strategy_report_card.py`
+(`GET /strategy/report-card`), cross-references every catalog Pilot's
+validated backtest (`ValidationHistoryStore`) against its real paper-trading
+history (`PaperAccountStore`) and carries its own
+`LEGACY_STRATEGY_ID_ALIASES` map translating the pre-standardization labels
+above onto the new ids, so trades recorded before this pass still attribute
+correctly on the read side. It gates every realized statistic behind
+`MIN_TRADES_FOR_VERDICT = 10` — below 10 closed trades it reports an honest
+`None`/"insufficient sample" rather than a noisy or fabricated verdict
+(CONSTRAINT #4).
+
+**Not fixed, deliberately out of scope for both passes**: forcing every
+writer in the codebase onto one shared vocabulary is a larger refactor than
+either pass above attempted — the 2026-09-06 pass covers only the options
+desk named in the table (a paper-trade writer for a non-options Pilot, e.g.
+one of the equity signal modules in `pilots/catalog.py`, still stamps
+whatever ad hoc label it always did, if it writes at all). Specifically,
+**`main_pipeline` attribution and `execution/queue_builder.py`'s
+`"advisory"`/`"composed"` bucket (finding #5 above) remain deliberately out
+of scope** — a weighted-sum ensemble decision has no single principled
+strategy owner to attribute the trade to, so folding either onto one Pilot
+id would misattribute by construction rather than fix the fragmentation.
+`"Manual Trade"`, `"untagged"`, and `"Delta Hedge"` remain legitimate,
+intentional non-Pilot buckets (findings #3/#4 above), not gaps to close.
+This doc records the landscape so that future work has an accurate map
+instead of having to re-derive it.
 
 ## Suggested direction for a future pass
 

@@ -9,9 +9,9 @@ from validation.validation_history_store import ValidationHistoryStore
 logger = logging.getLogger(__name__)
 
 LEGACY_STRATEGY_ID_ALIASES: Dict[str, str] = {
-    "Dispersion Arbitrage": "dispersion-arbitrage",
+    "Dispersion Arbitrage": "dispersion-trading",
     "Copula Stat Arb": "copula-stat-arb",
-    "0DTE Momentum Breakout": "0dte-momentum-breakout",
+    "0DTE Momentum Breakout": "zero-dte-momentum-breakout",
     "Earnings Crush": "earnings-crush",
     "Put Credit Spread": "put-credit-spread",
     "Call Credit Spread": "call-credit-spread",

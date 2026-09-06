@@ -665,14 +665,25 @@ PILOTS: List[Pilot] = [
 ]
 
 
-# Mapping of OptionsDirective strategy strings to catalog Pilot IDs
+# Mapping of OptionsDirective strategy strings to catalog Pilot IDs.
+#
+# Keys MUST be the exact Title-Case strings ``technical_options_engine.py``'s
+# ``generate_strategy_pricing_matrix`` writes to ``directive["Strategy"]``
+# (see that module's ``directive["Strategy"] = "Put Credit Spread"`` etc.
+# assignments) — NOT the ``structure_type`` UPPER_SNAKE_CASE convention used
+# elsewhere (e.g. ``pilots/multi_leg_pricing.py``'s ``"IRON_CONDOR"``, a
+# different field entirely). ``execution/options_paper_executor.py`` looks up
+# a live directive's ``strategy``/``candidate["strategy"]`` value (itself
+# read straight from ``directive["Strategy"]``) against this dict verbatim —
+# an UPPER_SNAKE_CASE key here would never match a real directive and this
+# normalization would silently no-op for every live trade.
 OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID = {
-    "PUT_CREDIT_SPREAD": "put-credit-spread",
-    "CALL_CREDIT_SPREAD": "call-credit-spread",
-    "CALL_DEBIT_SPREAD": "call-debit-spread",
-    "PUT_DEBIT_SPREAD": "put-debit-spread",
-    "COVERED_CALL": "covered-call",
-    "IRON_CONDOR": "iron-condor",
+    "Put Credit Spread": "put-credit-spread",
+    "Call Credit Spread": "call-credit-spread",
+    "Iron Condor": "iron-condor",
+    "Call Debit Spread": "call-debit-spread",
+    "Put Debit Spread": "put-debit-spread",
+    "Covered Call": "covered-call",
 }
 
 # Fast id -> Pilot index (built once at import; catalog is static).
