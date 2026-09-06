@@ -338,6 +338,30 @@ class TestGenerateForecast:
             assert key in result
             assert isinstance(result[key], float)
             assert result[key] > 0.0
+            # With 90 days of real history, Monte Carlo (at minimum) always
+            # produces usable output -- a real model contributed, so this
+            # must be disclosed as False, not left unset.
+            assert result[f"{key}_Is_Fallback"] is False
+
+    def test_thin_history_falls_back_to_current_price_and_discloses_it(self, engine):
+        """The one scenario where EVERY model — including Monte Carlo, which
+        otherwise always succeeds given a positive current_price — produces
+        no usable output: a single data point leaves log_returns empty after
+        .dropna(), so mu/sigma are NaN and Monte Carlo's own terminal price
+        is NaN too (fails the `> 0` gate in generate_forecast's horizon
+        loop). _blend_with_skill then has nothing to blend and returns
+        current_price verbatim (CONSTRAINT #4 -- a real observed price, never
+        a fabricated 0.0/NaN; see forecasting_engine.py's module comment).
+        This is exactly the case the *_Is_Fallback disclosure flag exists
+        for: Forecast_30 alone cannot tell a caller "no model ran" apart from
+        "a model predicted no change"."""
+        row = pd.Series({"sector": "Technology", "Symbol": "NEWIPO"})
+        history = pd.Series([42.0], index=pd.date_range("2026-01-01", periods=1, freq="B"))
+        current_price = 42.0
+        result = engine.generate_forecast(row, current_price=current_price, history_series=history)
+        for h in (10, 30, 60, 90):
+            assert result[f"Forecast_{h}"] == pytest.approx(current_price)
+            assert result[f"Forecast_{h}_Is_Fallback"] is True
 
     def test_unknown_sector_defaults_to_60_day_mc_config(self, engine):
         row = pd.Series({"sector": "Crypto Mining", "Symbol": "ZZZ"})

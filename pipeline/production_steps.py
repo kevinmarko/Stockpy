@@ -485,7 +485,22 @@ class ForecastingStep(PipelineStep):
         
         forecast_cols = ['Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
                          'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
-                         'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']
+                         'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper',
+                         # Disclosure flags (CONSTRAINT #4) -- True when EVERY
+                         # forecasting model failed to produce output for that
+                         # horizon and ForecastingEngine._blend_with_skill had
+                         # nothing left to blend but current_price (see
+                         # forecasting_engine.py::generate_forecast's own
+                         # comment on why that's current_price, not NaN).
+                         # Deliberately NOT registered in config.COLUMN_SCHEMA
+                         # -- Pandera's DashboardSchema is non-strict, so an
+                         # extra column here is fine, and adding it to the
+                         # schema would force main.py's advisory path /
+                         # Sheets publisher / report templates to also
+                         # populate it, which is out of scope for this change
+                         # (see docs/known_issues/forecast_fallback_current_price_disclosure.md).
+                         'Forecast_10_Is_Fallback', 'Forecast_30_Is_Fallback',
+                         'Forecast_60_Is_Fallback', 'Forecast_90_Is_Fallback']
 
         def _forecast_one(row) -> tuple[str, dict | None]:
             ticker = row['Symbol']
@@ -539,7 +554,17 @@ class ForecastingStep(PipelineStep):
                     'Forecast_60': mc_60,
                     'Forecast_90': mc_90,
                     'Forecast_30_Prophet_Lower': mc_low,
-                    'Forecast_30_Prophet_Upper': mc_high
+                    'Forecast_30_Prophet_Upper': mc_high,
+                    # The full ForecastingEngine blew up (ml_err above) and
+                    # this whole row is a coarse single-model Monte Carlo
+                    # recovery, not the real ARIMA/HW/CNN-LSTM/Prophet
+                    # ensemble -- honestly disclosed as a fallback on every
+                    # horizon, same as generate_forecast's own per-horizon
+                    # flag above.
+                    'Forecast_10_Is_Fallback': True,
+                    'Forecast_30_Is_Fallback': True,
+                    'Forecast_60_Is_Fallback': True,
+                    'Forecast_90_Is_Fallback': True,
                 }
 
         workers = max(1, int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)))
@@ -3039,9 +3064,18 @@ class BrokerExecutionStep(PipelineStep):
                     )
                     _precomputed_garch = None
                     _precomputed_forecast = None
+                    _precomputed_forecast_is_fallback = None
                     if _reuse_pipeline_compute:
                         _precomputed_garch = _row.get('GARCH_Vol')
                         _precomputed_forecast = _row.get('Forecast_30')
+                        # Only trust an actual bool -- the dashboard_df cell
+                        # can also be float('nan') (row skipped forecasting
+                        # entirely this cycle) or absent, neither of which
+                        # tells us anything about fallback status.
+                        _raw_pf_fallback = _row.get('Forecast_30_Is_Fallback')
+                        _precomputed_forecast_is_fallback = (
+                            _raw_pf_fallback if isinstance(_raw_pf_fallback, bool) else None
+                        )
                     _rec = _advisory_evaluate(
                         symbol=_ticker,
                         position=_position,
@@ -3051,6 +3085,7 @@ class BrokerExecutionStep(PipelineStep):
                         context_extras=_context_extras,
                         precomputed_garch=_precomputed_garch,
                         precomputed_forecast=_precomputed_forecast,
+                        precomputed_forecast_is_fallback=_precomputed_forecast_is_fallback,
                     )
                     if ctx.progress is not None:
                         ctx.progress.advance_symbol(f"Advisory: {_ticker}")

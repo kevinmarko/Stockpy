@@ -804,6 +804,20 @@ def _write_state_snapshot(
                     "shares": shares,
                     "macro_status": str(row.get("Macro Status", "")),
                     "hmm_risk_on": float(row.get("HMM_Risk_On_Probability", 0.0) or 0.0),
+                    # Disclosure flag (CONSTRAINT #4) for the "Forecast 30 Day"
+                    # dollar price target -- 1.0 when
+                    # ForecastingEngine._blend_with_skill had no model output
+                    # for the 30-day horizon this cycle and fell back to
+                    # current_price, 0.0 when a real model contributed, null
+                    # when the column was never populated (row skipped
+                    # forecasting entirely, e.g. Price was 0/missing). Sourced
+                    # from pipeline/production_steps.py's ForecastingStep,
+                    # which writes Forecast_30_Is_Fallback as an EXTRA
+                    # dashboard_df column (deliberately not registered in
+                    # config.COLUMN_SCHEMA -- see that module's own comment).
+                    # Parity with reporting.state_snapshot's
+                    # "forecast_is_fallback" (advisory path).
+                    "forecast_is_fallback": _safe_float_or_none(row.get("Forecast_30_Is_Fallback")),
                     # Buy- and sell-side execution corridors surfaced so the
                     # Streamlit observability dashboard can render the full
                     # tactical plan without re-reading the SQLite DB.
