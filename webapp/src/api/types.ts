@@ -3939,6 +3939,23 @@ export interface ForecastBackfillModelMetrics {
   n_test: number;
   split_date: string;
   is_active?: boolean;
+  /** Present only for a signal/horizon the live meta-labeler bridge
+   *  (ml/forecast_backfill_registry_bridge.py) attempted this run --
+   *  requires settings.META_LABELING_BACKFILL_BRIDGE_ENABLED plus an
+   *  explicit per-signal opt-in, so `undefined` is the default/common case.
+   *  Once attempted, `cpcv_dsr`/`pbo`/`mean_oos_sharpe` are `null` (not
+   *  `undefined`) whenever the backend genuinely could not compute them
+   *  (below the minimum event count, or CPCV produced no paths) --
+   *  CONSTRAINT #4: never a fabricated number in place of "unmeasured". */
+  cpcv_dsr?: number | null;
+  pbo?: number | null;
+  mean_oos_sharpe?: number | null;
+  registry_key?: string;
+  registered?: boolean;
+  /** Non-null only when `registered` is false -- e.g.
+   *  "incompatible_features_missing_RSI_14,Vol_20" from the
+   *  feature-compatibility gate, or a registry/CPCV failure reason. */
+  skip_reason?: string | null;
 }
 
 export interface ForecastBackfillSummary {
@@ -3965,6 +3982,7 @@ export type ForecastBackfillPhase =
   | "meta_targets"
   | "backtraining"
   | "backfilling"
+  | "registry_bridge"
   | "exporting";
 
 /** Only meaningful once `state` is a terminal failure state -- mirrors

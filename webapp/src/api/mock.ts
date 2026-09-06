@@ -1518,7 +1518,7 @@ function _mockForecastBackfillJobStatus(
 ): ForecastBackfillJob {
   const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
   const SECONDS_PER_PHASE = 2;
-  const TOTAL_STEPS = 7;
+  const TOTAL_STEPS = 8;
   const TOTAL_SECONDS = TOTAL_STEPS * SECONDS_PER_PHASE;
   const secondsRemaining = Math.max(
     0,
@@ -1560,8 +1560,11 @@ function _mockForecastBackfillJobStatus(
     phase = "backfilling";
     step = 6;
   } else if (elapsedSeconds < 14) {
-    phase = "exporting";
+    phase = "registry_bridge";
     step = 7;
+  } else if (elapsedSeconds < 16) {
+    phase = "exporting";
+    step = 8;
   } else {
     phase = "exporting";
     step = TOTAL_STEPS;
@@ -16050,6 +16053,14 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
     timestamp: new Date().toISOString(),
     horizons: [10, 30, 60, 90],
     metrics: {
+      // Live meta-labeler bridge (ml/forecast_backfill_registry_bridge.py)
+      // example rows -- one registered (gate cleared), one blocked (the
+      // feature-compatibility gate's honest, currently-universal outcome
+      // for all 6 eligible signals given today's live row schema -- see
+      // docs/plans/FORECAST_BACKFILL_PLAN.md). Exercising both states here
+      // is the only way mock-mode development (`npm run dev`, no
+      // VITE_USE_MOCK=false) can render the "Live Registry"/"CPCV DSR"/
+      // "PBO" columns and the blocked-with-reason styling at all.
       timeseries_momentum_10d: {
         accuracy: 0.5215,
         auc: 0.542,
@@ -16057,6 +16068,12 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
         n_test: 0,
         split_date: "CPCV",
         is_active: true,
+        cpcv_dsr: 0.968,
+        pbo: 0.31,
+        mean_oos_sharpe: 0.74,
+        registry_key: "meta_labeler_backfill_timeseries_momentum",
+        registered: true,
+        skip_reason: null,
       },
       timeseries_momentum_30d: {
         accuracy: 0.534,

@@ -79,6 +79,7 @@ BackfillPhase = Literal[
     "meta_targets",
     "backtraining",
     "backfilling",
+    "registry_bridge",
     "exporting",
 ]
 BackfillState = Literal["running", "succeeded", "failed", "timeout", "cancelled"]

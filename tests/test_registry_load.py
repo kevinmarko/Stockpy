@@ -554,3 +554,49 @@ models:
     assert entry["owner"] == "quant-team"
     assert entry["materiality_tier"] == "experimental"
 
+
+def test_update_model_metrics_independent_meta_labeler_keys(tmp_path, monkeypatch):
+    from ml.registry_io import update_model_metrics
+    
+    # Setup initial registry with both keys
+    yaml_content = '''
+models:
+  meta_labeler_timeseries_momentum:
+    deployable: false
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+  meta_labeler_backfill_timeseries_momentum:
+    deployable: false
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+'''
+    reg_path = tmp_path / "registry.yaml"
+    reg_path.write_text(yaml_content)
+    
+    # Update afml model
+    update_model_metrics("meta_labeler_timeseries_momentum", cpcv_dsr=0.99, pbo=0.01, n_train=100, path=reg_path)
+    
+    import yaml
+    with open(reg_path) as f:
+        data = yaml.safe_load(f)
+        
+    assert data["models"]["meta_labeler_timeseries_momentum"]["deployable"] is True
+    assert data["models"]["meta_labeler_timeseries_momentum"]["cpcv_dsr"] == 0.99
+    
+    # Backfill should be completely untouched
+    assert data["models"]["meta_labeler_backfill_timeseries_momentum"]["deployable"] is False
+    assert data["models"]["meta_labeler_backfill_timeseries_momentum"]["cpcv_dsr"] is None
+    
+    # Update backfill model
+    update_model_metrics("meta_labeler_backfill_timeseries_momentum", cpcv_dsr=0.96, pbo=0.1, n_train=200, path=reg_path)
+    
+    with open(reg_path) as f:
+        data = yaml.safe_load(f)
+        
+    assert data["models"]["meta_labeler_backfill_timeseries_momentum"]["deployable"] is True
+    assert data["models"]["meta_labeler_backfill_timeseries_momentum"]["cpcv_dsr"] == 0.96
+    
+    # AFML should be untouched
+    assert data["models"]["meta_labeler_timeseries_momentum"]["cpcv_dsr"] == 0.99

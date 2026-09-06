@@ -154,3 +154,11 @@ root cause, and verification for every item lives in
    cache file behind — fixed to the same write-then-rename idiom used elsewhere in this
    codebase (e.g. `execution/kill_switch.py`, `desktop/orchestrator_daemon.py`'s
    `_write_daemon_file`).
+
+## Backfill-Screen Live Meta-Labeler Bridge
+
+This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
+- **Registry Key**: `meta_labeler_backfill_options_flow_sentiment`
+- **Live Horizon**: 10 days (default)
+- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
+- **Feature-Compatibility Caveat**: This bridge is currently blocked by a strict fail-closed feature compatibility gate. The live `vec_df` schema does not yet contain all features used by the backfill screen during training. Until a separate follow-up widens the live row schema, any model trained for this signal will refuse to register to prevent silent zero-filling during live inference.

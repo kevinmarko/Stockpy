@@ -274,6 +274,30 @@ class MetaLabeler(Model):
             return True
         return (datetime.now() - self._last_trained).days >= self.retrain_freq_days
 
+    @classmethod
+    def from_fitted(
+        cls,
+        signal_id: str,
+        model,
+        feature_names: list[str],
+        n_train_samples: int,
+        *,
+        lgbm_params: Optional[dict] = None,
+        retrain_freq_days: int = 30,
+        trained_at: Optional[datetime] = None,
+    ) -> "MetaLabeler":
+        """Wrap a pre-fitted sklearn/lightgbm classifier directly."""
+        obj = cls(
+            signal_id=signal_id,
+            lgbm_params=lgbm_params,
+            retrain_freq_days=retrain_freq_days,
+        )
+        obj._model = model
+        obj._feature_names = feature_names
+        obj._n_train_samples = n_train_samples
+        obj._last_trained = trained_at or datetime.now()
+        return obj
+
     # ── Persistence (overrides Model.save/load with signal_id stamping) ───────
 
     def save(self, path: Optional[Path] = None) -> Path:
@@ -297,9 +321,9 @@ class MetaLabeler(Model):
         return obj
 
     @classmethod
-    def load_latest(cls, signal_id: str) -> Optional["MetaLabeler"]:
+    def load_latest(cls, signal_id: str, prefix: str = "meta") -> Optional["MetaLabeler"]:
         """Load the most recently saved model for ``signal_id``, or None."""
-        pickles = sorted(_MODELS_DIR.glob(f"meta_{signal_id}_*.pkl"))
+        pickles = sorted(_MODELS_DIR.glob(f"{prefix}_{signal_id}_*.pkl"))
         if not pickles:
             return None
         return cls.load(pickles[-1])
