@@ -283,7 +283,10 @@ def fit_predict_lstm_attention(
         if Y_seq is None:
             raise ValueError("Y_seq is required when weights is None (fit mode)")
         early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-        X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps)
+        # Single-horizon regressor (Dense(units=1) output below), so
+        # max_h=1 -- same rationale/precedent as fit_predict_or_infer_lstm's
+        # identical call above.
+        X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps, max_h=1)
         model.fit(
             X_tr, Y_tr,
             validation_data=(X_val, Y_val),

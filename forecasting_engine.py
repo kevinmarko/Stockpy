@@ -182,19 +182,28 @@ class ForecastingEngine:
         IMPORTANT: mu and sigma MUST be expressed as DAILY values (i.e. daily log-return
         mean and std). If annualized values are passed, drift will be 252x too large.
 
-        Formula: S_T = S_0 * exp((mu - 0.5*sigma^2)*T + sigma*sqrt(T)*Z), Z ~ N(0,1)
+        Formula: S_T = S_0 * exp(mu*T + sigma*sqrt(T)*Z), Z ~ N(0,1)
 
-        The Ito drift correction (mu - 0.5*sigma^2) is mandatory to prevent upward bias
-        in the expected terminal price (prevents naive flatline / drift collapse).
+        ``mu`` here is the mean of the log-returns themselves (e.g.
+        ``log_returns.mean()``), which already sits ``-0.5*sigma^2`` below the
+        arithmetic-return drift by construction (Jensen's inequality / Ito).
+        Subtracting ``0.5*sigma^2`` a second time here was a double
+        correction that systematically depressed every Monte Carlo band --
+        see docs/known_issues/forecast_ito_double_correction_and_horizon_units.md
+        (F1). ``E[S_T] = S_0 * exp((mu + 0.5*sigma^2)*T)``, which is a
+        consequence of this formula (lognormal mean), not something to
+        subtract out of the simulated path.
         """
         try:
-            import config
+            from settings import settings as _settings
             if days_forward <= 0 or simulations <= 0:
                 return start_price, start_price, start_price
 
             # F-05 GUARD: if mu looks annualized (|mu| >> typical daily range),
             # normalize to daily to prevent silent 252x drift explosion.
-            # Decoupled checks for mu and sigma.
+            # Decoupled checks for mu and sigma so a corrupted sigma doesn't
+            # silently ride along un-normalized just because mu looked fine
+            # (and vice versa) -- each is tested and scaled independently.
             if abs(mu) > 0.05:
                 logger.warning(
                     f"Monte Carlo: mu={mu:.4f} appears annualized. "
@@ -211,17 +220,20 @@ class ForecastingEngine:
             # dt = 1 trading day (mu and sigma are daily)
             dt = 1
 
-            shrinkage = getattr(config, 'FORECAST_DRIFT_SHRINKAGE', getattr(self, 'settings', type('mock', (), {'FORECAST_DRIFT_SHRINKAGE': 1.0})).FORECAST_DRIFT_SHRINKAGE)
-            
-            # Apply drift shrinkage (0.0 means no shrinkage, 1.0 means zero drift)
-            mu = mu * (1.0 - float(shrinkage))
+            # Drift shrinkage (settings.FORECAST_DRIFT_SHRINKAGE, default 0.0 =
+            # no-op): a modelling choice, not a bug fix -- see the setting's
+            # own docstring for why the measured mean is far noisier than the
+            # measured variance over a typical lookback.
+            shrinkage = float(getattr(_settings, "FORECAST_DRIFT_SHRINKAGE", 0.0) or 0.0)
+            mu = mu * (1.0 - shrinkage)
 
-            # The mean of log returns is mu.
-            # So E[S_T] = S_0 * exp((mu + 0.5 * sigma**2) * T).
-            # The terminal return is drawn from N(mu*T, sigma^2*T) -> drift is simply mu.
+            # The mean of log returns is mu -- the terminal log-return is
+            # drawn from N(mu*T, sigma^2*T), so the drift term is simply mu,
+            # not (mu - 0.5*sigma^2) (see the docstring above for why).
             daily_drift = mu * dt
 
-            rng = np.random.default_rng(seed)
+            mc_seed = seed if seed is not None else getattr(_settings, "FORECAST_MC_RANDOM_SEED", None)
+            rng = np.random.default_rng(mc_seed)
             shock = rng.normal(0, 1, (simulations, days_forward))
             daily_diffusion = sigma * np.sqrt(dt) * shock
 
@@ -1360,6 +1372,13 @@ class ForecastingEngine:
             term_structure = TechnicalOptionsEngine().estimate_gjr_garch_volatility_term_structure(
                 history_df, horizons=horizons
             )
+            # None means "not enough history to measure anything" (CONSTRAINT
+            # #4 -- see the estimator's own docstring); fall straight through
+            # to the flat historical-stdev fallback below rather than
+            # subscripting None, which would still be caught by this try's
+            # except but only incidentally.
+            if term_structure is None:
+                raise ValueError("GARCH term structure unavailable (insufficient history)")
             daily_by_horizon = {h: _annual_to_daily(term_structure.get(h)) for h in horizons}
             if all(v is not None for v in daily_by_horizon.values()):
                 return daily_by_horizon
@@ -1475,11 +1494,8 @@ class ForecastingEngine:
             if len(close_prices) > 30:
                 results['ARIMA'] = self.forecast_from_arima_fit(arima_fit, target_days)
 
-            import config
-            mc_seed = getattr(config, 'FORECAST_MC_RANDOM_SEED', getattr(self, 'settings', type('mock', (), {'FORECAST_MC_RANDOM_SEED': 42})).FORECAST_MC_RANDOM_SEED)
             mc_mean, mc_low, mc_high = self.run_monte_carlo(
                 current_price, mu, mc_sigma_by_horizon[target_days], target_days,
-                seed=mc_seed
             )
             results['MC_Target'] = mc_mean
             results['MC_Lower'] = mc_low
@@ -1565,9 +1581,7 @@ class ForecastingEngine:
                     a_res = self.forecast_from_arima_fit(arima_fit, h)
                     h_res = self.forecast_from_hw_fit(hw_fit, h, close_prices)
 
-                import config
-                mc_seed = getattr(config, 'FORECAST_MC_RANDOM_SEED', getattr(self, 'settings', type('mock', (), {'FORECAST_MC_RANDOM_SEED': 42})).FORECAST_MC_RANDOM_SEED)
-                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma_by_horizon[h], days_forward=h, seed=mc_seed)
+                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma_by_horizon[h], days_forward=h)
 
                 # Collect per-model prices for skill tracking and skill-weighted blend.
                 # Only include models that produced a positive price (CONSTRAINT #4).
@@ -1624,9 +1638,19 @@ class ForecastingEngine:
                 blended = self._blend_with_skill(model_forecasts, skill_weights, preferred_model, current_price)
 
                 # Step 2c: persist new forecasts for future validation.
-                if self._tracker is not None and model_forecasts:
+                # A zero-cost naive (price-stays-flat) baseline rides along
+                # in the SAME recorded dict, purely for measurement -- it is
+                # deliberately added to a COPY, never to model_forecasts
+                # itself, so it can never enter the blend above. This is the
+                # "does any model beat a naive random walk?" comparison the
+                # audit found nothing in this codebase could answer (see
+                # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md).
+                recordable_forecasts = dict(model_forecasts)
+                if current_price and current_price > 0:
+                    recordable_forecasts["naive"] = current_price
+                if self._tracker is not None and recordable_forecasts:
                     try:
-                        self._tracker.record_forecasts(symbol, h, model_forecasts, now_utc)
+                        self._tracker.record_forecasts(symbol, h, recordable_forecasts, now_utc)
                     except Exception as _exc:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
 

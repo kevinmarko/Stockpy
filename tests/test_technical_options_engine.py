@@ -286,9 +286,13 @@ class TestCalculateIndicators:
 # ============================================================================
 
 class TestEstimateGjrGarchVolatility:
-    def test_insufficient_history_returns_neutral_fallback(self):
+    def test_insufficient_history_returns_nan_not_fabricated_neutral(self):
+        """< 22 rows isn't enough to measure ANYTHING (not even a 20-day
+        historical stdev fallback) -- must return NaN (CONSTRAINT #4), never
+        a fabricated 0.20."""
+        import math
         engine = TechnicalOptionsEngine()
-        assert engine.estimate_gjr_garch_volatility(_ohlcv(10, seed=5)) == 0.20
+        assert math.isnan(engine.estimate_gjr_garch_volatility(_ohlcv(10, seed=5)))
 
     def test_sufficient_history_returns_bounded_volatility(self):
         engine = TechnicalOptionsEngine()
@@ -422,12 +426,18 @@ class TestGarchTermStructure:
         for h, vol in term_structure.items():
             assert vol == pytest.approx(expected, rel=1e-6), f"horizon {h} must match the flat fallback"
 
-    def test_insufficient_history_fallback_is_flat_neutral_default(self):
+    def test_insufficient_history_returns_none_not_fabricated_flat_default(self):
+        """< 22 rows isn't enough to measure ANYTHING, GARCH or a historical
+        stdev fallback -- must return None (CONSTRAINT #4), never a
+        fabricated flat 0.20 across every horizon. Callers that subscript
+        the result MUST check for None first (see
+        estimate_gjr_garch_volatility and forecasting_engine.py's
+        _estimate_daily_sigma_multi_horizon, both of which do)."""
         engine = TechnicalOptionsEngine()
         term_structure = engine.estimate_gjr_garch_volatility_term_structure(
             _ohlcv(10, seed=18), horizons=(1, 10, 30, 60, 90)
         )
-        assert term_structure == {1: 0.20, 10: 0.20, 30: 0.20, 60: 0.20, 90: 0.20}
+        assert term_structure is None
 
     def test_single_fit_covers_every_horizon(self, monkeypatch):
         """Efficiency contract: ONE arch_model.fit() call must produce every

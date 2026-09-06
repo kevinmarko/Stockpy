@@ -197,15 +197,40 @@ class OptionsMetaLabeler:
 
         try:
             from sklearn.ensemble import HistGradientBoostingClassifier
+            from sklearn.calibration import CalibratedClassifierCV
             from sklearn.metrics import accuracy_score, roc_auc_score
 
-            clf = HistGradientBoostingClassifier(
+            base_clf = HistGradientBoostingClassifier(
                 max_iter=100,
                 learning_rate=0.05,
                 max_leaf_nodes=15,
                 min_samples_leaf=5,
                 random_state=42,
             )
+
+            # Wrap in isotonic calibration (F8 in the math audit): boosted
+            # trees are systematically overconfident at the tails, and this
+            # probability feeds get_sizing_multiplier's LINEAR 4x-slope
+            # sizing map, so a calibration error dP becomes a 4*dP sizing
+            # error. cv is bounded by the minority class count --
+            # StratifiedKFold needs at least `cv` members of the SMALLER
+            # class -- and degrades to an uncalibrated (but still real,
+            # still a genuine HistGradientBoostingClassifier predict_proba)
+            # fit when there's too little data of one class to calibrate
+            # meaningfully, rather than raising (CONSTRAINT #6).
+            n_pos = int(np.sum(y == 1))
+            n_neg = int(np.sum(y == 0))
+            min_class_count = min(n_pos, n_neg)
+            if min_class_count >= 3:
+                cv_folds = min(5, min_class_count)
+                clf = CalibratedClassifierCV(base_clf, method="isotonic", cv=cv_folds)
+            else:
+                logger.warning(
+                    "OptionsMetaLabeler: only %d samples of the minority class "
+                    "(need >= 3); skipping isotonic calibration and using an "
+                    "uncalibrated fit.", min_class_count,
+                )
+                clf = base_clf
             clf.fit(X, y)
             self.model = clf
 
@@ -237,8 +262,18 @@ class OptionsMetaLabeler:
 
     def predict_probability(self, row: Dict[str, Any] | OptionsTradeFeatureRow) -> float:
         """
-        Predicts calibrated P(Profit > 0) for candidate options directive.
-        Returns probability in [0.0, 1.0].
+        Predicts P(Profit > 0) for a candidate options directive.
+
+        Genuinely calibrated (isotonic, via sklearn.calibration.
+        CalibratedClassifierCV -- see train()) whenever the last training run
+        had at least 3 samples of the minority class; degrades to an
+        UNCALIBRATED HistGradientBoostingClassifier.predict_proba() output
+        below that threshold (too little data to calibrate meaningfully --
+        logged at WARNING in train(), not silently swallowed). Either way
+        self.model exposes predict_proba(), so this call site is unchanged.
+        Returns probability in [0.0, 1.0], or NaN when scoring is declined
+        (no model trained yet, or a required feature was unresolved --
+        CONSTRAINT #4, never a fabricated number).
         """
         if self.model is None:
             return float('nan')
@@ -271,9 +306,20 @@ class OptionsMetaLabeler:
         """
         Computes dynamic position sizing scaling factor based on predicted edge.
         Returns:
+            1.0 (neutral, unscaled) if prob is NaN -- predict_probability
+                declined to score (no model trained yet, or a required
+                feature was unresolved). "No ML opinion" must not act like a
+                confident bearish one and block a directive that already
+                passed its own, independent gates (CONSTRAINT #6) --
+                comparing a NaN prob against min_confidence would otherwise
+                silently fall through to 0.0 anyway, since every comparison
+                against NaN is False in Python/numpy, making a blocked entry
+                indistinguishable from a genuinely low-confidence one.
             0.0 if prob < min_confidence (blocks low-confidence entry),
             Scaled multiplier in [0.30, 1.50] if prob >= min_confidence.
         """
+        if not np.isfinite(prob):
+            return 1.0
         if prob < min_confidence:
             return 0.0
 
@@ -298,15 +344,24 @@ class OptionsMetaLabeler:
     ) -> Dict[str, Any]:
         """
         Evaluates an actionable options directive and returns ML score metadata.
+
+        ``prob_win`` is ``None`` (never a fabricated/raw-NaN float --
+        CONSTRAINT #4) and ``probability_available`` is ``False`` when
+        ``predict_probability`` declined to score; ``sizing_multiplier``
+        still reports the neutral 1.0x get_sizing_multiplier applies in that
+        case and ``approved`` stays True (an unavailable ML opinion doesn't
+        veto a directive that already passed its own gates).
         """
         prob = self.predict_probability(directive)
+        prob_available = bool(np.isfinite(prob))
         sizing_mult = self.get_sizing_multiplier(prob, min_confidence=min_confidence)
         approved = sizing_mult > 0.0
 
         return {
             "strategy": directive.get("strategy", ""),
             "symbol": directive.get("symbol", ""),
-            "prob_win": round(prob, 3),
+            "prob_win": round(prob, 3) if prob_available else None,
+            "probability_available": prob_available,
             "sizing_multiplier": round(sizing_mult, 2),
             "approved": approved,
             "trained_samples": self.n_samples,

@@ -113,12 +113,16 @@ class TestSkillFromPooledStats:
         assert obs._skill_from_pooled_stats(n=50, mse=4.0, min_obs=10) == pytest.approx(0.5)
 
     def test_tiny_mse_is_floored_by_min_rmse(self):
-        from forecasting.forecast_tracker import _MIN_RMSE
+        import math
+
+        from forecasting.forecast_tracker import _MIN_MSE
 
         # An essentially-zero MSE must not blow up to a huge/infinite skill —
-        # the same _MIN_RMSE floor compute_skill_weights_from_stats uses.
+        # floored via sqrt(_MIN_MSE), the RMSE-scale equivalent of the same
+        # _MIN_MSE floor compute_skill_weights_from_stats uses directly on MSE.
+        min_rmse = math.sqrt(_MIN_MSE)
         skill = obs._skill_from_pooled_stats(n=50, mse=1e-12, min_obs=10)
-        assert skill == pytest.approx(1.0 / _MIN_RMSE)
+        assert skill == pytest.approx(1.0 / min_rmse)
 
 
 # ---------------------------------------------------------------------------

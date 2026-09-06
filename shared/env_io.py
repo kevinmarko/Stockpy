@@ -277,6 +277,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
     "FORECAST_PROPHET_WEIGHT",    # float [0,1] — Prophet ensemble overlay weight
+    # Math-calibration audit additions (docs/known_issues/forecast_ito_double_
+    # correction_and_horizon_units.md). Non-secret modelling tunables, no
+    # credential material.
+    "FORECAST_MC_RANDOM_SEED",    # Optional[int] — run_monte_carlo RNG seed; None = non-deterministic
+    "FORECAST_DRIFT_SHRINKAGE",   # float [0,1] — shrinks MC drift mu toward zero (0.0 = unshrunk, today's behavior)
+    "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",  # bool — ForecastTracker looks up each row's own due-date close instead of today's price
     "FORECAST_SKILL_WEIGHTING_ENABLED",  # bool — opt-in inverse-RMSE skill-weighted blend
     "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting
     "FORECAST_MODEL_PERSISTENCE_ENABLED",  # bool — opt-in CNN-LSTM/Prophet artifact persistence

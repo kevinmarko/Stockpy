@@ -107,9 +107,9 @@ operator could mistake them for genuine out-of-sample validation.
   into the feature vector rather than being silently defaulted).
   `predict_probability` gates on `np.all(np.isfinite(x_vec))` *before*
   dispatching to any model branch — a non-finite feature vector declines to
-  score and returns the existing neutral `0.65` fallback (which resolves to
-  exactly `1.0x` sizing, matching the untrained-model cold-start behavior),
-  logged at WARNING. `score_option_directive` gained an additive
+  score and returns `NaN` (see the 2026-09 addendum below for why this is
+  no longer a fabricated `0.65` fallback), logged at WARNING.
+  `score_option_directive` gained an additive
   `features_resolved: bool` key so callers/tests can distinguish "the model
   gave a genuinely neutral answer" from "scoring was skipped because
   required data was unresolved". `execution/options_paper_executor.py::
@@ -222,3 +222,67 @@ Full regression sweep after the fix: `tests/test_options_meta_labeler.py`,
 `tests/test_options_paper_executor.py`, `tests/test_pilots_paper_broker.py`,
 `tests/test_pilots_api.py`, `tests/test_options_harness.py`,
 `tests/test_options_queue_builder.py` — 668 passed, 0 failed.
+
+## 2026-09 addendum: the `0.65` fallback itself was fabricated, and a downstream
+## sizing bug this session's `predict_probability` fix introduced
+
+Two follow-on fixes from the forecast/LLM math audit (see
+`docs/known_issues/forecast_ito_double_correction_and_horizon_units.md`), both in
+`ml/options_meta_labeler.py`:
+
+1. **`predict_probability`'s `0.65` fallback (and `train()`'s `linear_fallback`
+   OLS-through-a-sigmoid path, and the hardcoded `acc = auc = 0.60` on a
+   training failure) were themselves fabricated numbers presented as
+   measurements** — the exact CONSTRAINT #4 problem this document's own
+   original items 1/3 fixed for the FEATURE side, still present on the
+   PREDICTION side. `predict_probability` now returns `NaN` (never `0.65`)
+   whenever it declines to score — the model is untrained, a required
+   feature is unresolved, or `predict_proba` itself raises. `train()`'s
+   `except Exception` branch on a genuine sklearn fit failure now sets
+   `self.model = None`/`acc = None`/`auc = None` instead of hand-rolling an
+   `np.linalg.lstsq` logistic-regression fallback and reporting invented
+   `0.60`/`0.60` metrics; `score_option_directive` reports the honest
+   `probability_available: False`/`prob_win: None` pair instead.
+2. **Bug this fix would have introduced if shipped alone**:
+   `get_sizing_multiplier(nan, ...)` was NOT updated in the same pass —
+   `nan < min_confidence` is `False` in Python (every comparison against
+   NaN is), so an unresolved score fell through the low-confidence gate
+   into `1.0 + (nan - 0.65) * 4.0` → `nan` → `np.clip(nan, ...)` → `nan`,
+   and `score_option_directive`'s `approved = sizing_mult > 0.0` then
+   evaluated to `False` — silently turning "no ML opinion" into an ACTIVE
+   REJECTION, the opposite of the old `0.65` fallback's always-neutral
+   `1.0x`/approved behavior. Fixed: `get_sizing_multiplier` now checks
+   `np.isfinite(prob)` first and returns the neutral `1.0x` when unresolved,
+   deferring to whatever gates already approved the directive rather than
+   vetoing it on missing data.
+3. **`train()` now wraps the classifier in `sklearn.calibration.
+   CalibratedClassifierCV(method="isotonic")`** (F8 in the math audit —
+   "OptionsMetaLabeler claims calibration it does not implement, and drives
+   sizing" — `predict_probability`'s docstring had said "calibrated"
+   since this module's introduction despite fitting a bare
+   `HistGradientBoostingClassifier` and calling `predict_proba` directly,
+   with no calibration wrapper anywhere). Boosted trees are systematically
+   overconfident at the tails, and `get_sizing_multiplier`'s linear 4x-slope
+   sizing map turns a miscalibration `Δp` into a `4Δp` sizing error — the
+   highest-leverage single fix in this pass by the original audit's own
+   estimate. `cv` is bounded by the minority class count (`min(5,
+   min_class_count)`) and calibration is skipped in favor of an
+   uncalibrated (but still real) fit when there are fewer than 3 samples of
+   either class — logged at WARNING, not silently accepted as "calibrated"
+   when it structurally can't be. `predict_probability`'s call site is
+   unchanged either way (`CalibratedClassifierCV` exposes the same
+   `predict_proba()` interface).
+4. **Not done in this pass, disclosed rather than silently skipped**: the
+   audit also flagged that a win-probability→size map alone ignores the
+   payoff ratio Kelly requires (a 55% win rate at 1:4 payoff is a negative
+   edge sized at 0.60x for a credit spread, since win rate and payoff are
+   inversely related by construction for that strategy family), and that
+   `get_sizing_multiplier`'s documented floor of 0.30x is unreachable given
+   `min_confidence=0.52` (the real range is `[0.48, 1.50]`). Both are
+   genuine, separate design gaps left for a future pass — see the plan's
+   WP4 notes for the full reasoning.
+
+Tests: `tests/test_options_meta_labeler.py::test_nan_ivr_declines_to_score_instead_of_predicting_confidently`,
+`test_none_valued_feature_also_declines_to_score`,
+`test_get_sizing_multiplier_nan_prob_is_neutral_not_a_rejection`;
+`tests/test_options_paper_executor.py::test_executor_construction_no_model_file_is_honest_and_non_crashing`.

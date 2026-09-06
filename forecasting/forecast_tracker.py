@@ -44,7 +44,8 @@ Database table: ``forecast_errors``
 | symbol         | TEXT       | Ticker (e.g. "AAPL").                           |
 | model_name     | TEXT       | One of: arima, monte_carlo, holt_winters,        |
 |                |            | cnn_lstm, prophet, lstm_baseline,                |
-|                |            | lstm_attention, bert_lla.                        |
+|                |            | lstm_attention, bert_lla, naive (a zero-cost      |
+|                |            | flat/random-walk baseline, never blend-eligible). |
 | horizon_days   | INTEGER    | Forecast horizon (e.g. 10, 30, 60, 90).          |
 | forecast_ts    | TEXT       | UTC ISO-8601 when the forecast was made.         |
 | forecast_price | REAL       | Predicted terminal price.                        |
@@ -90,9 +91,17 @@ MODEL_CNN_LSTM = "cnn_lstm"
 MODEL_LSTM_BASELINE = "lstm_baseline"
 MODEL_LSTM_ATTENTION = "lstm_attention"
 MODEL_BERT_LLA = "bert_lla"
+# Zero-cost persistence-forecast baseline ("price stays flat"): recorded
+# alongside every real model's forecast at every horizon, purely for
+# measurement -- forecasting_engine.py never includes it in model_forecasts,
+# so it can never enter the blend. Answers "does any model beat a naive
+# random walk?" for the first time; it is also MASE's correct denominator.
+# Always recordable (a symbol always has a current price), so unlike the
+# other models it needs no "did this model produce output" gate.
+MODEL_NAIVE = "naive"
 ALL_MODEL_NAMES = (
     MODEL_ARIMA, MODEL_MONTE_CARLO, MODEL_HOLT_WINTERS, MODEL_CNN_LSTM,
-    MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA,
+    MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA, MODEL_NAIVE,
 )
 
 # Minimum positive MSE to prevent division-by-zero when a model is extremely
@@ -377,9 +386,25 @@ class ForecastTracker:
         """Match past forecasts with actual realized prices.
 
         Finds all unactualized rows for ``symbol`` and ``horizon_days`` whose
-        ``forecast_ts`` is at least ``horizon_days`` days before ``as_of`` (i.e.
-        the full nominal horizon has genuinely elapsed), and writes
-        ``actual_price`` + ``squared_error`` into them.
+        ``forecast_ts`` is at least ``horizon_days`` trading days before
+        ``as_of`` (i.e. the full nominal horizon has genuinely elapsed), and
+        writes ``actual_price`` + ``squared_error`` into them.
+
+        Each row is scored against the close ON ITS OWN due date
+        (``forecast_ts`` + ``horizon_days`` trading bars), not against
+        ``actual_price`` (today's close) — a forecast that became overdue a
+        while ago (a missed cycle, a backlog of several pending rows) was
+        previously stamped with whatever price happened to be current on the
+        call that finally actualized it, not the price on the date it was
+        actually due. See F5 in
+        ``docs/known_issues/forecast_ito_double_correction_and_horizon_units.md``.
+        ``actual_price`` is now used only (a) to compute the eligibility
+        cutoff's frame of reference and (b) as the fallback price for a row
+        whose own due-date close genuinely can't be resolved (no historical
+        bar store, a due date the stored bars don't cover, or any other
+        failure) — that one row degrades to the legacy today's-price
+        behavior rather than being left permanently un-actualized
+        (CONSTRAINT #6).
 
         No separate lateness tolerance is needed: a forecast that becomes due
         while this cycle is skipped (a weekend, a holiday, a missed run) simply
@@ -399,7 +424,8 @@ class ForecastTracker:
         horizon_days : int
             Forecast horizon to actualize.
         actual_price : float
-            Current close price (the ground truth for past forecasts).
+            Current close price — the fallback ground truth for any row
+            whose own due-date close can't be resolved.
         as_of : datetime
             The UTC datetime of the current run.
 
@@ -417,27 +443,127 @@ class ForecastTracker:
 
             with self._lock:
                 conn = self._get_conn()
-                cursor = conn.execute(
-                    """UPDATE forecast_errors
-                       SET actual_price  = ?,
-                           squared_error = (? - forecast_price) * (? - forecast_price)
+                pending = conn.execute(
+                    """SELECT id, forecast_ts FROM forecast_errors
                        WHERE symbol       = ?
                          AND horizon_days = ?
                          AND forecast_ts  <= ?
                          AND actual_price IS NULL""",
-                    (
-                        actual_price, actual_price, actual_price,
-                        symbol.upper(), horizon_days, cutoff_iso,
-                    ),
+                    (symbol.upper(), horizon_days, cutoff_iso),
+                ).fetchall()
+
+            if not pending:
+                return 0
+
+            from settings import settings as _settings
+            if getattr(_settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", True):
+                # Resolved OUTSIDE the lock -- it may hit HistoricalStore's
+                # own DB/network path, which must never hold this tracker's
+                # lock.
+                price_by_id = self._resolve_due_date_prices(
+                    symbol, pending, horizon_days, fallback_price=actual_price
+                )
+            else:
+                price_by_id = {row_id: actual_price for row_id, _ in pending}
+            rows = [
+                (price, price, price, row_id) for row_id, price in price_by_id.items()
+            ]
+
+            with self._lock:
+                conn = self._get_conn()
+                conn.executemany(
+                    """UPDATE forecast_errors
+                       SET actual_price  = ?,
+                           squared_error = (? - forecast_price) * (? - forecast_price)
+                       WHERE id = ? AND actual_price IS NULL""",
+                    rows,
                 )
                 conn.commit()
-                return cursor.rowcount
+            return len(rows)
         except Exception as exc:
             self._safe_rollback()
             logger.warning(
                 "ForecastTracker.update_actuals(%s, h=%d) failed: %s", symbol, horizon_days, exc
             )
             return 0
+
+    def _resolve_due_date_prices(
+        self,
+        symbol: str,
+        pending: "list",
+        horizon_days: int,
+        fallback_price: float,
+    ) -> Dict[int, float]:
+        """Look up each pending row's own due-date close instead of stamping
+        every row with ``fallback_price`` (today's price).
+
+        Parameters
+        ----------
+        pending : list[tuple[int, str]]
+            ``(row_id, forecast_ts_iso)`` pairs, as returned by the
+            eligibility SELECT in ``update_actuals``.
+
+        Returns
+        -------
+        dict[int, float]
+            ``{row_id: price}`` for EVERY row in ``pending`` — a row whose
+            own due-date close can't be resolved falls back to
+            ``fallback_price`` for that row alone (CONSTRAINT #6: degrade
+            gracefully rather than strand a row un-actualized forever over a
+            data gap). Never raises.
+        """
+        due_ts_by_id: Dict[int, Optional[pd.Timestamp]] = {}
+        for row_id, forecast_ts in pending:
+            try:
+                made_ts = pd.Timestamp(forecast_ts)
+                if made_ts.tzinfo is not None:
+                    made_ts = made_ts.tz_convert(None)
+                due_ts_by_id[row_id] = (made_ts + pd.offsets.BDay(max(0, horizon_days))).normalize()
+            except Exception:
+                due_ts_by_id[row_id] = None
+
+        closes = None
+        try:
+            due_dates = [ts for ts in due_ts_by_id.values() if ts is not None]
+            if due_dates:
+                oldest_due = min(due_dates)
+                span_days = max(0, (pd.Timestamp.now().normalize() - oldest_due).days)
+                # Generous enough to cover a long-stalled backlog without an
+                # unbounded fetch -- a due date older than ~10 years falls
+                # back to fallback_price for that row rather than paying for
+                # an ever-larger historical pull.
+                lookback_days = int(min(max(504, span_days + 30), 3650))
+                from data.historical_store import HistoricalStore
+                bars_df = HistoricalStore().get_bars(symbol, lookback_days=lookback_days)
+                if bars_df is not None and not bars_df.empty and "Close" in bars_df.columns:
+                    closes = bars_df["Close"].copy()
+                    closes.index = pd.to_datetime(closes.index).normalize()
+                    closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+        except Exception as exc:
+            logger.debug(
+                "ForecastTracker: due-date close lookup failed for %s (h=%d): %s",
+                symbol, horizon_days, exc,
+            )
+
+        result: Dict[int, float] = {}
+        for row_id, due_ts in due_ts_by_id.items():
+            price = fallback_price
+            if closes is not None and due_ts is not None:
+                try:
+                    if due_ts in closes.index:
+                        price = float(closes.loc[due_ts])
+                    else:
+                        # Nearest bar AT OR BEFORE the due date (a mismatch
+                        # between pandas' generic BDay calendar and the real
+                        # exchange calendar, e.g. a market holiday) -- never
+                        # a bar after it, which would be lookahead.
+                        prior = closes.index[closes.index <= due_ts]
+                        if len(prior) > 0:
+                            price = float(closes.loc[prior[-1]])
+                except Exception:
+                    pass
+            result[row_id] = price
+        return result
 
     def get_skill_weights(
         self,

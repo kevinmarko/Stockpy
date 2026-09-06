@@ -330,6 +330,39 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_forecast_tracker_due_date_lookup_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable ForecastTracker.update_actuals's due-date-close lookup (the F5
+    fix, ``settings.FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED``) for every test.
+
+    That lookup lazily constructs a bare ``data.historical_store.
+    HistoricalStore()`` (no explicit ``db_path``) the first time a pending row
+    is actualized -- unlike every existing ``tests/test_historical_store.py``
+    call site, which always passes its own isolated ``db_path``, this
+    construction is IMPLICIT, deep inside ``update_actuals``, and reachable
+    from dozens of pre-existing tests (``tests/test_forecast_tracker.py``,
+    ``tests/test_forecasting_engine.py``, ``tests/test_forecast_skill_uplift.py``,
+    ...) that construct a ``ForecastTracker`` with their own isolated sqlite
+    file and have no reason to expect a SECOND, unrelated store to be reached
+    from inside it. Left unguarded, the default bare-``HistoricalStore()``
+    resolution would (a) read/write the operator's real shared
+    ``~/.stockpy_local/quant_platform.db`` bars table, and (b) attempt a live
+    market-data fetch for whatever symbol the test happens to use (e.g.
+    "AAPL") whenever the DB doesn't already have data for the test's
+    synthetic date -- silently reintroducing a network dependency into what
+    should be a pure-sqlite unit test, and risking a real close price
+    overwriting a test's hardcoded expected actualization value. Same risk
+    class and same fixture shape as ``_isolate_validation_runs_db_in_tests``
+    et al. above, gating a *setting* rather than a DB-URL resolver since the
+    lookup itself (not just its default DB path) is what needs disabling. A
+    test that wants to exercise the real lookup re-enables it explicitly via
+    ``monkeypatch.setattr(settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", True)``.
+    """
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_trends_store_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the default Google Trends store DB resolver at an in-memory db
     for every test, unless the test passes its own explicit ``db_url`` to

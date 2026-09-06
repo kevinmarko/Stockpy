@@ -328,7 +328,15 @@ class OptionsAnalysisStep(PipelineStep):
                 garch_term_structure = toe.estimate_gjr_garch_volatility_term_structure(
                     df_hist, horizons=(1, 10, 30, 60, 90)
                 )
-                vol = garch_term_structure[1]
+                # None means there isn't even enough history to measure a
+                # historical-stdev fallback (CONSTRAINT #4 -- see the
+                # estimator's own docstring). Degrade GARCH_Vol/VRP to NaN
+                # (VRP = current_iv - vol propagates the NaN and correctly
+                # gates the VRP leg closed) rather than letting this whole
+                # per-ticker step crash on `garch_term_structure[1]` and lose
+                # Aroon/Coppock/Chandelier/True_IVR too, none of which depend
+                # on GARCH at all.
+                vol = garch_term_structure[1] if garch_term_structure is not None else float('nan')
                 realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
 
                 as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")

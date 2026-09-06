@@ -819,10 +819,15 @@ def _forecast_stats_by_symbol(
 
 def _skill_from_pooled_stats(n: int, mse: Optional[float], min_obs: int) -> Optional[float]:
     """Raw (un-normalized) inverse-RMSE 'skill' score for one pooled
-    (all-models-combined) sub-window — the SAME formula piece
-    ``compute_skill_weights_from_stats`` uses per model
-    (``1.0 / max(rmse, _MIN_RMSE)``), reusing that module's own
-    ``_MIN_RMSE`` floor so the two never drift apart (see
+    (all-models-combined) sub-window.
+
+    As of the 2026-09 forecast-math audit, ``compute_skill_weights_from_stats``
+    itself weights models by inverse-MSE directly (no ``sqrt`` step) — see
+    that function's own docstring. This helper deliberately still reports an
+    inverse-RMSE magnitude (RMSE is expressed in the same units as price,
+    which is what a before/after ``decay_pct`` comparison wants), but floors
+    it via ``math.sqrt(_MIN_MSE)`` — the square root of that module's own
+    ``_MIN_MSE`` floor — so the two never drift apart (see
     ``compute_skill_weights_from_stats``'s docstring on the "three copies"
     bug this codebase already hit once).
 
@@ -837,10 +842,11 @@ def _skill_from_pooled_stats(n: int, mse: Optional[float], min_obs: int) -> Opti
     sub-window to trust its RMSE — or when ``mse`` is missing/negative."""
     if n < min_obs or mse is None or mse < 0:
         return None
-    from forecasting.forecast_tracker import _MIN_RMSE
+    from forecasting.forecast_tracker import _MIN_MSE
 
     rmse = math.sqrt(mse)
-    return 1.0 / max(rmse, _MIN_RMSE)
+    min_rmse = math.sqrt(_MIN_MSE)
+    return 1.0 / max(rmse, min_rmse)
 
 
 def _forecast_decay_stats_by_symbol(
@@ -862,8 +868,9 @@ def _forecast_decay_stats_by_symbol(
     ``decay_pct = (baseline_skill - recent_skill) / baseline_skill * 100``
     using :func:`_skill_from_pooled_stats` for both — positive means skill is
     degrading (recent RMSE worse than baseline), negative means it improved.
-    ``baseline_skill`` is always > 0 when not ``None`` (the ``_MIN_RMSE``
-    floor forbids a zero), so this never divides by zero.
+    ``baseline_skill`` is always > 0 when not ``None`` (the
+    ``math.sqrt(_MIN_MSE)`` floor forbids a zero), so this never divides by
+    zero.
 
     Returns ``{symbol: {"decay_pct": float | None, "decay_reason": str | None}}``.
     A symbol with insufficient completed forecasts in either sub-window gets

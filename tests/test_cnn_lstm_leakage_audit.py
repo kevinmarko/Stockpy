@@ -22,20 +22,27 @@ class TestCnnLstmLikageMitigation:
         lookback = 10
         n_samples = 100
         n_features = 4
-        n_horizons = 3
+        horizons = [5, 10, 20]
+        n_horizons = len(horizons)
+        max_h = max(horizons)
 
         # Create dummy sequential data
         X_seq = np.arange(n_samples * lookback * n_features, dtype=float).reshape(n_samples, lookback, n_features)
         Y_seq = np.ones((n_samples, n_horizons), dtype=float)
 
         X_train, Y_train, X_val, Y_val = ForecastingEngine.purged_train_val_split(
-            X_seq, Y_seq, lookback=lookback, val_fraction=0.2
+            X_seq, Y_seq, lookback=lookback, max_h=max_h, val_fraction=0.2
         )
 
         n_val = int(round(n_samples * 0.2))  # 20
         val_start = n_samples - n_val        # 80
-        embargo = lookback - 1                # 9
-        expected_train_len = val_start - embargo  # 71
+        # Embargo must also cover the max forecast horizon: a training
+        # window's TARGET can read up to max_h raw rows past its own last
+        # row, so a window within max_h rows of the validation boundary
+        # still leaks future information into val_loss-driven early
+        # stopping even though its own INPUT rows don't overlap.
+        embargo = lookback - 1 + max_h        # 9 + 20 = 29
+        expected_train_len = val_start - embargo  # 80 - 29 = 51
 
         assert len(X_train) == expected_train_len
         assert len(Y_train) == expected_train_len

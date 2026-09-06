@@ -2490,8 +2490,8 @@ class TestAIForecastingEndpoints:
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
-        assert len(body["forecast"]) == 4
-        assert "1d" in body["forecast"]
+        assert len(body["forecast"]) == 3
+        assert "1d" not in body["forecast"]
         assert "5d" in body["forecast"]
         assert "21d" in body["forecast"]
         assert "60d" in body["forecast"]
