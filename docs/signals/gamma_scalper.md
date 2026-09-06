@@ -8,8 +8,16 @@ Decay, Transaction Costs, and Net Edge.
 
 ## Backtest Validation — EXCLUDED from the deployability gate (not a strategy)
 
-**Not registered in `STRATEGY_REGISTRY`, and no docs "NOT GATEABLE" measurement was attempted —
-PBO/DSR/Sharpe/MaxDD are undefined for what this module actually is.**
+**Registered in `STRATEGY_REGISTRY` (`scripts/refresh_validations.py`) as of PR #952 — but as a
+deliberate `UNGATEABLE_NOT_A_STRATEGY` stub, not a numeric PBO/DSR/Sharpe/MaxDD backtest.** The
+registry entry's own adapter (`_build_ungateable_adapter`) always raises
+`RuntimeError("UNGATEABLE_DATA_GAP: Excluded — not a strategy (no scan/evaluate/execute path, no
+PaperAccountStore import, its only threshold is a hedge band).")`, so a `--strategies
+gamma_scalper` validation run records an honest dead-letter rather than silently doing nothing;
+`api/pilots_api.py`'s `OPTIONS_DESK_DEPLOYABILITY_GATES["gamma_scalper"]` echoes the same reason
+as `gate_status="UNGATEABLE_NOT_A_STRATEGY"` on the live `POST /pilots/options/gamma-scalp/simulate`
+response. PBO/DSR/Sharpe/MaxDD remain undefined for what this module actually is — the stub
+exists to make that status explicit and queryable, not to compute those metrics.
 
 `simulate_gamma_scalping(option_position=None, price_path=None, delta_threshold=0.15, ...)` takes
 **both the position AND the market price path as caller-supplied inputs**. It never decides when
@@ -39,5 +47,8 @@ geometric-Brownian-motion price path, and returns plausible-looking P&L numbers 
 market that were never real. Any caller of the bare function without real inputs should be
 treated as producing a demo/sanity-check result, not a backtest.
 
-See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) and
+See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s 2026-08-17
+"Options Desk Deployability-Gate Coverage" entry (the original exclusion analysis and its own
+fabrication-hazard finding) and its later "considered and reverted" entry confirming
+`gamma_scalper`'s registration was kept as one of the genuine, in-scope registry fixes, plus
 `.claude/giant_master_plan_audit.md`'s finding F4.
