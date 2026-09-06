@@ -200,3 +200,86 @@ describe("SymbolInput autocomplete", () => {
     expect(getUniverseSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("SymbolInput requireExactMatch (opt-in strict mode)", () => {
+  it("disables Load and shows a warning for a ticker that matches no suggestion", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch />);
+
+    const input = screen.getByTestId("symbol-input");
+    await user.type(input, "gbpdzd");
+
+    const loadBtn = await screen.findByRole("button", { name: /load/i });
+    expect(loadBtn).toBeDisabled();
+    expect(screen.getByText(/Not a recognized ticker yet/i)).toBeInTheDocument();
+
+    // Clicking a disabled button, and pressing Enter, are both no-ops.
+    await user.click(loadBtn);
+    await user.keyboard("{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("enables Load once the typed value exactly matches a tracked symbol", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch />);
+
+    const input = screen.getByTestId("symbol-input");
+    await user.type(input, "AAPL");
+
+    const loadBtn = await screen.findByRole("button", { name: /load/i });
+    await vi.waitFor(() => expect(loadBtn).not.toBeDisabled());
+    expect(screen.queryByText(/Not a recognized ticker yet/i)).not.toBeInTheDocument();
+
+    await user.click(loadBtn);
+    expect(onSubmit).toHaveBeenCalledWith("AAPL");
+  });
+
+  it("enables Load once the typed value exactly matches a live FMP symbol-search result", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockImplementation((q) =>
+      Promise.resolve(
+        q.toUpperCase() === "XOM"
+          ? { query: q, results: [{ symbol: "XOM", name: "Exxon Mobil", currency: "USD", exchange: "NYSE", exchange_full_name: null }], reason: null }
+          : { query: q, results: [], reason: null }
+      )
+    );
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch />);
+
+    const input = screen.getByTestId("symbol-input");
+    await user.type(input, "XOM");
+
+    const loadBtn = await screen.findByRole("button", { name: /load/i });
+    await vi.waitFor(() => expect(loadBtn).not.toBeDisabled());
+
+    await user.click(loadBtn);
+    expect(onSubmit).toHaveBeenCalledWith("XOM");
+  });
+
+  it("still allows clicking an actual suggestion row even before the exact-match debounce settles", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch />);
+
+    await user.type(screen.getByTestId("symbol-input"), "AAP");
+    const list = await screen.findByTestId("symbol-suggestions");
+    await user.click(within(list).getByText("AAPL"));
+
+    // Selecting a real suggestion always works -- it's known-valid by construction.
+    expect(onSubmit).toHaveBeenCalledWith("AAPL");
+  });
+
+  it("does not affect the default (requireExactMatch unset) behavior -- free text still submits", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} />);
+
+    const input = screen.getByTestId("symbol-input");
+    await user.type(input, "gbpdzd");
+    await user.keyboard("{Enter}");
+
+    expect(onSubmit).toHaveBeenCalledWith("GBPDZD");
+  });
+});

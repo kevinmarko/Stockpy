@@ -4393,6 +4393,11 @@ export interface ScenarioMatrixResponse {
   matrix: ScenarioMatrixCell[];
   historical_scenarios?: HistoricalScenarioPreset[];
   current_portfolio_value: number;
+  /** Count of open positions the grid was computed against. 0 means there is
+   * nothing to stress-test (an all-zero grid is then the honest, correct
+   * result, not a fabricated/broken one) -- optional so an older cached
+   * response without this field doesn't break existing callers. */
+  positions_count?: number;
 }
 
 export interface VolSmilePoint {

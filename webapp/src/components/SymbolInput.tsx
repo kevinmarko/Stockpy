@@ -59,6 +59,7 @@ export function SymbolInput({
   testId = "symbol-input",
   trackedSymbols,
   enableFmpSuggestions = true,
+  requireExactMatch = false,
 }: {
   initial?: string;
   onSubmit: (symbol: string) => void;
@@ -86,6 +87,18 @@ export function SymbolInput({
    * persisted DB state, so an untracked symbol is a guaranteed honest-empty
    * dead end and surfacing one here would just be misleading. */
   enableFmpSuggestions?: boolean;
+  /** Opt-in, stricter mode: reject free-text submission (Load button and
+   * bare Enter) unless the typed value exactly matches a symbol already
+   * known to be real -- either the tracked universe or a live
+   * `GET /data/symbol-search` result. Selecting an actual suggestion row
+   * (click, or Enter/Tab while one is highlighted) always works, since a
+   * suggestion is real by construction. Defaults to `false`, preserving
+   * every existing caller's free-text-always-works behavior exactly --
+   * only Paper Broker's Quick Trade panel opts in, since that's the one
+   * screen where a bad typo silently produces a plausible-looking "no
+   * quote available" error instead of an obviously-invalid disabled
+   * button. */
+  requireExactMatch?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   const [universe, setUniverse] = useState<UniverseSymbol[]>(
@@ -188,9 +201,23 @@ export function SymbolInput({
       ? `${listId}-opt-${activeIndex}`
       : undefined;
 
-  const commit = (sym: string) => {
+  // Checked against the FULL tracked set and raw fmpResults, not the merged
+  // `suggestions` list above -- that list deliberately excludes an exact
+  // already-tracked match (trackedSuggestions skips `s === q`, since a
+  // symbol you already typed exactly needs no suggestion row), which would
+  // otherwise make a perfectly valid, already-tracked ticker look "unknown"
+  // here. Only meaningful when `requireExactMatch` is set; unused (and free
+  // of any behavioral effect) otherwise.
+  const isKnownSymbol =
+    q.length > 0 && (trackedSymbolSet.has(q) || fmpResults.some((r) => r.symbol === q));
+
+  const commit = (sym: string, opts?: { fromSuggestion?: boolean }) => {
     const clean = sym.trim().toUpperCase();
     if (!clean) return;
+    if (requireExactMatch && !opts?.fromSuggestion) {
+      const known = trackedSymbolSet.has(clean) || fmpResults.some((r) => r.symbol === clean);
+      if (!known) return; // reject silently -- the disabled button already signals why
+    }
     setValue(clean);
     if (onChange) onChange(clean);
     setOpen(false);
@@ -225,8 +252,9 @@ export function SymbolInput({
       activeIndex >= 0
     ) {
       // A suggestion is highlighted → accept it (and load it on Enter).
+      // Always a real, known symbol by construction -- bypass requireExactMatch.
       e.preventDefault();
-      commit(suggestions[activeIndex].symbol);
+      commit(suggestions[activeIndex].symbol, { fromSuggestion: true });
     }
     // Enter with nothing highlighted falls through to the form's submit handler,
     // preserving free-text lookup of any ticker.
@@ -282,10 +310,23 @@ export function SymbolInput({
             color: "var(--text-muted)",
           }}
         >
-          {hideButton
+          {requireExactMatch
+            ? "Pick a suggested symbol -- only a recognized, quotable ticker can be submitted."
+            : hideButton
             ? "Type to search tracked symbols, or enter any ticker and press Enter."
             : "Type to search tracked symbols, or enter any ticker and press Load."}
         </div>
+        {requireExactMatch && value.trim().length > 0 && !isKnownSymbol && (
+          <div
+            style={{
+              marginTop: "var(--s-1)",
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            Not a recognized ticker yet -- pick one from the suggestions below.
+          </div>
+        )}
 
         {showDropdown && (
           <ul
@@ -314,7 +355,8 @@ export function SymbolInput({
                     aria-selected={selected}
                     onMouseDown={(e) => {
                       e.preventDefault(); // keep focus in the input through the click
-                      commit(s.symbol);
+                      // Always a real, known symbol by construction -- bypass requireExactMatch.
+                      commit(s.symbol, { fromSuggestion: true });
                     }}
                   >
                     <span className="combobox-symbol">{s.symbol}</span>
@@ -332,7 +374,12 @@ export function SymbolInput({
         )}
       </div>
       {!hideButton && (
-        <Button type="submit" variant="primary" pending={pending}>
+        <Button
+          type="submit"
+          variant="primary"
+          pending={pending}
+          disabled={requireExactMatch && !isKnownSymbol}
+        >
           {buttonText || "Load"}
         </Button>
       )}

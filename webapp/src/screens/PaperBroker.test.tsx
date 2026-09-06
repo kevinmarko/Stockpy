@@ -318,6 +318,16 @@ describe("PaperBroker", () => {
     vi.mocked(api.getDataQuotes).mockResolvedValue({
       ZZZZ: { symbol: "ZZZZ", price: 42.5, bid: 42.4, ask: 42.6, timestamp: "2026-08-20T14:00:00Z", is_stale: false, source: "fmp" },
     });
+    // Quick Trade's SymbolInput requires an exact recognized-symbol match
+    // before "Get Quote" is enabled -- "ZZZZ" isn't tracked, so it must come
+    // back from the (debounced) FMP symbol-search lookup to be accepted.
+    vi.mocked(api.getSymbolSearch).mockImplementation((q) =>
+      Promise.resolve(
+        q.toUpperCase() === "ZZZZ"
+          ? { query: q, results: [{ symbol: "ZZZZ", name: "Arbitrary Corp", currency: "USD", exchange: "NASDAQ", exchange_full_name: null }], reason: null }
+          : { query: q, results: [], reason: null }
+      )
+    );
 
     render(
       <MemoryRouter>
@@ -329,7 +339,14 @@ describe("PaperBroker", () => {
 
     const input = screen.getByTestId("quick-trade-symbol-input");
     fireEvent.change(input, { target: { value: "zzzz" } });
-    fireEvent.click(screen.getByText("Get Quote"));
+
+    // "Get Quote" only becomes enabled once the debounced FMP lookup confirms
+    // "ZZZZ" is a real, quotable symbol.
+    const getQuoteBtn = await screen.findByText("Get Quote");
+    await waitFor(() => {
+      expect(getQuoteBtn).not.toBeDisabled();
+    });
+    fireEvent.click(getQuoteBtn);
 
     await waitFor(() => {
       expect(api.getDataQuotes).toHaveBeenCalledWith(["ZZZZ"]);
@@ -338,6 +355,39 @@ describe("PaperBroker", () => {
     // Order ticket opens for the arbitrary (untracked) symbol, seeded with
     // the real fetched quote -- not a fabricated price.
     expect(await screen.findByText("Buy ZZZZ Stock")).toBeInTheDocument();
+  });
+
+  it("quick trade: greys out \"Get Quote\" for an unrecognized ticker instead of letting a typo submit", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    // No mock override for getSymbolSearch -- the beforeEach default (empty
+    // results) applies, matching a genuinely unrecognized/garbled ticker.
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("$105,000.00")).toBeInTheDocument();
+
+    const input = screen.getByTestId("quick-trade-symbol-input");
+    fireEvent.change(input, { target: { value: "gbpdzd" } });
+
+    const getQuoteBtn = await screen.findByText("Get Quote");
+    await waitFor(() => {
+      expect(getQuoteBtn).toBeDisabled();
+    });
+    expect(screen.getByText(/Not a recognized ticker yet/i)).toBeInTheDocument();
+
+    // Clicking a disabled button is a no-op -- no quote lookup is ever fired.
+    fireEvent.click(getQuoteBtn);
+    expect(api.getDataQuotes).not.toHaveBeenCalled();
   });
 
   it("quick trade: a ?quickTradeSymbol= URL param (handoff from SymbolScreener) prefills and fetches on mount", async () => {
@@ -395,7 +445,19 @@ describe("PaperBroker", () => {
     });
     vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
     vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
-    // No entry for the requested symbol -- simulates an unquotable/delisted ticker.
+    // No entry for the requested symbol -- simulates a real, recognized
+    // ticker whose live quote fetch itself comes back empty (e.g. a
+    // since-delisted symbol). Recognized via getSymbolSearch so the
+    // requireExactMatch gate lets the lookup through in the first place --
+    // this test is specifically about the quote-fetch failure path, not the
+    // unrecognized-ticker gate (see the "greys out" test above for that).
+    vi.mocked(api.getSymbolSearch).mockImplementation((q) =>
+      Promise.resolve(
+        q.toUpperCase() === "NOSUCH"
+          ? { query: q, results: [{ symbol: "NOSUCH", name: "No Such Corp", currency: "USD", exchange: "NASDAQ", exchange_full_name: null }], reason: null }
+          : { query: q, results: [], reason: null }
+      )
+    );
     vi.mocked(api.getDataQuotes).mockResolvedValue({});
 
     render(
@@ -408,7 +470,12 @@ describe("PaperBroker", () => {
 
     const input = screen.getByTestId("quick-trade-symbol-input");
     fireEvent.change(input, { target: { value: "nosuch" } });
-    fireEvent.click(screen.getByText("Get Quote"));
+
+    const getQuoteBtn = await screen.findByText("Get Quote");
+    await waitFor(() => {
+      expect(getQuoteBtn).not.toBeDisabled();
+    });
+    fireEvent.click(getQuoteBtn);
 
     expect(await screen.findByText(/No live quote available for "NOSUCH"/i)).toBeInTheDocument();
     expect(screen.queryByText("Buy NOSUCH Stock")).not.toBeInTheDocument();

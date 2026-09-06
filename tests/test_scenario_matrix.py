@@ -384,11 +384,13 @@ def test_evaluate_portfolio_scenario_matrix_frontend_shape():
         "matrix",
         "historical_scenarios",
         "current_portfolio_value",
+        "positions_count",
     ):
         assert key in res
     assert "grid" not in res
     assert "time_shifts_days" not in res
     assert "baseline" not in res
+    assert res["positions_count"] == 1
 
     expected_cell_keys = {
         "spot_shift_pct",
@@ -455,6 +457,26 @@ def test_to_scenario_matrix_response_omits_spot_price_for_empty_book():
     assert len(res["matrix"]) > 0
     for cell in res["matrix"]:
         assert "spot_price" not in cell
+
+
+def test_to_scenario_matrix_response_positions_count_zero_for_empty_book():
+    """
+    An empty book must report positions_count == 0 in the frontend-facing
+    response, not just the internal baseline dict -- this is the field the
+    webapp uses to distinguish "nothing to stress-test" (an honest all-zero
+    grid) from a real computed result. Regression for the bug where
+    to_scenario_matrix_response() dropped this field entirely, leaving the
+    frontend unable to tell the two cases apart (both rendered identically
+    as a full grid of $0s).
+    """
+    result = evaluate_scenario_matrix(positions=[], spot_map={})
+    res = to_scenario_matrix_response(result)
+
+    assert res["positions_count"] == 0
+    assert res["current_portfolio_value"] == 0.0
+    # The grid itself is still fully populated -- honest zeros, not omitted.
+    assert len(res["matrix"]) > 0
+    assert all(cell["portfolio_value"] == 0.0 for cell in res["matrix"])
 
 
 def test_scenario_matrix_ast_import_safety():
