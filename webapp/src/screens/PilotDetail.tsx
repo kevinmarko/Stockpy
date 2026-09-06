@@ -147,15 +147,22 @@ export function PilotDetail() {
           </div>
           {perf.data?.curve &&
             (perf.data.benchmark || perf.data.macro_benchmark) && (
-              <div style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-2-5)", fontSize: "var(--t-footnote)" }}>
-                <LegendDot color={theme.growth} label="Pilot" />
-                {perf.data.benchmark && (
-                  <LegendDot color={theme.textMuted} label="Benchmark" dashed />
+              <>
+                <div style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-2-5)", fontSize: "var(--t-footnote)" }}>
+                  <LegendDot color={theme.growth} label="Pilot" />
+                  {perf.data.benchmark && (
+                    <LegendDot color={theme.textMuted} label="Benchmark" dashed />
+                  )}
+                  {perf.data.macro_benchmark && (
+                    <LegendDot color={theme.accent} label="S&P 500" dashed />
+                  )}
+                </div>
+                {perf.data.macro_benchmark_note && (
+                  <div style={{ marginTop: "var(--s-1)", fontSize: "var(--t-footnote)", color: theme.textMuted }}>
+                    {perf.data.macro_benchmark_note}
+                  </div>
                 )}
-                {perf.data.macro_benchmark && (
-                  <LegendDot color={theme.accent} label="S&P 500" dashed />
-                )}
-              </div>
+              </>
             )}
         </section>
 

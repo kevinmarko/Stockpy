@@ -8774,6 +8774,7 @@ export const mockApi = {
         curve: null,
         benchmark: null,
         macro_benchmark: null,
+        macro_benchmark_note: null,
         reason:
           "No backtest series yet — this Pilot's validation report has no persisted return curve.",
       });
@@ -8788,6 +8789,10 @@ export const mockApi = {
       macro_benchmark: p.macroBenchmark
         ? synthCurve("SPY-macro", range, 0.08, 0.1)
         : null,
+      // synthCurve always ends "today" for every series in mock mode, so
+      // there's nothing realistic to disclose here -- see
+      // pilots/performance.py::pilot_performance() for the live computation.
+      macro_benchmark_note: null,
     });
   },
 
