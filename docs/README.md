@@ -52,6 +52,7 @@ plans; kept up to date as each integration evolves.
 |------|--------|
 | [`FMP_INTEGRATION.md`](FMP_INTEGRATION.md) | Financial Modeling Prep data layer — 28-setting reference, adjustment-mode gotchas, verification checklist |
 | [`JULES_INTEGRATION.md`](JULES_INTEGRATION.md) | Google Jules autonomous coding-agent integration |
+| [`GOOGLE_NOTEBOOK_INTEGRATION.md`](GOOGLE_NOTEBOOK_INTEGRATION.md) | Google NotebookLM modular knowledge-pack export (`scripts/export_notebooklm.py`) — 5 topic-scoped Markdown sources plus a consolidated file, for grounding NotebookLM's AI analysis/Audio Overview in the operator's live platform state; includes the mandatory privacy/data-handling disclosure |
 
 ## Settings census (generated + hand-maintained pair)
 
