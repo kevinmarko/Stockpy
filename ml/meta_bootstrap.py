@@ -82,18 +82,50 @@ META_LABELED_SIGNAL_IDS: tuple[str, ...] = (
 
 
 
-def _is_deployable(signal_id: str, registry_data: Dict[str, Any]) -> tuple[bool, Optional[float], Optional[float]]:
-    """Read ``meta_labeler_<signal_id>``'s ``deployable``/``cpcv_dsr``/``pbo``
+def _is_deployable(model_key: str, registry_data: Dict[str, Any]) -> tuple[bool, Optional[float], Optional[float]]:
+    """Read ``model_key``'s ``deployable``/``cpcv_dsr``/``pbo``
     fields out of an already-loaded ``ml/registry.yaml`` dict.
 
-    Fails CLOSED: a missing registry, a missing row for this signal_id, or a
+    Fails CLOSED: a missing registry, a missing row for this model_key, or a
     missing/non-bool ``deployable`` field all resolve to ``(False, None, None)``
     — a saved pickle with no accompanying deployability record is not evidence
     the model is fine; the absence of proof is treated as proof of absence.
     """
-    row = (registry_data.get("models") or {}).get(f"meta_labeler_{signal_id}") or {}
+    row = (registry_data.get("models") or {}).get(model_key) or {}
     deployable = row.get("deployable")
     return (deployable is True, row.get("cpcv_dsr"), row.get("pbo"))
+
+
+LIVE_ROW_FEATURE_WHITELIST: frozenset[str] = frozenset([
+    "forecast_price",
+    "trend_strength",
+    "atr",
+    "macd_line",
+    "macd_signal",
+    "aroon_osc",
+    "rsi",
+    "sortino_ratio",
+    "max_drawdown",
+    "relative_strength",
+    "garch_vol",
+    "GARCH_Vol",
+    "edge_ratio",
+    "chandelier_long",
+    "chandelier_short",
+    "current_price",
+    "Close",
+    "ticker",
+    "sector",
+    "roc_12m",
+    "ROC_12M",
+    "SMA_200",
+    "RSI_2",
+    "SMA_5",
+])
+
+def check_feature_compatibility(feature_names: List[str]) -> tuple[bool, List[str]]:
+    missing = [f for f in feature_names if f not in LIVE_ROW_FEATURE_WHITELIST]
+    return len(missing) == 0, missing
 
 
 def bootstrap_meta_registry(
@@ -205,7 +237,7 @@ def bootstrap_meta_registry(
             )
             continue
 
-        deployable, dsr, pbo = _is_deployable(signal_id, registry_data)
+        deployable, dsr, pbo = _is_deployable(f"meta_labeler_{signal_id}", registry_data)
         if not deployable:
             logger.warning(
                 "bootstrap_meta_registry: meta-labeler for %r exists on disk "
@@ -231,6 +263,59 @@ def bootstrap_meta_registry(
                 "%r (%s) — skipping.", signal_id, exc,
             )
             continue
+
+    if getattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", False):
+        eligible_signals = getattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", [])
+        for signal_id in eligible_signals:
+            if signal_id in registered:
+                continue
+            
+            try:
+                labeler = MetaLabeler.load_latest(signal_id, prefix="backfill_meta")
+            except Exception as exc:
+                logger.warning(
+                    "bootstrap_meta_registry: failed to load backfill meta-labeler for %r "
+                    "(%s) — skipping.", signal_id, exc,
+                )
+                continue
+
+            if labeler is None:
+                continue
+
+            deployable, dsr, pbo = _is_deployable(f"meta_labeler_backfill_{signal_id}", registry_data)
+            if not deployable:
+                logger.warning(
+                    "bootstrap_meta_registry: backfill meta-labeler for %r exists on disk "
+                    "but is NOT deployable per ml/registry.yaml "
+                    "(cpcv_dsr=%s, pbo=%s) — leaving unregistered.",
+                    signal_id, dsr, pbo,
+                )
+                continue
+            
+            is_compat, missing_features = check_feature_compatibility(getattr(labeler, "_feature_names", []))
+            if not is_compat:
+                logger.warning(
+                    "bootstrap_meta_registry: backfill meta-labeler for %r is deployable "
+                    "but its declared features are incompatible with the live row schema "
+                    "(missing: %s) — leaving unregistered.",
+                    signal_id, missing_features
+                )
+                continue
+
+            try:
+                global_meta_registry.register(labeler)
+                registered.append(signal_id)
+                logger.info(
+                    "bootstrap_meta_registry: registered BACKFILL meta-labeler for %r "
+                    "(trained on %d samples).",
+                    signal_id, getattr(labeler, "_n_train_samples", 0),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "bootstrap_meta_registry: failed to register backfill meta-labeler for "
+                    "%r (%s) — skipping.", signal_id, exc,
+                )
+                continue
 
     if registered:
         logger.info(

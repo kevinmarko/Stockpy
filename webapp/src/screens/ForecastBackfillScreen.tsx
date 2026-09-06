@@ -297,12 +297,20 @@ export function ForecastBackfillScreen() {
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Train N</th>
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Test N</th>
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Split Date</th>
+                      {modelKeys.some(k => metrics[k].registry_key) && (
+                        <>
+                          <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Live Registry</th>
+                          <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>CPCV DSR</th>
+                          <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>PBO</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
                     {modelKeys.map((key) => {
                       const m = metrics[key];
                       const isHighAcc = m.accuracy >= 0.50;
+                      const hasRegistryCols = modelKeys.some(k => metrics[k].registry_key);
                       return (
                         <tr key={key} style={{ borderBottom: `1px solid ${theme.border}` }}>
                           <td style={{ padding: "var(--s-2)", fontWeight: 600 }}>{key}</td>
@@ -324,6 +332,21 @@ export function ForecastBackfillScreen() {
                           <td style={{ padding: "var(--s-2)" }}>{m.n_train}</td>
                           <td style={{ padding: "var(--s-2)" }}>{m.n_test}</td>
                           <td style={{ padding: "var(--s-2)", color: theme.textMuted }}>{m.split_date}</td>
+                          {hasRegistryCols && (
+                            <>
+                              <td style={{ padding: "var(--s-2)" }}>
+                                {m.registry_key ? (
+                                  m.registered ? (
+                                    <span style={{ color: theme.growth }}>{m.registry_key}</span>
+                                  ) : (
+                                    <span style={{ color: theme.caution }} title={m.skip_reason}>{m.registry_key} (Skipped)</span>
+                                  )
+                                ) : "--"}
+                              </td>
+                              <td style={{ padding: "var(--s-2)" }}>{m.cpcv_dsr != null ? fmtNum(m.cpcv_dsr, 4) : "--"}</td>
+                              <td style={{ padding: "var(--s-2)" }}>{m.pbo != null ? fmtNum(m.pbo, 4) : "--"}</td>
+                            </>
+                          )}
                         </tr>
                       );
                     })}
@@ -345,7 +368,7 @@ export function ForecastBackfillScreen() {
               a separate artifact from the ones that actually gate live position sizing. A model only reaches the
               live signal aggregator's confidence gate via <code>scripts/train_meta_labelers.py</code> followed by
               the deployability-gated <code>bootstrap_meta_registry()</code> startup step (PBO/DSR-checked against
-              <code>ml/registry.yaml</code>), which this screen's runs do not feed.
+              <code>ml/registry.yaml</code>), but this screen's models can now reach the live gate for an operator-designated signal/horizon, still PBO/DSR-gated and still subject to a feature-compatibility check.
             </p>
           </section>
         </>

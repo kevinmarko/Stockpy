@@ -170,6 +170,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # independently gated by the FOLLOW_API_TOKEN command token regardless
     # of this flag's own GUI-writability.
     "FORECAST_BACKFILL_ENABLED",
+    "META_LABELING_BACKFILL_BRIDGE_ENABLED",
     # Observability / runtime
     "DASHBOARD_REFRESH_SECONDS",
     # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar

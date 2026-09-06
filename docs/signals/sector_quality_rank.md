@@ -386,3 +386,11 @@ follow-up, not attempted here.
 
 
 *Note: The 2026-08-17 run verifies stability following a systemic parser fix. The `Deployable: False` outcome and its underlying causal reasoning remain exactly as previously documented.*
+
+## Backfill-Screen Live Meta-Labeler Bridge
+
+This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
+- **Registry Key**: `meta_labeler_backfill_sector_quality_rank`
+- **Live Horizon**: 10 days (default)
+- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
+- **Feature-Compatibility Caveat**: This bridge is currently blocked by a strict fail-closed feature compatibility gate. The live `vec_df` schema does not yet contain all features used by the backfill screen during training. Until a separate follow-up widens the live row schema, any model trained for this signal will refuse to register to prevent silent zero-filling during live inference.

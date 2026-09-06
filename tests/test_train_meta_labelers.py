@@ -313,6 +313,156 @@ def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monke
     assert not meta_labeling.global_meta_registry.has("timeseries_momentum")
 
 
+
+def _save_dummy_backfill_model(tmp_models_dir, signal_id, feature_names=None):
+    from ml.meta_labeling import MetaLabeler
+    from sklearn.ensemble import RandomForestClassifier
+    from datetime import datetime
+    
+    if feature_names is None:
+        from ml.meta_bootstrap import LIVE_ROW_FEATURE_WHITELIST
+        feature_names = list(LIVE_ROW_FEATURE_WHITELIST)
+        
+    labeler = MetaLabeler(signal_id=signal_id)
+    labeler._model = RandomForestClassifier()
+    labeler._feature_names = feature_names
+    labeler._n_train_samples = 100
+    labeler._last_trained = datetime(2025, 1, 1)
+    
+    path = tmp_models_dir / f"backfill_meta_{signal_id}_20250101_130000.pkl"
+    labeler.save(path)
+    return path
+
+def _save_dummy_afml_model(tmp_models_dir, signal_id, feature_names=None):
+    from ml.meta_labeling import MetaLabeler
+    from sklearn.ensemble import RandomForestClassifier
+    from datetime import datetime
+    
+    if feature_names is None:
+        from ml.meta_bootstrap import LIVE_ROW_FEATURE_WHITELIST
+        feature_names = list(LIVE_ROW_FEATURE_WHITELIST)
+        
+    labeler = MetaLabeler(signal_id=signal_id)
+    labeler._model = RandomForestClassifier()
+    labeler._feature_names = feature_names
+    labeler._n_train_samples = 100
+    labeler._last_trained = datetime(2025, 1, 1)
+    
+    path = tmp_models_dir / f"meta_{signal_id}_20250101_130000.pkl"
+    labeler.save(path)
+    return path
+
+def _set_registry_deployable(yaml_path, key, deployable=True):
+    import yaml
+    with open(yaml_path, "r") as f:
+        data = yaml.safe_load(f)
+    if "models" not in data:
+        data["models"] = {}
+    if key not in data["models"]:
+        data["models"][key] = {}
+    data["models"][key]["deployable"] = deployable
+    data["models"][key]["cpcv_dsr"] = 0.99
+    data["models"][key]["pbo"] = 0.01
+    with open(yaml_path, "w") as f:
+        yaml.safe_dump(data, f)
+
+def test_bootstrap_backfill_bridge_disabled_by_default(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    # even if enabled, if bridge disabled (default), no backfill
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", False)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum")
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == []
+
+def test_bootstrap_registers_backfill_when_afml_absent_and_gate_clears(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum")
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == ["timeseries_momentum"]
+
+def test_bootstrap_prefers_afml_over_backfill_when_both_deployable(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_afml_model(tmp_models_dir, "timeseries_momentum", ["f_afml"])
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum", ["f_bf"])
+    _set_registry_deployable(tmp_registry, "meta_labeler_timeseries_momentum", True)
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == ["timeseries_momentum"]
+    
+    from ml.meta_labeling import global_meta_registry
+    assert global_meta_registry.has("timeseries_momentum")
+    # Actually wait, global_meta_registry.get_proba just returns a number. We need to check labeler object.
+    # It's better to just check the loaded instance.
+    labeler_obj = global_meta_registry._labelers["timeseries_momentum"]
+    assert labeler_obj._feature_names == ["f_afml"]
+
+def test_bootstrap_falls_back_to_backfill_when_afml_not_deployable(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_afml_model(tmp_models_dir, "timeseries_momentum", ["f_afml"])
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum") # features matching whitelist
+    
+    _set_registry_deployable(tmp_registry, "meta_labeler_timeseries_momentum", False)
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == ["timeseries_momentum"]
+    
+    from ml.meta_labeling import global_meta_registry
+    labeler_obj = global_meta_registry._labelers["timeseries_momentum"]
+    # Should be backfill model since backfill was deployable and AFML was not
+    assert getattr(labeler_obj, "_feature_names", None) != ["f_afml"]
+
+def test_bootstrap_refuses_registration_on_feature_incompatible_model(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    # Save backfill model with incompatible features (e.g., 'not_a_whitelist_feature')
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum", ["not_a_whitelist_feature"])
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == []
+
+def test_bootstrap_ignores_signal_not_in_eligible_list(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", [])
+    
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum")
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == []
+
 # ---------------------------------------------------------------------------
 # 3. End-to-end: registered LOW-confidence labeler fires the aggregator gate
 # ---------------------------------------------------------------------------

@@ -3939,6 +3939,12 @@ export interface ForecastBackfillModelMetrics {
   n_test: number;
   split_date: string;
   is_active?: boolean;
+  cpcv_dsr?: number;
+  pbo?: number;
+  mean_oos_sharpe?: number;
+  registry_key?: string;
+  registered?: boolean;
+  skip_reason?: string;
 }
 
 export interface ForecastBackfillSummary {

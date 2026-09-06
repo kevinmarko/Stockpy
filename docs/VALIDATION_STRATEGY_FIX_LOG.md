@@ -2736,3 +2736,16 @@ previously-documented gap (order-submitting options Pilots with zero registry st
 See `.claude/skills/stockpy-quant-integrity/SKILL.md`'s "Is the strategy registry honest?"
 bullet for the corrected three-way distinction (unregistered vs. registered-but-
 ungateable-by-design vs. registered-with-a-measured-fail).
+
+---
+
+## 2026-09-06 — Forecast Backfill Meta-Labeler Bridge
+
+**Scope**: Wired the Forecast Backfill screen's meta-labelers (`ml/forecast_backfill.py`) into the live `ml/meta_bootstrap.py` sizing gate. This allows the screen's RandomForest classifiers to gate live position sizing, alongside the existing AFML CUSUM/triple-barrier meta-labelers.
+
+**Key Mechanisms added**:
+1. **AFML-Priority Tie-Break**: `bootstrap_meta_registry()` loads AFML models first. If an AFML model exists for a signal and is `deployable`, it is prioritized. The backfill bridge serves as a fallback or additive coverage for signals lacking a deployable AFML model.
+2. **Feature-Compatibility Gate**: We discovered a gap where the backfill screen trains on features that are partially missing from the live per-ticker `row`/`vec_df` schema (which silently fills missing features with `0.0`). To prevent running live inference on zero-filled vectors, we added a strict fail-closed feature compatibility check (`LIVE_ROW_FEATURE_WHITELIST`). A backfill model will **refuse to register** if its declared features aren't fully covered by the live row schema.
+3. **Namespacing Fix**: Backfill models are now saved as `backfill_meta_{signal_id}_{horizon}d_{stamp}.pkl` and use the registry key `meta_labeler_backfill_<signal_id>`, fixing a bug where they could permanently shadow the real AFML pickles due to lexicographic glob collisions.
+
+This bridge is opt-in per signal (`settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS`) and gated by a master switch (`settings.META_LABELING_BACKFILL_BRIDGE_ENABLED`). Due to the feature-compatibility gate, the bridge is functionally inert until the live row schema is expanded to match the backfill training features.
