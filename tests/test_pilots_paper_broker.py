@@ -1222,6 +1222,7 @@ class TestOptionsForecastHarRvEndpoint:
 
 
 class TestOptionsForecastMispricingEndpoint:
+    @pytest.mark.network
     def test_get_forecast_mispricing_success(self):
         # The live endpoint reshapes get_volatility_mispricing_data()'s raw internal
         # result (MispricingAnalysis.to_dict() -- baseline_fair_iv/rich_candidates_count/
@@ -1543,6 +1544,7 @@ class TestOptionsDispersionEndpoints:
         assert "symbol" in opp["constituents"][0]
         assert "weight" in opp["constituents"][0]
 
+    @pytest.mark.network
     def test_get_dispersion_opportunities_with_index_filter(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
@@ -1741,6 +1743,7 @@ class TestOptionsZeroDteEndpoints:
             )
         assert resp.status_code == 401
 
+    @pytest.mark.network
     def test_post_zero_dte_execute_dry_run(self):
         payload = {
             "symbol": "SPY",
@@ -2570,6 +2573,7 @@ class TestAIForecastingEndpoints:
         assert resp.status_code == 401
 
 class TestOptimizationEndpoints:
+    @pytest.mark.network
     def test_post_portfolio_optimize_hrp_cvar_success(self):
         payload = {
             "symbols": ["AAPL", "MSFT", "GOOGL"]
@@ -3127,6 +3131,7 @@ def strategy(df: pd.DataFrame) -> pd.Series:
 
 
 class TestPilotsOptionsVolSurface3DMesh:
+    @pytest.mark.network
     def test_vol_surface_mesh_default_symbol(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
@@ -3146,6 +3151,7 @@ class TestPilotsOptionsVolSurface3DMesh:
         assert "smiles" in body
         assert "term_structure" in body
 
+    @pytest.mark.network
     def test_vol_surface_mesh_custom_symbol(self):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
