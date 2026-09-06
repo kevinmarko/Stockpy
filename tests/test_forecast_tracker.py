@@ -674,12 +674,23 @@ class TestDefaultDbPathResolvesThroughDbConfig:
     forecast_errors rows to a stray CWD-relative file that never migrated
     alongside the rest of the platform's data when settings.LOCAL_DATA_ROOT
     was introduced -- a live split-brain between the intended shared location
-    and this one stray file, undetected until caught by direct inspection."""
+    and this one stray file, undetected until caught by direct inspection.
+
+    Patches ``forecasting.forecast_tracker.resolve_database_url`` (the
+    module-top-level binding this module imports at load time, since
+    2026-09), NOT ``db_config.resolve_database_url`` -- re-assigning the
+    latter after import time would no longer be visible to this module's
+    already-bound name. This is also the exact seam
+    ``conftest.py::_isolate_forecast_tracker_db_in_tests`` patches to keep
+    every OTHER test's bare ``ForecastTracker()`` off the real, shared
+    on-disk DB now that main_orchestrator.py/engine/advisory.py/
+    pipeline/production_steps.py always construct one regardless of
+    FORECAST_SKILL_WEIGHTING_ENABLED."""
 
     def test_omitted_db_path_resolves_via_resolve_database_url(self, monkeypatch, tmp_path):
         fake_db = str(tmp_path / "resolved.db")
         monkeypatch.setattr(
-            "db_config.resolve_database_url", lambda: f"sqlite:///{fake_db}"
+            "forecasting.forecast_tracker.resolve_database_url", lambda: f"sqlite:///{fake_db}"
         )
         tracker = ForecastTracker()
         assert tracker._db_path == fake_db
@@ -695,7 +706,7 @@ class TestDefaultDbPathResolvesThroughDbConfig:
         can't be honored here, so it degrades to the pre-fix literal rather
         than raising or silently mis-resolving."""
         monkeypatch.setattr(
-            "db_config.resolve_database_url",
+            "forecasting.forecast_tracker.resolve_database_url",
             lambda: "postgresql://user:pass@host/db",
         )
         tracker = ForecastTracker()

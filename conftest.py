@@ -371,6 +371,71 @@ def _isolate_trends_store_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_forecast_tracker_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Point the default ``ForecastTracker`` DB resolver at a per-test
+    temp-file db for every test, unless the test passes its own explicit
+    ``db_path`` to ``ForecastTracker``.
+
+    Same risk class as ``_isolate_validation_runs_db_in_tests`` /
+    ``_isolate_execution_audit_db_in_tests`` / ``_isolate_broker_fills_db_in_tests``
+    / ``_isolate_trends_store_db_in_tests`` above, newly introduced by the
+    2026-09 fix that decouples forecast-coverage recording from
+    ``settings.FORECAST_SKILL_WEIGHTING_ENABLED``: ``main_orchestrator.py::
+    EngineContext.build``, ``engine/advisory.py::_build_forecasting_engine``,
+    and ``pipeline/production_steps.py::ForecastingStep.run`` now ALWAYS
+    construct a bare, write-mode ``ForecastTracker()`` (previously only when
+    that flag -- default ``False`` and forced to its coded default in every
+    test via this file's boolean-settings reset above -- was on, meaning
+    these three production call sites were never actually reached by the
+    real ``ForecastTracker`` class during a test run before this fix).
+    Dozens of pre-existing test files exercise these three functions (or
+    ``run_pipeline``/``evaluate``, which call them) with no ``ForecastTracker``
+    of their own; left unguarded, running this suite would now mutate the
+    operator's real, shared ``~/.stockpy_local/quant_platform.db`` schema
+    (write-mode construction calls ``_ensure_table()``) and seed it with fake
+    ``forecast_errors`` rows whenever a test's forecasting path actually
+    generates a forecast for a real/mocked history.
+
+    A per-test TEMP FILE, not ``sqlite:///:memory:`` -- unlike its four
+    siblings above (each a SQLAlchemy-engine-backed store, where SQLAlchemy
+    transparently pools a single persistent connection for a ``:memory:``
+    URL), ``ForecastTracker`` talks to sqlite directly via two independent
+    raw ``sqlite3.connect()`` calls: a throwaway one in ``_ensure_table()``
+    (closed immediately after creating the schema) and a separate one
+    lazily cached in ``_get_conn()`` for all later reads/writes. A bare
+    ``:memory:`` database is private to the single connection that created
+    it and vanishes the instant that connection closes, so the schema
+    ``_ensure_table()`` creates would already be gone by the time
+    ``_get_conn()`` opens its own, brand-new, empty ``:memory:`` database --
+    every subsequent read/write would dead-letter with "no such table:
+    forecast_errors" (confirmed by writing exactly this fixture with
+    ``:memory:`` first and watching a real ``record_forecasts()`` call
+    silently fail that way). A real temp file is shared correctly across
+    both connections, exactly like the production case this is standing in
+    for.
+
+    ``ForecastTracker.__init__`` resolves its default ``db_path`` via a
+    MODULE-TOP-LEVEL ``from db_config import resolve_database_url`` binding
+    (``forecasting.forecast_tracker.resolve_database_url``) rather than the
+    deferred-inside-``__init__`` pattern some sibling stores use -- patching
+    that local binding, instead of ``db_config.resolve_database_url`` itself,
+    keeps this fixture's blast radius scoped to ``ForecastTracker`` alone
+    rather than also silently redirecting every OTHER deferred consumer of
+    ``db_config.resolve_database_url`` (``data/historical_store.py``,
+    ``investyo_mcp_server.py``, ``scripts/preflight_check.py``) suite-wide.
+
+    Lazy import (mirrors the four siblings above) so a broken
+    ``forecasting/forecast_tracker.py`` import surfaces as a test failure for
+    whichever test actually touches it, not a collection-time failure for the
+    entire suite.
+    """
+    import forecasting.forecast_tracker as _forecast_tracker_mod
+
+    fake_db = str(tmp_path / "isolated_forecast_tracker.db")
+    monkeypatch.setattr(_forecast_tracker_mod, "resolve_database_url", lambda: f"sqlite:///{fake_db}")
+
+
+@pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""

@@ -1934,3 +1934,34 @@ class TestHistoricalStoreRouting:
         with mock.patch("engine.advisory._get_historical_store") as mock_getter:
             self._run(historical_store=fake_hs)
             mock_getter.assert_not_called()
+
+
+class TestBuildForecastingEngineTrackerAlwaysAttached:
+    """Regression coverage for the forecast_available coverage bug (2026-09,
+    see docs/known_issues/forecast_available_coupled_to_skill_weighting_
+    flag.md): ``_build_forecasting_engine()`` used to attach a
+    ForecastTracker ONLY when settings.FORECAST_SKILL_WEIGHTING_ENABLED was
+    True -- leaving forecast_errors permanently empty (and therefore
+    forecast_available permanently False) on any deployment that never
+    enabled skill weighting. A ForecastTracker is now ALWAYS attached; only
+    the skill-weighted blending read-back inside
+    ForecastingEngine.generate_forecast is still gated on the flag.
+
+    Calls ``_build_forecasting_engine()`` directly rather than through the
+    process-wide ``_get_forecasting_engine()`` singleton getter, so this
+    test can't be affected by (or leak into) that cache.
+    """
+
+    def test_tracker_attached_when_flag_off(self, monkeypatch):
+        import engine.advisory as mod
+
+        monkeypatch.setattr("settings.settings.FORECAST_SKILL_WEIGHTING_ENABLED", False)
+        fe = mod._build_forecasting_engine()
+        assert fe._tracker is not None
+
+    def test_tracker_attached_when_flag_on(self, monkeypatch):
+        import engine.advisory as mod
+
+        monkeypatch.setattr("settings.settings.FORECAST_SKILL_WEIGHTING_ENABLED", True)
+        fe = mod._build_forecasting_engine()
+        assert fe._tracker is not None

@@ -472,7 +472,14 @@ class ForecastingStep(PipelineStep):
             ctx.progress.start_stage("forecasting", symbols_total=len(ctx.dashboard_df))
 
         engines = ctx.engine_context
-        fallback_tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
+        # A ForecastTracker is ALWAYS attached (2026-09 fix) so forecast-
+        # coverage recording (record_forecasts/update_actuals) runs every
+        # cycle regardless of settings.FORECAST_SKILL_WEIGHTING_ENABLED --
+        # see main_orchestrator.py::EngineContext.build's identical comment
+        # for the full rationale. The flag itself continues to gate ONLY the
+        # skill-weighted ensemble blending read-back inside
+        # ForecastingEngine.generate_forecast.
+        fallback_tracker = ForecastTracker()
         fe = (engines.forecasting_engine if engines is not None and engines.forecasting_engine is not None
               else ForecastingEngine(tracker=fallback_tracker))
         

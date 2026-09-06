@@ -511,7 +511,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 934,
+    "attr": 932,
     "factory_param": 4,
     "getattr_const": 381,
     "os_environ": 2
@@ -963,7 +963,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "forecasting/forecast_tracker.py:179",
+        "site": "forecasting/forecast_tracker.py:216",
         "via": []
       },
       {
@@ -3041,9 +3041,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "forecasting_engine.py:146",
+        "site": "forecasting_engine.py:167",
         "via": [
-          122
+          143
         ]
       }
     ],
@@ -3054,9 +3054,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "forecasting_engine.py:144",
+        "site": "forecasting_engine.py:165",
         "via": [
-          122
+          143
         ]
       }
     ],

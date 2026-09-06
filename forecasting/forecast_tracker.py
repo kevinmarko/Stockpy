@@ -17,6 +17,24 @@ Design goals
   formula in ``ForecastingEngine`` degrades smoothly to the prior hardcoded
   static weights when no tracker is wired.
 
+Recording vs. blending are two independent concerns (2026-09 fix)
+-------------------------------------------------------------------
+``record_forecasts``/``update_actuals`` (recording that a forecast happened,
+and later completing it with the realized price) are **unconditional**
+whenever a tracker is attached to a ``ForecastingEngine`` -- this is what
+backs ``get_covered_symbols()``, and therefore ``forecast_available`` in
+``GET /data/sync-report`` / ``data.portfolio_sync.build_sync_report``.
+``settings.FORECAST_SKILL_WEIGHTING_ENABLED`` gates ONLY the read-back used
+for skill-weighted ensemble BLENDING (``get_skill_weights`` and its
+downstream use in ``ForecastingEngine._blend_with_skill`` -- see that
+method's own call site in ``generate_forecast()``). Before this fix, the one
+flag also silently gated recording itself (no ``ForecastTracker`` was ever
+attached when the flag was off), so ``forecast_errors`` stayed empty and
+``forecast_available`` reported ``False`` for every symbol on any
+deployment that never enabled skill weighting, even though forecasting
+genuinely ran every cycle. See
+``docs/known_issues/forecast_available_coupled_to_skill_weighting_flag.md``.
+
 Database table: ``forecast_errors``
 -------------------------------------
 +----------------+------------+--------------------------------------------------+
@@ -45,6 +63,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
+
+# Module-top-level (not deferred inside __init__) so tests can isolate this
+# class's default DB resolution the same way sibling stores are isolated
+# (see conftest.py's _isolate_forecast_tracker_db_in_tests, which patches
+# this exact name) without reaching into db_config's own module attribute
+# and risking a wider blast radius on every other deferred consumer of
+# db_config.resolve_database_url (data/historical_store.py,
+# investyo_mcp_server.py, scripts/preflight_check.py). No circular-import
+# risk: db_config.py only imports settings/sqlalchemy/stdlib.
+from db_config import resolve_database_url
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +152,21 @@ class ForecastTracker:
     -------------------------------------------------------------------
     1. ``update_actuals(symbol, horizon, current_price, now)`` — fills in
        ``actual_price`` for any past forecasts whose horizon has elapsed.
+       Runs whenever a tracker is attached, independent of
+       ``settings.FORECAST_SKILL_WEIGHTING_ENABLED``.
     2. ``get_skill_weights(symbol, horizon)`` — returns normalized inverse-RMSE
-       weights for the models seen in the rolling window.
-    3. Blend model outputs using those weights.
+       weights for the models seen in the rolling window. Only called when
+       ``settings.FORECAST_SKILL_WEIGHTING_ENABLED`` is True; otherwise
+       ``generate_forecast()`` skips this step entirely and blends with an
+       empty ``skill_weights`` dict (the same cold-start static blend used
+       before any history exists).
+    3. Blend model outputs using those weights (or the static blend when
+       step 2 was skipped/cold-started).
     4. ``record_forecasts(symbol, horizon, {model: price, …}, now)`` — stores
-       the new forecasts for future validation.
+       the new forecasts for future validation. Runs whenever a tracker is
+       attached, independent of the flag -- this is what backs
+       ``get_covered_symbols()``/``forecast_available`` telemetry, so it must
+       never depend on whether skill-weighted blending itself is enabled.
 
     Parameters
     ----------
@@ -175,7 +213,6 @@ class ForecastTracker:
             # DATABASE_URL; a non-sqlite (e.g. postgresql://) override falls
             # back to the historical CWD-relative literal, since this class has
             # never supported any backend other than sqlite.
-            from db_config import resolve_database_url
             resolved = resolve_database_url()
             if resolved.startswith("sqlite"):
                 from sqlalchemy.engine import make_url
