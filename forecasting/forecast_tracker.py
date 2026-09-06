@@ -214,11 +214,19 @@ class ForecastTracker:
             # back to the historical CWD-relative literal, since this class has
             # never supported any backend other than sqlite.
             resolved = resolve_database_url()
+            
+            try:
+                from settings import settings
+                fallback = str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
+            except Exception:
+                import os
+                fallback = os.path.join(os.path.expanduser("~"), ".stockpy_local", "quant_platform.db")
+
             if resolved.startswith("sqlite"):
                 from sqlalchemy.engine import make_url
-                db_path = make_url(resolved).database or "quant_platform.db"
+                db_path = make_url(resolved).database or fallback
             else:
-                db_path = "quant_platform.db"
+                db_path = fallback
         self._db_path = db_path
         self._readonly = readonly
         # ONE reused sqlite connection (opened lazily on first data-method use)

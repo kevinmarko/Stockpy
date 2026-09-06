@@ -105,7 +105,7 @@ class TestGarchSigma:
 
         recorded_sigmas = []
 
-        def _spy_monte_carlo(start_price, mu, sigma, days_forward, simulations=1000):
+        def _spy_monte_carlo(start_price, mu, sigma, days_forward, simulations=1000, seed=None):
             recorded_sigmas.append(sigma)
             return start_price, start_price, start_price
 

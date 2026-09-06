@@ -705,14 +705,15 @@ class TestDefaultDbPathResolvesThroughDbConfig:
     def test_non_sqlite_database_url_falls_back_to_the_historical_literal(self, monkeypatch):
         """This class only ever talks to sqlite (sqlite3.connect(), not
         SQLAlchemy) -- an operator-configured postgresql:// DATABASE_URL
-        can't be honored here, so it degrades to the pre-fix literal rather
+        can't be honored here, so it degrades to the absolute fallback rather
         than raising or silently mis-resolving."""
         monkeypatch.setattr(
             "forecasting.forecast_tracker.resolve_database_url",
             lambda: "postgresql://user:pass@host/db",
         )
         tracker = ForecastTracker()
-        assert tracker._db_path == "quant_platform.db"
+        from settings import settings
+        assert tracker._db_path == str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
 
 
 class TestGetForecastReliabilityCurve:
