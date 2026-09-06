@@ -114,13 +114,20 @@ _HISTORICAL_STORE: Optional[Any] = None
 
 
 def _build_forecasting_engine() -> Any:
-    """Construct a ForecastingEngine with the skill tracker gated on settings.
+    """Construct a ForecastingEngine with a ForecastTracker always attached.
 
-    Mirrors evaluate()'s pre-singleton construction exactly: a ForecastTracker
-    is attached only when FORECAST_SKILL_WEIGHTING_ENABLED is on (default OFF →
-    tracker=None → byte-identical static blend).
+    A ForecastTracker is ALWAYS attached (2026-09 fix) so forecast-coverage
+    recording (record_forecasts/update_actuals) runs every cycle regardless
+    of settings.FORECAST_SKILL_WEIGHTING_ENABLED -- this is what backs
+    ForecastTracker.get_covered_symbols() and therefore forecast_available
+    telemetry (GET /data/sync-report / data.portfolio_sync.build_sync_report).
+    The flag itself continues to gate ONLY the skill-weighted ensemble
+    BLENDING read-back (ForecastingEngine.generate_forecast's own internal
+    FORECAST_SKILL_WEIGHTING_ENABLED check before calling
+    tracker.get_skill_weights) -- when the flag is off, blending is
+    byte-identical to before this fix.
     """
-    _tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
+    _tracker = ForecastTracker()
     return ForecastingEngine(tracker=_tracker)
 
 

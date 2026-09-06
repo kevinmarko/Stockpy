@@ -67,6 +67,34 @@ class TestEngineContextBuild:
         assert ctx.evaluation_engine is None
 
 
+class TestEngineContextForecastTrackerAlwaysAttached:
+    """Regression coverage for the forecast_available coverage bug (2026-09,
+    see docs/known_issues/forecast_available_coupled_to_skill_weighting_
+    flag.md): EngineContext.build() used to attach a ForecastTracker to the
+    ForecastingEngine it constructs ONLY when
+    settings.FORECAST_SKILL_WEIGHTING_ENABLED was True -- leaving
+    forecast_errors permanently empty (and therefore forecast_available
+    permanently False for every symbol) on any deployment that never enabled
+    skill weighting, even though forecasting genuinely ran every cycle. A
+    ForecastTracker is now ALWAYS attached; only the skill-weighted
+    ensemble-blending read-back inside ForecastingEngine.generate_forecast is
+    still gated on the flag."""
+
+    def test_tracker_attached_when_flag_off(self, monkeypatch) -> None:
+        from settings import settings as _settings
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WEIGHTING_ENABLED", False)
+        ctx = EngineContext.build(data_engine=None)
+        assert ctx.forecasting_engine._tracker is not None
+
+    def test_tracker_attached_when_flag_on(self, monkeypatch) -> None:
+        from settings import settings as _settings
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WEIGHTING_ENABLED", True)
+        ctx = EngineContext.build(data_engine=None)
+        assert ctx.forecasting_engine._tracker is not None
+
+
 class TestRunPipelineBackwardCompatibility:
     def test_no_engines_arg_behaves_identically_to_today(self) -> None:
         """The default (engines=None) path must be completely unaffected --

@@ -350,11 +350,20 @@ class EngineContext:
         cost so a long-lived caller can reuse them across many
         ``run_pipeline()`` calls. ``data_engine`` is threaded into
         ``MacroEngine`` exactly as ``run_pipeline`` would today."""
-        # Opt-in inverse-RMSE skill-weighted forecast blending (default OFF →
-        # tracker is None → byte-identical static blend). Uses ForecastTracker's
-        # own default db_path (quant_platform.db), which self-provisions its
-        # forecast_errors table.
-        _tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
+        # A ForecastTracker is ALWAYS attached now (2026-09 fix) so
+        # forecast-coverage recording (record_forecasts/update_actuals) runs
+        # every cycle regardless of settings.FORECAST_SKILL_WEIGHTING_ENABLED
+        # -- this is what backs ForecastTracker.get_covered_symbols() and
+        # therefore forecast_available telemetry (GET /data/sync-report /
+        # data.portfolio_sync.build_sync_report). The flag itself continues to
+        # gate ONLY the skill-weighted ensemble BLENDING read-back
+        # (ForecastingEngine.generate_forecast's own internal
+        # FORECAST_SKILL_WEIGHTING_ENABLED check before calling
+        # tracker.get_skill_weights) -- when the flag is off, blending is
+        # byte-identical to before this fix. Uses ForecastTracker's own
+        # default db_path (quant_platform.db under settings.LOCAL_DATA_ROOT),
+        # which self-provisions its forecast_errors table.
+        _tracker = ForecastTracker()
         return cls(
             macro_engine=MacroEngine(data_engine=data_engine),
             technical_options_engine=TechnicalOptionsEngine(),

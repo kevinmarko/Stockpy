@@ -95,16 +95,37 @@ class ForecastingEngine:
     Holt-Winters, and CNN-LSTM models.
 
     Tier 2.2 addition: an optional ``ForecastTracker`` instance wires in
-    skill-based ensemble blending.  When provided, the engine:
-    1. Updates actuals for past forecasts (``tracker.update_actuals``).
-    2. Fetches normalized inverse-RMSE weights (``tracker.get_skill_weights``).
+    forecast-coverage recording and (opt-in) skill-based ensemble blending.
+    When a tracker is provided, the engine:
+    1. Updates actuals for past forecasts (``tracker.update_actuals``) --
+       unconditional whenever a tracker is attached.
+    2. Fetches normalized inverse-RMSE weights (``tracker.get_skill_weights``)
+       -- ONLY when ``settings.FORECAST_SKILL_WEIGHTING_ENABLED`` is True.
+       When False (the default), this step is skipped and blending proceeds
+       with an empty weights dict, identical to the cold-start case.
     3. Blends model outputs using those weights; falls back to the original
-       sector-preference static blending when skill data is absent (cold start).
+       sector-preference static blending when skill data is absent/skipped
+       (cold start or the flag being off both look identical to this step).
     4. Records the new forecast prices for future validation
-       (``tracker.record_forecasts``).
+       (``tracker.record_forecasts``) -- unconditional whenever a tracker is
+       attached. This is what backs ``ForecastTracker.get_covered_symbols()``
+       and therefore ``forecast_available`` telemetry (``GET
+       /data/sync-report`` / ``data.portfolio_sync.build_sync_report``), so it
+       must never depend on ``FORECAST_SKILL_WEIGHTING_ENABLED``.
 
-    The tracker is optional: ``ForecastingEngine()`` (no args) reproduces the
-    pre-Tier-2.2 behavior exactly — no DB writes, static blending unchanged.
+    In other words: attaching a tracker turns on RECORDING (steps 1 and 4)
+    unconditionally; ``settings.FORECAST_SKILL_WEIGHTING_ENABLED`` separately
+    and independently turns on READING THAT HISTORY BACK to blend (step 2).
+    A production orchestrator that always attaches a tracker (see
+    ``main_orchestrator.py::EngineContext.build``,
+    ``engine/advisory.py::_build_forecasting_engine``,
+    ``pipeline/production_steps.py::ForecastingStep.run``) therefore gets
+    forecast-coverage telemetry regardless of the flag, while the flag alone
+    still governs whether the blend itself is skill-weighted.
+
+    The tracker is optional: ``ForecastingEngine()`` (no args, e.g. every
+    ad-hoc/test/script call site) reproduces the pre-Tier-2.2 behavior
+    exactly — no DB writes at all, static blending unchanged.
     """
 
     def __init__(self, tracker=None):
@@ -1500,6 +1521,13 @@ class ForecastingEngine:
 
             # Step 2a: update actuals for all horizons BEFORE generating new forecasts.
             # This ensures the skill weights computed below reflect the latest error data.
+            # Runs whenever a tracker is attached -- NOT gated on
+            # settings.FORECAST_SKILL_WEIGHTING_ENABLED (see Step 2b's own comment
+            # below for why): completing past forecasts with their realized price is
+            # a recording concern, not a blending concern, and other read-only
+            # consumers (pilots/observability.py's per-symbol error/reliability
+            # views) depend on actual_price being filled in regardless of whether
+            # skill-weighted blending is enabled.
             if self._tracker is not None:
                 for h in horizons:
                     try:
@@ -1544,15 +1572,29 @@ class ForecastingEngine:
                     model_forecasts["bert_lla"] = bert_lla_res
 
                 # Step 2b: retrieve skill weights for this horizon (empty dict = cold start).
+                #
+                # Gated on settings.FORECAST_SKILL_WEIGHTING_ENABLED -- this is the
+                # ONLY tracker touchpoint gated by that flag. update_actuals (above)
+                # and record_forecasts (below) are recording/telemetry concerns and
+                # run unconditionally whenever a tracker is attached, so that
+                # forecast_available (ForecastTracker.get_covered_symbols(), read by
+                # GET /data/sync-report / data.portfolio_sync.build_sync_report)
+                # reflects real per-cycle forecast coverage regardless of whether
+                # skill-weighted blending itself is enabled. Reading settings
+                # dynamically (not cached on the engine instance) so a mid-process
+                # flag flip (e.g. a test, or a runtime-flags-store change) takes
+                # effect on the very next call -- matches this same call site's
+                # existing dynamic read of FORECAST_SKILL_WINDOW_DAYS/MIN_OBS below.
                 skill_weights: Dict[str, float] = {}
                 if self._tracker is not None:
                     try:
                         from settings import settings as _settings
-                        skill_weights = self._tracker.get_skill_weights(
-                            symbol, h,
-                            window_days=_settings.FORECAST_SKILL_WINDOW_DAYS,
-                            min_obs=_settings.FORECAST_SKILL_MIN_OBS,
-                        )
+                        if _settings.FORECAST_SKILL_WEIGHTING_ENABLED:
+                            skill_weights = self._tracker.get_skill_weights(
+                                symbol, h,
+                                window_days=_settings.FORECAST_SKILL_WINDOW_DAYS,
+                                min_obs=_settings.FORECAST_SKILL_MIN_OBS,
+                            )
                     except Exception as _exc:
                         logger.debug("ForecastTracker.get_skill_weights skipped for %s h=%d: %s", symbol, h, _exc)
 

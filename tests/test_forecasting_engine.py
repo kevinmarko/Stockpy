@@ -354,7 +354,15 @@ class TestGenerateForecast:
         result = engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
         assert result["Target_Days"] == 30
 
-    def test_tracker_lifecycle_is_called_for_each_horizon(self, engine):
+    def test_tracker_lifecycle_is_called_for_each_horizon(self, engine, monkeypatch):
+        """Full lifecycle (update_actuals -> get_skill_weights -> blend ->
+        record_forecasts) requires settings.FORECAST_SKILL_WEIGHTING_ENABLED
+        True -- see test_tracker_recording_runs_even_when_skill_weighting_
+        disabled below for the (default, flag-off) coverage-only contract
+        this decouples it from (2026-09 fix)."""
+        from settings import settings as _settings
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WEIGHTING_ENABLED", True)
         tracker = mock.MagicMock()
         tracker.get_skill_weights.return_value = {}
         engine._tracker = tracker
@@ -371,6 +379,75 @@ class TestGenerateForecast:
         assert called_symbols == {"MSFT"}
         called_horizons = {call.args[1] for call in tracker.update_actuals.call_args_list}
         assert called_horizons == {10, 30, 60, 90}
+
+    def test_tracker_recording_runs_even_when_skill_weighting_disabled(self, engine, monkeypatch):
+        """Regression test for the forecast_available coverage bug (2026-09,
+        see docs/known_issues/forecast_available_coupled_to_skill_weighting_
+        flag.md): update_actuals/record_forecasts -- the telemetry that backs
+        ForecastTracker.get_covered_symbols() and therefore forecast_available
+        -- must run for every horizon whenever a tracker is attached,
+        REGARDLESS of settings.FORECAST_SKILL_WEIGHTING_ENABLED (explicitly
+        forced False here even though it's already the coded default, for
+        clarity). Only get_skill_weights -- the skill-weighted BLENDING
+        read-back -- is gated on the flag and must NOT be called."""
+        from settings import settings as _settings
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WEIGHTING_ENABLED", False)
+        tracker = mock.MagicMock()
+        tracker.get_skill_weights.return_value = {}
+        engine._tracker = tracker
+        row = pd.Series({"sector": "Technology", "Symbol": "MSFT"})
+        history = _price_series(90, seed=8)
+        engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
+
+        assert tracker.update_actuals.call_count == 4
+        assert tracker.record_forecasts.call_count == 4
+        tracker.get_skill_weights.assert_not_called()
+
+    def test_blend_is_byte_identical_whether_or_not_tracker_is_attached_when_flag_off(self, monkeypatch, tmp_path):
+        """With FORECAST_SKILL_WEIGHTING_ENABLED off (the default), attaching
+        a REAL ForecastTracker -- as every production call site now always
+        does (main_orchestrator.py, engine/advisory.py,
+        pipeline/production_steps.py) -- must not change a single
+        Forecast_* value versus generate_forecast() with no tracker at all.
+        This is the "byte-identical default behavior" half of the 2026-09
+        fix: recording runs in the background, but never influences the
+        blend unless the flag is also on."""
+        from settings import settings as _settings
+        from forecasting.forecast_tracker import ForecastTracker
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WEIGHTING_ENABLED", False)
+
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(90, seed=13)
+        price = float(history.iloc[-1])
+
+        engine_no_tracker = ForecastingEngine()
+        np.random.seed(42)
+        result_no_tracker = engine_no_tracker.generate_forecast(
+            row, current_price=price, history_series=history
+        )
+
+        # A real temp-file DB, not ":memory:" -- ForecastTracker uses two
+        # independent raw sqlite3 connections (a throwaway one for
+        # _ensure_table, a separately cached one for reads/writes), and a
+        # bare ":memory:" db is private to whichever connection created it
+        # and vanishes the instant that connection closes (see
+        # conftest.py::_isolate_forecast_tracker_db_in_tests's docstring for
+        # the full explanation of this gotcha).
+        tracker = ForecastTracker(db_path=str(tmp_path / "tracker.db"))
+        engine_with_tracker = ForecastingEngine(tracker=tracker)
+        np.random.seed(42)
+        result_with_tracker = engine_with_tracker.generate_forecast(
+            row, current_price=price, history_series=history
+        )
+
+        for h in (10, 30, 60, 90):
+            assert result_no_tracker[f"Forecast_{h}"] == result_with_tracker[f"Forecast_{h}"]
+
+        # And recording DID happen in the background even though blending was
+        # untouched -- proving this is real coverage telemetry, not a no-op.
+        assert "AAPL" in tracker.get_covered_symbols(horizon_days=30)
 
     def test_tracker_failures_are_swallowed_dead_letter(self, engine):
         """A broken ForecastTracker (e.g. DB locked) must never crash
