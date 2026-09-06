@@ -12,7 +12,7 @@ import {
   stitchMultipleIntervals,
   type TrendsPoint,
 } from "../utils/trendsStitch";
-import type {
+import type { StrategyReportCardSnapshot,
   AgenticDiscovery,
   AgenticStatus,
   AgentLoopStatus,
@@ -505,6 +505,7 @@ const RAW: Array<{
   // Optional; defaults to true (a distinct SPY macro overlay is available).
   // Set false to model the honest redundancy case (underlying already IS SPY).
   macroBenchmark?: boolean;
+  followable?: boolean;
 }> = [
   {
     id: "trend-following",
@@ -714,6 +715,7 @@ const RAW: Array<{
     id: "regime-navigator",
     name: "Regime Navigator",
     category: "Macro",
+    followable: false,
     description:
       "Top-down macro regime read — leans defensive in Recession/Credit-Event regimes and rotates toward risk-on sectors when the systemic backdrop clears.",
     headline: h(null, null, null, null, false, false),
@@ -883,6 +885,53 @@ const RAW: Array<{
       ["ADBE", 18, 0.4],
     ],
   },
+  // Two real "Options"-category catalog Pilots (mirrors pilots/catalog.py --
+  // EVERY Options Pilot there is followable=False, since these are
+  // manually-executed options structures, not a simple auto-follow blend).
+  // Exercises: (a) the "Options" PilotCategory value actually appearing in
+  // Marketplace's category filter/rail with a real member, and (b) the
+  // followable:false disabled-Follow-button branch on PilotDetail/Comparison
+  // for an Options pilot specifically (previously only "regime-navigator",
+  // a Macro pilot, exercised followable:false at all).
+  {
+    id: "iron-condor",
+    name: "Iron Condor",
+    category: "Options",
+    description:
+      "Range-bound premium selling strategy combining credit spreads. No validated backtest exists for this structure yet -- metrics shown honestly as unavailable.",
+    followable: false,
+    headline: h(null, null, null, null, false, false),
+    long_only: false,
+    aum: 31800,
+    followers: 14,
+    hasCurve: false,
+    drift: 0,
+    vol: 0,
+    syms: [["SPY", 100, 0.5]],
+  },
+  {
+    id: "copula-stat-arb",
+    name: "Copula Stat Arb",
+    category: "Options",
+    description:
+      "Statistical arbitrage using copula-derived joint probabilities (KO/PEP pair). Honest FAIL: overfitting gate not cleared -- see Strategy Report Card for the full predicted-vs-actual detail.",
+    followable: false,
+    // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-19):
+    // Sharpe -0.455, PBO 0.000, DSR 0.246, MaxDD 35.1% -- worst drawdown lands
+    // on 2008-10-13 (the GFC). deployable=false is a genuine, documented FAIL,
+    // never softened.
+    headline: h(-0.455, 0.246, 0.0, 0.351, false, false),
+    long_only: false,
+    aum: 9600,
+    followers: 5,
+    hasCurve: true,
+    drift: -0.02,
+    vol: 0.31,
+    syms: [
+      ["KO", 50, 0.5],
+      ["PEP", 50, 0.48],
+    ],
+  },
 ];
 
 const CATALOG: MockPilot[] = RAW.map((r) => {
@@ -898,6 +947,7 @@ const CATALOG: MockPilot[] = RAW.map((r) => {
     aum_proxy: r.aum,
     followers_proxy: r.followers,
     long_only: r.long_only,
+    followable: r.followable ?? true,
   };
   return {
     summary,
@@ -8486,6 +8536,209 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
+    getStrategyReportCard: async (): Promise<StrategyReportCardSnapshot> => {
+    await delay(600);
+    return [
+      {
+        pilot_id: "trend-following",
+        name: "Trend Follower",
+        category: "Momentum",
+        is_pilot: true,
+        predicted: {
+          sharpe: 1.12,
+          max_drawdown: 0.19,
+          pbo: 0.31,
+          dsr: 1.8,
+          deployable: true,
+          reason: null,
+          n_trials: 1500,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: 0.95,
+          max_cumulative_drawdown_usd: 12500,
+          trade_count: 42,
+          win_rate: 0.55,
+          avg_realized_pnl_pct: 0.02,
+          total_realized_pnl_usd: 15000,
+          first_exit_ts: "2024-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        pilot_id: "copula-stat-arb",
+        name: "Copula Stat Arb",
+        category: "Options",
+        is_pilot: true,
+        predicted: {
+          // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md
+          // 2026-08-19): an honest, documented FAIL -- worst drawdown lands
+          // on 2008-10-13 (the GFC). `reason` is null here (not a fabricated
+          // "why" string) because the backend's `_predicted_side` only ever
+          // populates `reason` when a validated backtest is MISSING for this
+          // pilot -- when one exists (as it does here), `deployable: false`
+          // speaks for itself.
+          sharpe: -0.455,
+          max_drawdown: 0.351,
+          pbo: 0.0,
+          dsr: 0.246,
+          deployable: false,
+          reason: null,
+          n_trials: 2500,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: 0.12,
+          max_cumulative_drawdown_usd: 45000,
+          trade_count: 118,
+          win_rate: 0.45,
+          avg_realized_pnl_pct: -0.01,
+          total_realized_pnl_usd: -5000,
+          first_exit_ts: "2024-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        pilot_id: "iron-condor",
+        name: "Iron Condor",
+        category: "Options",
+        is_pilot: true,
+        // No registry key (`validation_strategy_id=None` in
+        // pilots/catalog.py) -- the backend's `_predicted_side` returns the
+        // fully-nulled shape with this EXACT reason string; every other
+        // field (including `is_options_selling`) is null too, never a
+        // fabricated `true` while the rest of the row is honestly unknown.
+        predicted: {
+          sharpe: null,
+          max_drawdown: null,
+          pbo: null,
+          dsr: null,
+          deployable: null,
+          reason: "no validated backtest for this pilot",
+          n_trials: null,
+          is_options_selling: null,
+          stress_gate_passed: null,
+          report_date: null,
+        },
+        actual: {
+          realized_sharpe_proxy: 1.35,
+          max_cumulative_drawdown_usd: 8400,
+          trade_count: 56,
+          win_rate: 0.75,
+          avg_realized_pnl_pct: 0.05,
+          total_realized_pnl_usd: 25000,
+          first_exit_ts: "2024-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        // Real Pilot with a genuine validated backtest but zero paper trades
+        // yet -- `is_pilot: true` on purpose: a non-Pilot bucket row can
+        // NEVER carry populated `predicted` metrics in the real backend (see
+        // "Legacy Discretionary" below), so a deployable=true predicted side
+        // only ever appears alongside `is_pilot: true`.
+        pilot_id: "zero-trade",
+        name: "Zero Trade Strategy",
+        category: "Momentum",
+        is_pilot: true,
+        predicted: {
+          sharpe: 1.5,
+          max_drawdown: 0.1,
+          pbo: 0.1,
+          dsr: 2.0,
+          deployable: true,
+          reason: null,
+          n_trials: 500,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: null,
+          max_cumulative_drawdown_usd: null,
+          trade_count: 0,
+          win_rate: null,
+          avg_realized_pnl_pct: null,
+          total_realized_pnl_usd: null,
+          first_exit_ts: null,
+          last_exit_ts: null,
+          reason: "insufficient sample (n=0)",
+        },
+      },
+      {
+        // Non-Pilot bucket: a strategy_id seen in closed paper trades that
+        // has no matching entry in pilots/catalog.py's list_pilots(). The
+        // real backend hardcodes this EXACT reason string ("non-pilot
+        // bucket") for every such row -- never a per-row custom explanation.
+        pilot_id: "non-pilot-bucket",
+        name: "Legacy Discretionary",
+        category: "Other",
+        is_pilot: false,
+        predicted: {
+          sharpe: null,
+          max_drawdown: null,
+          pbo: null,
+          dsr: null,
+          deployable: null,
+          reason: "non-pilot bucket",
+          n_trials: null,
+          is_options_selling: null,
+          stress_gate_passed: null,
+          report_date: null,
+        },
+        actual: {
+          realized_sharpe_proxy: 0.88,
+          max_cumulative_drawdown_usd: 22000,
+          trade_count: 315,
+          win_rate: 0.65,
+          avg_realized_pnl_pct: 0.03,
+          total_realized_pnl_usd: 45000,
+          first_exit_ts: "2023-01-01T00:00:00Z",
+          last_exit_ts: "2024-06-01T00:00:00Z",
+          reason: null,
+        },
+      },
+      {
+        // Real Pilot, real backtest, just launched -- below the live
+        // honesty floor (n=7 < MIN_TRADES_FOR_VERDICT=10) on the actual
+        // side. `is_pilot: true` for the same reason as "zero-trade" above.
+        pilot_id: "new-strategy",
+        name: "New Strategy",
+        category: "Blend",
+        is_pilot: true,
+        predicted: {
+          sharpe: 2.1,
+          max_drawdown: 0.05,
+          pbo: 0.15,
+          dsr: 2.5,
+          deployable: true,
+          reason: null,
+          n_trials: 800,
+          is_options_selling: false,
+          stress_gate_passed: null,
+          report_date: new Date().toISOString(),
+        },
+        actual: {
+          realized_sharpe_proxy: null,
+          max_cumulative_drawdown_usd: null,
+          trade_count: 7,
+          win_rate: null,
+          avg_realized_pnl_pct: null,
+          total_realized_pnl_usd: null,
+          first_exit_ts: null,
+          last_exit_ts: null,
+          reason: "insufficient sample (n=7)",
+        },
+      }
+    ];
+  },
   async health() {
     return delay({ status: "ok", mock: true }, 60);
   },

@@ -1,0 +1,28 @@
+- [ ] Part A — `strategy_id` vocabulary standardization
+  - [ ] `pilots/catalog.py`
+  - [ ] `tests/test_pilots_catalog.py`
+  - [ ] Write-site renames
+    - [ ] `execution/options_paper_executor.py`
+    - [ ] `pilots/dispersion_trading.py`
+    - [ ] `pilots/copula_stat_arb.py`
+    - [ ] `pilots/zero_dte_engine.py`
+    - [ ] `pilots/paper_broker_options_order.py`
+  - [ ] Frontend followability gating
+    - [ ] `api/pilots_api.py`
+    - [ ] `webapp/src/api/types.ts`
+    - [ ] `webapp/src/screens/PilotDetail.tsx` & `Comparison.tsx`
+    - [ ] `webapp/src/api/mock.ts`
+- [ ] Part B — Strategy Report Card
+  - [ ] `pilots/strategy_report_card.py`
+  - [ ] `tests/test_pilots_strategy_report_card.py`
+  - [ ] `tests/test_pilots_strategy_matrix.py`
+  - [ ] `api/pilots_api.py` & `tests/test_pilots_api.py`
+  - [ ] Frontend API types and client (`webapp/src/api/types.ts`, `client.ts`, `mock.ts`)
+  - [ ] Frontend Screen (`webapp/src/screens/StrategyReportCard.tsx`, `StrategyReportCard.test.tsx`)
+  - [ ] Frontend routing (`webapp/src/App.tsx`, `webapp/src/navigation.tsx`)
+- [ ] Part C — Documentation Updates
+  - [ ] `docs/known_issues/paper_trade_strategy_id_vocabulary.md`
+  - [ ] `docs/architecture/execution.md`
+  - [ ] `docs/architecture/webapp-and-gui.md`
+  - [ ] `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`
+- [ ] Verification and QA

@@ -10,7 +10,7 @@
 import { mockApi, MOCK_META } from "./mock";
 import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
-import type {
+import type { StrategyReportCardSnapshot,
   AgenticDiscovery,
   AgenticStatus,
   AiChartResponse,
@@ -433,6 +433,7 @@ async function http<T>(
 
 // ---- Live client (shape-identical to mockApi) ----
 const liveApi = {
+  getStrategyReportCard: () => http<StrategyReportCardSnapshot>("/strategy/report-card"),
   health: () => http<{ status: string }>("/health"),
   listPilots: () => http<PilotSummary[]>("/pilots"),
   getPilot: (id: string) =>

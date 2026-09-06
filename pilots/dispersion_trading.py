@@ -1135,6 +1135,7 @@ def execute_dispersion_trade(
         }
 
     strategy_name = "Dispersion Arbitrage"
+    strategy_id = "dispersion-trading"
     idx_sym = basket.index_symbol
     idx_coid = f"{basket_id}_IDX_{idx_sym}"
 
@@ -1148,7 +1149,7 @@ def execute_dispersion_trade(
         net_cash_impact=basket.index_net_cash_impact,
         commission_and_fees=2 * basket.index_contracts * OPTION_FEE_PER_CONTRACT_LEG,
         status=OrderStatus.FILLED,
-        strategy_id=strategy_name,
+        strategy_id=strategy_id,
     )
 
     if not idx_success:
@@ -1180,7 +1181,7 @@ def execute_dispersion_trade(
             net_cash_impact=c_cash,
             commission_and_fees=c_comm,
             status=OrderStatus.FILLED,
-            strategy_id=strategy_name,
+            strategy_id=strategy_id,
         )
 
         if c_success:

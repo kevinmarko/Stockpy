@@ -76,7 +76,8 @@ export type PilotCategory =
   | "Macro"
   | "Risk"
   | "Sentiment"
-  | "Forecast";
+  | "Forecast"
+  | "Options";
 
 /**
  * Honest, PBO/DSR-gated backtest headline from reports/<id>_validation_summary.json.
@@ -107,6 +108,7 @@ export interface PilotSummary {
   aum_proxy: number; // derived from follows.json (honest, local)
   followers_proxy: number;
   long_only: boolean;
+  followable: boolean;
 }
 
 export interface Holding {
@@ -5894,3 +5896,75 @@ export interface TrendsStitchDemoResponse {
   raw_curves: TrendsCurve[];
   stitched_curve: TrendsCurve;
 }
+
+export interface StrategyReportCardPredicted {
+  sharpe: number | null;
+  max_drawdown: number | null;
+  pbo: number | null;
+  dsr: number | null;
+  deployable: boolean | null;
+  reason: string | null;
+  n_trials: number | null;
+  is_options_selling: boolean | null;
+  stress_gate_passed: boolean | null;
+  report_date: string | null;
+}
+
+export interface StrategyReportCardActual {
+  trade_count: number;
+  win_rate: number | null;
+  avg_realized_pnl_pct: number | null;
+  /**
+   * Per-trade `realized_pnl_pct` Sharpe-style proxy (mean / stdev * sqrt(252)
+   * over CLOSED paper trades) -- NOT directly comparable to `predicted.sharpe`
+   * (a true backtest Sharpe over a full daily-return series). Different
+   * methodology entirely: this is a trade-level proxy computed over however
+   * many round-trips exist, the other a return-series statistic over the
+   * full historical window. Never render these side by side as if they were
+   * the same metric.
+   */
+  realized_sharpe_proxy: number | null;
+  /**
+   * Cumulative USD drawdown across CLOSED paper trades -- NOT directly
+   * comparable to `predicted.max_drawdown` (a FRACTION of backtest equity,
+   * e.g. `0.18` = 18%). Different unit (dollars vs. fraction) AND different
+   * methodology (realized trade P&L vs. a full equity curve).
+   */
+  max_cumulative_drawdown_usd: number | null;
+  total_realized_pnl_usd: number | null;
+  first_exit_ts: string | null;
+  last_exit_ts: string | null;
+  /** Honest "why every other field above is null" note -- e.g. an
+   *  "insufficient sample (n=<trade_count>)" floor. `null` when the row has
+   *  enough closed trades to report real numbers. */
+  reason: string | null;
+}
+
+/**
+ * One row of `GET /strategy/report-card` (`pilots/strategy_report_card.py`) --
+ * a catalog Pilot (or a non-Pilot paper-trading "bucket" seen in closed
+ * trades with no catalog match) with its validated backtest ("predicted")
+ * placed directly alongside its live paper-trading track record ("actual").
+ * `pilot_id`/`name` are never null even for a non-Pilot bucket row (`is_pilot:
+ * false`) -- the backend uses the bucket's own normalized strategy id/name as
+ * a stable row identity; only `predicted` is nulled-out (with `reason:
+ * "non-pilot bucket"`) for such a row, since only a real catalog Pilot has
+ * `pilots/catalog.py` validation-strategy join info to report.
+ */
+export interface StrategyReportCardRow {
+  pilot_id: string;
+  name: string;
+  category: string;
+  is_pilot: boolean;
+  predicted: StrategyReportCardPredicted;
+  actual: StrategyReportCardActual;
+}
+
+/**
+ * `GET /strategy/report-card` returns a bare JSON array
+ * (`pilots.strategy_report_card.strategy_report_card_rows() -> List[Dict]`),
+ * not an object envelope -- this alias exists so call sites can name the
+ * "whole response" type without re-typing `StrategyReportCardRow[]`.
+ */
+export type StrategyReportCardSnapshot = StrategyReportCardRow[];
+

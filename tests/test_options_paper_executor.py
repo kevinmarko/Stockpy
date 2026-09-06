@@ -781,3 +781,82 @@ def test_settle_post_earnings_trades_honors_real_non_default_strategy_id():
             session.query(PaperOrder).filter_by(client_order_id=close_order_id).one()
         )
         assert parent_order.strategy_id == "Vol Mispricing"
+
+
+# ---------------------------------------------------------------------------
+# strategy_id vocabulary standardization: the post-earnings auto-close
+# reconciliation query must also match the NEW canonical strategy_id
+# ("earnings-crush"), not only the legacy "Earnings Crush" label.
+# ---------------------------------------------------------------------------
+
+
+def test_settle_post_earnings_trades_finds_position_via_new_strategy_id_not_just_ec_prefix():
+    """Regression proof for the reconciliation query's ``strategy_id`` branch.
+
+    ``settle_post_earnings_trades``'s ``ec_orders`` query matches EITHER
+    ``PaperOrder.strategy_id.in_(["Earnings Crush", "earnings-crush"])`` OR a
+    ``client_order_id`` starting with ``"EC-"``. Every trade opened via
+    ``execute_earnings_crush_trade`` always uses an "EC-" prefixed
+    ``client_order_id`` regardless of ``strategy_id``, which means that
+    fallback alone would silently mask a broken ``strategy_id`` branch (the
+    exact gap this test targets, per the audit's own warning not to trust the
+    SQL by inspection alone). This test opens a position directly via
+    ``PaperAccountStore.apply_multi_leg_fill`` with a client_order_id that
+    does NOT start with "EC-" and the NEW canonical
+    ``strategy_id="earnings-crush"`` -- so the ONLY way this trade can be
+    found and closed is through the strategy_id branch of the query.
+    """
+    from data.paper_account_store import session_scope, PaperOrder
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+
+    legs = [
+        {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+        {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+        {"symbol": "NVDA 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+        {"symbol": "NVDA 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+    ]
+    commission = 0.65 * len(legs)
+    # Net credit: sell legs (180 + 200) minus buy legs (50 + 60), less commission.
+    net_cash_impact = (180.0 + 200.0) - (50.0 + 60.0) - commission
+
+    # Deliberately NOT prefixed "EC-" -- if this test passed only because of
+    # the client_order_id LIKE 'EC-%' OR-clause, changing this prefix would
+    # make it fail; it doesn't, proving the strategy_id branch is what finds it.
+    parent_client_order_id = "MANUAL-EARNINGS-CRUSH-001"
+
+    ok = store.apply_multi_leg_fill(
+        client_order_id=parent_client_order_id,
+        symbol="NVDA",
+        strategy_name="Earnings Crush",
+        contracts=1,
+        legs=legs,
+        net_cash_impact=net_cash_impact,
+        commission_and_fees=commission,
+        strategy_id="earnings-crush",
+    )
+    assert ok is True
+    positions_before = store.get_open_positions()
+    assert len(positions_before) == 4
+    assert all(p.strategy_id == "earnings-crush" for p in positions_before)
+
+    settle_res = executor.settle_post_earnings_trades(force=True, spot_map={"NVDA": 120.0})
+
+    assert settle_res["failed_count"] == 0, f"Unexpected failure: {settle_res}"
+    assert settle_res["settled_count"] == 1, (
+        f"Expected the manually-tagged 'earnings-crush' trade to be found and "
+        f"settled via the strategy_id branch of the reconciliation query, got: {settle_res}"
+    )
+    assert settle_res["settled"][0]["symbol"] == "NVDA"
+    assert settle_res["settled"][0]["parent_order_id"] == parent_client_order_id
+
+    # All 4 legs actually closed.
+    assert store.get_open_positions() == []
+
+    with session_scope(store.Session) as session:
+        parent_order = session.query(PaperOrder).filter_by(client_order_id=parent_client_order_id).one()
+        # The ORIGINAL order (the one the query had to find) is untouched --
+        # still carries the new canonical id, confirming the query matched it
+        # by strategy_id rather than mutating anything to make it match.
+        assert parent_order.strategy_id == "earnings-crush"

@@ -436,7 +436,7 @@ def test_execute_0dte_trade_single_leg():
     )
 
     assert res["ok"] is True
-    assert res["strategy_name"] == "0DTE Momentum Breakout"
+    assert res["strategy_name"] == "zero-dte-momentum-breakout"
     assert res["contracts"] == 2
     assert "SPY 2026-08-14 $500.00 CALL" in res.get("contract_symbol", res.get("symbol", ""))
 
@@ -701,7 +701,7 @@ class TestZeroDteExitStrategyIdAttribution:
     """A 0DTE position opened under a custom strategy_name must be closed
     (via evaluate_0dte_exits -> execute_0dte_exits, the manage_0dte_exits
     composition) under that SAME strategy_id -- not re-hardcoded to the
-    literal "0DTE Momentum Breakout", which would silently break per-strategy
+    literal "zero-dte-momentum-breakout", which would silently break per-strategy
     Kelly attribution for any non-default-named 0DTE strategy instance."""
 
     def test_open_then_close_preserves_custom_strategy_id_end_to_end(self):
@@ -763,14 +763,14 @@ class TestZeroDteExitStrategyIdAttribution:
             contracts=1, store=store, quote_price=2.00,
         )
         positions = store.get_open_positions()
-        assert positions[0].strategy_id == "0DTE Momentum Breakout"
+        assert positions[0].strategy_id == "zero-dte-momentum-breakout"
 
         exits = evaluate_0dte_exits(
             positions=positions,
             current_time_str="15:45",
             current_quotes={"SPY 2026-08-14 $500.00 CALL": 2.20},
         )
-        assert exits[0].strategy_id == "0DTE Momentum Breakout"
+        assert exits[0].strategy_id == "zero-dte-momentum-breakout"
 
         exec_res = execute_0dte_exits(exits, store=store)
         closing_order_id = exec_res["executed"][0]["order_id"]
@@ -781,7 +781,7 @@ class TestZeroDteExitStrategyIdAttribution:
                 .filter_by(client_order_id=closing_order_id)
                 .one()
             )
-            assert closing_order.strategy_id == "0DTE Momentum Breakout"
+            assert closing_order.strategy_id == "zero-dte-momentum-breakout"
 
     def test_execute_0dte_exits_reads_strategy_id_off_dict_directive(self):
         """execute_0dte_exits also accepts plain dict exit directives (not

@@ -687,6 +687,8 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # near-verbatim copies -- re/scipy/math/settings are no longer
         # directly imported here.
         allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
+    if module_name == "strategy_report_card":
+        allowed = allowed | {"pilots", "validation", "data", "datetime"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 

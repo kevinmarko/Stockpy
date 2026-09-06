@@ -31,7 +31,7 @@ Key Capabilities:
     - Mandatory 15:45 ET Hard Time Stop to eliminate closing assignment/pin risk -> HARD_TIME_STOP_1545 (EXIT_HARD_TIME_STOP).
 
 5. Single-Leg 0DTE Paper Broker Execution:
-    Submits single-leg option orders tagged with strategy_name="0DTE Momentum Breakout" into PaperAccountStore.
+    Submits single-leg option orders tagged with strategy_name="zero-dte-momentum-breakout" into PaperAccountStore.
 
 Design Invariants:
 * **AST-Safe (CONSTRAINTS #1 & #3)**: Pure compute/read module. Never imports heavy engines.
@@ -313,13 +313,13 @@ class ZeroDteExitSignal:
     contracts: int = 1
     # The real strategy_id the POSITION being closed was opened under (read off
     # PaperPosition.strategy_id in evaluate_0dte_exits) -- NOT hardcoded to
-    # "0DTE Momentum Breakout" here, since a 0DTE-expiring position may have
+    # "zero-dte-momentum-breakout" here, since a 0DTE-expiring position may have
     # been opened under a caller-supplied custom strategy_name (see
     # execute_0dte_trade's strategy_name param) or even by a different engine
     # entirely (the 0DTE filter matches on expiration date, not on strategy).
-    # Defaults to "0DTE Momentum Breakout" only for backward compatibility
+    # Defaults to "zero-dte-momentum-breakout" only for backward compatibility
     # with a caller/test that never supplied one.
-    strategy_id: str = "0DTE Momentum Breakout"
+    strategy_id: str = "zero-dte-momentum-breakout"
 
     def __getitem__(self, item: str) -> Any:
         if hasattr(self, item):
@@ -1075,7 +1075,7 @@ def evaluate_0dte_exits(
             # supplied one (e.g. a PaperPosition row's own field) -- falls
             # back to the historical default only when genuinely absent, not
             # re-hardcoded (see ZeroDteExitSignal.strategy_id's own comment).
-            pos_strategy_id = str(pos.get("strategy_id") or "0DTE Momentum Breakout")
+            pos_strategy_id = str(pos.get("strategy_id") or "zero-dte-momentum-breakout")
         else:
             symbol = str(getattr(pos, "symbol", ""))
             underlying = symbol.split()[0].upper()
@@ -1083,7 +1083,7 @@ def evaluate_0dte_exits(
             entry_price = float(getattr(pos, "avg_entry_price", 0.0))
             pos_id = f"pos_{symbol}_{uuid.uuid4().hex[:6]}"
             market_value = getattr(pos, "market_value", None)
-            pos_strategy_id = str(getattr(pos, "strategy_id", None) or "0DTE Momentum Breakout")
+            pos_strategy_id = str(getattr(pos, "strategy_id", None) or "zero-dte-momentum-breakout")
 
         if abs(qty) < _DEGENERATE_THRESHOLD:
             continue
@@ -1180,14 +1180,14 @@ def execute_0dte_trade(
     opt_type: Optional[str] = None,
     quote_price: Optional[float] = None,
     limit_price: Optional[float] = None,
-    strategy_name: str = "0DTE Momentum Breakout",
+    strategy_name: str = "zero-dte-momentum-breakout",
     stop_loss_pct: Optional[float] = None,
     profit_target_pct: Optional[float] = None,
     dry_run: bool = False,
     is_live: bool = False,
 ) -> Dict[str, Any]:
     """
-    Submits a 0DTE single-leg option order with strategy_name="0DTE Momentum Breakout"
+    Submits a 0DTE single-leg option order with strategy_name="zero-dte-momentum-breakout"
     and updates the PaperAccountStore atomically.
     """
     if is_live:
@@ -1369,17 +1369,17 @@ def execute_0dte_exits(
             # Real strategy_id the position being closed was opened under
             # (threaded through by evaluate_0dte_exits from the position's
             # own PaperPosition.strategy_id) -- NOT re-hardcoded to
-            # "0DTE Momentum Breakout" below, so a custom-named 0DTE entry
+            # "zero-dte-momentum-breakout" below, so a custom-named 0DTE entry
             # closes under the SAME tag it opened with (see
             # ZeroDteExitSignal.strategy_id's own comment for why).
-            item_strategy_id = str(item.get("strategy_id") or "0DTE Momentum Breakout")
+            item_strategy_id = str(item.get("strategy_id") or "zero-dte-momentum-breakout")
         else:
             pos_symbol = getattr(item, "contract_symbol", getattr(item, "symbol", ""))
             side = getattr(item, "side", "sell")
             qty = float(getattr(item, "quantity", getattr(item, "qty", 1.0)))
             price = float(getattr(item, "current_price", 1.0))
             exit_reason = getattr(item, "exit_reason", "EXIT")
-            item_strategy_id = str(getattr(item, "strategy_id", None) or "0DTE Momentum Breakout")
+            item_strategy_id = str(getattr(item, "strategy_id", None) or "zero-dte-momentum-breakout")
 
         client_order_id = f"exit_0dte_{uuid.uuid4().hex[:10]}"
         commission = 0.65 * max(1, int(round(qty)))

@@ -535,6 +535,13 @@ export function StrategyHealth() {
             value behind its deployable badge.
           </p>
         </div>
+        <button
+          className="btn btn-outline"
+          onClick={() => nav("/strategy-report-card")}
+          style={{ whiteSpace: "nowrap" }}
+        >
+          Report Card →
+        </button>
       </div>
 
       <TabGuide tabKey="strategy-health" />

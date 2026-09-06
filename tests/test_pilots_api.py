@@ -97,7 +97,7 @@ def test_pilots_list_shape(monkeypatch):
     assert set(tf.keys()) == {
         "id", "name", "category", "description",
         "headline", "holdings_count", "top_holdings", "aum_proxy", "followers_proxy",
-        "long_only",
+        "long_only", "followable"
     }
     assert tf["long_only"] is False
     # Headline comes from tests/fixtures/timeseries_momentum_validation_summary.json.
@@ -1111,6 +1111,49 @@ class TestFollowAuthorized:
                     headers=self._auth(),
                 )
         assert resp.status_code == 404
+
+    def test_post_follow_non_followable_pilot_400(self, tmp_path):
+        """The `followable` gate that disables the Follow button client-side
+        (PilotDetail.tsx/Comparison.tsx) must also be enforced here — the
+        UI disabling a button is not itself a security boundary, and a
+        direct API call must not be able to persist a follow for a Pilot
+        that is `weights={}` by design (e.g. the options-desk specialist
+        strategies added alongside the Strategy Report Card)."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.post(
+                    "/pilots/iron-condor/follow",
+                    json={"amount": 1000.0},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 400
+        assert "not followable" in resp.json()["detail"]
+
+    def test_put_follows_non_followable_pilot_400(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.put(
+                    "/follows",
+                    json={"pilot_id": "copula-stat-arb", "amount": 500.0},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 400
+        assert "not followable" in resp.json()["detail"]
+
+    def test_put_follows_cancel_non_followable_pilot_still_allowed(self, tmp_path):
+        """`amount == 0` (cancel) must never be blocked by the followable gate
+        — a pre-existing follow (e.g. one created before this fix shipped)
+        must always be cancellable regardless of the Pilot's current
+        followable state."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.put(
+                    "/follows",
+                    json={"pilot_id": "iron-condor", "amount": 0.0},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 200
+        assert resp.json()["follow"]["amount"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -3871,6 +3914,117 @@ class TestStrategyHealth:
         assert by_key["dsr"] == thresholds.DSR_MIN
         assert by_key["sharpe"] == thresholds.NET_SHARPE_MIN
         assert by_key["max_drawdown"] == thresholds.MAX_DRAWDOWN_MAX
+
+
+class TestStrategyReportCard:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
+    def test_shape_and_values(self, monkeypatch):
+        class _MockPaperAccountStore:
+            def __init__(self, *args, **kwargs):
+                pass
+            def get_full_closed_trades(self, limit):
+                return []
+                
+        class _MockValidationHistoryStore:
+            def __init__(self, *args, **kwargs):
+                pass
+            def get_latest_per_strategy(self):
+                return {
+                    "timeseries_momentum": {
+                        "deployable": True,
+                        "pbo": 0.18,
+                        "dsr": 0.972,
+                        "sharpe": 1.14,
+                        "max_drawdown": 0.176,
+                        "n_trials": 200,
+                        "is_options_selling": False,
+                        "stress_gate_passed": True,
+                        "report_date": "2026-06-15",
+                    }
+                }
+        
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore", _MockPaperAccountStore):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore", _MockValidationHistoryStore):
+                resp = client.get("/strategy/report-card")
+            
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) >= len(catalog.list_pilots())
+        
+        row = next(r for r in body if r["pilot_id"] == "trend-following")
+        assert row["name"] == "Trend Follower"
+        assert row["is_pilot"] is True
+        
+        pred = row["predicted"]
+        assert pred["deployable"] is True
+        assert pred["sharpe"] == 1.14
+        
+        act = row["actual"]
+        assert act["trade_count"] == 0
+        assert act["reason"] == "insufficient sample (n=0)"
+
+    def test_pilot_without_backtest_is_honest_never_fabricated(self, monkeypatch):
+        class _MockValidationHistoryStore:
+            def __init__(self, *args, **kwargs):
+                pass
+            def get_latest_per_strategy(self):
+                return {}
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore", _MockValidationHistoryStore):
+                resp = client.get("/strategy/report-card")
+        assert resp.status_code == 200
+        row = next(r for r in resp.json() if r["pilot_id"] == "news-catalyst")
+        assert row["predicted"]["deployable"] is None
+        assert row["predicted"]["reason"] == "no validated backtest for this pilot"
+
+    def test_fail_open_read_with_no_token(self, monkeypatch):
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore"):
+                with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                    resp = client.get("/strategy/report-card")
+                assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self, monkeypatch):
+        with mock.patch("pilots.strategy_report_card.PaperAccountStore"):
+            with mock.patch("pilots.strategy_report_card.ValidationHistoryStore"):
+                with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+                    resp = client.get("/strategy/report-card", headers={"Authorization": "Bearer wrong"})
+                assert resp.status_code == 401
+
+    def test_cold_start_empty_db_degrades_honestly_never_500(self):
+        """No mocking at all -- relies on the repo's own session-wide autouse
+        isolation fixtures (conftest.py's ``_isolate_validation_runs_db_in_tests``
+        / ``_isolate_paper_and_transactions_db_in_tests``) to point
+        ``ValidationHistoryStore``/``PaperAccountStore`` at a genuinely fresh,
+        empty per-test database -- the real "brand new checkout, pipeline never
+        run, no paper trades yet" cold-start shape, not a simulated one.
+
+        Every catalog Pilot must still come back with a 200 and an honest,
+        never-fabricated degrade: a Pilot with a real ``validation_strategy_id``
+        but no row in the (empty) validation-history table reports
+        ``predicted.reason == "missing"`` (CONSTRAINT #4 -- distinct from
+        ``pilot.validation_strategy_id is None``'s own
+        "no validated backtest for this pilot" reason, covered by
+        ``test_pilot_without_backtest_is_honest_never_fabricated`` above), and
+        the ``actual`` side reports ``trade_count == 0`` with an honest
+        "insufficient sample" reason rather than a fabricated zero-metric
+        verdict."""
+        resp = client.get("/strategy/report-card")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) >= len(catalog.list_pilots())
+
+        row = next(r for r in body if r["pilot_id"] == "trend-following")
+        assert row["predicted"]["deployable"] is None
+        assert row["predicted"]["reason"] == "missing"
+        assert row["actual"]["trade_count"] == 0
+        assert row["actual"]["reason"] == "insufficient sample (n=0)"
+        assert row["actual"]["win_rate"] is None
 
 
 # ---------------------------------------------------------------------------

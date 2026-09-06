@@ -29,7 +29,7 @@ const PILOT: PilotSummary = {
   holdings_count: 5,
   aum_proxy: 10000,
   followers_proxy: 12,
-  long_only: true,
+  long_only: true, followable: true,
   top_holdings: [],
 };
 

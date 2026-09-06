@@ -7,11 +7,14 @@ backtest.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from scripts.refresh_validations import STRATEGY_REGISTRY
 from settings import settings
 
 from pilots import Pilot, get_pilot, list_pilots
-from pilots.catalog import PILOTS
+from pilots.catalog import PILOTS, OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID
 
 
 def test_catalog_non_empty():
@@ -33,6 +36,8 @@ def test_pilot_ids_kebab_case():
 def test_weights_keys_are_real_signal_modules():
     valid = set(settings.SIGNAL_WEIGHTS)
     for p in list_pilots():
+        if not p.followable:
+            continue
         assert p.weights, f"{p.id!r} has empty weights"
         unknown = set(p.weights) - valid
         assert not unknown, f"{p.id!r} references unknown signal modules: {unknown}"
@@ -53,7 +58,7 @@ def test_validation_ids_are_real_or_none():
 def test_categories_are_known():
     allowed = {
         "Momentum", "Mean Reversion", "Factor", "Blend",
-        "Macro", "Risk", "Sentiment", "Forecast",
+        "Macro", "Risk", "Sentiment", "Forecast", "Options",
     }
     for p in list_pilots():
         assert p.category in allowed, f"{p.id!r} has unknown category {p.category!r}"
@@ -89,3 +94,51 @@ def test_balanced_blend_matches_full_signal_weights():
 def test_at_least_one_validated_pilot():
     # Sanity: the honest join is actually exercised somewhere.
     assert any(p.validation_strategy_id is not None for p in list_pilots())
+
+
+def test_non_followable_pilots():
+    for p in list_pilots():
+        if not p.followable:
+            assert p.weights == {}, f"{p.id!r} has weights but is not followable"
+            assert len(p.description.strip()) > 0, f"{p.id!r} needs a description"
+
+
+def test_options_directive_strategy_mapping():
+    # Keys must be the exact Title-Case strings technical_options_engine.py's
+    # generate_strategy_pricing_matrix writes to directive["Strategy"] --
+    # NOT the UPPER_SNAKE_CASE structure_type convention used elsewhere
+    # (e.g. pilots/multi_leg_pricing.py's "IRON_CONDOR", a different field).
+    # execution/options_paper_executor.py looks up a live directive's
+    # strategy string against this dict verbatim, so a wrong-cased key here
+    # would silently no-op the normalization for every real trade.
+    expected_keys = {
+        "Put Credit Spread",
+        "Call Credit Spread",
+        "Iron Condor",
+        "Call Debit Spread",
+        "Put Debit Spread",
+        "Covered Call",
+    }
+    assert set(OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.keys()) == expected_keys
+
+    catalog_ids = {p.id for p in list_pilots()}
+    for k, v in OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.items():
+        assert v in catalog_ids, f"Mapped value {v!r} for key {k!r} is not a valid Pilot ID"
+
+
+def test_options_directive_strategy_mapping_matches_technical_options_engine():
+    """Drift guard: every key here must be a real Title-Case ``Strategy``
+    value technical_options_engine.py actually assigns to a live directive
+    (grepped from its own source, not re-typed by hand), so this dict can
+    never silently drift out of sync with the live engine's strings again.
+    """
+    src = Path(__file__).resolve().parent.parent / "technical_options_engine.py"
+    text = src.read_text(encoding="utf-8")
+    real_strategy_strings = set(re.findall(r'directive\["Strategy"\]\s*=\s*"([^"]+)"', text))
+
+    for key in OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID:
+        assert key in real_strategy_strings, (
+            f"{key!r} is not a real directive['Strategy'] value emitted by "
+            f"technical_options_engine.py; real values: {sorted(real_strategy_strings)}"
+        )
+

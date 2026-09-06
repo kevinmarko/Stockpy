@@ -193,6 +193,7 @@ export const CATEGORY_PALETTE: Record<PilotCategory, string> = {
   Risk: "var(--cat-risk)", // amber
   Sentiment: "var(--cat-sentiment)", // fuchsia
   Forecast: "var(--cat-forecast)", // lime
+  Options: "var(--cat-options)",
 };
 
 /** Deterministic color for a Pilot category (fixed name-keyed slot, never cycled). */

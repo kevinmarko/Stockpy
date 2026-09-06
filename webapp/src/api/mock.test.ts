@@ -35,6 +35,7 @@ const CATEGORIES = [
   "Risk",
   "Sentiment",
   "Forecast",
+  "Options",
 ];
 
 const RANGES: PerfRange[] = ["1W", "1M", "3M", "6M", "1Y", "2Y"];

@@ -251,6 +251,7 @@ def execute_paper_order(
                 net_cash_impact=net_cash_impact,
                 commission_and_fees=commission,
                 collateral_required=collateral_required,
+                strategy_id="Manual Trade",
             )
 
             if not success:

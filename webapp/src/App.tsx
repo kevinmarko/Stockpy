@@ -20,6 +20,7 @@ import { OptionsMatrix } from "./screens/OptionsMatrix";
 import { Attribution } from "./screens/Attribution";
 import { Observability } from "./screens/Observability";
 import { StrategyHealth } from "./screens/StrategyHealth";
+import { StrategyReportCard } from "./screens/StrategyReportCard";
 import { Calibration } from "./screens/Calibration";
 import { PipelineDashboard } from "./screens/PipelineDashboard";
 import { SettingsLayout } from "./screens/SettingsLayout";
@@ -254,6 +255,7 @@ export default function App() {
                   <Route path="/attribution" element={<Attribution />} />
                   <Route path="/observability" element={<Observability />} />
                   <Route path="/strategy-health" element={<StrategyHealth />} />
+                  <Route path="/strategy-report-card" element={<StrategyReportCard />} />
                   <Route path="/calibration" element={<Calibration />} />
                   <Route path="/pipeline" element={<PipelineDashboard />} />
                   <Route path="/data-explorer" element={<DataExplorer />} />

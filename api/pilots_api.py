@@ -179,6 +179,7 @@ from pilots import (
     simulation,
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
+    strategy_report_card,
     symbols,
     trade_history,
     validation_trend as validation_trend_reader,
@@ -359,6 +360,10 @@ _MISSING_SNAPSHOT_DETAIL = "No state snapshot yet — run the pipeline first."
 _MISSING_PORTFOLIO_DETAIL = "No account snapshot yet — run the pipeline first."
 _UNKNOWN_PILOT_DETAIL = "No such pilot."
 _UNKNOWN_SYMBOL_DETAIL = "No such symbol in the latest snapshot."
+_NOT_FOLLOWABLE_DETAIL = (
+    "This Pilot is not followable — it's a standalone strategy, not a signal "
+    "blend, so there is nothing for the Follow mechanism to replay."
+)
 _DEFAULT_TRADES_LIMIT = 20
 _DETAIL_TRADES_LIMIT = 10
 
@@ -1010,6 +1015,7 @@ def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) ->
         "aum_proxy": store.aum_for(pilot.id),
         "followers_proxy": store.followers_for(pilot.id),
         "long_only": pilot.long_only,
+        "followable": getattr(pilot, "followable", True),
     }
 
 
@@ -2274,6 +2280,14 @@ def get_strategy_matrix() -> Dict[str, Any]:
     return payload
 
 
+@app.get("/strategy/report-card", dependencies=[Depends(require_read_token)])
+def get_strategy_report_card() -> List[Dict[str, Any]]:
+    """Performance grades and metrics for EVERY catalog Pilot's underlying
+    validated strategy. Surfaces the full suite of out-of-sample metrics from
+    the latest validation report."""
+    return strategy_report_card.strategy_report_card_rows()
+
+
 @app.get("/strategy/health", dependencies=[Depends(require_read_token)])
 def get_strategy_health() -> List[Dict[str, Any]]:
     """Deployability-gate breakdown for EVERY catalog Pilot — a bird's-eye view
@@ -2545,10 +2559,15 @@ def list_follows() -> List[Dict[str, Any]]:
 @app.put("/follows", dependencies=[Depends(require_command_token)])
 def upsert_follow(body: FollowUpsertRequest) -> Dict[str, Any]:
     """Create/update a follow. ``amount == 0`` cancels it. 404 on unknown
-    Pilot. Returns the updated follow row."""
+    Pilot; 400 if attempting to actually allocate (``amount > 0``) to a
+    non-followable Pilot — cancelling (``amount == 0``) is always allowed
+    regardless of ``followable``, so an existing follow can still be zeroed
+    out. Returns the updated follow row."""
     pilot = catalog.get_pilot(body.pilot_id)
     if pilot is None:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
+    if body.amount > 0.0 and not pilot.followable:
+        raise HTTPException(status_code=400, detail=_NOT_FOLLOWABLE_DETAIL)
     follow = FollowsStore().upsert(body.pilot_id, body.amount)
     return {"follow": follow}
 
@@ -2559,14 +2578,21 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
     gated, paper-first dry-run order queue via ``pilots.mirror.plan_follow``.
 
     Order (auth is already checked by the dependency): 404 unknown Pilot →
-    423 if the kill switch is active → persist the follow → plan the gated
-    queue. Idempotent. When no account snapshot is available the follow is still
-    persisted and a preview-only result (empty ``planned_intents`` + an honest
-    ``note``) is returned rather than a fabricated equity figure (CONSTRAINT #4).
+    400 if the Pilot isn't followable → 423 if the kill switch is active →
+    persist the follow → plan the gated queue. Idempotent. When no account
+    snapshot is available the follow is still persisted and a preview-only
+    result (empty ``planned_intents`` + an honest ``note``) is returned rather
+    than a fabricated equity figure (CONSTRAINT #4).
+
+    ``FollowRequest.amount`` is constrained ``gt=0.0`` (see its definition),
+    so every call here is a genuine "start/increase a follow" — there is no
+    zero-amount/cancel case to carve out, unlike ``PUT /follows`` below.
     """
     pilot = catalog.get_pilot(pilot_id)
     if pilot is None:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
+    if not pilot.followable:
+        raise HTTPException(status_code=400, detail=_NOT_FOLLOWABLE_DETAIL)
 
     ks = GlobalKillSwitch()
     if ks.is_active():

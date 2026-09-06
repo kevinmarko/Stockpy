@@ -294,13 +294,38 @@ export function PilotDetail() {
           marginTop: "var(--s-2)",
         }}
       >
-        <button
-          className="btn btn-primary btn-block"
-          style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: theme.growth + "33 0 8px 24px" }}
-          onClick={() => setShowFollow(true)}
-        >
-          Follow · allocate {pilot.headline.sharpe != null ? `${fmtNum(pilot.headline.sharpe, 2)} Sharpe` : ""}
-        </button>
+        {!pilot.followable ? (
+          // The InfoTip trigger sits BELOW the disabled button, never
+          // wrapping it -- an InfoTip whose own trigger is a real <button>
+          // must not nest a second native <button> inside it (invalid HTML,
+          // breaks keyboard/screen-reader focus).
+          <div style={{ width: "100%" }}>
+            <button
+              className="btn btn-primary btn-block"
+              style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: "none" }}
+              disabled
+              title="This pilot is currently restricted from accepting new allocations."
+            >
+              Follow (Restricted)
+            </button>
+            <div style={{ textAlign: "center", marginTop: "var(--s-1)" }}>
+              <InfoTip
+                triggerClassName="chip"
+                content="This pilot is currently restricted from accepting new allocations."
+              >
+                Why is this restricted?
+              </InfoTip>
+            </div>
+          </div>
+        ) : (
+          <button
+            className="btn btn-primary btn-block"
+            style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: theme.growth + "33 0 8px 24px" }}
+            onClick={() => setShowFollow(true)}
+          >
+            Follow · allocate {pilot.headline.sharpe != null ? `${fmtNum(pilot.headline.sharpe, 2)} Sharpe` : ""}
+          </button>
+        )}
       </div>
 
       {showFollow && (
