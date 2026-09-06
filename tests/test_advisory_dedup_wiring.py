@@ -1,25 +1,29 @@
 """
 tests/test_advisory_dedup_wiring.py
 ====================================
-PR D (performance overhaul) — main_orchestrator.py's advisory-overlay
+PR D (performance overhaul) — pipeline/production_steps.py's advisory-overlay
 ``_eval_one`` closure threads ``precomputed_garch``/``precomputed_forecast``
+(and, since the Forecast_{h}_Is_Fallback disclosure flag, ``precomputed_forecast_is_fallback``)
 into ``engine.advisory.evaluate()`` when ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE``
 is enabled, sourced from the SAME cycle's ``dashboard_df['GARCH_Vol']`` /
-``dashboard_df['Forecast_30']`` that ``run_pipeline()`` already computed.
+``dashboard_df['Forecast_30']`` / ``dashboard_df['Forecast_30_Is_Fallback']``
+that ``run_pipeline()`` already computed.
 
-``_eval_one`` is an inline closure inside ``_main_body`` (not importable), so
-per this codebase's established convention (see ``tests/test_forecast_parallel.py``
-for the identical pattern on the forecasting loop), this file reproduces the
-EXACT wiring logic byte-for-byte and asserts on it directly — the logic under
-test is copy-verified against ``main_orchestrator.py`` line-for-line, not a
-paraphrase.
+``_eval_one`` is an inline closure (not importable), so per this codebase's
+established convention (see ``tests/test_forecast_parallel.py`` for the
+identical pattern on the forecasting loop), this file reproduces the EXACT
+wiring logic byte-for-byte and asserts on it directly — the logic under test
+is copy-verified against ``pipeline/production_steps.py`` line-for-line, not
+a paraphrase.
 
 Covers:
-  * flag OFF (default): precomputed_garch=None, precomputed_forecast=None is
-    passed regardless of what dashboard_df carries for that row -- reproduces
-    pre-PR-D behavior exactly.
+  * flag OFF (default): precomputed_garch=None, precomputed_forecast=None,
+    precomputed_forecast_is_fallback=None is passed regardless of what
+    dashboard_df carries for that row -- reproduces pre-PR-D behavior exactly.
   * flag ON: the row's GARCH_Vol / Forecast_30 values are threaded through
-    verbatim.
+    verbatim; Forecast_30_Is_Fallback is threaded through ONLY when it's an
+    actual bool (a NaN/missing cell degrades to None, never a fabricated
+    True/False -- CONSTRAINT #4).
   * settings default: ADVISORY_REUSE_PIPELINE_COMPUTE is False out of the box.
 """
 
@@ -30,31 +34,46 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Reproduction of main_orchestrator.py's _eval_one precompute-selection logic
-# (mirrors the exact lines added around the `_advisory_evaluate(...)` call).
+# Reproduction of pipeline/production_steps.py's _eval_one precompute-selection
+# logic (mirrors the exact lines added around the `_advisory_evaluate(...)` call).
 # ---------------------------------------------------------------------------
 
 def _select_precomputed(_row: pd.Series, reuse_pipeline_compute: bool):
     """Byte-for-byte reproduction of the precompute-selection block inside
-    main_orchestrator.py's `_eval_one` closure."""
+    pipeline/production_steps.py's `_eval_one` closure (the module this logic
+    actually lives in today — see that file's ForecastingStep/advisory-overlay
+    step for the real source; this test file's own module docstring predates
+    that move and is kept as historical framing, not a live path claim).
+
+    ``_precomputed_forecast_is_fallback`` (added alongside
+    forecasting_engine.py's Forecast_30_Is_Fallback disclosure flag) is the
+    third value: it only ever trusts an ACTUAL bool from the row -- the same
+    cell can also be float('nan') (the row never reached ForecastingStep this
+    cycle) or absent, neither of which discloses anything about fallback
+    status."""
     _precomputed_garch = None
     _precomputed_forecast = None
+    _precomputed_forecast_is_fallback = None
     if reuse_pipeline_compute:
         _precomputed_garch = _row.get('GARCH_Vol')
         _precomputed_forecast = _row.get('Forecast_30')
-    return _precomputed_garch, _precomputed_forecast
+        _raw_pf_fallback = _row.get('Forecast_30_Is_Fallback')
+        _precomputed_forecast_is_fallback = (
+            _raw_pf_fallback if isinstance(_raw_pf_fallback, bool) else None
+        )
+    return _precomputed_garch, _precomputed_forecast, _precomputed_forecast_is_fallback
 
 
 class TestPrecomputeSelectionWiring:
     def test_flag_off_always_passes_none_regardless_of_row_contents(self):
         row = pd.Series({'Symbol': 'AAPL', 'GARCH_Vol': 0.35, 'Forecast_30': 150.0})
-        garch, forecast = _select_precomputed(row, reuse_pipeline_compute=False)
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=False)
         assert garch is None
         assert forecast is None
 
     def test_flag_on_threads_row_values_verbatim(self):
         row = pd.Series({'Symbol': 'AAPL', 'GARCH_Vol': 0.35, 'Forecast_30': 150.0})
-        garch, forecast = _select_precomputed(row, reuse_pipeline_compute=True)
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
         assert garch == pytest.approx(0.35)
         assert forecast == pytest.approx(150.0)
 
@@ -64,7 +83,7 @@ class TestPrecomputeSelectionWiring:
         advisory.evaluate()'s own >0 guard is the actual safety net, but the
         wiring itself must tolerate a missing key too."""
         row = pd.Series({'Symbol': 'AAPL'})  # no GARCH_Vol / Forecast_30 keys
-        garch, forecast = _select_precomputed(row, reuse_pipeline_compute=True)
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
         assert garch is None
         assert forecast is None
 
@@ -75,9 +94,34 @@ class TestPrecomputeSelectionWiring:
         as-is -- advisory.evaluate()'s `> 0` guard (not this selection logic)
         is what correctly rejects it and falls through to a fresh fit."""
         row = pd.Series({'Symbol': 'AAPL', 'GARCH_Vol': 0.0, 'Forecast_30': 0.0})
-        garch, forecast = _select_precomputed(row, reuse_pipeline_compute=True)
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
         assert garch == 0.0
         assert forecast == 0.0
+
+    def test_flag_on_threads_a_real_bool_fallback_flag(self):
+        row = pd.Series({'Symbol': 'AAPL', 'GARCH_Vol': 0.35, 'Forecast_30': 150.0,
+                          'Forecast_30_Is_Fallback': True})
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
+        assert is_fallback is True
+
+    def test_flag_off_fallback_flag_stays_none_regardless_of_row_contents(self):
+        row = pd.Series({'Symbol': 'AAPL', 'Forecast_30_Is_Fallback': True})
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=False)
+        assert is_fallback is None
+
+    def test_flag_on_nan_fallback_cell_degrades_to_none_not_true(self):
+        """A NaN cell (row skipped ForecastingStep entirely this cycle) is
+        truthy in plain Python -- `isinstance(..., bool)` is what keeps this
+        from silently being read as `is_fallback=True`."""
+        row = pd.Series({'Symbol': 'AAPL', 'GARCH_Vol': 0.35, 'Forecast_30': 150.0,
+                          'Forecast_30_Is_Fallback': float('nan')})
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
+        assert is_fallback is None
+
+    def test_flag_on_missing_fallback_column_degrades_to_none(self):
+        row = pd.Series({'Symbol': 'AAPL', 'GARCH_Vol': 0.35, 'Forecast_30': 150.0})
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
+        assert is_fallback is None
 
 
 class TestEvaluateRejectsNonPositivePrecomputedValues:
@@ -99,7 +143,7 @@ class TestEvaluateRejectsNonPositivePrecomputedValues:
         snapshot = _make_account_snapshot()
 
         row = pd.Series({'Symbol': 'TEST', 'GARCH_Vol': 0.0, 'Forecast_30': 0.0})
-        garch, forecast = _select_precomputed(row, reuse_pipeline_compute=True)
+        garch, forecast, is_fallback = _select_precomputed(row, reuse_pipeline_compute=True)
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
@@ -129,6 +173,7 @@ class TestEvaluateRejectsNonPositivePrecomputedValues:
                 symbol="TEST", position=None, market=market, snapshot=snapshot,
                 transactions_store=ts,
                 precomputed_garch=garch, precomputed_forecast=forecast,
+                precomputed_forecast_is_fallback=is_fallback,
             )
 
             # The zero placeholders were rejected -- both engines still fit fresh.

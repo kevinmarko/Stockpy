@@ -155,6 +155,17 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 # context_extras["multifactor_scores"]); None only when unavailable
                 # for this symbol/cycle — never a fabricated 0.0 (CONSTRAINT #4).
                 "garch_vol": _safe_float_or_none(ki.get("garch_vol")),
+                # Disclosure flag (CONSTRAINT #4) for "forecast_30d_pct" above
+                # (and the Forecast_30 dollar price it derives from) --
+                # 1.0 when ForecastingEngine._blend_with_skill had no model
+                # output for the 30-day horizon and fell back to
+                # current_price, 0.0 when a real model contributed, null when
+                # genuinely unknown this cycle (forecast never ran, or a
+                # reused pipeline value arrived with no flag). See
+                # forecasting_engine.py::generate_forecast's
+                # Forecast_30_Is_Fallback and this same key on
+                # main_orchestrator._write_state_snapshot for parity.
+                "forecast_is_fallback": _safe_float_or_none(ki.get("forecast_is_fallback")),
                 "hmm_risk_on": hmm_risk_on_val,
                 "value_z": _safe_float_or_none(ki.get("value_z")),
                 "quality_z": _safe_float_or_none(ki.get("quality_z")),

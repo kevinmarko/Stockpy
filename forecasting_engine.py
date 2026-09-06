@@ -1588,6 +1588,26 @@ class ForecastingEngine:
 
                 results[f'Forecast_{h}'] = blended
 
+                # Disclosure flag (CONSTRAINT #4): when model_forecasts is
+                # empty, _blend_with_skill's ONLY remaining option is to hand
+                # back current_price verbatim -- a real, observed number
+                # (deliberately NOT NaN; see _blend_with_skill's docstring
+                # and generate_forecast's module-level design note) but one
+                # that is, numerically, indistinguishable from a genuine
+                # model-derived prediction to any downstream reader. This
+                # boolean is the seam that lets a caller tell the two apart
+                # without having to change what Forecast_{h} itself contains
+                # -- flipping the value to NaN instead would be actively
+                # worse: pipeline/production_steps.py's vectorized signal
+                # path does `dashboard_df['Forecast_30'].fillna(0.0)`, so a
+                # NaN forecast silently becomes a literal "$0 price target"
+                # fed into cross-sectional scoring -- a far more misleading
+                # fabrication than reusing today's real price. Always set
+                # (True/False), never conditionally omitted, matching this
+                # repo's other *_is_fallback disclosure fields (e.g.
+                # api/data_api.py's default_tickers_is_fallback).
+                results[f'Forecast_{h}_Is_Fallback'] = not bool(model_forecasts)
+
                 # Surface the per-horizon Monte-Carlo p5/p95 confidence band so
                 # downstream (the webapp forecast chart) can draw a cone that
                 # widens with the forecast horizon. These are the SAME bounds

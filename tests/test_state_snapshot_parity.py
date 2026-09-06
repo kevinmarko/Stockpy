@@ -105,6 +105,13 @@ SHARED_SIGNAL_FIELDS = {
     # is structural rather than incidental.
     "symbol_rating_consecutive_bad_cycles",
     "symbol_rating_excluded",
+    # Forecast-fallback disclosure (forecasting_engine.py::generate_forecast's
+    # Forecast_30_Is_Fallback) -- genuinely shared: the advisory writer
+    # sources it from engine.advisory.Recommendation.key_indicators
+    # ("forecast_is_fallback", threaded from Step 6's fc_results), the
+    # orchestrator writer from dashboard_df's Forecast_30_Is_Fallback column
+    # (pipeline/production_steps.py::ForecastingStep).
+    "forecast_is_fallback",
 }
 
 # The four sizing-decomposition fields, tested together below (mirrors _TRIPLET).
@@ -240,6 +247,7 @@ def orchestrator_signals(tmp_path, monkeypatch):
             "Kelly_Target_Post_Regime": 0.0,  # clamp(0.04 * 0.75 * 0.0, ...) == 0.0
             "Sizing_Was_Capped": "Yes",
             "Sizing_Binding_Constraint": "kelly_cap",
+            "Forecast_30_Is_Fallback": True,
         },
         {
             "Symbol": "MSFT",
@@ -252,6 +260,8 @@ def orchestrator_signals(tmp_path, monkeypatch):
             # pipeline (pipeline/production_steps.py defaults these to None,
             # never ""/fabricated False -- see TestSizingGuardrailNullSafety
             # below, which locks in that this must round-trip as null, not false).
+            # Forecast_30_Is_Fallback likewise absent -- mirrors a row that
+            # never reached ForecastingStep (Price was 0/missing this cycle).
         },
     ]
     final_df = pd.DataFrame(rows)
@@ -426,6 +436,56 @@ class TestSizingQuartetNullHonesty:
             raw,
             parse_constant=lambda tok: (_ for _ in ()).throw(ValueError(f"invalid JSON constant: {tok}")),
         )
+
+
+class TestForecastIsFallbackParity:
+    """forecast_is_fallback discloses whether the Forecast_30 price target
+    behind forecast_30d_pct is a genuine model-derived prediction or
+    ForecastingEngine._blend_with_skill's every-model-failed fallback to
+    current_price (see forecasting_engine.py::generate_forecast). Both
+    writers must round-trip True->1.0/False->0.0/absent->null identically."""
+
+    def test_orchestrator_round_trips_true(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "AAPL")
+        assert sig["forecast_is_fallback"] == 1.0
+
+    def test_orchestrator_is_null_when_absent(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "MSFT")
+        assert sig["forecast_is_fallback"] is None
+
+    def test_orchestrator_round_trips_false(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity2.db'}")
+        rows = [{
+            "Symbol": "AAPL", "Action Signal": "BUY", "Price": 150.0,
+            "Forecast_30_Is_Fallback": False,
+        }]
+        mo._write_state_snapshot({"market_regime": "RISK ON"}, pd.DataFrame(rows), ["AAPL"])
+        sig = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"][0]
+        assert sig["forecast_is_fallback"] == 0.0
+        assert sig["forecast_is_fallback"] is not None
+
+    def test_advisory_round_trips_true(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        rec = _recommendation("AAPL", forecast_is_fallback=1.0)
+        result = SimpleNamespace(snapshot=SimpleNamespace(positions={}), recommendations=[rec])
+        ss.write_state_snapshot(result, _macro())
+        sig = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"][0]
+        assert sig["forecast_is_fallback"] == 1.0
+
+    def test_advisory_round_trips_false(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        rec = _recommendation("AAPL", forecast_is_fallback=0.0)
+        result = SimpleNamespace(snapshot=SimpleNamespace(positions={}), recommendations=[rec])
+        ss.write_state_snapshot(result, _macro())
+        sig = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"][0]
+        assert sig["forecast_is_fallback"] == 0.0
+        assert sig["forecast_is_fallback"] is not None
+
+    def test_advisory_is_null_when_absent(self, advisory_signals):
+        # The base fixture rec's key_indicators carries no forecast_is_fallback.
+        sig = advisory_signals[0]
+        assert sig["forecast_is_fallback"] is None
 
 
 class TestSizingGuardrailNullSafety:

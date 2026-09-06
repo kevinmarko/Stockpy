@@ -1630,10 +1630,19 @@ class TestTacticalRangesAndExitSizing:
 
 class TestPrecomputedGarchAndForecast:
     def _run(self, *, precomputed_garch=None, precomputed_forecast=None,
-              garch_fit_value=0.22, forecast_fit_value=105.0):
+              precomputed_forecast_is_fallback=None,
+              garch_fit_value=0.22, forecast_fit_value=105.0,
+              forecast_is_fallback=None):
         """Call evaluate() with heavy engines mocked; return
         (Recommendation, toe_mock, fe_mock, se_mock) so callers can assert on
-        call counts / call kwargs."""
+        call counts / call kwargs.
+
+        ``forecast_is_fallback`` (None/True/False) controls whether the
+        MOCKED fresh fe.generate_forecast() call's stub result carries a
+        Forecast_30_Is_Fallback key at all -- None reproduces a stub with no
+        such key (the pre-existing stubs above), matching a real
+        generate_forecast() call that never reached the per-horizon loop.
+        """
         from engine.advisory import evaluate
         from transactions_store import TransactionsStore
 
@@ -1651,9 +1660,10 @@ class TestPrecomputedGarchAndForecast:
             MockPE.return_value = pe_instance
 
             fe_instance = MagicMock()
-            fe_instance.generate_forecast.return_value = {
-                "Forecast_30": forecast_fit_value, "MC_Target": forecast_fit_value,
-            }
+            _fc_stub = {"Forecast_30": forecast_fit_value, "MC_Target": forecast_fit_value}
+            if forecast_is_fallback is not None:
+                _fc_stub["Forecast_30_Is_Fallback"] = forecast_is_fallback
+            fe_instance.generate_forecast.return_value = _fc_stub
             MockFE.return_value = fe_instance
 
             toe_instance = MagicMock()
@@ -1681,6 +1691,7 @@ class TestPrecomputedGarchAndForecast:
                 transactions_store=ts,
                 precomputed_garch=precomputed_garch,
                 precomputed_forecast=precomputed_forecast,
+                precomputed_forecast_is_fallback=precomputed_forecast_is_fallback,
             )
         return rec, toe_instance, fe_instance, se_instance
 
@@ -1768,6 +1779,55 @@ class TestPrecomputedGarchAndForecast:
         assert fe.generate_forecast.called  # forecast itself still runs fresh (no precomputed_forecast)
         _, kwargs = fe.generate_forecast.call_args
         assert kwargs.get("precomputed_garch_term_structure") is None
+
+
+class TestForecastIsFallbackKeyIndicator:
+    """key_indicators["forecast_is_fallback"] discloses whether forecast_price
+    (and the derived forecast_30d_pct) is a genuine model-derived prediction
+    or ForecastingEngine._blend_with_skill's every-model-failed fallback to
+    current_price -- see forecasting_engine.py::generate_forecast's
+    Forecast_30_Is_Fallback and this class's counterpart in
+    tests/test_state_snapshot_parity.py::TestForecastIsFallbackParity."""
+
+    def _run(self, **kw):
+        return TestPrecomputedGarchAndForecast()._run(**kw)
+
+    def test_fresh_fit_true_is_encoded_as_1(self):
+        rec, toe, fe, se = self._run(forecast_is_fallback=True)
+        assert rec.key_indicators["forecast_is_fallback"] == 1.0
+
+    def test_fresh_fit_false_is_encoded_as_0(self):
+        rec, toe, fe, se = self._run(forecast_is_fallback=False)
+        assert rec.key_indicators["forecast_is_fallback"] == 0.0
+
+    def test_fresh_fit_missing_key_is_nan_not_fabricated(self):
+        """A stub/real generate_forecast() result with no
+        Forecast_30_Is_Fallback key (e.g. an older ForecastingEngine, or a
+        call that raised before reaching the per-horizon loop) must degrade
+        to NaN -- never a fabricated False claiming a real model ran
+        (CONSTRAINT #4)."""
+        rec, toe, fe, se = self._run()  # forecast_is_fallback=None -> no key in the stub
+        assert math.isnan(rec.key_indicators["forecast_is_fallback"])
+
+    def test_precomputed_forecast_threads_its_own_fallback_flag(self):
+        """When ADVISORY_REUSE_PIPELINE_COMPUTE-style reuse skips the fresh
+        fit entirely, the caller's own precomputed_forecast_is_fallback must
+        be threaded through instead of silently reading as unknown."""
+        rec, toe, fe, se = self._run(
+            precomputed_forecast=112.5, precomputed_forecast_is_fallback=True,
+        )
+        assert not fe.generate_forecast.called
+        assert rec.key_indicators["forecast_is_fallback"] == 1.0
+
+    def test_precomputed_forecast_without_flag_is_nan(self):
+        """A caller reusing precomputed_forecast without also supplying
+        precomputed_forecast_is_fallback (e.g. an older call site) must
+        degrade to NaN, never infer False from the price alone -- a real
+        fallback price is numerically indistinguishable from a real
+        forecast, which is exactly the ambiguity this flag exists to
+        resolve."""
+        rec, toe, fe, se = self._run(precomputed_forecast=112.5)
+        assert math.isnan(rec.key_indicators["forecast_is_fallback"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
