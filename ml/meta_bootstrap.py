@@ -65,20 +65,26 @@ META_LABELED_SIGNAL_IDS: tuple[str, ...] = (
     "timeseries_momentum",
     "cross_sectional_momentum",
 )
-# NOTE: ml/forecast_backfill.py's AgenticForecastBackfiller trains its own
-# multi-horizon models (keys like "TSMOM_10d"/"CSMOM_90d") and persists them
-# to ml/models/meta_<model_key>.pkl. Those are NOT MetaLabeler instances (they
-# are raw sklearn/lightgbm classifiers) and their model_key never matches a
-# live SignalModule.name — MetaLabeler.load_latest() globs
-# meta_<signal_id>_<stamp>.pkl and requires the pickle to be a MetaLabeler, so
-# they cannot be (and must not be) added here: doing so would silently no-op
-# (file never found) or crash the load (wrong pickle type), and even if both
-# were fixed, SignalAggregator.aggregate() only ever queries the registry
-# with the two real signal_ids above, so a "TSMOM_10d" entry would just sit
-# unused. The multi-horizon backfill is a standalone research/diagnostic
-# engine (see docs/plans/FORECAST_BACKFILL_PLAN.md) — surfaced via
-# GET /pilots/forecast_backfill and the webapp Forecast Backfill screen, not
-# wired into live position sizing.
+# NOTE: ml/forecast_backfill.py's AgenticForecastBackfiller ALSO trains its
+# own multi-horizon diagnostic models (keys like "timeseries_momentum_10d")
+# and persists them to ml/models/backfill_diag_<model_key>.pkl -- those raw,
+# untyped RandomForestClassifier pickles are NEVER added to
+# META_LABELED_SIGNAL_IDS above and never touch the live gate directly.
+# Instead, ml/forecast_backfill_registry_bridge.py wraps ONE operator-chosen
+# horizon per opted-in signal as a real MetaLabeler, evaluates it via genuine
+# CPCV/DSR/PBO, and (if it clears the deployability gate AND the
+# LIVE_ROW_FEATURE_WHITELIST feature-compatibility check below) registers it
+# under a SEPARATE registry key, meta_labeler_backfill_<signal_id> -- see the
+# second loop in bootstrap_meta_registry() below. This lets the Forecast
+# Backfill screen (GET/POST /pilots/forecast_backfill, the webapp Forecast
+# Backfill screen) extend live meta-label coverage beyond the two AFML-
+# trained signals above, gated behind settings.META_LABELING_BACKFILL_
+# BRIDGE_ENABLED (default False) and an explicit per-signal opt-in
+# (settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS, default empty) -- see
+# docs/plans/FORECAST_BACKFILL_PLAN.md for the full design and its current,
+# honestly-disclosed limitation (the feature-compatibility gate below refuses
+# every one of the 6 eligible signals today, since none of their declared
+# training features are yet present in the live row schema).
 
 
 
@@ -96,6 +102,17 @@ def _is_deployable(model_key: str, registry_data: Dict[str, Any]) -> tuple[bool,
     return (deployable is True, row.get("cpcv_dsr"), row.get("pbo"))
 
 
+# Hand-copied from strategy_engine.py::evaluate_security()'s real per-ticker
+# `row = pd.Series({...})` construction (the exact feature set a MetaLabeler
+# is queried with at live inference, via SignalAggregator -> MetaLabelerRegistry
+# .get_proba()) plus the aggregator's own appended "primary_score" key. There
+# is no dynamic introspection path without executing the strategy engine
+# itself, so this MUST be kept in sync by hand if that row construction ever
+# changes -- a stale whitelist here would either wrongly refuse a genuinely
+# compatible model or (worse) wrongly admit one whose features aren't really
+# all present, silently zero-filling at inference (see
+# MetaLabeler._prepare_X()). tests/test_train_meta_labelers.py cross-checks
+# a live SignalAggregator row shape against this set.
 LIVE_ROW_FEATURE_WHITELIST: frozenset[str] = frozenset([
     "forecast_price",
     "trend_strength",
@@ -121,6 +138,15 @@ LIVE_ROW_FEATURE_WHITELIST: frozenset[str] = frozenset([
     "SMA_200",
     "RSI_2",
     "SMA_5",
+    # Appended by signals/aggregator.py's aggregate() (feat_row["primary_score"]
+    # = output.score) AFTER strategy_engine.py's own `row` is built, immediately
+    # before the meta-labeler is queried -- genuinely part of the live feature
+    # row, not part of `row` itself. Both existing AFML meta-labelers declare
+    # this as a training feature (see ml/registry.yaml's
+    # meta_labeler_timeseries_momentum/meta_labeler_cross_sectional_momentum
+    # `features` lists) -- omitting it here was a real gap, caught by
+    # tests/test_train_meta_labelers.py::test_live_row_feature_whitelist_matches_the_real_live_row.
+    "primary_score",
 ])
 
 def check_feature_compatibility(feature_names: List[str]) -> tuple[bool, List[str]]:

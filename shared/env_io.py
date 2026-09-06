@@ -171,6 +171,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # of this flag's own GUI-writability.
     "FORECAST_BACKFILL_ENABLED",
     "META_LABELING_BACKFILL_BRIDGE_ENABLED",
+    # Non-secret tunables for the bridge above -- neither is a master
+    # enable/execution switch itself (that's the flag above, the
+    # DANGEROUS_KEYS member), so these three are plain ALLOWED_KEYS: which
+    # signals opt in, and the live horizon default/per-signal override.
+    "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS",  # JSON-encoded list[str]; see _JSON_KEYS
+    "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS",
+    "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",  # JSON-encoded dict[str, int]; see _JSON_KEYS
     # Observability / runtime
     "DASHBOARD_REFRESH_SECONDS",
     # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar
@@ -952,6 +959,9 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "DUAL_MOMENTUM_RISKY_ASSETS",
         # Per-regime signal weight overrides (dict[str, dict[str, float]])
         "REGIME_SIGNAL_WEIGHTS",
+        # Forecast Backfill live meta-labeler bridge (ml/forecast_backfill_registry_bridge.py)
+        "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS",  # list[str]
+        "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",  # dict[str, int]
     }
 )
 

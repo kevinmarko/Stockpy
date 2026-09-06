@@ -1191,4 +1191,16 @@ class TestForecastBackfillStep7:
         assert len(files) > 0, "Expected at least one pickle file to be written"
         for f in files:
             assert not f.name.startswith("meta_"), f"Explicit regression: {f.name} starts with 'meta_' and could collide with AFML glob"
-            assert f.name.startswith("backfill_meta_"), f"Expected {f.name} to start with 'backfill_meta_'"
+            # Step 5's diagnostic pickles use "backfill_diag_", NOT
+            # "backfill_meta_" -- that prefix is reserved exclusively for
+            # step_7_register_live_meta_labelers' MetaLabeler-wrapped,
+            # registry-tracked artifacts (see ml/forecast_backfill.py's
+            # comment at this write site). Sharing one glob between the two
+            # would let MetaLabeler.load_latest(signal_id,
+            # prefix="backfill_meta")'s sorted()[-1] pick a raw, untyped
+            # diagnostic classifier over the real registered model.
+            assert f.name.startswith("backfill_diag_"), f"Expected {f.name} to start with 'backfill_diag_'"
+            assert not f.name.startswith("backfill_meta_"), (
+                f"Intra-namespace regression: {f.name} starts with "
+                "'backfill_meta_' and could collide with step 7's registered-model glob"
+            )

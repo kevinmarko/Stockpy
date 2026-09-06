@@ -780,7 +780,17 @@ class AgenticForecastBackfiller:
                 # from part of the data), and would be undefined entirely if
                 # every CPCV fold was skipped/failed, since it is never
                 # assigned outside the loop body.
-                model_path = (_MODELS_DIR / f"backfill_meta_{model_key}.pkl").resolve()
+                # Deliberately NOT "backfill_meta_" -- that prefix is
+                # reserved exclusively for step_7_register_live_meta_labelers'
+                # MetaLabeler-wrapped, registry-tracked artifacts. These are
+                # raw, untyped RandomForestClassifier diagnostic pickles (one
+                # per horizon, unconditional on the bridge flag); sharing the
+                # "backfill_meta_" glob with step 7's output would let
+                # sorted()[-1] pick the wrong (and wrong-typed) file as
+                # "latest" for MetaLabeler.load_latest(signal_id,
+                # prefix="backfill_meta") -- see the regression test in
+                # tests/test_forecast_backfill.py.
+                model_path = (_MODELS_DIR / f"backfill_diag_{model_key}.pkl").resolve()
                 if not is_confined(model_path, _MODELS_DIR.resolve()):
                     raise ValueError(f"Refusing to write model artifact outside {_MODELS_DIR}: {model_path}")
                 with open(model_path, "wb") as f:
@@ -939,7 +949,15 @@ class AgenticForecastBackfiller:
                 "theta_c": self.theta_c
             }
             
-            train_window = f"{dates.min().strftime('%Y-%m-%d')} to {dates.max().strftime('%Y-%m-%d')}"
+            # ml.registry_io.update_model_metrics does `dict(train_window)`,
+            # so this MUST be a dict, not a "start to end" string -- matches
+            # the {start, end, n_dates} shape every other registry entry uses
+            # (see ml/registry.yaml's lgbm_ranker entry).
+            train_window = {
+                "start": dates.min().strftime("%Y-%m-%d"),
+                "end": dates.max().strftime("%Y-%m-%d"),
+                "n_dates": int(pd.Series(dates).nunique()),
+            }
 
             registered, skip_reason = register_backfill_model(
                 signal_id=signal_id,

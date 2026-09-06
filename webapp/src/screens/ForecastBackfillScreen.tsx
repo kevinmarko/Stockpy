@@ -339,7 +339,7 @@ export function ForecastBackfillScreen() {
                                   m.registered ? (
                                     <span style={{ color: theme.growth }}>{m.registry_key}</span>
                                   ) : (
-                                    <span style={{ color: theme.caution }} title={m.skip_reason}>{m.registry_key} (Skipped)</span>
+                                    <span style={{ color: theme.caution }} title={m.skip_reason ?? undefined}>{m.registry_key} (Skipped)</span>
                                   )
                                 ) : "--"}
                               </td>
@@ -364,11 +364,14 @@ export function ForecastBackfillScreen() {
               Primary models generate raw directional signals (+1 for Buy, -1 for Sell).
               Secondary Meta-Labelers learn market environment conditions (volatility regime, RSI, MACD, volume ratio)
               under which primary signals succeed or fail at each horizon, and report out-of-sample accuracy/AUC per
-              model above. This is a research &amp; backfill diagnostic — the models it trains and saves here are
-              a separate artifact from the ones that actually gate live position sizing. A model only reaches the
-              live signal aggregator's confidence gate via <code>scripts/train_meta_labelers.py</code> followed by
-              the deployability-gated <code>bootstrap_meta_registry()</code> startup step (PBO/DSR-checked against
-              <code>ml/registry.yaml</code>), but this screen's models can now reach the live gate for an operator-designated signal/horizon, still PBO/DSR-gated and still subject to a feature-compatibility check.
+              model above. This is primarily a research &amp; backfill diagnostic, but an operator-designated
+              signal/horizon can now optionally be bridged into the same deployability gate that
+              <code>scripts/train_meta_labelers.py</code> feeds via the <code>bootstrap_meta_registry()</code> startup
+              step — PBO/DSR-checked against <code>ml/registry.yaml</code> exactly like every other model, plus a
+              feature-compatibility check unique to this bridge. <strong>As of today that feature-compatibility check
+              refuses every one of the 6 eligible signals</strong>: none of their declared training features are yet
+              present in the live per-ticker feature row, so this bridge is wired and safe but not yet actually active
+              for any signal — see the &quot;Live Registry&quot; column above for the honest per-signal reason.
             </p>
           </section>
         </>

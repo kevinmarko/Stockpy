@@ -1,3 +1,41 @@
+# InvestYo ML Model Registry
+# ===========================
+# Lists production models with their paths, training metadata, and CPCV validation metrics.
+# Updated automatically by the monthly retraining job scripts/retrain_models.py
+# (scheduled via the launchd plist scripts/com.investyo.monthly-retrain.plist).
+#
+# Fields
+# ------
+# role:            what the model does in the pipeline
+# path:            conventional model location, informational only — the runtime loader
+#                  (<Class>.load_latest()) never reads this field; it discovers the model
+#                  by glob-sorting dated ml/models/<prefix>_<YYYYMMDD>.pkl files. See
+#                  artifact_file below for the exact binary behind a given run's metrics.
+# trained_date:    ISO date of most recent training run
+# cpcv_dsr:        Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
+# pbo:             Probability of Backtest Overfitting from CPCV (target < 0.50)
+# n_train:         number of training samples in the most recent run
+# notes:           any caveats, data limitations, or scope restrictions
+# deployable:      true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+# owner:           team or person responsible for the model
+# materiality_tier: experimental, non_material, or material
+#
+# Provenance fields (optional; captured for reproducibility — never affect `deployable`)
+# ----------------------------------------------------------------------------------------
+# artifact_file:   exact dated pickle filename actually written this run (e.g. lgbm_20260706.pkl)
+# hyperparameters: the model's training hyperparameters (dict)
+# train_window:    the data-split window {start, end, n_dates} (dates as YYYY-MM-DD strings)
+# features:        the ordered feature-column list the model trained with (list)
+# cpcv_mean_oos_sharpe:  mean out-of-sample Sharpe across CPCV held-out paths for the
+#                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
+#                  deployable gate)
+# cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
+#                  SAME DSR-selected strategy (never read by the deployable gate). Null for
+#                  meta_labeler_* roles: their CPCV returns are discrete per-event R-multiples
+#                  (see scripts/train_meta_labelers.py::compute_cpcv_metrics), not compoundable
+#                  fractional-of-capital returns, so a compounded-equity-curve drawdown is not a
+#                  meaningful statistic for them.
+
 models:
   lgbm_ranker:
     role: cross_sectional_ranker
@@ -164,8 +202,8 @@ models:
     deployable: false
     notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_timeseries_momentum.
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: ''
-    trained_date: ''
+    path: null
+    trained_date: null
   meta_labeler_backfill_cross_sectional_momentum:
     role: meta_labeler
     owner: TBD
@@ -176,8 +214,8 @@ models:
     deployable: false
     notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_cross_sectional_momentum.
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: ''
-    trained_date: ''
+    path: null
+    trained_date: null
   meta_labeler_backfill_rsi2_mean_reversion:
     role: meta_labeler
     owner: TBD
@@ -188,8 +226,8 @@ models:
     deployable: false
     notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_rsi2_mean_reversion.
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: ''
-    trained_date: ''
+    path: null
+    trained_date: null
   meta_labeler_backfill_sector_quality_rank:
     role: meta_labeler
     owner: TBD
@@ -200,8 +238,8 @@ models:
     deployable: false
     notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_sector_quality_rank.
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: ''
-    trained_date: ''
+    path: null
+    trained_date: null
   meta_labeler_backfill_vrp_premium_selling:
     role: meta_labeler
     owner: TBD
@@ -212,8 +250,8 @@ models:
     deployable: false
     notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_vrp_premium_selling.
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: ''
-    trained_date: ''
+    path: null
+    trained_date: null
   meta_labeler_backfill_options_flow_sentiment:
     role: meta_labeler
     owner: TBD
@@ -224,5 +262,5 @@ models:
     deployable: false
     notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_options_flow_sentiment.
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: ''
-    trained_date: ''
+    path: null
+    trained_date: null

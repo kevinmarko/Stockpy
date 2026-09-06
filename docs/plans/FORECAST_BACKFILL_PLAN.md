@@ -17,6 +17,15 @@ feature compatibility check. The operator must explicitly opt a signal in via `s
 and enable the bridge via `settings.META_LABELING_BACKFILL_BRIDGE_ENABLED`. When both exist, AFML models are
 prioritized over backfill-screen models as a tie-break.
 
+**As of today, the bridge is wired, tested, and safe — but functionally inert for all 6 eligible signals.**
+The feature-compatibility check (`ml.meta_bootstrap.LIVE_ROW_FEATURE_WHITELIST`/`check_feature_compatibility`)
+refuses to register any model whose declared training features aren't fully present in the live per-ticker
+feature row `strategy_engine.py` actually queries a meta-labeler with — and none of the 6 backfill-eligible
+signals' declared `meta_label_features` are fully covered by that row today. A model can pass PBO/DSR and still
+never reach `global_meta_registry` until a separate follow-up widens the live row schema. See each signal's
+own `docs/signals/<name>.md` "Backfill-Screen Live Meta-Labeler Bridge" section for the per-signal registry
+key, chosen live horizon, and this same caveat.
+
 ---
 
 ## Technical Features & Signal Formulations
