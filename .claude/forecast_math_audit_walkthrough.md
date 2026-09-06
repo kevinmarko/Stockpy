@@ -122,6 +122,48 @@ file sets; each also found and fixed real bugs beyond what was asked:
   `scripts/measure_settings_census.py --write` / `scripts/settings_liveness.py --write` for the 3 new
   settings fields.
 
+### Rebase onto origin/main
+
+Before finalizing, `origin/main` had moved 7 commits ahead of this branch's base, two of which
+(`ad68f474`, `ed44bccc`) independently touched the exact same subsystem (`forecast_tracker.py`,
+`forecasting_engine.py`'s tracker-gating, `conftest.py`). Rebased and resolved two real conflicts:
+
+- `docs/architecture/signal-engines.md`: origin/main's copy of the `forecasting_engine.py` bullet had
+  grown further (later, unrelated commits appended more content) while this branch's own copy had
+  already removed the incorrect `(μ − 0.5σ²)` mention (F1's doc fix). Resolved by keeping
+  origin/main's longer, newer text and applying the same one-phrase removal to it, rather than
+  reverting to this branch's shorter, stale copy.
+- `pipeline/production_steps.py`: a genuine intent conflict. This branch's Pass 1 removed
+  `Forecast_30_Prophet_Lower/_Upper` from `ForecastingStep`'s exception-fallback dict (WP8: stop
+  writing MC percentiles under the Prophet name). Independently, origin/main's `ad68f474` had added
+  `Forecast_{10,30,60,90}_Is_Fallback` disclosure flags to that same dict (a real, valuable, unrelated
+  fix). Resolved by keeping both: the mislabeled Prophet columns stay removed, the new fallback-
+  disclosure flags are kept.
+
+Both `conftest.py`'s new autouse fixtures (this branch's `_no_forecast_tracker_due_date_lookup_in_tests`
+and origin/main's `_isolate_forecast_tracker_db_in_tests`) auto-merged cleanly — they patch different
+things (a settings flag vs. the DB path resolver) and coexist without conflict. `docs/settings_field_census.{json,md}`/
+`docs/settings_liveness.json` conflicted trivially (both sides regenerated the same auto-generated
+artifacts independently) — resolved by regenerating fresh against the final merged tree.
+
+### Two pre-existing, out-of-scope failures found during final verification
+
+Both confirmed NOT caused by this branch — `api/pilots_api.py`, `pilots/models.py`, and `ml/registry.yaml`
+are byte-identical to `origin/main` (aside from this branch's own, unrelated F7 `HORIZONS` fix) — and
+left alone rather than chased down:
+
+- `tests/test_runtime_flags.py::TestApplyHappyPath::test_string_values_are_coerced_to_the_field_type` —
+  fails only as part of the full-suite run, passes standalone and as part of its own file's full run.
+  Order-dependent pollution from some other test elsewhere in the ~12,800-test suite, unrelated to the
+  fields this branch touches (`BETA_LOOKBACK_DAYS`/`ADVISORY_ONLY`, not any of the new settings).
+- `tests/test_pilots_api.py::TestModelsRegistry::test_needs_retrain_age_flag_is_consistent_with_trained_date` —
+  `pilots/models.py::_scan_local_artifacts()` scans the real, machine-global
+  `settings.LOCAL_DATA_ROOT / "ml_models"` directory (shared across every worktree/checkout on this
+  machine, per `settings.LOCAL_DATA_ROOT`'s own design) with no test-isolation fixture of its own; some
+  other process/session on this shared machine left it in a state this test doesn't tolerate
+  (`trained_date: ""` instead of `null`/omitted for one entry). Reproducible with zero relation to any
+  file this branch changes.
+
 ### Deliberately not done (disclosed, not silently skipped)
 
 - Interval coverage / CRPS / pinball loss wired to `ForecastTracker`'s own realized rows and surfaced
