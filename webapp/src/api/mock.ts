@@ -1518,7 +1518,7 @@ function _mockForecastBackfillJobStatus(
 ): ForecastBackfillJob {
   const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
   const SECONDS_PER_PHASE = 2;
-  const TOTAL_STEPS = 7;
+  const TOTAL_STEPS = 8;
   const TOTAL_SECONDS = TOTAL_STEPS * SECONDS_PER_PHASE;
   const secondsRemaining = Math.max(
     0,
@@ -1560,8 +1560,11 @@ function _mockForecastBackfillJobStatus(
     phase = "backfilling";
     step = 6;
   } else if (elapsedSeconds < 14) {
-    phase = "exporting";
+    phase = "registry_bridge";
     step = 7;
+  } else if (elapsedSeconds < 16) {
+    phase = "exporting";
+    step = 8;
   } else {
     phase = "exporting";
     step = TOTAL_STEPS;
@@ -6885,25 +6888,61 @@ const FORECAST_SKILL_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD"];
 
 function mockForecastSkillBySymbol(horizon: number): ForecastSkillBySymbol {
   const models = ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
+  const MC_NOMINAL_COVERAGE_PCT = 90.0;
   const rows: ForecastSkillSymbolRow[] = FORECAST_SKILL_SYMBOLS.map(
     (symbol, i) => {
       const rng = seeded(horizon * 7919 + symbol.charCodeAt(0) * 31 + i);
       // One symbol (the last) is deliberately cold-start -- zero history yet,
       // even though it's part of the requested universe -- to exercise the
       // "never silently omit a requested symbol" rendering path in mock mode
-      // too, not just in the backend's own unit tests.
+      // too, not just in the backend's own unit tests. Every *_pct/*_score
+      // field this cold-start symbol carries stays honestly null, mirroring
+      // pilots/observability.py's own "insufficient history" gate.
       if (i === FORECAST_SKILL_SYMBOLS.length - 1) {
-        return { symbol, pending: 0, completed: 0, skill_weights: {} };
+        return {
+          symbol,
+          pending: 0,
+          completed: 0,
+          skill_weights: {},
+          n_by_model: {},
+          decay_pct: null,
+          decay_reason: "No forecast history yet — run the pipeline to accumulate it.",
+          mc_coverage_n: 0,
+          mc_coverage_pct: null,
+          mc_nominal_coverage_pct: MC_NOMINAL_COVERAGE_PCT,
+          mc_interval_score: null,
+          mc_coverage_reason: "No forecast history yet — run the pipeline to accumulate it.",
+        };
       }
       const raw = models.map(() => 0.1 + rng());
       const tot = raw.reduce((a, b) => a + b, 0);
       const skill_weights: Record<string, number> = {};
-      models.forEach((m, j) => (skill_weights[m] = +(raw[j] / tot).toFixed(3)));
+      const n_by_model: Record<string, number> = {};
+      models.forEach((m, j) => {
+        skill_weights[m] = +(raw[j] / tot).toFixed(3);
+        n_by_model[m] = Math.floor(rng() * 80) + 30;
+      });
+      const completed = Math.floor(rng() * 60) + 20;
+      // decay_pct: positive = degrading, negative = improving (see the
+      // helper's own docstring in pilots/observability.py). Symmetric
+      // around 0 so both directions show up across the mocked universe.
+      const decayPct = +((rng() - 0.5) * 20).toFixed(1);
+      const mcCoverageN = Math.floor(rng() * 30) + 5;
+      const mcCoveragePct = +(80 + rng() * 15).toFixed(1);
+      const mcIntervalScore = +(5 + rng() * 25).toFixed(2);
       return {
         symbol,
         pending: Math.floor(rng() * 4) + 1,
-        completed: Math.floor(rng() * 60) + 20,
+        completed,
         skill_weights,
+        n_by_model,
+        decay_pct: decayPct,
+        decay_reason: null,
+        mc_coverage_n: mcCoverageN,
+        mc_coverage_pct: mcCoveragePct,
+        mc_nominal_coverage_pct: MC_NOMINAL_COVERAGE_PCT,
+        mc_interval_score: mcIntervalScore,
+        mc_coverage_reason: null,
       };
     },
   );
@@ -16019,6 +16058,14 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
     timestamp: new Date().toISOString(),
     horizons: [10, 30, 60, 90],
     metrics: {
+      // Live meta-labeler bridge (ml/forecast_backfill_registry_bridge.py)
+      // example rows -- one registered (gate cleared), one blocked (the
+      // feature-compatibility gate's honest, currently-universal outcome
+      // for all 6 eligible signals given today's live row schema -- see
+      // docs/plans/FORECAST_BACKFILL_PLAN.md). Exercising both states here
+      // is the only way mock-mode development (`npm run dev`, no
+      // VITE_USE_MOCK=false) can render the "Live Registry"/"CPCV DSR"/
+      // "PBO" columns and the blocked-with-reason styling at all.
       timeseries_momentum_10d: {
         accuracy: 0.5215,
         auc: 0.542,
@@ -16026,6 +16073,12 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
         n_test: 0,
         split_date: "CPCV",
         is_active: true,
+        cpcv_dsr: 0.968,
+        pbo: 0.31,
+        mean_oos_sharpe: 0.74,
+        registry_key: "meta_labeler_backfill_timeseries_momentum",
+        registered: true,
+        skip_reason: null,
       },
       timeseries_momentum_30d: {
         accuracy: 0.534,

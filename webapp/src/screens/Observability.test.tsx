@@ -193,6 +193,42 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(screen.queryByTestId("forecast-skill-symbol-row")).not.toBeInTheDocument();
   });
 
+  it("renders real (non-null) skill-decay and MC band-coverage values for a symbol with history", async () => {
+    renderScreen();
+    const rows = (await screen.findAllByTestId("forecast-skill-symbol-row")) as HTMLTableRowElement[];
+    const bySymbol = Object.fromEntries(rows.map((r) => [r.cells[0].textContent, r]));
+    // AAPL is not the mock's deliberately cold-start symbol -- it has real
+    // decay_pct/mc_coverage_pct/mc_interval_score values, never "—" or a
+    // blank cell.
+    const decayCell = within(bySymbol.AAPL).getByTestId("forecast-skill-decay-cell");
+    expect(decayCell.textContent).toMatch(/^[+-]?\d+\.\d%$/);
+    const coverageCell = within(bySymbol.AAPL).getByTestId("forecast-skill-mc-coverage-cell");
+    expect(coverageCell.textContent).toMatch(/%/);
+    expect(coverageCell.textContent).toMatch(/target 90%/);
+    expect(coverageCell.textContent).toMatch(/n=\d+/);
+    expect(coverageCell.textContent).toMatch(/Interval score: \$/);
+  });
+
+  it("a cold-start symbol's skill-decay and MC band-coverage cells render the honest reason, never a blank/undefined cell", async () => {
+    renderScreen();
+    const rows = (await screen.findAllByTestId("forecast-skill-symbol-row")) as HTMLTableRowElement[];
+    const bySymbol = Object.fromEntries(rows.map((r) => [r.cells[0].textContent, r]));
+    // AMD is mock.ts's deliberately cold-start symbol -- decay_pct/
+    // mc_coverage_pct/mc_interval_score are all null there.
+    const decayCell = within(bySymbol.AMD).getByTestId("forecast-skill-decay-cell");
+    expect(decayCell.textContent).not.toBe("");
+    expect(decayCell.textContent).not.toMatch(/undefined|null|NaN/);
+    expect(decayCell.textContent).toBe(
+      "No forecast history yet — run the pipeline to accumulate it."
+    );
+    const coverageCell = within(bySymbol.AMD).getByTestId("forecast-skill-mc-coverage-cell");
+    expect(coverageCell.textContent).not.toBe("");
+    expect(coverageCell.textContent).not.toMatch(/undefined|null|NaN/);
+    expect(coverageCell.textContent).toBe(
+      "No forecast history yet — run the pipeline to accumulate it."
+    );
+  });
+
   it("renders the data-latency heatmap rows and KPI strip from the mock", async () => {
     renderScreen();
     expect(await screen.findByText("Data latency")).toBeInTheDocument();

@@ -25,18 +25,27 @@
         against NaN is `False` in Python — `score_option_directive` now also
         reports `probability_available`/`prob_win: None` honestly.
 - [x] WP5 — Transformer volatility labels
-- [~] WP6 — The measurement layer (**partial, deliberately** — see below)
+- [x] WP6 — The measurement layer (**complete** as of the follow-up session)
   - [x] Naive (price-stays-flat) baseline: `MODEL_NAIVE = "naive"`, recorded
         at every horizon via the existing `record_forecasts` call (added to
         a COPY of `model_forecasts`, never entering the blend)
-  - [ ] Interval coverage / CRPS / pinball loss wired to `ForecastTracker`'s
-        own realized rows + Mission Control surface — **deferred**. Needs an
-        additive `forecast_errors` schema change (`forecast_lower`/
-        `forecast_upper` columns) plus new call-site wiring; `pinball_loss`/
-        `interval_coverage` already exist as pure functions in
-        `validation/forecast_accuracy_metrics.py` but aren't wired to real
-        tracker data yet. Left as an explicit, disclosed follow-up rather
-        than a rushed schema migration bundled into the correctness-fix pass.
+  - [x] Interval coverage + a genuine proper scoring rule (built out in a
+        follow-up session, 4 parallel agents against a fixed contract):
+        `forecast_errors` gained additive `forecast_lower`/`forecast_upper`
+        columns; `record_forecasts(model_bounds=...)`; new
+        `ForecastTracker.coverage_report()`/`interval_score_stats()` methods
+        + a shared pure function, `compute_coverage_and_interval_score()`
+        (the Gneiting & Raftery 2007 interval score — deliberately NOT
+        called CRPS, which needs the full predictive distribution this
+        table doesn't persist); `forecasting_engine.py` wired to actually
+        populate the bounds; `pilots/observability.py`'s
+        `forecast_skill_by_symbol_summary` surfaces 5 new fields; rendered
+        in `webapp/src/screens/Observability.tsx`'s
+        `ForecastSkillBySymbolSection`. A synthetic-ground-truth statistical
+        test (`TestCoverageWithKnownGroundTruth`) proves a correctly-
+        calibrated 90% band measures within tolerance and a miscalibrated
+        one is correctly flagged as out-of-tolerance. See the walkthrough's
+        "Follow-up session — WP6 buildout" section for full detail.
   - [ ] `tests/test_forecast_skill_uplift.py`'s uplift experiment stays a
         diagnostic print, NOT converted to a hard alpha assertion — this was
         a DELIBERATE decision by that test's own original author (see its

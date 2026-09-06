@@ -187,3 +187,11 @@ fixes the FMP 5,000-row truncation. Re-run against the full 2005-present window:
 Sharpe=0.217, PBO=0.000, DSR=0.999, MaxDD=17.9%, `deployable=False` (unchanged conclusion —
 Sharpe remains well under the 0.50 gate). See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "FMP
 `historical_eod` 5,000-row cap fixed" entry.
+
+## Backfill-Screen Live Meta-Labeler Bridge
+
+This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
+- **Registry Key**: `meta_labeler_backfill_vrp_premium_selling`
+- **Live Horizon**: 10 days (default)
+- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
+- **Feature-Compatibility Caveat**: This bridge is currently blocked by a strict fail-closed feature compatibility gate. The live `vec_df` schema does not yet contain all features used by the backfill screen during training. Until a separate follow-up widens the live row schema, any model trained for this signal will refuse to register to prevent silent zero-filling during live inference.

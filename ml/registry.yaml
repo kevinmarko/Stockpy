@@ -39,18 +39,18 @@
 models:
   lgbm_ranker:
     role: cross_sectional_ranker
-    owner: "TBD"
-    materiality_tier: "experimental"
+    owner: TBD
+    materiality_tier: experimental
     path: ml/models/lgbm_latest.pkl
     trained_date: '2026-08-24'
     cpcv_dsr: 0.02407823552192498
     pbo: 0.2
     n_train: 450
     deployable: false
-    notes: LightGBM LambdaRank model for cross-sectional return rank prediction. Trained monthly on an
-      expanding window of dashboard_df snapshots via PITFeatureStore. NDCG@1 monitored in CV logs. Weight
-      in settings.SIGNAL_WEIGHTS["lgbm_ranker"] = 0.10 (modest until validated at > 200 out-of-sample
-      dates).
+    notes: LightGBM LambdaRank model for cross-sectional return rank prediction. Trained
+      monthly on an expanding window of dashboard_df snapshots via PITFeatureStore.
+      NDCG@1 monitored in CV logs. Weight in settings.SIGNAL_WEIGHTS["lgbm_ranker"]
+      = 0.10 (modest until validated at > 200 out-of-sample dates).
     artifact_file: lgbm_20260824.pkl
     hyperparameters:
       objective: lambdarank
@@ -102,17 +102,18 @@ models:
     cpcv_mean_oos_max_dd: 0.012760134209014428
   meta_labeler_timeseries_momentum:
     role: meta_labeler
-    owner: "TBD"
-    materiality_tier: "experimental"
+    owner: TBD
+    materiality_tier: experimental
     path: ml/models/meta_timeseries_momentum_latest.pkl
     trained_date: '2026-08-21'
     cpcv_dsr: 6.698769815553169e-45
     pbo: 0.0
     n_train: 16468
     deployable: false
-    notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct). Trained on triple-barrier
-      labels from ml/triple_barrier.py. If predict_proba < settings.META_LABEL_MIN_CONFIDENCE (0.4), the
-      position size for that cycle is zeroed by SignalAggregator.
+    notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct).
+      Trained on triple-barrier labels from ml/triple_barrier.py. If predict_proba
+      < settings.META_LABEL_MIN_CONFIDENCE (0.4), the position size for that cycle
+      is zeroed by SignalAggregator.
     artifact_file: meta_timeseries_momentum_20260821.pkl
     hyperparameters:
       objective: binary
@@ -141,17 +142,17 @@ models:
     cpcv_mean_oos_max_dd: null
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
-    owner: "TBD"
-    materiality_tier: "experimental"
+    owner: TBD
+    materiality_tier: experimental
     path: ml/models/meta_cross_sectional_momentum_latest.pkl
     trained_date: '2026-08-23'
     cpcv_dsr: 5.439908371777128e-08
     pbo: 0.0
     n_train: 16442
     deployable: false
-    notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct). Shares the
-      same triple-barrier label construction and feature set as the timeseries momentum meta-labeler;
-      trained and persisted independently.
+    notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal
+      correct). Shares the same triple-barrier label construction and feature set
+      as the timeseries momentum meta-labeler; trained and persisted independently.
     artifact_file: meta_cross_sectional_momentum_20260823.pkl
     hyperparameters:
       objective: binary
@@ -180,14 +181,86 @@ models:
     cpcv_mean_oos_max_dd: null
   options_meta_labeler:
     role: options_meta_labeler
-    owner: "TBD"
-    materiality_tier: "experimental"
+    owner: TBD
+    materiality_tier: experimental
     path: ml/models/options_meta_labeler_latest.pkl
     trained_date: '2026-08-22'
     cpcv_dsr: null
     pbo: null
     n_train: 0
     deployable: false
-    notes: Options meta labeler for dynamic position sizing and entry filtering based on paper closed
-      trades. Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo are null rather than a
-      fabricated 0.0/1.0 (CONSTRAINT #4); this is "not evaluated," not "evaluated and failed."
+    notes: Options meta labeler for dynamic position sizing and entry filtering based
+      on paper closed trades. Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo
+      are null rather than a fabricated 0.0/1.0 (CONSTRAINT
+  meta_labeler_backfill_timeseries_momentum:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+    deployable: false
+    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_timeseries_momentum.
+      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
+    path: null
+    trained_date: null
+  meta_labeler_backfill_cross_sectional_momentum:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+    deployable: false
+    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_cross_sectional_momentum.
+      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
+    path: null
+    trained_date: null
+  meta_labeler_backfill_rsi2_mean_reversion:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+    deployable: false
+    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_rsi2_mean_reversion.
+      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
+    path: null
+    trained_date: null
+  meta_labeler_backfill_sector_quality_rank:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+    deployable: false
+    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_sector_quality_rank.
+      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
+    path: null
+    trained_date: null
+  meta_labeler_backfill_vrp_premium_selling:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+    deployable: false
+    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_vrp_premium_selling.
+      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
+    path: null
+    trained_date: null
+  meta_labeler_backfill_options_flow_sentiment:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    cpcv_dsr: null
+    pbo: null
+    n_train: 0
+    deployable: false
+    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_options_flow_sentiment.
+      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
+    path: null
+    trained_date: null

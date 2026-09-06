@@ -947,6 +947,124 @@ def _forecast_decay_stats_by_symbol(
     return result
 
 
+# Minimum bounded, completed rows before reporting a real coverage/interval
+# figure for a symbol — deliberately DECOUPLED from the `min_obs` parameter
+# `forecast_skill_by_symbol_summary` receives from its caller (that parameter
+# is scoped to skill-weight blending only). Mirrors
+# ForecastTracker.coverage_report/interval_score_stats's own `min_obs=5`
+# default, since this bulk sibling reproduces those single-symbol methods'
+# exact formula and gating.
+_MC_COVERAGE_MIN_OBS = 5
+
+try:
+    # A default-parameter value is resolved at function-definition (module
+    # import) time, so it can't use this file's usual lazy/inside-function
+    # import style -- but this module's own design invariant (file docstring)
+    # is that a missing/broken forecasting.forecast_tracker must never break
+    # import of THIS module. Falls back to the literal string (identical to
+    # the real constant's value today) rather than letting a broken import
+    # there propagate here.
+    from forecasting.forecast_tracker import MODEL_MONTE_CARLO as _MODEL_MONTE_CARLO_DEFAULT
+except Exception:  # noqa: BLE001 — see comment above
+    _MODEL_MONTE_CARLO_DEFAULT = "monte_carlo"
+
+
+def _forecast_coverage_stats_by_symbol(
+    db_path: str,
+    symbols: List[str],
+    horizon_days: int,
+    window_days: int,
+    model_name: str = _MODEL_MONTE_CARLO_DEFAULT,
+) -> Dict[str, Dict[str, Any]]:
+    """Direct read-only SQL aggregate over ``forecast_errors``, grouped by
+    ``symbol`` — the bulk-query sibling of ``ForecastTracker.coverage_report``/
+    ``interval_score_stats`` (single-symbol), mirroring
+    :func:`_forecast_stats_by_symbol`'s/:func:`_forecast_decay_stats_by_symbol`'s
+    "one bulk query, group in Python" pattern one more time.
+
+    Applies the SAME formula those single-symbol methods delegate to —
+    ``forecasting.forecast_tracker.compute_coverage_and_interval_score`` — per
+    symbol, computed from one bulk result set instead of a per-symbol query
+    loop. Only rows carrying BOTH published bounds are counted (today, only
+    ``monte_carlo`` publishes a prediction interval; every other model is a
+    point forecast and is silently excluded rather than treated as "0%
+    covered" — CONSTRAINT #4).
+
+    Returns ``{symbol: {"n": int, "coverage_pct": float | None,
+    "interval_score": float | None, "reason": str | None}}`` — EVERY
+    requested symbol is present, including one with zero qualifying rows
+    (``n=0``, both values ``None``, an honest reason) — never silently
+    absent. ``coverage_pct`` is on a 0-100 scale (matching this file's
+    existing ``decay_pct`` convention); ``interval_score`` stays in raw price
+    units (not a percentage). Never raises (CONSTRAINT #6) — callers already
+    wrap this in their own try/except, matching
+    :func:`_forecast_decay_stats_by_symbol`'s sibling contract.
+    """
+    import sqlite3
+    from datetime import datetime, timedelta as _timedelta, timezone
+
+    from db_config import sqlite_readonly_uri
+    from forecasting.forecast_tracker import MC_INTERVAL_ALPHA, compute_coverage_and_interval_score
+
+    def _insufficient_reason(n: int) -> str:
+        return f"insufficient_history (n={n} < min_obs={_MC_COVERAGE_MIN_OBS})"
+
+    if not symbols:
+        return {}
+
+    # See _forecast_stats_by_symbol's comment above on the Bandit B608 false
+    # positive — same convention: only `placeholders` (derived from
+    # len(symbols), never symbol VALUES) is interpolated; every real value
+    # flows through parameterized `?` bindings.
+    placeholders = ",".join("?" for _ in symbols)
+    since_iso = (datetime.now(timezone.utc) - _timedelta(days=window_days)).isoformat()
+    conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
+    try:
+        rows = conn.execute(
+            f"""SELECT symbol, actual_price, forecast_lower, forecast_upper
+                FROM forecast_errors
+                WHERE horizon_days    = ?
+                  AND model_name      = ?
+                  AND actual_price    IS NOT NULL
+                  AND forecast_lower  IS NOT NULL
+                  AND forecast_upper  IS NOT NULL
+                  AND forecast_ts     >= ?
+                  AND symbol IN ({placeholders})""",  # nosec B608
+            (horizon_days, model_name, since_iso, *symbols),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    rows_by_symbol: Dict[str, List[Tuple[float, float, float]]] = {}
+    for sym, actual, lo, hi in rows:
+        rows_by_symbol.setdefault(sym, []).append((float(actual), float(lo), float(hi)))
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for sym in symbols:
+        sym_rows = rows_by_symbol.get(sym, [])
+        n = len(sym_rows)
+        if n < _MC_COVERAGE_MIN_OBS:
+            result[sym] = {
+                "n": n,
+                "coverage_pct": None,
+                "interval_score": None,
+                "reason": _insufficient_reason(n),
+            }
+            continue
+
+        coverage, interval_score = compute_coverage_and_interval_score(
+            sym_rows, alpha=MC_INTERVAL_ALPHA
+        )
+        result[sym] = {
+            "n": n,
+            "coverage_pct": coverage * 100.0 if coverage is not None else None,
+            "interval_score": interval_score,
+            "reason": None,
+        }
+
+    return result
+
+
 def forecast_skill_by_symbol_summary(
     snapshot: Optional[dict],
     horizon_days: int = 30,
@@ -1027,6 +1145,19 @@ def forecast_skill_by_symbol_summary(
         logger.debug("forecast_skill_by_symbol_summary: decay query failed: %s", exc)
         decay_by_symbol = {}
 
+    try:
+        coverage_by_symbol = _forecast_coverage_stats_by_symbol(db_path, bounded_symbols, horizon, window)
+    except Exception as exc:  # noqa: BLE001 — dead-letter (missing DB file, etc.)
+        logger.debug("forecast_skill_by_symbol_summary: coverage query failed: %s", exc)
+        coverage_by_symbol = {}
+
+    try:
+        from forecasting.forecast_tracker import MC_NOMINAL_COVERAGE
+    except Exception as exc:  # noqa: BLE001 — see _MODEL_MONTE_CARLO_DEFAULT's comment above
+        logger.debug("forecast_skill_by_symbol_summary: MC_NOMINAL_COVERAGE import failed: %s", exc)
+        MC_NOMINAL_COVERAGE = 0.90
+    mc_nominal_coverage_pct = MC_NOMINAL_COVERAGE * 100.0
+
     rows: List[Dict[str, Any]] = []
     any_history = False
     for sym in bounded_symbols:
@@ -1047,6 +1178,15 @@ def forecast_skill_by_symbol_summary(
                 "decay_reason": "No forecast history yet — run the pipeline to accumulate it.",
             },
         )
+        coverage = coverage_by_symbol.get(
+            sym,
+            {
+                "n": 0,
+                "coverage_pct": None,
+                "interval_score": None,
+                "reason": "No forecast history yet — run the pipeline to accumulate it.",
+            },
+        )
         rows.append(
             {
                 "symbol": sym,
@@ -1056,6 +1196,11 @@ def forecast_skill_by_symbol_summary(
                 "n_by_model": stats.get("n_by_model", {}),
                 "decay_pct": _finite_or_none(decay.get("decay_pct")),
                 "decay_reason": decay.get("decay_reason"),
+                "mc_coverage_n": int(coverage.get("n", 0) or 0),
+                "mc_coverage_pct": _finite_or_none(coverage.get("coverage_pct")),
+                "mc_nominal_coverage_pct": mc_nominal_coverage_pct,
+                "mc_interval_score": _finite_or_none(coverage.get("interval_score")),
+                "mc_coverage_reason": coverage.get("reason"),
             }
         )
 
