@@ -1112,6 +1112,49 @@ class TestFollowAuthorized:
                 )
         assert resp.status_code == 404
 
+    def test_post_follow_non_followable_pilot_400(self, tmp_path):
+        """The `followable` gate that disables the Follow button client-side
+        (PilotDetail.tsx/Comparison.tsx) must also be enforced here — the
+        UI disabling a button is not itself a security boundary, and a
+        direct API call must not be able to persist a follow for a Pilot
+        that is `weights={}` by design (e.g. the options-desk specialist
+        strategies added alongside the Strategy Report Card)."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.post(
+                    "/pilots/iron-condor/follow",
+                    json={"amount": 1000.0},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 400
+        assert "not followable" in resp.json()["detail"]
+
+    def test_put_follows_non_followable_pilot_400(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.put(
+                    "/follows",
+                    json={"pilot_id": "copula-stat-arb", "amount": 500.0},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 400
+        assert "not followable" in resp.json()["detail"]
+
+    def test_put_follows_cancel_non_followable_pilot_still_allowed(self, tmp_path):
+        """`amount == 0` (cancel) must never be blocked by the followable gate
+        — a pre-existing follow (e.g. one created before this fix shipped)
+        must always be cancellable regardless of the Pilot's current
+        followable state."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.put(
+                    "/follows",
+                    json={"pilot_id": "iron-condor", "amount": 0.0},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 200
+        assert resp.json()["follow"]["amount"] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # Backend analytics surfaces (zero-PWA-gap): realized P&L, alerts, forecast
