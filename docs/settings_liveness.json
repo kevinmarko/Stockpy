@@ -1953,7 +1953,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "scripts/export_notebooklm.py:55",
+        "site": "scripts/export_notebooklm.py:152",
         "via": []
       }
     ],
