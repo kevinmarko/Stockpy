@@ -58,3 +58,21 @@ $$h(u \mid v) = \frac{\partial C(u, v)}{\partial v} = P(U \le u \mid V = v)$$
 - **Known Failure Modes**:
   1. Structural break in cointegration due to M&A, regulatory shock, or corporate bankruptcy.
   2. Sustained divergence exceeding margin tolerance when volatility regimes transition from calm to credit crisis. **Measured, not just theoretical**: the KO/PEP validation's single worst day (-21.4% intra-strategy drawdown) occurred 2008-10-13, during the global financial crisis.
+- **Options-selling tail-scenario stress gate: not applicable (addendum, 2026-09)**. CLAUDE.md's
+  "Options-selling strategies carry an additional tail-scenario stress gate" rule does not apply
+  to this strategy — it was never wired into `_resolve_options_selling_stress_fn`
+  (`scripts/refresh_validations.py`), and this is a deliberate exclusion, not an oversight.
+  Confirmed by reading the actual trade-construction code, not inferred from the module living
+  under the "options desk" umbrella of `.claude/giant_master_plan.md`'s Phase 21: `execute_copula_spread_trade`
+  buys/sells **shares** of `symbol_y`/`symbol_x` (the pair's two legs) via
+  `PaperAccountStore.apply_multi_leg_fill` — no options contract is ever constructed, priced, or
+  written anywhere in `pilots/copula_stat_arb.py` (see that function's own inline comment: "`qty`
+  here is SHARES, not options contracts"). It is likewise absent from
+  `PAPER_BROKER_OPTIONS_STRATEGIES` in `scripts/refresh_validations.py`, which enumerates every
+  strategy that actually sells option premium in the live Paper Broker. The strategy's real risk
+  (cointegration breakdown between two equity legs, measured above via the 2008 GFC drawdown) is
+  already captured by the standard PBO/DSR/Sharpe/MaxDD deployability gate; the tail-stress
+  addendum measures a different, options-specific risk (short-premium blowup in a dated shock
+  window) that this strategy cannot incur because it never sells premium. See
+  `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-19 entry (addended 2026-09) for the same
+  reasoning recorded alongside the measured numbers.
