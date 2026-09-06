@@ -15,6 +15,7 @@ const mockScenarioData: ScenarioMatrixResponse = {
   iv_shifts: [-0.20, 0, 0.20],
   time_slices: [0, 7, 14, 21],
   current_portfolio_value: 100000,
+  positions_count: 3,
   matrix: [
     {
       spot_shift_pct: 0,
@@ -108,7 +109,7 @@ describe("ScenarioHeatmap", () => {
     const lehmanCard = screen.getByText("Lehman Crash");
     fireEvent.click(lehmanCard);
 
-    expect(screen.getByText(/Impact: -3.50% Equity Shock/i)).toBeInTheDocument();
+    expect(screen.getByText(/Impact: -3.50% of Position Value/i)).toBeInTheDocument();
   });
 
   it("omits the spot price parenthetical in the hover strip when spot_price is absent (multi-ticker book)", () => {
@@ -128,6 +129,31 @@ describe("ScenarioHeatmap", () => {
     expect(scenarioStrong?.textContent).not.toContain("$undefined");
     expect(scenarioStrong?.textContent).not.toContain("$NaN");
     expect(scenarioStrong?.textContent).toContain("Spot +0%");
+  });
+
+  it("shows an honest empty state instead of an all-zero grid when positions_count is 0", () => {
+    const emptyBookData: ScenarioMatrixResponse = {
+      ...mockScenarioData,
+      positions_count: 0,
+      current_portfolio_value: 0,
+      matrix: mockScenarioData.matrix.map((c) => ({ ...c, portfolio_value: 0, pnl_dollar: 0, pnl_pct: 0 })),
+    };
+
+    render(<ScenarioHeatmap initialData={emptyBookData} />);
+
+    expect(screen.getByText(/No open positions to stress-test/i)).toBeInTheDocument();
+    // The heatmap grid/controls must NOT render in this state -- a full grid
+    // of honest zeros still looks like a real (working) result otherwise.
+    expect(screen.queryByText("Today (T+0)")).not.toBeInTheDocument();
+    expect(screen.queryByText("P&L ($)")).not.toBeInTheDocument();
+  });
+
+  it("still renders the full grid when positions_count is undefined (older/uninstrumented response)", () => {
+    const { positions_count, ...withoutPositionsCount } = mockScenarioData;
+    render(<ScenarioHeatmap initialData={withoutPositionsCount as ScenarioMatrixResponse} />);
+
+    expect(screen.getByText(/Multi-Dimensional Scenario Matrix/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No open positions to stress-test/i)).not.toBeInTheDocument();
   });
 
   it("triggers refresh callback", async () => {

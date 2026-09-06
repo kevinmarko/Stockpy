@@ -599,6 +599,11 @@ def to_scenario_matrix_response(result: Dict[str, Any]) -> Dict[str, Any]:
             _preset_to_frontend_shape(preset) for preset in result["historical_presets"].values()
         ],
         "current_portfolio_value": result["baseline"]["portfolio_market_value"],
+        # Additive-only field: lets the frontend distinguish a genuinely-flat
+        # (zero open positions) book from a real stress result -- both look
+        # identical as an all-zero grid otherwise. See
+        # docs/known_issues/scenario_matrix_field_mismatch.md's follow-up note.
+        "positions_count": result["baseline"]["positions_count"],
     }
 
 

@@ -40,7 +40,33 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
     return null;
   }
 
-  const { spot_shifts, iv_shifts, time_slices, matrix, historical_scenarios, current_portfolio_value } = matrixData;
+  const { spot_shifts, iv_shifts, time_slices, matrix, historical_scenarios, current_portfolio_value, positions_count } = matrixData;
+
+  // A book with zero open positions has nothing to stress-test -- every cell
+  // in the grid below is honestly $0 (correct math), but rendered without
+  // this check it looks identical to a real, working stress test that just
+  // happens to show no exposure. Show an explicit empty state instead.
+  if (positions_count === 0) {
+    return (
+      <div
+        style={{
+          background: theme.surface,
+          borderRadius: 8,
+          border: `1px solid ${theme.border}`,
+          padding: 24,
+          textAlign: "center",
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>
+          🗺️ Multi-Dimensional Scenario Matrix &amp; Stress Grid
+        </div>
+        <div style={{ fontSize: 13, color: theme.textSecondary }}>
+          No open positions to stress-test. Open an equity or options position and refresh to see spot/IV/time
+          shock projections here.
+        </div>
+      </div>
+    );
+  }
 
   // Filter cells by selected days_forward
   const currentCells = matrix.filter((c) => c.days_forward === selectedTimeSlice);
@@ -211,8 +237,9 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
             </button>
           ))}
         </div>
-        <div style={{ fontSize: 12, color: theme.textMuted }}>
-          Current Portfolio Equity: ${current_portfolio_value.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+        <div style={{ fontSize: 12, color: theme.textMuted }} title="Sum of open position market values used as the stress-test baseline. Excludes cash -- not the same as total account equity.">
+          Position Value (Stress Basis): $
+          {current_portfolio_value.toLocaleString("en-US", { minimumFractionDigits: 2 })}
         </div>
       </div>
 
@@ -351,7 +378,7 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
             </strong>
           </div>
           <div>
-            <span style={{ color: theme.textSecondary }}>Portfolio Value: </span>
+            <span style={{ color: theme.textSecondary }}>Position Value: </span>
             <strong>${hoveredCell.portfolio_value.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 12, color: theme.textMuted }}>
@@ -401,7 +428,7 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
                   </div>
                   <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3 }}>{sc.description}</div>
                   <div style={{ fontSize: 10, color: theme.decline, marginTop: 4, fontWeight: 500 }}>
-                    Impact: {(sc.projected_pnl_pct * 100).toFixed(2)}% Equity Shock
+                    Impact: {(sc.projected_pnl_pct * 100).toFixed(2)}% of Position Value
                   </div>
                 </div>
               );

@@ -12899,6 +12899,10 @@ export const mockApi = {
       matrix,
       historical_scenarios,
       current_portfolio_value,
+      // Mock's happy path represents a book with open positions (non-zero
+      // current_portfolio_value/P&L above) -- keep positions_count consistent
+      // with that rather than the honest 0 a truly empty account would report.
+      positions_count: 3,
     });
   },
   async getDeltaHedgePreview() {
