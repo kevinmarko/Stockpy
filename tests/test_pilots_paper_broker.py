@@ -1556,6 +1556,7 @@ class TestOptionsDispersionEndpoints:
         assert body["count"] == 1
         assert body["opportunities"][0]["index_symbol"] == "SPY"
 
+    @pytest.mark.network
     def test_get_dispersion_opportunities_fail_open_without_token(self):
         with mock_patch_settings(STATE_API_TOKEN=""):
             resp = _client.get("/pilots/options/dispersion/opportunities")
