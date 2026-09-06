@@ -524,6 +524,7 @@ def evaluate(
     strategy_engine: Optional[Any] = None,
     precomputed_garch: Optional[float] = None,
     precomputed_forecast: Optional[float] = None,
+    precomputed_forecast_is_fallback: Optional[bool] = None,
     historical_store: Optional[Any] = None,
 ) -> Recommendation:
     """Produce a holding-aware advisory recommendation for ``symbol``.
@@ -591,6 +592,17 @@ def evaluate(
         original independent fit (CONSTRAINT #6: this can only ever remove a
         redundant fit, never silently substitute a bad one). ``None`` (the
         default for every caller today) reproduces pre-dedup behavior exactly.
+    precomputed_forecast_is_fallback : bool or None (keyword-only)
+        Companion disclosure flag for ``precomputed_forecast`` — whether the
+        orchestrator's own ``ForecastingEngine.generate_forecast()`` call this
+        cycle had to fall back to ``current_price`` for every model on that
+        horizon (see ``forecasting_engine.py``'s ``Forecast_30_Is_Fallback``
+        and ``key_indicators["forecast_is_fallback"]`` below). ``None`` when
+        the caller didn't reuse pipeline compute, or genuinely doesn't know
+        (e.g. the dashboard column was NaN, not a real bool) — never inferred
+        from ``precomputed_forecast``'s own value, since a real fallback price
+        is numerically indistinguishable from a real forecast (that's exactly
+        the ambiguity this flag exists to resolve).
     historical_store : HistoricalStore or None (keyword-only)
         Optional pre-built ``data.historical_store.HistoricalStore`` instance,
         analogous to the other engine injection params.  When ``None`` (the
@@ -827,8 +839,18 @@ def evaluate(
     # falls straight through to the original fresh-fit path (dead-letter safe).
     # ──────────────────────────────────────────────────────────────────────────
     forecast_price: Optional[float] = None
+    # Disclosure companion for forecast_price (CONSTRAINT #4) -- True when
+    # the forecast behind forecast_price is known to be every-model-failed
+    # ForecastingEngine._blend_with_skill fallback to current_price rather
+    # than a genuine model-derived prediction; False when a real model
+    # contributed; None when unknown (fresh fit never ran, or a reused
+    # pipeline value arrived with no flag attached). See
+    # forecasting_engine.py::generate_forecast's Forecast_{h}_Is_Fallback
+    # for why the underlying price itself stays current_price, not NaN.
+    forecast_is_fallback: Optional[bool] = None
     if precomputed_forecast is not None and precomputed_forecast > 0:
         forecast_price = float(precomputed_forecast)
+        forecast_is_fallback = precomputed_forecast_is_fallback
     elif has_sufficient_history:
         try:
             # Opt-in inverse-RMSE skill-weighted blending (default OFF → tracker
@@ -847,6 +869,8 @@ def evaluate(
             )
             raw_f30 = fc_results.get("Forecast_30", 0.0)
             forecast_price = float(raw_f30) if raw_f30 and raw_f30 > 0 else None
+            _raw_fallback_flag = fc_results.get("Forecast_30_Is_Fallback")
+            forecast_is_fallback = _raw_fallback_flag if isinstance(_raw_fallback_flag, bool) else None
         except Exception as exc:
             logger.warning("advisory[%s]: forecast failed — %s", symbol, exc)
             partial_flags.append("forecast_failed")
@@ -1313,6 +1337,16 @@ def evaluate(
         "rs_vs_spy": _safe_float(tech.get("RS vs SPY"), nan),
         "garch_vol": _safe_float(garch_vol, nan),
         "forecast_30d_pct": forecast_30d_pct,
+        # Disclosure flag (CONSTRAINT #4) for forecast_price/forecast_30d_pct
+        # above -- encoded 1.0/0.0 (not a bool), same convention as
+        # kelly_raw_was_capped below, since every key_indicators value is
+        # passed through math.isnan(). NaN (never a fabricated 0.0) when the
+        # fallback status genuinely isn't known for this cycle -- see
+        # forecast_is_fallback's own docstring a few lines above Step 12.
+        "forecast_is_fallback": (
+            nan if forecast_is_fallback is None
+            else (1.0 if forecast_is_fallback else 0.0)
+        ),
         "unrealized_pl_pct": unrealized_pl_pct,
         "dividend_yield": dividend_yield,
         # REUSE: surface the liquidity ratio (Agent 2 added dto.current_ratio to
