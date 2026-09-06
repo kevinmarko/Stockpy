@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 360,
+    "live_safe": 363,
     "no_op": 5,
     "restart_required": 96,
-    "total": 461
+    "total": 464
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 449,
+  "files_scanned": 450,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -274,13 +274,16 @@
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
+    "FORECAST_DRIFT_SHRINKAGE",
     "FORECAST_MAX_CONCURRENCY",
+    "FORECAST_MC_RANDOM_SEED",
     "FORECAST_MODEL_PERSISTENCE_ENABLED",
     "FORECAST_MODEL_RETRAIN_DAYS",
     "FORECAST_PROPHET_WEIGHT",
     "FORECAST_SKILL_MIN_OBS",
     "FORECAST_SKILL_WEIGHTING_ENABLED",
     "FORECAST_SKILL_WINDOW_DAYS",
+    "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",
     "FORECAST_USE_GARCH_SIGMA",
     "FRED_KEY_ROTATED_DATE",
     "FRED_REQUEST_TIMEOUT_SECONDS",
@@ -511,15 +514,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 932,
+    "attr": 933,
     "factory_param": 4,
-    "getattr_const": 381,
+    "getattr_const": 384,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 282,
     "factory_param": 4,
-    "getattr_const": 217,
+    "getattr_const": 220,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -963,7 +966,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "forecasting/forecast_tracker.py:216",
+        "site": "forecasting/forecast_tracker.py:225",
         "via": []
       },
       {
@@ -2191,6 +2194,15 @@
         "discarded": false,
         "form": "attr",
         "rules": [
+          "init_body"
+        ],
+        "site": "forecasting/forecast_tracker.py:229",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
           "module_level"
         ],
         "site": "forecasting/model_persistence.py:47",
@@ -3150,7 +3162,7 @@
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 14,
-    "init_body": 12,
+    "init_body": 13,
     "init_self_assign": 51,
     "method_self_assign": 8,
     "module_level": 79,

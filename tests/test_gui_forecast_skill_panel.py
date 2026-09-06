@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 
+import pandas as pd
 import pytest
 
 from forecasting.forecast_tracker import ForecastTracker
@@ -78,8 +79,12 @@ def test_rmse_helper_returns_real_per_model_rmse(tmp_path):
     db = str(tmp_path / "warm.db")
     tracker = ForecastTracker(db_path=db)
 
-    # Forecast 30 days ago so the horizon has elapsed and update_actuals matches.
-    fcast_ts = datetime.now(timezone.utc) - timedelta(days=30)
+    # Forecast far enough back that the full 30-TRADING-day horizon has
+    # elapsed (ForecastTracker.update_actuals's eligibility cutoff is now
+    # `as_of - BDay(horizon_days)`, not a calendar-day offset — see
+    # forecasting/forecast_tracker.py::update_actuals) so update_actuals
+    # actually matches this row.
+    fcast_ts = datetime.now(timezone.utc) - pd.offsets.BDay(31)
     as_of = datetime.now(timezone.utc)
 
     # Single row per model → RMSE == |forecast - actual|, deterministic.

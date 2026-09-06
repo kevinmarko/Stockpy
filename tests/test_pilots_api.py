@@ -6695,12 +6695,17 @@ class TestTransformerForecast:
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
-        for h in ["1d", "5d", "21d", "60d"]:
+        # h=1 was dropped from HORIZONS: a 1-day realized-vol label is
+        # identically zero (std of a single return) and is not a meaningful
+        # training target -- see F7 in
+        # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md.
+        assert "1d" not in body["forecast"]
+        for h in ["5d", "21d", "60d"]:
             assert h in body["forecast"]
             assert isinstance(body["forecast"][h], float)
         assert body["trained_samples"] >= 30
         assert "quantile_forecast" in body
-        for h in ["1d", "5d", "21d", "60d"]:
+        for h in ["5d", "21d", "60d"]:
             assert h in body["quantile_forecast"]
             q_h = body["quantile_forecast"][h]
             assert "q10" in q_h and "q50" in q_h and "q90" in q_h

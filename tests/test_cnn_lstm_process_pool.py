@@ -191,6 +191,7 @@ class TestRealTensorFlowThroughThePool:
     def test_fit_predict_cnn_lstm_completes_through_the_real_pool(self):
         rng = np.random.RandomState(0)
         n_samples, lookback, n_features, n_horizons = 40, 10, 3, 4
+        max_h = 20  # largest forecast horizon Y_seq's columns represent
         X_seq = rng.rand(n_samples, lookback, n_features)
         Y_seq = rng.rand(n_samples, n_horizons)
         last_window = rng.rand(1, lookback, n_features)
@@ -198,7 +199,7 @@ class TestRealTensorFlowThroughThePool:
         try:
             result = pool_mod.run_in_subprocess(
                 fit_predict_cnn_lstm,
-                (X_seq, Y_seq, last_window, n_horizons),
+                (X_seq, Y_seq, last_window, n_horizons, max_h),
                 timeout_seconds=60,
                 max_workers=1,
             )

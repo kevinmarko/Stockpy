@@ -11394,8 +11394,12 @@ export const mockApi = {
     if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol);
     const sym = symbol.toUpperCase();
     const baseVol = 0.15 + (sym.length % 5) * 0.02;
-    const horizons = ["1d", "5d", "21d", "60d"];
-    const horizonDays: Record<string, number> = { "1d": 1, "5d": 5, "21d": 21, "60d": 60 };
+    // Matches the live backend's HORIZONS (api/pilots_api.py) -- "1d" was
+    // dropped there because a 1-day realized-vol label computed as std()
+    // of a single return is identically zero by construction, never a
+    // meaningful training target. Keep this list in sync with the API.
+    const horizons = ["5d", "21d", "60d"];
+    const horizonDays: Record<string, number> = { "5d": 5, "21d": 21, "60d": 60 };
     const forecast: Record<string, number> = {};
     const quantile_forecast: Record<string, { q10: number; q50: number; q90: number }> = {};
 

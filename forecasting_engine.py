@@ -174,7 +174,7 @@ class ForecastingEngine:
     # CORE MODELS
     # =========================================================================
     
-    def run_monte_carlo(self, start_price: float, mu: float, sigma: float, days_forward: int, simulations: int = 1000):
+    def run_monte_carlo(self, start_price: float, mu: float, sigma: float, days_forward: int, simulations: int = 4000, seed: Optional[int] = None):
         """
         Runs Geometric Brownian Motion simulations.
 
@@ -182,32 +182,60 @@ class ForecastingEngine:
         IMPORTANT: mu and sigma MUST be expressed as DAILY values (i.e. daily log-return
         mean and std). If annualized values are passed, drift will be 252x too large.
 
-        Formula: S_T = S_0 * exp((mu - 0.5*sigma^2)*T + sigma*sqrt(T)*Z), Z ~ N(0,1)
+        Formula: S_T = S_0 * exp(mu*T + sigma*sqrt(T)*Z), Z ~ N(0,1)
 
-        The Ito drift correction (mu - 0.5*sigma^2) is mandatory to prevent upward bias
-        in the expected terminal price (prevents naive flatline / drift collapse).
+        ``mu`` here is the mean of the log-returns themselves (e.g.
+        ``log_returns.mean()``), which already sits ``-0.5*sigma^2`` below the
+        arithmetic-return drift by construction (Jensen's inequality / Ito).
+        Subtracting ``0.5*sigma^2`` a second time here was a double
+        correction that systematically depressed every Monte Carlo band --
+        see docs/known_issues/forecast_ito_double_correction_and_horizon_units.md
+        (F1). ``E[S_T] = S_0 * exp((mu + 0.5*sigma^2)*T)``, which is a
+        consequence of this formula (lognormal mean), not something to
+        subtract out of the simulated path.
         """
         try:
+            from settings import settings as _settings
             if days_forward <= 0 or simulations <= 0:
                 return start_price, start_price, start_price
 
             # F-05 GUARD: if mu looks annualized (|mu| >> typical daily range),
             # normalize to daily to prevent silent 252x drift explosion.
+            # Decoupled checks for mu and sigma so a corrupted sigma doesn't
+            # silently ride along un-normalized just because mu looked fine
+            # (and vice versa) -- each is tested and scaled independently.
             if abs(mu) > 0.05:
                 logger.warning(
                     f"Monte Carlo: mu={mu:.4f} appears annualized. "
                     f"Normalizing to daily (dividing by 252)."
                 )
-                mu    = mu    / 252
+                mu = mu / 252
+            if sigma > 0.20:
+                logger.warning(
+                    f"Monte Carlo: sigma={sigma:.4f} appears annualized. "
+                    f"Normalizing to daily (dividing by sqrt(252))."
+                )
                 sigma = sigma / np.sqrt(252)
 
             # dt = 1 trading day (mu and sigma are daily)
             dt = 1
 
-            # Ito structural drift: (mu - 0.5*sigma^2) per day — prevents naive upward bias
-            daily_drift     = (mu - 0.5 * sigma ** 2) * dt            # scalar, per day
-            shock           = np.random.normal(0, 1, (simulations, days_forward))
-            daily_diffusion = sigma * np.sqrt(dt) * shock             # shape: (sims, days)
+            # Drift shrinkage (settings.FORECAST_DRIFT_SHRINKAGE, default 0.0 =
+            # no-op): a modelling choice, not a bug fix -- see the setting's
+            # own docstring for why the measured mean is far noisier than the
+            # measured variance over a typical lookback.
+            shrinkage = float(getattr(_settings, "FORECAST_DRIFT_SHRINKAGE", 0.0) or 0.0)
+            mu = mu * (1.0 - shrinkage)
+
+            # The mean of log returns is mu -- the terminal log-return is
+            # drawn from N(mu*T, sigma^2*T), so the drift term is simply mu,
+            # not (mu - 0.5*sigma^2) (see the docstring above for why).
+            daily_drift = mu * dt
+
+            mc_seed = seed if seed is not None else getattr(_settings, "FORECAST_MC_RANDOM_SEED", None)
+            rng = np.random.default_rng(mc_seed)
+            shock = rng.normal(0, 1, (simulations, days_forward))
+            daily_diffusion = sigma * np.sqrt(dt) * shock
 
             # Terminal log-return = sum over T days
             total_log_return = (daily_drift * days_forward) + np.sum(daily_diffusion, axis=1)
@@ -319,15 +347,14 @@ class ForecastingEngine:
                 return None
 
     def forecast_from_hw_fit(self, fitted, days_forward: int, history: np.ndarray) -> float:
-        """Forecasts from a pre-fitted Holt-Winters model. None -> float(history[-1])
-        (matches run_holt_winters_grid_search's terminal fallback)."""
+        """Forecasts from a pre-fitted Holt-Winters model. None -> float('nan')"""
         if fitted is None:
-            return float(history[-1])
+            return float('nan')
         try:
             forecast = fitted.forecast(days_forward)
             return self._get_last_forecast_value(forecast)
         except Exception:
-            return float(history[-1])
+            return float('nan')
 
     def run_holt_winters_grid_search(self, history: np.ndarray, days_forward: int) -> float:
         """
@@ -562,6 +589,7 @@ class ForecastingEngine:
         X_seq: np.ndarray,
         Y_seq: np.ndarray,
         lookback: int,
+        max_h: int,
         val_fraction: float = 0.2,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Purge overlapping windows at the internal train/validation boundary.
@@ -589,9 +617,10 @@ class ForecastingEngine:
         n_total = len(X_seq)
         n_val = max(1, int(round(n_total * val_fraction)))
         val_start = max(0, n_total - n_val)
-        embargo = max(0, lookback - 1)
+        embargo = max(0, lookback - 1 + max_h)
         train_end = val_start - embargo
         if train_end <= 0:
+            logger.warning('Purged split exhausted training data. Falling back to unpurged split, accepting lookahead leak.')
             train_end = val_start
         return X_seq[:train_end], Y_seq[:train_end], X_seq[val_start:], Y_seq[val_start:]
 
@@ -926,7 +955,7 @@ class ForecastingEngine:
                 save_path = keras_path if persistence_enabled else None
                 result = run_in_subprocess(
                     fit_predict_cnn_lstm,
-                    (X_seq, Y_seq, last_window, len(horizons), save_path),
+                    (X_seq, Y_seq, last_window, len(horizons), max(horizons), save_path),
                     timeout_seconds=timeout_seconds,
                     max_workers=pool_workers,
                 )
@@ -953,7 +982,7 @@ class ForecastingEngine:
                 # would leave the last lookback-1 training windows overlapping
                 # the first validation windows almost entirely.
                 X_tr, Y_tr, X_val, Y_val = self.purged_train_val_split(
-                    X_seq, Y_seq, lookback
+                    X_seq, Y_seq, lookback, max(horizons)
                 )
                 model.fit(
                     X_tr, Y_tr,
@@ -1343,6 +1372,13 @@ class ForecastingEngine:
             term_structure = TechnicalOptionsEngine().estimate_gjr_garch_volatility_term_structure(
                 history_df, horizons=horizons
             )
+            # None means "not enough history to measure anything" (CONSTRAINT
+            # #4 -- see the estimator's own docstring); fall straight through
+            # to the flat historical-stdev fallback below rather than
+            # subscripting None, which would still be caught by this try's
+            # except but only incidentally.
+            if term_structure is None:
+                raise ValueError("GARCH term structure unavailable (insufficient history)")
             daily_by_horizon = {h: _annual_to_daily(term_structure.get(h)) for h in horizons}
             if all(v is not None for v in daily_by_horizon.values()):
                 return daily_by_horizon
@@ -1459,7 +1495,7 @@ class ForecastingEngine:
                 results['ARIMA'] = self.forecast_from_arima_fit(arima_fit, target_days)
 
             mc_mean, mc_low, mc_high = self.run_monte_carlo(
-                current_price, mu, mc_sigma_by_horizon[target_days], target_days
+                current_price, mu, mc_sigma_by_horizon[target_days], target_days,
             )
             results['MC_Target'] = mc_mean
             results['MC_Lower'] = mc_low
@@ -1602,9 +1638,19 @@ class ForecastingEngine:
                 blended = self._blend_with_skill(model_forecasts, skill_weights, preferred_model, current_price)
 
                 # Step 2c: persist new forecasts for future validation.
-                if self._tracker is not None and model_forecasts:
+                # A zero-cost naive (price-stays-flat) baseline rides along
+                # in the SAME recorded dict, purely for measurement -- it is
+                # deliberately added to a COPY, never to model_forecasts
+                # itself, so it can never enter the blend above. This is the
+                # "does any model beat a naive random walk?" comparison the
+                # audit found nothing in this codebase could answer (see
+                # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md).
+                recordable_forecasts = dict(model_forecasts)
+                if current_price and current_price > 0:
+                    recordable_forecasts["naive"] = current_price
+                if self._tracker is not None and recordable_forecasts:
                     try:
-                        self._tracker.record_forecasts(symbol, h, model_forecasts, now_utc)
+                        self._tracker.record_forecasts(symbol, h, recordable_forecasts, now_utc)
                     except Exception as _exc:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
 

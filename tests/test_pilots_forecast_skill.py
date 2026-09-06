@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import ast
 import pathlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
 
 from forecasting.forecast_tracker import ForecastTracker, MODEL_ARIMA, MODEL_MONTE_CARLO
@@ -47,7 +48,12 @@ def _point_at(monkeypatch, db_path: str) -> None:
 def _seed_completed(db_path: str, symbol: str, horizon: int, model: str,
                      forecast_price: float, actual_price: float) -> None:
     writer = ForecastTracker(db_path=db_path)
-    ts = datetime.now(timezone.utc) - timedelta(days=horizon + 5)
+    # ForecastTracker.update_actuals's eligibility cutoff is
+    # `as_of - BDay(horizon_days)` (trading days, not calendar days) — see
+    # forecasting/forecast_tracker.py::update_actuals — so the seeded
+    # forecast must be at least `horizon` TRADING days old, not just
+    # `horizon` calendar days old, for update_actuals to match it below.
+    ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 5)
     writer.record_forecasts(symbol, horizon, {model: forecast_price}, ts)
     writer.update_actuals(symbol, horizon, actual_price, datetime.now(timezone.utc))
 

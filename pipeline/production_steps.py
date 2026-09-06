@@ -328,7 +328,15 @@ class OptionsAnalysisStep(PipelineStep):
                 garch_term_structure = toe.estimate_gjr_garch_volatility_term_structure(
                     df_hist, horizons=(1, 10, 30, 60, 90)
                 )
-                vol = garch_term_structure[1]
+                # None means there isn't even enough history to measure a
+                # historical-stdev fallback (CONSTRAINT #4 -- see the
+                # estimator's own docstring). Degrade GARCH_Vol/VRP to NaN
+                # (VRP = current_iv - vol propagates the NaN and correctly
+                # gates the VRP leg closed) rather than letting this whole
+                # per-ticker step crash on `garch_term_structure[1]` and lose
+                # Aroon/Coppock/Chandelier/True_IVR too, none of which depend
+                # on GARCH at all.
+                vol = garch_term_structure[1] if garch_term_structure is not None else float('nan')
                 realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
 
                 as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
@@ -530,8 +538,8 @@ class ForecastingStep(PipelineStep):
                 return ticker, forecasts
             except Exception as ml_err:
                 telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")
-                mu = 0.0002
-                sigma = 0.015
+                mu = float('nan')
+                sigma = float('nan')
                 if history_series is not None and len(history_series) > 1:
                     returns = np.log(history_series / history_series.shift(1)).dropna()
                     mu = float(returns.mean())
@@ -553,8 +561,11 @@ class ForecastingStep(PipelineStep):
                     'Forecast_30': mc_target,
                     'Forecast_60': mc_60,
                     'Forecast_90': mc_90,
-                    'Forecast_30_Prophet_Lower': mc_low,
-                    'Forecast_30_Prophet_Upper': mc_high,
+                    # Deliberately no Forecast_30_Prophet_Lower/_Upper here --
+                    # these are MC percentiles, not Prophet output, and
+                    # writing them under the Prophet name was a mislabeling
+                    # bug fixed as part of the forecast-math audit (see
+                    # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md).
                     # The full ForecastingEngine blew up (ml_err above) and
                     # this whole row is a coarse single-model Monte Carlo
                     # recovery, not the real ARIMA/HW/CNN-LSTM/Prophet

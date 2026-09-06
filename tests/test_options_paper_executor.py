@@ -415,8 +415,12 @@ def test_execute_strategy_directives_uses_real_model_for_gating_and_sizing(
 def test_executor_construction_no_model_file_is_honest_and_non_crashing(
     reset_meta_labeler_singleton, tmp_path
 ):
-    """A fresh install with no trained model on disk must not crash construction,
-    and must keep the honest 0.65/1.0x fallback (CONSTRAINT #6)."""
+    """A fresh install with no trained model on disk must not crash
+    construction, and must decline to score (NaN, never a fabricated
+    number -- CONSTRAINT #4) while still applying the neutral 1.0x sizing
+    (CONSTRAINT #6) rather than either a confident or a blocked outcome."""
+    import math
+
     singleton = reset_meta_labeler_singleton
     singleton.model = None
     singleton.model_path = tmp_path / "does_not_exist.pkl"
@@ -425,8 +429,8 @@ def test_executor_construction_no_model_file_is_honest_and_non_crashing(
     OptionsPaperExecutor(store=store)  # must not raise
 
     assert singleton.model is None
-    assert singleton.predict_probability({"strategy": "Put Credit Spread"}) == 0.65
-    assert singleton.get_sizing_multiplier(0.65) == 1.0
+    assert math.isnan(singleton.predict_probability({"strategy": "Put Credit Spread"}))
+    assert singleton.get_sizing_multiplier(float("nan")) == 1.0
 
 
 def test_execute_strategy_directives_fails_closed_on_ml_scoring_exception(caplog):

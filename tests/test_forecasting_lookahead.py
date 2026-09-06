@@ -332,22 +332,25 @@ class TestPurgedTrainValSplit:
         training window's raw span must not intersect the first validation
         window's raw span at all."""
         lookback = 10
+        max_h = 30
         n_samples = 200
         X_seq = np.arange(n_samples).reshape(-1, 1, 1).repeat(lookback, axis=1)
         Y_seq = np.arange(n_samples).reshape(-1, 1)
 
         X_tr, Y_tr, X_val, Y_val = ForecastingEngine.purged_train_val_split(
-            X_seq, Y_seq, lookback
+            X_seq, Y_seq, lookback, max_h
         )
         assert len(X_tr) > 0 and len(X_val) > 0
 
         last_train_window_idx = len(X_tr) - 1
         first_val_window_idx = n_samples - len(X_val)
-        last_train_span = (last_train_window_idx, last_train_window_idx + lookback)
-        first_val_span = (first_val_window_idx, first_val_window_idx + lookback)
-        assert last_train_span[1] <= first_val_span[0], (
-            f"train window ending at {last_train_span} overlaps the raw row "
-            f"span of the first validation window {first_val_span}"
+        
+        max_train_label_idx = last_train_window_idx + lookback - 1 + max_h
+        min_val_input_idx = first_val_window_idx
+        
+        assert max_train_label_idx < min_val_input_idx, (
+            f"Train label extends to {max_train_label_idx} which leaks into "
+            f"validation input starting at {min_val_input_idx}"
         )
 
     def test_val_fraction_matches_unpurged_boundary(self):
@@ -355,12 +358,13 @@ class TestPurgedTrainValSplit:
         must still be exactly the chronologically-last val_fraction of
         windows, matching Keras's own validation_split semantics."""
         lookback = 5
+        max_h = 10
         n_samples = 100
         X_seq = np.zeros((n_samples, lookback, 1))
         Y_seq = np.zeros((n_samples, 1))
 
         _, _, X_val, _ = ForecastingEngine.purged_train_val_split(
-            X_seq, Y_seq, lookback, val_fraction=0.2
+            X_seq, Y_seq, lookback, max_h, val_fraction=0.2
         )
         assert len(X_val) == 20
 
@@ -369,12 +373,13 @@ class TestPurgedTrainValSplit:
         training set, degrade to the unpurged split rather than raising or
         returning an empty training set."""
         lookback = 60
+        max_h = 30
         n_samples = 5
         X_seq = np.zeros((n_samples, lookback, 1))
         Y_seq = np.zeros((n_samples, 1))
 
         X_tr, Y_tr, X_val, Y_val = ForecastingEngine.purged_train_val_split(
-            X_seq, Y_seq, lookback
+            X_seq, Y_seq, lookback, max_h
         )
         assert len(X_tr) > 0
         assert len(X_val) > 0

@@ -49,8 +49,9 @@ ELSE:
     -10 pts (forecast suggests structural price erosion)
 ```
 
-`forecast_price` is the **blended** 30-day forecast from `ForecastingEngine.generate_forecast()`,
-weighted by inverse-RMSE skill weights from `ForecastTracker` (Tier 2.2). When the
+`forecast_price` is the **blended** 30-day forecast from `ForecastingEngine.generate_forecast()`.
+By default, this is a static blend. Inverse-MSE skill weighting from `ForecastTracker` is an opt-in
+feature behind `FORECAST_SKILL_WEIGHTING_ENABLED`. When enabled and the
 tracker has insufficient history (< 30 completed observations per model), it falls back
 to equal weighting.
 
@@ -60,9 +61,9 @@ to equal weighting.
 
 ## Interaction with the Skill Tracker (Tier 2.2)
 
-The `ForecastTracker` in `forecasting/forecast_tracker.py` records each model's predicted
+When `FORECAST_SKILL_WEIGHTING_ENABLED` is true, the `ForecastTracker` in `forecasting/forecast_tracker.py` records each model's predicted
 price and compares it to the actual price 30 days later. The model with the lowest recent
-RMSE gets the highest ensemble weight. This means:
+MSE gets the highest ensemble weight. This means:
 
 1. Fresh install: all models have equal weight (equal-weighted ensemble).
 2. After 30+ completed predictions: the model with best recent accuracy dominates.

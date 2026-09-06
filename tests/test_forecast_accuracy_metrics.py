@@ -8,6 +8,9 @@ from validation.forecast_accuracy_metrics import (
     naive_one_step_mae,
     rmse,
     rmse_from_errors,
+    interval_coverage,
+    pinball_loss,
+    naive_volatility_baseline,
 )
 from validation.sector_forecast_types import ForecastError
 
@@ -103,3 +106,67 @@ class TestRMSEFromErrors:
 
     def test_empty_is_nan(self):
         assert np.isnan(rmse_from_errors([]))
+
+
+class TestIntervalCoverage:
+    def test_perfect_coverage(self):
+        y_true = np.array([1.5, 2.0, 2.5])
+        y_lower = np.array([1.0, 1.0, 2.0])
+        y_upper = np.array([2.0, 3.0, 3.0])
+        assert interval_coverage(y_true, y_lower, y_upper) == pytest.approx(1.0)
+
+    def test_partial_coverage(self):
+        y_true = np.array([0.5, 2.0, 3.5])
+        y_lower = np.array([1.0, 1.0, 2.0])
+        y_upper = np.array([2.0, 3.0, 3.0])
+        # Only index 1 is covered
+        assert interval_coverage(y_true, y_lower, y_upper) == pytest.approx(1/3)
+
+    def test_shape_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            interval_coverage(np.array([1.0]), np.array([1.0, 2.0]), np.array([1.0, 2.0]))
+
+    def test_nans_dropped_pairwise(self):
+        y_true = np.array([1.5, np.nan, 2.5])
+        y_lower = np.array([1.0, 1.0, 2.0])
+        y_upper = np.array([2.0, 3.0, 3.0])
+        assert interval_coverage(y_true, y_lower, y_upper) == pytest.approx(1.0)
+
+
+class TestPinballLoss:
+    def test_median_is_mae(self):
+        y_true = np.array([1.0, 2.0, 3.0])
+        y_pred = np.array([1.5, 1.5, 3.5])
+        # errors: -0.5, 0.5, -0.5 -> max(0.5e, -0.5e) -> 0.25, 0.25, 0.25 -> mean=0.25
+        # MAE is 0.5, 0.5, 0.5 -> mean=0.5. Pinball loss at 0.5 is half of MAE.
+        assert pinball_loss(y_true, y_pred, 0.5) == pytest.approx(0.25)
+
+    def test_quantile_asymmetry(self):
+        y_true = np.array([1.0])
+        y_pred = np.array([0.0]) # underprediction, e=1.0
+        # alpha=0.9 -> max(0.9*1, -0.1*1) = 0.9
+        assert pinball_loss(y_true, y_pred, 0.9) == pytest.approx(0.9)
+        
+        y_pred2 = np.array([2.0]) # overprediction, e=-1.0
+        # alpha=0.9 -> max(0.9*-1, -0.1*-1) = 0.1
+        assert pinball_loss(y_true, y_pred2, 0.9) == pytest.approx(0.1)
+
+
+class TestNaiveVolatilityBaseline:
+    def test_standard(self):
+        # constant trend prices
+        prices = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
+        # Returns: 0.01, 0.0099, 0.0098, 0.0097, 0.0096
+        # Expected std is non-zero, very small.
+        vol = naive_volatility_baseline(prices)
+        assert vol > 0.0
+        assert np.isfinite(vol)
+
+    def test_degenerate_flat(self):
+        prices = np.full(10, 100.0)
+        # Returns: 0.0, 0.0, ... std is 0.
+        vol = naive_volatility_baseline(prices)
+        assert vol == pytest.approx(1e-9)
+
+    def test_insufficient_data(self):
+        assert naive_volatility_baseline(np.array([100.0])) == pytest.approx(1e-9)

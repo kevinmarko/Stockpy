@@ -8,7 +8,7 @@ Covers:
 * record / update_actuals / get_skill_weights lifecycle.
 * Cold-start: fewer than ``min_obs`` observations → equal weights.
 * Warm path: inverse-RMSE weighting (better model gets higher weight).
-* ``_MIN_RMSE`` guard prevents division-by-zero on perfect predictions.
+* ``_MIN_MSE`` guard prevents division-by-zero on perfect predictions.
 * Missing file / corrupt DB → graceful degradation (returns {}, 0, never raises).
 * Full-horizon boundary: forecast is actualized exactly when its full nominal
   horizon has elapsed, never early (see ``test_not_actualized_before_full_horizon_elapses``).
@@ -19,6 +19,7 @@ Covers:
 """
 
 import math
+import pandas as pd
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -33,8 +34,9 @@ from forecasting.forecast_tracker import (
     MODEL_MONTE_CARLO,
     MODEL_HOLT_WINTERS,
     MODEL_CNN_LSTM,
+    MODEL_NAIVE,
     ALL_MODEL_NAMES,
-    _MIN_RMSE,
+    _MIN_MSE,
     compute_skill_weights_from_stats,
 )
 
@@ -50,7 +52,7 @@ def _make_tracker(tmp_path) -> ForecastTracker:
 
 def _record(tracker: ForecastTracker, symbol="AAPL", horizon=30, **model_prices):
     """Helper to record a set of model prices at a given timestamp."""
-    ts = datetime.now(timezone.utc) - timedelta(days=horizon + 1)  # already past horizon
+    ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 1)  # already past horizon
     tracker.record_forecasts(symbol, horizon, dict(model_prices), ts)
     return ts
 
@@ -60,7 +62,7 @@ def _fill_window(tracker: ForecastTracker, symbol: str, horizon: int, n: int,
     """Insert ``n`` completed observations with controlled errors."""
     base_price = 100.0
     for i in range(n):
-        ts = datetime.now(timezone.utc) - timedelta(days=horizon + 2 + i)
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 2 + i)
         tracker.record_forecasts(symbol, horizon, {
             MODEL_ARIMA: base_price + arima_delta,
             MODEL_MONTE_CARLO: base_price + mc_delta,
@@ -139,6 +141,21 @@ class TestRecordForecasts:
         # Should not raise; logs a warning
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
 
+    def test_naive_baseline_is_a_registered_model_name(self):
+        """MODEL_NAIVE ("naive") is registered alongside the real models so a
+        zero-cost persistence baseline can be recorded and later compared
+        against -- see forecasting_engine.py's generate_forecast, which
+        records it but never adds it to model_forecasts (never blend
+        -eligible)."""
+        assert MODEL_NAIVE == "naive"
+        assert MODEL_NAIVE in ALL_MODEL_NAMES
+
+    def test_naive_baseline_recorded_and_queryable_like_any_other_model(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts("AAPL", 30, {MODEL_NAIVE: 150.0}, ts)
+        assert tracker.pending_count("AAPL", 30) == 1
+
 
 # ---------------------------------------------------------------------------
 # update_actuals
@@ -147,14 +164,14 @@ class TestRecordForecasts:
 class TestUpdateActuals:
     def test_actualizes_past_due_forecasts(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.now(timezone.utc) - timedelta(days=35)  # 35 days ago, horizon 30
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)  # 35 days ago, horizon 30
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
         n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert n == 1
 
     def test_does_not_actualize_recent_forecasts(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.now(timezone.utc) - timedelta(days=10)  # only 10 days ago, horizon 30
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(10)  # only 10 days ago, horizon 30
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
         n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert n == 0
@@ -165,7 +182,7 @@ class TestUpdateActuals:
         tracker = _make_tracker(tmp_path)
         horizon = 30
         # Made exactly `horizon` days ago -> full horizon elapsed, should actualize.
-        ts_due = datetime.now(timezone.utc) - timedelta(days=horizon)
+        ts_due = datetime.now(timezone.utc) - pd.offsets.BDay(horizon)
         tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts_due)
         n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
         assert n == 1
@@ -178,7 +195,7 @@ class TestUpdateActuals:
         the removed ``tolerance_days=5`` default) must stay pending."""
         tracker = _make_tracker(tmp_path)
         horizon = 30
-        ts_too_early = datetime.now(timezone.utc) - timedelta(days=horizon - 5)  # 25 days ago
+        ts_too_early = datetime.now(timezone.utc) - pd.offsets.BDay(horizon - 5)  # 25 days ago
         tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts_too_early)
         n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
         assert n == 0
@@ -186,7 +203,7 @@ class TestUpdateActuals:
 
     def test_idempotent_already_actualized(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.now(timezone.utc) - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
         n1 = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         n2 = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
@@ -196,7 +213,7 @@ class TestUpdateActuals:
     def test_squared_error_written_correctly(self, tmp_path):
         import sqlite3
         tracker = _make_tracker(tmp_path)
-        ts = datetime.now(timezone.utc) - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
         tracker.update_actuals("AAPL", 30, 160.0, datetime.now(timezone.utc))
         with sqlite3.connect(tracker._db_path) as conn:
@@ -211,6 +228,117 @@ class TestUpdateActuals:
         tracker._db_path = "/nonexistent/path/db.sqlite"
         result = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# update_actuals -- F5 due-date-close lookup (settings.
+# FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED, disabled by conftest.py's own
+# autouse fixture by default -- these tests explicitly re-enable it).
+# ---------------------------------------------------------------------------
+
+class TestUpdateActualsDueDateLookup:
+    def test_disabled_by_default_in_this_suite(self):
+        """conftest.py's autouse fixture must have already flipped this off --
+        every other TestUpdateActuals test above relies on that to keep
+        scoring against the passed-in price."""
+        from settings import settings as _settings
+        assert _settings.FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED is False
+
+    def test_actualizes_against_due_date_close_not_todays_price(self, tmp_path, monkeypatch):
+        """F5 fix: a pending row is scored against the close ON ITS OWN due
+        date (forecast_ts + horizon trading bars), not whatever price is
+        passed as `actual_price` when update_actuals happens to run -- e.g.
+        a backlog of several overdue rows previously all got stamped with
+        today's price regardless of how overdue each one was."""
+        from settings import settings as _settings
+        monkeypatch.setattr(_settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", True)
+
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        made_ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 5)  # well past due
+        tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, made_ts)
+
+        made_ts_naive = pd.Timestamp(made_ts).tz_convert(None)
+        due_ts = (made_ts_naive + pd.offsets.BDay(horizon)).normalize()
+        # The real due-date close, deliberately far from both the forecast
+        # (150.0) and the "today" price passed to update_actuals (155.0) --
+        # if the fix regresses to the old today's-price behavior, the
+        # assertion on 999.0 below fails loudly.
+        bars = pd.DataFrame({"Close": [999.0]}, index=[due_ts])
+        fake_store = mock.Mock()
+        fake_store.get_bars.return_value = bars
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=fake_store):
+            n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
+
+        assert n == 1
+        fake_store.get_bars.assert_called_once()
+        import sqlite3
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT actual_price, squared_error FROM forecast_errors WHERE model_name='arima'"
+            ).fetchone()
+        assert row is not None
+        assert abs(row[0] - 999.0) < 0.01
+        assert abs(row[1] - (999.0 - 150.0) ** 2) < 0.01
+
+    def test_falls_back_to_passed_price_when_due_date_close_unresolvable(self, tmp_path, monkeypatch):
+        """A row whose own due-date close can't be resolved (no historical
+        store / no covering bar) still gets actualized -- CONSTRAINT #6,
+        never stranded pending forever over a data gap -- using the legacy
+        passed-in price as its fallback."""
+        from settings import settings as _settings
+        monkeypatch.setattr(_settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", True)
+
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon)
+        tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts)
+
+        with mock.patch("data.historical_store.HistoricalStore", side_effect=RuntimeError("boom")):
+            n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
+
+        assert n == 1
+        import sqlite3
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT actual_price FROM forecast_errors WHERE model_name='arima'"
+            ).fetchone()
+        assert row is not None
+        assert abs(row[0] - 155.0) < 0.01
+
+    def test_uses_nearest_prior_bar_when_exact_due_date_missing(self, tmp_path, monkeypatch):
+        """A due date that pandas' generic BDay calendar lands on but the
+        real exchange calendar has no bar for (e.g. a market holiday) uses
+        the nearest bar AT OR BEFORE the due date -- never one after it,
+        which would be lookahead."""
+        from settings import settings as _settings
+        monkeypatch.setattr(_settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", True)
+
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        made_ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 5)
+        tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, made_ts)
+
+        made_ts_naive = pd.Timestamp(made_ts).tz_convert(None)
+        due_ts = (made_ts_naive + pd.offsets.BDay(horizon)).normalize()
+        prior_bar = due_ts - pd.Timedelta(days=1)
+        later_bar = due_ts + pd.Timedelta(days=1)
+        bars = pd.DataFrame(
+            {"Close": [777.0, 888.0]}, index=[prior_bar, later_bar]
+        )
+        fake_store = mock.Mock()
+        fake_store.get_bars.return_value = bars
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=fake_store):
+            tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc))
+
+        import sqlite3
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT actual_price FROM forecast_errors WHERE model_name='arima'"
+            ).fetchone()
+        assert abs(row[0] - 777.0) < 0.01  # the PRIOR bar, never the later one
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +380,7 @@ class TestGetSkillWeights:
         assert abs(sum(weights.values()) - 1.0) < 1e-9
 
     def test_min_rmse_guard_applied(self, tmp_path):
-        """Perfect model (RMSE=0) should not get infinite weight (clamped to _MIN_RMSE)."""
+        """Perfect model (RMSE=0) should not get infinite weight (clamped to _MIN_MSE)."""
         tracker = _make_tracker(tmp_path)
         # arima_delta=0 → perfect prediction (RMSE=0)
         _fill_window(tracker, "AAPL", 30, n=35, actual=100.0, arima_delta=0.0, mc_delta=5.0)
@@ -273,7 +401,7 @@ class TestGetSkillWeights:
         tracker = _make_tracker(tmp_path)
         import sqlite3
         # Manually insert a completed row with forecast_ts older than 60 days
-        old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - pd.offsets.BDay(90)).isoformat()
         now_iso = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(tracker._db_path) as conn:
             conn.execute(
@@ -313,24 +441,25 @@ class TestComputeSkillWeightsFromStats:
         assert weights == {MODEL_ARIMA: pytest.approx(1.0)}
         assert MODEL_MONTE_CARLO not in weights
 
-    def test_multiple_mature_models_inverse_rmse_weighted(self):
+    def test_multiple_mature_models_inverse_mse_weighted(self):
         """Two mature models, one immature -> the immature model is
-        excluded and the two mature models split inverse-RMSE weight
+        excluded and the two mature models split inverse-MSE weight
         between themselves (not diluted by the immature model)."""
         stats = {
-            MODEL_ARIMA: (30, 1.0),          # RMSE = 1.0
-            MODEL_HOLT_WINTERS: (40, 4.0),   # RMSE = 2.0
+            MODEL_ARIMA: (30, 1.0),          # MSE = 1.0
+            MODEL_HOLT_WINTERS: (40, 4.0),   # MSE = 4.0
             MODEL_MONTE_CARLO: (2, 100.0),   # immature -> excluded
         }
         weights = compute_skill_weights_from_stats(stats, min_obs=10)
         assert MODEL_MONTE_CARLO not in weights
         assert set(weights) == {MODEL_ARIMA, MODEL_HOLT_WINTERS}
-        # arima has the lower RMSE -> should get the larger weight.
+        # arima has the lower MSE -> should get the larger weight.
         assert weights[MODEL_ARIMA] > weights[MODEL_HOLT_WINTERS]
+        assert weights[MODEL_ARIMA] == pytest.approx(4.0 / 5.0)
         assert sum(weights.values()) == pytest.approx(1.0)
 
-    def test_min_rmse_guard_applied_over_mature_subset(self):
-        """A perfect (RMSE=0) mature model is clamped to _MIN_RMSE rather
+    def test_min_mse_guard_applied_over_mature_subset(self):
+        """A perfect (MSE=0) mature model is clamped to _MIN_MSE rather
         than assigned infinite weight."""
         stats = {MODEL_ARIMA: (30, 0.0), MODEL_HOLT_WINTERS: (30, 25.0)}
         weights = compute_skill_weights_from_stats(stats, min_obs=10)
@@ -357,7 +486,7 @@ class TestGetErrorByModel:
         migration), not just RMSE."""
         tracker = _make_tracker(tmp_path)
         for actual in (110.0, 110.0, 90.0):
-            ts = datetime.now(timezone.utc) - timedelta(days=35)
+            ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
             tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, ts)
             tracker.update_actuals("AAPL", 30, actual, datetime.now(timezone.utc))
 
@@ -376,7 +505,7 @@ class TestGetErrorByModel:
         its own AVG(ABS(...)), this would fail."""
         tracker = _make_tracker(tmp_path)
         for actual in (100.0, 100.0, 130.0):
-            ts = datetime.now(timezone.utc) - timedelta(days=35)
+            ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
             tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, ts)
             tracker.update_actuals("AAPL", 30, actual, datetime.now(timezone.utc))
 
@@ -406,7 +535,7 @@ class TestGetErrorByModel:
     def test_window_excludes_old_rows(self, tmp_path):
         tracker = _make_tracker(tmp_path)
         import sqlite3
-        old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - pd.offsets.BDay(90)).isoformat()
         now_iso = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(tracker._db_path) as conn:
             conn.execute(
@@ -433,7 +562,7 @@ class TestGetErrorByModel:
         columns) while get_error_by_model still returns a real MAE."""
         import sqlite3
         tracker = _make_tracker(tmp_path)
-        ts = datetime.now(timezone.utc) - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, ts)
         tracker.update_actuals("AAPL", 30, 108.0, datetime.now(timezone.utc))
 
@@ -461,7 +590,7 @@ class TestCountHelpers:
 
     def test_pending_decreases_after_actualize(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.now(timezone.utc) - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
         tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert tracker.pending_count("AAPL", 30) == 0
@@ -528,7 +657,7 @@ class TestGetCoveredSymbols:
         tracker = _make_tracker(tmp_path)
         now = datetime.now(timezone.utc)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, now)
-        tracker.record_forecasts("MSFT", 30, {MODEL_ARIMA: 300.0}, now - timedelta(days=40))
+        tracker.record_forecasts("MSFT", 30, {MODEL_ARIMA: 300.0}, now - pd.offsets.BDay(35))
         result = tracker.get_covered_symbols(horizon_days=30)
         assert result == ["AAPL"]
         assert "MSFT" not in result
@@ -537,7 +666,7 @@ class TestGetCoveredSymbols:
         tracker = _make_tracker(tmp_path)
         now = datetime.now(timezone.utc)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, now)
-        tracker.record_forecasts("MSFT", 30, {MODEL_ARIMA: 300.0}, now - timedelta(days=40))
+        tracker.record_forecasts("MSFT", 30, {MODEL_ARIMA: 300.0}, now - pd.offsets.BDay(35))
         result = tracker.get_covered_symbols(horizon_days=30, window_days=None)
         assert sorted(result) == ["AAPL", "MSFT"]
 
@@ -644,17 +773,20 @@ class TestBlendWithSkill:
 # ---------------------------------------------------------------------------
 
 class TestModuleSurface:
-    def test_all_model_names_contains_seven_entries(self):
+    def test_all_model_names_contains_eight_entries(self):
         """Extended for the BERT-LLA ablations (lstm_baseline,
-        lstm_attention, bert_lla) alongside the original four."""
-        assert len(ALL_MODEL_NAMES) == 7
+        lstm_attention, bert_lla) alongside the original four, plus the
+        zero-cost naive persistence baseline (WP6 -- see
+        docs/known_issues/forecast_ito_double_correction_and_horizon_units.md)."""
+        assert len(ALL_MODEL_NAMES) == 8
+        assert MODEL_NAIVE in ALL_MODEL_NAMES
 
     def test_model_name_constants_are_strings(self):
         for name in ALL_MODEL_NAMES:
             assert isinstance(name, str)
 
     def test_min_rmse_positive(self):
-        assert _MIN_RMSE > 0
+        assert _MIN_MSE > 0
 
     def test_forecast_tracker_importable_from_package(self):
         from forecasting import ForecastTracker as FT  # noqa: F401
@@ -703,14 +835,15 @@ class TestDefaultDbPathResolvesThroughDbConfig:
     def test_non_sqlite_database_url_falls_back_to_the_historical_literal(self, monkeypatch):
         """This class only ever talks to sqlite (sqlite3.connect(), not
         SQLAlchemy) -- an operator-configured postgresql:// DATABASE_URL
-        can't be honored here, so it degrades to the pre-fix literal rather
+        can't be honored here, so it degrades to the absolute fallback rather
         than raising or silently mis-resolving."""
         monkeypatch.setattr(
             "forecasting.forecast_tracker.resolve_database_url",
             lambda: "postgresql://user:pass@host/db",
         )
         tracker = ForecastTracker()
-        assert tracker._db_path == "quant_platform.db"
+        from settings import settings
+        assert tracker._db_path == str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
 
 
 class TestGetForecastReliabilityCurve:
@@ -725,7 +858,7 @@ class TestGetForecastReliabilityCurve:
         """Record a forecast far enough in the past, then actualize it --
         exercises the real record_forecasts()/update_actuals() API rather
         than raw SQL, matching this file's existing test conventions."""
-        forecast_ts = datetime.now(timezone.utc) - timedelta(days=horizon + 1)
+        forecast_ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 1)
         tracker.record_forecasts(symbol, horizon, {model: forecast_price}, forecast_ts)
         tracker.update_actuals(symbol, horizon, actual_price, datetime.now(timezone.utc))
 

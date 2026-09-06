@@ -135,11 +135,11 @@ def _ensure_meta_labeler_loaded() -> None:
     ``GET /pilots/options/meta-model/status`` endpoint handler
     (``api/pilots_api.py``). A fresh daemon/API process that never happened to hit
     that endpoint scored every real options directive through
-    ``predict_probability()``'s hardcoded 0.65 fallback forever, and
-    ``get_sizing_multiplier(0.65)`` always resolves to exactly 1.0x (edge=0.15
-    exactly cancels the function's -0.15 offset) -- silently turning the
-    "Stage 4 ML gate" into an always-approve, always-full-size no-op even when a
-    genuinely trained model existed on disk at ``model_path``.
+    ``predict_probability()``'s "declined to score" path (``nan``, which
+    ``get_sizing_multiplier`` treats as a neutral 1.0x -- see that function's
+    own docstring) forever -- silently turning the "Stage 4 ML gate" into an
+    always-approve, always-full-size no-op even when a genuinely trained
+    model existed on disk at ``model_path``.
 
     Guarded on ``self.model is None`` so every call after the first successful
     (or attempted) load in this process is a cheap no-op -- called once per
@@ -420,10 +420,17 @@ class OptionsPaperExecutor:
                 try:
                     from ml.options_meta_labeler import global_options_meta_labeler
                     ml_score = global_options_meta_labeler.score_option_directive(item)
+                    # prob_win is None (not a fabricated number) when the ML
+                    # score was unavailable -- see score_option_directive's
+                    # docstring. A plain f"{...:.2f}" on None would raise, so
+                    # this renders "n/a" instead of crashing the whole cycle
+                    # over a log message.
+                    _prob_win = ml_score.get("prob_win")
+                    _prob_win_str = f"{_prob_win:.2f}" if _prob_win is not None else "n/a"
                     if not ml_score.get("approved", True):
                         skipped.append({
                             "symbol": sym,
-                            "reason": f"Stage 4 ML Meta-Labeler rejected directive (P(Win)={ml_score.get('prob_win', 0):.2f} < threshold)",
+                            "reason": f"Stage 4 ML Meta-Labeler rejected directive (P(Win)={_prob_win_str} < threshold)",
                             "ml_score": ml_score,
                         })
                         continue
@@ -439,7 +446,7 @@ class OptionsPaperExecutor:
                     if ml_contracts < 1:
                         skipped.append({
                             "symbol": sym,
-                            "reason": f"Stage 4 ML Meta-Labeler sizing multiplier ({mult:.2f}x) derated position below 1 contract (P(Win)={ml_score.get('prob_win', 0):.2f})",
+                            "reason": f"Stage 4 ML Meta-Labeler sizing multiplier ({mult:.2f}x) derated position below 1 contract (P(Win)={_prob_win_str})",
                             "ml_score": ml_score,
                         })
                         continue

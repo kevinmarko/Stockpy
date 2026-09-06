@@ -2140,6 +2140,58 @@ class Settings(BaseSettings):
             "0.0 disables Prophet's influence on the blend."
         ),
     )
+    FORECAST_MC_RANDOM_SEED: Optional[int] = Field(
+        default=42,
+        description=(
+            "Seed for run_monte_carlo's np.random.default_rng(), matching "
+            "CNN_LSTM_RANDOM_SEED's determinism convention -- previously the "
+            "Monte Carlo path used the unseeded global np.random.normal, so "
+            "MC_Target/MC_Lower/MC_Upper wobbled run-to-run by roughly "
+            "sigma*sqrt(T)/sqrt(simulations) even against identical input data "
+            "(see docs/known_issues/forecast_ito_double_correction_and_horizon_"
+            "units.md). None restores fully non-deterministic sampling."
+        ),
+    )
+    FORECAST_DRIFT_SHRINKAGE: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Shrinks run_monte_carlo's log-return drift mu toward zero: "
+            "mu_used = mu * (1 - FORECAST_DRIFT_SHRINKAGE). 0.0 (the default) "
+            "uses the measured drift unshrunk -- today's exact behavior, "
+            "byte-identical aside from the F1 Ito-double-correction fix (see the "
+            "known-issues doc above), which is applied unconditionally regardless "
+            "of this setting. 1.0 zeroes the drift entirely (a pure random walk), "
+            "the defensible null given that the drift's standard error over a "
+            "typical 504-day lookback at 30% annualized vol (~7.6% at T=90) "
+            "dwarfs a realistic 10%/yr expected drift (~3.6% at T=90) -- the "
+            "measured mean is far noisier than the measured variance. This is a "
+            "modelling choice, not a bug fix, so it defaults to a no-op unlike "
+            "F1's unconditional correction."
+        ),
+    )
+    FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True (default), ForecastTracker.update_actuals looks up each "
+            "pending forecast's own due date's close (forecast_ts + horizon_days "
+            "trading bars) via a lazily-imported data.historical_store."
+            "HistoricalStore instead of stamping every overdue row with today's "
+            "price -- see F5 in docs/known_issues/forecast_ito_double_correction_"
+            "and_horizon_units.md (a backlog of several pending rows previously "
+            "actualized against whatever price happened to be current on the "
+            "call that finally caught up with them, not the price on each row's "
+            "own due date). A row whose own due-date close can't be resolved "
+            "still falls back to the passed-in price (CONSTRAINT #6). False "
+            "restores the exact pre-fix behavior (every due row stamped with "
+            "the passed-in price) -- set by the test suite's own conftest.py "
+            "autouse fixture so a bare unit test's ForecastTracker never "
+            "reaches a live HistoricalStore/network path just by calling "
+            "update_actuals; a test that wants to exercise the real lookup "
+            "explicitly re-enables it."
+        ),
+    )
     FORECAST_MODEL_PERSISTENCE_ENABLED: bool = Field(
         default=False,
         description=(

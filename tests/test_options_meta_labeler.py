@@ -1,5 +1,6 @@
 """Tests for ml/options_meta_labeler.py (Stage 4 Options ML Meta-Labeler)."""
 
+import math
 import tempfile
 from pathlib import Path
 import numpy as np
@@ -153,8 +154,9 @@ def test_nan_ivr_declines_to_score_instead_of_predicting_confidently():
     """A required feature that is PRESENT in the dict but NaN (the real shape
     ``execution/options_paper_executor.py::get_actionable_directives`` produces
     for an unresolvable ``True_IVR``) must never sail through as a normal
-    value into the model. It must decline to score (neutral 0.65 / 1.0x
-    sizing), not produce a confident, possibly INCREASED prediction."""
+    value into the model. It must decline to score (an unavailable
+    probability, never a fabricated number -- CONSTRAINT #4) and apply a
+    neutral 1.0x sizing rather than either a confident or a blocked outcome."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         model_path = Path(tmp_dir) / "test_meta.pkl"
         labeler = OptionsMetaLabeler(model_path=model_path)
@@ -173,13 +175,16 @@ def test_nan_ivr_declines_to_score_instead_of_predicting_confidently():
         }
 
         prob = labeler.predict_probability(candidate)
-        assert prob == 0.65
+        assert math.isnan(prob)
 
         mult = labeler.get_sizing_multiplier(prob)
         assert mult == 1.0
 
         score_info = labeler.score_option_directive(candidate)
         assert score_info["features_resolved"] is False
+        assert score_info["probability_available"] is False
+        assert score_info["prob_win"] is None
+        assert score_info["approved"] is True
 
 
 def test_none_valued_feature_also_declines_to_score():
@@ -201,13 +206,31 @@ def test_none_valued_feature_also_declines_to_score():
         }
 
         prob = labeler.predict_probability(candidate)
-        assert prob == 0.65
+        assert math.isnan(prob)
 
         mult = labeler.get_sizing_multiplier(prob)
         assert mult == 1.0
 
         score_info = labeler.score_option_directive(candidate)
         assert score_info["features_resolved"] is False
+        assert score_info["probability_available"] is False
+        assert score_info["prob_win"] is None
+        assert score_info["approved"] is True
+
+
+def test_get_sizing_multiplier_nan_prob_is_neutral_not_a_rejection():
+    """An unavailable ML opinion (NaN prob) must never act like a confident
+    bearish one: comparing NaN against min_confidence is always False in
+    Python/numpy, so without an explicit isfinite check this would silently
+    fall through to the SAME 0.0 as a genuinely low-confidence prediction --
+    indistinguishable from an active rejection. get_sizing_multiplier must
+    return the neutral 1.0x instead, deferring to whatever gates already
+    approved this directive."""
+    labeler = OptionsMetaLabeler(model_path=Path("/nonexistent/unused.pkl"))
+    assert labeler.get_sizing_multiplier(float("nan")) == 1.0
+    # A genuinely low, FINITE probability must still be rejected -- the NaN
+    # branch must not accidentally swallow the real low-confidence gate.
+    assert labeler.get_sizing_multiplier(0.10) == 0.0
 
 
 def test_degenerate_single_class_training_never_produces_unclipped_confidence():

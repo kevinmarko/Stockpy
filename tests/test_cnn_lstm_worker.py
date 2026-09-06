@@ -139,7 +139,7 @@ class TestFitPredictCnnLstm:
         X_seq, Y_seq, last_window = _windows()
         mock_sequential.return_value.predict.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
 
-        result = cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+        result = cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4, max_h=30)
 
         assert result["pred_scaled"] == pytest.approx([0.1, 0.2, 0.3, 0.4])
         assert result["saved"] is False
@@ -151,7 +151,7 @@ class TestFitPredictCnnLstm:
         save_path = str(tmp_path / "model.keras")
 
         result = cnn_lstm_worker.fit_predict_cnn_lstm(
-            X_seq, Y_seq, last_window, num_horizons=4, keras_save_path=save_path
+            X_seq, Y_seq, last_window, num_horizons=4, max_h=30, keras_save_path=save_path
         )
 
         assert result["saved"] is True
@@ -159,7 +159,7 @@ class TestFitPredictCnnLstm:
 
     def test_does_not_save_when_no_path_given(self):
         X_seq, Y_seq, last_window = _windows()
-        result = cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+        result = cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4, max_h=30)
         assert result["saved"] is False
         mock_sequential.return_value.save.assert_not_called()
 
@@ -167,7 +167,7 @@ class TestFitPredictCnnLstm:
         monkeypatch.setattr(cnn_lstm_worker, "TENSORFLOW_AVAILABLE", False)
         X_seq, Y_seq, last_window = _windows()
         with pytest.raises(RuntimeError, match="tensorflow"):
-            cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+            cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4, max_h=30)
 
     def test_fit_uses_purged_validation_data_not_validation_split(self):
         """The subprocess worker must mirror forecasting_engine.py's purged
@@ -176,7 +176,7 @@ class TestFitPredictCnnLstm:
         the last lookback-1 overlapping training windows contaminating the
         first validation windows."""
         X_seq, Y_seq, last_window = _windows(n_samples=40, lookback=60)
-        cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+        cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4, max_h=30)
 
         _, fit_kwargs = mock_sequential.return_value.fit.call_args
         assert "validation_data" in fit_kwargs
@@ -197,7 +197,7 @@ class TestFitPredictCnnLstm:
         Y_seq = np.arange(n_samples).reshape(-1, 1)
 
         X_tr, Y_tr, X_val, Y_val = cnn_lstm_worker._purged_train_val_split(
-            X_seq, Y_seq, lookback
+            X_seq, Y_seq, lookback, max_h=10
         )
         assert len(X_tr) > 0 and len(X_val) > 0
         last_train_end = (len(X_tr) - 1) + lookback
@@ -210,7 +210,7 @@ class TestFitPredictCnnLstm:
         every call -- not just once at import time."""
         X_seq, Y_seq, last_window = _windows()
         with patch("numpy.random.seed") as mock_np_seed:
-            cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+            cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4, max_h=30)
         mock_np_seed.assert_called_once_with(cnn_lstm_worker.CNN_LSTM_RANDOM_SEED)
         cnn_lstm_worker.tf.random.set_seed.assert_called_with(cnn_lstm_worker.CNN_LSTM_RANDOM_SEED)
 
@@ -220,7 +220,7 @@ class TestFitPredictCnnLstm:
         silently produce a differently-shaped model than the in-process
         legacy path in forecasting_engine.py."""
         X_seq, Y_seq, last_window = _windows(lookback=60, n_features=10, n_horizons=4)
-        cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+        cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4, max_h=30)
 
         layers_arg = mock_sequential.call_args[0][0]
         conv_call = cnn_lstm_worker.Conv1D.call_args

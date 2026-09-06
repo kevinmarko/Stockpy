@@ -492,8 +492,23 @@ class TechnicalOptionsEngine:
         variance, same formula), so every existing horizon=1 caller (the
         GARCH_Vol dashboard column, the VRP gate, True IVR, position sizing)
         is unaffected by this refactor.
+
+        Returns ``nan`` (never a fabricated 0.20 -- CONSTRAINT #4) when there
+        isn't enough history to measure anything at all; see
+        estimate_gjr_garch_volatility_term_structure's docstring for exactly
+        when that is. Every current caller already wraps this in a broad
+        try/except and treats the result as `nan`-safe (get_vrp propagates a
+        NaN GARCH vol into a NaN VRP, which correctly gates the VRP leg
+        closed; calculate_realized_vol_rank short-circuits to 50.0 before
+        ever touching a NaN current_vol on the same insufficient-history
+        condition) -- this explicit check just makes that contract direct
+        instead of relying on a caller's except clause to catch an
+        AttributeError/TypeError from subscripting None.
         """
-        return self.estimate_gjr_garch_volatility_term_structure(df, horizons=(1,))[1]
+        term_structure = self.estimate_gjr_garch_volatility_term_structure(df, horizons=(1,))
+        if term_structure is None:
+            return float("nan")
+        return term_structure[1]
 
     def estimate_gjr_garch_volatility_term_structure(
         self, df: pd.DataFrame, horizons: Sequence[int] = (1,)
@@ -525,23 +540,37 @@ class TechnicalOptionsEngine:
         implementation, regardless of how many horizons are requested.
 
         horizons=(1,) reproduces estimate_gjr_garch_volatility()'s existing
-        output exactly. Degrades (same as before) to the 20-day historical
-        annualized stdev -- or the neutral 0.20 default -- applied FLATLY to
-        every requested horizon when arch is unavailable, the fit fails, or
-        there isn't enough history: with no fitted model there is no term
-        structure to compute, so every horizon gets the same fallback value
-        (never fabricated per-horizon variation).
+        output exactly.
+
+        Returns ``None`` (never a fabricated 0.20 -- CONSTRAINT #4) when
+        there isn't enough history to measure ANYTHING, GARCH or otherwise
+        (< 22 rows, or < 10 usable daily returns -- the same floor a 20-day
+        historical stdev itself needs, so there is no honest fallback number
+        to fall back to either). When there IS enough history but arch is
+        unavailable or the GJR-GARCH fit itself fails, this degrades to the
+        20-day historical annualized stdev applied FLATLY to every requested
+        horizon (a real measurement, just not GARCH's mean-reversion-aware
+        one) -- with no fitted model there is no term structure to compute,
+        so every horizon gets the same fallback value (never fabricated
+        per-horizon variation). Callers that subscript the return value MUST
+        check for ``None`` first (estimate_gjr_garch_volatility above and
+        _estimate_daily_sigma_multi_horizon in forecasting_engine.py both do)
+        rather than relying on the resulting AttributeError/TypeError to be
+        caught somewhere up the call stack -- a caller with too broad a
+        try/except around this call can otherwise silently drop unrelated
+        computations that share its scope (see
+        docs/known_issues/forecast_ito_double_correction_and_horizon_units.md).
         """
         horizons = sorted({int(h) for h in horizons}) or [1]
         max_h = horizons[-1]
 
         df_clean = self.sanitize_ohlcv(df)
         if len(df_clean) < 22:
-            return {h: 0.20 for h in horizons}  # Neutral 20% default fallback
+            return None
 
         returns = df_clean['Close'].pct_change().dropna()
         if len(returns) < 10:
-            return {h: 0.20 for h in horizons}
+            return None
 
         # Try GJR-GARCH fitting if arch library is available
         if ARCH_AVAILABLE:

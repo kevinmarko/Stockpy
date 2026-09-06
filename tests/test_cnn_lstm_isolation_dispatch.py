@@ -79,8 +79,9 @@ class TestFreshFitIsolationDispatch:
         mock_run.assert_called_once()
         called_func, called_args = mock_run.call_args[0]
         assert called_func.__name__ == "fit_predict_cnn_lstm"
-        X_seq, Y_seq, last_window, num_horizons, save_path = called_args
+        X_seq, Y_seq, last_window, num_horizons, max_h, save_path = called_args
         assert num_horizons == 4
+        assert max_h == max(horizons)
         assert save_path is None  # persistence not enabled in this test
         assert isinstance(X_seq, np.ndarray) and isinstance(Y_seq, np.ndarray)
 
@@ -96,7 +97,7 @@ class TestFreshFitIsolationDispatch:
             engine.run_cnn_lstm_forecast(df, horizons=(10, 30, 60, 90), ticker="ISOTEST")
 
         _, called_args = mock_run.call_args[0]
-        save_path = called_args[4]
+        save_path = called_args[5]
         assert save_path is not None
         assert "ISOTEST" in str(save_path) or "cnn_lstm" in str(save_path)
 

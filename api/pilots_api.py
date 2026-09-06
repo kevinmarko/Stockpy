@@ -6979,7 +6979,7 @@ def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
     SEQ_LEN = 60
     D_MODEL = 32
     NUM_HEADS = 4
-    HORIZONS = [1, 5, 21, 60]
+    HORIZONS = [5, 21, 60]
     MIN_TRAIN_SAMPLES = 30
     TRAIN_STRIDE = 3
 

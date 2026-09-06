@@ -197,15 +197,40 @@ class OptionsMetaLabeler:
 
         try:
             from sklearn.ensemble import HistGradientBoostingClassifier
+            from sklearn.calibration import CalibratedClassifierCV
             from sklearn.metrics import accuracy_score, roc_auc_score
 
-            clf = HistGradientBoostingClassifier(
+            base_clf = HistGradientBoostingClassifier(
                 max_iter=100,
                 learning_rate=0.05,
                 max_leaf_nodes=15,
                 min_samples_leaf=5,
                 random_state=42,
             )
+
+            # Wrap in isotonic calibration (F8 in the math audit): boosted
+            # trees are systematically overconfident at the tails, and this
+            # probability feeds get_sizing_multiplier's LINEAR 4x-slope
+            # sizing map, so a calibration error dP becomes a 4*dP sizing
+            # error. cv is bounded by the minority class count --
+            # StratifiedKFold needs at least `cv` members of the SMALLER
+            # class -- and degrades to an uncalibrated (but still real,
+            # still a genuine HistGradientBoostingClassifier predict_proba)
+            # fit when there's too little data of one class to calibrate
+            # meaningfully, rather than raising (CONSTRAINT #6).
+            n_pos = int(np.sum(y == 1))
+            n_neg = int(np.sum(y == 0))
+            min_class_count = min(n_pos, n_neg)
+            if min_class_count >= 3:
+                cv_folds = min(5, min_class_count)
+                clf = CalibratedClassifierCV(base_clf, method="isotonic", cv=cv_folds)
+            else:
+                logger.warning(
+                    "OptionsMetaLabeler: only %d samples of the minority class "
+                    "(need >= 3); skipping isotonic calibration and using an "
+                    "uncalibrated fit.", min_class_count,
+                )
+                clf = base_clf
             clf.fit(X, y)
             self.model = clf
 
@@ -215,12 +240,10 @@ class OptionsMetaLabeler:
             acc = float(accuracy_score(y, y_pred))
             auc = float(roc_auc_score(y, y_proba))
         except Exception as exc:
-            logger.warning("sklearn fit failed (%s); using logistic fallback", exc)
-            # Fallback simple logistic regression with numpy
-            weights = np.linalg.lstsq(X, y, rcond=None)[0]
-            self.model = ("linear_fallback", weights)
-            acc = 0.60
-            auc = 0.60
+            logger.warning("sklearn fit failed (%s)", exc)
+            self.model = None
+            acc = None
+            auc = None
 
         self.trained_at = datetime.now(timezone.utc)
         self.n_samples = len(y)
@@ -228,8 +251,8 @@ class OptionsMetaLabeler:
         self.train_roc_auc = auc
 
         logger.info(
-            "OptionsMetaLabeler trained on %d samples. Accuracy: %.2f%%, ROC-AUC: %.3f",
-            len(y), acc * 100.0, auc,
+            "OptionsMetaLabeler trained on %d samples. Accuracy: %s, ROC-AUC: %s",
+            len(y), f"{acc * 100.0:.2f}%" if acc is not None else "None", f"{auc:.3f}" if auc is not None else "None",
         )
 
         # Automatically persist
@@ -239,12 +262,21 @@ class OptionsMetaLabeler:
 
     def predict_probability(self, row: Dict[str, Any] | OptionsTradeFeatureRow) -> float:
         """
-        Predicts calibrated P(Profit > 0) for candidate options directive.
-        Returns probability in [0.0, 1.0].
+        Predicts P(Profit > 0) for a candidate options directive.
+
+        Genuinely calibrated (isotonic, via sklearn.calibration.
+        CalibratedClassifierCV -- see train()) whenever the last training run
+        had at least 3 samples of the minority class; degrades to an
+        UNCALIBRATED HistGradientBoostingClassifier.predict_proba() output
+        below that threshold (too little data to calibrate meaningfully --
+        logged at WARNING in train(), not silently swallowed). Either way
+        self.model exposes predict_proba(), so this call site is unchanged.
+        Returns probability in [0.0, 1.0], or NaN when scoring is declined
+        (no model trained yet, or a required feature was unresolved --
+        CONSTRAINT #4, never a fabricated number).
         """
         if self.model is None:
-            # Fallback default probability based on base options premium collection edge (~65% win rate)
-            return 0.65
+            return float('nan')
 
         x_vec = self._extract_feature_vector(row).reshape(1, -1)
 
@@ -252,29 +284,19 @@ class OptionsMetaLabeler:
             logger.warning(
                 "OptionsMetaLabeler.predict_probability: declining to score -- "
                 "one or more required features (ivr/vrp/vix/target_dte/"
-                "credit_to_width_ratio/short_delta) were missing or non-finite "
-                "for this directive. Returning the neutral fallback (0.65 / "
-                "1.0x sizing) instead of letting NaN reach the model, which "
-                "previously produced a confident prediction on unresolved data."
+                "credit_to_width_ratio/short_delta) were missing or non-finite."
             )
-            return 0.65
+            return float('nan')
 
         if isinstance(self.model, tuple) and self.model[0] == "baseline":
             return float(np.clip(self.model[1], 0.05, 0.95))
-
-        if isinstance(self.model, tuple) and self.model[0] == "linear_fallback":
-            weights = self.model[1]
-            raw = float(np.dot(x_vec[0], weights))
-            # Sigmoid
-            prob = 1.0 / (1.0 + np.exp(-raw))
-            return float(np.clip(prob, 0.05, 0.95))
 
         try:
             proba = float(self.model.predict_proba(x_vec)[0, 1])
             return float(np.clip(proba, 0.01, 0.99))
         except Exception as exc:
-            logger.warning("predict_proba failed (%s); returning default 0.65", exc)
-            return 0.65
+            logger.warning("predict_proba failed (%s)", exc)
+            return float('nan')
 
     def get_sizing_multiplier(
         self,
@@ -284,9 +306,20 @@ class OptionsMetaLabeler:
         """
         Computes dynamic position sizing scaling factor based on predicted edge.
         Returns:
+            1.0 (neutral, unscaled) if prob is NaN -- predict_probability
+                declined to score (no model trained yet, or a required
+                feature was unresolved). "No ML opinion" must not act like a
+                confident bearish one and block a directive that already
+                passed its own, independent gates (CONSTRAINT #6) --
+                comparing a NaN prob against min_confidence would otherwise
+                silently fall through to 0.0 anyway, since every comparison
+                against NaN is False in Python/numpy, making a blocked entry
+                indistinguishable from a genuinely low-confidence one.
             0.0 if prob < min_confidence (blocks low-confidence entry),
             Scaled multiplier in [0.30, 1.50] if prob >= min_confidence.
         """
+        if not np.isfinite(prob):
+            return 1.0
         if prob < min_confidence:
             return 0.0
 
@@ -311,15 +344,24 @@ class OptionsMetaLabeler:
     ) -> Dict[str, Any]:
         """
         Evaluates an actionable options directive and returns ML score metadata.
+
+        ``prob_win`` is ``None`` (never a fabricated/raw-NaN float --
+        CONSTRAINT #4) and ``probability_available`` is ``False`` when
+        ``predict_probability`` declined to score; ``sizing_multiplier``
+        still reports the neutral 1.0x get_sizing_multiplier applies in that
+        case and ``approved`` stays True (an unavailable ML opinion doesn't
+        veto a directive that already passed its own gates).
         """
         prob = self.predict_probability(directive)
+        prob_available = bool(np.isfinite(prob))
         sizing_mult = self.get_sizing_multiplier(prob, min_confidence=min_confidence)
         approved = sizing_mult > 0.0
 
         return {
             "strategy": directive.get("strategy", ""),
             "symbol": directive.get("symbol", ""),
-            "prob_win": round(prob, 3),
+            "prob_win": round(prob, 3) if prob_available else None,
+            "probability_available": prob_available,
             "sizing_multiplier": round(sizing_mult, 2),
             "approved": approved,
             "trained_samples": self.n_samples,

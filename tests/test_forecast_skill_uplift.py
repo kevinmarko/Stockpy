@@ -81,7 +81,7 @@ def _warm_tracker(tracker: ForecastTracker, symbol: str,
     base_price = 100.0
     for h in horizons:
         for i in range(n_per_model):
-            ts = datetime.now(timezone.utc) - timedelta(days=h + 2 + i)
+            ts = datetime.now(timezone.utc) - pd.offsets.BDay(h + 2 + i)
             tracker.record_forecasts(symbol, h, {
                 MODEL_ARIMA: base_price + 0.2,        # near-perfect → low RMSE
                 MODEL_MONTE_CARLO: base_price + 2.0,  # off by ~2 → higher RMSE
