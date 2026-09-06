@@ -1123,6 +1123,31 @@ underlying no-lookahead guarantee this adapter inherits). Verified manually end-
 `yfinance` KO/PEP download → adapter → `python -m scripts.refresh_validations --strategies
 copula_stat_arb --json` produced the table above.
 
+**Addendum (2026-09): options-selling tail-scenario stress gate does not apply here.** A
+follow-up audit asked whether `copula_stat_arb` should also be wired into
+`_resolve_options_selling_stress_fn` (`scripts/refresh_validations.py`) — the function CLAUDE.md's
+"Options-selling strategies carry an additional tail-scenario stress gate" rule is enforced
+through — since it was never included there. Investigated by reading
+`pilots/copula_stat_arb.py`'s actual trade-construction code (`execute_copula_spread_trade`), not
+inferring from the module's name or its placement alongside the options-desk build-out
+(`.claude/giant_master_plan.md` Phase 21). Finding: this strategy does **not** sell options. It
+buys/sells **shares** of the pair's two legs (`symbol_y`/`symbol_x`) via
+`PaperAccountStore.apply_multi_leg_fill`; no options contract is ever constructed, priced, or
+written anywhere in the module — confirmed by that function's own inline comment ("`qty` here is
+SHARES, not options contracts"). It is also correctly absent from `PAPER_BROKER_OPTIONS_STRATEGIES`
+(the list enumerating every strategy that actually sells option premium in the live Paper Broker).
+Per CLAUDE.md's own rule, the tail-scenario stress gate applies only to options-selling strategies,
+so the gate simply does not apply here — this is a **documentation fix**, not a code wire-up. No
+change was made to `is_options_selling`/`stress_returns_fn` for this entry (it correctly stays
+`False`/`None`, exactly as it already was). A comment was added at the end of
+`_resolve_options_selling_stress_fn` naming `copula_stat_arb` explicitly and explaining why it's
+excluded, and `docs/signals/copula_stat_arb.md`'s "Backtest Validation" section gained a matching
+"Options-selling tail-scenario stress gate: not applicable" note — both citing this same evidence
+so a future reader doesn't have to re-derive it. Contrast with `zero_dte_engine`/`gamma_scalper`,
+which genuinely are options-selling-shaped strategies excluded from the gate for a different
+reason (no reachable historical data to run the gate against, not "doesn't apply") — see
+`docs/signals/zero_dte_engine.md`'s "NOT GATEABLE" section for that distinct case.
+
 ---
 
 ## 2026-08-19 (cont.): dispersion_trading basket fix + zero_dte_engine docstring corrections

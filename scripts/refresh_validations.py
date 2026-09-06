@@ -3941,6 +3941,28 @@ def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str
         from validation.options_selling_backtest import simulate_covered_call_returns
 
         return simulate_covered_call_returns
+    # `copula_stat_arb` is deliberately absent from this dispatch, not merely
+    # not-yet-wired. CLAUDE.md's tail-scenario stress-gate addendum applies
+    # only to "options-selling strategies", and `pilots/copula_stat_arb.py`
+    # is a pure equity pairs/stat-arb strategy: `execute_copula_spread_trade`
+    # buys/sells SHARES of the pair's two legs (`sym_y`/`sym_x`) via
+    # `PaperAccountStore.apply_multi_leg_fill` -- no options contract is ever
+    # constructed, priced, or written anywhere in that module (confirmed by
+    # reading the trade-construction code, not inferred from the name; see
+    # that function's own inline comment: "`qty` here is SHARES, not options
+    # contracts"). It also does not appear in `PAPER_BROKER_OPTIONS_STRATEGIES`
+    # above, which enumerates every strategy that actually sells option
+    # premium in the live Paper Broker. Forcing a `stress_returns_fn` onto it
+    # here would misapply a gate designed for short-premium tail risk (a
+    # dated-shock-window survival test) to a strategy whose only risk is a
+    # cointegration breakdown between two equity legs -- see
+    # `docs/signals/copula_stat_arb.md`'s "Backtest Validation" section and
+    # `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-19 entry (addended
+    # 2026-09) for the full reasoning. Contrast with `zero_dte_engine`/
+    # `gamma_scalper`, which ARE options-selling-shaped strategies excluded
+    # from the gate for a DIFFERENT reason (no reachable historical data to
+    # run the gate against) -- `docs/signals/zero_dte_engine.md`'s "NOT
+    # GATEABLE" section documents that distinct case.
     return None
 
 
