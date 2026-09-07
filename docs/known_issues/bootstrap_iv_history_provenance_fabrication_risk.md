@@ -4,9 +4,11 @@
 related, separate, deliberately-deferred finding while extending the Forecast
 Backfill meta-labeling screen (see
 [`docs/known_issues/vrp_premium_selling_no_historical_iv.md`](vrp_premium_selling_no_historical_iv.md)'s
-"Related, separate hazard" section, PR #1017 / branch
-`extend-backfill-meta-labeling`) — that discovery correctly scoped this out as
-its own follow-up rather than bundling an unrelated fix into that PR.
+"Related, separate hazard" section, [PR #1017](https://github.com/kevinmarko/Stockpy/pull/1017) /
+branch `extend-backfill-meta-labeling`) — that discovery correctly scoped this out
+as its own follow-up rather than bundling an unrelated fix into that PR. This
+write-up is that follow-up; `vrp_premium_selling_no_historical_iv.md`'s own text
+has been updated to point here.
 
 ## The hazard
 

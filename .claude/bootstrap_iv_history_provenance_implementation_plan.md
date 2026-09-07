@@ -93,13 +93,14 @@ CONSTRAINT #4/#6 violation.
 - `ruff check . --select=F821,F822,F823,E9` (this repo's actual CI-gate
   ruleset per `/verify`): clean.
 
-## Known gap, disclosed not fixed
+## Cross-reference resolution (updated after a rebase)
 
 `docs/known_issues/vrp_premium_selling_no_historical_iv.md` (which first
-flagged this hazard, per this task's own background) lives on PR #1017 /
-branch `extend-backfill-meta-labeling`, not yet merged into `main` as of
-this branch's creation — so it does not exist in this branch, and its own
-"Related, separate hazard" text could not be updated to point at this fix.
-Cross-referenced by path/PR number instead in the new known_issues doc;
-whoever merges #1017 (or a follow-up) should update that doc's text once
-both are on `main`.
+flagged this hazard) lived on PR #1017 / branch
+`extend-backfill-meta-labeling`, not yet merged into `main` when this
+branch was created — initially handled by cross-referencing it by PR
+number/path only. #1017 merged to `main` while this PR was still open;
+rebased onto the new `main` (one real conflict in
+`docs/known_issues/README.md`, resolved by keeping both PRs' appended
+rows) and updated that doc's own "Related, separate hazard" section to
+say Fixed and point at this write-up.

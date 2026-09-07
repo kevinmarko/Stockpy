@@ -121,15 +121,18 @@ write-up, rather than left as an unstated judgment call.
   around it for verification purposes and does not touch production code
   or behavior.
 
-## Scope boundary, disclosed
+## Scope boundary — resolved during a rebase
 
 `docs/known_issues/vrp_premium_selling_no_historical_iv.md` — the doc that
 originally flagged this hazard in its own "Related, separate hazard"
-section — lives on PR #1017 (`extend-backfill-meta-labeling`), which was
-still open/unmerged when this branch was created from `main` (per this
-task's own repo instructions). That file does not exist on this branch, so
-it could not be edited to stop describing the hazard as open. The new
-`docs/known_issues/bootstrap_iv_history_provenance_fabrication_risk.md`
-cross-references PR #1017 by number/branch instead. Whoever merges #1017
-(or a small follow-up after both land on `main`) should update that doc's
-text to point at this fix.
+section — lived on PR #1017 (`extend-backfill-meta-labeling`), still
+open/unmerged when this branch was first created from `main`. Initially
+disclosed as a gap this PR couldn't close (the file didn't exist yet on
+this branch). PR #1017 merged to `main` while this PR was open; rebasing
+onto the new `main` pulled that file in, along with a real conflict in
+`docs/known_issues/README.md` (both PRs appended a new row at the same
+insertion point — resolved by keeping both rows, with this fix's row
+placed directly after the one that flagged it). `vrp_premium_selling_no_
+historical_iv.md`'s own text was then updated to say the hazard is fixed
+and point at this write-up, closing the gap for real rather than leaving
+it as a permanent disclosed caveat.

@@ -42,14 +42,16 @@ Branch: `fix-bootstrap-iv-history-provenance`
       `docs/architecture/validation-and-signals.md`'s bootstrap-script
       one-liner both updated; `docs/test_coverage_analysis.md`'s two
       stale 0%-coverage rows for this file marked closed.
-- [ ] **Not done — disclosed gap**: `docs/known_issues/
-      vrp_premium_selling_no_historical_iv.md` (the doc that originally
-      flagged this hazard) lives on unmerged PR #1017
-      (`extend-backfill-meta-labeling`) and does not exist on this branch
-      (branched from `main` per instructions). Cross-referenced by
-      path/PR number instead; that doc's own text should be updated once
-      both branches are on `main`.
-- [ ] PR artifacts committed to `.claude/` (this file + implementation
+- [x] **Resolved during rebase**: PR #1017 (`extend-backfill-meta-labeling`,
+      which first flagged this hazard) merged to `main` while this PR was
+      open. Rebased this branch onto the new `main`, resolved a real
+      conflict in `docs/known_issues/README.md` (both PRs appended a row
+      at the same spot — kept both, mine placed directly after theirs
+      since it closes the hazard theirs flagged), and updated
+      `docs/known_issues/vrp_premium_selling_no_historical_iv.md`'s own
+      "Related, separate hazard" section to say Fixed and point at this
+      write-up, closing the gap this tracker originally disclosed as open.
+- [x] PR artifacts committed to `.claude/` (this file + implementation
       plan + walkthrough) with scoped names — done as part of this commit.
 - [ ] Open PR, self-review full diff, merge per CLAUDE.md's checklist
       (pending — final step before this tracker is fully checked off).
