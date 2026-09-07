@@ -166,12 +166,60 @@ left alone rather than chased down:
 
 ### Deliberately not done (disclosed, not silently skipped)
 
-- Interval coverage / CRPS / pinball loss wired to `ForecastTracker`'s own realized rows and surfaced
-  on Mission Control — needs an additive `forecast_errors` schema change plus new call-site wiring;
-  left as a follow-up rather than a rushed migration bundled into this pass.
 - `tests/test_forecast_skill_uplift.py`'s uplift experiment stays a diagnostic print, not a hard alpha
   assertion — that test's own author already documented why (avoiding overfitting the test to
   synthetic data), and that reasoning holds up on review.
+
+## Follow-up session — WP6 buildout (interval coverage, no longer deferred)
+
+The item above ("Interval coverage / CRPS / pinball loss") was the one deliberately-deferred piece of
+the original audit. This follow-up session built it out in full, again via 4 parallel agents against a
+fixed contract this session defined up front (the schema/tracker-method layer, done first since
+everything else depends on its exact method signatures):
+
+1. **Schema + tracker methods** (done directly, not by an agent, since it fixes the contract everything
+   else builds against): `forecast_errors` gained additive `forecast_lower`/`forecast_upper` columns
+   (idempotent `PRAGMA table_info`-guarded migration); `record_forecasts()` gained an optional
+   `model_bounds` parameter; two new `ForecastTracker` methods, `coverage_report()`/
+   `interval_score_stats()`; a shared pure function, `compute_coverage_and_interval_score()`, computing
+   the Gneiting & Raftery (2007) interval score — deliberately NOT called CRPS, since a true CRPS needs
+   the full predictive distribution this table doesn't persist, and mislabeling a real, different metric
+   as CRPS would be its own honesty violation.
+2. **Engine wiring** (agent): threaded `run_monte_carlo`'s `(mc_lo, mc_hi)` into the ONE
+   `record_forecasts` call site in `generate_forecast()`'s per-horizon loop, gated on the same
+   `m_res > 0` condition already gating the point forecast's own inclusion.
+3. **Observability wiring** (agent): a new bulk-SQL sibling, `_forecast_coverage_stats_by_symbol`,
+   mirroring `_forecast_stats_by_symbol`/`_forecast_decay_stats_by_symbol`'s existing "one query, group
+   in Python" pattern, reusing the shared pure function rather than reimplementing the formula a third
+   time — wired into `forecast_skill_by_symbol_summary`'s per-symbol rows as 5 new fields
+   (`mc_coverage_n`/`mc_coverage_pct`/`mc_nominal_coverage_pct`/`mc_interval_score`/`mc_coverage_reason`).
+4. **Test coverage** (agent): 25 new tests in `tests/test_forecast_tracker.py`, including the plan's
+   explicit statistical ask — a synthetic-ground-truth test proving a correctly-calibrated 90% band
+   measures within tolerance of its true coverage on 500 known draws, AND that a deliberately
+   miscalibrated band is correctly flagged as measuring well outside that tolerance (so the test
+   provably discriminates good calibration from bad, not just "returns a number"). No bugs found in the
+   already-implemented tracker code — every test passed on first attempt against the documented
+   contract.
+5. **Webapp** (agent): rendered the 5 new fields in `Observability.tsx`'s `ForecastSkillBySymbolSection`
+   (an honest degrade to the `*_reason` text when insufficient history, never a blank cell), and — found
+   and closed in the same pass — a real, separate, PRE-EXISTING gap: `pending`/`n_by_model`/`decay_pct`/
+   `decay_reason` were already computed by the Python backend but never declared in the webapp's
+   `ForecastSkillSymbolRow` type or rendered anywhere, since an earlier session added the decay feature
+   without a corresponding webapp pass.
+
+Also run this session, per the plan's own instruction ("the operator, not the agent"): `scripts/
+repair_forecast_errors_horizon.py --dry-run` against the live `~/.stockpy_local/quant_platform.db`.
+Result: **2,362,135 rows scanned, 47,403 to NULL (prematurely actualized under the old calendar-day
+cutoff), 676,782 to correct (scored against the wrong price)** — roughly 30% of the table affected,
+confirming F5's real-world impact was substantial. `--apply` has NOT been run — that write step is the
+operator's own, after a `sqlite3 ".backup"` snapshot, exactly as the original plan specified.
+
+Verification: full offline suite after all 4 agents' changes — 12,939 passed, 4 pre-existing failures
+confirmed unrelated (backing files byte-identical to `origin/main`: a load-sensitive subprocess-timing
+test, a real non-default `.env` value leaking into an unrelated settings test, a sector-selection
+sentiment test, and the previously-documented shared-machine `pilots/models.py` state issue) — plus a
+harmless settings-liveness artifact line-number drift from this session's own line-count changes,
+regenerated. Webapp: `npm run typecheck` clean, full vitest suite (176 files / 1956 tests) passing.
 - The historic DB repair itself (`scripts/repair_forecast_errors_horizon.py --apply`) has not been run
   against the live `~/.stockpy_local/quant_platform.db` — per the plan, that's the operator's step,
   after a `sqlite3 ".backup"` snapshot.

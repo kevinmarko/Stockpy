@@ -7,6 +7,7 @@ export const PHASE_LABEL: Record<ForecastBackfillPhase, string> = {
   meta_targets: "Creating meta targets…",
   backtraining: "Backtraining meta labelers…",
   backfilling: "Executing backfill…",
+  registry_bridge: "Registering live meta-labelers…",
   exporting: "Exporting results…",
 };
 

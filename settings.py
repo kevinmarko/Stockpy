@@ -4401,6 +4401,30 @@ class Settings(BaseSettings):
             "model exists; set False to disable meta-labeling entirely."
         ),
     )
+    META_LABELING_BACKFILL_BRIDGE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the Forecast Backfill screen's live meta-labeler bridge. "
+            "When True, ml/meta_bootstrap.py's second loop attempts to register screen-trained "
+            "models (meta_labeler_backfill_<signal_id>) if they clear the PBO/DSR deployability "
+            "gate and the feature-compatibility check. False (default) disables the bridge entirely."
+        ),
+    )
+    META_LABELING_BACKFILL_ELIGIBLE_SIGNALS: list[str] = Field(
+        default=[],
+        description=(
+            "Explicit per-signal opt-in for the Forecast Backfill meta-labeler bridge. "
+            "Nothing registers even with the master flag on until a signal ID is listed here."
+        ),
+    )
+    META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS: int = Field(
+        default=10,
+        description="Default trading horizon (days) for the live backfill bridge when no per-signal override exists.",
+    )
+    META_LABELING_BACKFILL_LIVE_HORIZON_DAYS: dict[str, int] = Field(
+        default={},
+        description="Per-signal override for the live backfill bridge horizon (e.g. {'timeseries_momentum': 20}).",
+    )
 
     # --- Snapshot rotation & Δ-band diff (scripts/snapshot_diff.py) ---
     # Each orchestrator/advisory run writes output/state_snapshot.json AND

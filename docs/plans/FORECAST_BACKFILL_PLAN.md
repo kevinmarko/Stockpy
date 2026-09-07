@@ -9,16 +9,22 @@ The Multi-Horizon Forecast Backfill and Meta-Labeling engine (`ml/forecast_backf
 
 The pipeline trains confidence classifiers that evaluate market environment conditions (volatility, RSI, MACD, volume ratio) to output out-of-sample $P(\text{success})$ probabilities for primary signals, per horizon.
 
-**Current scope: standalone research/backfill diagnostic, not wired to live trading.** The trained
-per-horizon models (`ml/models/meta_{TSMOM,CSMOM}_{10,30,60,90}d.pkl`) are plain pickled
-classifiers, not `ml.meta_labeling.MetaLabeler` instances, and are **not** registered into
-`ml.meta_labeling.global_meta_registry` — `SignalAggregator`/`StrategyEngine`'s live position
-sizing and confidence gating are unaffected by this engine today. `ml/meta_bootstrap.py` documents
-why (file-naming convention, pickled type, and signal-id keying are all incompatible with the
-existing single-model-per-`SignalModule` gate). Wiring multi-horizon confidence into live sizing
-is a real, separate design decision (which horizon should gate the existing `timeseries_momentum`/
-`cross_sectional_momentum` signals, or a new aggregation across horizons) that hasn't been made —
-this PR ships the backfill/training/reporting engine and its API + UI, not that wiring.
+**Current scope: Research/diagnostic with an opt-in live gate bridge.** The trained
+per-horizon models (`ml/models/backfill_meta_{signal_id}_{horizon}d_{stamp}.pkl`) are plain pickled
+classifiers, wrapped as `ml.meta_labeling.MetaLabeler` instances, and can be registered into
+`ml.meta_labeling.global_meta_registry` if they pass the deployability gate (PBO/DSR) and an explicit
+feature compatibility check. The operator must explicitly opt a signal in via `settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS`
+and enable the bridge via `settings.META_LABELING_BACKFILL_BRIDGE_ENABLED`. When both exist, AFML models are
+prioritized over backfill-screen models as a tie-break.
+
+**As of today, the bridge is wired, tested, and safe — but functionally inert for all 6 eligible signals.**
+The feature-compatibility check (`ml.meta_bootstrap.LIVE_ROW_FEATURE_WHITELIST`/`check_feature_compatibility`)
+refuses to register any model whose declared training features aren't fully present in the live per-ticker
+feature row `strategy_engine.py` actually queries a meta-labeler with — and none of the 6 backfill-eligible
+signals' declared `meta_label_features` are fully covered by that row today. A model can pass PBO/DSR and still
+never reach `global_meta_registry` until a separate follow-up widens the live row schema. See each signal's
+own `docs/signals/<name>.md` "Backfill-Screen Live Meta-Labeler Bridge" section for the per-signal registry
+key, chosen live horizon, and this same caveat.
 
 ---
 
