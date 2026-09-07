@@ -602,7 +602,7 @@ class TestRegisterBackfillModelReal:
             signal_id="vrp_premium_selling",
             horizon_days=10,
             model=clf,
-            feature_names=["Vol_20", "RSI_14"],  # not in LIVE_ROW_FEATURE_WHITELIST
+            feature_names=["Totally_Fake_Feature_Not_In_Whitelist", "Another_Fake_One"],  # not in LIVE_ROW_FEATURE_WHITELIST
             n_train=1,
             cpcv_result={"cpcv_dsr": 0.99, "pbo": 0.01, "mean_oos_sharpe": 2.0},
             hyperparameters={},
@@ -618,6 +618,36 @@ class TestRegisterBackfillModelReal:
         data = yaml.safe_load(tmp_registry.read_text())
         row = data["models"]["meta_labeler_backfill_vrp_premium_selling"]
         assert row["cpcv_dsr"] is None  # stub untouched
+
+
+class TestSixEligibleSignalsFeatureCompatibility:
+    """The actual deliverable: LIVE_ROW_FEATURE_WHITELIST now genuinely
+    resolves every one of the 6 Forecast-Backfill-eligible signals' real,
+    currently-declared meta_label_features -- previously this always failed
+    for all 6, by construction, regardless of DSR/PBO. Features are imported
+    directly from the real signal modules (not hand-copied literals) so this
+    test can never silently go stale."""
+
+    @pytest.mark.parametrize("module_path,class_name", [
+        ("signals.timeseries_momentum", "TimeSeriesMomentumSignal"),
+        ("signals.cross_sectional_momentum", "CrossSectionalMomentumSignal"),
+        ("signals.rsi2_mean_reversion", "RSI2MeanReversionSignal"),
+        ("signals.sector_quality_rank", "SectorNeutralQualitySignal"),
+        ("signals.vrp_premium_selling", "VRPPremiumSellingSignal"),
+        ("signals.options_flow_sentiment", "OptionsFlowSentimentSignal"),
+    ])
+    def test_eligible_signal_features_are_now_compatible(self, module_path, class_name):
+        import importlib
+
+        from ml.meta_bootstrap import check_feature_compatibility
+
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name)
+        features = getattr(cls, "meta_label_features", [])
+        assert features, f"{class_name} has no meta_label_features declared"
+
+        is_compat, missing = check_feature_compatibility(features)
+        assert is_compat, f"{class_name}'s declared features still incompatible: {missing}"
 
 
 # ---------------------------------------------------------------------------

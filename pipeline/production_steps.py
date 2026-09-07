@@ -2586,6 +2586,12 @@ class StrategyEvalStep(PipelineStep):
                 edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
                 rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
                 sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
+                roc_6m_val = float(row.get('ROC_6M')) if pd.notna(row.get('ROC_6M')) else 0.0
+                vol_20_val = float(row.get('Vol_20')) if pd.notna(row.get('Vol_20')) else None
+                vol_50_val = float(row.get('Vol_50')) if pd.notna(row.get('Vol_50')) else None
+                vol_ratio_val = float(row.get('Vol_Ratio')) if pd.notna(row.get('Vol_Ratio')) else None
+                roc_5_val = float(row.get('ROC_5')) if pd.notna(row.get('ROC_5')) else 0.0
+                roc_20_val = float(row.get('ROC_20')) if pd.notna(row.get('ROC_20')) else 0.0
 
                 chan_long = 0.0
                 chan_short = 0.0
@@ -2615,6 +2621,12 @@ class StrategyEvalStep(PipelineStep):
                     sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
                     rsi_2=rsi_2_val,
                     sma_5=sma_5_val,
+                    roc_6m=roc_6m_val,
+                    vol_20=vol_20_val,
+                    vol_50=vol_50_val,
+                    vol_ratio=vol_ratio_val,
+                    roc_5=roc_5_val,
+                    roc_20=roc_20_val,
                     # Per-name ETF volatility-transmission derate resolved by
                     # _apply_etf_transmission_multiplier() before this loop.
                     # Bare .get() -- a missing column / NaN cell is passed

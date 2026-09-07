@@ -308,6 +308,49 @@ class TestMomentumEarlyReturnNaN:
         rv = result["AAPL"]["Realized_Vol_60D"]
         assert math.isnan(rv), f"Realized_Vol_60D should be NaN for short history, got {rv}"
 
+    def test_roc_5_is_nan_when_shift_window_data_missing(self):
+        """ROC_5 (calculate_technical_metrics) = Close.shift(1)/Close.shift(6) - 1.0.
+        Unlike ROC_12M/ROC_6M above, ROC_5/ROC_20 have no dedicated
+        insufficient-history early-return gate of their own -- they live inside
+        calculate_technical_metrics's per-ticker loop, which already requires
+        len(df) >= 30 to process a ticker at all. Since 30 bars is already more
+        than ROC_5's 6-bar and ROC_20's 21-bar windows need, _short_df's own
+        "too few total rows" shape can never surface a NaN here (the ticker
+        would simply be skipped entirely below the 30-bar floor instead). The
+        real-world case this guard protects is a genuine DATA GAP inside an
+        otherwise-long-enough history (a provider outage / missing bar) -- so
+        this test reproduces that shape directly rather than a short df, and
+        proves the result is NaN, never a fabricated 0.0 (CONSTRAINT #4)."""
+        pe = ProcessingEngine()
+        df = self._short_df(35)  # comfortably above the 30-bar per-ticker floor
+        gap_idx = len(df) - 7  # Close.shift(6) at the last row reads this position
+        df.loc[df.index[gap_idx], "Close"] = np.nan
+        result = pe.calculate_technical_metrics({"AAPL": df})
+        roc5 = result["AAPL"]["ROC_5"]
+        assert math.isnan(roc5), f"ROC_5 should be NaN when its shift(6) window hits missing data, got {roc5}"
+
+    def test_roc_20_is_nan_when_shift_window_data_missing(self):
+        """Same guard as above, for ROC_20's longer Close.shift(21) window."""
+        pe = ProcessingEngine()
+        df = self._short_df(35)
+        gap_idx = len(df) - 22  # Close.shift(21) at the last row reads this position
+        df.loc[df.index[gap_idx], "Close"] = np.nan
+        result = pe.calculate_technical_metrics({"AAPL": df})
+        roc20 = result["AAPL"]["ROC_20"]
+        assert math.isnan(roc20), f"ROC_20 should be NaN when its shift(21) window hits missing data, got {roc20}"
+
+    def test_roc_5_and_roc_20_are_real_for_sufficient_history(self):
+        """With ample clean history (no data gaps), both new ROC columns must
+        be numeric (not NaN) -- mirroring test_roc_values_are_real_for_sufficient_history
+        above for ROC_12M/ROC_6M."""
+        pe = ProcessingEngine()
+        df = self._short_df(300)
+        result = pe.calculate_technical_metrics({"AAPL": df})
+        roc5 = result["AAPL"]["ROC_5"]
+        roc20 = result["AAPL"]["ROC_20"]
+        assert not math.isnan(roc5), f"ROC_5 should be a real value with 300 bars of clean history, got {roc5}"
+        assert not math.isnan(roc20), f"ROC_20 should be a real value with 300 bars of clean history, got {roc20}"
+
 
 # ============================================================================
 # BUG-5: Mutable default argument in evaluate_portfolio
