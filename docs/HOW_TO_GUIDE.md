@@ -175,6 +175,14 @@ The advisory orchestrator `main.py` does **not** use `DEFAULT_TICKERS`. It assem
 If all three are empty, `main.py` logs a warning that names all four remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`, Sheet2 column A) and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer regardless.
 
 See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
+### Universe Coverage
+
+The Pilots PWA provides a Universe panel that breaks down your symbols into three categories:
+1. **Tracked universe**: Everything evaluated by the pipeline (holdings + watchlists).
+2. **Forecast-covered**: Symbols that have an active price forecast model configured.
+3. **Full data coverage**: Symbols where both live pricing and fundamental data were successfully fetched on the latest run.
+
+These metrics help you see exactly what the pipeline is tracking and why some symbols may not be receiving forecasts.
 
 ### Symbol rating and automatic exclusion
 

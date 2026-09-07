@@ -1,11 +1,11 @@
 import { useState, type MouseEvent } from "react";
+import { Link } from "react-router";
 import { api } from "../api/client";
 import type { CoverageStatus, SyncReportResponse, SyncReportSymbol } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
 import { Button, ErrorState, Loading, MetricBadge } from "./ui";
-import { Toggle } from "./Toggle";
 import { theme } from "../theme";
 import { fmtNum, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 
@@ -256,7 +256,7 @@ function UniverseCoverageLive() {
     [],
   );
   useAutoPoll(reload, "robinhood", { hasError: error != null });
-  const [gapsOnly, setGapsOnly] = useState(false);
+  const [filter, setFilter] = useState<"all" | "forecast" | "full">("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const toggleExpanded = (symbol: string) => {
@@ -286,8 +286,8 @@ function UniverseCoverageLive() {
       {!loading && !error && data && (
         <UniverseCoverageBody
           data={data}
-          gapsOnly={gapsOnly}
-          onGapsOnlyChange={setGapsOnly}
+          filter={filter}
+          onFilterChange={setFilter}
           expanded={expanded}
           onToggleExpanded={toggleExpanded}
           onReincluded={reload}
@@ -315,15 +315,15 @@ export function UniverseCoverage() {
 
 function UniverseCoverageBody({
   data,
-  gapsOnly,
-  onGapsOnlyChange,
+  filter,
+  onFilterChange,
   expanded,
   onToggleExpanded,
   onReincluded,
 }: {
   data: SyncReportResponse;
-  gapsOnly: boolean;
-  onGapsOnlyChange: (v: boolean) => void;
+  filter: "all" | "forecast" | "full";
+  onFilterChange: (v: "all" | "forecast" | "full") => void;
   expanded: Set<string>;
   onToggleExpanded: (symbol: string) => void;
   onReincluded: () => void;
@@ -338,8 +338,13 @@ function UniverseCoverageBody({
   if (rows.length === 0) {
     return (
       <div className="empty" data-testid="universe-coverage-empty">
-        No symbols tracked yet — a held position or a Robinhood/watchlist-file
-        entry will appear here once one exists, or click Sync Now to discover them.
+        <p style={{ margin: "0 0 var(--s-2-5)" }}>
+          No symbols tracked yet — a held position or a Robinhood/watchlist-file
+          entry will appear here once one exists, or click Sync Now to discover them.
+        </p>
+        <p style={{ margin: 0 }}>
+          Looking for a specific symbol? Check the <Link to="/symbol-screener" style={{ color: "var(--growth)" }}>Symbol Screener</Link> for the wider market.
+        </p>
       </div>
     );
   }
@@ -352,25 +357,56 @@ function UniverseCoverageBody({
     uncovered: 0,
     unknown: 0,
   };
-  for (const r of rows) counts[r.coverage] += 1;
+  let forecastCovered = 0;
+  for (const r of rows) {
+    counts[r.coverage] += 1;
+    if (r.forecast_available) forecastCovered += 1;
+  }
 
-  const filtered = gapsOnly ? rows.filter((r) => r.coverage !== "full") : rows;
+  const filtered = rows.filter((r) => {
+    if (filter === "forecast") return r.forecast_available;
+    if (filter === "full") return r.coverage === "full";
+    return true; // all
+  });
 
   return (
     <>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
-        <MetricBadge label="Symbols" value={String(rows.length)} />
-        <MetricBadge label="Full" value={String(counts.full)} good />
-        <MetricBadge
-          label="Equity only"
-          value={String(counts.equity_only)}
-          good={counts.equity_only === 0}
-        />
-        <MetricBadge
-          label="Uncovered"
-          value={String(counts.uncovered)}
-          good={counts.uncovered === 0}
-        />
+        <button
+          type="button"
+          className={`badge ${filter === "all" ? "badge-good" : "badge-neutral"}`}
+          style={{ cursor: "pointer", border: "none", fontFamily: "inherit" }}
+          onClick={() => onFilterChange("all")}
+          data-testid="filter-all"
+        >
+          Tracked {rows.length}
+        </button>
+        <button
+          type="button"
+          className={`badge ${filter === "forecast" ? "badge-good" : "badge-neutral"}`}
+          style={{ cursor: "pointer", border: "none", fontFamily: "inherit" }}
+          onClick={() => onFilterChange("forecast")}
+          data-testid="filter-forecast"
+        >
+          Forecast-covered {forecastCovered}
+        </button>
+        <button
+          type="button"
+          className={`badge ${filter === "full" ? "badge-good" : "badge-neutral"}`}
+          style={{ cursor: "pointer", border: "none", fontFamily: "inherit" }}
+          onClick={() => onFilterChange("full")}
+          data-testid="filter-full"
+        >
+          Full coverage {counts.full}
+        </button>
+        
+        {/* Keep the negative/warning indicators visible if they exist */}
+        {counts.equity_only > 0 && (
+          <MetricBadge label="Equity only" value={String(counts.equity_only)} good={false} />
+        )}
+        {counts.uncovered > 0 && (
+          <MetricBadge label="Uncovered" value={String(counts.uncovered)} good={false} />
+        )}
       </div>
 
       {data.generated_at && (
@@ -380,18 +416,9 @@ function UniverseCoverageBody({
         </p>
       )}
 
-      <div style={{ marginBottom: "var(--s-2-5)" }}>
-        <Toggle
-          label="Coverage gaps only"
-          checked={gapsOnly}
-          onChange={onGapsOnlyChange}
-          dataTestId="universe-coverage-gaps-only"
-        />
-      </div>
-
       {filtered.length === 0 ? (
         <div className="empty" data-testid="universe-coverage-no-gaps" style={{ padding: "var(--s-4)" }}>
-          No coverage gaps — everything is FULL.
+          No symbols match the selected filter.
         </div>
       ) : (
         <div className="list">
