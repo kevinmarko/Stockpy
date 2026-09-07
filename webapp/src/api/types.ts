@@ -6079,3 +6079,41 @@ export interface StrategyReportCardRow {
  */
 export type StrategyReportCardSnapshot = StrategyReportCardRow[];
 
+/**
+ * One entry in `GET /signals/radar`'s ranked feed ("Today's Radar" --
+ * `pilots/radar_ranking.py::radar_feed`). `rank` is 1-indexed. Every
+ * sub-factor z-score is `null` (never a fabricated placeholder) when the
+ * pipeline didn't compute one for this symbol this cycle -- a symbol can
+ * carry a real `multifactor_composite` while missing an individual
+ * sub-factor, so each must be null-checked independently when rendering.
+ * `reason` is a server-templated, plain-English sentence that only names a
+ * sub-factor when it is actually present -- render it verbatim, never
+ * re-derive or paraphrase it client-side.
+ */
+export interface RadarItem {
+  symbol: string;
+  rank: number;
+  multifactor_composite: number;
+  value_z: number | null;
+  quality_z: number | null;
+  lowvol_z: number | null;
+  size_z: number | null;
+  sector: string | null;
+  price: number | null;
+  reason: string;
+}
+
+/**
+ * `GET /signals/radar` response. `items` is `[]` on a cold start (no
+ * pipeline run yet), a malformed snapshot, or a real snapshot where no
+ * tracked symbol has a computed `Multifactor_Composite` this cycle --
+ * `reason` carries the honest explanation for any of those (never a
+ * fabricated demo/example row, CONSTRAINT #4). `null` only when `items` is
+ * non-empty.
+ */
+export interface RadarFeedResponse {
+  as_of: string | null;
+  items: RadarItem[];
+  reason: string | null;
+}
+

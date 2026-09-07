@@ -90,6 +90,8 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The mean absolute contribution (score × weight) a signal module carries, averaged across every currently-tracked symbol — a quick 'which signals matter most right now' view. This is a linear, configured-weight breakdown, not SHAP or a machine-learned feature-importance measure: it uses the exact same fixed weights as 'signal weight' above, and captures no interaction effects between modules. A module with no data for a symbol this cycle is left out of that symbol's average entirely, never counted as a zero.",
   multifactor:
     "A cross-sectional blend of Value, Quality, Low-Volatility, and Size z-scores into one composite, ranking each name against the rest of the universe.",
+  "today's radar":
+    "A signal-based discovery feed: the symbols in your tracked universe with the highest Multifactor Composite right now, each with a one-sentence, server-generated reason built only from real computed numbers. Additive to the Symbol Screener's attribute-based search (sector, market cap, price) — this answers 'what is the model paying attention to today,' not 'find me a name matching these filters.' A symbol excluded from the feed simply has no computed composite this cycle, not a fabricated placeholder.",
   "cross-sectional momentum":
     "Ranks the universe by 12-1 month return (12-month lookback, skipping the most recent month to avoid reversal bias). Top-half names score positive. Based on Jegadeesh-Titman (1993).",
   "hmm regime":
@@ -266,6 +268,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "follow minimum",
       "buy range",
       "sell/stop range",
+      "today's radar",
     ],
   },
   portfolio: {

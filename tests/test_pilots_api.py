@@ -412,6 +412,74 @@ def test_symbols_compare_missing_query_param_422(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /signals/radar — "Today's Radar" ranked, explainable discovery feed
+# ---------------------------------------------------------------------------
+
+
+def test_signals_radar_shape_and_values(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/signals/radar")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"as_of", "items", "reason"}
+    assert body["as_of"] == "2026-07-11T21:05:00+00:00"
+    assert body["reason"] is None
+    assert len(body["items"]) == 8  # the fixture's 8 tracked symbols
+    item = body["items"][0]
+    assert set(item) == {
+        "symbol", "rank", "multifactor_composite", "value_z", "quality_z",
+        "lowvol_z", "size_z", "sector", "price", "reason",
+    }
+    assert item["rank"] == 1
+    # Descending by multifactor_composite.
+    composites = [i["multifactor_composite"] for i in body["items"]]
+    assert composites == sorted(composites, reverse=True)
+
+
+def test_signals_radar_limit_param(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/signals/radar?limit=3")
+    assert resp.status_code == 200
+    assert len(resp.json()["items"]) == 3
+
+
+def test_signals_radar_limit_out_of_range_422(monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        assert client.get("/signals/radar?limit=0").status_code == 422
+        assert client.get("/signals/radar?limit=51").status_code == 422
+
+
+def test_signals_radar_cold_start_never_500s(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STATE_API_TOKEN", "", raising=False)
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        resp = client.get("/signals/radar")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"] == []
+    assert body["as_of"] is None
+    assert body["reason"] == "No state snapshot yet — run the pipeline first."
+
+
+def test_signals_radar_read_token_gates_the_endpoint():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            assert client.get("/signals/radar").status_code == 401
+            resp = client.get(
+                "/signals/radar", headers={"Authorization": "Bearer read-tok"}
+            )
+            assert resp.status_code == 200
+            wrong = client.get(
+                "/signals/radar", headers={"Authorization": "Bearer WRONG"}
+            )
+            assert wrong.status_code == 401
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            assert client.get("/signals/radar").status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # GET /universe — the symbol-autocomplete source
 # ---------------------------------------------------------------------------
 

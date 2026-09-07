@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import type {
   SignalBreakdown as SignalBreakdownData,
@@ -252,7 +252,26 @@ function GlobalImportancePanel() {
 
 export function SignalBreakdown() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [symbol, setSymbol] = useState("AAPL");
+
+  // Cross-screen handoff from "Today's Radar" (Marketplace.tsx) and any
+  // other future caller — `?symbol=` preselects the ticker on first mount,
+  // mirroring the codebase's existing `?quickTradeSymbol=`/`?builder=`
+  // handoff pattern (PaperBroker.tsx/Commands.tsx). A `useRef` guard (not
+  // `searchParams` itself, which is a fresh object every render) ensures
+  // this fires at most once per mount.
+  const symbolHandoffDone = useRef(false);
+  useEffect(() => {
+    if (symbolHandoffDone.current) return;
+    const handoff = searchParams.get("symbol");
+    if (handoff) {
+      symbolHandoffDone.current = true;
+      setSymbol(handoff.trim().toUpperCase());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const { data, loading, error, status, reload } = useApi<SignalBreakdownData>(
     () => api.getSignalBreakdown(symbol),
     [symbol]

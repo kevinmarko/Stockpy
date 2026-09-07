@@ -171,6 +171,7 @@ from pilots import (
     options,
     pairs,
     performance,
+    radar_ranking,
     realized,
     rlhf_review_queue,
     rolling_beta,
@@ -1389,6 +1390,36 @@ def get_recommendations(
         "as_of": as_of,
         "reason": None if recs else "No BUY-rated recommendations in the latest snapshot yet.",
     }
+
+
+@app.get("/signals/radar", dependencies=[Depends(require_read_token)])
+def get_signals_radar(
+    limit: int = Query(10, ge=1, le=50),
+) -> Dict[str, Any]:
+    """"Today's Radar" — a small, ranked, explainable feed of the Top-``limit``
+    symbols in the tracked universe by ``Multifactor_Composite`` today, each
+    with a templated, honest one-sentence reason.
+
+    Additive to the attribute-based Symbol Screener (``GET
+    /data/symbol-search``, ``GET /data/screener``) — this is signal-based
+    discovery ("what is the model currently paying attention to"), not
+    attribute-based ("find me low-vol dividend names"). Zero new scoring
+    logic: reads and ranks the SAME already-computed, already-persisted
+    ``Multifactor_Composite`` cross-sectional z-score
+    (``signals/multifactor.py::pre_compute()``) that ``GET /symbols/{ticker}``
+    already exposes per-ticker — see ``pilots/radar_ranking.py`` for the pure
+    ranking logic.
+
+    Reads only persisted state (``output/state_snapshot.json``'s
+    ``signals[]``, restricted to the snapshot's own ``tickers[]`` — the
+    snapshot's ``signals[]`` list can carry a benchmark/proxy row, e.g. SPY,
+    that is not part of the tracked universe and must never appear in this
+    feed). A symbol with no computed composite this cycle is excluded
+    entirely, never backfilled (CONSTRAINT #4). Never 500s (CONSTRAINT #6) —
+    a cold start / malformed snapshot / a real snapshot with no symbol
+    carrying a composite yet all degrade to ``{"items": [], "reason": ...}``,
+    never a fabricated example row."""
+    return radar_ranking.radar_feed(_load_snapshot(), limit=limit)
 
 
 @app.get("/symbols/compare", dependencies=[Depends(require_read_token)])
