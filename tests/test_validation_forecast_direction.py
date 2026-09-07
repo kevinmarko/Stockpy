@@ -151,7 +151,7 @@ class TestBuildForecastDirectionAdapter:
         by the sibling tests in this class (test_returns_three_items_and_variant,
         test_score_weighted_book_not_rank_based, test_no_lookahead_shift1,
         test_real_forecast_alignment_signal_reused) and by
-        TestForecastDirectionIntegration's real yfinance end-to-end test.
+        TestForecastDirectionIntegration's real FMP end-to-end test.
         """
         idx = pd.bdate_range("2005-01-01", periods=252 * 10)  # ~10 years
         rng = np.random.RandomState(1)
@@ -254,11 +254,12 @@ class TestBuildForecastDirectionAdapter:
         assert (pre["ForecastDirection_ScoreWeighted"] == 0.0).all()
 
     def test_universe_constant_matches_edgar_pit_universe(self) -> None:
-        """Sanity-check the module-level universe constant used for
-        registration is the intended SPY benchmark + 10-ticker subset."""
-        assert FORECAST_DIRECTION_UNIVERSE == [
-            "SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F",
-        ]
+        """Sanity-check the module-level universe constant is lazily evaluated
+        and contains SPY as a benchmark."""
+        universe = FORECAST_DIRECTION_UNIVERSE()
+        assert isinstance(universe, list)
+        assert len(universe) > 0
+        assert "SPY" in universe
 
 
 # ---------------------------------------------------------------------------

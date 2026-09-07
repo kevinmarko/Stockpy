@@ -126,7 +126,24 @@ class AgenticForecastBackfiller:
         caught and logged, never allowed to abort training (CONSTRAINT #6 --
         checkpoint plumbing must never be the reason a real model fails to
         train)."""
-        self.tickers = tickers or settings.DEFAULT_TICKERS or ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"]
+        if tickers:
+            self.tickers = tickers
+        else:
+            from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
+            try:
+                from data.robinhood_portfolio import fetch_account_snapshot
+                snapshot = fetch_account_snapshot(allow_live_fetch=False)
+                held = snapshot.positions.keys() if snapshot else ()
+            except Exception as e:
+                import logging
+                logging.getLogger("ML.ForecastBackfill").warning("Failed to fetch account snapshot: %s", e)
+                held = ()
+            
+            self.tickers = compute_tracked_universe(
+                held=held,
+                watchlist=load_env_watchlist("watchlist.txt"),
+                default_tickers=settings.DEFAULT_TICKERS,
+            )
         self.end_date = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date:
             self.start_date = start_date

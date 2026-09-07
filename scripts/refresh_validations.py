@@ -1670,7 +1670,29 @@ FORECAST_DIRECTION_HORIZON_DAYS = 30
 
 # Universe for forecast_direction_arima_hw: SPY added as benchmark-only
 # market-trend overlay (Faber SMA-200), plus 10 tradeable liquid large caps.
-FORECAST_DIRECTION_UNIVERSE = ["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"]
+def _get_forecast_direction_universe() -> list[str]:
+    from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
+    from settings import settings
+    import logging
+    try:
+        from data.robinhood_portfolio import fetch_account_snapshot
+        snapshot = fetch_account_snapshot(allow_live_fetch=False)
+        held = snapshot.positions.keys() if snapshot else ()
+    except Exception as e:
+        logging.getLogger(__name__).warning("Failed to fetch account snapshot: %s", e)
+        held = ()
+    
+    universe = compute_tracked_universe(
+        held=held,
+        watchlist=load_env_watchlist("watchlist.txt"),
+        default_tickers=settings.DEFAULT_TICKERS,
+    )
+    if "SPY" not in universe:
+        universe.append("SPY")
+    return sorted(set(universe))
+
+FORECAST_DIRECTION_UNIVERSE = _get_forecast_direction_universe
+
 
 
 def _weekly_rebalance_dates(common_index: pd.DatetimeIndex) -> List[pd.Timestamp]:
@@ -3555,7 +3577,7 @@ def _build_ungateable_adapter(reason: str) -> Callable[[pd.Series], Tuple[pd.Dat
         raise RuntimeError(f"UNGATEABLE_DATA_GAP: {reason}")
     return adapter
 
-STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
+STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, Union[List[str], Callable[[], List[str]]]]] = {
 
     "options_flow_sentiment": (_build_options_flow_sentiment_adapter, 0.04, ["SPY"]),
     # Turnover corrected 2026-08 (empirical measurement): Connors RSI(2) on SPY
@@ -3664,7 +3686,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "forecast_direction_arima_hw": (
         _build_forecast_direction_adapter,
         0.02,
-        FORECAST_DIRECTION_UNIVERSE,
+        _get_forecast_direction_universe,
     ),
     # Real SignalAggregator/SignalRegistry replay across history (see
     # _build_signal_replay_adapter's docstring for the full honesty contract:
@@ -4052,6 +4074,8 @@ def _validate_single_strategy(
     logger.info("Validating: %s", name)
     try:
         adapter_fn, turnover, universe = STRATEGY_REGISTRY[name]
+        if callable(universe):
+            universe = universe()
         available = [
             t for t in universe
             if t in closes_df.columns and closes_df[t].notna().any()
@@ -4279,7 +4303,7 @@ def run_validations(
     # never read the result.
     known = [s for s in strategies if s in STRATEGY_REGISTRY]
     ticker_union = sorted({
-        t for s in known for t in STRATEGY_REGISTRY[s][2]
+        t for s in known for t in (STRATEGY_REGISTRY[s][2]() if callable(STRATEGY_REGISTRY[s][2]) else STRATEGY_REGISTRY[s][2])
     })
     share_tickers = sorted({
         t
