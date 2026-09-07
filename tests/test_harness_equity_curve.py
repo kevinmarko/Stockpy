@@ -16,6 +16,7 @@ from validation.harness import (
     ValidationReport,
     _build_equity_curve,
     _build_macro_benchmark_curve,
+    _spy_return_series,
 )
 
 
@@ -195,6 +196,141 @@ class TestBuildMacroBenchmarkCurve:
         assert _build_macro_benchmark_curve(
             self._idx(), None, "2020-01-01", "2020-06-30"
         ) == []
+
+
+class TestSpyReturnSeriesFmpPrimary:
+    """``_spy_return_series`` is FMP-primary, yfinance-fallback (see
+    ``_spy_return_series_fmp``/``_spy_return_series_yfinance``). Both tiers
+    are patched directly by their exact qualified names -- the dispatcher
+    itself (``_spy_return_series``) is what every OTHER test in this file
+    patches wholesale, so those tests are unaffected by this internal split.
+    """
+
+    def _idx(self, n=60):
+        return pd.date_range("2020-01-01", periods=n, freq="B")
+
+    def test_fmp_success_is_used_as_is_yfinance_never_called(self, monkeypatch):
+        idx = self._idx()
+        fmp_series = pd.Series(0.0007, index=idx)
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series_fmp",
+            lambda oos_index, s, e: fmp_series.reindex(oos_index),
+        )
+
+        def _boom(oos_index, s, e):
+            raise AssertionError("yfinance fallback must not run when FMP succeeds")
+
+        monkeypatch.setattr("validation.harness._spy_return_series_yfinance", _boom)
+
+        result = _spy_return_series(idx, "2020-01-01", "2020-06-30")
+        assert result is not None
+        pd.testing.assert_series_equal(result, fmp_series.reindex(idx), check_names=False)
+
+    def test_fmp_none_falls_back_to_yfinance(self, monkeypatch):
+        idx = self._idx()
+        yf_series = pd.Series(0.0003, index=idx)
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series_fmp",
+            lambda oos_index, s, e: None,
+        )
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series_yfinance",
+            lambda oos_index, s, e: yf_series.reindex(oos_index),
+        )
+        result = _spy_return_series(idx, "2020-01-01", "2020-06-30")
+        assert result is not None
+        pd.testing.assert_series_equal(result, yf_series.reindex(idx), check_names=False)
+
+    def test_fmp_raises_falls_back_to_yfinance(self, monkeypatch):
+        # _spy_return_series_fmp itself never raises in practice (its own body
+        # is fully try/except-guarded per CONSTRAINT #6), but the dispatcher
+        # ALSO defensively wraps the FMP call (belt-and-suspenders) so a
+        # raising FMP tier -- however that might happen -- still falls back
+        # to yfinance instead of propagating.
+        idx = self._idx()
+        yf_series = pd.Series(0.0002, index=idx)
+
+        def _boom(oos_index, s, e):
+            raise RuntimeError("network boom")
+
+        monkeypatch.setattr("validation.harness._spy_return_series_fmp", _boom)
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series_yfinance",
+            lambda oos_index, s, e: yf_series.reindex(oos_index),
+        )
+        result = _spy_return_series(idx, "2020-01-01", "2020-06-30")
+        assert result is not None
+        pd.testing.assert_series_equal(result, yf_series.reindex(idx), check_names=False)
+
+    def test_both_tiers_fail_yields_none(self, monkeypatch):
+        idx = self._idx()
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series_fmp",
+            lambda oos_index, s, e: None,
+        )
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series_yfinance",
+            lambda oos_index, s, e: None,
+        )
+        assert _spy_return_series(idx, "2020-01-01", "2020-06-30") is None
+
+    def test_fmp_tier_unset_api_key_degrades_to_none_not_a_raise(self, monkeypatch):
+        # historical_eod_full_range raises FMPUnavailable synchronously when
+        # FMP_API_KEY is unset -- confirm _spy_return_series_fmp swallows it
+        # (CONSTRAINT #6) rather than letting the dispatcher see an exception.
+        from validation.harness import _spy_return_series_fmp
+        from data.fmp_client import FMPUnavailable
+
+        def _raise_unavailable(*args, **kwargs):
+            raise FMPUnavailable("FMP_API_KEY is not set")
+
+        monkeypatch.setattr(
+            "data.fmp_client.historical_eod_full_range", _raise_unavailable
+        )
+        idx = self._idx()
+        assert _spy_return_series_fmp(idx, "2020-01-01", "2020-06-30") is None
+
+    def test_fmp_tier_empty_payload_degrades_to_none(self, monkeypatch):
+        from validation.harness import _spy_return_series_fmp
+
+        monkeypatch.setattr(
+            "data.fmp_client.historical_eod_full_range", lambda *a, **k: []
+        )
+        idx = self._idx()
+        assert _spy_return_series_fmp(idx, "2020-01-01", "2020-06-30") is None
+
+    def test_fmp_tier_real_payload_builds_return_series(self, monkeypatch):
+        from validation.harness import _spy_return_series_fmp
+
+        idx = self._idx()
+        payload = [
+            {
+                "date": d.strftime("%Y-%m-%d"),
+                "open": 400.0 + i * 0.1,
+                "high": 401.0 + i * 0.1,
+                "low": 399.0 + i * 0.1,
+                "close": 400.0 + i * 0.2,
+                "volume": 1_000_000,
+            }
+            for i, d in enumerate(idx)
+        ]
+        monkeypatch.setattr(
+            "data.fmp_client.historical_eod_full_range", lambda *a, **k: payload
+        )
+        result = _spy_return_series_fmp(idx, "2020-01-01", "2020-06-30")
+        assert result is not None
+        assert not result.dropna().empty
+
+    def test_dispatcher_is_the_stable_patch_point_used_elsewhere_in_this_file(self):
+        # Every other test class in this file patches
+        # "validation.harness._spy_return_series" by exact qualified name --
+        # confirm that name still resolves to a callable after the internal
+        # FMP/yfinance split (a plain import-error regression guard).
+        import validation.harness as harness_module
+
+        assert callable(harness_module._spy_return_series)
+        assert callable(harness_module._spy_return_series_fmp)
+        assert callable(harness_module._spy_return_series_yfinance)
 
 
 class TestRunBenchmarkAlignment:
