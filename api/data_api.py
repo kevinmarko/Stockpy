@@ -309,13 +309,27 @@ def get_current_fundamentals(symbol: str) -> Dict[str, Any]:
 
     ``provider.get_fundamentals`` returns a **plain dict** and never raises
     (it degrades to ``{}``). An empty dict → 404 (honest "no coverage").
+
+    ``FMPProvider.get_fundamentals`` (via ``data.fmp_fundamentals.map_fundamentals``)
+    stows a real ``pandas.Series`` under the internal-plumbing key
+    ``"_dividends_series"`` whenever the symbol has dividend history (e.g.
+    AAPL) — deliberately not part of this endpoint's yfinance-mirroring JSON
+    contract (see that function's docstring). Returning it as-is crashed
+    pydantic's response serializer with ``PydanticSerializationError:
+    Unable to serialize unknown type: <class 'pandas.core.series.Series'>``,
+    which — since it's an unhandled exception rather than an ``HTTPException``
+    — produced a 500 with no CORS headers, surfacing to the browser as an
+    opaque "network error" rather than a real server error. Built as a new
+    dict (never mutated in place) since ``provider.get_fundamentals`` results
+    are cache-backed and shared across calls.
     """
     symbol = symbol.upper()
     provider = get_provider()
     fundamentals = provider.get_fundamentals(symbol) or {}
     if not fundamentals:
         raise HTTPException(status_code=404, detail=f"No fundamentals available for {symbol}")
-    return _clean_nan(fundamentals)
+    public = {k: v for k, v in fundamentals.items() if k != "_dividends_series"}
+    return _clean_nan(public)
 
 
 @app.get("/data/fundamentals/{symbol}/history", dependencies=[Depends(require_token)])
