@@ -118,6 +118,54 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
   });
 
+  it("renders macro_benchmark_note as always-visible text near the S&P 500 legend, never a hover-only tooltip", async () => {
+    vi.spyOn(api, "getPerformance").mockResolvedValueOnce({
+      range: "1Y",
+      metrics: { sharpe: 1.1, dsr: 0.97, pbo: 0.3, max_drawdown: 0.2, deployable: true },
+      curve: [
+        { date: "2024-01-31", value: 100 },
+        { date: "2024-06-30", value: 110 },
+      ],
+      benchmark: null,
+      macro_benchmark: [
+        { date: "2024-01-31", value: 100 },
+        { date: "2024-03-31", value: 102 },
+      ],
+      macro_benchmark_note:
+        "S&P 500 overlay data is only available through 2024-03-31 (91 days behind the Pilot's own track record).",
+    });
+
+    renderDetail("trend-following");
+
+    expect(
+      await screen.findByText(/S&P 500 overlay data is only available through 2024-03-31/i)
+    ).toBeInTheDocument();
+  });
+
+  it("does not render a disclosure row when macro_benchmark_note is null", async () => {
+    vi.spyOn(api, "getPerformance").mockResolvedValueOnce({
+      range: "1Y",
+      metrics: { sharpe: 1.1, dsr: 0.97, pbo: 0.3, max_drawdown: 0.2, deployable: true },
+      curve: [
+        { date: "2024-01-31", value: 100 },
+        { date: "2024-06-30", value: 110 },
+      ],
+      benchmark: null,
+      macro_benchmark: [
+        { date: "2024-01-31", value: 100 },
+        { date: "2024-06-30", value: 105 },
+      ],
+      macro_benchmark_note: null,
+    });
+
+    renderDetail("trend-following");
+
+    await screen.findByText("S&P 500");
+    expect(
+      screen.queryByText(/overlay data is only available through/i)
+    ).not.toBeInTheDocument();
+  });
+
   it("offline with a cached performance curve (client.ts's localStorage fallback) renders the cached chart behind a stale-data notice", async () => {
     const err = new ApiError("Network error reaching Pilots API", 0);
     err.cachedData = {

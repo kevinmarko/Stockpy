@@ -212,6 +212,11 @@ export interface PerformanceResponse {
   // `benchmark` (the strategy's own underlying). null when SPY was unavailable
   // or the underlying already IS SPY (redundant); never fabricated.
   macro_benchmark: CurvePoint[] | null;
+  // Honest disclosure when the persisted SPY overlay's real data trails the
+  // Pilot's own track record by more than a few calendar days (e.g. a report
+  // persisted before the macro-benchmark fetch became FMP-primary). null when
+  // not applicable (in sync, or macro_benchmark itself is null).
+  macro_benchmark_note?: string | null;
   reason?: string; // present when curve is null ("no backtest series yet")
 }
 
