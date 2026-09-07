@@ -175,14 +175,30 @@ The advisory orchestrator `main.py` does **not** use `DEFAULT_TICKERS`. It assem
 If all three are empty, `main.py` logs a warning that names all four remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`, Sheet2 column A) and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer regardless.
 
 See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
+
 ### Universe Coverage
 
-The Pilots PWA provides a Universe panel that breaks down your symbols into three categories:
-1. **Tracked universe**: Everything evaluated by the pipeline (holdings + watchlists).
-2. **Forecast-covered**: Symbols that have an active price forecast model configured.
-3. **Full data coverage**: Symbols where both live pricing and fundamental data were successfully fetched on the latest run.
+The Pilots PWA's Settings → Tracked Universe screen includes a coverage
+panel with three honest counts. Note this reads a narrower universe than
+`main.py`'s own three-tier assembly described above — held positions plus
+Robinhood/file-backed watchlists only, not the Sheet2 fallback or
+scan-discovered candidates:
 
-These metrics help you see exactly what the pipeline is tracking and why some symbols may not be receiving forecasts.
+1. **Tracked**: every symbol in this report.
+2. **Forecast-covered**: the subset with a price forecast recorded recently
+   by the pipeline (the platform's forecast-tracking database) — this
+   reflects whether the pipeline actually forecast that symbol lately, not a
+   fixed sector or model list.
+3. **Full data coverage**: the subset where a live check, performed when you
+   load the screen (not read from a cached pipeline artifact), confirmed
+   price quotes, historical bars, and fundamental data are all available
+   right now.
+
+Each count is clickable to filter the symbol list below it. These numbers
+often genuinely diverge — a symbol can be tracked without a recent forecast
+(e.g. it was only just added), or forecast-covered without full data
+coverage (e.g. fundamentals are temporarily unavailable from the data
+provider).
 
 ### Symbol rating and automatic exclusion
 

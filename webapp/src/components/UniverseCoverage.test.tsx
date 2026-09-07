@@ -95,7 +95,7 @@ describe("UniverseCoverage (real mock API)", () => {
   it("clicking the top summary badges filters the list", async () => {
     renderLive();
     await screen.findByTestId("universe-coverage-row-AAPL");
-    
+
     // Initially all are shown
     expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
     expect(screen.getByTestId("universe-coverage-row-DUK")).toBeInTheDocument();
@@ -114,6 +114,54 @@ describe("UniverseCoverage (real mock API)", () => {
     fireEvent.click(screen.getByTestId("filter-all"));
     expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
     expect(screen.getByTestId("universe-coverage-row-DUK")).toBeInTheDocument();
+  });
+
+  it("renders the three honest counts (Tracked / Forecast-covered / Full coverage) correctly, and they genuinely diverge", async () => {
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-AAPL");
+    // The mock's ROWS fixture has 8 symbols total (AAPL/MSFT/NVDA/V/COST/
+    // DUK/T/XOM). forecast_available is true for whichever symbols have a
+    // working quote leg (full/stale/quotes_only) = AAPL, MSFT, NVDA, V,
+    // COST = 5. coverage === "full" only for AAPL, MSFT, COST = 3. This is a
+    // genuinely diverging case already present in the fixture -- not
+    // contrived to make the assertion pass -- exercising exactly the
+    // scenario the implementation plan's §8 testing requirement calls for.
+    expect(screen.getByTestId("filter-all")).toHaveTextContent("Tracked 8");
+    expect(screen.getByTestId("filter-forecast")).toHaveTextContent("Forecast-covered 5");
+    expect(screen.getByTestId("filter-full")).toHaveTextContent("Full coverage 3");
+  });
+
+  it("renders all three counts equal when every tracked symbol is both forecast-covered and fully covered", async () => {
+    const makeRow = (symbol: string): SyncReportResponse["symbols"][string] => ({
+      symbol,
+      coverage: "full",
+      held: true,
+      quantity: 10,
+      avg_cost: 100,
+      current_price: 105,
+      cost_basis_delta_per_share: 5,
+      market_value: 1050,
+      is_stale_quote: false,
+      quote_source: "alpaca",
+      has_fundamentals: true,
+      forecast_available: true,
+      watchlists: [],
+      diagnostic: "",
+    });
+    const allEqual: SyncReportResponse = {
+      generated_at: new Date().toISOString(),
+      positions: ["AAA", "BBB", "CCC"],
+      watchlists: {},
+      symbols: { AAA: makeRow("AAA"), BBB: makeRow("BBB"), CCC: makeRow("CCC") },
+      provider_source: "alpaca",
+      fundamentals_source: "yahoo_computed",
+    };
+    vi.spyOn(api, "getSyncReport").mockResolvedValue(allEqual);
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-AAA");
+    expect(screen.getByTestId("filter-all")).toHaveTextContent("Tracked 3");
+    expect(screen.getByTestId("filter-forecast")).toHaveTextContent("Forecast-covered 3");
+    expect(screen.getByTestId("filter-full")).toHaveTextContent("Full coverage 3");
   });
 
   it("renders the honest empty state when nothing is tracked yet", async () => {
