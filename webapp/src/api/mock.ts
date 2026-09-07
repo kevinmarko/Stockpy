@@ -106,6 +106,7 @@ import type { StrategyReportCardSnapshot,
   PortfolioForecastSkill,
   PortfolioHeatMetric,
   PortfolioRiskMetrics,
+  RadarFeedResponse,
   RealizedPerformance,
   TradeHistoryPage,
   RegimeOverlay,
@@ -9330,6 +9331,52 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
+    getSignalsRadar: async (limit = 10): Promise<RadarFeedResponse> => {
+      await delay(300);
+      // A realistic mixed-honesty payload, matching the real live shape
+      // observed in output/state_snapshot.json -- not every symbol has every
+      // sub-factor z-score computed every cycle (SRET-style below has a real
+      // composite but a missing lowvol_z), so this exercises the null-safe
+      // reason-string rendering path even in mock mode.
+      const all: RadarFeedResponse["items"] = [
+        {
+          symbol: "NVDA", rank: 1, multifactor_composite: 1.42,
+          value_z: -0.3, quality_z: 1.9, lowvol_z: -0.8, size_z: 2.1,
+          sector: "Technology", price: 118.4,
+          reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).",
+        },
+        {
+          symbol: "MSFT", rank: 2, multifactor_composite: 1.05,
+          value_z: 0.4, quality_z: 1.3, lowvol_z: 0.6, size_z: 1.8,
+          sector: "Technology", price: 415.2,
+          reason: "#2 by Multifactor Composite in the tracked universe today (Size Z +1.8, Quality Z +1.3).",
+        },
+        {
+          symbol: "JNJ", rank: 3, multifactor_composite: 0.87,
+          value_z: 0.6, quality_z: 0.7, lowvol_z: null, size_z: 1.1,
+          sector: "Healthcare", price: 156.9,
+          reason: "#3 by Multifactor Composite in the tracked universe today (Size Z +1.1, Quality Z +0.7).",
+        },
+        {
+          symbol: "AAPL", rank: 4, multifactor_composite: 0.63,
+          value_z: -0.4, quality_z: 1.2, lowvol_z: 0.3, size_z: -1.9,
+          sector: "Technology", price: 224.2,
+          reason: "#4 by Multifactor Composite in the tracked universe today (Size Z -1.9, Quality Z +1.2).",
+        },
+        {
+          symbol: "XOM", rank: 5, multifactor_composite: 0.5,
+          value_z: 1.35, quality_z: -0.2, lowvol_z: 0.75, size_z: -1.55,
+          sector: "Energy", price: 118.6,
+          reason: "#5 by Multifactor Composite in the tracked universe today (Value Z +1.4, Size Z -1.6).",
+        },
+      ];
+      const capped = Math.max(1, Math.min(limit, 50));
+      return {
+        as_of: new Date().toISOString(),
+        items: all.slice(0, capped),
+        reason: null,
+      };
+    },
     getStrategyReportCard: async (): Promise<StrategyReportCardSnapshot> => {
     await delay(600);
     return [

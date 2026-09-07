@@ -1,12 +1,54 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { api, apiMeta } from "../api/client";
-import type { PilotSummary } from "../api/types";
+import type { PilotSummary, RadarItem } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PilotCard, PopularCard } from "../components/PilotCard";
+import { RadarCard } from "../components/RadarCard";
 import { ErrorState, Loading, StaleDataNotice, InfoTip } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
+
+/**
+ * "Today's Radar" — a small, ranked, explainable signal-based discovery feed
+ * (`GET /signals/radar`), additive to the attribute-based Symbol Screener.
+ * Deliberately renders nothing on a genuine backend failure (the screen's
+ * existing top-level `ErrorState` already covers `listPilots` failures; a
+ * second full-screen error for one panel would be jarring) — degrades
+ * silently to nothing on `error`, but always shows the backend's own honest
+ * empty-state `reason` (never a fabricated example row) when the fetch
+ * SUCCEEDS with zero items.
+ */
+function RadarSection() {
+  const { data, loading, error } = useApi<{ items: RadarItem[]; reason: string | null }>(
+    () => api.getSignalsRadar(6),
+    []
+  );
+
+  if (loading) return <Loading lines={2} />;
+  if (error) return null;
+  if (!data) return null;
+
+  return (
+    <section>
+      <div className="rail-head">
+        <h2>Today's Radar</h2>
+        <span className="rail-sub">What the model is paying attention to today</span>
+      </div>
+      {data.items.length === 0 ? (
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-callout)" }}>
+          {data.reason ?? "No signals computed yet for this cycle."}
+        </p>
+      ) : (
+        <div className="rail">
+          {data.items.map((item) => (
+            <RadarCard key={item.symbol} item={item} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function Rail({
   title,
@@ -111,6 +153,8 @@ export function Marketplace() {
       </div>
 
       <TabGuide tabKey="pilots" />
+
+      <RadarSection />
 
       {loading && <Loading lines={3} />}
 

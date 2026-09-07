@@ -9,9 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SignalBreakdown } from "./SignalBreakdown";
 import { api } from "../api/client";
 
-function renderScreen() {
+function renderScreen(initialEntry = "/signals") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <SignalBreakdown />
     </MemoryRouter>
   );
@@ -45,6 +45,31 @@ describe("SignalBreakdown screen (real mock API)", () => {
     expect(
       await screen.findByText(/No signal modules ran for ZZZZ/)
     ).toBeInTheDocument();
+  });
+
+  describe("?symbol= cross-screen handoff (Today's Radar click-through)", () => {
+    it("preselects the symbol from the query param on first mount", async () => {
+      const spy = vi.spyOn(api, "getSignalBreakdown");
+      renderScreen("/signals?symbol=NVDA");
+      // The default "AAPL" call may or may not fire before the handoff effect
+      // runs; what matters is the final resolved symbol is NVDA, not AAPL.
+      await screen.findByText("timeseries_momentum");
+      expect(spy).toHaveBeenCalledWith("NVDA");
+    });
+
+    it("uppercases and trims a lowercase/whitespace-padded query param", async () => {
+      const spy = vi.spyOn(api, "getSignalBreakdown");
+      renderScreen("/signals?symbol=  nvda  ");
+      await screen.findByText("timeseries_momentum");
+      expect(spy).toHaveBeenCalledWith("NVDA");
+    });
+
+    it("with no query param, falls back to the default symbol unchanged", async () => {
+      const spy = vi.spyOn(api, "getSignalBreakdown");
+      renderScreen("/signals");
+      await screen.findByText("timeseries_momentum");
+      expect(spy).toHaveBeenCalledWith("AAPL");
+    });
   });
 
   describe("Signal driver weights (universe-wide) panel", () => {

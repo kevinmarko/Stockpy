@@ -70,6 +70,7 @@ import type { StrategyReportCardSnapshot,
   Holding,
   Portfolio,
   PortfolioAttribution,
+  RadarFeedResponse,
   RealizedPerformance,
   RollingBeta,
   RunRecord,
@@ -435,6 +436,8 @@ async function http<T>(
 // ---- Live client (shape-identical to mockApi) ----
 const liveApi = {
   getStrategyReportCard: () => http<StrategyReportCardSnapshot>("/strategy/report-card"),
+  getSignalsRadar: (limit = 10) =>
+    http<RadarFeedResponse>(`/signals/radar?limit=${limit}`),
   health: () => http<{ status: string }>("/health"),
   listPilots: () => http<PilotSummary[]>("/pilots"),
   getPilot: (id: string) =>
