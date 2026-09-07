@@ -221,6 +221,12 @@ class StrategyEngine:
                           sma_200: float = 0.0,
                           rsi_2: float = 50.0,
                           sma_5: Optional[float] = None,
+                          roc_6m: float = 0.0,
+                          vol_20: Optional[float] = None,
+                          vol_50: Optional[float] = None,
+                          vol_ratio: Optional[float] = None,
+                          roc_5: float = 0.0,
+                          roc_20: float = 0.0,
                           strategy_id: Optional[str] = None,
                           etf_transmission_multiplier: Optional[float] = None,
                           robinhood_position: Optional[RobinhoodPositionDTO] = None,
@@ -249,6 +255,15 @@ class StrategyEngine:
             ``settings.ETF_TRANSMISSION_SIZING_ENABLED`` is False or this
             name has no ETF coverage -- is the exact no-op 1.0, NEVER a NaN
             that would poison the weight (see that module's docstring).
+        roc_6m, vol_20, vol_50, vol_ratio, roc_5, roc_20 : float or None
+            Additive feature-widening params feeding the Forecast Backfill
+            Meta-Labeler Bridge's live row (see
+            ``ml/meta_bootstrap.py::LIVE_ROW_FEATURE_WHITELIST``). All
+            default to today's exact behavior (0.0 / None) when not
+            supplied by a caller. Not consumed by any existing primary-
+            signal ``compute()`` method except
+            ``signals/options_flow_sentiment.py``, which reads ``ROC_5``/
+            ``ROC_20`` as a momentum-proxy fallback for its own score.
         """
         current_price = bar.close
         ticker = bar.ticker
@@ -286,6 +301,16 @@ class StrategyEngine:
             "SMA_200": sma_200,
             "RSI_2": rsi_2,
             "SMA_5": sma_5_resolved,
+            "roc_6m": roc_6m,
+            "ROC_6M": roc_6m,
+            "Vol_20": vol_20,
+            "Vol_50": vol_50,
+            "Vol_Ratio": vol_ratio,
+            "RSI_14": rsi,
+            "MACD": macd_line,
+            "MACD_Signal": macd_signal,
+            "ROC_5": roc_5,
+            "ROC_20": roc_20,
         })
         
         from signals.base import SignalContext
