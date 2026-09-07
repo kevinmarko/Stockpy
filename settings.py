@@ -1152,9 +1152,19 @@ class Settings(BaseSettings):
     FMP_PROFILE_ENABLED: bool = Field(
         default=True,
         description=(
-            "Master switch for FMP company profile wrapper (/profile) "
-            "used by GET /data/explain/{symbol}. Defaults True by explicit "
-            "operator decision."
+            "Master switch for the FMP company profile wrapper "
+            "(data/fmp_client.py::company_profile, /profile) used by the "
+            "'Explain This Ticker' panel's GET /data/explain/{symbol} "
+            "endpoint. Defaults True by explicit operator decision, "
+            "accepting that this endpoint has NOT been verified against a "
+            "live FMP account -- field names (companyName/description/"
+            "sector/industry/exchange/website/ceo are typical FMP fields; "
+            "the market-cap field name is genuinely ambiguous between "
+            "mktCap and marketCap) are best-effort guesses -- see "
+            "docs/FMP_INTEGRATION.md §10 and scripts/verify_fmp_profile.py "
+            "before trusting this live. company_profile() never raises and "
+            "degrades to None on any failure or when disabled/unconfigured, "
+            "with zero network calls when this flag is False."
         ),
     )
     # ── FMP behavior knobs ───────────────────────────────────────────────

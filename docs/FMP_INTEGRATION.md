@@ -419,3 +419,87 @@ import is lazy, inside the function body). Proven by
 `tests/test_fmp_screener.py` (module-level gate/degrade coverage) and
 `tests/test_data_api_screener.py` (endpoint-level flag-off/honest-reason
 coverage for all three routes).
+
+## 10. Company profile feed (2026-09 addition)
+
+Added for the Pilots PWA's "Explain This Ticker" panel (`GET
+/data/explain/{symbol}`, `api/data_api.py`), which needed a plain-English
+"what does this company do" section — no plain-language company description
+existed anywhere in this codebase before this addition; every other FMP feed
+in this document is numeric/tabular.
+
+**Endpoint used:** `data/fmp_client.py::company_profile(symbol)` wraps the
+bare `profile(symbol)` call to `GET /profile` (single-symbol company profile
+— name, description, sector, industry, exchange, website, CEO, market cap).
+Unlike this module's other wrappers, `company_profile()` is not a thin
+pass-through: it is the gated, never-raising entry point consumers should
+call — `profile()` itself stays a bare `_fmp_get` wrapper for anything that
+needs the raw call directly (mirroring `stock_news()`/`historical_eod()`'s
+existing "gate lives one layer up" precedent, except here both the raw call
+and its gated wrapper live in the same module because there is exactly one
+consumer and no separate dispatcher file the way `data/fmp_universe.py`/
+`data/fmp_screener.py` exist for §8/§9).
+
+**⚠️ NOT verified against a live FMP account — field names are best-effort
+guesses, explicitly flagged as such in the implementation plan that
+introduced this feed.** Unlike §7's and §9's endpoints (confirmed live
+against a real, working FMP account), this integration was built and
+audited in a sandbox with no configured `FMP_API_KEY`, so nothing below has
+been confirmed against a real `/profile` response. The commonly-documented
+`/profile` fields (`companyName`, `description`, `sector`, `industry`,
+`exchange`, `website`, `ceo`) are typical across FMP's v3 and `stable` API
+families and are a reasonably safe bet. **The market-cap field name is
+genuinely ambiguous and unresolved**: FMP's legacy `/api/v3/profile` family
+documents `mktCap`, while the `stable` family this codebase's
+`FMP_BASE_URL` defaults to (see §2) documents `marketCap` for the sibling
+`/company-screener` endpoint (`docs/FMP_INTEGRATION.md` §9's confirmed
+schema) — whether `/profile` on the `stable` family uses `mktCap`,
+`marketCap`, or both was not checked against a live response as part of
+this feature. `api/data_api.py::explain_ticker` is written defensively
+because of this: it reads `prof_dict.get("mktCap") or prof_dict.get("marketCap")`
+rather than trusting either name alone. `data/fmp_client.py::company_profile`
+itself never depends on any specific field — it returns the first raw
+profile dict unmodified, so a renamed/missing field degrades to a missing
+key in the consumer's own read, never a wrapper-level crash. **Before
+relying on this in production, run `python scripts/verify_fmp_profile.py`
+against a real, configured `FMP_API_KEY`** (checks `companyName`/`sector`/
+`description` are present and `description` is a genuine, non-trivial
+string — see the script's own docstring for exit codes) and separately
+confirm the real market-cap field name by inspecting one live response
+directly. Update this section with a "Verified live YYYY-MM-DD" note (and
+the real field name) once that check has actually been run — do not treat
+this note as satisfied by anything less.
+
+**Gate:** `settings.FMP_PROFILE_ENABLED` (default `True`, following this
+document's established "diagnostic feed defaults on by explicit operator
+decision" convention — see §3) plus `settings.FMP_API_KEY` being configured;
+both are checked, in that order, before any request is built.
+`company_profile()` never raises: an `FMPUnavailable` (429/5xx exhausted
+retries, or the circuit breaker open) or any other exception is caught,
+logged at WARNING, and degrades to `None` — the same "honest unavailable,
+never a fabricated description" contract every consumer of this wrapper
+relies on (CONSTRAINT #4).
+
+**Not a `SignalModule`, not written into `SIGNAL_WEIGHTS`.** Like every
+other diagnostic feed in this document, `/profile` serves only the CURRENT
+company profile — there is no point-in-time history to backtest against, so
+this is a read-only, on-demand, request-scoped capability only, with no
+lookahead-test obligation.
+
+**Consumers:**
+- `api/data_api.py::explain_ticker` (`GET /data/explain/{symbol}`) — one of
+  four independently-sourced sections in the aggregated "Explain This
+  Ticker" response. Degrades to `{"available": False, "reason": "FMP
+  profile unavailable for {symbol}"}` (every field `None`) on any failure —
+  never a placeholder company name or fabricated description — so a
+  `FMP_PROFILE_ENABLED=False` deployment and a genuine fetch failure render
+  identically honest to the caller.
+
+**Flag-off is byte-identical.** With `FMP_PROFILE_ENABLED=False`,
+`data/fmp_client.py::company_profile()` returns `None` immediately after
+one settings check, before `profile()` — and therefore `_fmp_get` and any
+HTTP call — is ever reached; zero network calls. Proven by
+`tests/test_fmp_client.py::TestCompanyProfile::test_company_profile_disabled_returns_none`
+(asserts the underlying `profile()` mock is never called) and
+`tests/test_verify_fmp_profile.py` (the manual verification CLI's own
+gate-check coverage).

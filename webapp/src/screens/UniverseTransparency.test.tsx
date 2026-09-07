@@ -1,23 +1,44 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { MemoryRouter } from "react-router";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { UniverseTransparency } from "./UniverseTransparency";
 import { ExplainTickerProvider } from "../context/ExplainTickerContext";
 import { ExplainTickerDrawer } from "../components/ExplainTickerDrawer";
+import { AutoRefreshProvider } from "../components/AutoRefreshContext";
 import { api } from "../api/client";
 
+/**
+ * `GET /data/sync-report` can trigger a real Robinhood login when the cached
+ * snapshot is stale (see CLAUDE.md's ROBINHOOD_AUTO_REFRESH_ENABLED bullet),
+ * so `UniverseTransparency` -- like its sibling `UniverseCoverage.tsx` --
+ * does not fetch unconditionally on mount; it only does so once the
+ * "robinhood" auto-refresh category is on. These tests exercise the live
+ * view's existing behavior, so they render with that category seeded on,
+ * matching what an operator who has opted in sees (mirrors
+ * `UniverseCoverage.test.tsx`'s identical `renderLive()` convention).
+ */
 function renderUniverseTransparency() {
   return render(
-    <ExplainTickerProvider>
-      <UniverseTransparency />
-      <ExplainTickerDrawer />
-    </ExplainTickerProvider>
+    <AutoRefreshProvider>
+      <MemoryRouter>
+        <ExplainTickerProvider>
+          <UniverseTransparency />
+          <ExplainTickerDrawer />
+        </ExplainTickerProvider>
+      </MemoryRouter>
+    </AutoRefreshProvider>
   );
 }
 
 describe("UniverseTransparency screen", () => {
+  beforeEach(() => {
+    localStorage.setItem("stockpy.auto_refresh.robinhood_enabled", "1");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("renders header, provenance data, and 6 KPI summary cards", async () => {
@@ -85,7 +106,12 @@ describe("UniverseTransparency screen", () => {
     await userEvent.clear(searchInput);
     await userEvent.type(searchInput, "NONEXISTENT");
 
+    // A non-empty universe filtered down to zero matches is a DIFFERENT,
+    // distinct honest state from a genuinely empty universe (see the
+    // dedicated cold-start test below) -- must render the filter-specific
+    // empty state, not the "nothing tracked yet" one.
     expect(screen.getByTestId("empty-filtered-state")).toBeInTheDocument();
+    expect(screen.queryByTestId("universe-transparency-empty")).not.toBeInTheDocument();
     expect(screen.queryByTestId("universe-row-AAPL")).not.toBeInTheDocument();
   });
 
@@ -175,5 +201,138 @@ describe("UniverseTransparency screen", () => {
     await userEvent.click(reincludeBtn);
 
     expect(reincludeSpy).toHaveBeenCalledWith("EXCL");
+  });
+
+  it("distinguishes a real 0-bad-cycles rating from no rating history at all", async () => {
+    // CONSTRAINT #4: `rating_consecutive_bad_cycles == null` (no history)
+    // must never render identically to a symbol genuinely verified clean
+    // for zero consecutive bad cycles -- both used to render "0 bad".
+    vi.spyOn(api, "getSyncReport").mockResolvedValueOnce({
+      generated_at: new Date().toISOString(),
+      positions: [],
+      watchlists: {},
+      symbols: {
+        RATED_CLEAN: {
+          symbol: "RATED_CLEAN",
+          coverage: "full",
+          held: false,
+          quantity: 0,
+          avg_cost: null,
+          current_price: 100,
+          cost_basis_delta_per_share: null,
+          market_value: null,
+          is_stale_quote: false,
+          quote_source: "alpaca",
+          has_fundamentals: true,
+          forecast_available: true,
+          watchlists: ["file:watchlist.txt"],
+          diagnostic: "",
+          rating_consecutive_bad_cycles: 0,
+          rating_excluded: false,
+        },
+        UNRATED: {
+          symbol: "UNRATED",
+          coverage: "full",
+          held: false,
+          quantity: 0,
+          avg_cost: null,
+          current_price: 100,
+          cost_basis_delta_per_share: null,
+          market_value: null,
+          is_stale_quote: false,
+          quote_source: "alpaca",
+          has_fundamentals: true,
+          forecast_available: true,
+          watchlists: ["file:watchlist.txt"],
+          diagnostic: "",
+          rating_consecutive_bad_cycles: null,
+          rating_excluded: false,
+        },
+      },
+      provider_source: "alpaca",
+      fundamentals_source: "yahoo",
+    });
+
+    renderUniverseTransparency();
+
+    const ratedRow = await screen.findByTestId("universe-row-RATED_CLEAN");
+    const unratedRow = await screen.findByTestId("universe-row-UNRATED");
+
+    expect(ratedRow).toHaveTextContent("0 bad");
+    // "No rating history" must render a distinct em-dash, never the same
+    // "0 bad" text a genuinely-rated-clean symbol gets.
+    expect(unratedRow).not.toHaveTextContent("0 bad");
+    expect(unratedRow).toHaveTextContent("—");
+  });
+
+  it("renders an honest cold-start empty state for a genuinely empty universe, distinct from a filtered-to-zero result", async () => {
+    vi.spyOn(api, "getSyncReport").mockResolvedValueOnce({
+      generated_at: new Date().toISOString(),
+      positions: [],
+      watchlists: {},
+      symbols: {},
+      provider_source: "",
+      fundamentals_source: "",
+    });
+
+    renderUniverseTransparency();
+
+    expect(await screen.findByTestId("universe-transparency-empty")).toHaveTextContent(
+      /No symbols tracked yet/i,
+    );
+    expect(screen.queryByTestId("empty-filtered-state")).not.toBeInTheDocument();
+    // Points the operator at the wider market rather than a dead end.
+    expect(screen.getByRole("link", { name: /Symbol Screener/i })).toBeInTheDocument();
+  });
+});
+
+describe("UniverseTransparency — idle by default (Robinhood category gate)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it("does not call GET /data/sync-report on mount when the robinhood category is off (default)", async () => {
+    const spy = vi.spyOn(api, "getSyncReport");
+    render(
+      <AutoRefreshProvider>
+        <MemoryRouter>
+          <ExplainTickerProvider>
+            <UniverseTransparency />
+            <ExplainTickerDrawer />
+          </ExplainTickerProvider>
+        </MemoryRouter>
+      </AutoRefreshProvider>
+    );
+
+    expect(await screen.findByTestId("universe-transparency-idle")).toHaveTextContent(
+      "Coverage report not loaded",
+    );
+    expect(screen.getByTestId("universe-transparency-load")).toBeInTheDocument();
+    // Sync Universe stays reachable from the idle view too.
+    expect(screen.getByTestId("sync-now-button")).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("clicking 'Load coverage report' fetches exactly once and renders the live view", async () => {
+    const spy = vi.spyOn(api, "getSyncReport");
+    render(
+      <AutoRefreshProvider>
+        <MemoryRouter>
+          <ExplainTickerProvider>
+            <UniverseTransparency />
+            <ExplainTickerDrawer />
+          </ExplainTickerProvider>
+        </MemoryRouter>
+      </AutoRefreshProvider>
+    );
+
+    await screen.findByTestId("universe-transparency-idle");
+    expect(spy).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId("universe-transparency-load"));
+
+    expect(await screen.findByTestId("universe-row-AAPL")).toBeInTheDocument();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

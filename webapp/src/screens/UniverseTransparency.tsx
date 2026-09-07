@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { Link } from "react-router";
 import {
   Globe,
   RefreshCw,
@@ -14,6 +15,8 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useAutoRefresh } from "../components/AutoRefreshContext";
 import type { CoverageStatus, SyncReportResponse, SyncReportSymbol } from "../api/types";
 import { Button, Loading, ErrorState } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
@@ -22,6 +25,14 @@ import { fmtUsd, fmtNum, timeAgo } from "../format";
 
 export type FilterTab = "all" | "gaps" | "held" | "watchlists" | "excluded";
 
+// Mirrors data.portfolio_sync.CoverageStatus badge styling/labels EXACTLY as
+// used by the sibling coverage panel (webapp/src/components/UniverseCoverage.tsx,
+// reachable from Settings -> Tracked Universe) -- duplicated here rather than
+// imported, since the two components live in independently-owned files, but
+// kept byte-identical on purpose: the same six-value backend enum must never
+// read as two different vocabularies depending which screen an operator
+// happens to be looking at (see CLAUDE.md's "Universe Transparency panel"
+// bullet for the full history of that already-audited component).
 const COVERAGE_BADGE_CLASS: Record<CoverageStatus, string> = {
   full: "badge-good",
   stale: "badge-warn",
@@ -33,18 +44,167 @@ const COVERAGE_BADGE_CLASS: Record<CoverageStatus, string> = {
 
 const COVERAGE_LABEL: Record<CoverageStatus, string> = {
   full: "Full",
-  stale: "Stale Quotes",
-  quotes_only: "Quotes Only",
-  equity_only: "Equity Only",
+  stale: "Stale",
+  quotes_only: "Quotes only",
+  equity_only: "Equity only",
   uncovered: "Uncovered",
   unknown: "Unknown",
 };
 
-export const UniverseTransparency: React.FC = () => {
+/**
+ * Rating-streak cell for a symbol row. `rating_consecutive_bad_cycles` is
+ * `undefined`/`null` when the rating engine has no history for this symbol
+ * yet -- NOT the same fact as a symbol verified clean for zero consecutive
+ * bad cycles, and must never render identically to it (CONSTRAINT #4).
+ * Mirrors `UniverseCoverage.tsx`'s `ratingCyclesLabel` null-vs-zero
+ * distinction; duplicated rather than imported for the same cross-file
+ * reason as the label maps above.
+ */
+function ratingCyclesCell(cycles: number | null | undefined): React.ReactElement {
+  if (cycles == null) {
+    return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  }
+  if (cycles > 0) {
+    return <span style={{ color: "var(--caution)" }}>{cycles} bad cycle(s)</span>;
+  }
+  return <span style={{ color: "var(--text-muted)" }}>0 bad</span>;
+}
+
+/**
+ * UniverseTransparencyIdle -- rendered whenever the "robinhood" auto-refresh
+ * category is off and the operator hasn't explicitly loaded the report yet.
+ * `GET /data/sync-report` recomputes coverage live and CAN trigger a real
+ * Robinhood login when the cached account snapshot is stale and the operator
+ * has `ROBINHOOD_AUTO_REFRESH_ENABLED=True` (see CLAUDE.md) -- this screen
+ * must not fetch on mount by default, mirroring the identical guard already
+ * shipped and audited on `UniverseCoverage.tsx` (Settings -> Tracked
+ * Universe), which reads this exact same endpoint. "Sync Universe"
+ * (`POST /data/sync`) is a different, always-manual-only mutation that stays
+ * reachable here too; a successful sync arms the live view so the operator
+ * immediately sees what they just synced.
+ */
+function UniverseTransparencyIdle({ onLoad }: { onLoad: () => void }) {
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{ text: string; isError: boolean } | null>(null);
+
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await api.postDataSync();
+      setSyncMessage({
+        text: `Sync completed: ${res.default_tickers.length} tickers configured. ${res.note || ""}`,
+        isError: false,
+      });
+      onLoad();
+    } catch (err: any) {
+      setSyncMessage({
+        text: err?.message || "Universe sync failed.",
+        isError: true,
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div
+      className="page"
+      data-testid="universe-transparency-screen"
+      style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}
+    >
+      <div
+        style={{
+          background: "var(--surface)",
+          padding: "var(--s-4)",
+          borderRadius: "var(--r-md)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <Globe size={22} color="var(--accent)" />
+          <h1 style={{ margin: 0, fontSize: "var(--t-title)", fontWeight: 700 }}>
+            Universe Transparency
+          </h1>
+        </div>
+        <p
+          style={{
+            margin: "var(--s-1) 0 0",
+            color: "var(--text-secondary)",
+            fontSize: "var(--t-body)",
+          }}
+        >
+          Real-time market data coverage, portfolio sync status, and data pipeline verification
+          across all tracked symbols.
+        </p>
+        <p
+          style={{
+            margin: "var(--s-1) 0 0",
+            color: "var(--text-muted)",
+            fontSize: "var(--t-caption)",
+          }}
+        >
+          Looking to add or remove symbols? Manage the list in{" "}
+          <Link to="/settings/universe" style={{ color: "var(--accent)" }}>
+            Settings → Tracked Universe
+          </Link>
+          .
+        </p>
+      </div>
+
+      <TabGuide tabKey="universe" />
+
+      <div
+        data-testid="universe-transparency-idle"
+        style={{
+          background: "var(--surface)",
+          padding: "var(--s-6)",
+          borderRadius: "var(--r-sm)",
+          border: "1px dashed var(--border)",
+          textAlign: "center",
+        }}
+      >
+        <p style={{ margin: "0 0 var(--s-3)", color: "var(--text-secondary)" }}>
+          Coverage report not loaded. Fetching it can trigger a live Robinhood login.
+        </p>
+        <div style={{ display: "flex", justifyContent: "center", gap: "var(--s-2)", flexWrap: "wrap" }}>
+          <Button variant="neutral" onClick={onLoad} data-testid="universe-transparency-load">
+            Load coverage report
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleSyncNow}
+            disabled={syncing}
+            data-testid="sync-now-button"
+            style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1)" }}
+          >
+            <Layers size={14} className={syncing ? "spin" : ""} />
+            <span>{syncing ? "Syncing..." : "Sync Universe"}</span>
+          </Button>
+        </div>
+        {syncMessage && (
+          <div
+            className={`notice ${syncMessage.isError ? "notice-warn" : "notice-success"}`}
+            style={{ marginTop: "var(--s-3)" }}
+            role="status"
+          >
+            <span>{syncMessage.text}</span>
+          </div>
+        )}
+        <p style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)", margin: "var(--s-3) 0 0" }}>
+          — or turn on Robinhood auto-refresh in Settings → Data & Automation.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function UniverseTransparencyLive() {
   const { data, loading, error, status, reload } = useApi<SyncReportResponse>(
     () => api.getSyncReport(),
     [],
   );
+  useAutoPoll(reload, "robinhood", { hasError: error != null });
 
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -189,6 +349,19 @@ export const UniverseTransparency: React.FC = () => {
             >
               Real-time market data coverage, portfolio sync status, and data pipeline verification
               across all tracked symbols.
+            </p>
+            <p
+              style={{
+                margin: "var(--s-1) 0 0",
+                color: "var(--text-muted)",
+                fontSize: "var(--t-caption)",
+              }}
+            >
+              Looking to add or remove symbols? Manage the list in{" "}
+              <Link to="/settings/universe" style={{ color: "var(--accent)" }}>
+                Settings → Tracked Universe
+              </Link>
+              .
             </p>
           </div>
 
@@ -488,7 +661,39 @@ export const UniverseTransparency: React.FC = () => {
         <ErrorState message={error} status={status} onRetry={reload} />
       )}
 
-      {!loading && !error && filteredRows.length === 0 && (
+      {/* Genuinely-empty universe (no held positions, no watchlists at all)
+          renders a distinct, honest cold-start message -- never the generic
+          "no symbols found matching your filter criteria" text, which would
+          misrepresent "nothing is tracked yet" as "your filter is too
+          narrow" (mirrors UniverseCoverage.tsx's universe-coverage-empty
+          state and its Symbol Screener pointer for the wider market). */}
+      {!loading && !error && rows.length === 0 && (
+        <div
+          data-testid="universe-transparency-empty"
+          style={{
+            padding: "var(--s-6)",
+            textAlign: "center",
+            background: "var(--surface)",
+            borderRadius: "var(--r-sm)",
+            border: "1px dashed var(--border)",
+            color: "var(--text-muted)",
+          }}
+        >
+          <p style={{ margin: "0 0 var(--s-2)" }}>
+            No symbols tracked yet — a held position or a Robinhood/watchlist-file entry will
+            appear here once one exists, or click Sync Universe above to discover them.
+          </p>
+          <p style={{ margin: 0 }}>
+            Looking for a specific symbol? Check the{" "}
+            <Link to="/symbol-screener" style={{ color: "var(--growth)" }}>
+              Symbol Screener
+            </Link>{" "}
+            for the wider market.
+          </p>
+        </div>
+      )}
+
+      {!loading && !error && rows.length > 0 && filteredRows.length === 0 && (
         <div
           data-testid="empty-filtered-state"
           style={{
@@ -645,13 +850,7 @@ export const UniverseTransparency: React.FC = () => {
                           Excluded
                         </span>
                       )}
-                      {r.rating_consecutive_bad_cycles != null && r.rating_consecutive_bad_cycles > 0 ? (
-                        <span style={{ color: "var(--caution)" }}>
-                          {r.rating_consecutive_bad_cycles} bad cycle(s)
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--text-muted)" }}>0 bad</span>
-                      )}
+                      {ratingCyclesCell(r.rating_consecutive_bad_cycles)}
                       {r.rating_excluded && (
                         <button
                           type="button"
@@ -715,6 +914,24 @@ export const UniverseTransparency: React.FC = () => {
       )}
     </div>
   );
+}
+
+/**
+ * UniverseTransparency -- gates the fetch itself, not just a subsequent
+ * poll. Opening this route (e.g. via nav) must never itself trigger a live
+ * Robinhood login: the idle view renders (and mounts no `useApi`/
+ * `useAutoPoll` at all) until the "robinhood" auto-refresh category is on,
+ * or the operator explicitly arms it via "Load coverage report" / a manual
+ * sync. See `UniverseTransparencyIdle`'s docstring and
+ * `UniverseCoverage.tsx`'s identical, already-audited precedent.
+ */
+export const UniverseTransparency: React.FC = () => {
+  const { robinhoodRefreshEnabled } = useAutoRefresh();
+  const [armed, setArmed] = useState(false);
+  if (!robinhoodRefreshEnabled && !armed) {
+    return <UniverseTransparencyIdle onLoad={() => setArmed(true)} />;
+  }
+  return <UniverseTransparencyLive />;
 };
 
 export default UniverseTransparency;

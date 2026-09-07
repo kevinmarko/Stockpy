@@ -9,14 +9,10 @@ Adversarial stress-testing suite for Milestone M3:
 from __future__ import annotations
 
 import json
-import math
-import sqlite3
-from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 import urllib.parse
 
-import pandas as pd
 import pytest
 import requests
 from fastapi.testclient import TestClient
@@ -127,7 +123,7 @@ class TestExplainEndpointAdversarial:
         """Verify lower, mixed, and upper case symbols produce consistent normalized responses."""
         monkeypatch.setattr(data_api, "company_profile", lambda sym: {"companyName": "Test Co", "description": "Desc"})
         monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={}))
-        monkeypatch.setattr(data_api, "_query_daily_signals", lambda sym: None)
+        monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: None)
 
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
             for variant in ["aapl", "AaPl", "AAPL"]:
@@ -191,17 +187,26 @@ class TestExplainEndpointAdversarial:
         assert resp.status_code == expected_code
         assert "Symbol cannot be empty" in resp.json()["detail"]
 
-    def test_database_operational_error_in_daily_signals(self, monkeypatch):
-        """Verify that when sqlite3 raises OperationalError (e.g. database locked or corrupted),
-        _query_daily_signals catches it and explain_ticker cleanly reports factor_breakdown unavailable.
+    def test_snapshot_read_failure_degrades_factor_breakdown_honestly(self, monkeypatch):
+        """Verify that when the state-snapshot read fails (corrupt/unreadable
+        output/state_snapshot.json, e.g. disk error), _load_symbol_signal
+        catches it and explain_ticker cleanly reports factor_breakdown
+        unavailable rather than raising a 500.
+
+        factor_breakdown is sourced from output/state_snapshot.json (the
+        same persisted per-cycle read pilots/symbols.py / pilots/
+        radar_ranking.py already use), NOT the DailySignals SQLite table --
+        see docs/known_issues/daily_signals_missing_table.md for why a
+        DailySignals query would always report empty regardless of pipeline
+        health.
         """
         monkeypatch.setattr(data_api, "company_profile", lambda s: {"companyName": "OK Co"})
         monkeypatch.setattr(data_api, "build_sync_report", lambda s, **k: SimpleNamespace(symbols={}))
 
-        def mock_sqlite_connect(*args, **kwargs):
-            raise sqlite3.OperationalError("database is locked")
+        def mock_load_snapshot():
+            raise OSError("disk read error")
 
-        monkeypatch.setattr(sqlite3, "connect", mock_sqlite_connect)
+        monkeypatch.setattr(data_api, "load_snapshot", mock_load_snapshot)
 
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
             resp = client.get("/data/explain/LOCKED")
@@ -209,13 +214,13 @@ class TestExplainEndpointAdversarial:
         assert resp.status_code == 200
         data = resp.json()
         assert data["factor_breakdown"]["available"] is False
-        assert "No signals recorded" in data["factor_breakdown"]["reason"]
+        assert "No signals computed this cycle" in data["factor_breakdown"]["reason"]
 
     def test_untracked_nonexistent_ticker_honesty(self, monkeypatch):
         """A ticker that has never existed anywhere must cleanly report untracked without errors."""
         monkeypatch.setattr(data_api, "company_profile", lambda s: None)
         monkeypatch.setattr(data_api, "build_sync_report", lambda s, **k: SimpleNamespace(symbols={}))
-        monkeypatch.setattr(data_api, "_query_daily_signals", lambda s: None)
+        monkeypatch.setattr(data_api, "_load_symbol_signal", lambda s: None)
 
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
             resp = client.get("/data/explain/NONEXISTENT999")
@@ -232,10 +237,14 @@ class TestExplainEndpointAdversarial:
         assert data["price_history_status"]["available"] is False
         assert data["price_history_status"]["status"] == "no_data"
 
-    def test_malformed_quantity_type_vulnerability(self, monkeypatch):
-        """Adversarially probe line 1010 of api/data_api.py where float(status_entry.quantity)
-        is unshielded by a try-except block. Demonstrates that non-numeric quantity strings
-        cause an uncaught ValueError.
+    def test_malformed_quantity_type_degrades_gracefully(self, monkeypatch):
+        """Regression test for a fixed CONSTRAINT #6 violation: a non-numeric
+        SymbolStatus.quantity/avg_cost/market_value used to hit a bare
+        float()/math.isnan() call with no guard, raising an uncaught
+        ValueError/TypeError straight out of the endpoint (HTTP 500) instead
+        of degrading honestly. Fixed by routing all three through
+        pilots.scoring._coerce_float (never a bare float()), so a malformed
+        value now degrades to None and the request still returns 200.
         """
         bad_status = SimpleNamespace(
             symbol="MALFORMED_QTY",
@@ -252,12 +261,23 @@ class TestExplainEndpointAdversarial:
             "build_sync_report",
             lambda snap, **k: SimpleNamespace(symbols={"MALFORMED_QTY": bad_status}),
         )
-        monkeypatch.setattr(data_api, "_query_daily_signals", lambda s: None)
+        monkeypatch.setattr(data_api, "_load_symbol_signal", lambda s: None)
 
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with pytest.raises(ValueError, match="could not convert string to float"):
-                # Direct call to endpoint function demonstrates unhandled exception
-                data_api.explain_ticker("MALFORMED_QTY")
+            # Direct call to the endpoint function -- must no longer raise.
+            result = data_api.explain_ticker("MALFORMED_QTY")
+
+        assert result["tracking"]["tracked"] is True
+        assert result["tracking"]["held"] is True
+        assert result["tracking"]["quantity"] is None  # degraded, never a crash or a fabricated 0.0
+        assert result["tracking"]["avg_cost"] == 100.0  # a genuine numeric field is unaffected
+
+        # Same probe via the real HTTP path -- confirms no 500 escapes FastAPI's
+        # own exception handling either.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/data/explain/MALFORMED_QTY")
+        assert resp.status_code == 200
+        assert resp.json()["tracking"]["quantity"] is None
 
 
 # ==============================================================================

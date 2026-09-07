@@ -6154,17 +6154,35 @@ export interface ExplainTracking {
 }
 
 /**
- * Factor breakdown from DailySignals for GET /data/explain/{symbol}.
- * Read-only adapter; available is false if no signals computed for this cycle.
+ * Factor breakdown for GET /data/explain/{symbol} -- a plain read of
+ * output/state_snapshot.json's per-symbol signal entry (the SAME persisted,
+ * per-cycle data pilots/symbols.py's Symbol Detail page and
+ * pilots/radar_ranking.py's Today's Radar feed already surface), NOT
+ * DailySignals (that table is structurally, permanently empty -- see
+ * docs/known_issues/daily_signals_missing_table.md). Read-only adapter;
+ * available is false if no signals computed for this cycle.
+ *
+ * `multifactor`/`momentum` stay a loose Record because ExplainTickerDrawer
+ * renders them generically via Object.entries() -- but `volatility_regime`
+ * and `sentiment` are accessed by fixed property name in the drawer, so
+ * they're typed precisely on purpose: a looser Record type here previously
+ * let the drawer read nonexistent keys (`.regime`, `.aggregate_score`) that
+ * silently rendered "--" against real data with no compile error.
  */
 export interface ExplainFactorBreakdown {
   available: boolean;
   as_of: string | null;
   multifactor: Record<string, number | null> | null;
   momentum: Record<string, number | null> | null;
-  volatility_regime: Record<string, number | null> | null;
+  volatility_regime: {
+    regime: string | null;
+    hmm_risk_on_probability: number | null;
+    garch_vol: number | null;
+  } | null;
   tactical: Record<string, any> | null;
-  sentiment: Record<string, number | null> | null;
+  sentiment: {
+    aggregate_score: number | null;
+  } | null;
   raw_factors: Record<string, any>;
   reason: string | null;
 }

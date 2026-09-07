@@ -33,7 +33,12 @@ describe("Milestone M3 Frontend Adversarial Testing", () => {
       expect(res.tracking.tracked).toBe(false);
       expect(res.tracking.held).toBe(false);
       expect(res.tracking.quantity).toBeNull();
-      expect(res.tracking.coverage_status).toBe("uncovered");
+      // "untracked" is the real literal api/data_api.py emits for a symbol
+      // that's neither held nor watchlisted -- "uncovered" is a genuine
+      // CoverageStatus value reserved for a *tracked* symbol the data
+      // providers can't cover, a different fact (fixed 2026-09 audit: a
+      // prior mock/backend drift had this test pinned to the wrong value).
+      expect(res.tracking.coverage_status).toBe("untracked");
       expect(res.factor_breakdown.available).toBe(false);
       expect(res.factor_breakdown.reason).toContain("not tracked in the quantitative pipeline");
       expect(res.price_history_status.available).toBe(false);
@@ -264,6 +269,8 @@ describe("Milestone M3 Frontend Adversarial Testing", () => {
           },
           volatility_regime: {
             regime: null,
+            hmm_risk_on_probability: null,
+            garch_vol: null,
           },
           tactical: null,
           sentiment: {
@@ -353,6 +360,165 @@ describe("Milestone M3 Frontend Adversarial Testing", () => {
         await userEvent.click(backdrop);
         expect(onClose).toHaveBeenCalledTimes(1);
       }
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 4. Price chart honesty: bars gaps must never render as a fabricated
+  //    interpolated line, and a "stale" price_history_status must be
+  //    honestly surfaced rather than rendered indistinguishably from fresh
+  //    data (CONSTRAINT #4; mirrors GexProfileView.tsx's chain_source
+  //    honesty-banner precedent for degraded chart data).
+  // --------------------------------------------------------------------------
+  describe("Price chart bars-gap and staleness honesty", () => {
+    const basePayload = (): ExplainTickerResponse => ({
+      symbol: "GAPCO",
+      company_profile: {
+        available: true,
+        company_name: "Gap Co",
+        description: "A test company.",
+        sector: "Technology",
+        industry: "Software",
+        exchange: "NASDAQ",
+        website: null,
+        ceo: null,
+        market_cap: null,
+        source: "fmp",
+        reason: null,
+      },
+      tracking: {
+        tracked: true,
+        held: false,
+        quantity: null,
+        avg_cost: null,
+        market_value: null,
+        watchlists: [],
+        coverage_status: "full",
+        rating_consecutive_bad_cycles: null,
+        rating_excluded: false,
+        reasons: [],
+      },
+      factor_breakdown: {
+        available: false,
+        as_of: null,
+        multifactor: null,
+        momentum: null,
+        volatility_regime: null,
+        tactical: null,
+        sentiment: null,
+        raw_factors: {},
+        reason: "No daily signals computed for this cycle",
+      },
+      price_history_status: {
+        available: true,
+        bar_count: 3,
+        earliest_date: "2026-01-01",
+        latest_date: "2026-02-01",
+        latest_close: 150,
+        status: "ok",
+        reason: null,
+      },
+    });
+
+    it("renders an honest gap notice and never a smooth line across a real multi-week bars gap", async () => {
+      vi.spyOn(api, "getExplainTicker").mockResolvedValue(basePayload());
+      vi.spyOn(api, "getDataBars").mockResolvedValue([
+        { date: "2026-01-01", Open: 100, High: 101, Low: 99, Close: 100, Volume: 1000 },
+        { date: "2026-01-02", Open: 101, High: 102, Low: 100, Close: 101, Volume: 1000 },
+        // A genuine ~30-day gap in the underlying bars (e.g. an unbackfilled
+        // stretch) -- the chart must break the line here, not connect it.
+        { date: "2026-02-01", Open: 150, High: 151, Low: 149, Close: 150, Volume: 1000 },
+      ]);
+
+      render(
+        <ExplainTickerProvider>
+          <ExplainTickerDrawer symbol="GAPCO" isOpen={true} onClose={vi.fn()} />
+        </ExplainTickerProvider>
+      );
+
+      expect(await screen.findByTestId("price-chart")).toBeInTheDocument();
+      const gapNotice = await screen.findByTestId("price-gap-notice");
+      expect(gapNotice).toHaveTextContent(/Data gap detected/i);
+      expect(gapNotice).toHaveTextContent(/1 period/i);
+    });
+
+    it("does not render a gap notice for a genuinely continuous bars series", async () => {
+      vi.spyOn(api, "getExplainTicker").mockResolvedValue(basePayload());
+      vi.spyOn(api, "getDataBars").mockResolvedValue([
+        { date: "2026-01-01", Open: 100, High: 101, Low: 99, Close: 100, Volume: 1000 },
+        { date: "2026-01-02", Open: 101, High: 102, Low: 100, Close: 101, Volume: 1000 },
+        { date: "2026-01-03", Open: 102, High: 103, Low: 101, Close: 102, Volume: 1000 },
+      ]);
+
+      render(
+        <ExplainTickerProvider>
+          <ExplainTickerDrawer symbol="GAPCO" isOpen={true} onClose={vi.fn()} />
+        </ExplainTickerProvider>
+      );
+
+      expect(await screen.findByTestId("price-chart")).toBeInTheDocument();
+      expect(screen.queryByTestId("price-gap-notice")).not.toBeInTheDocument();
+    });
+
+    it("honestly flags stale price history instead of rendering it indistinguishably from fresh data", async () => {
+      const payload = basePayload();
+      payload.price_history_status.status = "stale";
+      payload.price_history_status.reason = "Last refreshed 3 days ago";
+      vi.spyOn(api, "getExplainTicker").mockResolvedValue(payload);
+      vi.spyOn(api, "getDataBars").mockResolvedValue([
+        { date: "2026-01-01", Open: 100, High: 101, Low: 99, Close: 100, Volume: 1000 },
+        { date: "2026-01-02", Open: 101, High: 102, Low: 100, Close: 101, Volume: 1000 },
+      ]);
+
+      render(
+        <ExplainTickerProvider>
+          <ExplainTickerDrawer symbol="GAPCO" isOpen={true} onClose={vi.fn()} />
+        </ExplainTickerProvider>
+      );
+
+      expect(await screen.findByTestId("price-chart")).toBeInTheDocument();
+      const badge = await screen.findByTestId("price-stale-notice");
+      expect(badge).toHaveTextContent(/stale/i);
+      const banner = await screen.findByTestId("price-stale-banner");
+      expect(banner).toHaveTextContent(/stale/i);
+      expect(banner).toHaveTextContent(/Last refreshed 3 days ago/i);
+    });
+
+    it("does not show a stale notice for fresh (status: ok) price history", async () => {
+      vi.spyOn(api, "getExplainTicker").mockResolvedValue(basePayload());
+      vi.spyOn(api, "getDataBars").mockResolvedValue([
+        { date: "2026-01-01", Open: 100, High: 101, Low: 99, Close: 100, Volume: 1000 },
+      ]);
+
+      render(
+        <ExplainTickerProvider>
+          <ExplainTickerDrawer symbol="GAPCO" isOpen={true} onClose={vi.fn()} />
+        </ExplainTickerProvider>
+      );
+
+      expect(await screen.findByTestId("price-chart")).toBeInTheDocument();
+      expect(screen.queryByTestId("price-stale-notice")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("price-stale-banner")).not.toBeInTheDocument();
+    });
+
+    it("honestly falls back to the no-bars notice when status is 'no_data' even if available is (inconsistently) true", async () => {
+      const payload = basePayload();
+      payload.price_history_status.status = "no_data";
+      payload.price_history_status.reason = "No historical bars stored";
+      vi.spyOn(api, "getExplainTicker").mockResolvedValue(payload);
+      vi.spyOn(api, "getDataBars").mockResolvedValue([
+        { date: "2026-01-01", Open: 100, High: 101, Low: 99, Close: 100, Volume: 1000 },
+      ]);
+
+      render(
+        <ExplainTickerProvider>
+          <ExplainTickerDrawer symbol="GAPCO" isOpen={true} onClose={vi.fn()} />
+        </ExplainTickerProvider>
+      );
+
+      const noBars = await screen.findByTestId("no-price-bars-notice");
+      expect(noBars).toBeInTheDocument();
+      expect(screen.queryByTestId("price-chart")).not.toBeInTheDocument();
     });
   });
 });

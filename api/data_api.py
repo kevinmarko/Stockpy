@@ -34,8 +34,6 @@ import base64
 import logging
 import math
 from datetime import date
-import os
-import sqlite3
 from typing import Any, Dict, List, Optional
 import json
 import asyncio
@@ -88,9 +86,16 @@ from llm.chart_insight import generate_chart_pattern_read, render_price_chart_pn
 from llm.research import generate_research_brief
 from pilots.catalog import get_pilot as _catalog_get_pilot, list_pilots as _catalog_list_pilots
 from pilots.observability import observability_summary as _pilots_observability_summary
-from pilots.scoring import load_snapshot
+from pilots.scoring import _coerce_float, load_snapshot
 from pilots.scoring import pilot_holdings as _pilots_pilot_holdings
 from pilots.scoring import pilot_trades as _pilots_pilot_trades
+# `find_signal`/`_clean_str` are the SAME persisted-per-cycle read
+# `pilots.symbols.symbol_detail` uses for the Symbol Detail / Today's Radar
+# surfaces (`output/state_snapshot.json`'s `signals[]` list) — reused here
+# (not re-derived) so GET /data/explain/{symbol}'s factor_breakdown section
+# never diverges from what the rest of the Pilots read layer already reports
+# for the same symbol on the same cycle.
+from pilots.symbols import _clean_str, find_signal
 
 logger = logging.getLogger(__name__)
 
@@ -867,49 +872,40 @@ def get_sync_report() -> Dict[str, Any]:
     return resp
 
 
-def _query_daily_signals(symbol: str) -> Optional[Dict[str, Any]]:
-    """Query the most recent DailySignals row for symbol from quant_platform.db.
+def _load_symbol_signal(symbol: str) -> Optional[Dict[str, Any]]:
+    """Read the most recent per-symbol signal entry for ``symbol``.
 
-    Returns a flat dictionary of column names to values, or None if no row exists
-    or the table/database is inaccessible. Read-only and dead-letter safe.
+    Reads ``output/state_snapshot.json`` (via ``pilots.scoring.load_snapshot`` +
+    ``pilots.symbols.find_signal``) — the SAME persisted, per-cycle read the
+    Pilots read layer already uses for the Symbol Detail page / Today's Radar
+    feed. This is deliberately **not** a query against the ``DailySignals``
+    SQLite table (an earlier revision of this endpoint queried that table
+    directly): ``DailySignals`` is structurally, permanently empty in every
+    real deployment — no live code path anywhere in this repo ever writes a
+    row into it (see ``docs/known_issues/daily_signals_missing_table.md``,
+    and the identical reasoning behind ``pilots/radar_ranking.py`` reading
+    the snapshot instead) — so a query against it would always report "no
+    signals" even while the pipeline is running and computing scores every
+    cycle. Reading the snapshot also means this is a genuine READ of
+    already-computed data, never a second/parallel score recomputation.
+
+    Returns the raw ``signals[]`` entry dict with an added ``"_as_of"`` key
+    (the snapshot's own top-level ``timestamp``), or ``None`` when no
+    snapshot exists, it is malformed, or *symbol* has no entry this cycle.
+    Read-only and dead-letter safe (CONSTRAINT #6) — never raises.
     """
     try:
-        from db_config import resolve_database_url, sqlite_readonly_uri
-        from sqlalchemy.engine import make_url
-
-        db_url = resolve_database_url()
-        if db_url.startswith("sqlite"):
-            parsed = make_url(db_url)
-            db_path = parsed.database or str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
-            if not os.path.exists(db_path):
-                return None
-            with sqlite3.connect(sqlite_readonly_uri(db_path), uri=True) as conn:
-                conn.row_factory = sqlite3.Row
-                cur = conn.cursor()
-                cur.execute(
-                    'SELECT * FROM DailySignals WHERE "Symbol" = ? ORDER BY timestamp DESC LIMIT 1',
-                    (symbol.upper(),),
-                )
-                row = cur.fetchone()
-                if row:
-                    return dict(row)
-                return None
-        else:
-            from db_config import create_readonly_db_engine
-            from sqlalchemy import text
-
-            engine = create_readonly_db_engine()
-            with engine.connect() as conn:
-                result = conn.execute(
-                    text('SELECT * FROM "DailySignals" WHERE "Symbol" = :sym ORDER BY timestamp DESC LIMIT 1'),
-                    {"sym": symbol.upper()},
-                )
-                row = result.mappings().fetchone()
-                if row:
-                    return dict(row)
-                return None
+        snapshot = load_snapshot()
+        if not snapshot:
+            return None
+        sig = find_signal(snapshot, symbol)
+        if sig is None:
+            return None
+        enriched = dict(sig)
+        enriched["_as_of"] = snapshot.get("timestamp") if isinstance(snapshot, dict) else None
+        return enriched
     except Exception as exc:
-        logger.warning("data_api: DailySignals query failed for %s: %s", symbol, exc)
+        logger.warning("data_api: state snapshot signal lookup failed for %s: %s", symbol, exc)
         return None
 
 
@@ -922,8 +918,14 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
        market cap via data.fmp_client.company_profile.
     2. tracking: Universe tracking provenance (why is this symbol tracked,
        holdings details, watchlists, rating status) via build_sync_report.
-    3. factor_breakdown: Read-only adapter over DailySignals table in
-       quant_platform.db without synthetic composite fabrication.
+    3. factor_breakdown: Read-only adapter over the latest
+       output/state_snapshot.json signals[] entry (the same persisted
+       per-cycle read pilots/symbols.py's Symbol Detail page and
+       pilots/radar_ranking.py's Today's Radar feed already use) — never the
+       DailySignals SQLite table, which no live code path ever writes a row
+       into (see docs/known_issues/daily_signals_missing_table.md). No
+       synthetic composite fabrication — everything here is a plain dict
+       lookup, never a recomputed score.
     4. price_history_status: Bar count, date range, latest close, and
        chart readiness (ok/no_data/stale) via HistoricalStore.
 
@@ -1007,17 +1009,13 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
             else str(status_entry.coverage)
         )
         watchlists_list = list(status_entry.watchlists) if status_entry.watchlists else []
-        qty = float(status_entry.quantity) if is_held and status_entry.quantity is not None else None
-        avg_cost = (
-            float(status_entry.avg_cost)
-            if is_held and status_entry.avg_cost is not None and not math.isnan(status_entry.avg_cost)
-            else None
-        )
-        market_val = (
-            float(status_entry.market_value)
-            if is_held and status_entry.market_value is not None and not math.isnan(status_entry.market_value)
-            else None
-        )
+        # _coerce_float (never a bare float()/math.isnan()) so a malformed
+        # SymbolStatus field (e.g. a non-numeric quantity from a corrupted
+        # snapshot) degrades to None instead of raising an uncaught
+        # ValueError/TypeError out of the whole endpoint — CONSTRAINT #6.
+        qty = _coerce_float(status_entry.quantity) if is_held else None
+        avg_cost = _coerce_float(status_entry.avg_cost) if is_held else None
+        market_val = _coerce_float(status_entry.market_value) if is_held else None
 
         reasons: List[str] = []
         if is_held:
@@ -1057,49 +1055,58 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
             "reasons": ["Symbol is not currently held or included in any active watchlist"],
         }
 
-    # ── 3. Factor Breakdown (DailySignals) ────────────────────────────────
-    signal_row = _query_daily_signals(sym)
+    # ── 3. Factor Breakdown ────────────────────────────────────────────────
+    # Read of output/state_snapshot.json's signals[] entry — the SAME
+    # persisted per-cycle data pilots/symbols.py::symbol_detail (Symbol
+    # Detail page) and pilots/radar_ranking.py (Today's Radar) already
+    # surface for this symbol. Never a second/parallel score computation —
+    # every value below is a plain dict lookup, honestly nulled when the
+    # active snapshot writer didn't populate it this cycle (CONSTRAINT #4).
+    signal_row = _load_symbol_signal(sym)
     if signal_row and isinstance(signal_row, dict):
-        as_of_val = signal_row.get("timestamp")
+        as_of_val = signal_row.get("_as_of")
         raw_factors = {
             k: v for k, v in signal_row.items()
-            if k not in ("id", "Symbol", "timestamp") and v is not None
+            if k not in ("symbol", "_as_of") and v is not None and v != ""
         }
+        # advisory_action (holding-aware overlay) wins over the raw signal
+        # action when both are present — same precedence as
+        # pilots/symbols.py::symbol_detail's "advisory" block.
+        action_val = _clean_str(signal_row.get("advisory_action")) or _clean_str(signal_row.get("action"))
         factor_breakdown_section = {
             "available": True,
             "as_of": str(as_of_val) if as_of_val is not None else None,
             "multifactor": {
-                "value_z": signal_row.get("value_z"),
-                "quality_z": signal_row.get("quality_z") if signal_row.get("quality_z") is not None else signal_row.get("Quality Score"),
-                "low_vol_z": signal_row.get("low_vol_z"),
-                "size_z": signal_row.get("size_z"),
-                "composite": signal_row.get("composite"),
+                "value_z": _coerce_float(signal_row.get("value_z")),
+                "quality_z": _coerce_float(signal_row.get("quality_z")),
+                "low_vol_z": _coerce_float(signal_row.get("lowvol_z")),
+                "size_z": _coerce_float(signal_row.get("size_z")),
+                "composite": _coerce_float(signal_row.get("multifactor_composite")),
             },
             "momentum": {
-                "rsi_14": signal_row.get("RSI") if signal_row.get("RSI") is not None else signal_row.get("rsi_14"),
-                "rsi_2": signal_row.get("RSI_2") if signal_row.get("RSI_2") is not None else signal_row.get("rsi_2"),
-                "macd_line": signal_row.get("MACD_Line") if signal_row.get("MACD_Line") is not None else signal_row.get("macd_line"),
-                "macd_signal": signal_row.get("MACD_Signal") if signal_row.get("MACD_Signal") is not None else signal_row.get("macd_signal"),
-                "rs_vs_spy": signal_row.get("RS vs SPY") if signal_row.get("RS vs SPY") is not None else signal_row.get("rs_vs_spy"),
-                "xsec_momentum_rank": signal_row.get("Momentum_Vol_Scaled") if signal_row.get("Momentum_Vol_Scaled") is not None else signal_row.get("xsec_momentum_rank"),
+                "xsec_12_1m": _coerce_float(signal_row.get("xsec_12_1m")),
+                "xsec_momentum_rank": _coerce_float(signal_row.get("xsec_momentum_rank")),
             },
             "volatility_regime": {
-                "hmm_risk_on_probability": signal_row.get("HMM_Risk_On_Probability") if signal_row.get("HMM_Risk_On_Probability") is not None else signal_row.get("hmm_risk_on_probability"),
-                "macro_status": signal_row.get("Macro Status") if signal_row.get("Macro Status") is not None else signal_row.get("macro_status"),
-                "garch_vol": signal_row.get("GARCH_Vol") if signal_row.get("GARCH_Vol") is not None else signal_row.get("garch_vol"),
-                "realized_vol_rank": signal_row.get("Realized_Vol_Rank") if signal_row.get("Realized_Vol_Rank") is not None else signal_row.get("realized_vol_rank"),
-                "vrp": signal_row.get("VRP") if signal_row.get("VRP") is not None else signal_row.get("vrp"),
+                # "regime" is the exact key ExplainTickerDrawer.tsx renders
+                # (volatility_regime.regime) — the market/macro regime label
+                # for this cycle (e.g. "EXPANSION"/"RECESSION"), not a
+                # numeric HMM state index.
+                "regime": _clean_str(signal_row.get("macro_status")),
+                "hmm_risk_on_probability": _coerce_float(signal_row.get("hmm_risk_on")),
+                "garch_vol": _coerce_float(signal_row.get("garch_vol")),
             },
             "tactical": {
-                "action_signal": signal_row.get("Action Signal") if signal_row.get("Action Signal") is not None else signal_row.get("action_signal"),
-                "advice": signal_row.get("Advice") if signal_row.get("Advice") is not None else signal_row.get("advice"),
-                "kelly_target": signal_row.get("Kelly Target") if signal_row.get("Kelly Target") is not None else signal_row.get("kelly_target"),
-                "buy_range": signal_row.get("buyRange") if signal_row.get("buyRange") is not None else signal_row.get("buy_range"),
-                "sell_range": signal_row.get("sellRange") if signal_row.get("sellRange") is not None else signal_row.get("sell_range"),
+                "action": action_val,
+                "kelly_target": _coerce_float(signal_row.get("kelly_target")),
+                "buy_range": _clean_str(signal_row.get("buy_range")),
+                "sell_range": _clean_str(signal_row.get("sell_range")),
             },
             "sentiment": {
-                "news_sentiment": signal_row.get("News Sentiment") if signal_row.get("News Sentiment") is not None else signal_row.get("news_sentiment"),
-                "credibility_weighted_sentiment": signal_row.get("Credibility Weighted Sentiment") if signal_row.get("Credibility Weighted Sentiment") is not None else signal_row.get("credibility_weighted_sentiment"),
+                # "aggregate_score" is the exact key ExplainTickerDrawer.tsx
+                # renders (sentiment.aggregate_score); news_sentiment (FinBERT)
+                # is the only per-symbol sentiment scalar the snapshot carries.
+                "aggregate_score": _coerce_float(signal_row.get("news_sentiment")),
             },
             "raw_factors": raw_factors,
             "reason": None,
@@ -1114,7 +1121,7 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
             "tactical": None,
             "sentiment": None,
             "raw_factors": {},
-            "reason": f"No signals recorded in DailySignals for {sym}",
+            "reason": f"No signals computed this cycle for {sym}",
         }
 
     # ── 4. Price History Status ──────────────────────────────────────────

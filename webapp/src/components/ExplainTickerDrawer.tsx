@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { X, ExternalLink, RefreshCw, BarChart2, Shield, Compass, TrendingUp } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { api } from "../api/client";
@@ -11,6 +11,68 @@ export interface ExplainTickerDrawerProps {
   symbol?: string;
   isOpen?: boolean;
   onClose?: () => void;
+}
+
+/**
+ * `GET /data/bars/{symbol}` simply omits any trading day it has no row for
+ * (see `api/data_api.py::get_bars` -- a plain `df.to_dict(orient="records")`
+ * over whatever `HistoricalStore` actually holds) rather than emitting an
+ * explicit null-valued placeholder for a missing date. Recharts draws a
+ * straight line between whatever consecutive points it IS given, with no
+ * awareness of the real calendar gap between them -- left alone, a genuine
+ * backfill gap in the underlying bars would render as a silently
+ * interpolated, fabricated flat/rising/falling line exactly as if trading
+ * had continued uninterrupted (a CONSTRAINT #4 violation; mirrors
+ * `GexProfileView.tsx`'s `chain_source` honesty-banner precedent for
+ * degraded chart data).
+ *
+ * `PRICE_GAP_THRESHOLD_DAYS` is set above the longest ordinary market
+ * closure (a 3-day weekend plus one adjacent holiday is at most 4 calendar
+ * days) so a normal holiday break is never mistaken for a genuine gap.
+ */
+const PRICE_GAP_THRESHOLD_DAYS = 5;
+
+export interface ExplainTickerChartPoint {
+  date: string;
+  Close: number | null;
+  isGapMarker?: boolean;
+}
+
+/**
+ * Sorts `bars` by date and inserts a synthetic `Close: null` marker
+ * wherever two consecutive bars are more than `PRICE_GAP_THRESHOLD_DAYS`
+ * apart. Paired with `connectNulls={false}` on the chart's `<Area>` (set
+ * explicitly below, matching recharts' own default), this makes the
+ * line/area genuinely break across the gap instead of connecting through
+ * it. Exported for unit testing.
+ */
+export function buildGapAwareSeries(bars: Bar[] | null | undefined): {
+  series: ExplainTickerChartPoint[];
+  gapCount: number;
+} {
+  const withDates = (bars ?? []).filter((b): b is Bar => !!b?.date);
+  const sorted = [...withDates].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  const series: ExplainTickerChartPoint[] = [];
+  let gapCount = 0;
+
+  sorted.forEach((bar, idx) => {
+    series.push({ date: bar.date, Close: bar.Close });
+    const next = sorted[idx + 1];
+    if (!next) return;
+    const t1 = new Date(bar.date).getTime();
+    const t2 = new Date(next.date).getTime();
+    if (Number.isNaN(t1) || Number.isNaN(t2)) return;
+    const diffDays = Math.round((t2 - t1) / 86_400_000);
+    if (diffDays > PRICE_GAP_THRESHOLD_DAYS) {
+      gapCount += 1;
+      // Synthetic marker only -- never a real bar. `Close: null` is what
+      // makes `connectNulls={false}` actually break the line here.
+      series.push({ date: `${bar.date}__gap-${gapCount}`, Close: null, isGapMarker: true });
+    }
+  });
+
+  return { series, gapCount };
 }
 
 export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
@@ -30,6 +92,8 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
   const [barsLoading, setBarsLoading] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
+
+  const { series: chartSeries, gapCount } = useMemo(() => buildGapAwareSeries(bars), [bars]);
 
   // Close on Escape key press
   useEffect(() => {
@@ -54,6 +118,15 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
     }
 
     let active = true;
+    // Reset unconditionally on every symbol switch, not only on close --
+    // otherwise switching from one open symbol straight to another (without
+    // closing first) briefly re-renders the new symbol's header over the
+    // PREVIOUS symbol's still-stale body content until the new fetch
+    // resolves (found via live browser reproduction during the 2026-09
+    // audit -- see .claude/explain-ticker_walkthrough.md).
+    setData(null);
+    setBars(null);
+    setBackfillResult(null);
     setLoading(true);
     setError(null);
 
@@ -767,24 +840,54 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
                     <TrendingUp size={16} />
                     <span>Recent Price Action</span>
                   </div>
-                  <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
-                    {data.price_history_status.bar_count} bars
-                    {data.price_history_status.latest_close != null &&
-                      ` · ${fmtUsd(data.price_history_status.latest_close)}`}
+                  <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+                    <span>
+                      {data.price_history_status.bar_count} bars
+                      {data.price_history_status.latest_close != null &&
+                        ` · ${fmtUsd(data.price_history_status.latest_close)}`}
+                    </span>
+                    {data.price_history_status.status === "stale" && (
+                      <span
+                        data-testid="price-stale-notice"
+                        className="badge badge-warn"
+                        style={{ fontSize: "var(--t-caption)", textTransform: "uppercase" }}
+                        title={data.price_history_status.reason || "This price history may not reflect the most recent trading session."}
+                      >
+                        Stale
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 {barsLoading ? (
                   <Loading lines={3} />
                 ) : data.price_history_status.available &&
+                data.price_history_status.status !== "no_data" &&
                 data.price_history_status.bar_count > 0 &&
                 bars &&
                 bars.length > 0 ? (
                   <div data-testid="price-chart">
+                    {data.price_history_status.status === "stale" && (
+                      <div
+                        data-testid="price-stale-banner"
+                        style={{
+                          fontSize: "var(--t-caption)",
+                          color: "var(--caution)",
+                          background: "rgba(234, 179, 8, 0.1)",
+                          border: "1px solid rgba(234, 179, 8, 0.3)",
+                          borderRadius: "var(--r-xs)",
+                          padding: "var(--s-2)",
+                          marginBottom: "var(--s-2)",
+                        }}
+                      >
+                        This price history is stale
+                        {data.price_history_status.reason ? ` — ${data.price_history_status.reason}` : " and may not reflect the most recent trading session."}
+                      </div>
+                    )}
                     <div style={{ width: "100%", height: 160 }}>
                       <ResponsiveContainer width="100%" height={160}>
                         <AreaChart
-                          data={bars}
+                          data={chartSeries}
                           margin={{ top: 5, right: 10, left: 10, bottom: 0 }}
                         >
                           <defs>
@@ -802,7 +905,7 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
                               borderRadius: "4px",
                               fontSize: "12px",
                             }}
-                            formatter={(value: any) => [fmtUsd(value), "Close"]}
+                            formatter={(value: any) => [value != null ? fmtUsd(value) : "No data (gap)", "Close"]}
                           />
                           <Area
                             type="monotone"
@@ -811,10 +914,29 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
                             strokeWidth={2}
                             fillOpacity={1}
                             fill="url(#priceGradient)"
+                            connectNulls={false}
+                            isAnimationActive={false}
                           />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
+                    {gapCount > 0 && (
+                      <div
+                        data-testid="price-gap-notice"
+                        style={{
+                          fontSize: "var(--t-caption)",
+                          color: "var(--caution)",
+                          padding: "var(--s-2)",
+                          marginTop: "4px",
+                          background: "rgba(234, 179, 8, 0.1)",
+                          border: "1px dashed rgba(234, 179, 8, 0.3)",
+                          borderRadius: "var(--r-xs)",
+                        }}
+                      >
+                        Data gap detected — {gapCount} period{gapCount > 1 ? "s" : ""} of missing bars.
+                        The line above breaks across the gap rather than being interpolated.
+                      </div>
+                    )}
                     {data.price_history_status.earliest_date && data.price_history_status.latest_date && (
                       <div
                         style={{
