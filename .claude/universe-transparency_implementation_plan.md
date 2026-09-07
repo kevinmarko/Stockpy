@@ -63,35 +63,77 @@ rather than universe *display*, stop — that has crossed into territory this
 plan explicitly did not scope, and the higher-stakes constraints (fail-closed,
 single-source-of-truth) apply in a way this plan hasn't reasoned through.
 
-## 3. §0 dependency check — REQUIRED before any code, not yet done
+## 3. §0 dependency check — REQUIRED before any code
 
 This plan was written from `CLAUDE.md` prose (`investyo:get_doc`, commit
 `e2a8dcb6`, 2026-09-07) in a session with no repo filesystem access. A coding
 agent must confirm, against live code, before implementation:
 
-- [ ] Real current response schema of `GET /universe`, `GET /data/universe`
+> **Audit note (2026-09-07, independent audit against live code, post-merge
+> into this branch):** these boxes were left unchecked despite `task.md`
+> marking the identical items done and this file's own header claiming
+> `Status: IMPLEMENTED` — one of several places this plan's own text drifted
+> from what was actually verified. Checked off below based on what the audit
+> actually confirmed against live code, not assumed from the implementer's
+> checklist alone.
+
+- [x] Real current response schema of `GET /universe`, `GET /data/universe`
       (DEFAULT_TICKERS), and `data/portfolio_sync.py::build_sync_report()` —
       this plan assumes fields described in prose, not a verified JSON shape.
-- [ ] `webapp/src/components/UniverseCoverage.tsx`'s current props and data
+      Confirmed: `GET /data/sync-report` (which `UniverseCoverage.tsx` reads)
+      returns `build_sync_report()`'s ticker-keyed map — a narrower universe
+      (holdings ∪ Robinhood/file watchlists only) than `GET /data/universe`'s
+      `effective_symbols` (which mirrors `compute_tracked_universe()`,
+      including the `DEFAULT_TICKERS` fallback and scan-discovered
+      candidates). The panel's "Tracked" count is therefore scoped to what
+      `GET /data/sync-report` reports, not the full multi-source universe
+      `main.py`/the daemon actually evaluates each cycle — a real, disclosed
+      simplification, not a defect, since Phase 1 was explicitly scoped to
+      reuse an existing endpoint rather than build a new one.
+- [x] `webapp/src/components/UniverseCoverage.tsx`'s current props and data
       source. CLAUDE.md indicates it already renders `forecast_available`
       per symbol from `GET /data/sync-report` — confirm whether it already
       distinguishes "not forecast-covered" from "not tracked at all," or
-      conflates the two (this materially changes Phase 1 scope).
-  - [ ] Where the ~26-symbol forecast universe's membership is actually
+      conflates the two (this materially changes Phase 1 scope). Confirmed:
+      before this plan, the component only surfaced `forecast_available` at
+      the per-row detail level (no aggregate count) — it did not yet
+      distinguish the two at the summary level, which is exactly what Phase 1
+      added.
+  - [x] Where the ~26-symbol forecast universe's membership is actually
         defined (a `settings` field, `SECTOR_FORECAST_CONFIGS`, or hardcoded
         in a forecasting module) — needed to display it honestly, not
-        needed to change it.
-- [ ] `webapp/src/components/universeCache.ts`'s current contents/refresh
+        needed to change it. Confirmed, and the answer is NOT what this plan
+        assumed: there is no fixed ~26-symbol semiconductor/mega-cap forecast
+        list, and `SECTOR_FORECAST_CONFIGS`/`sector_configs.json` (a per-
+        SECTOR model/horizon backtest config) does not gate per-symbol
+        coverage at all. `forecast_available` is `ForecastTracker
+        .get_covered_symbols()`: whether a price forecast was recorded for
+        that symbol within the last 7 days. The shipped `GLOSSARY`/
+        `docs/HOW_TO_GUIDE.md` text got this wrong on first pass (attributing
+        it to `sector_configs.json`) — fixed by the same-day audit; see
+        `docs/known_issues/universe_count_reporting_mismatch.md` for the
+        real story behind the "~26 symbols" figure (it was one operator's
+        actual watchlist size, not a hardcoded list).
+- [x] `webapp/src/components/universeCache.ts`'s current contents/refresh
       cadence — a new panel would likely reuse this rather than re-fetch.
-- [ ] Re-run `investyo:get_universe_status` (or read live daemon state)
+      Confirmed this assumption was wrong and correctly NOT followed:
+      `universeCache.ts` wraps `GET /universe`'s bare autocomplete symbol
+      list (no coverage/forecast fields at all) — a different dataset this
+      panel has no use for. The implementation correctly reuses the
+      pre-existing `UniverseCoverageLive`'s own `GET /data/sync-report` call
+      instead.
+- [x] Re-run `investyo:get_universe_status` (or read live daemon state)
       immediately before implementation — the 29-symbol/0-signal-rows state
       observed during scoping may not match the state when this is built.
-- [ ] Confirm via `CLAUDE.md`'s branch-workflow section whether a
+- [x] Confirm via `CLAUDE.md`'s branch-workflow section whether a
       webapp-component-only change of this shape qualifies as the
       "low-risk, no branch required" tier or needs the standard
       branch+PR path — this plan assumes the latter (it's user-facing
       behavior, not docs/config) but that's a judgment call for whoever
-      implements it, not settled here.
+      implements it, not settled here. This work landed on `feat-universe-
+      transparency`, a feature branch — consistent with the "everything
+      else" tier (user-facing behavior change) rather than the low-risk
+      docs/config tier.
 
 ## 4. Proposed UX
 
