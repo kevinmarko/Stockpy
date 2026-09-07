@@ -6423,6 +6423,30 @@ const MODELS: ModelRow[] = [
     cpcv_mean_oos_sharpe: null,
     cpcv_mean_oos_max_dd: null,
   },
+  {
+    // ml/registry.yaml's meta_labeler_backfill_<signal_id> stubs: trained
+    // (if at all) only by the Forecast Backfill screen's own job, never by
+    // this screen's "Retrain Now" -> POST /jobs {job_type:"train_meta"}
+    // path (that dispatches scripts/train_meta_labelers.py, which has never
+    // heard of a "backfill_<signal_id>" identifier and rejects it). This
+    // fixture exercises the honest "run a backfill" link Models.tsx renders
+    // for a `meta_labeler_backfill_*` row instead of a Retrain Now button
+    // that would 400.
+    name: "meta_labeler_backfill_cross_sectional_momentum",
+    role: "meta_labeler",
+    trained_date: null,
+    cpcv_dsr: null,
+    pbo: null,
+    n_train: 0,
+    deployable: false,
+    notes:
+      "Forecast Backfill meta-labeler stub. Distinct from meta_labeler_cross_sectional_momentum. " +
+      "AFML takes priority in meta_bootstrap.py if both exist and are deployable.",
+    age_days: null,
+    needs_retrain: null,
+    cpcv_mean_oos_sharpe: null,
+    cpcv_mean_oos_max_dd: null,
+  },
 ];
 
 // ---- Strategy Health (deployability-gate breakdown) fixture ----

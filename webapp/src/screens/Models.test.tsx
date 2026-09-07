@@ -42,6 +42,24 @@ describe("Models screen (real mock API)", () => {
     expect(retrainSpy).toHaveBeenCalled();
   });
 
+  it("a meta_labeler_backfill_* stub renders a Forecast Backfill link, never a Retrain Now button that would 400", async () => {
+    // Regression test: ml/registry.yaml's meta_labeler_backfill_<signal_id>
+    // stubs used to inherit the same "Retrain Now" button as a real
+    // meta_labeler_<signal_id> row. Clicking it stripped only the outer
+    // "meta_labeler_" prefix (metaLabelerSignal), leaving "backfill_<id>",
+    // which shared/orchestrator_runner.py::launch_train_meta_labelers
+    // correctly rejects with "Invalid signal identifier: 'backfill_<id>'"
+    // (that script trains the AFML signals, not the Forecast Backfill
+    // screen's own models). The card must instead point at /forecast/backfill.
+    const createJobSpy = vi.spyOn(api, "createJob");
+    renderModels();
+    const label = await screen.findByText("meta_labeler_backfill_cross_sectional_momentum");
+    const card = label.closest("section")!;
+    expect(within(card).queryByText("Retrain Now")).not.toBeInTheDocument();
+    expect(within(card).getByText("run a backfill →")).toBeInTheDocument();
+    expect(createJobSpy).not.toHaveBeenCalled();
+  });
+
   it("renders model rows with an honest not-deployable badge", async () => {
     renderModels();
     expect(await screen.findByText("lgbm_ranker")).toBeInTheDocument();
