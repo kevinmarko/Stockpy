@@ -1,20 +1,20 @@
 # Per-Agent Identity & Least Privilege — Task Tracker
 
-> Companion to `per_agent_identity_implementation_plan.md`. **Do not start Phase 1 until
-> the operator has explicitly picked Path A or Path B (plan §1/§4) — this is the primary
-> open decision, not a formality.**
+> Companion to `per_agent_identity_implementation_plan.md`. **Resolved 2026-09-07: operator
+> confirmed Path A.**
 
-## §0 — Decision required before any work
-- [ ] Operator confirms: Path A (document as not-solvable-here, close via the
-      cross-agent-audit-trail plan's attribution work instead) — recommended, OR
-- [ ] Operator confirms: Path B (extend OAuth `subject` for the remote/streamable-http
-      transport only) — only if a remote/LAN MCP surface is actually in active use
+## §0 — Decision (resolved)
+- [x] Operator confirms: Path A (document as not-solvable-here, close via the
+      cross-agent-audit-trail plan's attribution work instead) — **confirmed 2026-09-07**
 
-## If Path A chosen
-- [ ] Write the "not solvable within this architecture for a filesystem-privileged agent"
-      finding into `docs/AGENTIC_TRADING_SAFETY_FRAMEWORK.md`'s open-gap entry
-- [ ] Close this backlog item; no code changes
-- [ ] Confirm `cross_agent_audit_trail_implementation_plan.md` covers the attribution need
+## Path A — done
+- [x] Write the "not solvable within this architecture for a filesystem-privileged agent"
+      finding into `docs/AGENTIC_TRADING_SAFETY_FRAMEWORK.md`'s open-gap entry (item 2 +
+      open-gaps backlog, both updated 2026-09-07)
+- [x] Close this backlog item; no code changes
+- [x] Confirm `cross_agent_audit_trail_implementation_plan.md` covers the attribution need
+      (it does — that plan is unaffected by this closure and remains the path forward for
+      the attribution half of the original ask)
 
 ## If Path B chosen
 - [ ] Phase 1: wire `subject` from an issued OAuth token through to read-tier logging/telemetry

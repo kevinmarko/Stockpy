@@ -1,6 +1,6 @@
 # Per-Agent Identity & Least Privilege — Implementation Plan
 
-## Status: SCOPED, NOT YET APPROVED FOR BUILD — recommend re-scoping the goal itself, see §1
+## Status: RESOLVED 2026-09-07 — operator confirmed Path A (no build). See `docs/AGENTIC_TRADING_SAFETY_FRAMEWORK.md`'s item 2 and open-gaps backlog for the closure record.
 
 Written from a dedicated research pass against live code (2026-09-07). No code has been
 written. This is the artifact to review/edit before any implementation begins.
