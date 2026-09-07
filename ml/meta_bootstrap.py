@@ -138,6 +138,29 @@ LIVE_ROW_FEATURE_WHITELIST: frozenset[str] = frozenset([
     "SMA_200",
     "RSI_2",
     "SMA_5",
+    # Added so check_feature_compatibility() can genuinely resolve the 6
+    # Forecast-Backfill-eligible signals' declared meta_label_features
+    # (timeseries_momentum, cross_sectional_momentum, rsi2_mean_reversion,
+    # sector_quality_rank, vrp_premium_selling, options_flow_sentiment) --
+    # previously always refused, by construction, regardless of DSR/PBO,
+    # since these 9 keys were genuinely absent from strategy_engine.py's
+    # `row` construction (the source of truth this whitelist mirrors) until
+    # this change added them there too.
+    "Vol_20",
+    "Vol_50",
+    "Vol_Ratio",
+    "RSI_14",
+    "MACD",
+    "MACD_Signal",
+    # roc_6m/ROC_6M: strategy_engine.py's row carries both the lowercase and
+    # uppercase key for this value (mirroring the pre-existing roc_12m/
+    # ROC_12M duplicate-casing pair a few lines above), so both must be
+    # whitelisted for tests/test_train_meta_labelers.py::
+    # test_live_row_feature_whitelist_matches_the_real_live_row to hold.
+    "roc_6m",
+    "ROC_6M",
+    "ROC_5",
+    "ROC_20",
     # Appended by signals/aggregator.py's aggregate() (feat_row["primary_score"]
     # = output.score) AFTER strategy_engine.py's own `row` is built, immediately
     # before the meta-labeler is queried -- genuinely part of the live feature

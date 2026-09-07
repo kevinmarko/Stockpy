@@ -949,6 +949,12 @@ def evaluate(
             sma_200=float(tech.get("SMA_200") or 0.0),
             rsi_2=float(tech.get("RSI_2") or 50.0),
             sma_5=tech.get("SMA_5"),
+            roc_6m=float(tech.get("ROC_6M") or 0.0),
+            vol_20=tech.get("Vol_20"),
+            vol_50=tech.get("Vol_50"),
+            vol_ratio=tech.get("Vol_Ratio"),
+            roc_5=float(tech.get("ROC_5") or 0.0),
+            roc_20=float(tech.get("ROC_20") or 0.0),
             # Pass pre-computed universe-wide ranks so cross-sectional momentum
             # and multifactor signals score correctly (not neutral/0) when called
             # per-symbol from the advisory path.
