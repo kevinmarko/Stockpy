@@ -357,6 +357,45 @@ describe("PaperBroker", () => {
     expect(await screen.findByText("Buy ZZZZ Stock")).toBeInTheDocument();
   });
 
+  it("quick trade: auto-fetches a quote as soon as a recognized ticker is typed, with no manual \"Get Quote\" click", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getDataQuotes).mockResolvedValue({
+      ZZZZ: { symbol: "ZZZZ", price: 42.5, bid: 42.4, ask: 42.6, timestamp: "2026-08-20T14:00:00Z", is_stale: false, source: "fmp" },
+    });
+    vi.mocked(api.getSymbolSearch).mockImplementation((q) =>
+      Promise.resolve(
+        q.toUpperCase() === "ZZZZ"
+          ? { query: q, results: [{ symbol: "ZZZZ", name: "Arbitrary Corp", currency: "USD", exchange: "NASDAQ", exchange_full_name: null }], reason: null }
+          : { query: q, results: [], reason: null }
+      )
+    );
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("$105,000.00")).toBeInTheDocument();
+
+    const input = screen.getByTestId("quick-trade-symbol-input");
+    fireEvent.change(input, { target: { value: "zzzz" } });
+
+    // No click on "Get Quote" anywhere in this test -- finishing a
+    // recognized ticker alone must be enough once the debounced FMP lookup
+    // confirms it's real.
+    await waitFor(() => {
+      expect(api.getDataQuotes).toHaveBeenCalledWith(["ZZZZ"]);
+    });
+    expect(await screen.findByText("Buy ZZZZ Stock")).toBeInTheDocument();
+  });
+
   it("quick trade: greys out \"Get Quote\" for an unrecognized ticker instead of letting a typo submit", async () => {
     vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
       equity: 105000,

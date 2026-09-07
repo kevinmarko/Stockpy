@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
@@ -60,6 +61,7 @@ export function SymbolInput({
   trackedSymbols,
   enableFmpSuggestions = true,
   requireExactMatch = false,
+  autoSubmitOnExactMatch = false,
 }: {
   initial?: string;
   onSubmit: (symbol: string) => void;
@@ -99,6 +101,19 @@ export function SymbolInput({
    * quote available" error instead of an obviously-invalid disabled
    * button. */
   requireExactMatch?: boolean;
+  /** Opt-in: once the typed value resolves to a known real symbol (same
+   * `isKnownSymbol` check `requireExactMatch` already gates the button on),
+   * fire `onSubmit` automatically instead of waiting for a manual button
+   * click -- so finishing a valid ticker behaves like picking a suggestion
+   * already does (a suggestion click always auto-submits; only the
+   * exact-typed-match path previously required an extra click). Fires once
+   * per newly-resolved symbol (guarded by a ref, not on every keystroke --
+   * `q` is already 200ms-debounced) and re-arms if the value changes to a
+   * different symbol. Meaningless without `requireExactMatch` (there is no
+   * "known" gate to react to) and defaults to `false`, preserving every
+   * other caller's manual-submit-only behavior exactly -- only Paper
+   * Broker's Quick Trade panel opts in. */
+  autoSubmitOnExactMatch?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   const [universe, setUniverse] = useState<UniverseSymbol[]>(
@@ -225,6 +240,30 @@ export function SymbolInput({
     onSubmit(clean);
   };
 
+  // Auto-submit once the (debounced) typed value resolves to a known real
+  // symbol -- so finishing a valid ticker behaves like clicking a suggestion
+  // already does, instead of silently waiting for a manual button press.
+  // `lastAutoSubmitted` guards against refiring on every render for the same
+  // resolved symbol (isKnownSymbol/q stay stable once resolved); it resets
+  // once the query no longer matches, so retyping the same symbol later
+  // re-arms it.
+  const lastAutoSubmittedRef = useRef<string | null>(null);
+  useEffect(() => {
+    // Gated on requireExactMatch too, not just autoSubmitOnExactMatch: without
+    // it, free text always submits anyway (Enter / blur+Load), so there is
+    // nothing distinctly "exact match" to react to, and firing here would
+    // submit mid-typing before the operator ever pressed Enter or Load.
+    if (!autoSubmitOnExactMatch || !requireExactMatch) return;
+    if (!isKnownSymbol) {
+      lastAutoSubmittedRef.current = null;
+      return;
+    }
+    if (lastAutoSubmittedRef.current === q) return;
+    lastAutoSubmittedRef.current = q;
+    commit(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, isKnownSymbol, autoSubmitOnExactMatch, requireExactMatch]);
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     commit(value);
@@ -311,7 +350,9 @@ export function SymbolInput({
           }}
         >
           {requireExactMatch
-            ? "Pick a suggested symbol -- only a recognized, quotable ticker can be submitted."
+            ? autoSubmitOnExactMatch
+              ? "Pick a suggested symbol, or finish typing a recognized ticker to load it automatically."
+              : "Pick a suggested symbol -- only a recognized, quotable ticker can be submitted."
             : hideButton
             ? "Type to search tracked symbols, or enter any ticker and press Enter."
             : "Type to search tracked symbols, or enter any ticker and press Load."}

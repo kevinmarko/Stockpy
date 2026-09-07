@@ -755,6 +755,7 @@ export function PaperBroker() {
             buttonText="Get Quote"
             testId="quick-trade-symbol-input"
             requireExactMatch
+            autoSubmitOnExactMatch
           />
           {quickTradeError && (
             <div style={{
