@@ -166,6 +166,24 @@ independently validated (numeric-drift-tested against hand-computed values, per
 CLAUDE.md's 1e-5 tolerance convention) without conflating it with this module's own
 correctness.
 
+**2026-09 update — the Forecast Backfill screen's meta-labeler training path is now
+unblocked; the live per-cycle path above is not.** `data/sneqr_quality_facts.py`
+(extracted from `scripts/refresh_validations.py`'s already-live-EDGAR-verified
+`_fetch_sneqr_quality_facts`) computes both raw inputs for real, gated behind
+`settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED` (opt-in, default `False`),
+consumed by `ml/forecast_backfill.py::step_2_calculate_technical_features()`. Verified
+live: a 6-name real Technology-sector universe (`AAPL`/`MSFT`/`AMD`/`ADBE`/`ADI`/`AVGO`)
+genuinely trains this signal's meta-labeler across all 4 horizons — see
+`tests/test_forecast_backfill.py::test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end`.
+**Scope, stated plainly**: this closes the backfill/research path only. The module
+remains dormant in the live trading pipeline exactly as described above (`0.0`
+contribution to `final_score` every cycle) — `processing_engine.calculate_fundamental_metrics()`
+was deliberately left unchanged, since wiring the live path safely needs a durable
+cache (every backfill run currently re-fetches EDGAR company-facts JSON per ticker;
+acceptable for an occasional research run, not for a pipeline that re-cycles every few
+minutes) that was out of scope for this pass. See
+`docs/plans/FORECAST_BACKFILL_PLAN.md`'s WP3 section for the full detail.
+
 ---
 
 ## Interaction with Other Modules
@@ -392,5 +410,5 @@ follow-up, not attempted here.
 This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
 - **Registry Key**: `meta_labeler_backfill_sector_quality_rank`
 - **Live Horizon**: 10 days (default)
-- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
+- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in). Previously this signal could never train ANY model regardless of DSR/PBO (0/N trainable rows on every universe/history combination) — see the "2026-09 update" in the Data Availability Gap section above for the fix and its live-EDGAR verification.
 - **Feature-Compatibility Caveat**: RESOLVED — the live per-ticker row (`strategy_engine.py::evaluate_security()`) was widened with the 9 previously-missing feature names this signal (and its 5 siblings) declare, genuinely computed in `processing_engine.py`/`ml/forecast_backfill.py`, not merely whitelisted. `check_feature_compatibility()` now returns `True` for this signal's real `meta_label_features` (see `tests/test_train_meta_labelers.py::TestSixEligibleSignalsFeatureCompatibility`). A trained model for this signal can now actually reach `global_meta_registry` once it separately clears the DSR/PBO deployability gate (unchanged by this fix).

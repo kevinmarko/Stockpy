@@ -121,6 +121,276 @@ def test_backfiller_initialization():
     assert engine.max_depth == settings.FORECAST_BACKFILL_MAX_DEPTH
 
 
+# ---------------------------------------------------------------------------
+# WP3: real point-in-time accrual_ratio/gross_profitability/sector wiring
+# (settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED, opt-in, default
+# False) -- unblocks sector_quality_rank, previously permanently stuck at
+# 0/N trainable rows regardless of universe or history length. See
+# docs/plans/FORECAST_BACKFILL_PLAN.md's WP3 section.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.network
+def test_sneqr_quality_facts_disabled_by_default_adds_no_columns(monkeypatch):
+    """The default (flag off) must be byte-identical to pre-WP3 behavior --
+    no accrual_ratio/gross_profitability/sector columns, and critically NO
+    network call at all (verified by asserting fetch_sneqr_quality_facts is
+    never even imported/called)."""
+    from settings import settings
+
+    monkeypatch.setattr(settings, "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED", False)
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+
+    called = []
+    import data.sneqr_quality_facts as sneqr_mod
+    monkeypatch.setattr(
+        sneqr_mod, "fetch_sneqr_quality_facts",
+        lambda *a, **k: called.append(1) or __import__("pandas").DataFrame(),
+    )
+
+    engine.step_2_calculate_technical_features()
+    assert "accrual_ratio" not in engine.data.columns
+    assert "gross_profitability" not in engine.data.columns
+    assert "sector" not in engine.data.columns
+    assert called == [], "SEC EDGAR must never be reached when the flag is off"
+
+
+@pytest.mark.network
+def test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end():
+    """Real, live SEC EDGAR verification: a 6-name Technology-sector universe
+    (all real tickers, all with real EDGAR filing history) genuinely trains
+    sector_quality_rank across every horizon once the flag is on -- this
+    signal was permanently stuck at 0 trainable rows before WP3 regardless
+    of universe size or history length, since accrual_ratio/gross_profitability
+    were never computed anywhere in this pipeline."""
+    import importlib
+    from settings import settings
+    import ml.forecast_backfill as fb_mod
+
+    original = settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED
+    settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED = True
+    try:
+        # 6 real, well-known Technology-sector tickers -- forecasting/data/
+        # ticker_sectors.csv carries 84 Technology names, so MIN_SECTOR_SIZE=5
+        # clears easily for this subset.
+        tickers = ["AAPL", "MSFT", "AMD", "ADBE", "ADI", "AVGO"]
+        engine = fb_mod.AgenticForecastBackfiller(
+            tickers=tickers,
+            start_date="2018-01-01",
+            end_date="2022-01-01",
+            horizons=[10, 30, 60, 90],
+            n_estimators=10,
+            max_depth=3,
+            use_fmp=False,
+        )
+        engine.step_1_fetch_data()
+        engine.step_2_calculate_technical_features()
+        assert "accrual_ratio" in engine.data.columns
+        assert "gross_profitability" in engine.data.columns
+        assert "sector" in engine.data.columns
+        assert engine.data["accrual_ratio"].notna().any(), (
+            "expected at least one real, non-fabricated accrual_ratio value from live EDGAR"
+        )
+
+        engine.step_3_generate_primary_signals()
+        assert "sector_quality_rank" in engine.active_strategies
+        sig = engine.data["sector_quality_rank_Signal"]
+        assert sig.notna().any(), "expected a genuinely two-sided (not all-NaN) Signal column"
+        assert set(sig.dropna().unique()).issubset({-1.0, 1.0})
+
+        engine.step_4_create_meta_targets()
+        metrics = engine.step_5_backtrain_meta_labelers()
+        trained_keys = [k for k in metrics if k.startswith("sector_quality_rank_")]
+        assert trained_keys, "sector_quality_rank must train at least one horizon given real EDGAR data"
+        assert engine.eligibility["sector_quality_rank"]["trained"] is True
+        assert engine.eligibility["sector_quality_rank"]["reason"] is None
+    finally:
+        settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED = original
+
+
+# ---------------------------------------------------------------------------
+# WP4: quarantined realized-vol proxy for vrp_premium_selling
+# (settings.FORECAST_BACKFILL_VRP_PROXY_ENABLED, opt-in, default False).
+# The real vrp_premium_selling signal can never train here (True_IVR/VRP are
+# options-chain-derived and structurally unavailable to this OHLCV-only
+# offline engine -- see docs/known_issues/vrp_premium_selling_no_historical_iv.md
+# -- and this is unrelated to and unaffected by this whole change either way).
+# ml/vrp_premium_selling_proxy_signal.py::VrpPremiumSellingProxySignal instead
+# trains a SEPARATE, quarantined model_type ("vrp_premium_selling_proxy")
+# against IVR_Proxy/VRP_Proxy (realized-vol-derived, OHLCV-only, no network) --
+# structurally excluded from ml/forecast_backfill_registry_bridge.py::
+# BACKFILL_ELIGIBLE_SIGNAL_IDS so it can never reach live inference. See
+# docs/plans/FORECAST_BACKFILL_PLAN.md's WP4 section.
+# ---------------------------------------------------------------------------
+
+
+def test_vrp_proxy_disabled_by_default_adds_no_columns_and_leaves_real_signal_unaffected(monkeypatch):
+    """The default (flag off) must be byte-identical to pre-WP4 behavior --
+    no IVR_Proxy/VRP_Proxy columns, no vrp_premium_selling_proxy in
+    active_strategies, and the real vrp_premium_selling signal's own
+    (already-degenerate, pre-existing, tracked separately in
+    docs/known_issues/vrp_premium_selling_no_historical_iv.md) eligibility
+    is completely unaffected: it still can't train (0 samples, because its
+    Signal column is all-NaN -- True_IVR/VRP are never populated by this
+    offline engine, flag or no flag) exactly as before this whole WP4
+    change."""
+    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", False)
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+
+    engine.step_2_calculate_technical_features()
+    assert "IVR_Proxy" not in engine.data.columns
+    assert "VRP_Proxy" not in engine.data.columns
+
+    engine.step_3_generate_primary_signals()
+    assert "vrp_premium_selling_proxy" not in engine.active_strategies
+    # The real signal is untouched by this whole change -- it still runs
+    # (and still can't score anything, for the same pre-existing reason).
+    assert "vrp_premium_selling" in engine.active_strategies
+
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+    assert not any(k.startswith("vrp_premium_selling_proxy_") for k in metrics)
+    assert "vrp_premium_selling_proxy" not in engine.eligibility
+
+    real_elig = engine.eligibility.get("vrp_premium_selling")
+    assert real_elig is not None
+    assert real_elig["trained"] is False
+    # The exact horizon suffix depends on the union of every active
+    # strategy's own meta_label_horizons (step_4 unions them globally), not
+    # just this engine's own requested horizons -- assert the stable,
+    # always-true "0 samples" prefix rather than a specific "_for_Xd" tail.
+    assert real_elig["reason"].startswith("insufficient_samples:0_")
+
+
+def _regime_switching_prices(
+    tickers, n_days=1300, seed=7, low_vol=0.006, high_vol=0.045, low_len=55, high_len=18,
+):
+    """Alternating low/high daily-vol blocks -- unlike a flat-vol random
+    walk (``_synthetic_engine``'s default), this reliably produces rows
+    where the trailing-60-day realized vol (VRP_Proxy's slow leg) stays
+    elevated for a while after a high-vol block ends while the fast EWMA
+    GARCH_Vol (its quick leg) has already decayed back down -- i.e. genuine
+    VRP_Proxy > threshold readings, needed to give
+    vrp_premium_selling_proxy something non-degenerate to train on. A flat
+    single-regime random walk gates on far too few rows (well under the
+    30-sample training floor in ``_build_training_set``) to ever train --
+    verified separately before choosing this construction."""
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2015-01-01", periods=n_days)
+    data = {}
+    for t in tickers:
+        vols, d, high = [], 0, False
+        while d < n_days:
+            block = high_len if high else low_len
+            vols.extend([high_vol if high else low_vol] * block)
+            d += block
+            high = not high
+        vols_arr = np.array(vols[:n_days])
+        rets = rng.normal(0.0001, 1.0, n_days) * vols_arr
+        data[t] = 100.0 * np.cumprod(1.0 + rets)
+    return pd.DataFrame(data, index=dates)
+
+
+def test_vrp_proxy_enabled_trains_at_least_one_horizon_offline(monkeypatch):
+    """Fully offline -- no network needed, unlike WP3's SNEQR facts test
+    above (IVR_Proxy/VRP_Proxy are pure OHLCV derivations, no EDGAR/FMP
+    call involved). A regime-switching synthetic universe genuinely trains
+    vrp_premium_selling_proxy at least one horizon once the flag is on."""
+    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", True)
+    tickers = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+    prices = _regime_switching_prices(tickers)
+    volumes = pd.DataFrame({t: 1_000_000.0 for t in tickers}, index=prices.index)
+
+    engine = AgenticForecastBackfiller(
+        tickers=tickers, horizons=[10, 30, 60, 90], use_fmp=False, n_estimators=10, max_depth=3,
+        # Restrict step 3 to the proxy alone -- this file's other tests
+        # already cover the other 6 signals extensively; without this the
+        # regime-switching universe below trains all 7 active strategies
+        # (~5x slower) for no additional coverage this test needs.
+        strategy_ids=["vrp_premium_selling_proxy"],
+    )
+    engine.prices, engine.volumes = prices, volumes
+
+    engine.step_2_calculate_technical_features()
+    assert "IVR_Proxy" in engine.data.columns
+    assert "VRP_Proxy" in engine.data.columns
+
+    engine.step_3_generate_primary_signals()
+    assert "vrp_premium_selling_proxy" in engine.active_strategies
+
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+    trained_keys = [k for k in metrics if k.startswith("vrp_premium_selling_proxy_")]
+    assert trained_keys, "vrp_premium_selling_proxy must train at least one horizon given a regime-switching universe"
+    assert engine.eligibility["vrp_premium_selling_proxy"]["trained"] is True
+    assert engine.eligibility["vrp_premium_selling_proxy"]["reason"] is None
+
+
+def test_vrp_proxy_never_reaches_live_meta_labeler_registry_even_with_bridge_and_eligible_signals_set(monkeypatch):
+    """Even with the registry bridge on AND the proxy explicitly named in
+    the operator's own eligible-signals allowlist, step_7 must never
+    register anything for it. ml/forecast_backfill_registry_bridge.py::
+    BACKFILL_ELIGIBLE_SIGNAL_IDS is the structural gate --
+    step_7_register_live_meta_labelers's `active_and_eligible` is an
+    intersection of active_strategies, BACKFILL_ELIGIBLE_SIGNAL_IDS, AND
+    the operator allowlist, and BACKFILL_ELIGIBLE_SIGNAL_IDS deliberately
+    never lists "vrp_premium_selling_proxy" -- so the intersection is
+    guaranteed empty regardless of what the operator opts into."""
+    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["vrp_premium_selling_proxy"])
+
+    tickers = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+    prices = _regime_switching_prices(tickers)
+    volumes = pd.DataFrame({t: 1_000_000.0 for t in tickers}, index=prices.index)
+    engine = AgenticForecastBackfiller(
+        tickers=tickers, horizons=[10, 30, 60, 90], use_fmp=False, n_estimators=10, max_depth=3,
+        # Restrict step 3 to the proxy alone -- this file's other tests
+        # already cover the other 6 signals extensively; without this the
+        # regime-switching universe below trains all 7 active strategies
+        # (~5x slower) for no additional coverage this test needs.
+        strategy_ids=["vrp_premium_selling_proxy"],
+    )
+    engine.prices, engine.volumes = prices, volumes
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    assert "vrp_premium_selling_proxy" in engine.active_strategies
+    engine.step_4_create_meta_targets()
+    engine.step_5_backtrain_meta_labelers()
+    assert any(k.startswith("vrp_premium_selling_proxy_") for k in engine.models), (
+        "test setup assumption: the proxy must have genuinely trained a model before step 7 runs"
+    )
+
+    calls = []
+    import ml.forecast_backfill_registry_bridge as bridge_mod
+
+    def _spy_register_backfill_model(**kwargs):
+        calls.append(kwargs.get("signal_id"))
+        return (False, "should never be called")
+
+    monkeypatch.setattr(bridge_mod, "register_backfill_model", _spy_register_backfill_model)
+
+    engine.step_7_register_live_meta_labelers()
+    assert calls == [], f"register_backfill_model must never be called for the proxy, got calls={calls}"
+    assert not any(
+        "registered" in engine.metrics.get(k, {})
+        for k in engine.metrics if k.startswith("vrp_premium_selling_proxy_")
+    )
+
+
+def test_vrp_proxy_never_registered_in_global_signal_registry():
+    """VrpPremiumSellingProxySignal has no `global_registry.register(...)`
+    call at module scope (unlike every real SignalModule file's
+    convention) -- the structural mechanism that keeps it off the live
+    per-cycle scoring path entirely. Import the module fresh (side effects
+    only) and confirm the name still isn't resolvable."""
+    import ml.vrp_premium_selling_proxy_signal  # noqa: F401 -- import for its (lack of) side effects
+    from signals.registry import global_registry
+
+    with pytest.raises(KeyError):
+        global_registry.get("vrp_premium_selling_proxy")
+
+
 @pytest.mark.network
 def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     """Test full 6-step forecast backfill pipeline using synthetic data.
@@ -644,6 +914,125 @@ def test_step_3_skips_cross_sectional_modules_with_no_meta_label_features():
     for name in non_trainable_cross_sectional:
         assert name not in engine.active_strategies
         assert f"{name}_Signal" not in engine.data.columns
+
+
+# ---------------------------------------------------------------------------
+# WP2: per-signal eligibility bookkeeping (ml/forecast_backfill.py::
+# _mark_eligibility) -- honest "why didn't this signal train" reporting.
+# See docs/plans/FORECAST_BACKFILL_PLAN.md's WP2 section.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_eligibility_helper_contract():
+    """Unit-tests _mark_eligibility's own logic directly, independent of
+    which real signal happens to exercise which branch this run: creates an
+    entry on first call, a later reason updates it, trained=True clears any
+    reason, and a trained=True entry is never clobbered by a subsequent
+    (stale) failure reason from a different horizon."""
+    engine = _synthetic_engine(["AAA"], n_days=50)
+    assert engine.eligibility == {}
+
+    engine._mark_eligibility("sig_a")
+    assert engine.eligibility["sig_a"] == {
+        "declares_meta_label_features": True, "trained": False, "reason": None,
+    }
+
+    engine._mark_eligibility("sig_a", reason="insufficient_samples:0_for_10d")
+    assert engine.eligibility["sig_a"]["trained"] is False
+    assert engine.eligibility["sig_a"]["reason"] == "insufficient_samples:0_for_10d"
+
+    # A later horizon's failure reason still updates it (not trained yet).
+    engine._mark_eligibility("sig_a", reason="insufficient_samples:0_for_30d")
+    assert engine.eligibility["sig_a"]["reason"] == "insufficient_samples:0_for_30d"
+
+    # A genuine training success clears the reason and wins.
+    engine._mark_eligibility("sig_a", trained=True)
+    assert engine.eligibility["sig_a"]["trained"] is True
+    assert engine.eligibility["sig_a"]["reason"] is None
+
+    # A subsequent horizon's failure for the SAME signal must never
+    # downgrade an already-trained signal back to blocked.
+    engine._mark_eligibility("sig_a", reason="insufficient_samples:0_for_90d")
+    assert engine.eligibility["sig_a"]["trained"] is True
+    assert engine.eligibility["sig_a"]["reason"] is None
+
+    # Never raises on a malformed call (CONSTRAINT #6) -- e.g. eligibility
+    # somehow not a dict. Simulate by corrupting it directly.
+    engine.eligibility = None
+    engine._mark_eligibility("sig_b", reason="x")  # must not raise
+
+
+def test_eligibility_marks_a_genuinely_trained_signal_correctly():
+    """A signal that actually trains at least one horizon (timeseries_momentum,
+    always trainable on this fixture's synthetic OHLCV) is reported as
+    trained: true, reason: null -- and is_active derives from
+    BACKFILL_ELIGIBLE_SIGNAL_IDS membership, not a hardcoded 3-name list."""
+    from ml.forecast_backfill_registry_bridge import BACKFILL_ELIGIBLE_SIGNAL_IDS
+
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+
+    assert engine.eligibility["timeseries_momentum"] == {
+        "declares_meta_label_features": True, "trained": True, "reason": None,
+    }
+    trained_keys = [k for k in metrics if k.startswith("timeseries_momentum_")]
+    assert trained_keys, "expected timeseries_momentum to train at least one horizon"
+    assert "timeseries_momentum" in BACKFILL_ELIGIBLE_SIGNAL_IDS
+    for key in trained_keys:
+        assert metrics[key]["is_active"] is True
+
+
+def test_eligibility_records_insufficient_samples_reason_for_a_signal_that_never_trains():
+    """sector_quality_rank/vrp_premium_selling declare meta_label_features
+    but score 0.0 on every row given this test's fully synthetic tickers
+    (no real EDGAR accrual/gross-profitability/sector data, no real
+    options-chain-derived True_IVR/VRP exist for a fake ticker regardless of
+    how the live/backfill data pipeline is wired) -- so every horizon hits
+    _build_training_set's `len(clean_df) < 30` branch and the real,
+    measured reason is recorded, never a fabricated metrics row."""
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+
+    for name in ("sector_quality_rank", "vrp_premium_selling"):
+        assert not any(k.startswith(f"{name}_") for k in metrics), (
+            f"{name} must not have produced a fabricated metrics row on synthetic-only tickers"
+        )
+        entry = engine.eligibility.get(name)
+        assert entry is not None, f"{name} should have a real eligibility entry"
+        assert entry["trained"] is False
+        assert entry["reason"] is not None
+        assert entry["reason"].startswith("insufficient_samples:")
+
+
+def test_export_results_summary_carries_eligibility_and_never_fabricates_a_metrics_row():
+    """agentic_forecast_summary.json's new `eligibility` block must be
+    present and internally consistent with `metrics`: every signal with
+    trained: true has a real metrics row for at least one horizon, and a
+    signal with no metrics row anywhere is honestly reported as untrained
+    with a real reason (CONSTRAINT #4)."""
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    engine.step_5_backtrain_meta_labelers()
+    engine.step_6_execute_backfill()
+    _, summary = engine.export_results(filename="test_eligibility_output.csv")
+
+    assert "eligibility" in summary
+    for name, entry in summary["eligibility"].items():
+        has_metrics_row = any(k.startswith(f"{name}_") for k in summary["metrics"])
+        if entry["trained"]:
+            assert has_metrics_row, f"{name} reported trained but has no metrics row"
+            assert entry["reason"] is None
+        else:
+            assert not has_metrics_row, f"{name} reported untrained but has a metrics row"
+            assert entry["reason"] is not None
 
 
 def test_cross_sectional_fast_path_matches_slow_path_parity():
@@ -1204,3 +1593,161 @@ class TestForecastBackfillStep7:
                 f"Intra-namespace regression: {f.name} starts with "
                 "'backfill_meta_' and could collide with step 7's registered-model glob"
             )
+
+
+# ---------------------------------------------------------------------------
+# WP5: suppress options_flow_sentiment's momentum-proxy fallback on the
+# backfill path only (settings-free, unconditional bug fix -- see
+# docs/plans/FORECAST_BACKFILL_PLAN.md's WP5 section). This engine's dummy
+# SignalContext/synthetic pre_compute() never carries real UOA (unusual-
+# options-activity) flow data, so options_flow_sentiment's own legitimate
+# live-production fallback -- a price-momentum proxy keyed off ROC_5/ROC_20
+# -- would otherwise fire on every row it's asked to score here, training a
+# meta-labeler on pure price momentum mislabelled as options flow sentiment.
+# The fix lives entirely in ml/forecast_backfill.py::_run_cross_sectional_
+# module (options_flow_sentiment overrides pre_compute, so it is dispatched
+# through the per-date/per-ticker SCALAR compute() replay, not
+# compute_vectorized()) and never touches signals/options_flow_sentiment.py.
+# ---------------------------------------------------------------------------
+
+
+def _options_flow_signal_context(sentiment_dict=None):
+    """A minimal, self-contained SignalContext -- deliberately NOT importing
+    tests/test_options_flow_sentiment.py's private _dummy_signal_context, so
+    this file's proof that the live module is untouched doesn't depend on
+    another test file's fixture staying in sync."""
+    from datetime import datetime, timezone
+
+    from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
+    from signals.base import SignalContext
+
+    bar = MarketBarDTO(
+        date=datetime.now(timezone.utc), ticker="AAPL",
+        open_price=150.0, high_price=155.0, low_price=149.0, close_price=153.0, volume=1_000_000,
+    )
+    fund = FundamentalDataDTO(
+        ticker="AAPL", pe_ratio=25.0, pb_ratio=10.0, dividend_yield=0.005, book_value=20.0,
+        eps_trailing=8.0, dividend_growth_rate=0.05, payout_ratio=0.15, sector="Technology",
+        company_name="Apple Inc.",
+    )
+    macro = MacroEconomicDTO(
+        yield_curve_10y_2y=1.0, high_yield_oas=3.0, inflation_rate=2.5, vix_value=15.0,
+        sahm_rule_indicator=0.0,
+    )
+    ctx = SignalContext(bar=bar, fundamentals=fund, macro=macro)
+    if sentiment_dict:
+        ctx.options_flow_sentiment = dict(sentiment_dict)
+    return ctx
+
+
+def test_options_flow_sentiment_live_compute_vectorized_fallback_still_fires_unchanged():
+    """Proof #1 (vectorized path): calling
+    signals.options_flow_sentiment.OptionsFlowSentimentSignal().
+    compute_vectorized() DIRECTLY (never through ml/forecast_backfill.py) on
+    a DataFrame that has ROC_5/ROC_20 and no other flow-data columns must
+    still trigger the momentum-proxy fallback exactly as before this
+    change -- signals/options_flow_sentiment.py itself was never edited."""
+    from signals.options_flow_sentiment import OptionsFlowSentimentSignal
+
+    signal = OptionsFlowSentimentSignal()
+    ctx = _options_flow_signal_context()
+    df = pd.DataFrame({
+        "Symbol": ["AAPL", "TSLA"],
+        "ROC_5": [0.03, -0.03],
+        "ROC_20": [0.06, -0.06],
+    })
+
+    out = signal.compute_vectorized(df, ctx)
+    assert out["score"].notna().all()
+    assert (out["score"] != 0.0).all(), "the momentum-proxy fallback must still produce a real non-neutral score"
+    assert out["score"].iloc[0] > 0.50
+    assert "bullish" in out["explanation"].iloc[0]
+    assert out["score"].iloc[1] < -0.50
+    assert "bearish" in out["explanation"].iloc[1]
+
+
+def test_options_flow_sentiment_live_compute_scalar_fallback_still_fires_unchanged():
+    """Proof #1 (scalar path -- the ACTUAL method
+    ml/forecast_backfill.py::_run_cross_sectional_module dispatches to for
+    options_flow_sentiment, since it overrides pre_compute and so is routed
+    through the per-date/per-ticker replay, never compute_vectorized()):
+    calling OptionsFlowSentimentSignal().compute() DIRECTLY on a row that
+    carries ROC_5/ROC_20 and no other flow-data source must still trigger
+    the identical momentum-proxy fallback -- proving the module this
+    engine's fix routes AROUND, not INTO, is completely unchanged."""
+    from signals.options_flow_sentiment import OptionsFlowSentimentSignal
+
+    signal = OptionsFlowSentimentSignal()
+    ctx = _options_flow_signal_context()
+    row = pd.Series({"Symbol": "AAPL", "ROC_5": 0.03, "ROC_20": 0.06})
+
+    out = signal.compute(row, ctx)
+    assert out.score == pytest.approx(0.5 * min(1.0, 0.03 / 0.02) + 0.5 * min(1.0, 0.06 / 0.05), abs=1e-9)
+    assert out.score > 0.50
+    assert "bullish" in out.explanation
+
+    row_bear = pd.Series({"Symbol": "TSLA", "ROC_5": -0.03, "ROC_20": -0.06})
+    out_bear = signal.compute(row_bear, ctx)
+    assert out_bear.score < -0.50
+    assert "bearish" in out_bear.explanation
+
+
+def test_forecast_backfill_suppresses_options_flow_sentiment_momentum_proxy_on_backfill_path():
+    """Proof #2, #3, #4 combined: on the offline synthetic backfill panel
+    (which -- unlike the live pipeline -- never carries real UOA flow data),
+    options_flow_sentiment's Signal column must come out entirely NaN (the
+    momentum-proxy fallback suppressed, score forced neutral, np.sign(0.0)
+    -> NaN per step 3's own sign-then-replace-zero-with-NaN convention), the
+    shared ROC_5/ROC_20 columns every OTHER module reads from self.data must
+    be completely unaffected, the signal's eligibility must honestly report
+    an insufficient_samples reason (never a fabricated trained model), and
+    the other three signals on this same panel must be a genuine regression
+    check -- unaffected, still training normally."""
+    tickers = ["AAA", "BBB", "CCC", "DDD"]
+    engine = _synthetic_engine(tickers)
+
+    engine.step_2_calculate_technical_features()
+    assert "ROC_5" in engine.data.columns and "ROC_20" in engine.data.columns
+    roc5_before = engine.data["ROC_5"].copy()
+    roc20_before = engine.data["ROC_20"].copy()
+
+    engine.step_3_generate_primary_signals()
+
+    # options_flow_sentiment still runs (it declares meta_label_features and
+    # has no required_features to fail on) and still gets a Signal column --
+    # it's just entirely NaN, since every row's score was forced neutral.
+    assert "options_flow_sentiment" in engine.active_strategies
+    assert "options_flow_sentiment_Signal" in engine.data.columns
+    sig = engine.data["options_flow_sentiment_Signal"]
+    assert len(sig) > 0
+    assert sig.isna().all(), "the momentum-proxy fallback must be fully suppressed on the backfill path"
+
+    # self.data's shared ROC_5/ROC_20 columns (read by every OTHER module,
+    # and by this signal's own meta_label_features resolution in step 5)
+    # must be byte-identical to before step 3 ran -- only a local copy fed
+    # into options_flow_sentiment's own dispatch was touched.
+    pd.testing.assert_series_equal(engine.data["ROC_5"], roc5_before)
+    pd.testing.assert_series_equal(engine.data["ROC_20"], roc20_before)
+
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+
+    assert not any(k.startswith("options_flow_sentiment_") for k in metrics), (
+        "options_flow_sentiment must never produce a fabricated metrics row on the backfill path"
+    )
+    entry = engine.eligibility.get("options_flow_sentiment")
+    assert entry is not None
+    assert entry["trained"] is False
+    assert entry["reason"] is not None
+    assert entry["reason"].startswith("insufficient_samples:"), entry["reason"]
+
+    # No regression: the other three signal modules on this exact same
+    # synthetic panel must be unaffected by the options_flow_sentiment-only
+    # suppression and still train normally.
+    for name in ("timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion"):
+        trained_keys = [k for k in metrics if k.startswith(f"{name}_")]
+        assert trained_keys, f"{name} was expected to train at least one horizon, unaffected by the WP5 fix"
+        entry = engine.eligibility.get(name)
+        assert entry is not None
+        assert entry["trained"] is True
+        assert entry["reason"] is None

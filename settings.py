@@ -5340,6 +5340,46 @@ class Settings(BaseSettings):
             "worker must still be reaped eventually."
         ),
     )
+    FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Gates whether ml/forecast_backfill.py::step_2_calculate_technical_features() "
+            "fetches real point-in-time accrual_ratio/gross_profitability (SEC EDGAR XBRL, "
+            "via data/sneqr_quality_facts.py) and sector (forecasting/data/ticker_sectors.csv) "
+            "for every ticker in the run's universe -- the raw inputs "
+            "signals/sector_quality_rank.py's meta-labeler needs. Default False preserves "
+            "today's exact behavior byte-identically: no network call, no new columns, and "
+            "every existing offline (non-@pytest.mark.network) test that constructs an engine "
+            "with synthetic prices/volumes and calls step_2 directly keeps working with zero "
+            "network dependency. When True, one SEC EDGAR company-facts fetch is made per "
+            "ticker (throttled ~10 req/s by data/edgar_fundamentals.py's existing cross-process "
+            "throttle) -- for a wide universe this can add meaningful wall-clock time to a run, "
+            "which is why it is opt-in rather than the default even though the underlying fetch "
+            "itself never raises and degrades a ticker to NaN inputs on any failure "
+            "(CONSTRAINT #6)."
+        ),
+    )
+    FORECAST_BACKFILL_VRP_PROXY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Gates whether the Forecast Backfill screen computes IVR_Proxy/VRP_Proxy "
+            "(OHLCV-only, no network -- realized-vol-derived stand-ins for the real "
+            "options-chain-derived True_IVR/VRP, which are structurally unavailable from "
+            "this repo's permitted FMP/Yahoo data sources -- see "
+            "docs/known_issues/vrp_premium_selling_no_historical_iv.md) and trains a "
+            "SEPARATE, quarantined model_type ('vrp_premium_selling_proxy', "
+            "ml/vrp_premium_selling_proxy_signal.py) against them. Never touches "
+            "signals/vrp_premium_selling.py or its live per-ticker behavior. The proxy "
+            "model_type is deliberately absent from "
+            "ml/forecast_backfill_registry_bridge.py::BACKFILL_ELIGIBLE_SIGNAL_IDS, so it "
+            "can never be promoted into ml.meta_labeling.global_meta_registry regardless "
+            "of settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS -- a model trained on it "
+            "is a realized-vol-regime model, not a volatility-risk-premium model, and must "
+            "never reach live inference. Default False preserves today's exact behavior "
+            "byte-identically: no new columns, no new model_type, no proxy signal "
+            "instantiated."
+        ),
+    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod

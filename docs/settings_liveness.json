@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 367,
+    "live_safe": 369,
     "no_op": 5,
     "restart_required": 96,
-    "total": 468
+    "total": 470
   },
   "dynamic_sites": [
     {
@@ -49,28 +49,28 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3194,
+      "line": 3196,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4335,
+      "line": 4337,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4440,
+      "line": 4442,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5374,
+      "line": 5376,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -145,7 +145,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 452,
+  "files_scanned": 454,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -280,6 +280,8 @@
     "FOLLOW_MIN_AMOUNT",
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
+    "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
+    "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "FORECAST_DRIFT_SHRINKAGE",
     "FORECAST_MAX_CONCURRENCY",
@@ -527,13 +529,13 @@
   "read_forms": {
     "attr": 933,
     "factory_param": 4,
-    "getattr_const": 391,
+    "getattr_const": 394,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 282,
     "factory_param": 4,
-    "getattr_const": 224,
+    "getattr_const": 226,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1637,7 +1639,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4817",
+        "site": "api/pilots_api.py:4819",
         "via": []
       }
     ],
@@ -1648,7 +1650,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4816",
+        "site": "api/pilots_api.py:4818",
         "via": []
       }
     ],
@@ -1659,7 +1661,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4986",
+        "site": "api/pilots_api.py:4988",
         "via": []
       },
       {
@@ -1758,7 +1760,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4958",
+        "site": "api/pilots_api.py:4960",
         "via": []
       },
       {

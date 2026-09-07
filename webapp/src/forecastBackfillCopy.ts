@@ -58,3 +58,33 @@ export function backfillFailureMessage(job: ForecastBackfillJob | null): string 
       return job.error || "The backfill failed. Nothing was saved.";
   }
 }
+
+/**
+ * Honest, human-readable label for a machine-readable eligibility `reason`
+ * from `ml/forecast_backfill.py::_mark_eligibility` (surfaced on
+ * `ForecastBackfillSummary.eligibility[<signal>].reason`) -- e.g.
+ * "insufficient_samples:0_for_90d" -> "Insufficient training samples (0)
+ * at the 90d horizon". Falls back to the raw reason string verbatim for a
+ * reason shape this hasn't been taught to parse, rather than hiding it.
+ */
+export function formatEligibilityReason(reason: string | null): string {
+  if (!reason) return "Unknown";
+  const insufficientMatch = reason.match(/^insufficient_samples:(\d+)_for_(\d+)d$/);
+  if (insufficientMatch) {
+    const [, n, h] = insufficientMatch;
+    return `Insufficient training samples (${n}) at the ${h}d horizon`;
+  }
+  if (reason.startsWith("missing_required_features:")) {
+    return `Missing required input columns: ${reason.slice("missing_required_features:".length)}`;
+  }
+  if (reason === "unresolvable_features") {
+    return "None of this signal's declared training features could be resolved";
+  }
+  if (reason.startsWith("compute_error:")) {
+    return `Signal computation failed: ${reason.slice("compute_error:".length)}`;
+  }
+  if (reason === "no_meta_label_features") {
+    return "No meta-label features declared";
+  }
+  return reason;
+}
