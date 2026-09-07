@@ -3993,11 +3993,34 @@ export interface ForecastBackfillModelMetrics {
   skip_reason?: string | null;
 }
 
+/** One eligible signal's (a signal declaring non-empty
+ *  meta_label_features) real, measured training outcome for the last run --
+ *  see ml/forecast_backfill.py::_mark_eligibility(). Distinct from
+ *  ForecastBackfillModelMetrics: a signal that never trained never gets a
+ *  fabricated metrics row (CONSTRAINT #4); its real reason lives here. */
+export interface ForecastBackfillEligibility {
+  declares_meta_label_features: boolean;
+  /** True the moment ANY horizon for this signal produced a trained model --
+   *  a signal that trains at one horizon but hits e.g. "insufficient
+   *  samples" at another still reports trained: true, reason: null. */
+  trained: boolean;
+  /** Machine-readable reason this signal has not (yet) trained any horizon,
+   *  e.g. "insufficient_samples:0_for_90d", "missing_required_features:[...]",
+   *  "unresolvable_features", "compute_error:...". `null` only when
+   *  `trained` is true. */
+  reason: string | null;
+}
+
 export interface ForecastBackfillSummary {
   status?: string;
   timestamp?: string | null;
   horizons: number[];
   metrics: Record<string, ForecastBackfillModelMetrics>;
+  /** Per-signal (not per model_key) real eligibility outcome for every
+   *  signal that declares meta_label_features and was attempted this run.
+   *  Optional/possibly-absent on an older cached summary file written
+   *  before this field existed -- treat `undefined` the same as `{}`. */
+  eligibility?: Record<string, ForecastBackfillEligibility>;
   tickers: string[];
   total_rows?: number;
   csv_path?: string;

@@ -161,9 +161,78 @@ class AgenticForecastBackfiller:
         self.models: Dict[str, Any] = {}
         self.metrics: Dict[str, Dict[str, float]] = {}
         self._training_sets: Dict[str, Tuple[pd.DataFrame, pd.Series, pd.Index, List[str]]] = {}
+        # Per-signal (not per model_key) honest eligibility bookkeeping --
+        # see _mark_eligibility()'s docstring and
+        # docs/plans/FORECAST_BACKFILL_PLAN.md's WP2 section. Populated only
+        # for signals that declare non-empty meta_label_features (i.e. the
+        # BACKFILL_ELIGIBLE_SIGNAL_IDS universe) AND were actually attempted
+        # this run (not filtered out by self.strategy_ids). Deliberately kept
+        # separate from self.metrics -- a signal that never produced a
+        # trained model must never gain a fabricated zero-valued metrics
+        # row (CONSTRAINT #4); this dict is where its real reason lives.
+        self.eligibility: Dict[str, Dict[str, Any]] = {}
         # Tickers for which no real provider (FMP nor CompositeProvider) returned
         # data. They are dropped from the run and recorded via the 3-strike rule.
         self.dropped_tickers: List[str] = []
+        # Backfill-only "pseudo-signal" modules -- e.g.
+        # ml/vrp_premium_selling_proxy_signal.py -- deliberately never
+        # registered in signals.registry.global_registry (so they can never
+        # reach live production scoring), populated in
+        # step_3_generate_primary_signals when their own opt-in flag is set.
+        # See _get_module()'s docstring for why every other step's module
+        # lookup must go through it instead of global_registry.get() directly.
+        self._proxy_modules: Dict[str, Any] = {}
+
+    def _get_module(self, name: str) -> Optional[Any]:
+        """Look up a module by name across BOTH the real
+        signals.registry.global_registry AND this engine's own
+        self._proxy_modules -- the single lookup every step (3 onward) must
+        use instead of calling global_registry.get() directly.
+
+        global_registry.get() RAISES KeyError for an unregistered name (it
+        does not return None) -- every existing `if not module: ...`
+        defensive check in this file relies on getting a genuine None back,
+        which was previously dead code (self.active_strategies is built
+        exclusively from real registry entries in step 3, so every name
+        already reaching these checks was guaranteed to exist). Backfill-only
+        proxy modules break that guarantee -- their name is never in
+        global_registry -- so this helper restores the graceful-None
+        contract those checks already assume, for both real and proxy names.
+        """
+        from signals.registry import global_registry
+
+        try:
+            return global_registry.get(name)
+        except KeyError:
+            return self._proxy_modules.get(name)
+
+    def _mark_eligibility(
+        self, name: str, *, trained: Optional[bool] = None, reason: Optional[str] = None,
+    ) -> None:
+        """Best-effort per-signal eligibility bookkeeping for the Forecast
+        Backfill screen's honest "why didn't this signal train" reporting.
+
+        Creates ``self.eligibility[name]`` on first call (a signal is only
+        ever marked once it's known to declare non-empty meta_label_features
+        -- see the call sites in step 3/step 5/_build_training_set). A
+        genuine training success (``trained=True``, called once per
+        model_type the moment ANY horizon actually produces a model) always
+        wins and clears any earlier failure reason -- a signal that trains
+        at one horizon but hits "insufficient samples" at another is
+        reported as trained, not blocked. Never raises (CONSTRAINT #6): a
+        bookkeeping bug must never abort a real training run.
+        """
+        try:
+            entry = self.eligibility.setdefault(
+                name, {"declares_meta_label_features": True, "trained": False, "reason": None},
+            )
+            if trained is True:
+                entry["trained"] = True
+                entry["reason"] = None
+            elif reason is not None and not entry["trained"]:
+                entry["reason"] = reason
+        except Exception as exc:
+            logger.debug("_mark_eligibility bookkeeping failed for %s: %s", name, exc)
 
     def step_1_fetch_data(self) -> pd.DataFrame:
         """Step 1: Fetch daily OHLCV price and volume data using FMP or fallback providers."""
@@ -261,6 +330,33 @@ class AgenticForecastBackfiller:
         logger.info("[*] Step 2: Calculating technical features...")
         features_list: List[pd.DataFrame] = []
 
+        # Sector-Neutral Earnings-Quality (SNEQR) raw inputs -- accrual_ratio/
+        # gross_profitability (real SEC EDGAR XBRL, per-ticker) and sector
+        # (forecasting/data/ticker_sectors.csv) -- are signals/
+        # sector_quality_rank.py's declared required inputs and are OFF by
+        # default (see settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED's
+        # own docstring): no network call, no new columns, byte-identical to
+        # pre-2026-09 behavior unless explicitly enabled. ticker_sectors is
+        # loaded ONCE here (a single CSV read), not per ticker in the loop
+        # below.
+        sneqr_enabled = getattr(settings, "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED", False)
+        ticker_sectors: Dict[str, str] = {}
+        fetch_sneqr_quality_facts = None
+        if sneqr_enabled:
+            from data.sneqr_quality_facts import fetch_sneqr_quality_facts, load_ticker_sectors
+            ticker_sectors = load_ticker_sectors()
+
+        # IVR_Proxy/VRP_Proxy -- OHLCV-only, no network -- realized-vol-derived
+        # stand-ins for the real options-chain-derived True_IVR/VRP, which are
+        # structurally unavailable from this repo's permitted data sources
+        # (see docs/known_issues/vrp_premium_selling_no_historical_iv.md).
+        # Consumed ONLY by ml/vrp_premium_selling_proxy_signal.py's
+        # quarantined vrp_premium_selling_proxy model_type -- NEVER by the
+        # real signals/vrp_premium_selling.py.
+        vrp_proxy_enabled = getattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", False)
+        IVR_PROXY_LOOKBACK_DAYS = 252  # matches calculate_true_ivr's own lookback_days=252 default
+        VRP_PROXY_RV_WINDOW_DAYS = 60  # matches validation/options_selling_backtest.py's LONG_TERM_VOL_WINDOW
+
         for ticker in self.prices.columns:
             if ticker not in self.volumes.columns:
                 continue
@@ -319,6 +415,61 @@ class AgenticForecastBackfiller:
             gain_2 = (delta.where(delta > 0, 0.0)).rolling(window=2).mean()
             loss_2 = (-delta.where(delta < 0, 0.0)).rolling(window=2).mean()
             df["RSI_2"] = 100.0 - (100.0 / (1.0 + gain_2 / loss_2.replace(0.0, np.nan)))
+
+            if sneqr_enabled:
+                # PIT accrual_ratio/gross_profitability -- same merge_asof
+                # forward-fill mechanism scripts/refresh_validations.py::
+                # _build_sector_quality_rank_adapter already validated live
+                # against SEC EDGAR (~99% coverage on a 100-name S&P slice,
+                # see docs/signals/sector_quality_rank.md). A ticker whose
+                # EDGAR fetch fails entirely (no CIK, no facts) degrades to
+                # all-NaN for both columns here -- excluded from ranking at
+                # every date downstream, never fabricated (CONSTRAINT #4),
+                # never raises (CONSTRAINT #6, fetch_sneqr_quality_facts's
+                # own contract).
+                facts_df = fetch_sneqr_quality_facts(ticker)
+                if not facts_df.empty:
+                    daily = pd.merge_asof(
+                        pd.DataFrame(index=df.index),
+                        facts_df,
+                        left_index=True,
+                        right_index=True,
+                        direction="backward",
+                    )
+                    daily.index = df.index
+                    df["accrual_ratio"] = pd.to_numeric(daily["accrual_ratio"], errors="coerce")
+                    df["gross_profitability"] = pd.to_numeric(daily["gross_profitability"], errors="coerce")
+                else:
+                    df["accrual_ratio"] = np.nan
+                    df["gross_profitability"] = np.nan
+                # A CURRENT sector snapshot applied across the full backtest
+                # history -- the same accepted approximation
+                # scripts/refresh_validations.py::_load_ticker_sectors
+                # documents (no PIT sector history exists anywhere in this
+                # repo). A ticker absent from the CSV gets "N/A", matching
+                # dto_models.py::FundamentalDataDTO.sector's own established
+                # "no sector data" default (the same convention the live
+                # per-cycle path already uses) -- never a fabricated real
+                # sector name.
+                df["sector"] = ticker_sectors.get(ticker, "N/A")
+
+            if vrp_proxy_enabled:
+                # IVR_Proxy: trailing-lookback percentile rank of GARCH_Vol
+                # (this pipeline's own vectorized EWMA-GARCH estimate) --
+                # `.rolling(window).rank(pct=True)` ranks each date's value
+                # against its own trailing window, the exact percentile-rank
+                # semantics calculate_true_ivr computes against a real
+                # dated-IV history, just substituting GARCH_Vol for IV.
+                df["IVR_Proxy"] = (
+                    df["GARCH_Vol"].rolling(IVR_PROXY_LOOKBACK_DAYS).rank(pct=True) * 100.0
+                )
+                # VRP_Proxy: a trailing realized-vol reading in place of a
+                # real IV reading, matching volatility/iv_engine.get_vrp's
+                # exact `current_iv - garch_vol` formula and the identical
+                # proxy convention validation/options_selling_backtest.py
+                # already uses (LONG_TERM_VOL_WINDOW=60).
+                rv60 = df["Return"].rolling(VRP_PROXY_RV_WINDOW_DAYS).std() * np.sqrt(252)
+                df["VRP_Proxy"] = rv60 - df["GARCH_Vol"]
 
             df["Ticker"] = ticker
             features_list.append(df)
@@ -445,6 +596,29 @@ class AgenticForecastBackfiller:
                 },
                 index=day_returns.index,
             )
+            # Widen with sector_quality_rank's raw inputs (sector,
+            # accrual_ratio, gross_profitability) when step 2 joined them in
+            # -- see settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED.
+            # REQUIRED, not optional: sector_quality_rank.pre_compute() reads
+            # its raw inputs from the universe_df IT IS HANDED, never from
+            # self.data directly -- without this widening it would keep
+            # seeing only Symbol/XSec_12_1M and degrade to empty ranks
+            # regardless of what step 2 computed. A ticker present in
+            # day_returns but absent from `group` for this date (e.g.
+            # dropped by step 2's own minimum-history requirement) gets NaN
+            # accrual_ratio/gross_profitability (never fabricated) and
+            # "N/A" sector (matching dto_models.py::FundamentalDataDTO
+            # .sector's own "no sector data" convention). No-op for every
+            # other cross-sectional module (cross_sectional_momentum,
+            # options_flow_sentiment) whose pre_compute never reads these
+            # columns.
+            if "sector" in group.columns:
+                sector_series = group["sector"].droplevel("Date").reindex(day_returns.index)
+                universe_df["sector"] = sector_series.fillna("N/A")
+            if "accrual_ratio" in group.columns:
+                universe_df["accrual_ratio"] = group["accrual_ratio"].droplevel("Date").reindex(day_returns.index)
+            if "gross_profitability" in group.columns:
+                universe_df["gross_profitability"] = group["gross_profitability"].droplevel("Date").reindex(day_returns.index)
             context = make_context()
             module.pre_compute(universe_df, context)
 
@@ -534,14 +708,24 @@ class AgenticForecastBackfiller:
             # waste. Skipping here, before the cross-sectional pre_compute
             # path is ever reached, is what actually eliminates the
             # ~500K-call replay for every such module (e.g. news_catalyst,
-            # multifactor, sector_quality_rank, lgbm_ranker).
+            # multifactor, macro_regime, lgbm_ranker -- NOT sector_quality_rank,
+            # which does declare meta_label_features and is skipped here only
+            # if it also fails required_features/produces an all-NaN Signal).
             if not getattr(module, "meta_label_features", []):
                 logger.debug(f"Skipping {name}: no meta_label_features declared (never trainable).")
                 continue
 
+            # This module IS one of the Forecast-Backfill-eligible signals --
+            # give it an eligibility entry now so it appears (with an honest
+            # reason) even if every check below fails, rather than being
+            # invisible to the screen's "eligible signals not trained"
+            # reporting.
+            self._mark_eligibility(name)
+
             missing = [f for f in module.required_features if f not in self.data.columns]
             if missing:
                 logger.debug(f"Skipping {name} due to missing features: {missing}")
+                self._mark_eligibility(name, reason=f"missing_required_features:{missing}")
                 continue
 
             try:
@@ -565,6 +749,35 @@ class AgenticForecastBackfiller:
                     self.active_strategies.append(name)
             except Exception as e:
                 logger.warning(f"Error computing vectorized signal for {name}: {e}")
+                self._mark_eligibility(name, reason=f"compute_error:{type(e).__name__}: {e}")
+
+        # Backfill-only quarantined proxy signal(s) -- deliberately NOT part
+        # of the global_registry loop above. See
+        # ml/vrp_premium_selling_proxy_signal.py's module docstring and
+        # settings.FORECAST_BACKFILL_VRP_PROXY_ENABLED's own docstring for
+        # the full scope statement (never touches signals/vrp_premium_selling.py,
+        # never registered in signals.registry.global_registry, structurally
+        # excluded from ml/forecast_backfill_registry_bridge.py::
+        # BACKFILL_ELIGIBLE_SIGNAL_IDS so it can never reach live inference).
+        if getattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", False):
+            from ml.vrp_premium_selling_proxy_signal import VrpPremiumSellingProxySignal
+
+            proxy_module = VrpPremiumSellingProxySignal()
+            if not self.strategy_ids or proxy_module.name in self.strategy_ids:
+                self._proxy_modules[proxy_module.name] = proxy_module
+                self._mark_eligibility(proxy_module.name)
+                try:
+                    out_df = proxy_module.compute_vectorized(self.data, context)
+                    if "score" in out_df.columns:
+                        signal_col = np.sign(out_df["score"]).replace(0, np.nan)
+                        self.data[f"{proxy_module.name}_Signal"] = signal_col
+                        for feat in proxy_module.meta_label_features:
+                            if feat in out_df.columns:
+                                self.data[f"{proxy_module.name}_{feat}"] = out_df[feat]
+                        self.active_strategies.append(proxy_module.name)
+                except Exception as e:
+                    logger.warning(f"Error computing vectorized signal for {proxy_module.name}: {e}")
+                    self._mark_eligibility(proxy_module.name, reason=f"compute_error:{type(e).__name__}: {e}")
 
         logger.info(f"[+] Step 3 complete. Primary signals generated for: {self.active_strategies}")
         return self.data
@@ -576,7 +789,7 @@ class AgenticForecastBackfiller:
         from signals.registry import global_registry
         all_horizons = set(self.horizons)
         for name in self.active_strategies:
-            module = global_registry.get(name)
+            module = self._get_module(name)
             if module and getattr(module, "meta_label_horizons", []):
                 all_horizons.update(module.meta_label_horizons)
 
@@ -625,7 +838,7 @@ class AgenticForecastBackfiller:
 
     def _build_training_set(self, model_type: str, h: int) -> Optional[Tuple[pd.DataFrame, pd.Series, pd.Index, List[str]]]:
         from signals.registry import global_registry
-        module = global_registry.get(model_type)
+        module = self._get_module(model_type)
         if not module:
             return None
             
@@ -646,6 +859,7 @@ class AgenticForecastBackfiller:
 
         if len(clean_df) < 30:
             logger.warning("Insufficient samples (%d) for %s_%dd model. Skipping.", len(clean_df), model_type, h)
+            self._mark_eligibility(model_type, reason=f"insufficient_samples:{len(clean_df)}_for_{h}d")
             return None
             
         X = clean_df[resolved_features]
@@ -686,21 +900,24 @@ class AgenticForecastBackfiller:
 
         from validation.purged_cv import CombinatorialPurgedCV
         from signals.registry import global_registry
+        from ml.forecast_backfill_registry_bridge import BACKFILL_ELIGIBLE_SIGNAL_IDS
 
         for model_type in self.active_strategies:
-            module = global_registry.get(model_type)
+            module = self._get_module(model_type)
             if not module:
                 continue
                 
             features_raw = getattr(module, "meta_label_features", [])
             if not features_raw:
                 logger.warning("Strategy %s has no meta_label_features defined, skipping training.", model_type)
+                self._mark_eligibility(model_type, reason="no_meta_label_features")
                 continue
                 
             resolved_features = self._resolve_meta_features(model_type, features_raw)
 
             if not resolved_features:
                 logger.warning("Could not resolve any features for %s", model_type)
+                self._mark_eligibility(model_type, reason="unresolvable_features")
                 continue
                 
             horizons_raw = getattr(module, "meta_label_horizons", None) or self.horizons
@@ -771,8 +988,16 @@ class AgenticForecastBackfiller:
                     "n_train": len(X),
                     "n_test": 0,
                     "split_date": "CPCV",
-                    "is_active": model_type in ["timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion"],
+                    # "Active" = model_type is one of the canonical, currently-
+                    # supported Forecast-Backfill-eligible signals (the same
+                    # BACKFILL_ELIGIBLE_SIGNAL_IDS the registry bridge in step 7
+                    # uses) -- derived, not a hardcoded name list, so a newly-
+                    # eligible signal is never mislabelled "Diagnostic" just
+                    # because it postdates whatever list happened to exist when
+                    # this field was first written.
+                    "is_active": model_type in BACKFILL_ELIGIBLE_SIGNAL_IDS,
                 }
+                self._mark_eligibility(model_type, trained=True)
 
                 # Save trained model artifact. model_key is built from
                 # model_type (a signals.registry.global_registry strategy
@@ -844,7 +1069,7 @@ class AgenticForecastBackfiller:
         """
         from signals.registry import global_registry
 
-        module = global_registry.get(model_type)
+        module = self._get_module(model_type)
         features_raw = getattr(module, "meta_label_features", []) if module else []
         resolved_features = self._resolve_meta_features(model_type, features_raw)
         prob_col = f"{model_type}_Meta_Prob_{h}d"
@@ -893,7 +1118,7 @@ class AgenticForecastBackfiller:
         from signals.registry import global_registry
 
         for model_type in self.active_strategies:
-            module = global_registry.get(model_type)
+            module = self._get_module(model_type)
             features_raw = getattr(module, "meta_label_features", []) if module else []
             horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
             resolved_features = self._resolve_meta_features(model_type, features_raw)
@@ -999,12 +1224,13 @@ class AgenticForecastBackfiller:
 
         Restricts to strategies that actually produced at least one trained
         model, rather than every module that merely satisfied step 3's
-        required_features check (or even declared meta_label_features -- see
-        step_3_generate_primary_signals's KNOWN GAP docstring for
-        cross_sectional_momentum, which declares features but never trains:
-        its rank lookup misses on every row, so its Signal column is
-        unconditionally NaN). Several registered modules pass step 3's check
-        with an empty required_features list but actually score off
+        required_features check or declared meta_label_features. That
+        weaker bar is not sufficient on its own: cross_sectional_momentum's
+        historical inability to train (its rank lookup missed on every row,
+        producing an unconditionally-NaN Signal column) was fixed by routing
+        it through _run_cross_sectional_module's real pre_compute/compute
+        replay -- but other registered modules can still pass step 3's check
+        with an empty required_features list while actually scoring off
         SignalContext fields this backfiller's dummy context never populates
         (real dividend yield, sortino ratio, ...) -- their Signal column is
         likewise unconditionally NaN. Including any such column in the
@@ -1018,7 +1244,7 @@ class AgenticForecastBackfiller:
         from signals.registry import global_registry
 
         def _has_trained_model(name: str) -> bool:
-            module = global_registry.get(name)
+            module = self._get_module(name)
             horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
             return any(f"{name}_{h}d" in self.models for h in horizons_raw)
 
@@ -1026,7 +1252,7 @@ class AgenticForecastBackfiller:
 
         export_cols = ["Close"] + [f"{m}_Signal" for m in trainable_strategies]
         for model_type in trainable_strategies:
-            module = global_registry.get(model_type)
+            module = self._get_module(model_type)
             horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
             for h in horizons_raw:
                 prob_col = f"{model_type}_Meta_Prob_{h}d"
@@ -1085,6 +1311,10 @@ class AgenticForecastBackfiller:
                 "tickers": self.tickers,
                 "horizons": self.horizons,
                 "metrics": dict(self.metrics),
+                # Separate from `metrics` -- a signal that never trained
+                # never gets a fabricated metrics row (CONSTRAINT #4); its
+                # real reason lives here instead. See _mark_eligibility().
+                "eligibility": dict(self.eligibility),
                 "total_rows": len(output_df),
                 "csv_path": str(out_csv),
                 # Non-empty iff step_1_fetch_data dropped tickers due to missing data.
@@ -1127,6 +1357,10 @@ class AgenticForecastBackfiller:
             "tickers": self.tickers,
             "horizons": self.horizons,
             "metrics": self.metrics,
+            # Separate from `metrics` -- a signal that never trained never
+            # gets a fabricated metrics row (CONSTRAINT #4); its real reason
+            # lives here instead. See _mark_eligibility().
+            "eligibility": dict(self.eligibility),
             "total_rows": len(output_df),
             "csv_path": str(out_csv),
             # Non-empty iff step_1_fetch_data dropped tickers due to missing data.

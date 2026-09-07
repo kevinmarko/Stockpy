@@ -1073,6 +1073,7 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
                 "timestamp": None,
                 "horizons": getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90]),
                 "metrics": {},
+                "eligibility": {},
                 "tickers": settings.DEFAULT_TICKERS,
                 "message": (
                     "The forecast backfill summary file exists but could not be "
@@ -1086,6 +1087,7 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
         "timestamp": None,
         "horizons": getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90]),
         "metrics": {},
+        "eligibility": {},
         "tickers": settings.DEFAULT_TICKERS,
         "message": "Forecast backfill has not been run yet.",
     }

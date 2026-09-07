@@ -27,13 +27,25 @@ been widened with the 9 previously-missing feature names (`Vol_20`, `Vol_50`, `V
 `tests/test_train_meta_labelers.py::TestSixEligibleSignalsFeatureCompatibility` proves all 6 signals' real
 `meta_label_features` now pass `check_feature_compatibility()`. Be precise about scope: this closes the
 *compatibility* gate specifically. A signal still separately needs to pass the DSR/PBO deployability gate
-(unchanged, untouched by this fix) to actually register live, and `cross_sectional_momentum` has a SEPARATE,
-pre-existing, disclosed primary-signal-generation gap — its Signal column is unconditionally NaN in this
-screen's dummy `SignalContext` (per `ml/forecast_backfill.py`'s own "KNOWN GAP" docstring on
-`step_3_generate_primary_signals`) — that likely still prevents it from ever training a model in the first
-place, regardless of this fix. Do not read this update as "all 6 signals are now live" — only the
-compatibility gate itself was fixed. See each signal's own `docs/signals/<name>.md` "Backfill-Screen Live
-Meta-Labeler Bridge" section for the per-signal registry key, chosen live horizon, and this same caveat.
+(unchanged, untouched by this fix) to actually register live. Do not read this update as "all 6 signals are
+now live" — only the compatibility gate itself was fixed. See each signal's own `docs/signals/<name>.md`
+"Backfill-Screen Live Meta-Labeler Bridge" section for the per-signal registry key, chosen live horizon, and
+this same caveat.
+
+**Correction, same doc, 2026-09 follow-up: the `cross_sectional_momentum` "Signal column unconditionally
+NaN" claim above is stale.** The "KNOWN GAP" docstring it referenced was removed from
+`ml/forecast_backfill.py` by an earlier fix (commit `8e000117`, "wire cross-sectional pre_compute into the
+forecast backfill pipeline") — `step_3_generate_primary_signals` now detects this module's overridden
+`pre_compute` and routes it through `_run_cross_sectional_module`'s real two-phase replay (via
+`compute_batch_xsec`'s vectorized fast path, see the "Step 3 vectorization" section below). Verified
+directly: a synthetic-panel run trains all 4 horizons with a genuinely two-sided (+1/-1) Signal column.
+`sector_quality_rank` was, at the time this paragraph was originally written, also genuinely blocked from
+training (no accrual_ratio/gross_profitability/sector data anywhere in this pipeline). It no longer is — see
+this doc's own WP3 section below, which unblocked it via a real, opt-in SEC EDGAR fetch
+(`settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED`, verified live). `vrp_premium_selling` remains
+genuinely blocked — real per-ticker historical implied volatility is structurally unavailable from this
+repo's permitted data sources (FMP/Yahoo); see `docs/known_issues/vrp_premium_selling_no_historical_iv.md`
+and this doc's WP4 section below.
 
 ---
 
@@ -127,6 +139,66 @@ All hyperparameters are centralized in `settings.py` and configurable via `.env`
 | `FORECAST_BACKFILL_RANDOM_STATE` | `42` | Random seed for reproducibility. |
 | `FORECAST_BACKFILL_CLASSIFIER_TYPE` | `"random_forest"` | Algorithm (`"random_forest"` or `"lightgbm"`). |
 | `FORECAST_BACKFILL_DEADLINE_SECONDS` | `5400` (90 min) | Hard wall-clock deadline for one run, from worker start to a terminal result — the process group is SIGKILLed if it hasn't produced a result by then. Raised from a prior `1800` (30 min) default, which was too short for a full ~500-ticker operator universe. GUI-writable. |
+| `FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED` | `False` | Opt-in real SEC EDGAR fetch (accrual_ratio/gross_profitability/sector) per ticker in step 2 — the raw inputs `sector_quality_rank` needs. Off preserves byte-identical pre-2026-09 behavior; see the "Real Accrual/Gross-Profitability/Sector Data (WP3)" section below. GUI-writable. |
+
+---
+
+## Real Accrual/Gross-Profitability/Sector Data (WP3, 2026-09)
+
+`sector_quality_rank` declares `meta_label_features` but, before this, could never train a
+single model regardless of universe size or history length — `signals/sector_quality_rank.py`'s
+own "Data Availability Gap" docstring documents why: neither raw input (`accrual_ratio`,
+`gross_profitability`) was computed anywhere in this pipeline. This is now fixed FOR THE
+BACKFILL/RESEARCH PATH ONLY, gated behind `FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED`
+(opt-in, default `False` — no network call, no new columns, byte-identical to before this
+change whenever the flag is off).
+
+**Reused, not reimplemented.** `data/sneqr_quality_facts.py::fetch_sneqr_quality_facts()` is
+the same, already live-EDGAR-verified computation `scripts/refresh_validations.py`'s
+`sector-quality-rank` Pilot validation has used since 2026-08 (extracted verbatim from that
+script's `_fetch_sneqr_quality_facts`, which now delegates to the shared module) — real SEC
+EDGAR XBRL `NetIncomeLoss`/`NetCashProvidedByUsedInOperatingActivities`/`Assets`/`GrossProfit`
+tags, PIT-correct via `data/edgar_fundamentals.py::extract_latest_fact(..., max_date=filed)`.
+`data/sneqr_quality_facts.py::load_ticker_sectors()` reads the same
+`forecasting/data/ticker_sectors.csv` current-snapshot-applied-across-history approximation
+already accepted for `macro_regime_pit`/`signal_replay_balanced_blend`.
+
+**Wiring, when enabled**: `ml/forecast_backfill.py::step_2_calculate_technical_features()`
+fetches and `merge_asof`-joins both ratios plus `sector` onto each ticker's panel;
+`_run_cross_sectional_module()`'s per-date `universe_df` slice (previously hardcoded to only
+`Symbol`+`XSec_12_1M`) is widened to carry these three columns through to
+`sector_quality_rank.pre_compute()` — without this second step, `pre_compute()` would still see
+nothing regardless of what step 2 computed, since it reads its raw inputs from the `universe_df`
+it's handed, never from `self.data` directly.
+
+**Verified live, not assumed**: a real 6-name Technology-sector universe
+(`AAPL`/`MSFT`/`AMD`/`ADBE`/`ADI`/`AVGO` — `forecasting/data/ticker_sectors.csv` carries 84
+Technology names, comfortably clearing `MIN_SECTOR_SIZE=5`) genuinely trains
+`sector_quality_rank` across all 4 horizons —
+`tests/test_forecast_backfill.py::test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end`.
+
+**Deliberately, disclosed scope trim — NOT done in this pass**:
+1. **No DB persistence/caching.** Every backfill run re-fetches full EDGAR company-facts JSON
+   per ticker (throttled ~10 req/s by `data/edgar_fundamentals.py`'s existing cross-process
+   throttle). Acceptable for an occasional research run; a real cost for a wide universe run
+   repeated often. A follow-up could persist both ratios into `HistoricalStore.fundamentals_history`
+   (additive `ALTER TABLE ... ADD COLUMN`, the same idempotent-probe convention that table's
+   `report_date` column already uses) so repeat runs read cache instead of re-fetching.
+2. **The LIVE per-cycle trading pipeline is untouched.** `processing_engine.calculate_fundamental_metrics()`
+   does not compute either ratio for production scoring — `sector_quality_rank` remains dormant
+   there (`0.0` contribution to `final_score` every cycle) exactly as its own docstring already
+   documented. Wiring the live path safely needs the DB-caching layer above first (a live cycle
+   re-fetching full EDGAR JSON per ticker every few minutes, unthrottled-by-caching, is not
+   something to ship). See `signals/sector_quality_rank.md`'s own "2026-09 update" note.
+3. **No point-in-time sector history.** `load_ticker_sectors()` is a current snapshot applied
+   across all history (unfixed, already-accepted approximation) and
+   `universe_engine.get_sp500_constituents` returns the current roster for every historical
+   date, so a wide backfill panel carries membership survivorship bias independent of this fix.
+
+Tests: `tests/test_forecast_backfill.py`'s `test_sneqr_quality_facts_disabled_by_default_adds_no_columns`
+(flag off is a true no-op, zero network calls) and
+`test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end` (live-EDGAR verification
+above), both `@pytest.mark.network`.
 
 ---
 

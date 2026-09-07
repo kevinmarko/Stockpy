@@ -16801,11 +16801,12 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
     horizons: [10, 30, 60, 90],
     metrics: {
       // Live meta-labeler bridge (ml/forecast_backfill_registry_bridge.py)
-      // example rows -- one registered (gate cleared), one blocked (the
-      // feature-compatibility gate's honest, currently-universal outcome
-      // for all 6 eligible signals given today's live row schema -- see
-      // docs/plans/FORECAST_BACKFILL_PLAN.md). Exercising both states here
-      // is the only way mock-mode development (`npm run dev`, no
+      // example rows -- one registered (gate cleared), one blocked (a
+      // realistic DSR/PBO-deployability-gate rejection, the reason a
+      // feature-compatible model still fails to register -- the feature-
+      // compatibility gate itself now passes for all 6 eligible signals,
+      // see docs/plans/FORECAST_BACKFILL_PLAN.md). Exercising both states
+      // here is the only way mock-mode development (`npm run dev`, no
       // VITE_USE_MOCK=false) can render the "Live Registry"/"CPCV DSR"/
       // "PBO" columns and the blocked-with-reason styling at all.
       timeseries_momentum_10d: {
@@ -16878,13 +16879,15 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
         split_date: "CPCV",
         is_active: true,
       },
-      // Illustrative "Diagnostic" (is_active: false) row -- any registered
-      // SignalModule with meta_label_features declared can train here, but
-      // ml/forecast_backfill.py only marks the fixed
-      // timeseries_momentum/cross_sectional_momentum/rsi2_mean_reversion
-      // trio as `is_active: true`. Keeping a false-branch example in the
-      // mock exercises the "Diagnostic" badge and bottom-of-table sort in
-      // tests, rather than only ever rendering the all-Active happy path.
+      // Illustrative "Diagnostic" (is_active: false) row -- `is_active` is
+      // derived from BACKFILL_ELIGIBLE_SIGNAL_IDS membership (the 6 real
+      // Forecast-Backfill-eligible signals), not a fixed 3-name list. This
+      // model_type isn't one of them (macd_momentum declares no
+      // meta_label_features at all -- it could never really reach this
+      // engine's training path), which is exactly why it's the honest
+      // "Diagnostic" example: a model_key this mock renders to exercise the
+      // badge and bottom-of-table sort, distinct from what a real backend
+      // could ever actually train.
       macd_momentum_10d: {
         accuracy: 0.504,
         auc: 0.508,
@@ -16892,6 +16895,29 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
         n_test: 0,
         split_date: "CPCV",
         is_active: false,
+      },
+    },
+    // Per-signal eligibility -- WP2's honest "why didn't this signal train"
+    // reporting. timeseries_momentum/rsi2_mean_reversion mirror their
+    // trained metrics rows above (a real backend never sets trained: true
+    // without a corresponding metrics row); sector_quality_rank/
+    // vrp_premium_selling illustrate the genuinely-blocked case this mock
+    // doesn't carry metrics rows for. cross_sectional_momentum and
+    // options_flow_sentiment are deliberately omitted from BOTH dicts here
+    // -- this fixture is illustrative, not an exhaustive mirror of every
+    // eligible signal's live state.
+    eligibility: {
+      timeseries_momentum: { declares_meta_label_features: true, trained: true, reason: null },
+      rsi2_mean_reversion: { declares_meta_label_features: true, trained: true, reason: null },
+      sector_quality_rank: {
+        declares_meta_label_features: true,
+        trained: false,
+        reason: "insufficient_samples:0_for_90d",
+      },
+      vrp_premium_selling: {
+        declares_meta_label_features: true,
+        trained: false,
+        reason: "insufficient_samples:0_for_90d",
       },
     },
     tickers: ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"],

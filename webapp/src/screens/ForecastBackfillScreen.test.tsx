@@ -61,6 +61,53 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     expect(screen.queryByRole("option", { name: "macro_regime_pit" })).not.toBeInTheDocument();
   });
 
+  it("also seeds the multi-select from the eligibility block, so an untrained-but-eligible signal is still selectable", async () => {
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+    // sector_quality_rank/vrp_premium_selling have no metrics rows in the mock
+    // fixture at all -- only an eligibility entry -- yet must still be a
+    // selectable option (WP2's chicken-and-egg fix: an untrained signal can
+    // never be re-run if it can never be selected).
+    expect(screen.getByRole("option", { name: "sector_quality_rank" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "vrp_premium_selling" })).toBeInTheDocument();
+  });
+
+  it("renders an honest 'Eligible Signals Not Trained' section with the real reason, never a fabricated metrics row", async () => {
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+    expect(screen.getByText("Eligible Signals Not Trained")).toBeInTheDocument();
+    // Both names also appear as <option>s in the multi-select above (WP2's
+    // seed-from-eligibility fix), so scope these to the new table's cells.
+    expect(screen.getByRole("cell", { name: "sector_quality_rank" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "vrp_premium_selling" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Insufficient training samples \(0\) at the 90d horizon/).length).toBe(2);
+    // These two never got a fabricated metrics row -- confirm no
+    // sector_quality_rank_*/vrp_premium_selling_* model_key rendered in the
+    // Trained Meta-Labelers table.
+    expect(screen.queryByText(/^sector_quality_rank_\d+d$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^vrp_premium_selling_\d+d$/)).not.toBeInTheDocument();
+  });
+
+  it("hides the 'Eligible Signals Not Trained' section entirely when every eligible signal has trained (or eligibility is absent)", async () => {
+    vi.spyOn(api, "getForecastBackfill").mockResolvedValueOnce({
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      horizons: [10],
+      metrics: {
+        timeseries_momentum_10d: {
+          accuracy: 0.52, auc: 0.54, n_train: 100, n_test: 0, split_date: "CPCV", is_active: true,
+        },
+      },
+      eligibility: {
+        timeseries_momentum: { declares_meta_label_features: true, trained: true, reason: null },
+      },
+      tickers: ["AAPL"],
+    });
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+    expect(screen.queryByText("Eligible Signals Not Trained")).not.toBeInTheDocument();
+  });
+
   it("shows the honest 'no trained models yet' state when metrics are empty", async () => {
     vi.spyOn(api, "getForecastBackfill").mockResolvedValueOnce({
       status: "not_run",
@@ -351,11 +398,17 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     expect(screen.getAllByText("--").length).toBeGreaterThan(0);
   });
 
-  it("discloses that the feature-compatibility gate currently blocks every eligible signal, without overclaiming the bridge is live", async () => {
+  it("discloses that the feature-compatibility gate now passes for all 6 eligible signals, without overclaiming live deployability", async () => {
     renderScreen();
     await screen.findByText("timeseries_momentum_10d");
     expect(
-      screen.getByText(/refuses every one of the 6 eligible signals/)
+      screen.getByText(/feature-compatibility check passes for/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/all 6 eligible signals/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/DSR\/PBO deployability gate itself/)
     ).toBeInTheDocument();
   });
 });

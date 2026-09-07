@@ -156,6 +156,14 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FORECAST_BACKFILL_MAX_DEPTH",
     "FORECAST_BACKFILL_RANDOM_STATE",
     "FORECAST_BACKFILL_CLASSIFIER_TYPE",
+    # Opt-in gate for a real SEC EDGAR fetch per ticker (accrual_ratio/
+    # gross_profitability/sector) inside step 2 -- no credential, no
+    # dangerous write; a GUI bug here can only make a training run slower.
+    "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
+    # Opt-in gate for the quarantined vrp_premium_selling_proxy backfill-only
+    # signal -- OHLCV-derived, no credential, no live-inference reach
+    # (structurally excluded from BACKFILL_ELIGIBLE_SIGNAL_IDS).
+    "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     # Wall-clock deadline for the async forecast-backfill job's worker
     # subprocess (ml/forecast_backfill_job.py) -- a timeout tunable, same
     # treatment as RH_LOGIN_DEADLINE_SECONDS below.

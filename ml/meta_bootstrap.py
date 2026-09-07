@@ -81,10 +81,13 @@ META_LABELED_SIGNAL_IDS: tuple[str, ...] = (
 # trained signals above, gated behind settings.META_LABELING_BACKFILL_
 # BRIDGE_ENABLED (default False) and an explicit per-signal opt-in
 # (settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS, default empty) -- see
-# docs/plans/FORECAST_BACKFILL_PLAN.md for the full design and its current,
-# honestly-disclosed limitation (the feature-compatibility gate below refuses
-# every one of the 6 eligible signals today, since none of their declared
-# training features are yet present in the live row schema).
+# docs/plans/FORECAST_BACKFILL_PLAN.md for the full design. As of the 2026-09
+# feature-widening fix, the feature-compatibility gate below passes for all 6
+# eligible signals -- the live row now computes every technical feature they
+# declare. Live promotion is still gated separately by DSR/PBO deployability
+# (_is_deployable() below), which is a genuinely measured, independent check,
+# not a rubber stamp -- do not read a passing feature-compatibility check as
+# "this signal is live".
 
 
 

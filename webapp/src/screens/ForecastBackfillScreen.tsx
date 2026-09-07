@@ -7,7 +7,7 @@ import { useBackfillJob } from "../hooks/useBackfillJob";
 import { ErrorState, Loading, MetricBadge } from "../components/ui";
 import { fmtDate, fmtNum } from "../format";
 import { theme } from "../theme";
-import { PHASE_LABEL, formatBackfillCountdown, backfillFailureMessage } from "../forecastBackfillCopy";
+import { PHASE_LABEL, formatBackfillCountdown, backfillFailureMessage, formatEligibilityReason } from "../forecastBackfillCopy";
 
 export function ForecastBackfillScreen() {
   const nav = useNavigate();
@@ -48,8 +48,17 @@ export function ForecastBackfillScreen() {
       const match = key.match(/^(.+)_\d+d$/);
       if (match) names.add(match[1]);
     }
+    // Also seed from the eligibility block -- a signal that declares
+    // meta_label_features but hasn't (yet) trained any horizon has no
+    // model_key in `metrics` and would otherwise be invisible AND
+    // unselectable here (a chicken-and-egg: it can never be picked to
+    // (re-)run precisely because it never trained). See WP2 in
+    // docs/plans/FORECAST_BACKFILL_PLAN.md.
+    for (const name of Object.keys(data?.eligibility ?? {})) {
+      names.add(name);
+    }
     return Array.from(names).sort();
-  }, [data?.metrics]);
+  }, [data?.metrics, data?.eligibility]);
 
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -74,6 +83,14 @@ export function ForecastBackfillScreen() {
   if (selectedStrategies.length > 0) {
     modelKeys = modelKeys.filter(key => selectedStrategies.some(s => key.startsWith(s)));
   }
+
+  // Eligible signals (declare meta_label_features) that have not trained
+  // any horizon this run, with their real, measured reason -- never a
+  // fabricated metrics row (CONSTRAINT #4). See WP2 in
+  // docs/plans/FORECAST_BACKFILL_PLAN.md.
+  const untrainedEligible = Object.entries(data?.eligibility ?? {})
+    .filter(([, v]) => !v.trained)
+    .sort(([a], [b]) => a.localeCompare(b));
 
   // Checkpointed step-5 combos from a timed-out run (ml/forecast_backfill_job.py's
   // BackfillJobState.partial_summary) -- null/empty whenever the kill landed
@@ -356,6 +373,39 @@ export function ForecastBackfillScreen() {
             )}
           </section>
 
+          {untrainedEligible.length > 0 && (
+            <section className="card card-pad">
+              <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", marginBottom: "var(--s-2)" }}>
+                Eligible Signals Not Trained
+              </div>
+              <div style={{ fontSize: "12px", color: theme.textMuted, marginBottom: "16px" }}>
+                These signals declare the technical features this engine needs to meta-label them, but
+                produced no trained model at any horizon this run. Never a fabricated result -- each row is
+                the real, measured reason.
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                      <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Signal</th>
+                      <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {untrainedEligible.map(([name, v]) => (
+                      <tr key={name} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                        <td style={{ padding: "var(--s-2)", fontWeight: 600 }}>{name}</td>
+                        <td style={{ padding: "var(--s-2)", color: theme.caution }} title={v.reason ?? undefined}>
+                          {formatEligibilityReason(v.reason)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
           <section className="card card-pad">
             <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", marginBottom: "var(--s-2)" }}>
               How This Research Engine Works
@@ -368,10 +418,12 @@ export function ForecastBackfillScreen() {
               signal/horizon can now optionally be bridged into the same deployability gate that
               <code>scripts/train_meta_labelers.py</code> feeds via the <code>bootstrap_meta_registry()</code> startup
               step — PBO/DSR-checked against <code>ml/registry.yaml</code> exactly like every other model, plus a
-              feature-compatibility check unique to this bridge. <strong>As of today that feature-compatibility check
-              refuses every one of the 6 eligible signals</strong>: none of their declared training features are yet
-              present in the live per-ticker feature row, so this bridge is wired and safe but not yet actually active
-              for any signal — see the &quot;Live Registry&quot; column above for the honest per-signal reason.
+              feature-compatibility check unique to this bridge. <strong>The feature-compatibility check passes for
+              all 6 eligible signals</strong> as of the 2026-09 feature-widening fix — the live per-ticker row now
+              computes every technical feature these signals declare. What still blocks live promotion is the
+              DSR/PBO deployability gate itself: a screen-trained model registers into <code>ml/registry.yaml</code>
+              only when its measured out-of-sample CPCV DSR exceeds 0.95 and PBO stays under 0.50 — see the
+              &quot;Live Registry&quot; column above for each signal&apos;s real, measured outcome.
             </p>
           </section>
         </>

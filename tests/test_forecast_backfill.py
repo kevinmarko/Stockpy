@@ -121,6 +121,93 @@ def test_backfiller_initialization():
     assert engine.max_depth == settings.FORECAST_BACKFILL_MAX_DEPTH
 
 
+# ---------------------------------------------------------------------------
+# WP3: real point-in-time accrual_ratio/gross_profitability/sector wiring
+# (settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED, opt-in, default
+# False) -- unblocks sector_quality_rank, previously permanently stuck at
+# 0/N trainable rows regardless of universe or history length. See
+# docs/plans/FORECAST_BACKFILL_PLAN.md's WP3 section.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.network
+def test_sneqr_quality_facts_disabled_by_default_adds_no_columns(monkeypatch):
+    """The default (flag off) must be byte-identical to pre-WP3 behavior --
+    no accrual_ratio/gross_profitability/sector columns, and critically NO
+    network call at all (verified by asserting fetch_sneqr_quality_facts is
+    never even imported/called)."""
+    from settings import settings
+
+    monkeypatch.setattr(settings, "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED", False)
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+
+    called = []
+    import data.sneqr_quality_facts as sneqr_mod
+    monkeypatch.setattr(
+        sneqr_mod, "fetch_sneqr_quality_facts",
+        lambda *a, **k: called.append(1) or __import__("pandas").DataFrame(),
+    )
+
+    engine.step_2_calculate_technical_features()
+    assert "accrual_ratio" not in engine.data.columns
+    assert "gross_profitability" not in engine.data.columns
+    assert "sector" not in engine.data.columns
+    assert called == [], "SEC EDGAR must never be reached when the flag is off"
+
+
+@pytest.mark.network
+def test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end():
+    """Real, live SEC EDGAR verification: a 6-name Technology-sector universe
+    (all real tickers, all with real EDGAR filing history) genuinely trains
+    sector_quality_rank across every horizon once the flag is on -- this
+    signal was permanently stuck at 0 trainable rows before WP3 regardless
+    of universe size or history length, since accrual_ratio/gross_profitability
+    were never computed anywhere in this pipeline."""
+    import importlib
+    from settings import settings
+    import ml.forecast_backfill as fb_mod
+
+    original = settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED
+    settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED = True
+    try:
+        # 6 real, well-known Technology-sector tickers -- forecasting/data/
+        # ticker_sectors.csv carries 84 Technology names, so MIN_SECTOR_SIZE=5
+        # clears easily for this subset.
+        tickers = ["AAPL", "MSFT", "AMD", "ADBE", "ADI", "AVGO"]
+        engine = fb_mod.AgenticForecastBackfiller(
+            tickers=tickers,
+            start_date="2018-01-01",
+            end_date="2022-01-01",
+            horizons=[10, 30, 60, 90],
+            n_estimators=10,
+            max_depth=3,
+            use_fmp=False,
+        )
+        engine.step_1_fetch_data()
+        engine.step_2_calculate_technical_features()
+        assert "accrual_ratio" in engine.data.columns
+        assert "gross_profitability" in engine.data.columns
+        assert "sector" in engine.data.columns
+        assert engine.data["accrual_ratio"].notna().any(), (
+            "expected at least one real, non-fabricated accrual_ratio value from live EDGAR"
+        )
+
+        engine.step_3_generate_primary_signals()
+        assert "sector_quality_rank" in engine.active_strategies
+        sig = engine.data["sector_quality_rank_Signal"]
+        assert sig.notna().any(), "expected a genuinely two-sided (not all-NaN) Signal column"
+        assert set(sig.dropna().unique()).issubset({-1.0, 1.0})
+
+        engine.step_4_create_meta_targets()
+        metrics = engine.step_5_backtrain_meta_labelers()
+        trained_keys = [k for k in metrics if k.startswith("sector_quality_rank_")]
+        assert trained_keys, "sector_quality_rank must train at least one horizon given real EDGAR data"
+        assert engine.eligibility["sector_quality_rank"]["trained"] is True
+        assert engine.eligibility["sector_quality_rank"]["reason"] is None
+    finally:
+        settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED = original
+
+
 @pytest.mark.network
 def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     """Test full 6-step forecast backfill pipeline using synthetic data.
@@ -644,6 +731,125 @@ def test_step_3_skips_cross_sectional_modules_with_no_meta_label_features():
     for name in non_trainable_cross_sectional:
         assert name not in engine.active_strategies
         assert f"{name}_Signal" not in engine.data.columns
+
+
+# ---------------------------------------------------------------------------
+# WP2: per-signal eligibility bookkeeping (ml/forecast_backfill.py::
+# _mark_eligibility) -- honest "why didn't this signal train" reporting.
+# See docs/plans/FORECAST_BACKFILL_PLAN.md's WP2 section.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_eligibility_helper_contract():
+    """Unit-tests _mark_eligibility's own logic directly, independent of
+    which real signal happens to exercise which branch this run: creates an
+    entry on first call, a later reason updates it, trained=True clears any
+    reason, and a trained=True entry is never clobbered by a subsequent
+    (stale) failure reason from a different horizon."""
+    engine = _synthetic_engine(["AAA"], n_days=50)
+    assert engine.eligibility == {}
+
+    engine._mark_eligibility("sig_a")
+    assert engine.eligibility["sig_a"] == {
+        "declares_meta_label_features": True, "trained": False, "reason": None,
+    }
+
+    engine._mark_eligibility("sig_a", reason="insufficient_samples:0_for_10d")
+    assert engine.eligibility["sig_a"]["trained"] is False
+    assert engine.eligibility["sig_a"]["reason"] == "insufficient_samples:0_for_10d"
+
+    # A later horizon's failure reason still updates it (not trained yet).
+    engine._mark_eligibility("sig_a", reason="insufficient_samples:0_for_30d")
+    assert engine.eligibility["sig_a"]["reason"] == "insufficient_samples:0_for_30d"
+
+    # A genuine training success clears the reason and wins.
+    engine._mark_eligibility("sig_a", trained=True)
+    assert engine.eligibility["sig_a"]["trained"] is True
+    assert engine.eligibility["sig_a"]["reason"] is None
+
+    # A subsequent horizon's failure for the SAME signal must never
+    # downgrade an already-trained signal back to blocked.
+    engine._mark_eligibility("sig_a", reason="insufficient_samples:0_for_90d")
+    assert engine.eligibility["sig_a"]["trained"] is True
+    assert engine.eligibility["sig_a"]["reason"] is None
+
+    # Never raises on a malformed call (CONSTRAINT #6) -- e.g. eligibility
+    # somehow not a dict. Simulate by corrupting it directly.
+    engine.eligibility = None
+    engine._mark_eligibility("sig_b", reason="x")  # must not raise
+
+
+def test_eligibility_marks_a_genuinely_trained_signal_correctly():
+    """A signal that actually trains at least one horizon (timeseries_momentum,
+    always trainable on this fixture's synthetic OHLCV) is reported as
+    trained: true, reason: null -- and is_active derives from
+    BACKFILL_ELIGIBLE_SIGNAL_IDS membership, not a hardcoded 3-name list."""
+    from ml.forecast_backfill_registry_bridge import BACKFILL_ELIGIBLE_SIGNAL_IDS
+
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+
+    assert engine.eligibility["timeseries_momentum"] == {
+        "declares_meta_label_features": True, "trained": True, "reason": None,
+    }
+    trained_keys = [k for k in metrics if k.startswith("timeseries_momentum_")]
+    assert trained_keys, "expected timeseries_momentum to train at least one horizon"
+    assert "timeseries_momentum" in BACKFILL_ELIGIBLE_SIGNAL_IDS
+    for key in trained_keys:
+        assert metrics[key]["is_active"] is True
+
+
+def test_eligibility_records_insufficient_samples_reason_for_a_signal_that_never_trains():
+    """sector_quality_rank/vrp_premium_selling declare meta_label_features
+    but score 0.0 on every row given this test's fully synthetic tickers
+    (no real EDGAR accrual/gross-profitability/sector data, no real
+    options-chain-derived True_IVR/VRP exist for a fake ticker regardless of
+    how the live/backfill data pipeline is wired) -- so every horizon hits
+    _build_training_set's `len(clean_df) < 30` branch and the real,
+    measured reason is recorded, never a fabricated metrics row."""
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    metrics = engine.step_5_backtrain_meta_labelers()
+
+    for name in ("sector_quality_rank", "vrp_premium_selling"):
+        assert not any(k.startswith(f"{name}_") for k in metrics), (
+            f"{name} must not have produced a fabricated metrics row on synthetic-only tickers"
+        )
+        entry = engine.eligibility.get(name)
+        assert entry is not None, f"{name} should have a real eligibility entry"
+        assert entry["trained"] is False
+        assert entry["reason"] is not None
+        assert entry["reason"].startswith("insufficient_samples:")
+
+
+def test_export_results_summary_carries_eligibility_and_never_fabricates_a_metrics_row():
+    """agentic_forecast_summary.json's new `eligibility` block must be
+    present and internally consistent with `metrics`: every signal with
+    trained: true has a real metrics row for at least one horizon, and a
+    signal with no metrics row anywhere is honestly reported as untrained
+    with a real reason (CONSTRAINT #4)."""
+    engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    engine.step_5_backtrain_meta_labelers()
+    engine.step_6_execute_backfill()
+    _, summary = engine.export_results(filename="test_eligibility_output.csv")
+
+    assert "eligibility" in summary
+    for name, entry in summary["eligibility"].items():
+        has_metrics_row = any(k.startswith(f"{name}_") for k in summary["metrics"])
+        if entry["trained"]:
+            assert has_metrics_row, f"{name} reported trained but has no metrics row"
+            assert entry["reason"] is None
+        else:
+            assert not has_metrics_row, f"{name} reported untrained but has a metrics row"
+            assert entry["reason"] is not None
 
 
 def test_cross_sectional_fast_path_matches_slow_path_parity():

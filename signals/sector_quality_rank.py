@@ -92,6 +92,28 @@ path, just not wired into the live per-cycle universe yet) is left to a
 follow-up data-plumbing task. See docs/signals/sector_quality_rank.md's
 "Data Availability Gap" section.
 
+**2026-09 update: the Forecast Backfill screen's meta-labeler training path
+is unblocked, the live per-cycle path above is NOT.** These two raw inputs
+are now genuinely computed -- real SEC EDGAR XBRL, the exact
+``NetIncomeLoss``/``NetCashProvidedByUsedInOperatingActivities``/``Assets``/
+``GrossProfit`` tags described above -- via
+``data/sneqr_quality_facts.py::fetch_sneqr_quality_facts()``, consumed by
+``ml/forecast_backfill.py::step_2_calculate_technical_features()`` when
+``settings.FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED`` (opt-in, default
+``False``) is set. Verified LIVE: a 6-name real Technology-sector universe
+(``AAPL``/``MSFT``/``AMD``/``ADBE``/``ADI``/``AVGO``) genuinely trains this
+signal's meta-labeler across every horizon (see
+``tests/test_forecast_backfill.py::test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end``).
+The sentence above ("neither raw input is populated anywhere in this
+codebase's live per-cycle data path") remains true and unchanged by this --
+``processing_engine.calculate_fundamental_metrics()`` still does not compute
+either ratio for the LIVE trading pipeline, so this module remains inert
+there; only the offline Forecast Backfill research/meta-labeling path gained
+real data. See ``docs/plans/FORECAST_BACKFILL_PLAN.md``'s WP3 section for
+the full detail, including the deliberately-deferred DB-persistence
+follow-up (every backfill run re-fetches EDGAR company-facts JSON per
+ticker rather than caching it).
+
 SIGNAL ARCHITECTURE
 --------------------
 Two-phase hook pattern, same convention as CrossSectionalMomentumSignal /
