@@ -9,6 +9,7 @@ export function SentimentSettings() {
       backTo="/settings"
       fetchSettings={() => api.getSentimentSettings()}
       updateSettings={(values, confirm) => api.updateSentimentSettings(values, confirm)}
+      tabGuideKey="settings-sentiment"
     />
   );
 }

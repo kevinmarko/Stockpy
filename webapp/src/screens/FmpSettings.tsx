@@ -46,6 +46,7 @@ export function FmpSettings() {
       fetchSettings={() => api.getFmpSettings()}
       updateSettings={(values, confirm) => api.updateFmpSettings(values, confirm)}
       labelMap={FMP_LABEL_MAP}
+      tabGuideKey="settings-fmp"
     />
   );
 }

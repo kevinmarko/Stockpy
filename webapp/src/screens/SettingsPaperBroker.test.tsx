@@ -24,6 +24,16 @@ vi.mock("../api/client", () => ({
         drift_keys: [],
       })
     ),
+    getThresholds: vi.fn(() => Promise.resolve({
+      vix_stress: 30,
+      vrp_min: 0.02,
+      ivr_min: 50,
+      half_life_min: 5,
+      half_life_max: 60,
+      z_entry: 2.0,
+      z_exit: 0.0,
+      z_stop: 4.0,
+    })),
   },
 }));
 

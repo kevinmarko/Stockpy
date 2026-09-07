@@ -9,6 +9,7 @@ export function SettingsPaperBroker() {
       backTo="/settings"
       fetchSettings={() => api.getPaperBrokerSettings()}
       updateSettings={(values, confirm) => api.updatePaperBrokerSettings(values, confirm)}
+      tabGuideKey="settings-paper-broker"
     />
   );
 }

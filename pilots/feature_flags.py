@@ -96,6 +96,11 @@ WRITE_GATE_REASONS: dict[str, str] = {
         "gateway (execution/fix_gateway.py) is fully simulated -- it never "
         "opens a real venue connection or touches real capital."
     ),
+    "MULTI_BROKER_GATEWAY_ENABLED": (
+        "Enables multi-broker smart routing via MultiBrokerGateway in broker "
+        "execution tools (broker_live_execution_mcp.py). When false, falls "
+        "back directly to the primary broker backend without routing failover."
+    ),
 }
 
 # -- Read-only diagnostic/data features (2026-08-07, opt-in by operator -----

@@ -36,6 +36,7 @@ import { SectorSelectionSettings } from "./screens/SectorSelectionSettings";
 import { FmpSettings } from "./screens/FmpSettings";
 import { EtfTransmissionSettings } from "./screens/EtfTransmissionSettings";
 import { SettingsCacheLongShort } from "./screens/SettingsCacheLongShort";
+import { SettingsReference } from "./screens/SettingsReference";
 import { FeatureFlagsScreen } from "./screens/FeatureFlagsScreen";
 import { AIControlCenter } from "./screens/AIControlCenter";
 import { DataExplorer } from "./screens/DataExplorer";
@@ -301,6 +302,7 @@ export default function App() {
             <Route path="paper-broker" element={<SettingsPaperBroker />} />
 
                     <Route path="feature-flags" element={<FeatureFlagsScreen />} />
+                    <Route path="reference" element={<SettingsReference />} />
                     <Route path="ai" element={<AIControlCenter />} />
                     <Route path="prompts" element={<PromptRegistry />} />
                   </Route>

@@ -93,3 +93,27 @@ def test_require_enabled_guards_registered():
                                     f"but {flag_name} is not in FEATURE_FLAG_KEYS. Update settings_keysets.py or pilots/feature_flags.py."
                                 )
                                 break
+
+def test_mock_ts_feature_flags_parity():
+    """
+    Ensure webapp/src/api/mock.ts's FEATURE_FLAGS_TUNABLE_DEFS includes every
+    key in pilots/feature_flags.py's FEATURE_FLAG_KEYS so mock-mode development
+    and tests don't drift from live.
+    """
+    import re
+
+    repo_root = Path(__file__).parent.parent
+    mock_path = repo_root / "webapp" / "src" / "api" / "mock.ts"
+    assert mock_path.exists(), f"mock.ts not found at {mock_path}"
+
+    content = mock_path.read_text(encoding="utf-8")
+    match = re.search(
+        r"const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef\[\] = \[(.*?)\];\n",
+        content,
+        re.DOTALL,
+    )
+    assert match, "FEATURE_FLAGS_TUNABLE_DEFS block not found in mock.ts"
+
+    mock_keys = set(re.findall(r'key:\s*"([^"]+)"', match.group(1)))
+    missing = FEATURE_FLAG_KEYS - mock_keys
+    assert not missing, f"webapp/src/api/mock.ts is missing feature flags: {sorted(missing)}"

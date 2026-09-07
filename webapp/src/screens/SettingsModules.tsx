@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { api } from "../api/client";
-import type { Follow, LlmStatus, PromptListResponse, StrategyMatrix, TunablesResponse } from "../api/types";
+import type { Follow, LlmStatus, PromptListResponse, StrategyMatrix, TunablesResponse, SettingsReferenceResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { theme } from "../theme";
@@ -31,6 +31,7 @@ export function SettingsModules() {
         <PaperBrokerLink />
       <PromptRegistryLink />
       <AiControlCenterLink />
+      <SettingsReferenceLink />
       
       <ActiveFollowsSection />
     </div>
@@ -322,6 +323,32 @@ function AiControlCenterLink() {
             {total == null
               ? "LLM commentary, Gravity AI runner, Opal research"
               : `${readyCount}/${total} ready`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+
+function SettingsReferenceLink() {
+  const { data } = useApi<SettingsReferenceResponse>(() => api.getSettingsReference(), []);
+  const total = data?.total ?? null;
+  const domains = data?.domains.length ?? null;
+  return (
+    <Link
+      to="/settings/reference"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Settings Reference</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {total == null
+              ? "Platform-wide explainer and settings directory"
+              : `${total} fields · ${domains} domains`}
           </div>
         </div>
         <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>

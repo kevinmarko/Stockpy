@@ -140,6 +140,8 @@ import type { StrategyReportCardSnapshot,
   TunableLiveness,
   TunablesResponse,
   TunablesUpdateResult,
+  SettingsReferenceResponse,
+  SettingsReferenceField,
   AppliesState,
   AppliesSummary,
   SettingsConfirmMap,
@@ -2353,6 +2355,15 @@ const MOCK_DANGEROUS_KEYS = new Set([
 const MOCK_DEMO_ONLY_STATES: Record<string, "env_pinned" | "no_effect"> = {
   LOG_LEVEL: "env_pinned",
   REQUIRED_RETURN_RATE: "no_effect",
+  // Unlike the two above, this ONE entry does describe real platform
+  // behaviour: OPTIONS_EARNINGS_CRUSH_ENABLED is a genuine no_op per
+  // docs/settings_liveness.json (read nowhere in production code). Without
+  // this override it falls through to the generic live_safe/restart_required
+  // mock classification below, which -- caught live in the Settings
+  // Reference screen -- rendered it as "Applies now" with an interactive
+  // Toggle, exactly the misleading "control that does nothing" trap
+  // `writable`'s no_op exclusion (mockSettingsReference()) exists to prevent.
+  OPTIONS_EARNINGS_CRUSH_ENABLED: "no_effect",
 };
 
 function mockLiveness(key: string): TunableLiveness {
@@ -2450,6 +2461,47 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     max: 1,
     step: 0.01,
     description: null,
+  },
+  {
+    group: "Financial Constants",
+    key: "MULTIFACTOR_MICROCAP_THRESHOLD",
+    type: "number",
+    value: 50000000.0,
+    default: 50000000.0,
+    description: "Market-cap floor (USD) below which multifactor ranking heavily penalizes a ticker.",
+    min: 0.0,
+    max: 1000000000000.0,
+    step: 1000000.0,
+  },
+  {
+    group: "Financial Constants",
+    key: "CORRELATION_CLUSTER_LOOKBACK_DAYS",
+    type: "number",
+    value: 60,
+    default: 60,
+    description: "Lookback window in trading days for correlation clustering. 60 days (~1 quarter) balances responsiveness to regime changes against covariance noise.",
+    min: 5,
+    max: 500,
+    step: 5,
+  },
+  {
+    group: "Financial Constants",
+    key: "CORRELATION_CLUSTER_THRESHOLD",
+    type: "number",
+    value: 0.4,
+    default: 0.4,
+    description: "Dendrogram cut-distance for cluster assignment. Uses the Lopez de Prado distance d=sqrt(0.5*(1-rho)). At 0.4, stocks with |correlation| > 0.68 merge into the same cluster. Lower = tighter (fewer, smaller clusters); higher = looser.",
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+  },
+  {
+    group: "Financial Constants",
+    key: "FEATURE_DRIFT_PSI_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description: "Enable Population Stability Index check for feature drift.",
   },
   // ---- Position Sizing ----
   {
@@ -3013,6 +3065,28 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     value: 30, default: 30, min: 1, max: 3600, step: 1,
     description: "Seconds between the orchestrator daemon's checks of output/runtime_flags.json for cross-process changes. Only consulted when RUNTIME_FLAGS_REFRESH_ENABLED is True.",
   },
+  {
+    group: "Runtime & Ops",
+    key: "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
+    type: "number",
+    value: 25.0,
+    default: 25.0,
+    description: "Total seconds budgeted for the orchestrator daemon's graceful teardown (Control API + Pilots API drain, timer-thread join, final in-flight-run poll). Does not wait out an in-flight pipeline cycle. Must stay below the outer supervisor timeouts (launch_app.command, launchd ExitTimeOut, systemd TimeoutStopSec) or shutdown gets worse, not better.",
+    min: 1.0,
+    max: 300.0,
+    step: 1.0,
+  },
+  {
+    group: "Runtime & Ops",
+    key: "PIPELINE_STALL_ALERT_SECONDS",
+    type: "number",
+    value: 3600,
+    default: 3600,
+    description: "Threshold (seconds) of no progress.json update while state='running' before the stall alert fires. Set well above DATA_FETCH_TASK_TIMEOUT_SECONDS's worst case and any legitimate single pipeline-stage duration -- still two orders of magnitude below the multi-hour/multi-day hang this was added to catch. Raised from the original 1800 to 3600 on 2026-08-27, in lockstep with PIPELINE_STEP_TIMEOUT_SECONDS's 900->1800 bump (see that field's own description for the incident that prompted it) -- kept at exactly 2x PIPELINE_STEP_TIMEOUT_SECONDS to preserve the original design margin: the per-step timeout should always fire, and let the daemon reschedule, well before this stall alert would ever need to.",
+    min: 60,
+    max: 86400,
+    step: 60,
+  },
   // ---- Advanced / Config (the 7 keys the real Streamlit tab's own
   // _SETTINGS_LAYOUT, gui/panels/settings_manager.py:36-77, already served) ----
   {
@@ -3454,6 +3528,196 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "RLHF Calibration", key: "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "When True, a proposal that receives a 5-star human_rating is automatically appended to the SFT JSONL export the moment the review is submitted, instead of requiring a separate POST /rlhf/export-sft call. Default False (opt-in).",
+  },
+  // ---- Options Desk Automation ----
+  {
+    group: "Options Desk Automation",
+    key: "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description: "Automatically execute valid options strategy directives into the paper broker every cycle.",
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_AUTO_EXIT_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description: "Automatically manage and exit option positions on profit target, stop loss, or DTE threshold.",
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_PROFIT_TARGET_PCT",
+    type: "number",
+    value: 0.5,
+    default: 0.5,
+    description: "Profit target percentage threshold to trigger automated exit (e.g. 0.50 for 50% max profit).",
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_STOP_LOSS_MULTIPLE",
+    type: "number",
+    value: 2.0,
+    default: 2.0,
+    description: "Stop loss multiple of max credit/debit to trigger automated exit (e.g. 2.0 for 200% loss).",
+    min: 0.5,
+    max: 10.0,
+    step: 0.1,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_MANAGE_DTE_THRESHOLD",
+    type: "number",
+    value: 21,
+    default: 21,
+    description: "DTE threshold at or below which options positions are proactively closed/rolled (e.g. 21 days).",
+    min: 0,
+    max: 60,
+    step: 1,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_DELTA_HEDGE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description: "Enable automatic dynamic SPY delta hedging for options paper portfolio.",
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+    type: "number",
+    value: 25.0,
+    default: 25.0,
+    description: "Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
+    min: 1,
+    max: 500,
+    step: 5,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_0DTE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description: "Enable automated 0DTE options momentum breakout trading and lifecycle management.",
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+    type: "number",
+    value: 0.75,
+    default: 0.75,
+    description: "Profit target percentage threshold to trigger 0DTE exit (e.g. 0.75 for +75% gain in premium).",
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_0DTE_STOP_LOSS_PCT",
+    type: "number",
+    value: 0.3,
+    default: 0.3,
+    description: "Stop loss percentage threshold to trigger 0DTE exit (e.g. 0.30 for -30% loss).",
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "OPTIONS_0DTE_HARD_EXIT_TIME",
+    type: "string",
+    value: "15:45",
+    default: "15:45",
+    description: "Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
+  },
+  {
+    group: "Options Desk Automation",
+    key: "MAX_OPTION_NOTIONAL_PER_TRADE",
+    type: "number",
+    value: 2500.0,
+    default: 2500.0,
+    description: "Max risk notional collateral per automated options paper trade.",
+    min: 100.0,
+    max: 100000.0,
+    step: 500.0,
+  },
+  {
+    group: "Options Desk Automation",
+    key: "MAX_CONCURRENT_OPTION_POSITIONS",
+    type: "number",
+    value: 10,
+    default: 10,
+    description: "Max total concurrent open option positions in the paper broker.",
+    min: 1,
+    max: 100,
+    step: 1,
+  },
+  // ---- Circuit Breaker ----
+  {
+    group: "Circuit Breaker",
+    key: "CIRCUIT_BREAKER_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description: "Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
+  },
+  {
+    group: "Circuit Breaker",
+    key: "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
+    type: "number",
+    value: 3.5,
+    default: 3.5,
+    description: "Volatility jump Z-score threshold to trigger SOFT_HALT (VOLATILITY_BURST_HALT).",
+    min: 1.0,
+    max: 10.0,
+    step: 0.25,
+  },
+  {
+    group: "Circuit Breaker",
+    key: "CIRCUIT_BREAKER_VPIN_THRESHOLD",
+    type: "number",
+    value: 0.4,
+    default: 0.4,
+    description: "Volume-Synchronized Probability of Toxicity threshold to trigger FLASH_CRASH_SHIELD.",
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+  },
+  {
+    group: "Circuit Breaker",
+    key: "CIRCUIT_BREAKER_OFI_THRESHOLD",
+    type: "number",
+    value: 1000.0,
+    default: 1000.0,
+    description: "Order Flow Imbalance threshold (selling pressure) to trigger FLASH_CRASH_SHIELD.",
+    min: 0.0,
+    max: 10000.0,
+    step: 10.0,
+  },
+  {
+    group: "Circuit Breaker",
+    key: "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
+    type: "number",
+    value: 30.0,
+    default: 30.0,
+    description: "Loss velocity rolling time window in minutes relative to daily loss limit.",
+    min: 1,
+    max: 120,
+    step: 1,
+  },
+  {
+    group: "Circuit Breaker",
+    key: "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+    type: "string",
+    value: "SPY",
+    default: "SPY",
+    description: "Reference symbol used for the live volatility-jump circuit-breaker updater's baseline/reactive vol computation.",
   },
 ];
 
@@ -4948,6 +5212,88 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Gates PUT /strategy/modules -- signal weights and the disabled-module set, which changes what the platform recommends.",
   },
+  {
+    group: "Write & Execution Gates",
+    key: "BROKER_BACKEND",
+    type: "enum",
+    value: "fmp_paper",
+    default: "fmp_paper",
+    options: ["fmp_paper", "alpaca"],
+    description:
+      "Selects which broker actually receives orders: 'alpaca' (real broker) vs. 'fmp_paper' (a local SQLite-backed paper broker).",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "LIVE_TRADE_EXECUTION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for broker_live_execution_mcp.py's execute_live_trade/confirm_live_trade tool pair -- turning it on permits live order routing to an external broker.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "LIVE_TRADE_APPROVAL_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Gates the only endpoints that can move a live-trade proposal's status to 'approved' (POST /pilots/execution/proposals/{id}/approve).",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Bridges simulated PaperAccountStore closed trades into the real transactions_store 'trades' ledger.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "META_LABELING_BACKFILL_BRIDGE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the Forecast Backfill screen's live meta-labeler bridge -- when True, screen-trained models can gate real position sizing if they clear the PBO/DSR deployability check.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "OFI_SHIELD_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Fail-closed extension to the Flash Crash (OFI+VPIN) circuit-breaker shield (execution/dynamic_circuit_breaker.py).",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "MCP_OAUTH_MULTI_USER_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Switches the OAuth /login form from the single-passphrase check (MCP_OAUTH_PASSWORD) to per-user credentials.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "FORECAST_BACKFILL_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Gates POST /pilots/forecast_backfill/run and POST /pilots/forecast_backfill/cancel/{job_id}, which run a full multi-day forecast-history backfill.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "JULES_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Enables the Jules third-party autonomous coding-agent integration (data/jules_client.py) -- creates PRs against the connected repo.",
+  },
   // -- Write gates NOT in DANGEROUS_KEYS (pilots/feature_flags.py's
   // WRITE_GATE_REASONS -- visible, no typed confirmation required) --
   {
@@ -5003,6 +5349,33 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     default: true,
     description:
       "Gates the RLHF Calibration Review Queue's write endpoints -- defaults on since every proposal is hypothetical/paper-only.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "PAPER_BROKER_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /pilots/paper-broker/reset on the Pilots API -- wipes the local FMP paper account's positions/orders and reseeds cash.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "FIX_GATEWAY_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /pilots/execution/fix/route and FIX session-management endpoints on the Pilots API -- simulated FIX 4.4 gateway.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "MULTI_BROKER_GATEWAY_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Enables multi-broker smart routing via MultiBrokerGateway in broker execution tools (broker_live_execution_mcp.py).",
   },
   // -- Diagnostic & Data Features (read-only measurement/data-source
   // master switches, feed no scoring or sizing decision) --
@@ -5070,7 +5443,365 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     default: false,
     description: "Enables full-text ingestion of 10-K/10-Q SEC filings.",
   },
+  {
+    group: "Diagnostic & Data Features",
+    key: "PIPELINE_STALL_ALERT_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Fires a WARNING alert if a pipeline cycle stops updating progress.json while state='running' -- read-only, never cancels a run or restarts the daemon.",
+  },
 ];
+
+// Representative multi-domain sample for Settings Reference offline mock.
+// Covers all 14 domains with diverse types, secret masking, and liveness states.
+// Overrides key for `PUT /settings/reference` boolean toggles — a dedicated
+// storage bucket, distinct from the per-editor override keys above, since
+// this screen can write a field regardless of which (if any) dedicated
+// editor also covers it.
+const SETTINGS_REFERENCE_OVERRIDES_KEY = "stockpy_settings_reference_overrides";
+
+function mockSettingsReference(): SettingsReferenceResponse {
+  const overrides = readOverrides(SETTINGS_REFERENCE_OVERRIDES_KEY);
+  const domains = [
+    "Financial/Risk/Sizing",
+    "Execution/Brokers",
+    "Options Desk",
+    "Market Data/DB",
+    "Universe/Watchlist",
+    "Forecasting/ML",
+    "ETF Transmission",
+    "Sentiment/News/Attention",
+    "AI/LLM/RAG",
+    "Orchestrator/Daemon/Jobs",
+    "Alerting/Observability",
+    "Strategy Overlays",
+    "Filesystem/Bootstrap",
+    "RLHF",
+  ];
+  // `writable` is a computed pass below, not per-literal here, so it can
+  // never drift from `type`/`category` the way a hand-typed boolean would —
+  // exactly the class of bug the real backend's own `writable = key in
+  // _REFERENCE_WRITE_INDEX` derivation exists to prevent (see api/pilots_api.py).
+  const baseFields: Omit<SettingsReferenceField, "writable">[] = [
+    {
+      key: "ADVISORY_ONLY",
+      category: "allowed",
+      value: true,
+      default: true,
+      type: "boolean",
+      description: "When True, ALL broker order submission is suppressed. The pipeline still runs end-to-end but order execution returns immediately.",
+      domain: "Financial/Risk/Sizing",
+      dangerous: true,
+      liveness: mockLiveness("ADVISORY_ONLY"),
+      // ADVISORY_ONLY is listed in BOTH _TUNABLE_GROUPS and (via
+      // settings_keysets.DANGEROUS_KEYS) _FEATURE_FLAGS_GROUPS. The real
+      // backend's _build_editable_at_index() checks /settings/feature-flags
+      // before /settings/tunables, first-match-wins -- this must match.
+      editable_at: "/settings/feature-flags",
+    },
+    {
+      key: "KELLY_FRACTION",
+      category: "allowed",
+      value: 0.5,
+      default: 0.5,
+      type: "number",
+      description: "Fractional Kelly sizing multiplier (e.g. 0.5 for half-Kelly) applied to reduce volatility and avoid overbetting.",
+      domain: "Financial/Risk/Sizing",
+      dangerous: false,
+      liveness: mockLiveness("KELLY_FRACTION"),
+      editable_at: "/settings/tunables",
+    },
+    {
+      key: "BROKER_BACKEND",
+      category: "allowed",
+      value: "fmp_paper",
+      default: "fmp_paper",
+      type: "string",
+      description: "Selects which broker actually receives orders: 'alpaca' (real broker) vs. 'fmp_paper' (a local SQLite-backed paper broker).",
+      domain: "Execution/Brokers",
+      dangerous: true,
+      liveness: mockLiveness("BROKER_BACKEND"),
+      // BROKER_BACKEND is also DANGEROUS_KEYS (so it's in
+      // _FEATURE_FLAGS_GROUPS too), but it's literally defined in
+      // _PAPER_BROKER_GROUPS, whose editor route is checked BEFORE
+      // /settings/feature-flags in _build_editable_at_index() -- paper-broker
+      // wins in the real backend, so it must win here too.
+      editable_at: "/settings/paper-broker",
+    },
+    {
+      key: "OPTIONS_0DTE_ENABLED",
+      category: "allowed",
+      value: false,
+      default: false,
+      type: "boolean",
+      description: "Enable automated 0DTE options momentum breakout trading and lifecycle management.",
+      domain: "Options Desk",
+      dangerous: false,
+      liveness: mockLiveness("OPTIONS_0DTE_ENABLED"),
+      editable_at: "/settings/tunables",
+    },
+    {
+      key: "OPTIONS_EARNINGS_CRUSH_ENABLED",
+      category: "allowed",
+      value: false,
+      default: false,
+      type: "boolean",
+      description: "Enable earnings crush options strategy module.",
+      domain: "Options Desk",
+      dangerous: false,
+      liveness: mockLiveness("OPTIONS_EARNINGS_CRUSH_ENABLED"),
+      editable_at: null,
+    },
+    {
+      key: "FRED_API_KEY",
+      category: "secret",
+      value: "•••• (set)",
+      default: "",
+      type: "string",
+      description: "FRED API key. Required for live macroeconomic data.",
+      domain: "Market Data/DB",
+      dangerous: false,
+      liveness: mockLiveness("FRED_API_KEY"),
+      editable_at: null,
+    },
+    {
+      key: "WATCHLIST",
+      category: "allowed",
+      value: "SPY,QQQ,AAPL,NVDA,MSFT",
+      default: "",
+      type: "string",
+      description: "Comma-separated list of symbols to include in the active tracking universe.",
+      domain: "Universe/Watchlist",
+      dangerous: false,
+      liveness: mockLiveness("WATCHLIST"),
+      editable_at: null,
+    },
+    {
+      key: "FORECAST_USE_GARCH_SIGMA",
+      category: "allowed",
+      value: true,
+      default: true,
+      type: "boolean",
+      description: "Use GARCH(1,1) conditional volatility for forecast confidence intervals.",
+      domain: "Forecasting/ML",
+      dangerous: false,
+      liveness: mockLiveness("FORECAST_USE_GARCH_SIGMA"),
+      editable_at: "/settings/tunables",
+    },
+    {
+      key: "ETF_HOLDINGS_ENABLED",
+      category: "allowed",
+      value: false,
+      default: false,
+      type: "boolean",
+      description: "Enables fetching ETF constituent baskets for exposure analysis.",
+      domain: "ETF Transmission",
+      dangerous: false,
+      liveness: mockLiveness("ETF_HOLDINGS_ENABLED"),
+      editable_at: "/settings/etf-transmission",
+    },
+    {
+      key: "SENTIMENT_INGESTION_ENABLED",
+      category: "allowed",
+      value: false,
+      default: false,
+      type: "boolean",
+      description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR).",
+      domain: "Sentiment/News/Attention",
+      dangerous: false,
+      liveness: mockLiveness("SENTIMENT_INGESTION_ENABLED"),
+      editable_at: "/settings/sentiment",
+    },
+    {
+      key: "LLM_COMMENTARY_ENABLED",
+      category: "allowed",
+      value: true,
+      default: true,
+      type: "boolean",
+      description: "Enable automated LLM narration for daily advisory reports.",
+      domain: "AI/LLM/RAG",
+      dangerous: false,
+      liveness: mockLiveness("LLM_COMMENTARY_ENABLED"),
+      editable_at: null,
+    },
+    {
+      key: "ORCHESTRATOR_DAEMON_ENABLED",
+      category: "allowed",
+      value: true,
+      default: true,
+      type: "boolean",
+      description: "Run the continuous background pipeline timer daemon.",
+      domain: "Orchestrator/Daemon/Jobs",
+      dangerous: false,
+      liveness: mockLiveness("ORCHESTRATOR_DAEMON_ENABLED"),
+      editable_at: "/settings/tunables",
+    },
+    {
+      key: "ALERT_EMAIL_ENABLED",
+      category: "allowed",
+      value: false,
+      default: false,
+      type: "boolean",
+      description: "Send operational and trading alerts via SMTP email.",
+      domain: "Alerting/Observability",
+      dangerous: false,
+      liveness: mockLiveness("ALERT_EMAIL_ENABLED"),
+      editable_at: null,
+    },
+    {
+      key: "CIRCUIT_BREAKER_ENABLED",
+      category: "allowed",
+      value: false,
+      default: false,
+      type: "boolean",
+      description: "Master switch for automatic live circuit-breaker updates.",
+      domain: "Strategy Overlays",
+      dangerous: false,
+      liveness: mockLiveness("CIRCUIT_BREAKER_ENABLED"),
+      editable_at: "/settings/tunables",
+    },
+    {
+      key: "LOCAL_DATA_ROOT",
+      category: "excluded",
+      value: "~/.stockpy_local",
+      default: "~/.stockpy_local",
+      type: "string",
+      description: "Root directory path for local SQLite databases, logs, and artifacts.",
+      domain: "Filesystem/Bootstrap",
+      dangerous: false,
+      liveness: mockLiveness("LOCAL_DATA_ROOT"),
+      editable_at: null,
+    },
+    {
+      key: "RLHF_CALIBRATION_ENABLED",
+      category: "allowed",
+      value: true,
+      default: true,
+      type: "boolean",
+      description: "Gates the RLHF Calibration Review Queue's write endpoints.",
+      domain: "RLHF",
+      dangerous: false,
+      liveness: mockLiveness("RLHF_CALIBRATION_ENABLED"),
+      editable_at: "/settings/feature-flags",
+    },
+  ];
+  // `writable` mirrors the real backend's `key in _REFERENCE_WRITE_INDEX`
+  // exactly (non-secret boolean only) -- computed, never hand-typed per
+  // field, so it cannot drift the way the two editable_at literals above did.
+  // Applies any override an earlier `updateSettingsReference` call persisted,
+  // matching `buildTunablesResponse`'s read-overrides convention.
+  const fields: SettingsReferenceField[] = baseFields.map((f) => ({
+    ...f,
+    value: f.key in overrides ? overrides[f.key] : f.value,
+    // Mirrors the real backend's exclusion exactly: a no_op field (e.g.
+    // OPTIONS_EARNINGS_CRUSH_ENABLED, read nowhere in production) never gets
+    // a live-looking Toggle -- that would imply the control does something
+    // when it provably doesn't. `mockLiveness(key).applies === "no_effect"`
+    // is this mock's equivalent of the real backend's `no_op` bucket check.
+    writable: f.type === "boolean" && f.category === "allowed" && f.liveness.applies !== "no_effect",
+  }));
+  return {
+    fields,
+    total: fields.length,
+    domains,
+  };
+}
+
+function applySettingsReference(
+  values: Record<string, boolean>,
+  confirm: Record<string, string> = {},
+): TunablesUpdateResult {
+  // The write scope is exactly the writable rows `mockSettingsReference()`
+  // itself would report -- reusing that function (rather than re-deriving a
+  // second boolean/allowed check here) means this can never drift from what
+  // the screen actually shows as toggleable.
+  const writableKeys = new Set(
+    mockSettingsReference().fields.filter((f) => f.writable).map((f) => f.key),
+  );
+  const written: Record<string, boolean> = {};
+  const rejected: Record<string, string> = {};
+  for (const [key, val] of Object.entries(values)) {
+    if (!writableKeys.has(key)) {
+      rejected[key] = "unknown_key";
+      continue;
+    }
+    if (typeof val !== "boolean") {
+      rejected[key] = "expected_boolean";
+      continue;
+    }
+    written[key] = val;
+  }
+  // Dangerous-key confirmation gate -- identical ordering/semantics to
+  // applyTunablesGeneric's (runs after type validation, per-key, never
+  // whole-batch).
+  for (const key of Object.keys(written)) {
+    if (!MOCK_DANGEROUS_KEYS.has(key)) continue;
+    const echoed = confirm[key];
+    if (echoed === undefined) {
+      rejected[key] = "confirmation_required";
+      delete written[key];
+    } else if (echoed !== key) {
+      rejected[key] = "confirmation_mismatch";
+      delete written[key];
+    }
+  }
+
+  const perKeyApplies: Record<string, AppliesState> = {};
+  for (const key of Object.keys(written)) {
+    perKeyApplies[key] = mockLiveness(key).applies;
+  }
+  const appliedNow = Object.keys(perKeyApplies).filter((k) => perKeyApplies[k] === "immediately");
+  const pending = Object.keys(perKeyApplies).filter((k) => perKeyApplies[k] !== "immediately");
+
+  if (Object.keys(written).length > 0) {
+    try {
+      localStorage.setItem(
+        SETTINGS_REFERENCE_OVERRIDES_KEY,
+        JSON.stringify({ ...readOverrides(SETTINGS_REFERENCE_OVERRIDES_KEY), ...written }),
+      );
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  const counts: Record<AppliesState, number> = {
+    immediately: 0,
+    next_daemon_restart: 0,
+    no_effect: 0,
+    env_pinned: 0,
+  };
+  for (const s of Object.values(perKeyApplies)) counts[s] += 1;
+  const present = (Object.keys(counts) as AppliesState[]).filter((s) => counts[s] > 0);
+  const summary: AppliesSummary =
+    present.length === 1 ? present[0] : present.length === 0 ? "next_daemon_restart" : "mixed";
+
+  let note: string;
+  if (Object.keys(written).length === 0) {
+    note = "Nothing was written.";
+  } else if (appliedNow.length && !pending.length) {
+    note = "Saved to .env and applied to the running process — no restart needed.";
+  } else if (pending.length && !appliedNow.length) {
+    note =
+      "Saved to .env. The running process keeps the previous values until it restarts (POST /daemon/restart).";
+  } else {
+    note =
+      `Saved to .env. ${appliedNow.length} applied to the running process immediately; ` +
+      `${pending.length} take effect on the next restart (${pending.join(", ")}).`;
+  }
+
+  return {
+    written,
+    rejected,
+    applies: summary,
+    applies_counts: counts,
+    per_key_applies: perKeyApplies,
+    restart_required: pending.length > 0,
+    restart_endpoint: "POST /daemon/restart",
+    note,
+  };
+}
 
 function mockSentimentTunables(): TunablesResponse {
   return buildTunablesResponse(
@@ -10882,6 +11613,17 @@ export const mockApi = {
     confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applyCacheLongShortTunables(values, confirm));
+  },
+
+  async getSettingsReference(): Promise<SettingsReferenceResponse> {
+    return delay(mockSettingsReference());
+  },
+
+  async updateSettingsReference(
+    values: Record<string, boolean>,
+    confirm: SettingsConfirmMap = {},
+  ): Promise<TunablesUpdateResult> {
+    return delay(applySettingsReference(values, confirm));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
