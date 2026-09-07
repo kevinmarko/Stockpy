@@ -176,6 +176,30 @@ If all three are empty, `main.py` logs a warning that names all four remediation
 
 See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
 
+### Universe Coverage
+
+The Pilots PWA's Settings → Tracked Universe screen includes a coverage
+panel with three honest counts. Note this reads a narrower universe than
+`main.py`'s own three-tier assembly described above — held positions plus
+Robinhood/file-backed watchlists only, not the Sheet2 fallback or
+scan-discovered candidates:
+
+1. **Tracked**: every symbol in this report.
+2. **Forecast-covered**: the subset with a price forecast recorded recently
+   by the pipeline (the platform's forecast-tracking database) — this
+   reflects whether the pipeline actually forecast that symbol lately, not a
+   fixed sector or model list.
+3. **Full data coverage**: the subset where a live check, performed when you
+   load the screen (not read from a cached pipeline artifact), confirmed
+   price quotes, historical bars, and fundamental data are all available
+   right now.
+
+Each count is clickable to filter the symbol list below it. These numbers
+often genuinely diverge — a symbol can be tracked without a recent forecast
+(e.g. it was only just added), or forecast-covered without full data
+coverage (e.g. fundamentals are temporarily unavailable from the data
+provider).
+
 ### Symbol rating and automatic exclusion
 
 Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine each cycle, persisted to a durable history (`rating/symbol_rating_store.py`). When `SYMBOL_RATING_AUTO_DROP_ENABLED` is turned on (it's `False` by default), a symbol with enough consecutive BAD-rated cycles in a row (`SYMBOL_RATING_DROP_THRESHOLD_CYCLES`, 5 by default) can be automatically excluded from tracking and buying — but a symbol you currently hold is **never** auto-excluded, regardless of its rating streak. The Pilots PWA's Tracked Universe screen (`GET /data/sync-report`) shows each symbol's consecutive-BAD-cycle count and an "Excluded" badge for anything currently dropped; a "Re-include" button (`POST /universe/{symbol}/reinclude`) lets you manually undo an exclusion at any time without waiting for a GOOD-rated cycle.

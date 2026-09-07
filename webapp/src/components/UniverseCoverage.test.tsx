@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UniverseCoverage } from "./UniverseCoverage";
 import { AutoRefreshProvider } from "./AutoRefreshContext";
@@ -36,7 +37,9 @@ import type { SyncReportResponse } from "../api/types";
 function renderLive() {
   return render(
     <AutoRefreshProvider>
-      <UniverseCoverage />
+      <MemoryRouter>
+        <UniverseCoverage />
+      </MemoryRouter>
     </AutoRefreshProvider>
   );
 }
@@ -89,12 +92,76 @@ describe("UniverseCoverage (real mock API)", () => {
     expect(row.textContent).not.toContain("quote:");
   });
 
-  it("'Coverage gaps only' filters out FULL-coverage rows", async () => {
+  it("clicking the top summary badges filters the list", async () => {
     renderLive();
     await screen.findByTestId("universe-coverage-row-AAPL");
-    fireEvent.click(screen.getByTestId("universe-coverage-gaps-only"));
-    expect(screen.queryByTestId("universe-coverage-row-AAPL")).not.toBeInTheDocument();
+
+    // Initially all are shown
+    expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
     expect(screen.getByTestId("universe-coverage-row-DUK")).toBeInTheDocument();
+
+    // Filter to Full coverage
+    fireEvent.click(screen.getByTestId("filter-full"));
+    expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
+    expect(screen.queryByTestId("universe-coverage-row-DUK")).not.toBeInTheDocument();
+
+    // Filter to Forecast-covered
+    fireEvent.click(screen.getByTestId("filter-forecast"));
+    // Assuming AAPL is forecast covered in the mock
+    expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
+
+    // Back to Tracked (all)
+    fireEvent.click(screen.getByTestId("filter-all"));
+    expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
+    expect(screen.getByTestId("universe-coverage-row-DUK")).toBeInTheDocument();
+  });
+
+  it("renders the three honest counts (Tracked / Forecast-covered / Full coverage) correctly, and they genuinely diverge", async () => {
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-AAPL");
+    // The mock's ROWS fixture has 8 symbols total (AAPL/MSFT/NVDA/V/COST/
+    // DUK/T/XOM). forecast_available is true for whichever symbols have a
+    // working quote leg (full/stale/quotes_only) = AAPL, MSFT, NVDA, V,
+    // COST = 5. coverage === "full" only for AAPL, MSFT, COST = 3. This is a
+    // genuinely diverging case already present in the fixture -- not
+    // contrived to make the assertion pass -- exercising exactly the
+    // scenario the implementation plan's §8 testing requirement calls for.
+    expect(screen.getByTestId("filter-all")).toHaveTextContent("Tracked 8");
+    expect(screen.getByTestId("filter-forecast")).toHaveTextContent("Forecast-covered 5");
+    expect(screen.getByTestId("filter-full")).toHaveTextContent("Full coverage 3");
+  });
+
+  it("renders all three counts equal when every tracked symbol is both forecast-covered and fully covered", async () => {
+    const makeRow = (symbol: string): SyncReportResponse["symbols"][string] => ({
+      symbol,
+      coverage: "full",
+      held: true,
+      quantity: 10,
+      avg_cost: 100,
+      current_price: 105,
+      cost_basis_delta_per_share: 5,
+      market_value: 1050,
+      is_stale_quote: false,
+      quote_source: "alpaca",
+      has_fundamentals: true,
+      forecast_available: true,
+      watchlists: [],
+      diagnostic: "",
+    });
+    const allEqual: SyncReportResponse = {
+      generated_at: new Date().toISOString(),
+      positions: ["AAA", "BBB", "CCC"],
+      watchlists: {},
+      symbols: { AAA: makeRow("AAA"), BBB: makeRow("BBB"), CCC: makeRow("CCC") },
+      provider_source: "alpaca",
+      fundamentals_source: "yahoo_computed",
+    };
+    vi.spyOn(api, "getSyncReport").mockResolvedValue(allEqual);
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-AAA");
+    expect(screen.getByTestId("filter-all")).toHaveTextContent("Tracked 3");
+    expect(screen.getByTestId("filter-forecast")).toHaveTextContent("Forecast-covered 3");
+    expect(screen.getByTestId("filter-full")).toHaveTextContent("Full coverage 3");
   });
 
   it("renders the honest empty state when nothing is tracked yet", async () => {

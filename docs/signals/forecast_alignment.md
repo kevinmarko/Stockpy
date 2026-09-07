@@ -152,3 +152,70 @@ materially different — and more honest — strategy, not a data artifact or ha
 doc's "Backtest Validation" numbers above predate the fix and should not be read as the strategy's
 current behavior; they are retained here as history per this file's existing convention, not
 because they still describe what `forecast_direction_arima_hw` does today.
+
+### 2026-09-07 — Universe made dynamic (`FORECAST_DIRECTION_UNIVERSE`/`_get_forecast_direction_universe`), a confirmed live regression found and fixed, and re-validation on the widened universe
+
+`scripts/refresh_validations.py`'s `FORECAST_DIRECTION_UNIVERSE` constant (previously a fixed
+`["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"]` list) was replaced with a
+lazily-evaluated `_get_forecast_direction_universe()` that reads the operator's live tracked
+universe via `data.portfolio_sync.compute_tracked_universe` (held Robinhood positions ∪
+`WATCHLIST`/`watchlist.txt` ∪ `settings.DEFAULT_TICKERS` — the same single source of truth
+`main.py`/`pipeline/production_steps.py` use), per commit `5eb9c6c1` on branch
+`feat-universe-transparency`.
+
+**A real, confirmed regression was found and fixed in the same pass, not merely theorized.** As
+first committed, `_get_forecast_direction_universe()` returned ONLY
+`compute_tracked_universe(...)`'s result (falling back to a bare `["SPY"]` widening otherwise) —
+this SILENTLY REPLACED the curated 10-large-cap benchmark documented above ("the same 10-ticker
+universe as the EDGAR PIT adapters") with whatever real account happened to be cached locally.
+Verified live (2026-09-07, this machine's own `~/.stockpy_local/quant_platform.db` cached account
+snapshot): the resolved universe became
+`['AAL', 'ABR', 'AGNC', 'AM', 'ARCC', 'ARR', 'CGBD', 'DEI', 'DIV', 'DX', 'ET', 'KRO', 'MFA', 'MPT',
+'NTDOY', 'PK', 'PSEC', 'REFI', 'RITM', 'RWT', 'SDIV', 'SPY', 'SRET', 'SYF', 'UPBD', 'UWMC']` — 26
+real held REIT/BDC/dividend-focused tickers, with ZERO overlap with the documented "10 liquid large
+caps" (not even AAPL survived). This is not a data-availability edge case; it reproduces on every
+run as long as a cached account snapshot exists, making this `STRATEGY_REGISTRY` entry's validated
+universe environment-dependent (whichever operator's Robinhood cache happens to be warm on the
+machine that runs `refresh_validations.py`) rather than the fixed, reproducible benchmark this doc
+and `dividend_yield_edgar_pit`/`deep_value_edgar_pit`/`value_quality_edgar_pit` were built to share.
+
+**Fix**: `_get_forecast_direction_universe()` now returns the ADDITIVE UNION of a new
+`FORECAST_DIRECTION_CURATED_UNIVERSE` constant (the original 11-ticker list, verbatim) with
+`compute_tracked_universe(...)`'s result — never a replacement. The curated benchmark is therefore
+always present as a subset (enforced by `tests/test_validation_forecast_direction.py`'s
+`test_universe_constant_matches_edgar_pit_universe`), while the operator's real tracked universe is
+still surfaced as a widening, matching the 2026-08-21 tiered-universe-widening precedent
+(`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s cross-sectional-strategy entry) of unioning onto a baseline
+rather than silently substituting it.
+
+**Re-validation, both before and after the union fix** (`python -m scripts.refresh_validations
+--strategies forecast_direction_arima_hw --start 2015-01-01 --end 2026-09-07`, this session, real
+FMP-sourced data, `VALIDATION_HARNESS_OOS_GATE_ENABLED` at its default `False`):
+
+| Universe | Tickers | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|---|
+| Curated-only (last recorded, 2026-08-19, flag off) | 10 + SPY | 0.424 | 0.000 | 0.841 | 29.8% | ❌ False |
+| **Bug**: `compute_tracked_universe(...)` alone (held positions silently replaced curated list) | 26 (0 curated) | **−0.441** | 0.000 | **0.145** | **38.3%** | ❌ False |
+| **Fixed**: curated ∪ tracked (this entry's shipped behavior) | 36 (11 curated + 25 additional) | **−0.175** | 0.000 | **0.338** | **21.7%** | ❌ False |
+
+**Verdict**: `deployable=False` both before and after this fix — this was never a "close the gate"
+change, and none of these numbers should be read as a regression to chase. The widened (curated ∪
+tracked) universe measures honestly *worse* than the curated-only benchmark (Sharpe −0.175 vs.
+0.424, DSR 0.338 vs. 0.841) — a real, disclosed universe-composition effect: the ARIMA+Holt-Winters
+trend-consensus methodology, tuned and previously measured against liquid blue-chip large caps,
+performs worse on the wider mix of REIT/BDC/dividend-focused names an operator's real tracked
+universe pulled in here. This is not a bug in the forecasting math or the harness — it is an honest
+measurement of what this `STRATEGY_REGISTRY` entry now actually backtests once its universe is
+allowed to widen with the operator's tracked universe, and the underlying `deployable=False` verdict
+was already true of the curated-only benchmark before this change. The "Recalculate Strategy
+Validations" open gap noted in `.claude/claude_handover_areas_to_improve.md` (which claimed this
+could not be done due to a yfinance network outage and remained "Unvalidated") was itself
+inaccurate — a real, measured, non-"Unvalidated" `forecast_direction_arima_hw` entry already existed
+in `docs/VALIDATION_STRATEGY_FIX_LOG.md` (2026-08-19), and real FMP network access was confirmed
+working in this same sandboxed session, closing that gap directly rather than deferring it further.
+
+See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md)'s 2026-09-07 entry
+for the full write-up, including the two additional structural test-suite bugs
+(`tests/test_refresh_validations.py::TestRegistryStructure`) this same universe-type change (a
+`STRATEGY_REGISTRY` universe becoming a callable rather than a static list) broke and this pass
+fixed.

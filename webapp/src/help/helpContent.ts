@@ -232,6 +232,10 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "How and when a settings change takes effect: immediately (live in the running process), on next daemon restart (captured by runtime code or components), no effect (unreferenced setting), or env pinned (overridden by an active shell environment variable).",
   "settings reference":
     "A read-only comprehensive directory and explainer for all platform configuration settings, documenting default values, current values, safety categories, and liveness behavior.",
+  "universe coverage":
+    "Tracked symbols are every symbol in this report — held positions plus Robinhood/file-backed watchlists. Forecast-covered are the subset with a price forecast recorded recently (the pipeline's forecast-tracking database — not a fixed sector or model list); a symbol can be tracked without one, e.g. if it's new or hasn't had a pipeline cycle run for it yet. Full coverage means a live check — run right now, not read from a cached pipeline artifact — confirmed price quotes, historical bars, and fundamental data are all available for the symbol.",
+  "uncovered symbols":
+    "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (e.g. FMP or Alpaca) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -470,7 +474,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
     title: "Tracked Universe",
     description:
       "Add or remove the symbols the pipeline processes on every run, and see per-symbol data coverage — including each symbol's rating history and whether it's currently excluded by the platform's automated rating system.",
-    keyConcepts: ["symbol rating"],
+    keyConcepts: ["universe coverage", "uncovered symbols", "symbol rating"],
   },
   "settings-brokers": {
     title: "Brokerage Connections",

@@ -36,6 +36,7 @@ from dotenv import dotenv_values
 import settings as settings_module
 
 from scripts.refresh_validations import (
+    FORECAST_DIRECTION_CURATED_UNIVERSE,
     FORECAST_DIRECTION_HORIZON_DAYS,
     FORECAST_DIRECTION_UNIVERSE,
     FORECAST_DIRECTION_WINDOW_YEARS,
@@ -151,7 +152,7 @@ class TestBuildForecastDirectionAdapter:
         by the sibling tests in this class (test_returns_three_items_and_variant,
         test_score_weighted_book_not_rank_based, test_no_lookahead_shift1,
         test_real_forecast_alignment_signal_reused) and by
-        TestForecastDirectionIntegration's real yfinance end-to-end test.
+        TestForecastDirectionIntegration's real FMP end-to-end test.
         """
         idx = pd.bdate_range("2005-01-01", periods=252 * 10)  # ~10 years
         rng = np.random.RandomState(1)
@@ -254,11 +255,24 @@ class TestBuildForecastDirectionAdapter:
         assert (pre["ForecastDirection_ScoreWeighted"] == 0.0).all()
 
     def test_universe_constant_matches_edgar_pit_universe(self) -> None:
-        """Sanity-check the module-level universe constant used for
-        registration is the intended SPY benchmark + 10-ticker subset."""
-        assert FORECAST_DIRECTION_UNIVERSE == [
-            "SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F",
-        ]
+        """The lazily-evaluated universe must ALWAYS contain the curated
+        10-large-cap + SPY baseline as a SUBSET -- this is the load-bearing
+        invariant docs/signals/forecast_alignment.md documents ("the same
+        10-ticker universe as the EDGAR PIT adapters") and the reason
+        _get_forecast_direction_universe() unions the operator's tracked
+        universe onto this baseline rather than replacing it (see that
+        function's own docstring for the confirmed-live regression this
+        guards against: an operator's real held positions silently replacing
+        the documented benchmark with an unrelated, non-reproducible set of
+        tickers)."""
+        universe = FORECAST_DIRECTION_UNIVERSE()
+        assert isinstance(universe, list)
+        assert len(universe) > 0
+        assert set(FORECAST_DIRECTION_CURATED_UNIVERSE).issubset(set(universe)), (
+            "the curated EDGAR-PIT-matching baseline must always be present, "
+            f"regardless of the operator's tracked universe; got {universe}"
+        )
+        assert "SPY" in universe
 
 
 # ---------------------------------------------------------------------------

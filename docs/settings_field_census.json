@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "355a27e58a576ca4c12de7e5ff566dbcd459dfa7",
+    "git_commit": "503ef3b4462cea1a1b70e3dd8690e6985ec12f5f",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4065,7 +4065,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 842,
+      "total_reads": 843,
       "distinct_fields": 279,
       "counts": {
         "OUTPUT_DIR": 135,
@@ -4073,7 +4073,7 @@
         "SIGNAL_WEIGHTS": 21,
         "DASHBOARD_REFRESH_SECONDS": 18,
         "DISABLED_SIGNAL_MODULES": 14,
-        "DEFAULT_TICKERS": 12,
+        "DEFAULT_TICKERS": 13,
         "FRED_API_KEY": 12,
         "DRY_RUN": 9,
         "REGIME_SIGNAL_WEIGHTS": 9,
