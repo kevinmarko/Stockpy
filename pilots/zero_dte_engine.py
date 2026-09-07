@@ -1461,12 +1461,27 @@ def manage_0dte_exits(
 
     Audit note (.claude/giant_master_plan_audit.md, F5): this closes "never
     callable at all" -- the endpoint wrapping this function now exists and
-    genuinely calls through to evaluate_0dte_exits/execute_0dte_exits. It
-    does NOT close "never actually triggered automatically" -- no scheduler
-    anywhere in this codebase fires anything at a specific time of day
-    (checked desktop/daemon_runtime.py's _timer_loop: flat-interval only, no
-    time-of-day concept). A genuinely automatic 15:45 ET trigger needs a new
-    scheduling primitive, out of scope here.
+    genuinely calls through to evaluate_0dte_exits/execute_0dte_exits.
+
+    Update: "never actually triggered automatically" is ALSO closed, as of
+    the daemon-wiring fix documented in CLAUDE.md's "Options desk ML/safety
+    gates and findings" bullet -- desktop/daemon_runtime.py's _timer_loop
+    now calls this function unconditionally on every interval tick while
+    OPTIONS_0DTE_ENABLED and the extended-hours/weekday gate both allow it
+    (see that module's `_timer_loop`, right before `trigger_run`). There is
+    still no dedicated "fire at exactly 15:45 ET" scheduling primitive in
+    this codebase -- and none is needed: evaluate_0dte_exits() re-derives
+    `now >= hard_exit_time` freshly on every call, so as long as the timer
+    loop keeps ticking (i.e. `ORCHESTRATOR_INTERVAL_SECONDS > 0`; the
+    default 0 means on-demand-only and this loop never wakes on its own),
+    the first tick after the hard-exit threshold closes the position, and
+    every later tick that same day is a correctly-idempotent no-op (the
+    position is already closed). Do not reintroduce a second, separately
+    time-gated caller of this function alongside the daemon's per-tick one
+    -- that was tried and reverted (see git history around branch
+    fix-0dte-hard-exit) because it only duplicated this existing call
+    without covering the interval=0 gap, while also silently skipping the
+    extended-hours/weekday gate the per-tick call above already respects.
     """
     if store is None:
         store = PaperAccountStore()
