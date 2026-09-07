@@ -300,6 +300,37 @@ def test_fundamentals_empty_is_404(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_fundamentals_strips_internal_dividends_series(monkeypatch):
+    """Regression: ``FMPProvider.get_fundamentals`` (via
+    ``data.fmp_fundamentals.map_fundamentals``) stows a real ``pandas.Series``
+    under the internal-plumbing key ``"_dividends_series"`` whenever the
+    symbol has dividend history (e.g. AAPL) -- not part of this endpoint's
+    yfinance-mirroring JSON contract. Returning it as-is previously crashed
+    pydantic's response serializer (``PydanticSerializationError: Unable to
+    serialize unknown type: <class 'pandas.core.series.Series'>``) with a
+    500 that carries no CORS headers -- a browser fetch reports that as an
+    opaque "network error", indistinguishable from the service being down.
+    The response must be genuinely JSON-serializable and omit the key
+    entirely, while every ordinary metric (including the sibling "_source"
+    internal-but-JSON-safe string key) still comes through untouched."""
+    series = pd.Series([0.24, 0.25], index=pd.to_datetime(["2026-05-01", "2026-08-01"]))
+    fund = {
+        "trailingPE": 28.5,
+        "_source": "fmp",
+        "_dividends_series": series,
+    }
+    monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider(fundamentals=fund))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/fundamentals/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "_dividends_series" not in body
+    assert body["trailingPE"] == 28.5
+    assert body["_source"] == "fmp"
+    # The cached provider dict itself must never be mutated in place.
+    assert "_dividends_series" in fund
+
+
 # ---------------------------------------------------------------------------
 # GET /data/fundamentals/{symbol}/history
 # ---------------------------------------------------------------------------
