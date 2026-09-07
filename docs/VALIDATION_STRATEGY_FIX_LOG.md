@@ -2751,3 +2751,91 @@ ungateable-by-design vs. registered-with-a-measured-fail).
 This bridge is opt-in per signal (`settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS`) and gated by a master switch (`settings.META_LABELING_BACKFILL_BRIDGE_ENABLED`). Due to the feature-compatibility gate, the bridge is functionally inert until the live row schema is expanded to match the backfill training features.
 
 **Same-day follow-up — 6-agent audit found the bridge was completely non-functional, all fixed**: a 6-agent parallel audit of the initial build (Antigravity) found `register_backfill_model` unconditionally raised `ImportError` (`from config import MODELS_DIR`, an attribute that doesn't exist — the models directory should have been `ml.meta_labeling._MODELS_DIR`) and, past that, called `ml.registry_io.update_model_metrics` with a wrong kwarg (`registry_path` instead of `path`) and a plain string instead of the required `train_window` dict; `compute_backfill_cpcv_metrics` called `validation.metrics.run_cpcv_evaluation` with entirely nonexistent kwargs, so DSR/PBO could never be genuinely computed under any input. Every `step_7_register_live_meta_labelers` test monkeypatched away exactly these two functions, so nothing in the shipped test suite ever exercised the real, broken code path — the audit found this only by calling the functions directly with real data. A second, independent bug (not present in the original design, introduced by the namespacing fix in item 3 above): step 5's own always-on diagnostic pickle writes and step 7's registered-model pickle shared one `backfill_meta_{signal_id}_*` glob, so `MetaLabeler.load_latest(..., prefix="backfill_meta")`'s `sorted()[-1]` could still pick the wrong (and wrong-typed) file — fixed by moving step 5's diagnostic writes to a third, disjoint `backfill_diag_` prefix. A third bug: `LIVE_ROW_FEATURE_WHITELIST` was itself missing `primary_score` — a real feature both existing AFML meta-labelers train on (see their `features:` lists above) — despite 4 of the 6 audit agents independently verifying it as an "exact match" against `strategy_engine.py`'s row construction; caught by a new test that parses `strategy_engine.py`'s real `row = pd.Series({...})` literal directly and diffs it against the whitelist, rather than trusting a hand-verified claim. All three are fixed; the bridge's remaining inertness is now, honestly, solely the feature-compatibility gate described above. See `CLAUDE.md`'s Forecast Backfill Meta-Labeler Bridge bullet for the full fix list.
+
+---
+
+## 2026-09-07 — `forecast_direction_arima_hw`: universe wiring regression found and fixed, re-validated on the (now correctly widened) universe
+
+**Scope**: independent verification, on branch `feat-universe-transparency`, of two claims made in
+that branch's own `.claude/claude_handover_areas_to_improve.md` — (1) that commit `5eb9c6c1` (which
+rewired `FORECAST_DIRECTION_UNIVERSE`/`ml/forecast_backfill.py`'s default ticker resolution onto
+`data.portfolio_sync.compute_tracked_universe`) was a correct, safe fix, and (2) that
+`forecast_direction_arima_hw`'s validation metrics "could not be recomputed... and remain marked as
+Unvalidated" due to a yfinance network outage.
+
+**Claim 2 was false as stated**: a real, measured `forecast_direction_arima_hw` entry already existed
+in this file (2026-08-19, `Sharpe 0.424/0.392`, `PBO 0.000/0.000`, `DSR 0.841/0.821`,
+`MaxDD 29.8%/17.6%`, `deployable=False`/`False` — see the "Full before/after table" above) — not
+"Unvalidated." Live network access (both yfinance and FMP, this session, this sandbox) was confirmed
+working: a real `yfinance` 5-day AAPL download succeeded, and a real FMP `/historical-price-eod`
+call against a live `FMP_API_KEY` (sourced from this machine's own primary checkout's `.env`, copied
+into this worktree's own `.env`, never printed or transmitted anywhere) returned real data.
+
+**Claim 1 was partially true and led to a confirmed, fixed regression.** The "dynamically wired into
+`compute_tracked_universe`" claim itself checked out — `data.portfolio_sync.compute_tracked_universe`
+is a real function, already the single source of truth `main.py`/`pipeline/production_steps.py` use,
+and it now genuinely drives which tickers `forecast_direction_arima_hw`'s scored/traded book includes
+(confirmed by reading `_build_forecast_direction_adapter`: every non-SPY column in the downloaded
+`closes` DataFrame is scored and traded — SPY is excluded, used only as the Faber SMA-200 trend
+filter). But as shipped, `_get_forecast_direction_universe()` returned `compute_tracked_universe(...)`
+**alone** — silently REPLACING, not widening, the curated 10-large-cap benchmark
+(`docs/signals/forecast_alignment.md`: "the same 10-ticker universe as the EDGAR PIT adapters") with
+whatever real account snapshot happened to be cached locally. Verified live against this machine's
+own `~/.stockpy_local/quant_platform.db`: the resolved universe became a 26-ticker REIT/BDC/dividend
+book (`AAL, ABR, AGNC, AM, ARCC, ARR, CGBD, DEI, DIV, DX, ET, KRO, MFA, MPT, NTDOY, PK, PSEC, REFI,
+RITM, RWT, SDIV, SPY, SRET, SYF, UPBD, UWMC`) with **zero** overlap with the documented benchmark —
+not a "widened" superset, a silent substitution. This breaks the documented
+"same universe as the EDGAR PIT strategies" invariant and makes this registry entry's validated
+numbers non-reproducible across machines (whichever operator's brokerage cache happens to be warm at
+run time silently becomes part of the backtest). The "Exception Masking" claim in the handover doc
+(framed as "repairing" a pre-existing silent-failure bug) does not match this branch's git history —
+there was no prior version of this code in this branch to repair; the try/except around
+`fetch_account_snapshot(allow_live_fetch=False)` is new code introduced by the same commit, and it IS
+correctly non-silent (logs a WARNING) and fails closed (degrades `held` to `()`), so the resulting
+behavior is sound even though "repaired" overstates what changed.
+
+**Fix** (this session, `scripts/refresh_validations.py`): `_get_forecast_direction_universe()` now
+returns the ADDITIVE UNION of a new `FORECAST_DIRECTION_CURATED_UNIVERSE` constant (the original
+11-ticker list, verbatim, never dropped) with `compute_tracked_universe(...)`'s result — mirroring
+the 2026-08-21 tiered-universe-widening precedent (widen via union, never silently substitute).
+Regression-tested: `tests/test_validation_forecast_direction.py::test_universe_constant_matches_edgar_pit_universe`
+now asserts the curated set is always a subset of the resolved universe, not merely that `SPY` is
+present.
+
+**A second, independent bug found by the same investigation**: this universe-type change (the
+registry's third tuple element becoming a `Union[list[str], Callable[[], list[str]]]` for this one
+entry) broke two structural, registry-wide tests in `tests/test_refresh_validations.py::TestRegistryStructure`
+(`test_each_entry_is_adapter_turnover_universe_triple`, `test_adapter_arity_matches_universe_size`) —
+both assumed every registry universe is a plain `list` and crashed with `TypeError`/`AssertionError`
+on the callable. Neither was caught by the task that introduced the callable universe, because that
+work only ran the narrower `tests/test_validation_forecast_direction.py`. Fixed by resolving the
+callable in both tests (mirroring the pattern `_validate_single_strategy`/`run_validations` already
+used) and by extracting the shared resolution into one new helper,
+`scripts/refresh_validations.py::_resolve_registry_universe(name)`, used at all three production call
+sites (`_validate_single_strategy`, and `run_validations`'s `ticker_union`/`share_tickers`
+computations — the latter previously resolved the callable inconsistently between the two, a latent
+`TypeError` risk if a future strategy with a callable universe is ever added to
+`_STRATEGIES_NEEDING_SHARES`).
+
+**Before/after** (`python -m scripts.refresh_validations --strategies forecast_direction_arima_hw
+--start 2015-01-01 --end 2026-09-07`, this session, real FMP data,
+`VALIDATION_HARNESS_OOS_GATE_ENABLED` at its default `False`):
+
+| Universe | Tickers | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|---|
+| Curated-only (last recorded, 2026-08-19) | 10 + SPY | 0.424 | 0.000 | 0.841 | 29.8% | ❌ False |
+| **Bug** (as shipped in `5eb9c6c1`): tracked-universe-only, curated list silently dropped | 26 (0 curated) | −0.441 | 0.000 | 0.145 | 38.3% | ❌ False |
+| **Fixed** (this session): curated ∪ tracked, additive widening | 36 (11 curated + 25 additional) | −0.175 | 0.000 | 0.338 | 21.7% | ❌ False |
+
+**Verdict**: `deployable=False` in all three rows — this pass never loosened a gate, date-snooped a
+window, or cherry-picked a parameter to force a pass. The fixed (widened) universe measures honestly
+worse than the curated-only benchmark (Sharpe −0.175 vs. 0.424, DSR 0.338 vs. 0.841): a real,
+disclosed universe-composition effect, not a harness or forecasting-math regression — the
+ARIMA+Holt-Winters trend-consensus methodology was tuned and previously measured against liquid
+blue-chip large caps, and performs worse on the wider REIT/BDC/dividend-focused mix a real operator's
+tracked universe pulled in here. No further fix lever was applied to chase a passing number; this
+strategy was already honestly `deployable=False` before this session's universe-wiring change and
+remains so after it, for a different, now-disclosed reason. See
+`docs/signals/forecast_alignment.md`'s 2026-09-07 entry for the full write-up and
+`.claude/claude_handover_areas_to_improve.md`'s item 4 (superseded by this entry — that "Recalculate
+Strategy Validations" gap is now closed).

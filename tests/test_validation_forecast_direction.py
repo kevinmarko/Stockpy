@@ -36,6 +36,7 @@ from dotenv import dotenv_values
 import settings as settings_module
 
 from scripts.refresh_validations import (
+    FORECAST_DIRECTION_CURATED_UNIVERSE,
     FORECAST_DIRECTION_HORIZON_DAYS,
     FORECAST_DIRECTION_UNIVERSE,
     FORECAST_DIRECTION_WINDOW_YEARS,
@@ -254,11 +255,23 @@ class TestBuildForecastDirectionAdapter:
         assert (pre["ForecastDirection_ScoreWeighted"] == 0.0).all()
 
     def test_universe_constant_matches_edgar_pit_universe(self) -> None:
-        """Sanity-check the module-level universe constant is lazily evaluated
-        and contains SPY as a benchmark."""
+        """The lazily-evaluated universe must ALWAYS contain the curated
+        10-large-cap + SPY baseline as a SUBSET -- this is the load-bearing
+        invariant docs/signals/forecast_alignment.md documents ("the same
+        10-ticker universe as the EDGAR PIT adapters") and the reason
+        _get_forecast_direction_universe() unions the operator's tracked
+        universe onto this baseline rather than replacing it (see that
+        function's own docstring for the confirmed-live regression this
+        guards against: an operator's real held positions silently replacing
+        the documented benchmark with an unrelated, non-reproducible set of
+        tickers)."""
         universe = FORECAST_DIRECTION_UNIVERSE()
         assert isinstance(universe, list)
         assert len(universe) > 0
+        assert set(FORECAST_DIRECTION_CURATED_UNIVERSE).issubset(set(universe)), (
+            "the curated EDGAR-PIT-matching baseline must always be present, "
+            f"regardless of the operator's tracked universe; got {universe}"
+        )
         assert "SPY" in universe
 
 

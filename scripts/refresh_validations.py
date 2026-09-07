@@ -133,7 +133,7 @@ import warnings
 from datetime import date
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -1668,9 +1668,47 @@ def _build_macro_regime_adapter(
 FORECAST_DIRECTION_WINDOW_YEARS = 5
 FORECAST_DIRECTION_HORIZON_DAYS = 30
 
-# Universe for forecast_direction_arima_hw: SPY added as benchmark-only
-# market-trend overlay (Faber SMA-200), plus 10 tradeable liquid large caps.
+# Curated baseline for forecast_direction_arima_hw: SPY as a benchmark-only
+# market-trend overlay (Faber SMA-200), plus the same 10-ticker liquid-large-
+# cap universe the EDGAR PIT adapters (dividend_yield_edgar_pit,
+# deep_value_edgar_pit, value_quality_edgar_pit) use -- see
+# docs/signals/forecast_alignment.md's Backtest Validation section, which
+# documents this as "the same 10-ticker universe as the EDGAR PIT adapters."
+# This list is a fixed, reproducible measurement baseline and must never be
+# silently dropped -- see _get_forecast_direction_universe()'s docstring for
+# why it is unioned with, never replaced by, the operator's tracked universe.
+FORECAST_DIRECTION_CURATED_UNIVERSE = [
+    "SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F",
+]
+
+
 def _get_forecast_direction_universe() -> list[str]:
+    """Return the ADDITIVE union of the curated 10-large-cap benchmark above
+    with whatever the operator is currently tracking (held Robinhood
+    positions ∪ WATCHLIST/watchlist.txt ∪ DEFAULT_TICKERS, via
+    ``data.portfolio_sync.compute_tracked_universe`` -- the same single
+    source of truth ``main.py``/``pipeline/production_steps.py`` use).
+
+    This is a UNION, never a substitute: an earlier version of this function
+    returned ONLY ``compute_tracked_universe(...)``'s result (falling back to
+    a bare ``["SPY"]`` widening when nothing else was present), which
+    silently replaced the documented curated benchmark with whatever real
+    account happened to be cached locally -- confirmed live (2026-09-07) to
+    pull an actual operator's real held REIT/BDC/dividend-focused positions
+    (e.g. AGNC, ARR, MFA, MPT, RITM, RWT, PSEC -- nothing resembling the
+    documented "10 liquid large caps") instead of the intended benchmark,
+    breaking comparability with the EDGAR PIT strategies' shared universe and
+    making this STRATEGY_REGISTRY entry's validated numbers non-reproducible
+    across machines/environments (whoever's Robinhood cache happens to be
+    warm at run time silently becomes part of the backtest). Unioning instead
+    of replacing keeps the curated baseline always present -- and therefore
+    always comparable to the recorded history in
+    docs/VALIDATION_STRATEGY_FIX_LOG.md and docs/signals/forecast_alignment.md
+    -- while still surfacing the operator's real tracked universe as an
+    additive widening, mirroring the 2026-08-21 tiered-universe-widening
+    precedent for the cross-sectional strategies (superset, never a silent
+    replacement).
+    """
     from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
     from settings import settings
     import logging
@@ -1681,15 +1719,14 @@ def _get_forecast_direction_universe() -> list[str]:
     except Exception as e:
         logging.getLogger(__name__).warning("Failed to fetch account snapshot: %s", e)
         held = ()
-    
-    universe = compute_tracked_universe(
+
+    tracked = compute_tracked_universe(
         held=held,
         watchlist=load_env_watchlist("watchlist.txt"),
         default_tickers=settings.DEFAULT_TICKERS,
     )
-    if "SPY" not in universe:
-        universe.append("SPY")
-    return sorted(set(universe))
+    universe = set(FORECAST_DIRECTION_CURATED_UNIVERSE) | set(tracked)
+    return sorted(universe)
 
 FORECAST_DIRECTION_UNIVERSE = _get_forecast_direction_universe
 
@@ -3681,8 +3718,12 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, Union[List[str], Callable[[]
     # Narrower ARIMA+Holt-Winters forecast-direction proxy (see
     # _build_forecast_direction_adapter's docstring for the full honesty
     # contract: bounded 5yr window, weekly cadence, real ForecastAlignmentSignal
-    # reuse). Weekly turnover on a 10-name universe with trend overlay & conviction
-    # thresholding is ~0.02/day.
+    # reuse). Weekly turnover on the curated 10-name universe (see
+    # FORECAST_DIRECTION_CURATED_UNIVERSE / _get_forecast_direction_universe's
+    # own docstring -- the universe returned may be WIDER than 10 names when
+    # the operator's tracked universe adds more, but the curated baseline the
+    # 0.02 measurement below was taken against is always included) with trend
+    # overlay & conviction thresholding is ~0.02/day.
     "forecast_direction_arima_hw": (
         _build_forecast_direction_adapter,
         0.02,
@@ -3791,6 +3832,19 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, Union[List[str], Callable[[]
         ["SPY"],
     ),
 }
+
+
+def _resolve_registry_universe(name: str) -> List[str]:
+    """Resolve ``STRATEGY_REGISTRY[name]``'s universe element to a concrete
+    ``list[str]`` -- it may be a static list, or (``forecast_direction_arima_hw``
+    only, today) a zero-arg callable evaluated lazily at call time so it can
+    reflect the operator's live tracked universe. The single choke point for
+    this resolution so every call site (``_validate_single_strategy``,
+    ``run_validations``'s ``ticker_union``/``share_tickers`` computation, and
+    any future one) stays in sync rather than re-deriving the
+    ``callable(...)`` check ad hoc."""
+    universe = STRATEGY_REGISTRY[name][2]
+    return universe() if callable(universe) else universe
 
 
 # The subset of STRATEGY_REGISTRY entries that simulate a real, production
@@ -4073,9 +4127,8 @@ def _validate_single_strategy(
 
     logger.info("Validating: %s", name)
     try:
-        adapter_fn, turnover, universe = STRATEGY_REGISTRY[name]
-        if callable(universe):
-            universe = universe()
+        adapter_fn, turnover, _universe_raw = STRATEGY_REGISTRY[name]
+        universe = _resolve_registry_universe(name)
         available = [
             t for t in universe
             if t in closes_df.columns and closes_df[t].notna().any()
@@ -4303,13 +4356,13 @@ def run_validations(
     # never read the result.
     known = [s for s in strategies if s in STRATEGY_REGISTRY]
     ticker_union = sorted({
-        t for s in known for t in (STRATEGY_REGISTRY[s][2]() if callable(STRATEGY_REGISTRY[s][2]) else STRATEGY_REGISTRY[s][2])
+        t for s in known for t in _resolve_registry_universe(s)
     })
     share_tickers = sorted({
         t
         for s in known
         if s in _STRATEGIES_NEEDING_SHARES
-        for t in STRATEGY_REGISTRY[s][2]
+        for t in _resolve_registry_universe(s)
     })
 
     closes_df: pd.DataFrame = pd.DataFrame()
