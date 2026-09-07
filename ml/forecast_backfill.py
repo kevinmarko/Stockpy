@@ -300,6 +300,16 @@ class AgenticForecastBackfiller:
             # Additional features for various signals
             df["ROC_12M"] = df["Close"].shift(1) / df["Close"].shift(253) - 1.0
             df["ROC_6M"] = df["Close"].shift(1) / df["Close"].shift(127) - 1.0
+            # ROC_5 / ROC_20: shorter-window siblings of ROC_12M/ROC_6M above, needed by
+            # signals/options_flow_sentiment.py's declared meta_label_features -- were
+            # previously never computed here, so _resolve_meta_features() silently
+            # dropped both every time a model trained (7 of 9 declared features used,
+            # not 9). Same shift(1) no-lookahead convention as ROC_12M/ROC_6M, and must
+            # stay IDENTICAL to processing_engine.py::calculate_technical_metrics()'s
+            # live ROC_5/ROC_20 formula (a sibling agent is adding it there in this same
+            # change) so training and live inference see the same feature definition.
+            df["ROC_5"] = df["Close"].shift(1) / df["Close"].shift(6) - 1.0
+            df["ROC_20"] = df["Close"].shift(1) / df["Close"].shift(21) - 1.0
             daily_returns = df["Close"].pct_change().shift(1)
             ewma_var = daily_returns.pow(2).ewm(alpha=0.06, adjust=False).mean()
             df["GARCH_Vol"] = np.sqrt(ewma_var * 252.0)

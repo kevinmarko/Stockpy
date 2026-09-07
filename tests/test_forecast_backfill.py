@@ -163,7 +163,7 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     # Step 2: Technical features
     features = engine.step_2_calculate_technical_features()
     assert not features.empty
-    for col in ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]:
+    for col in ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio", "ROC_5", "ROC_20"]:
         assert col in features.columns
 
     # Step 3: Primary signals -- at minimum the two baseline momentum

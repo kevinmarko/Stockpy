@@ -17,14 +17,23 @@ feature compatibility check. The operator must explicitly opt a signal in via `s
 and enable the bridge via `settings.META_LABELING_BACKFILL_BRIDGE_ENABLED`. When both exist, AFML models are
 prioritized over backfill-screen models as a tie-break.
 
-**As of today, the bridge is wired, tested, and safe — but functionally inert for all 6 eligible signals.**
-The feature-compatibility check (`ml.meta_bootstrap.LIVE_ROW_FEATURE_WHITELIST`/`check_feature_compatibility`)
-refuses to register any model whose declared training features aren't fully present in the live per-ticker
-feature row `strategy_engine.py` actually queries a meta-labeler with — and none of the 6 backfill-eligible
-signals' declared `meta_label_features` are fully covered by that row today. A model can pass PBO/DSR and still
-never reach `global_meta_registry` until a separate follow-up widens the live row schema. See each signal's
-own `docs/signals/<name>.md` "Backfill-Screen Live Meta-Labeler Bridge" section for the per-signal registry
-key, chosen live horizon, and this same caveat.
+**2026-09 update: the feature-compatibility gate no longer refuses all 6 eligible signals by construction.**
+The gate (`ml.meta_bootstrap.LIVE_ROW_FEATURE_WHITELIST`/`check_feature_compatibility`) previously refused
+to register any model whose declared training features weren't fully present in the live per-ticker feature
+row `strategy_engine.py::evaluate_security()` actually queries a meta-labeler with — and none of the 6
+backfill-eligible signals' declared `meta_label_features` were fully covered by that row. That row has now
+been widened with the 9 previously-missing feature names (`Vol_20`, `Vol_50`, `Vol_Ratio`, `RSI_14`, `MACD`,
+`MACD_Signal`, `ROC_6M`, `ROC_5`, `ROC_20`), each genuinely computed — not fabricated or zero-filled — and
+`tests/test_train_meta_labelers.py::TestSixEligibleSignalsFeatureCompatibility` proves all 6 signals' real
+`meta_label_features` now pass `check_feature_compatibility()`. Be precise about scope: this closes the
+*compatibility* gate specifically. A signal still separately needs to pass the DSR/PBO deployability gate
+(unchanged, untouched by this fix) to actually register live, and `cross_sectional_momentum` has a SEPARATE,
+pre-existing, disclosed primary-signal-generation gap — its Signal column is unconditionally NaN in this
+screen's dummy `SignalContext` (per `ml/forecast_backfill.py`'s own "KNOWN GAP" docstring on
+`step_3_generate_primary_signals`) — that likely still prevents it from ever training a model in the first
+place, regardless of this fix. Do not read this update as "all 6 signals are now live" — only the
+compatibility gate itself was fixed. See each signal's own `docs/signals/<name>.md` "Backfill-Screen Live
+Meta-Labeler Bridge" section for the per-signal registry key, chosen live horizon, and this same caveat.
 
 ---
 
@@ -39,6 +48,8 @@ key, chosen live horizon, and this same caveat.
 - **RSI_14**: 14-day Relative Strength Index.
 - **MACD**: Moving Average Convergence Divergence ($EMA_{12} - EMA_{26}$).
 - **Vol_Ratio**: Ratio of daily volume to 20-day moving average volume.
+- **ROC_5 / ROC_20**: 5-day and 20-day rate-of-change, now genuinely computed in `step_2_calculate_technical_features()` (previously declared by `options_flow_sentiment`'s `meta_label_features` but silently dropped every training run since they were never computed here — a real, now-fixed gap, not merely a doc omission).
+- **ROC_6M**: 6-month rate-of-change — already computed here, but only threaded into the live per-ticker row as part of the 2026-09 feature-compatibility fix described above.
 
 ### Meta-Target Formulation
 For horizon $h \in \{10, 30, 60, 90\}$ days:

@@ -182,7 +182,30 @@ class ProcessingEngine:
                 # --- B. RISK METRICS (NEW) ---
                 # Calculate Returns
                 df['Pct_Change'] = df['Close'].pct_change(fill_method=None)
-                
+
+                # Vol_20 / Vol_50: rolling realized vol of daily returns, annualized.
+                # UNSHIFTED (uses df['Pct_Change'] which already includes today's return) --
+                # this matches the existing unshifted convention for "current state"
+                # indicators in this same function (RSI/MACD/ATR/SMA all read df.iloc[-1]
+                # with no shift), and matches ml/forecast_backfill.py's own Vol_20/Vol_50
+                # training-time formula exactly (Return.rolling(window).std()*sqrt(252)) --
+                # do not add a shift here, it would create a live/training feature mismatch.
+                df['Vol_20'] = df['Pct_Change'].rolling(window=20).std() * np.sqrt(252)
+                df['Vol_50'] = df['Pct_Change'].rolling(window=50).std() * np.sqrt(252)
+
+                # Vol_Ratio: current volume vs its own 20-day moving average. Matches
+                # ml/forecast_backfill.py's vol_ratio_window default (20) exactly.
+                df['Vol_Ratio'] = df['Volume'] / df['Volume'].rolling(window=20).mean().replace(0.0, np.nan)
+
+                # ROC_5 / ROC_20: shorter-window siblings of the existing ROC_12M/ROC_6M
+                # momentum features (computed elsewhere in calculate_momentum_metrics) --
+                # deliberately shift(1)'d to match that established no-lookahead convention
+                # exactly (these feed signals/options_flow_sentiment.py's own PRIMARY score
+                # as a momentum-proxy fallback, not just a meta-label diagnostic input, so
+                # they must meet the same lookahead-perturbation-test bar as ROC_12M/ROC_6M).
+                df['ROC_5'] = df['Close'].shift(1) / df['Close'].shift(6) - 1.0
+                df['ROC_20'] = df['Close'].shift(1) / df['Close'].shift(21) - 1.0
+
                 # 1. VaR 95 (Historical Method, 5th percentile of daily returns)
                 # We assume 1-day VaR. For annual, multiply by sqrt(252)
                 var_95 = df['Pct_Change'].quantile(0.05)
@@ -270,6 +293,17 @@ class ProcessingEngine:
                     'RSI_2': float(last_row.get('RSI_2', 50.0)) if pd.notna(last_row.get('RSI_2')) else 50.0,
                     'MACD_Line': last_row.get('MACD_Line', 0),
                     'MACD_Signal': last_row.get('MACD_Signal', 0),
+                    'Vol_20': float(last_row['Vol_20']) if pd.notna(last_row.get('Vol_20')) else float('nan'),
+                    'Vol_50': float(last_row['Vol_50']) if pd.notna(last_row.get('Vol_50')) else float('nan'),
+                    'Vol_Ratio': float(last_row['Vol_Ratio']) if pd.notna(last_row.get('Vol_Ratio')) else float('nan'),
+                    # RSI_14 / MACD / MACD_Signal are aliases of already-computed values under
+                    # their exact `meta_label_features`-declared names (signals/timeseries_momentum.py
+                    # etc. declare "RSI_14"/"MACD"/"MACD_Signal" verbatim) -- no new computation,
+                    # just additional dict keys pointing at the same already-computed numbers.
+                    'RSI_14': last_row.get('RSI', 50),
+                    'MACD': last_row.get('MACD_Line', 0),
+                    'ROC_5': float(last_row['ROC_5']) if pd.notna(last_row.get('ROC_5')) else float('nan'),
+                    'ROC_20': float(last_row['ROC_20']) if pd.notna(last_row.get('ROC_20')) else float('nan'),
                     'ATR': last_row.get('ATR', 0),
                     'SMA_5': float(last_row.get('SMA_5', 0.0)) if pd.notna(last_row.get('SMA_5')) else last_row['Close'],
                     'SMA_50': last_row.get('SMA_50', 0),
@@ -313,7 +347,9 @@ class ProcessingEngine:
         # Calculates MACD aligned variables and computes the Options IV Edge from historical vol and ATR.
         res = self.calculate_technical_metrics(raw_tech_data, transactions_df)
         for ticker, metrics in res.items():
-            metrics['MACD'] = metrics.get('MACD_Line', 0.0)
+            # 'MACD' is now set directly inside calculate_technical_metrics() itself
+            # (as an alias of 'MACD_Line'), so both the vectorized and non-vectorized
+            # paths get it from the same single place -- no post-hoc patch needed here.
             df = raw_tech_data.get(ticker)
             if df is not None and not df.empty and len(df) >= 14:
                 try:

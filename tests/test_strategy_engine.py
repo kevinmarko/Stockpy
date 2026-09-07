@@ -191,6 +191,85 @@ class TestEvaluateSecurityContract:
 
 
 # ===========================================================================
+# 1b. Forecast Backfill Meta-Labeler Bridge feature widening: the 9 new
+#     ``row`` keys (roc_6m/ROC_6M, Vol_20, Vol_50, Vol_Ratio, RSI_14, MACD,
+#     MACD_Signal, ROC_5, ROC_20) reach the aggregator's ``row`` argument at
+#     the values the caller supplied -- including the alias keys that reuse
+#     existing params (RSI_14==rsi, MACD==macd_line, MACD_Signal==macd_signal).
+#     See ml/meta_bootstrap.py::LIVE_ROW_FEATURE_WHITELIST (a concurrent
+#     agent widens that whitelist to match these exact key names).
+# ===========================================================================
+class TestBridgeFeatureWideningRow:
+    """Captures the internal ``row`` Series via a monkeypatched
+    ``SignalAggregator.aggregate`` rather than asserting on
+    ``evaluate_security()``'s return dict -- these features feed the
+    aggregator/meta-labeler contract, not scoring output, so the return
+    dict has no surface for them.
+    """
+
+    def test_new_bridge_features_present_in_row(self, monkeypatch):
+        captured: dict = {}
+
+        def _fake_aggregate(self_agg, row, context):
+            captured["row"] = row
+            # Real 6-tuple contract: (final_score, score_log, warnings,
+            # details, outputs, meta_label_composite).
+            return 50.0, [], [], [], {}, 1.0
+
+        monkeypatch.setattr(
+            "signals.aggregator.SignalAggregator.aggregate", _fake_aggregate
+        )
+
+        _engine().evaluate_security(
+            bar=_bar(), fundamentals=_fund(), macro=_macro_riskon(),
+            forecast_price=168.00, trend_strength=72.0, atr=2.50,
+            macd_line=1.11, macd_signal=0.98, rsi=63.5,
+            garch_vol=0.20,
+            roc_6m=1.23, vol_20=4.56, vol_50=7.89, vol_ratio=0.5,
+            roc_5=0.01, roc_20=0.02,
+        )
+
+        row = captured["row"]
+        assert row["roc_6m"] == pytest.approx(1.23)
+        assert row["ROC_6M"] == pytest.approx(1.23)
+        assert row["Vol_20"] == pytest.approx(4.56)
+        assert row["Vol_50"] == pytest.approx(7.89)
+        assert row["Vol_Ratio"] == pytest.approx(0.5)
+        assert row["ROC_5"] == pytest.approx(0.01)
+        assert row["ROC_20"] == pytest.approx(0.02)
+        assert row["RSI_14"] == row["rsi"] == pytest.approx(63.5)
+        assert row["MACD"] == row["macd_line"] == pytest.approx(1.11)
+        assert row["MACD_Signal"] == row["macd_signal"] == pytest.approx(0.98)
+
+    def test_bridge_features_default_to_today_exact_behavior_when_omitted(self, monkeypatch):
+        """Every new param is optional; an existing caller that never passes
+        them must see the exact same defaults as before this change."""
+        captured: dict = {}
+
+        def _fake_aggregate(self_agg, row, context):
+            captured["row"] = row
+            return 50.0, [], [], [], {}, 1.0
+
+        monkeypatch.setattr(
+            "signals.aggregator.SignalAggregator.aggregate", _fake_aggregate
+        )
+
+        _engine().evaluate_security(
+            bar=_bar(), fundamentals=_fund(), macro=_macro_riskon(),
+            forecast_price=168.00, trend_strength=72.0, atr=2.50, garch_vol=0.20,
+        )
+
+        row = captured["row"]
+        assert row["roc_6m"] == 0.0
+        assert row["ROC_6M"] == 0.0
+        assert row["Vol_20"] is None
+        assert row["Vol_50"] is None
+        assert row["Vol_Ratio"] is None
+        assert row["ROC_5"] == 0.0
+        assert row["ROC_20"] == 0.0
+
+
+# ===========================================================================
 # 2. Sizing wiring: regime multiplier + meta composite + clamp
 # ===========================================================================
 class TestSizingWiring:
