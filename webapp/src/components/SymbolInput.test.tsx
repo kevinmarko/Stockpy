@@ -283,3 +283,68 @@ describe("SymbolInput requireExactMatch (opt-in strict mode)", () => {
     expect(onSubmit).toHaveBeenCalledWith("GBPDZD");
   });
 });
+
+describe("SymbolInput autoSubmitOnExactMatch (opt-in, requires requireExactMatch)", () => {
+  it("submits automatically once the typed value resolves to a known tracked symbol -- no click or Enter needed", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch autoSubmitOnExactMatch />);
+
+    const input = screen.getByTestId("symbol-input");
+    await user.type(input, "AAPL");
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledWith("AAPL"));
+  });
+
+  it("submits automatically once the typed value resolves to a live FMP symbol-search result", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockImplementation((q) =>
+      Promise.resolve(
+        q.toUpperCase() === "XOM"
+          ? { query: q, results: [{ symbol: "XOM", name: "Exxon Mobil", currency: "USD", exchange: "NYSE", exchange_full_name: null }], reason: null }
+          : { query: q, results: [], reason: null }
+      )
+    );
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch autoSubmitOnExactMatch />);
+
+    await user.type(screen.getByTestId("symbol-input"), "XOM");
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledWith("XOM"));
+  });
+
+  it("never auto-submits an unrecognized ticker", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} requireExactMatch autoSubmitOnExactMatch />);
+
+    await user.type(screen.getByTestId("symbol-input"), "gbpdzd");
+
+    // Give the debounce + FMP lookup a beat to settle, then confirm it never fired.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("does not re-fire for the same resolved symbol on an unrelated re-render", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(<SymbolInput onSubmit={onSubmit} requireExactMatch autoSubmitOnExactMatch />);
+
+    await user.type(screen.getByTestId("symbol-input"), "AAPL");
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    rerender(<SymbolInput onSubmit={onSubmit} requireExactMatch autoSubmitOnExactMatch hint="re-rendered" />);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op without requireExactMatch -- free text is never auto-submitted mid-typing", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={onSubmit} autoSubmitOnExactMatch />);
+
+    await user.type(screen.getByTestId("symbol-input"), "AAPL");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
