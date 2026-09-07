@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 369,
+    "live_safe": 365,
     "no_op": 5,
-    "restart_required": 96,
+    "restart_required": 100,
     "total": 470
   },
   "dynamic_sites": [
@@ -453,7 +453,6 @@
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
     "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
     "RLHF_CALIBRATION_ENABLED",
-    "ROBINHOOD_AUTO_REFRESH_ENABLED",
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
@@ -502,9 +501,7 @@
     "SNAPSHOT_HISTORY_DAYS",
     "STOCKTWITS_ENABLED",
     "STRATEGY_WRITES_ENABLED",
-    "SYMBOL_RATING_AUTO_DROP_ENABLED",
     "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
-    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
     "SYMBOL_RATING_ENABLED",
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
@@ -512,7 +509,6 @@
     "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
-    "WATCHLIST",
     "WATCH_RULES_FILE",
     "WIKIPEDIA_ATTENTION_ENABLED",
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
@@ -527,7 +523,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 933,
+    "attr": 938,
     "factory_param": 4,
     "getattr_const": 394,
     "os_environ": 2
@@ -1597,7 +1593,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:129",
+        "site": "ml/forecast_backfill.py:145",
         "via": []
       }
     ],
@@ -1815,7 +1811,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:152",
+        "site": "ml/forecast_backfill.py:169",
         "via": []
       }
     ],
@@ -1826,7 +1822,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:139",
+        "site": "ml/forecast_backfill.py:156",
         "via": []
       }
     ],
@@ -1837,7 +1833,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "ml/forecast_backfill.py:134",
+        "site": "ml/forecast_backfill.py:151",
         "via": []
       }
     ],
@@ -1848,7 +1844,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:145",
+        "site": "ml/forecast_backfill.py:162",
         "via": []
       }
     ],
@@ -1859,7 +1855,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:146",
+        "site": "ml/forecast_backfill.py:163",
         "via": []
       }
     ],
@@ -1870,7 +1866,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:150",
+        "site": "ml/forecast_backfill.py:167",
         "via": []
       }
     ],
@@ -1881,7 +1877,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:141",
+        "site": "ml/forecast_backfill.py:158",
         "via": []
       }
     ],
@@ -1892,7 +1888,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:149",
+        "site": "ml/forecast_backfill.py:166",
         "via": []
       }
     ],
@@ -1903,7 +1899,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:151",
+        "site": "ml/forecast_backfill.py:168",
         "via": []
       }
     ],
@@ -1914,7 +1910,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:144",
+        "site": "ml/forecast_backfill.py:161",
         "via": []
       }
     ],
@@ -1925,7 +1921,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:148",
+        "site": "ml/forecast_backfill.py:165",
         "via": []
       }
     ],
@@ -1936,7 +1932,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:143",
+        "site": "ml/forecast_backfill.py:160",
         "via": []
       }
     ],
@@ -1947,7 +1943,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:147",
+        "site": "ml/forecast_backfill.py:164",
         "via": []
       }
     ],
@@ -1958,7 +1954,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:142",
+        "site": "ml/forecast_backfill.py:159",
         "via": []
       }
     ],
@@ -2601,7 +2597,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:155",
+        "site": "ml/forecast_backfill.py:172",
         "via": []
       }
     ],
@@ -3037,6 +3033,17 @@
         "via": []
       }
     ],
+    "ROBINHOOD_AUTO_REFRESH_ENABLED": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "ml/forecast_backfill.py:135",
+        "via": []
+      }
+    ],
     "ROBINHOOD_PASSWORD": [
       {
         "discarded": false,
@@ -3159,6 +3166,39 @@
         "site": "api/state_api.py:94",
         "via": []
       }
+    ],
+    "SYMBOL_RATING_AUTO_DROP_ENABLED": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "ml/forecast_backfill.py:142",
+        "via": []
+      }
+    ],
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "ml/forecast_backfill.py:142",
+        "via": []
+      }
+    ],
+    "WATCHLIST": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "ml/forecast_backfill.py:144",
+        "via": []
+      }
     ]
   },
   "restart_required_only_import_time_discard": [
@@ -3170,7 +3210,7 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 91,
+    "cross_module_init_helper": 95,
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
