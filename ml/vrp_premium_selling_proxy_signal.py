@@ -39,7 +39,7 @@ meta-labeler's own context features are identical either way).
 
 import pandas as pd
 
-from signals.base import SignalModule, SignalContext
+from signals.base import SignalModule, SignalContext, SignalOutput
 from signals.vrp_premium_selling import (
     IVR_SELL_THRESHOLD,
     VRP_MIN_THRESHOLD,
@@ -93,3 +93,54 @@ class VrpPremiumSellingProxySignal(SignalModule):
             },
             index=df.index,
         )
+
+    def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
+        """Per-row equivalent of ``compute_vectorized`` above -- a byte-for-byte
+        port of ``VRPPremiumSellingSignal.compute()``
+        (``signals/vrp_premium_selling.py``), substituting
+        ``IVR_Proxy``/``VRP_Proxy`` for ``True_IVR``/``VRP``. Required because
+        ``SignalModule.compute`` is ``@abstractmethod`` -- without an override
+        here this class cannot be instantiated at all. Not on any hot path
+        today (``compute_vectorized`` above is what
+        ``ml/forecast_backfill.py`` actually calls); this exists so the class
+        satisfies the ABC contract and behaves correctly if ever driven
+        per-row (e.g. by a future caller of the base class's default
+        per-row-fallback ``compute_vectorized``, or direct unit testing).
+        """
+        ivr_proxy = row.get("IVR_Proxy")
+        vrp_proxy = row.get("VRP_Proxy")
+
+        has_data = (
+            ivr_proxy is not None and not pd.isna(ivr_proxy)
+            and vrp_proxy is not None and not pd.isna(vrp_proxy)
+        )
+        if not has_data:
+            return SignalOutput(
+                score=0.0, confidence=0.0,
+                explanation="Proxy Cash/Wait: IVR_Proxy/VRP_Proxy not available",
+            )
+
+        gate = (ivr_proxy > IVR_SELL_THRESHOLD) and (vrp_proxy > VRP_MIN_THRESHOLD)
+        if not gate:
+            reasons = []
+            if ivr_proxy <= IVR_SELL_THRESHOLD:
+                reasons.append("IVR_Proxy<=50")
+            if vrp_proxy <= VRP_MIN_THRESHOLD:
+                reasons.append("VRP_Proxy<=2%")
+            return SignalOutput(
+                score=0.0, confidence=0.0,
+                explanation=(
+                    "Proxy VRP regime gate not met "
+                    f"({' '.join(reasons)}, realized-vol-derived, not real IV)"
+                ),
+            )
+
+        ivr_excess = max(0.0, min(1.0, (ivr_proxy - IVR_SELL_THRESHOLD) / IVR_SELL_THRESHOLD))
+        vrp_excess = max(0.0, min(1.0, vrp_proxy / VRP_SATURATION))
+        score = max(0.0, min(1.0, 0.5 * ivr_excess + 0.5 * vrp_excess))
+        explanation = (
+            f"Proxy +{score * 100:.1f}pts: VRP regime favors selling premium "
+            f"(IVR_Proxy={ivr_proxy:.1f}, VRP_Proxy={vrp_proxy * 100:.2f}%, "
+            "realized-vol-derived, not real IV)"
+        )
+        return SignalOutput(score=score, confidence=1.0, explanation=explanation)

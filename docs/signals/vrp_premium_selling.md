@@ -195,3 +195,22 @@ This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
 - **Live Horizon**: 10 days (default)
 - **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
 - **Feature-Compatibility Caveat**: RESOLVED — the live per-ticker row (`strategy_engine.py::evaluate_security()`) was widened with the 9 previously-missing feature names this signal (and its 5 siblings) declare, genuinely computed in `processing_engine.py`/`ml/forecast_backfill.py`, not merely whitelisted. `check_feature_compatibility()` now returns `True` for this signal's real `meta_label_features` (see `tests/test_train_meta_labelers.py::TestSixEligibleSignalsFeatureCompatibility`). A trained model for this signal can now actually reach `global_meta_registry` once it separately clears the DSR/PBO deployability gate (unchanged by this fix).
+- **"Pending a successful run" above is permanent, not transient (WP4, 2026-09)**: this signal
+  genuinely cannot clear a training run through this bridge at all. `_build_training_set` always
+  sees 0 samples — `VRPPremiumSellingSignal.compute_vectorized()`'s `_Signal` column is all-NaN
+  because `True_IVR`/`VRP` are real, per-ticker, options-chain-derived historical implied
+  volatility that this repo's permitted data sources (FMP, Yahoo) cannot reconstruct. This is a
+  verified, disclosed, structural data-availability gap, not a bug — see
+  `docs/known_issues/vrp_premium_selling_no_historical_iv.md` for the full root-cause writeup. A
+  SEPARATE, quarantined `model_type` (`"vrp_premium_selling_proxy"`,
+  `ml/vrp_premium_selling_proxy_signal.py`, opt-in behind
+  `settings.FORECAST_BACKFILL_VRP_PROXY_ENABLED`) trains against `IVR_Proxy`/`VRP_Proxy`
+  (realized-vol-derived, OHLCV-only stand-ins) purely for research/diagnostic purposes — it is a
+  REALIZED-VOL-REGIME model, not a volatility-risk-premium model, and it can never reach this
+  bridge: its `model_type` name is deliberately absent from
+  `ml/forecast_backfill_registry_bridge.py::BACKFILL_ELIGIBLE_SIGNAL_IDS`, so
+  `step_7_register_live_meta_labelers()`'s `active_and_eligible` intersection is guaranteed
+  empty for it regardless of any operator opt-in. This signal (`signals/vrp_premium_selling.py`)
+  itself is completely untouched by the proxy — its own `True_IVR`/`VRP`-based logic and live
+  per-cycle behavior are unaffected. See `docs/plans/FORECAST_BACKFILL_PLAN.md`'s "Quarantined
+  Realized-Vol Proxy for vrp_premium_selling (WP4)" section for full detail.

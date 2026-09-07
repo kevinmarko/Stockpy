@@ -632,7 +632,36 @@ class AgenticForecastBackfiller:
             # genuine fix here needs SignalModule.compute()'s pd.Series-typed
             # contract to accept a Mapping instead, not another row-construction
             # swap.
-            for idx, row in group.iterrows():
+            #
+            # options_flow_sentiment momentum-proxy suppression (WP5): this
+            # engine's synthetic pre_compute() above never carries real UOA
+            # (unusual-options-activity) flow data (load_uoa_records() finds
+            # nothing to load in a backfill run), so options_flow_sentiment's
+            # own legitimate live-production fallback -- a price-momentum
+            # proxy keyed off ROC_5/ROC_20, see
+            # signals/options_flow_sentiment.py::compute()'s "Fallback to
+            # velocity / momentum proxy" block -- would otherwise fire on
+            # every row reaching this loop (options_flow_sentiment overrides
+            # pre_compute, so it is dispatched here, through the SCALAR
+            # compute() path, not compute_vectorized()), training a
+            # meta-labeler on pure price momentum mislabelled as options
+            # flow sentiment. compute()'s fallback check is a column-
+            # PRESENCE test on the row it's handed ("ROC_5" in row and
+            # "ROC_20" in row), so dropping the two trigger columns from the
+            # per-date row source fed into THIS loop suppresses the fallback
+            # without touching self.data itself (every other module's view
+            # of it, AND this signal's own meta_label_features resolution in
+            # step 5's _resolve_meta_features, which reads self.data
+            # directly) or signals/options_flow_sentiment.py's live
+            # per-ticker behavior at all. See
+            # docs/plans/FORECAST_BACKFILL_PLAN.md's WP5 section and
+            # docs/signals/options_flow_sentiment.md's "Backfill-Screen Live
+            # Meta-Labeler Bridge" section for the full writeup.
+            row_source = group
+            if getattr(module, "name", None) == "options_flow_sentiment":
+                row_source = group.drop(columns=["ROC_5", "ROC_20"], errors="ignore")
+
+            for idx, row in row_source.iterrows():
                 ticker = idx[1]  # self.data's index is (Date, Ticker)
                 row_with_symbol = row.copy()
                 row_with_symbol["Symbol"] = ticker
