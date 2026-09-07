@@ -88,8 +88,44 @@ _EXPECTED_GROUPS = [
     "ML, Data Capture & Audit",
     "Validation Gates",
     "RLHF Calibration",
+    "Options Desk Automation",
+    "Circuit Breaker",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
+
+_NEW_OPTIONS_DESK_KEYS = {
+    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+    "OPTIONS_AUTO_EXIT_ENABLED",
+    "OPTIONS_PROFIT_TARGET_PCT",
+    "OPTIONS_STOP_LOSS_MULTIPLE",
+    "OPTIONS_MANAGE_DTE_THRESHOLD",
+    "OPTIONS_DELTA_HEDGE_ENABLED",
+    "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+    "OPTIONS_0DTE_ENABLED",
+    "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+    "OPTIONS_0DTE_STOP_LOSS_PCT",
+    "OPTIONS_0DTE_HARD_EXIT_TIME",
+    "MAX_OPTION_NOTIONAL_PER_TRADE",
+    "MAX_CONCURRENT_OPTION_POSITIONS",
+}
+
+_NEW_CIRCUIT_BREAKER_KEYS = {
+    "CIRCUIT_BREAKER_ENABLED",
+    "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
+    "CIRCUIT_BREAKER_VPIN_THRESHOLD",
+    "CIRCUIT_BREAKER_OFI_THRESHOLD",
+    "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
+    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+}
+
+_NEW_PROMOTED_KEYS = {
+    "MULTIFACTOR_MICROCAP_THRESHOLD",
+    "CORRELATION_CLUSTER_LOOKBACK_DAYS",
+    "CORRELATION_CLUSTER_THRESHOLD",
+    "FEATURE_DRIFT_PSI_ENABLED",
+    "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
+    "PIPELINE_STALL_ALERT_SECONDS",
+}
 
 _NEW_ADVANCED_KEYS = {
     "SECTOR_FORECAST_CONFIG_PATH",
@@ -272,8 +308,10 @@ class TestGetTunables:
         dry_run = _find_field(body, "DRY_RUN")
         assert dry_run["description"] == model_fields["DRY_RUN"].description
         assert dry_run["description"]  # non-empty
-        # KELLY_FRACTION is a plain assignment (no Field) — null, never fabricated.
-        assert _find_field(body, "KELLY_FRACTION")["description"] is None
+        # All fields have Field(description=...) backfilled.
+        kelly = _find_field(body, "KELLY_FRACTION")
+        assert kelly["description"] == model_fields["KELLY_FRACTION"].description
+        assert kelly["description"]  # non-empty
 
     def test_fail_open_when_read_token_unset(self):
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -367,26 +405,35 @@ class TestTunablesScopeInvariants:
             assert key in pilots_api.env_io.ALLOWED_KEYS, f"{key} not in ALLOWED_KEYS"
             assert key not in pilots_api.env_io.SECRET_KEYS, f"{key} is a SECRET_KEY"
 
-        expected = {
-            "RISK_FREE_RATE", "MARKET_RISK_PREMIUM", "REQUIRED_RETURN_RATE", "MAX_PORTFOLIO_HEAT",
-            "KELLY_FRACTION", "KELLY_CAP", "VOL_TARGET", "MAX_LEVERAGE", "MAX_POSITION_WEIGHT",
-            "MAX_PORTFOLIO_GROSS", "SIZING_CAP_ESCALATION_ENABLED",
-            "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", "SIZING_CAP_ESCALATION_FACTOR",
-            "SIZING_CAP_AUDIT_ENABLED", "SIZING_CAP_ALERT_ENABLED", "SIZING_CAP_ALERT_THRESHOLD_PCT",
-            "SYMBOL_RATING_ENABLED", "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
-            "SYMBOL_RATING_AUTO_DROP_ENABLED", "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
-            "MAX_CORRELATION", "DAILY_LOSS_LIMIT_PCT", "MAX_ORDER_RATE_PER_MIN",
-            "HMM_RISK_OFF_BLOCK_THRESHOLD", "RISK_GATE_ENFORCE_MARKET_HOURS",
-            "META_LABEL_MIN_CONFIDENCE", "DRY_RUN",
-            "FORECAST_USE_GARCH_SIGMA", "FORECAST_PROPHET_WEIGHT",
-            "FORECAST_SKILL_WEIGHTING_ENABLED", "FORECAST_SKILL_WINDOW_DAYS",
-            "FORECAST_MODEL_PERSISTENCE_ENABLED", "FORECAST_MODEL_RETRAIN_DAYS",
-            "BETA_LOOKBACK_DAYS",
-            "MARKET_DATA_PROVIDER", "MARKET_DATA_QUOTE_TTL_SECONDS",
-            "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
-            "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
-            "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS | _NEW_REGIME_KEYS | _NEW_MISC_TUNABLE_KEYS
+        expected = (
+            {
+                "RISK_FREE_RATE", "MARKET_RISK_PREMIUM", "REQUIRED_RETURN_RATE", "MAX_PORTFOLIO_HEAT",
+                "KELLY_FRACTION", "KELLY_CAP", "VOL_TARGET", "MAX_LEVERAGE", "MAX_POSITION_WEIGHT",
+                "MAX_PORTFOLIO_GROSS", "SIZING_CAP_ESCALATION_ENABLED",
+                "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", "SIZING_CAP_ESCALATION_FACTOR",
+                "SIZING_CAP_AUDIT_ENABLED", "SIZING_CAP_ALERT_ENABLED", "SIZING_CAP_ALERT_THRESHOLD_PCT",
+                "SYMBOL_RATING_ENABLED", "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
+                "SYMBOL_RATING_AUTO_DROP_ENABLED", "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
+                "MAX_CORRELATION", "DAILY_LOSS_LIMIT_PCT", "MAX_ORDER_RATE_PER_MIN",
+                "HMM_RISK_OFF_BLOCK_THRESHOLD", "RISK_GATE_ENFORCE_MARKET_HOURS",
+                "META_LABEL_MIN_CONFIDENCE", "DRY_RUN",
+                "FORECAST_USE_GARCH_SIGMA", "FORECAST_PROPHET_WEIGHT",
+                "FORECAST_SKILL_WEIGHTING_ENABLED", "FORECAST_SKILL_WINDOW_DAYS",
+                "FORECAST_MODEL_PERSISTENCE_ENABLED", "FORECAST_MODEL_RETRAIN_DAYS",
+                "BETA_LOOKBACK_DAYS",
+                "MARKET_DATA_PROVIDER", "MARKET_DATA_QUOTE_TTL_SECONDS",
+                "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
+                "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
+                "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
+            }
+            | _NEW_ADVANCED_KEYS
+            | _NEW_RLHF_KEYS
+            | _NEW_REGIME_KEYS
+            | _NEW_MISC_TUNABLE_KEYS
+            | _NEW_OPTIONS_DESK_KEYS
+            | _NEW_CIRCUIT_BREAKER_KEYS
+            | _NEW_PROMOTED_KEYS
+        )
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
@@ -404,6 +451,20 @@ class TestTunablesScopeInvariants:
             assert key in pilots_api._TUNABLE_INDEX, f"{key} still missing from tunables scope"
         advanced_group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Advanced / Config")
         assert {k for k, _kind, _extras in advanced_group[1]} == _NEW_ADVANCED_KEYS
+
+    def test_options_desk_automation_group_has_exactly_the_intended_fields(self):
+        """Per-group membership, not just flat-index presence -- the flat
+        _TUNABLE_INDEX/group-name-list checks elsewhere would NOT catch a
+        field placed in the wrong group (e.g. a Circuit Breaker field
+        accidentally landing in Options Desk Automation)."""
+        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Options Desk Automation")
+        assert {k for k, _kind, _extras in group[1]} == _NEW_OPTIONS_DESK_KEYS
+        # The one field this promotion deliberately excludes, and why.
+        assert "OPTIONS_EARNINGS_CRUSH_ENABLED" not in _NEW_OPTIONS_DESK_KEYS
+
+    def test_circuit_breaker_group_has_exactly_the_intended_fields(self):
+        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Circuit Breaker")
+        assert {k for k, _kind, _extras in group[1]} == _NEW_CIRCUIT_BREAKER_KEYS
 
 
 # ---------------------------------------------------------------------------

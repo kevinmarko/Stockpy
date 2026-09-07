@@ -85,6 +85,7 @@ import type { StrategyReportCardSnapshot,
   SentimentHistory,
   TunablesResponse,
   TunablesUpdateResult,
+  SettingsReferenceResponse,
   SettingsConfirmMap,
   SymbolDetail,
   SymbolCompareResponse,
@@ -833,6 +834,19 @@ const liveApi = {
     confirm: SettingsConfirmMap = {},
   ) =>
     http<TunablesUpdateResult>("/settings/etf-transmission", {
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
+    }),
+  getSettingsReference: () => http<SettingsReferenceResponse>("/settings/reference"),
+  // Toggle any non-secret BOOLEAN field directly from the Settings Reference
+  // screen. `confirm` echoes a DANGEROUS_KEYS field's own name back, exactly
+  // like `updateTunables`/`updateFeatureFlags` above — see those for the
+  // full contract.
+  updateSettingsReference: (
+    values: Record<string, boolean>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
+    http<TunablesUpdateResult>("/settings/reference", {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),

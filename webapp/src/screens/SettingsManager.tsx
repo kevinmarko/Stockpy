@@ -33,6 +33,7 @@ export function SettingsManager() {
       emptyTitle="No tunables exposed"
       emptyHint="The backend returned no editable settings. Nothing here is fabricated when a value is unavailable."
       dangerZone={<DangerZone />}
+      tabGuideKey="settings-tunables"
     />
   );
 }

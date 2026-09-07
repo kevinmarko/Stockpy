@@ -9,6 +9,7 @@ export function FeatureFlagsScreen() {
       backTo="/settings"
       fetchSettings={() => api.getFeatureFlags()}
       updateSettings={(values, confirm) => api.updateFeatureFlags(values, confirm)}
+      tabGuideKey="settings-feature-flags"
     />
   );
 }

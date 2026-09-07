@@ -106,6 +106,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import typing
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -209,6 +210,7 @@ from rlhf_calibration_store import (
 # runtime_flags + settings_keysets only — see its module docstring.
 import pilots.settings_meta as settings_meta
 import pilots.feature_flags as feature_flags
+import pilots.settings_domains as settings_domains
 import settings_keysets
 
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
@@ -4042,6 +4044,10 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("MARKET_RISK_PREMIUM", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
             ("REQUIRED_RETURN_RATE", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
             ("MAX_PORTFOLIO_HEAT", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
+            ("MULTIFACTOR_MICROCAP_THRESHOLD", "float", {"min": 0.0, "max": 1e12, "step": 1e6}),
+            ("CORRELATION_CLUSTER_LOOKBACK_DAYS", "int", {"min": 5, "max": 500, "step": 5}),
+            ("CORRELATION_CLUSTER_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("FEATURE_DRIFT_PSI_ENABLED", "bool", {}),
         ],
     ),
     (
@@ -4159,6 +4165,8 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("ROBINHOOD_AUTO_REFRESH_ENABLED", "bool", {}),
             ("RUNTIME_FLAGS_REFRESH_ENABLED", "bool", {}),
             ("RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS", "int", {"min": 1, "max": 3600, "step": 1}),
+            ("DAEMON_SHUTDOWN_TIMEOUT_SECONDS", "float", {"min": 1.0, "max": 300.0, "step": 1.0}),
+            ("PIPELINE_STALL_ALERT_SECONDS", "int", {"min": 60, "max": 86400, "step": 60}),
         ],
     ),
     (
@@ -4209,6 +4217,35 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", "bool", {}),
             ("RLHF_CALIBRATION_CONFIDENCE_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
             ("RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "Options Desk Automation",
+        [
+            ("PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", "bool", {}),
+            ("OPTIONS_AUTO_EXIT_ENABLED", "bool", {}),
+            ("OPTIONS_PROFIT_TARGET_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("OPTIONS_STOP_LOSS_MULTIPLE", "float", {"min": 0.5, "max": 10.0, "step": 0.1}),
+            ("OPTIONS_MANAGE_DTE_THRESHOLD", "int", {"min": 0, "max": 60, "step": 1}),
+            ("OPTIONS_DELTA_HEDGE_ENABLED", "bool", {}),
+            ("OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES", "int", {"min": 1, "max": 500, "step": 5}),
+            ("OPTIONS_0DTE_ENABLED", "bool", {}),
+            ("OPTIONS_0DTE_PROFIT_TARGET_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("OPTIONS_0DTE_STOP_LOSS_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("OPTIONS_0DTE_HARD_EXIT_TIME", "str", {}),
+            ("MAX_OPTION_NOTIONAL_PER_TRADE", "float", {"min": 100.0, "max": 100000.0, "step": 500.0}),
+            ("MAX_CONCURRENT_OPTION_POSITIONS", "int", {"min": 1, "max": 100, "step": 1}),
+        ],
+    ),
+    (
+        "Circuit Breaker",
+        [
+            ("CIRCUIT_BREAKER_ENABLED", "bool", {}),
+            ("CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD", "float", {"min": 1.0, "max": 10.0, "step": 0.25}),
+            ("CIRCUIT_BREAKER_VPIN_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("CIRCUIT_BREAKER_OFI_THRESHOLD", "float", {"min": 0.0, "max": 10000.0, "step": 10.0}),
+            ("CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS", "int", {"min": 1, "max": 120, "step": 1}),
+            ("CIRCUIT_BREAKER_REFERENCE_SYMBOL", "str", {}),
         ],
     ),
 ]
@@ -5203,6 +5240,231 @@ def get_settings_etf_transmission() -> Dict[str, Any]:
 def put_settings_etf_transmission(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update ETF volatility transmission & holdings configuration in .env."""
     return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX, confirm=body.confirm)
+
+
+# ---------------------------------------------------------------------------
+# Settings Reference (GET /settings/reference)
+# ---------------------------------------------------------------------------
+
+
+def _build_editable_at_index() -> Dict[str, str]:
+    """Reverse-index mapping every setting key served across all 8 /settings/*
+    editors to its canonical edit route. Built once at import time. Dedicated
+    editors take precedence over the broader Tunables/Feature Flags screens."""
+    editors: List[tuple[str, List[tuple]]] = [
+        ("/settings/sentiment", _SENTIMENT_GROUPS),
+        ("/settings/sector-selection", _SECTOR_SELECTION_GROUPS),
+        ("/settings/cache-long-short", _CACHE_LONG_SHORT_GROUPS),
+        ("/settings/paper-broker", _PAPER_BROKER_GROUPS),
+        ("/settings/fmp", _FMP_GROUPS),
+        ("/settings/etf-transmission", _ETF_TRANSMISSION_GROUPS),
+        ("/settings/feature-flags", _FEATURE_FLAGS_GROUPS),
+        ("/settings/tunables", _TUNABLE_GROUPS),
+    ]
+    index: Dict[str, str] = {}
+    for route, groups in editors:
+        for _gname, specs in groups:
+            for spec in specs:
+                key = spec[0]
+                if key not in index:
+                    index[key] = route
+    return index
+
+
+_EDITABLE_AT_INDEX: Dict[str, str] = _build_editable_at_index()
+
+
+class SettingsReferenceUpdateRequest(BaseModel):
+    """Body for ``PUT``/``PATCH /settings/reference``. Same shape as
+    :class:`TunablesUpdateRequest` (``values`` + ``confirm``) — this endpoint
+    is not a new write mechanism, it is :func:`_validate_and_write_payload`
+    scoped to :data:`_REFERENCE_WRITE_INDEX` instead of one of the other
+    editors' hand-curated indexes."""
+
+    values: Dict[str, Any] = Field(..., max_length=64)
+    confirm: Dict[str, str] = Field(default_factory=dict, max_length=64)
+
+
+def _infer_reference_field_type(fi: Any) -> str:
+    """Infer wire type ('boolean' | 'number' | 'string') from a pydantic FieldInfo."""
+    if fi is None:
+        return "string"
+    annotation = getattr(fi, "annotation", None)
+    origin = getattr(typing, "get_origin", lambda x: None)(annotation)
+    args = getattr(typing, "get_args", lambda x: ())(annotation)
+    if origin is Union:
+        args = [a for a in args if a is not type(None)]
+        if len(args) == 1:
+            annotation = args[0]
+            origin = getattr(typing, "get_origin", lambda x: None)(annotation)
+    if annotation is bool:
+        return "boolean"
+    if annotation in (int, float):
+        return "number"
+    return "string"
+
+
+def _build_reference_write_index() -> Dict[str, tuple]:
+    """Every non-secret, non-``no_op`` BOOLEAN field on ``Settings`` — the
+    ``PUT``/``PATCH /settings/reference`` write scope, letting an operator
+    toggle any real on/off flag directly from the Settings Reference screen
+    rather than only the handful of fields a dedicated editor happens to also
+    cover.
+
+    DERIVED from live introspection (``Settings.model_fields`` +
+    ``env_io.ALLOWED_KEYS`` + ``docs/settings_liveness.json``'s ``no_op``
+    bucket), not hand-listed — mirroring this codebase's own established
+    convention for a flag registry that must never silently miss a
+    newly-added field (see ``pilots.feature_flags.FEATURE_FLAG_KEYS``
+    inheriting ``settings_keysets.DANGEROUS_KEYS`` by import rather than by
+    copy, for the identical reason). A brand-new boolean ``Settings`` field
+    becomes toggleable here automatically, with zero code change in this
+    function. Non-boolean fields are structurally excluded — even a
+    maliciously/incorrectly crafted request body cannot write one through
+    this endpoint, since ``_validate_and_write_payload`` rejects any key
+    outside its ``index_spec`` as ``unknown_key`` before it ever inspects the
+    submitted value.
+
+    ``no_op`` fields (e.g. ``OPTIONS_EARNINGS_CRUSH_ENABLED`` — read nowhere
+    in production code) are excluded on purpose, matching the exact same
+    caution already applied when choosing which fields to promote into the
+    "Options Desk Automation" Tunables group below: a live-looking Toggle
+    switch for a field that provably does nothing on write would be
+    CONSTRAINT #4-adjacent — technically not a fabricated VALUE, but a
+    fabricated IMPLICATION that the control does something. The GET response
+    still reports these fields (``writable`` mirrors this same exclusion, see
+    below) with their own honest "not read anywhere" callout instead of a
+    toggle."""
+    no_op_keys = settings_meta.load_liveness().get("no_op", frozenset())
+    return {
+        key: ("bool", {})
+        for key, fi in Settings.model_fields.items()
+        if key in env_io.ALLOWED_KEYS
+        and _infer_reference_field_type(fi) == "boolean"
+        and key not in no_op_keys
+    }
+
+
+_REFERENCE_WRITE_INDEX: Dict[str, tuple] = _build_reference_write_index()
+
+
+@app.get("/settings/reference", dependencies=[Depends(require_read_token)])
+def get_settings_reference() -> Dict[str, Any]:
+    """Return all settings fields across the platform, domain-classified,
+    with secret-masked values, pydantic descriptions, liveness metadata, and
+    links to their dedicated editor route if editable."""
+    model_fields = Settings.model_fields
+    liveness = settings_meta.load_liveness()
+    pinned = settings_meta.env_pinned_keys()
+    stored = settings_meta.runtime_store_keys()
+    live_apply = settings_meta.live_apply_available()
+
+    fields: List[Dict[str, Any]] = []
+    for key, fi in model_fields.items():
+        is_secret = key in env_io.SECRET_KEYS
+        if is_secret:
+            category = "secret"
+        elif key in env_io.EXCLUDED_FROM_GUI:
+            category = "excluded"
+        elif key in env_io.ALLOWED_KEYS:
+            category = "allowed"
+        else:
+            category = "excluded"
+
+        val = getattr(settings, key, None)
+        if is_secret:
+            value = "•••• (set)" if val else "(not set)"
+        else:
+            if isinstance(val, Path):
+                value = str(val)
+            else:
+                try:
+                    json.dumps(val)
+                    value = val
+                except (TypeError, ValueError):
+                    value = str(val) if val is not None else None
+
+        default_val = _tunable_default(fi)
+        if isinstance(default_val, Path):
+            default_val = str(default_val)
+        else:
+            try:
+                json.dumps(default_val)
+            except (TypeError, ValueError):
+                default_val = str(default_val) if default_val is not None else None
+        # A secret field's compile-time default must never be echoed in the
+        # clear, even though `value` (the live value) already is masked above
+        # — the field-level literal `Field(default=...)` is just as much a
+        # potential credential as the running value would be (CONSTRAINT #3).
+        if is_secret:
+            default_val = "•••• (set)" if default_val else "(not set)"
+
+        description = getattr(fi, "description", None) or None
+        domain = settings_domains.KEY_DOMAIN.get(key, "Filesystem/Bootstrap")
+        dangerous = key in settings_keysets.DANGEROUS_KEYS
+        field_type = _infer_reference_field_type(fi)
+        # True iff a bare boolean toggle on this screen actually writes
+        # somewhere real — mirrors `_REFERENCE_WRITE_INDEX`'s own membership
+        # test exactly (same two conditions), so this can never drift from
+        # what the PUT endpoint below will actually accept.
+        writable = key in _REFERENCE_WRITE_INDEX
+        live_meta = settings_meta.field_metadata(
+            key,
+            pinned=pinned,
+            stored=stored,
+            data=liveness,
+            live_apply=live_apply,
+        )
+        editable_at = _EDITABLE_AT_INDEX.get(key, None)
+
+        fields.append({
+            "key": key,
+            "category": category,
+            "value": value,
+            "default": default_val,
+            "type": field_type,
+            "description": description,
+            "domain": domain,
+            "dangerous": dangerous,
+            "writable": writable,
+            "liveness": live_meta,
+            "editable_at": editable_at,
+        })
+
+    return {
+        "fields": fields,
+        "total": len(fields),
+        "domains": settings_domains.DOMAINS,
+    }
+
+
+@app.put(
+    "/settings/reference",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/reference",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_reference(body: SettingsReferenceUpdateRequest) -> Dict[str, Any]:
+    """Toggle any non-secret BOOLEAN ``Settings`` field on/off directly from
+    the Settings Reference screen.
+
+    Goes through the exact same shared :func:`_validate_and_write_payload`
+    every other ``/settings/*`` editor already uses — the same
+    ``DANGEROUS_KEYS`` typed-confirmation gate, the same bootstrap-key
+    live-apply refusal, the same per-key liveness reporting — scoped to
+    :data:`_REFERENCE_WRITE_INDEX` instead of a hand-curated editor group. A
+    non-boolean field, a secret, or an excluded field is rejected as
+    ``unknown_key``/``forbidden_key`` exactly as it would be on any other
+    editor; nothing new is introduced here beyond the write scope itself."""
+    return _validate_and_write_payload(body.values, _REFERENCE_WRITE_INDEX, confirm=body.confirm)
 
 
 # ---------------------------------------------------------------------------

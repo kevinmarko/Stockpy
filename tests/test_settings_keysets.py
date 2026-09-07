@@ -285,13 +285,28 @@ class TestExistingEditorsAreNotBootstrap:
             # HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS/OPTIONS_VRP_THRESHOLD (3 keys);
             # HMM_RISK_OFF_BLOCK_THRESHOLD moved into it from "Risk Gate" (no
             # net change to the total).
-            "_TUNABLE_INDEX": 89,
+            # 89 -> 114 (2026-09, Settings Reference universal-toggle fix):
+            # two brand-new _TUNABLE_GROUPS entries -- "Options Desk
+            # Automation" (13 keys: PAPER_OPTIONS_AUTO_EXECUTE_ENABLED,
+            # OPTIONS_AUTO_EXIT_ENABLED, OPTIONS_PROFIT_TARGET_PCT,
+            # OPTIONS_STOP_LOSS_MULTIPLE, OPTIONS_MANAGE_DTE_THRESHOLD,
+            # OPTIONS_DELTA_HEDGE_ENABLED, OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES,
+            # OPTIONS_0DTE_ENABLED, OPTIONS_0DTE_PROFIT_TARGET_PCT,
+            # OPTIONS_0DTE_STOP_LOSS_PCT, OPTIONS_0DTE_HARD_EXIT_TIME,
+            # MAX_OPTION_NOTIONAL_PER_TRADE, MAX_CONCURRENT_OPTION_POSITIONS
+            # -- deliberately excluding the no_op OPTIONS_EARNINGS_CRUSH_ENABLED)
+            # and "Circuit Breaker" (6 keys) -- plus 6 fields folded into
+            # existing groups (MULTIFACTOR_MICROCAP_THRESHOLD,
+            # CORRELATION_CLUSTER_LOOKBACK_DAYS, CORRELATION_CLUSTER_THRESHOLD,
+            # FEATURE_DRIFT_PSI_ENABLED, DAEMON_SHUTDOWN_TIMEOUT_SECONDS,
+            # PIPELINE_STALL_ALERT_SECONDS). 13+6+6 = 25 keys total.
+            "_TUNABLE_INDEX": 114,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
             "_FMP_INDEX": 32,
             "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 184
+        assert len(ALL_EDITOR_KEYS) == 209
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

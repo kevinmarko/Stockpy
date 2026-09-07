@@ -82,6 +82,11 @@ vi.mock("../api/client", () => ({
       z_exit: 0.0,
       z_stop: 4.0,
     })),
+    getSettingsReference: vi.fn(() => Promise.resolve({
+      fields: [],
+      total: 464,
+      domains: ["Core Runtime & Orchestration"],
+    })),
   },
 }));
 
@@ -98,5 +103,7 @@ describe("SettingsModules", () => {
     expect(await screen.findByText("1 paper broker settings")).toBeInTheDocument();
     expect(screen.getByText("Signal modules")).toBeInTheDocument();
     expect(screen.getByText("Prompt Registry")).toBeInTheDocument();
+    expect(screen.getByText("Settings Reference")).toBeInTheDocument();
+    expect(await screen.findByText("464 fields · 1 domains")).toBeInTheDocument();
   });
 });

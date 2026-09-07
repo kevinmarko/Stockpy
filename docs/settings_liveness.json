@@ -49,21 +49,28 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3192,
+      "line": 3194,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4298,
+      "line": 4335,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4403,
+      "line": 4440,
+      "resolved_by_factory": null,
+      "rules": []
+    },
+    {
+      "expr": "getattr(settings, key, None)",
+      "file": "api/pilots_api.py",
+      "line": 5374,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +145,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 451,
+  "files_scanned": 452,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -708,7 +715,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:332",
+        "site": "api/pilots_api.py:334",
         "via": []
       },
       {
@@ -1630,7 +1637,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4780",
+        "site": "api/pilots_api.py:4817",
         "via": []
       }
     ],
@@ -1641,7 +1648,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4779",
+        "site": "api/pilots_api.py:4816",
         "via": []
       }
     ],
@@ -1652,7 +1659,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4949",
+        "site": "api/pilots_api.py:4986",
         "via": []
       },
       {
@@ -1751,7 +1758,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4921",
+        "site": "api/pilots_api.py:4958",
         "via": []
       },
       {
@@ -1795,7 +1802,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:646",
+        "site": "api/pilots_api.py:648",
         "via": []
       }
     ],
@@ -3138,7 +3145,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:641",
+        "site": "api/pilots_api.py:643",
         "via": []
       },
       {

@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `5e4eec3f2afae7d62226271699444b71e546c3ff`
+- Measured at commit: `78575034ed30992a1334ab41f10aaae22bc25a05`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -83,14 +83,14 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1771 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5521 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4707 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L4508 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LOCAL_DATA_ROOT` | L2027 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
-| `OUTPUT_DIR` | L2044 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4859 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L2067 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L4393 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `GCLOUD_BIN` | L5587 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4773 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L4574 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L2087 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L2104 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4925 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L2130 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L4459 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -138,28 +138,28 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 | `MCP_HTTP_BEARER_TOKEN` | `settings.py:497` | no | yes | yes |
 | `MCP_OAUTH_PASSWORD` | `settings.py:545` | no | yes | yes |
 | `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:464` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4824` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4832` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4816` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4808` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4890` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4898` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4882` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4874` | no | yes | yes |
 | `SENTRY_DSN` | `settings.py:1591` | no | yes | yes |
 | `STATE_API_TOKEN` | `settings.py:456` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **84**
-- routes that mutate a setting: **22**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **86**
+- routes that mutate a setting: **24**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
 "this process's singleton" would miss two of them:
 
 | Mechanism | Routes | Effect |
 |---|---|---|
-| `.env` write via `env_io.write_*` | 22 | durable; takes effect on the **next** process launch |
+| `.env` write via `env_io.write_*` | 24 | durable; takes effect on the **next** process launch |
 | in-process `setattr(settings, ...)` | 0 | patches THIS process's singleton only |
 | push to the daemon via `daemon_client.set_*` | 1 | HTTP call into a **separately running** daemon process |
 
-Routes declaring an `applies` value in their response: **6** of 22.
+Routes declaring an `applies` value in their response: **6** of 24.
 
 Resolution is AST-based and follows one level of indirection: a handler that only calls a
 module-level helper which itself calls `env_io.write_*` (or builds the response carrying
@@ -169,28 +169,30 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 
 | Route | Method | Handler | Line | `.env` | `setattr` | daemon push | `applies` claims |
 |---|---|---|---|---|---|---|---|
-| `/observability/macro-gate` | PUT | `put_macro_gate` | 1912 | yes | no | no | `next_daemon_restart` |
-| `/llm/setting` | PUT | `set_llm_setting` | 3123 | yes | no | no | `immediately`, `next_daemon_restart` |
-| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3756 | yes | no | yes | `immediately`, `next_daemon_restart` |
-| `/strategy/modules` | PUT | `set_strategy_modules` | 3839 | yes | no | no | `next_daemon_restart` |
-| `/automation/execution-mode` | PUT | `update_execution_mode` | 3926 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 4361 | yes | no | no | _(none)_ |
-| `/settings/tunables` | PATCH | `put_settings_tunables` | 4361 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 5013 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 5013 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 5038 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 5038 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 5063 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 5063 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 5085 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 5085 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5149 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5149 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 5178 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PATCH | `put_settings_fmp` | 5178 | yes | no | no | _(none)_ |
-| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 5203 | yes | no | no | _(none)_ |
-| `/settings/etf-transmission` | PATCH | `put_settings_etf_transmission` | 5203 | yes | no | no | _(none)_ |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 5474 | yes | no | no | `next_daemon_restart` |
+| `/observability/macro-gate` | PUT | `put_macro_gate` | 1914 | yes | no | no | `next_daemon_restart` |
+| `/llm/setting` | PUT | `set_llm_setting` | 3125 | yes | no | no | `immediately`, `next_daemon_restart` |
+| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3758 | yes | no | yes | `immediately`, `next_daemon_restart` |
+| `/strategy/modules` | PUT | `set_strategy_modules` | 3841 | yes | no | no | `next_daemon_restart` |
+| `/automation/execution-mode` | PUT | `update_execution_mode` | 3928 | yes | no | no | `next_daemon_restart` |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 4398 | yes | no | no | _(none)_ |
+| `/settings/tunables` | PATCH | `put_settings_tunables` | 4398 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 5050 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 5050 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 5075 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 5075 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 5100 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 5100 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 5122 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 5122 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5186 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5186 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 5215 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PATCH | `put_settings_fmp` | 5215 | yes | no | no | _(none)_ |
+| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 5240 | yes | no | no | _(none)_ |
+| `/settings/etf-transmission` | PATCH | `put_settings_etf_transmission` | 5240 | yes | no | no | _(none)_ |
+| `/settings/reference` | PUT | `put_settings_reference` | 5455 | yes | no | no | _(none)_ |
+| `/settings/reference` | PATCH | `put_settings_reference` | 5455 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 5736 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `shared/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -222,7 +224,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **451** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **452** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -237,7 +239,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 |---|---|---|
 | (a) `settings.KEY` | 842 | 279 |
 | (b) `getattr(settings, "KEY", default)` | 391 | 224 |
-| (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
+| (c) `getattr(settings, <var>)` (dynamic) | 18 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
 Fields reached by at least one form: **457** of 468.
@@ -251,10 +253,10 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4780` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4779` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4949`, `legacy/streamlit_command_center/panels/settings_manager.py:126` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4921`, `legacy/streamlit_command_center/panels/settings_manager.py:162` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4817` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4816` | likely read dynamically |
+| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4986`, `legacy/streamlit_command_center/panels/settings_manager.py:126` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4958`, `legacy/streamlit_command_center/panels/settings_manager.py:162` | likely read dynamically |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
@@ -448,7 +450,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` | b | 2 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
 
-### Dynamic `getattr` sites (form c) — **17**
+### Dynamic `getattr` sites (form c) — **18**
 
 The key is not a literal, so no static analysis can attribute these to a field name.
 
@@ -458,9 +460,10 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:177` | `getattr(settings, flag_name, False)` |
-| `api/pilots_api.py:3192` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:4298` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:4403` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:3194` | `getattr(settings, body.key)` |
+| `api/pilots_api.py:4335` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4440` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:5374` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `legacy/streamlit_command_center/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
