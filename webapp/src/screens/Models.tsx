@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
 import type { ModelRow, ObservabilitySummary, Thresholds } from "../api/types";
 import { JobConflictError } from "../api/types";
@@ -55,11 +55,30 @@ const SORT_SELECTORS: Record<Exclude<SortKey, "default">, (m: ModelRow) => numbe
   maxdd: (m) => m.cpcv_mean_oos_max_dd,
 };
 
-// Registry model names for a meta-labeler are always exactly
-// `meta_labeler_<signal_id>` -- stripping this prefix always recovers a
-// valid backend `--signal` value (ml.meta_bootstrap.META_LABELED_SIGNAL_IDS).
+// Registry model names for an AFML-trained meta-labeler are always exactly
+// `meta_labeler_<signal_id>` -- stripping this prefix recovers a valid
+// backend `--signal` value (ml.meta_bootstrap.META_LABELED_SIGNAL_IDS).
+// NEVER call this for a `meta_labeler_backfill_<signal_id>` row (see
+// `isBackfillStub` below) -- those aren't in META_LABELED_SIGNAL_IDS and
+// aren't trained by this same script, so stripping only the outer prefix
+// would leave `backfill_<signal_id>`, which `launch_train_meta_labelers`
+// correctly rejects with "Invalid signal identifier".
 function metaLabelerSignal(modelName: string): string {
   return modelName.replace(/^meta_labeler_/, "");
+}
+
+// `ml/registry.yaml`'s `meta_labeler_backfill_<signal_id>` entries are
+// experimental stubs the Forecast Backfill screen (ml/forecast_backfill.py
+// -> ml/forecast_backfill_registry_bridge.py) writes into, distinct from the
+// AFML-trained `meta_labeler_<signal_id>` entries `scripts/train_meta_labelers.py`
+// trains. There is no "retrain this one signal" CLI for the backfill path --
+// it only trains via a full backfill run (`POST /pilots/forecast_backfill/run`
+// on the Forecast Backfill screen) across ALL eligible signals at once, so
+// this card's "Retrain Now" must not dispatch `train_meta` for it (see
+// CLAUDE.md's "Forecast Backfill Meta-Labeler Bridge" entry for the full
+// registry-key convention).
+function isBackfillStub(modelName: string): boolean {
+  return modelName.startsWith("meta_labeler_backfill_");
 }
 
 /**
@@ -87,7 +106,10 @@ function ModelCard({
   retrainError?: string;
   onRetrain: (m: ModelRow) => void;
 }) {
-  const canRetrain = m.role === "cross_sectional_ranker" || m.role === "meta_labeler" || m.role === "options_meta_labeler";
+  const isBackfill = isBackfillStub(m.name);
+  const canRetrain =
+    !isBackfill &&
+    (m.role === "cross_sectional_ranker" || m.role === "meta_labeler" || m.role === "options_meta_labeler");
   return (
     <section className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", padding: 0 }}>
       <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)", padding: "var(--s-3)", borderBottom: "1px solid var(--border)" }}>
@@ -157,6 +179,12 @@ function ModelCard({
             <span style={{ color: theme.decline, fontSize: "var(--t-caption)" }}>{retrainError}</span>
           )}
         </div>
+      )}
+      {isBackfill && (
+        <p style={{ marginTop: "var(--s-3)", color: theme.textMuted, fontSize: "var(--t-caption)" }}>
+          Trained by the Forecast Backfill screen, not this button —{" "}
+          <Link to="/forecast/backfill">run a backfill →</Link>
+        </p>
       )}
     </div>
     </section>
