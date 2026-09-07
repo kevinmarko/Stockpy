@@ -781,6 +781,43 @@ def profile(symbol: str) -> Any:
     return _fmp_get("profile", {"symbol": _sym(symbol)})
 
 
+def company_profile(symbol: str) -> Optional[Dict[str, Any]]:
+    """Company profile wrapper gated by ``settings.FMP_PROFILE_ENABLED`` (``/profile``).
+
+    Returns the first profile record dictionary for *symbol*, or ``None`` when
+    disabled, unconfigured, or unavailable. Fails cleanly with an honest
+    missing-data status (CONSTRAINT #4 / #6) — never fabricates a description
+    or placeholder prose.
+    """
+    from settings import settings as _settings
+
+    if not getattr(_settings, "FMP_PROFILE_ENABLED", True):
+        logger.info("FMP company_profile skipped: FMP_PROFILE_ENABLED is False")
+        return None
+
+    if not getattr(_settings, "FMP_API_KEY", None):
+        logger.info("FMP company_profile skipped: FMP_API_KEY is not configured")
+        return None
+
+    try:
+        raw = profile(symbol)
+    except FMPUnavailable as exc:
+        logger.warning("FMP company_profile unavailable for %s: %s", symbol, exc)
+        return None
+    except Exception as exc:
+        logger.warning("FMP company_profile failed for %s: %s", symbol, exc)
+        return None
+
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                return item
+        return None
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
 def shares_float(symbol: str) -> Any:
     """Float and shares-outstanding counts (``/shares-float``)."""
     return _fmp_get("shares-float", {"symbol": _sym(symbol)})

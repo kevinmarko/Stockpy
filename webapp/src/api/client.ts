@@ -11,6 +11,7 @@ import { mockApi, MOCK_META } from "./mock";
 import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type { StrategyReportCardSnapshot,
+  ExplainTickerResponse,
   AgenticDiscovery,
   AgenticStatus,
   AiChartResponse,
@@ -676,6 +677,10 @@ const liveApi = {
   // base, :8603). Distinct from getDataUniverse's plain add/remove list:
   // this is the FULL/EQUITY_ONLY/UNCOVERED market-data coverage breakdown.
   getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
+  // Reusable multi-factor, provenance, company profile, and price history
+  // summary for a single symbol (data base, :8603).
+  getExplainTicker: (symbol: string) =>
+    http<ExplainTickerResponse>(`/data/explain/${encodeURIComponent(symbol)}`),
   // Manual escape hatch to undo an automated symbol-rating exclusion
   // (pilots base, :8602 — NOT under "/data/", so baseFor() routes it to
   // BASE_URL, not DATA_BASE_URL). require_command_token-gated on the server.

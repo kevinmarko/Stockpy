@@ -10,6 +10,7 @@ import { timeAgo } from "../format";
 import { theme, alpha } from "../theme";
 import { ChevronDown, ChevronRight, Check, X } from "lucide-react";
 import { SignalContributionPanel } from "./SignalContributionPanel";
+import { ExplainTickerButton } from "./ExplainTickerButton";
 
 /**
  * Read-only view of the gated Robinhood execution queue
@@ -298,6 +299,7 @@ function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueI
         >
           {intent.symbol}
         </Link>
+        <ExplainTickerButton symbol={intent.symbol} />
         <span style={{ color: intent.action === "BUY" ? theme.growth : theme.decline, fontWeight: 600, fontSize: "var(--t-caption)" }}>
           {intent.action}
         </span>

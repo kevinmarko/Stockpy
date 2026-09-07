@@ -10,6 +10,7 @@ import { ErrorState, HonestyRow, InfoTip, Loading, StaleDataNotice } from "../co
 import { FollowModal } from "./FollowModal";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
+import { ExplainTickerButton } from "../components/ExplainTickerButton";
 
 const SIDE_STYLE: Record<string, string> = {
   ENTER: "badge-good",
@@ -192,7 +193,10 @@ export function PilotDetail() {
               <Link className="row" key={hd.symbol} to={`/symbol/${hd.symbol}`} style={{ flexWrap: "wrap", gap: "var(--s-2)" }}>
                 <div style={{ display: "flex", width: "100%", justifyContent: "space-between" }}>
                   <div className="row-main">
-                    <span className="row-title">{hd.symbol}</span>
+                    <span className="row-title" style={{ display: "inline-flex", alignItems: "center" }}>
+                      {hd.symbol}
+                      <ExplainTickerButton symbol={hd.symbol} />
+                    </span>
                     <span className="row-sub">
                       {hd.name} · {hd.sector}
                     </span>

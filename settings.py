@@ -1149,6 +1149,14 @@ class Settings(BaseSettings):
             "[] on any failure, never raises."
         ),
     )
+    FMP_PROFILE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for FMP company profile wrapper (/profile) "
+            "used by GET /data/explain/{symbol}. Defaults True by explicit "
+            "operator decision."
+        ),
+    )
     # ── FMP behavior knobs ───────────────────────────────────────────────
     FMP_FALLBACK_ENABLED: bool = Field(
         default=True,

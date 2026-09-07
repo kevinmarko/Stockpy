@@ -6079,3 +6079,79 @@ export interface StrategyReportCardRow {
  */
 export type StrategyReportCardSnapshot = StrategyReportCardRow[];
 
+/**
+ * Company profile returned in GET /data/explain/{symbol}.
+ * Gated by FMP_PROFILE_ENABLED on the backend; available is false if disabled
+ * or not found, with null for missing fields (never fabricated defaults).
+ */
+export interface ExplainCompanyProfile {
+  available: boolean;
+  company_name: string | null;
+  description: string | null;
+  sector: string | null;
+  industry: string | null;
+  exchange: string | null;
+  website: string | null;
+  ceo: string | null;
+  market_cap: number | null;
+  source: string | null;
+  reason: string | null;
+}
+
+/**
+ * Universe tracking status for GET /data/explain/{symbol}, derived from
+ * portfolio holdings and watchlists via build_sync_report().
+ */
+export interface ExplainTracking {
+  tracked: boolean;
+  held: boolean;
+  quantity: number | null;
+  avg_cost: number | null;
+  market_value: number | null;
+  watchlists: string[];
+  coverage_status: string;
+  rating_consecutive_bad_cycles: number | null;
+  rating_excluded: boolean;
+  reasons: string[];
+}
+
+/**
+ * Factor breakdown from DailySignals for GET /data/explain/{symbol}.
+ * Read-only adapter; available is false if no signals computed for this cycle.
+ */
+export interface ExplainFactorBreakdown {
+  available: boolean;
+  as_of: string | null;
+  multifactor: Record<string, number | null> | null;
+  momentum: Record<string, number | null> | null;
+  volatility_regime: Record<string, number | null> | null;
+  tactical: Record<string, any> | null;
+  sentiment: Record<string, number | null> | null;
+  raw_factors: Record<string, any>;
+  reason: string | null;
+}
+
+/**
+ * Historical bar store availability for GET /data/explain/{symbol}.
+ */
+export interface ExplainPriceHistoryStatus {
+  available: boolean;
+  bar_count: number;
+  earliest_date: string | null;
+  latest_date: string | null;
+  latest_close: number | null;
+  status: "ok" | "no_data" | "stale";
+  reason: string | null;
+}
+
+/**
+ * Full response envelope for GET /data/explain/{symbol}.
+ */
+export interface ExplainTickerResponse {
+  symbol: string;
+  company_profile: ExplainCompanyProfile;
+  tracking: ExplainTracking;
+  factor_breakdown: ExplainFactorBreakdown;
+  price_history_status: ExplainPriceHistoryStatus;
+}
+
