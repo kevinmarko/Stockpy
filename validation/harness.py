@@ -106,13 +106,16 @@ def _build_equity_curve(
         return []
 
 
-def _spy_return_series(
+def _spy_return_series_yfinance(
     oos_index: "pd.Index", start_date: str, end_date: str
 ) -> Optional["pd.Series"]:
     """Fetch SPY daily returns over ``[start_date, end_date]`` reindexed to
-    ``oos_index`` (yfinance — CONSTRAINT #7, the same library the harness/tests
-    already use). Returns ``None`` (never raises, never fabricates — CONSTRAINT
-    #6/#4) on any download failure or empty response.
+    ``oos_index`` via yfinance (CONSTRAINT #7, the same library the harness/
+    tests already use). Returns ``None`` (never raises, never fabricates —
+    CONSTRAINT #6/#4) on any download failure or empty response.
+
+    This is the FALLBACK tier — see :func:`_spy_return_series` below, which
+    tries FMP first and only calls this when FMP is unconfigured/unavailable.
     """
     try:
         df = yf.download("SPY", start=start_date, end=end_date, progress=False)
@@ -123,8 +126,88 @@ def _spy_return_series(
         spy_ret = close.pct_change()
         return spy_ret.reindex(oos_index)
     except Exception as exc:  # pragma: no cover - network/parse defensive
-        logger.debug("_spy_return_series failed (%s); no macro benchmark", exc)
+        logger.debug("_spy_return_series_yfinance failed (%s); no macro benchmark", exc)
         return None
+
+
+def _spy_return_series_fmp(
+    oos_index: "pd.Index", start_date: str, end_date: str
+) -> Optional["pd.Series"]:
+    """Fetch SPY daily returns via FMP — the SAME provider the strategy's own
+    price fetch already uses (``scripts/refresh_validations.py::_fetch_fmp_ohlcv_batch``,
+    migrated off yfinance 2026-08-21), reindexed to ``oos_index``.
+
+    Mirrors ``_fetch_fmp_ohlcv_batch``'s per-ticker fetch/reshape exactly
+    (same ``FMP_BARS_ADJUSTMENT`` variant resolution, same
+    ``data.market_data._fmp_bars_payload_to_df`` reshape helper) rather than
+    reimplementing the adjustment-convention-sensitive logic a second time —
+    CONSTRAINT #7.
+
+    Returns ``None`` (never raises — CONSTRAINT #6) on ANY failure: no
+    ``FMP_API_KEY`` configured (``historical_eod_full_range``'s first inner
+    call raises ``FMPUnavailable`` *synchronously*, not an empty return — the
+    whole call must be guarded, not just checked for ``None``), a malformed/
+    empty payload, or an empty ``Close`` series after dropping NaNs. Any
+    non-``None`` result is used as-is by the dispatcher below — this function
+    never second-guesses whether the result is "complete enough".
+    """
+    try:
+        from data import fmp_client
+        from data.market_data import (
+            _fmp_bars_payload_to_df,
+            _warn_once_if_fmp_bars_adjustment_mismatched,
+        )
+        from settings import settings as _settings
+
+        variant = str(
+            getattr(_settings, "FMP_BARS_ADJUSTMENT", "dividend-adjusted")
+            or "dividend-adjusted"
+        )
+        _warn_once_if_fmp_bars_adjustment_mismatched(variant)
+
+        payload = fmp_client.historical_eod_full_range(
+            "SPY", variant=variant, from_date=start_date, to_date=end_date,
+        )
+        df = _fmp_bars_payload_to_df(payload)
+        if df is None or df.empty:
+            return None
+        df.index = df.index.normalize()
+        df.sort_index(inplace=True)
+        close = df["Close"].dropna()
+        if close.empty:
+            return None
+        return close.pct_change().reindex(oos_index)
+    except Exception as exc:  # pragma: no cover - network/parse defensive
+        logger.debug("_spy_return_series_fmp failed (%s); falling back", exc)
+        return None
+
+
+def _spy_return_series(
+    oos_index: "pd.Index", start_date: str, end_date: str
+) -> Optional["pd.Series"]:
+    """Fetch SPY daily returns over ``[start_date, end_date]`` reindexed to
+    ``oos_index``. Two-tier: **FMP-primary** (matches the strategy-side price
+    fetch's own provider post the 2026-08-21 migration, removing the
+    two-different-providers mismatch that could otherwise leave
+    ``equity_curve``/``macro_benchmark_curve`` covering different real-world
+    date ranges — see ``docs/known_issues/sp500_macro_overlay_yfinance_truncation.md``),
+    **yfinance-fallback** (CONSTRAINT #7) when FMP is unconfigured or fails
+    for any reason. Returns ``None`` (never raises — CONSTRAINT #6/#4) only
+    when BOTH tiers fail. The FMP tier is called through a defensive
+    try/except here too (belt-and-suspenders on top of
+    ``_spy_return_series_fmp``'s own internal guard) so this dispatcher's own
+    "never raises" contract holds even if that guard is ever bypassed.
+    """
+    try:
+        spy_ret = _spy_return_series_fmp(oos_index, start_date, end_date)
+    except Exception as exc:  # pragma: no cover - defensive, see docstring
+        logger.debug("_spy_return_series: FMP tier raised (%s); yfinance fallback", exc)
+        spy_ret = None
+    if spy_ret is not None:
+        logger.debug("_spy_return_series: served by FMP")
+        return spy_ret
+    logger.debug("_spy_return_series: FMP unavailable/failed; yfinance fallback")
+    return _spy_return_series_yfinance(oos_index, start_date, end_date)
 
 
 def _build_macro_benchmark_curve(

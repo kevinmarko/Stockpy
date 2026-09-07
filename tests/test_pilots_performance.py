@@ -13,6 +13,8 @@ import pytest
 
 from pilots.catalog import get_pilot
 from pilots.performance import (
+    _macro_benchmark_staleness_note,
+    _slice_curve_by_range,
     load_validation_summary,
     pilot_headline,
     pilot_performance,
@@ -431,3 +433,202 @@ class TestPilotPerformanceMacroBenchmark:
         assert perf["curve"] is None
         assert perf["reason"] == "no backtest series persisted"
         assert isinstance(perf["macro_benchmark"], list) and len(perf["macro_benchmark"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# _slice_curve_by_range's anchor_date param
+# ---------------------------------------------------------------------------
+class TestSliceCurveByRangeAnchorDate:
+    def _monthly(self, start_year, start_month, n):
+        pts = []
+        y, m = start_year, start_month
+        for _ in range(n):
+            pts.append({"date": f"{y:04d}-{m:02d}-28", "value": 100.0})
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
+        return pts
+
+    def test_anchor_date_omitted_reproduces_self_anchored_behavior(self):
+        """Default (no anchor_date) is byte-identical to today's behavior."""
+        curve = self._monthly(2022, 1, 24)  # 2022-01 .. 2023-12
+        sliced_default = _slice_curve_by_range(curve, "1Y")
+        sliced_explicit_self = _slice_curve_by_range(
+            curve, "1Y", anchor_date=curve[-1]["date"]
+        )
+        assert sliced_default == sliced_explicit_self
+
+    def test_anchor_date_windows_relative_to_anchor_not_own_last_point(self):
+        """A shorter series anchored to a LATER date gets a stricter (later)
+        cutoff than self-anchoring would -- fewer, more-recent-relative-to-
+        the-anchor points, not just "whatever its own tail happens to be"."""
+        curve = self._monthly(2022, 1, 24)  # ends 2023-12
+        self_anchored = _slice_curve_by_range(curve, "1Y")  # anchors to 2023-12-28
+        later_anchored = _slice_curve_by_range(curve, "1Y", anchor_date="2024-06-28")
+        assert self_anchored[-1] == curve[-1]  # last point never changes
+        assert later_anchored[-1] == curve[-1]
+        # A later anchor pushes the cutoff later too -> a stricter (shorter
+        # or equal) window than self-anchoring the same series.
+        assert len(later_anchored) <= len(self_anchored)
+
+    def test_anchor_far_past_all_points_falls_back_to_last_two(self):
+        """When every point predates the anchor-derived cutoff, the existing
+        'never return fewer than 2 points' fallback still applies -- returns
+        the series' own last two REAL points rather than an empty list."""
+        curve = self._monthly(2020, 1, 3)  # 2020-01, 02, 03
+        sliced = _slice_curve_by_range(curve, "1M", anchor_date="2024-06-30")
+        assert sliced == curve[-2:]
+
+    def test_unparseable_anchor_date_returns_full_curve(self):
+        curve = self._monthly(2022, 1, 24)
+        assert _slice_curve_by_range(curve, "1Y", anchor_date="not-a-date") == curve
+
+
+# ---------------------------------------------------------------------------
+# _macro_benchmark_staleness_note
+# ---------------------------------------------------------------------------
+class TestMacroBenchmarkStalenessNote:
+    def test_no_anchor_yields_none(self):
+        macro = [{"date": "2024-01-31", "value": 100.0}, {"date": "2024-02-29", "value": 101.0}]
+        assert _macro_benchmark_staleness_note(None, macro, macro) is None
+
+    def test_no_macro_benchmark_yields_none(self):
+        raw = [{"date": "2024-01-31", "value": 100.0}, {"date": "2024-02-29", "value": 101.0}]
+        assert _macro_benchmark_staleness_note("2024-06-30", raw, None) is None
+
+    def test_exact_match_yields_none(self):
+        raw = [{"date": "2024-01-31", "value": 100.0}, {"date": "2024-06-30", "value": 101.0}]
+        sliced = raw
+        assert _macro_benchmark_staleness_note("2024-06-30", raw, sliced) is None
+
+    def test_small_gap_within_tolerance_yields_none(self):
+        raw = [{"date": "2024-01-31", "value": 100.0}, {"date": "2024-06-27", "value": 101.0}]
+        sliced = raw
+        # 2024-06-30 - 2024-06-27 = 3 days <= _MACRO_BENCHMARK_STALE_TOLERANCE_DAYS (5)
+        assert _macro_benchmark_staleness_note("2024-06-30", raw, sliced) is None
+
+    def test_large_gap_yields_a_note_naming_the_date_and_gap(self):
+        raw = [{"date": "2024-01-31", "value": 100.0}, {"date": "2024-03-31", "value": 102.0}]
+        sliced = raw
+        note = _macro_benchmark_staleness_note("2024-06-30", raw, sliced)
+        assert note is not None
+        assert "2024-03-31" in note
+        assert "91" in note  # (2024-06-30 - 2024-03-31).days == 91
+
+    def test_macro_ahead_of_curve_yields_none(self):
+        """A negative gap (macro's real data extends PAST the curve's own
+        last date) has nothing to disclose."""
+        raw = [{"date": "2024-01-31", "value": 100.0}, {"date": "2024-09-30", "value": 105.0}]
+        sliced = raw
+        assert _macro_benchmark_staleness_note("2024-06-30", raw, sliced) is None
+
+    def test_never_raises_on_malformed_raw_macro_benchmark(self):
+        assert _macro_benchmark_staleness_note("2024-06-30", "not-a-list", ["x"]) is None
+        assert _macro_benchmark_staleness_note("2024-06-30", [{"date": None}], ["x"]) is None
+
+
+# ---------------------------------------------------------------------------
+# pilot_performance() end-to-end: staleness note + anchored slicing
+# ---------------------------------------------------------------------------
+class TestPilotPerformanceMacroBenchmarkStaleness:
+    def _write(self, tmp_path, name, **fields):
+        (tmp_path / f"{name}_validation_summary.json").write_text(
+            json.dumps({"strategy_id": name, "sharpe": 1.0, "deployable": True, **fields}),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = name
+
+        return _P()
+
+    def test_stale_macro_curve_surfaces_a_note(self, tmp_path):
+        pilot = self._write(
+            tmp_path,
+            "stalemacro",
+            equity_curve=[
+                {"date": "2024-01-31", "value": 100.0},
+                {"date": "2024-02-29", "value": 102.0},
+                {"date": "2024-03-31", "value": 104.0},
+                {"date": "2024-04-30", "value": 106.0},
+                {"date": "2024-05-31", "value": 108.0},
+                {"date": "2024-06-30", "value": 110.0},
+            ],
+            macro_benchmark_curve=[
+                {"date": "2024-01-31", "value": 100.0},
+                {"date": "2024-02-29", "value": 101.0},
+                {"date": "2024-03-31", "value": 102.0},
+            ],
+        )
+        perf = pilot_performance(pilot, range="2Y", reports_dir=str(tmp_path))
+        assert perf["curve"][-1]["date"] == "2024-06-30"
+        assert perf["macro_benchmark"] is not None
+        assert perf["macro_benchmark"][-1]["date"] == "2024-03-31"
+        assert perf["macro_benchmark_note"] is not None
+        assert "2024-03-31" in perf["macro_benchmark_note"]
+        assert "91" in perf["macro_benchmark_note"]
+
+    def test_in_sync_macro_curve_has_no_note(self, tmp_path):
+        pilot = self._write(
+            tmp_path,
+            "syncmacro",
+            equity_curve=[
+                {"date": "2024-01-31", "value": 100.0},
+                {"date": "2024-06-30", "value": 110.0},
+            ],
+            macro_benchmark_curve=[
+                {"date": "2024-01-31", "value": 100.0},
+                {"date": "2024-06-30", "value": 105.0},
+            ],
+        )
+        perf = pilot_performance(pilot, range="2Y", reports_dir=str(tmp_path))
+        assert perf["macro_benchmark_note"] is None
+
+    def test_no_curve_available_has_no_note(self, tmp_path):
+        """Mirrors test_macro_benchmark_surfaces_even_when_strategy_curve_absent
+        (no equity_curve at all) -- there's no anchor to compare against, so
+        the note stays honestly None rather than guessing."""
+        pilot = self._write(
+            tmp_path,
+            "nocurve",
+            macro_benchmark_curve=[
+                {"date": "2024-01-31", "value": 100.0},
+                {"date": "2024-03-31", "value": 101.6},
+            ],
+        )
+        perf = pilot_performance(pilot, reports_dir=str(tmp_path))
+        assert perf["curve"] is None
+        assert perf["macro_benchmark"] is not None
+        assert perf["macro_benchmark_note"] is None
+
+    def test_every_return_branch_carries_the_macro_benchmark_note_key(self, tmp_path):
+        # no validation_strategy_id at all
+        class _NoId:
+            validation_strategy_id = None
+
+        assert "macro_benchmark_note" in pilot_performance(_NoId())
+
+        # validation_strategy_id set but no summary file on disk
+        class _Missing:
+            validation_strategy_id = "does-not-exist-anywhere"
+
+        assert "macro_benchmark_note" in pilot_performance(_Missing(), reports_dir=str(tmp_path))
+
+    def test_existing_healthy_fixture_regression_guard(self):
+        """The one fixture with all three curves sharing an identical last
+        date (tests/fixtures/timeseries_momentum_validation_summary.json)
+        must still tail-slice byte-identically to before this change, and
+        report no staleness note."""
+        pilot = get_pilot("trend-following")
+        full = pilot_performance(pilot, range="2Y", reports_dir=FIXTURES_DIR)
+        one_y = pilot_performance(pilot, range="1Y", reports_dir=FIXTURES_DIR)
+        one_m = pilot_performance(pilot, range="1M", reports_dir=FIXTURES_DIR)
+        for perf in (full, one_y, one_m):
+            assert perf["macro_benchmark_note"] is None
+        assert len(one_m["macro_benchmark"]) <= len(one_y["macro_benchmark"]) <= len(full["macro_benchmark"])
+        assert (
+            one_m["macro_benchmark"][-1]
+            == one_y["macro_benchmark"][-1]
+            == full["macro_benchmark"][-1]
+        )

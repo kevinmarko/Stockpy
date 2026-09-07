@@ -169,6 +169,14 @@ describe("mock API — /pilots/{id}/performance contract", () => {
     expect(perf.macro_benchmark).toBeNull();
   });
 
+  it("macro_benchmark_note is present (null or a string) alongside macro_benchmark", async () => {
+    const perf = await mockApi.getPerformance("trend-following", "1Y");
+    expect(
+      perf.macro_benchmark_note === null ||
+        typeof perf.macro_benchmark_note === "string"
+    ).toBe(true);
+  });
+
   it("returns the requested range for every PerfRange", async () => {
     for (const r of RANGES) {
       const perf = await mockApi.getPerformance("balanced-blend", r);
