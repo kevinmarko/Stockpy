@@ -142,6 +142,14 @@ class TestRegistryStructure:
         assert "timeseries_momentum" in STRATEGY_REGISTRY
 
     def test_each_entry_is_adapter_turnover_universe_triple(self) -> None:
+        """The registry's third tuple element may be a static ``list`` OR a
+        zero-arg callable resolving to one lazily (e.g.
+        ``forecast_direction_arima_hw``'s ``_get_forecast_direction_universe``,
+        which reads the operator's live tracked universe at call time rather
+        than at import time) -- see ``_validate_single_strategy``'s and
+        ``run_validations``'s own ``callable(universe)`` resolution for the
+        precedent this test mirrors. Either way, the RESOLVED value must be a
+        non-empty list of ticker strings."""
         from scripts.refresh_validations import STRATEGY_REGISTRY
 
         for name, entry in STRATEGY_REGISTRY.items():
@@ -150,6 +158,8 @@ class TestRegistryStructure:
             assert isinstance(turnover, float) and turnover > 0, (
                 f"{name}: turnover must be positive float"
             )
+            if callable(universe):
+                universe = universe()
             assert isinstance(universe, list) and len(universe) > 0, (
                 f"{name}: universe must be a non-empty list of tickers"
             )
@@ -198,6 +208,8 @@ class TestRegistryStructure:
         from scripts.refresh_validations import STRATEGY_REGISTRY
 
         for name, (fn, _turnover, universe) in STRATEGY_REGISTRY.items():
+            if callable(universe):
+                universe = universe()
             n_params = len(inspect.signature(fn).parameters)
             expected = 1 if len(universe) == 1 else 2
             assert n_params == expected, (
