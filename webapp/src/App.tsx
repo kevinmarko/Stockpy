@@ -73,6 +73,9 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPaletteModal } from "./components/CommandPaletteModal";
 import { ReportPreviewModal } from "./components/ReportPreviewModal";
 import { TickerDrawer } from "./components/TickerDrawer";
+import { ExplainTickerDrawer } from "./components/ExplainTickerDrawer";
+import { ExplainTickerProvider } from "./context/ExplainTickerContext";
+import { UniverseTransparency } from "./screens/UniverseTransparency";
 import { TopStatusBar } from "./components/TopStatusBar";
 import { ToastProvider } from "./components/ToastProvider";
 import { DensityProvider } from "./components/DensityContext";
@@ -237,6 +240,7 @@ export default function App() {
           <AutoRefreshProvider>
           <ExecutionModeProvider>
           <JobStatusProvider>
+          <ExplainTickerProvider>
           <div className="app app-shell">
             <Sidebar />
             <div className="app-main">
@@ -276,6 +280,7 @@ export default function App() {
                   <Route path="/research/trends-stitcher" element={<TrendsVisualizer />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
+                  <Route path="/universe" element={<UniverseTransparency />} />
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/cache-long-short" element={<CacheLongShort />} />
           <Route path="/paper-broker" element={<PaperBroker />} />
@@ -349,7 +354,10 @@ export default function App() {
                 onClose={() => setPreviewReportName(null)}
               />
             )}
+
+            <ExplainTickerDrawer />
           </div>
+          </ExplainTickerProvider>
           </JobStatusProvider>
           </ExecutionModeProvider>
         </AutoRefreshProvider>

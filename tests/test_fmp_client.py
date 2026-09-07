@@ -40,6 +40,7 @@ from data.fmp_client import (
     FMPUnavailable,
     _fmp_get,
     batch_quote,
+    company_profile,
     get_fmp_call_stats,
     historical_eod,
     historical_eod_full_range,
@@ -883,3 +884,88 @@ class TestHistoricalEodFullRange:
         dates = [r["date"] for r in result]
         assert dates == sorted(dates)
         assert dates == ["2010-01-01", "2010-01-02", "2010-01-03"]
+
+
+class TestCompanyProfile:
+    """Unit tests for the gated company_profile(symbol) wrapper."""
+
+    def test_company_profile_success_returns_first_record(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        mock_data = [
+            {
+                "symbol": "AAPL",
+                "companyName": "Apple Inc.",
+                "description": "Apple Inc. designs, manufactures, and markets smartphones...",
+                "sector": "Technology",
+                "industry": "Consumer Electronics",
+                "exchange": "NASDAQ",
+                "website": "https://www.apple.com",
+                "ceo": "Timothy D. Cook",
+                "mktCap": 3450000000000,
+            }
+        ]
+        with patch("data.fmp_client.profile", return_value=mock_data) as mock_p:
+            res = company_profile("AAPL")
+            assert res == mock_data[0]
+            mock_p.assert_called_once_with("AAPL")
+
+    def test_company_profile_dict_return_handling(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        single_dict = {"symbol": "MSFT", "companyName": "Microsoft Corp", "description": "Software giant"}
+        with patch("data.fmp_client.profile", return_value=single_dict):
+            res = company_profile("MSFT")
+            assert res == single_dict
+
+    def test_company_profile_disabled_returns_none(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", False)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.profile") as mock_p, caplog.at_level(logging.INFO):
+            res = company_profile("AAPL")
+            assert res is None
+            mock_p.assert_not_called()
+            assert any("FMP_PROFILE_ENABLED is False" in rec.message for rec in caplog.records)
+
+    def test_company_profile_missing_key_returns_none(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", None)
+        with patch("data.fmp_client.profile") as mock_p, caplog.at_level(logging.INFO):
+            res = company_profile("AAPL")
+            assert res is None
+            mock_p.assert_not_called()
+            assert any("FMP_API_KEY is not configured" in rec.message for rec in caplog.records)
+
+    def test_company_profile_empty_list_returns_none(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.profile", return_value=[]):
+            res = company_profile("INVALID")
+            assert res is None
+
+    def test_company_profile_fmp_unavailable_caught_returns_none(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.profile", side_effect=FMPUnavailable("rate limit")), \
+             caplog.at_level(logging.WARNING):
+            res = company_profile("AAPL")
+            assert res is None
+            assert any("unavailable" in rec.message for rec in caplog.records)
+
+    def test_company_profile_general_exception_caught_returns_none(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.profile", side_effect=RuntimeError("unexpected crash")), \
+             caplog.at_level(logging.WARNING):
+            res = company_profile("AAPL")
+            assert res is None
+            assert any("failed" in rec.message for rec in caplog.records)
+
+    def test_company_profile_never_fabricates_description(self, monkeypatch):
+        """Honesty mandate: no fabricated placeholder text or fake profile dictionaries."""
+        monkeypatch.setattr(settings, "FMP_PROFILE_ENABLED", True)
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.profile", return_value=None):
+            res = company_profile("AAPL")
+            assert res is None
+

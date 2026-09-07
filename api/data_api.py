@@ -33,6 +33,9 @@ from __future__ import annotations
 import base64
 import logging
 import math
+from datetime import date
+import os
+import sqlite3
 from typing import Any, Dict, List, Optional
 import json
 import asyncio
@@ -58,6 +61,7 @@ _load_dotenv(ENV_PATH, override=False)
 
 from api.auth import require_read_token as require_token, require_write_token
 from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
+from data.fmp_client import company_profile
 from data.historical_store import HistoricalStore
 from data.market_data import get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
@@ -861,6 +865,343 @@ def get_sync_report() -> Dict[str, Any]:
         # Degrade: leave symbols without the two new keys rather than failing
         # the whole endpoint (CONSTRAINT #6).
     return resp
+
+
+def _query_daily_signals(symbol: str) -> Optional[Dict[str, Any]]:
+    """Query the most recent DailySignals row for symbol from quant_platform.db.
+
+    Returns a flat dictionary of column names to values, or None if no row exists
+    or the table/database is inaccessible. Read-only and dead-letter safe.
+    """
+    try:
+        from db_config import resolve_database_url, sqlite_readonly_uri
+        from sqlalchemy.engine import make_url
+
+        db_url = resolve_database_url()
+        if db_url.startswith("sqlite"):
+            parsed = make_url(db_url)
+            db_path = parsed.database or str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
+            if not os.path.exists(db_path):
+                return None
+            with sqlite3.connect(sqlite_readonly_uri(db_path), uri=True) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute(
+                    'SELECT * FROM DailySignals WHERE "Symbol" = ? ORDER BY timestamp DESC LIMIT 1',
+                    (symbol.upper(),),
+                )
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+                return None
+        else:
+            from db_config import create_readonly_db_engine
+            from sqlalchemy import text
+
+            engine = create_readonly_db_engine()
+            with engine.connect() as conn:
+                result = conn.execute(
+                    text('SELECT * FROM "DailySignals" WHERE "Symbol" = :sym ORDER BY timestamp DESC LIMIT 1'),
+                    {"sym": symbol.upper()},
+                )
+                row = result.mappings().fetchone()
+                if row:
+                    return dict(row)
+                return None
+    except Exception as exc:
+        logger.warning("data_api: DailySignals query failed for %s: %s", symbol, exc)
+        return None
+
+
+@app.get("/data/explain/{symbol}", dependencies=[Depends(require_token)])
+def explain_ticker(symbol: str) -> Dict[str, Any]:
+    """Explain This Ticker aggregated endpoint.
+
+    Aggregates four independent facets for symbol:
+    1. company_profile: Description, sector, industry, exchange, website, CEO,
+       market cap via data.fmp_client.company_profile.
+    2. tracking: Universe tracking provenance (why is this symbol tracked,
+       holdings details, watchlists, rating status) via build_sync_report.
+    3. factor_breakdown: Read-only adapter over DailySignals table in
+       quant_platform.db without synthetic composite fabrication.
+    4. price_history_status: Bar count, date range, latest close, and
+       chart readiness (ok/no_data/stale) via HistoricalStore.
+
+    Returns HTTP 200 for both tracked and untracked symbols.
+    Never fabricates missing metrics or placeholder text (CONSTRAINT #4).
+    All float fields cleaned via _clean_nan().
+    """
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=422, detail="Symbol cannot be empty")
+
+    # ── 1. Company Profile (FMP) ──────────────────────────────────────────
+    prof_dict = None
+    try:
+        prof_dict = company_profile(sym)
+    except Exception as exc:
+        logger.warning("data_api: company_profile failed for %s: %s", sym, exc)
+
+    if prof_dict and isinstance(prof_dict, dict):
+        company_profile_section = {
+            "available": True,
+            "company_name": prof_dict.get("companyName") or prof_dict.get("name"),
+            "description": prof_dict.get("description"),
+            "sector": prof_dict.get("sector"),
+            "industry": prof_dict.get("industry"),
+            "exchange": prof_dict.get("exchange") or prof_dict.get("exchangeShortName"),
+            "website": prof_dict.get("website"),
+            "ceo": prof_dict.get("ceo"),
+            "market_cap": prof_dict.get("mktCap") or prof_dict.get("marketCap"),
+            "source": "fmp",
+            "reason": None,
+        }
+    else:
+        company_profile_section = {
+            "available": False,
+            "company_name": None,
+            "description": None,
+            "sector": None,
+            "industry": None,
+            "exchange": None,
+            "website": None,
+            "ceo": None,
+            "market_cap": None,
+            "source": None,
+            "reason": f"FMP profile unavailable for {sym}",
+        }
+
+    # ── 2. Universe Tracking ─────────────────────────────────────────────
+    snapshot = None
+    try:
+        snapshot = fetch_account_snapshot(force=False)
+    except Exception as exc:
+        logger.warning("data_api: account snapshot unavailable for explain %s: %s", sym, exc)
+
+    status_entry = None
+    try:
+        report = build_sync_report(snapshot, probe_market=False)
+        if report and hasattr(report, "symbols"):
+            status_entry = report.symbols.get(sym)
+    except Exception as exc:
+        logger.warning("data_api: sync report probe failed for explain %s: %s", sym, exc)
+
+    rating_bad_cycles = None
+    rating_excluded = False
+    try:
+        from rating.symbol_rating_store import SymbolRatingStore
+
+        store_rating = SymbolRatingStore(readonly=True)
+        rating_bad_cycles = store_rating.get_consecutive_bad_cycles(sym)
+        threshold = getattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        is_held_flag = bool(status_entry.held) if status_entry else False
+        rating_excluded = (not is_held_flag) and (rating_bad_cycles is not None and rating_bad_cycles >= threshold)
+    except Exception as exc:
+        logger.warning("data_api: rating lookup failed for explain %s: %s", sym, exc)
+
+    if status_entry is not None:
+        is_held = bool(status_entry.held)
+        cov_status = (
+            status_entry.coverage.value
+            if hasattr(status_entry.coverage, "value")
+            else str(status_entry.coverage)
+        )
+        watchlists_list = list(status_entry.watchlists) if status_entry.watchlists else []
+        qty = float(status_entry.quantity) if is_held and status_entry.quantity is not None else None
+        avg_cost = (
+            float(status_entry.avg_cost)
+            if is_held and status_entry.avg_cost is not None and not math.isnan(status_entry.avg_cost)
+            else None
+        )
+        market_val = (
+            float(status_entry.market_value)
+            if is_held and status_entry.market_value is not None and not math.isnan(status_entry.market_value)
+            else None
+        )
+
+        reasons: List[str] = []
+        if is_held:
+            qty_str = f"{qty:.1f}" if qty is not None else "0.0"
+            cost_str = f"${avg_cost:.2f}" if avg_cost is not None else "N/A"
+            reasons.append(f"Held in portfolio ({qty_str} shares @ {cost_str})")
+        for w in watchlists_list:
+            reasons.append(f"Tracked via watchlist '{w}'")
+        if rating_excluded:
+            reasons.append(f"Excluded by rating filter ({rating_bad_cycles} consecutive bad cycles)")
+        if not reasons:
+            reasons.append("Tracked in universe")
+
+        tracking_section = {
+            "tracked": True,
+            "held": is_held,
+            "quantity": qty,
+            "avg_cost": avg_cost,
+            "market_value": market_val,
+            "watchlists": watchlists_list,
+            "coverage_status": cov_status,
+            "rating_consecutive_bad_cycles": rating_bad_cycles,
+            "rating_excluded": rating_excluded,
+            "reasons": reasons,
+        }
+    else:
+        tracking_section = {
+            "tracked": False,
+            "held": False,
+            "quantity": None,
+            "avg_cost": None,
+            "market_value": None,
+            "watchlists": [],
+            "coverage_status": "untracked",
+            "rating_consecutive_bad_cycles": rating_bad_cycles,
+            "rating_excluded": False,
+            "reasons": ["Symbol is not currently held or included in any active watchlist"],
+        }
+
+    # ── 3. Factor Breakdown (DailySignals) ────────────────────────────────
+    signal_row = _query_daily_signals(sym)
+    if signal_row and isinstance(signal_row, dict):
+        as_of_val = signal_row.get("timestamp")
+        raw_factors = {
+            k: v for k, v in signal_row.items()
+            if k not in ("id", "Symbol", "timestamp") and v is not None
+        }
+        factor_breakdown_section = {
+            "available": True,
+            "as_of": str(as_of_val) if as_of_val is not None else None,
+            "multifactor": {
+                "value_z": signal_row.get("value_z"),
+                "quality_z": signal_row.get("quality_z") if signal_row.get("quality_z") is not None else signal_row.get("Quality Score"),
+                "low_vol_z": signal_row.get("low_vol_z"),
+                "size_z": signal_row.get("size_z"),
+                "composite": signal_row.get("composite"),
+            },
+            "momentum": {
+                "rsi_14": signal_row.get("RSI") if signal_row.get("RSI") is not None else signal_row.get("rsi_14"),
+                "rsi_2": signal_row.get("RSI_2") if signal_row.get("RSI_2") is not None else signal_row.get("rsi_2"),
+                "macd_line": signal_row.get("MACD_Line") if signal_row.get("MACD_Line") is not None else signal_row.get("macd_line"),
+                "macd_signal": signal_row.get("MACD_Signal") if signal_row.get("MACD_Signal") is not None else signal_row.get("macd_signal"),
+                "rs_vs_spy": signal_row.get("RS vs SPY") if signal_row.get("RS vs SPY") is not None else signal_row.get("rs_vs_spy"),
+                "xsec_momentum_rank": signal_row.get("Momentum_Vol_Scaled") if signal_row.get("Momentum_Vol_Scaled") is not None else signal_row.get("xsec_momentum_rank"),
+            },
+            "volatility_regime": {
+                "hmm_risk_on_probability": signal_row.get("HMM_Risk_On_Probability") if signal_row.get("HMM_Risk_On_Probability") is not None else signal_row.get("hmm_risk_on_probability"),
+                "macro_status": signal_row.get("Macro Status") if signal_row.get("Macro Status") is not None else signal_row.get("macro_status"),
+                "garch_vol": signal_row.get("GARCH_Vol") if signal_row.get("GARCH_Vol") is not None else signal_row.get("garch_vol"),
+                "realized_vol_rank": signal_row.get("Realized_Vol_Rank") if signal_row.get("Realized_Vol_Rank") is not None else signal_row.get("realized_vol_rank"),
+                "vrp": signal_row.get("VRP") if signal_row.get("VRP") is not None else signal_row.get("vrp"),
+            },
+            "tactical": {
+                "action_signal": signal_row.get("Action Signal") if signal_row.get("Action Signal") is not None else signal_row.get("action_signal"),
+                "advice": signal_row.get("Advice") if signal_row.get("Advice") is not None else signal_row.get("advice"),
+                "kelly_target": signal_row.get("Kelly Target") if signal_row.get("Kelly Target") is not None else signal_row.get("kelly_target"),
+                "buy_range": signal_row.get("buyRange") if signal_row.get("buyRange") is not None else signal_row.get("buy_range"),
+                "sell_range": signal_row.get("sellRange") if signal_row.get("sellRange") is not None else signal_row.get("sell_range"),
+            },
+            "sentiment": {
+                "news_sentiment": signal_row.get("News Sentiment") if signal_row.get("News Sentiment") is not None else signal_row.get("news_sentiment"),
+                "credibility_weighted_sentiment": signal_row.get("Credibility Weighted Sentiment") if signal_row.get("Credibility Weighted Sentiment") is not None else signal_row.get("credibility_weighted_sentiment"),
+            },
+            "raw_factors": raw_factors,
+            "reason": None,
+        }
+    else:
+        factor_breakdown_section = {
+            "available": False,
+            "as_of": None,
+            "multifactor": None,
+            "momentum": None,
+            "volatility_regime": None,
+            "tactical": None,
+            "sentiment": None,
+            "raw_factors": {},
+            "reason": f"No signals recorded in DailySignals for {sym}",
+        }
+
+    # ── 4. Price History Status ──────────────────────────────────────────
+    bar_count = 0
+    earliest_date = None
+    latest_date = None
+    latest_close = None
+    try:
+        store = HistoricalStore(readonly=True)
+        if hasattr(store, "_get_conn"):
+            with store._lock:
+                conn = store._get_conn()
+                count_row = conn.execute(
+                    "SELECT COUNT(*), MIN(date), MAX(date) FROM price_bars WHERE symbol = ?",
+                    (sym,),
+                ).fetchone()
+                if count_row and count_row[0] and count_row[0] > 0:
+                    bar_count = int(count_row[0])
+                    earliest_date = str(count_row[1]) if count_row[1] else None
+                    latest_date = str(count_row[2]) if count_row[2] else None
+                    close_row = conn.execute(
+                        "SELECT close FROM price_bars WHERE symbol = ? AND date = ?",
+                        (sym, latest_date),
+                    ).fetchone()
+                    if close_row and close_row[0] is not None:
+                        latest_close = float(close_row[0])
+        elif hasattr(store, "get_bars"):
+            df = store.get_bars(sym)
+            if df is not None and not df.empty:
+                bar_count = len(df)
+                d_idx = df.index
+                earliest_date = str(d_idx[0].date()) if hasattr(d_idx[0], "date") else str(d_idx[0])[:10]
+                latest_date = str(d_idx[-1].date()) if hasattr(d_idx[-1], "date") else str(d_idx[-1])[:10]
+                if "Close" in df.columns and len(df["Close"]) > 0:
+                    latest_close = float(df["Close"].iloc[-1])
+    except Exception as exc:
+        logger.warning("data_api: price history status query failed for %s: %s", sym, exc)
+
+    if bar_count > 0 and latest_date:
+        is_stale = False
+        try:
+            latest_dt = date.fromisoformat(latest_date[:10])
+            today_dt = date.today()
+            if (today_dt - latest_dt).days > 7:
+                is_stale = True
+        except Exception:
+            pass
+
+        if is_stale:
+            price_history_section = {
+                "available": True,
+                "bar_count": bar_count,
+                "earliest_date": earliest_date,
+                "latest_date": latest_date,
+                "latest_close": latest_close,
+                "status": "stale",
+                "reason": f"Latest price bar is from {latest_date} (>7 days old)",
+            }
+        else:
+            price_history_section = {
+                "available": True,
+                "bar_count": bar_count,
+                "earliest_date": earliest_date,
+                "latest_date": latest_date,
+                "latest_close": latest_close,
+                "status": "ok",
+                "reason": None,
+            }
+    else:
+        price_history_section = {
+            "available": False,
+            "bar_count": 0,
+            "earliest_date": None,
+            "latest_date": None,
+            "latest_close": None,
+            "status": "no_data",
+            "reason": "No cached price bars found in historical store",
+        }
+
+    response_payload = {
+        "symbol": sym,
+        "company_profile": company_profile_section,
+        "tracking": tracking_section,
+        "factor_breakdown": factor_breakdown_section,
+        "price_history_status": price_history_section,
+    }
+    return _clean_nan(response_payload)
 
 
 @app.get("/data/account", dependencies=[Depends(require_token)])

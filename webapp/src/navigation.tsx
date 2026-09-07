@@ -4,6 +4,7 @@ import {
   BarChart2,
   Bell,
   Bot,
+  Globe,
   Compass,
   Scale,
   BrainCircuit,
@@ -109,6 +110,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/cache-long-short", label: "Cache L/S", ico: Briefcase, match: (p) => p.startsWith("/cache-long-short"), section: "trading" },
   { to: "/strategy-insights", label: "Strategy Insights", ico: LineChart, match: (p) => p.startsWith("/strategy-insights"), section: "trading" },
   // Operations
+  { to: "/universe", label: "Universe Transparency", ico: Globe, match: (p) => p.startsWith("/universe"), section: "operations" },
   { to: "/live-trade-approvals", label: "Live Trade Approvals", ico: ShieldCheck, match: (p) => p.startsWith("/live-trade-approvals"), section: "operations" },
   { to: "/observability", label: "Mission Control", ico: Satellite, match: (p) => p.startsWith("/observability"), section: "operations" },
   { to: "/pipeline", label: "Pipeline", ico: Rocket, match: (p) => p.startsWith("/pipeline"), section: "operations" },
