@@ -150,6 +150,10 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     // ::collect_circuit_breaker_trips's `window` parameter), not a Thresholds API
     // field — same "documented literal" precedent as "half-life"/"iv rank" above.
     "The kill switch plus every risk-gate block, merged into one severity-classified view: CRITICAL (halts everything, e.g. the kill switch or a daily loss limit) or WARNING (a single order blocked). Deduped to the most recent trip per breaker within a rolling 24h window so a chatty block log doesn't bury the signal — an unresolved trip stays visible until a newer one for that same breaker supersedes it.",
+  "skill decay":
+    "How much a symbol's pooled forecast skill (inverse-RMSE, all models combined) has changed between an older baseline half of the lookback window and the most recent half. Positive means skill is degrading — recent forecasts have been less accurate than the baseline; negative means it improved. Shown as 'insufficient history' rather than a fabricated number when either half has too few completed, actualized forecasts to trust its RMSE.",
+  "mc band coverage":
+    "Whether the platform's own published Monte Carlo forecast band (the 5th-95th percentile spread across simulated price paths) is actually well-calibrated: the empirical percentage of the time the real price landed inside that band, against its advertised (nominal) coverage — typically 90%. Paired with an interval score (in dollars, lower = tighter/better) measuring how narrow the band was for the coverage it delivered — a genuinely narrower relative, not the same thing as CRPS. Both read 'insufficient history' rather than a fabricated figure when there aren't yet enough resolved forecasts to measure.",
   "orchestrator daemon":
     "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
   "sizing cap":
@@ -417,7 +421,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
     title: "Mission Control",
     description:
       "An attention summary up top flags anything that actually needs a look — circuit-breaker trips, risk-gate blocks, a sizing-cap escalation, a stale heartbeat, the macro gate being off — with an honest 'All clear' when nothing does. Below that, always visible: the macro regime gate control (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability, and the toggle that vetoes new BUYs during a bad regime) and portfolio risk/equity history. Everything else — forecast-model skill (portfolio-wide and per-symbol), the circuit-breaker dashboard, the raw risk-gate block log, system telemetry, per-symbol quote latency, the sizing-cap audit trail, ETF volatility transmission, heartbeat, strategy P&L, and the log tail — lives in a collapsed 'Background telemetry' section below, expandable on demand.",
-    keyConcepts: ["hmm regime", "risk gate", "circuit breaker", "sizing cap", "etf transmission"],
+    keyConcepts: ["hmm regime", "risk gate", "circuit breaker", "sizing cap", "etf transmission", "skill decay", "mc band coverage"],
   },
   pipeline: {
     title: "Pipeline",

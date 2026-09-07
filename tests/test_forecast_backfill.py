@@ -163,7 +163,7 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     # Step 2: Technical features
     features = engine.step_2_calculate_technical_features()
     assert not features.empty
-    for col in ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]:
+    for col in ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio", "ROC_5", "ROC_20"]:
         assert col in features.columns
 
     # Step 3: Primary signals -- at minimum the two baseline momentum
@@ -1029,3 +1029,178 @@ class TestForecastBackfillEnabledFlagClassification:
         from settings import Settings
 
         assert Settings.model_fields["FORECAST_BACKFILL_ENABLED"].default is False
+
+
+class TestMetaLabelingBackfillBridgeEnabledFlagClassification:
+    def test_flag_is_gui_writable(self):
+        import api.pilots_api as pilots_api
+        assert "META_LABELING_BACKFILL_BRIDGE_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
+        assert "META_LABELING_BACKFILL_BRIDGE_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "META_LABELING_BACKFILL_BRIDGE_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
+
+    def test_flag_is_dangerous(self):
+        import settings_keysets
+        assert "META_LABELING_BACKFILL_BRIDGE_ENABLED" in settings_keysets.DANGEROUS_KEYS
+        assert "META_LABELING_BACKFILL_BRIDGE_ENABLED" in settings_keysets.SAFETY_CRITICAL_KEYS
+
+    def test_flag_defaults_false(self):
+        from settings import Settings
+        assert Settings.model_fields["META_LABELING_BACKFILL_BRIDGE_ENABLED"].default is False
+
+
+class TestForecastBackfillStep7:
+    def test_step_7_no_ops_when_disabled(self, monkeypatch):
+        from settings import settings
+        from ml.forecast_backfill import AgenticForecastBackfiller
+        
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", False)
+        engine = AgenticForecastBackfiller()
+        engine.metrics = {"some": "metric"}
+        
+        result = engine.step_7_register_live_meta_labelers()
+        assert result == {"some": "metric"}
+
+    def test_step_7_computes_cpcv_and_registers_when_clears(self, monkeypatch):
+        from settings import settings
+        from ml.forecast_backfill import AgenticForecastBackfiller
+        import ml.forecast_backfill_registry_bridge as bridge
+        
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+        
+        engine = AgenticForecastBackfiller()
+        engine.active_strategies = ["timeseries_momentum"]
+        engine.models = {"timeseries_momentum_10d": "mock_model"}
+        import pandas as pd
+        engine._training_sets = {"timeseries_momentum_10d": (pd.DataFrame({"feat1": [1, 2]}), pd.Series([1, 0]), pd.Series(pd.to_datetime(["2020-01-01", "2020-01-02"])), ["feat1"])}
+        engine.data = pd.DataFrame({"timeseries_momentum_Signal": [1, -1]})
+        engine.metrics = {"timeseries_momentum_10d": {}}
+        
+        cpcv_called = False
+        def mock_cpcv(*args, **kwargs):
+            nonlocal cpcv_called
+            cpcv_called = True
+            return {"cpcv_dsr": 1.5, "pbo": 0.1, "mean_oos_sharpe": 1.0}
+            
+        register_called = False
+        def mock_register(*args, **kwargs):
+            nonlocal register_called
+            register_called = True
+            return True, None
+            
+        monkeypatch.setattr(bridge, "compute_backfill_cpcv_metrics", mock_cpcv)
+        monkeypatch.setattr(bridge, "register_backfill_model", mock_register)
+        
+        metrics = engine.step_7_register_live_meta_labelers()
+        
+        assert cpcv_called is True
+        assert register_called is True
+        assert metrics["timeseries_momentum_10d"]["cpcv_dsr"] == 1.5
+        assert metrics["timeseries_momentum_10d"]["registered"] is True
+        
+    def test_step_7_skips_feature_incompatible(self, monkeypatch):
+        from settings import settings
+        from ml.forecast_backfill import AgenticForecastBackfiller
+        import ml.forecast_backfill_registry_bridge as bridge
+        
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+        
+        engine = AgenticForecastBackfiller()
+        engine.active_strategies = ["timeseries_momentum"]
+        engine.models = {"timeseries_momentum_10d": "mock_model"}
+        import pandas as pd
+        engine._training_sets = {"timeseries_momentum_10d": (pd.DataFrame({"feat1": [1, 2]}), pd.Series([1, 0]), pd.Series(pd.to_datetime(["2020-01-01", "2020-01-02"])), ["feat1"])}
+        engine.data = pd.DataFrame({"timeseries_momentum_Signal": [1, -1]})
+        engine.metrics = {"timeseries_momentum_10d": {}}
+        
+        def mock_cpcv(*args, **kwargs):
+            return {"cpcv_dsr": 1.5, "pbo": 0.1, "mean_oos_sharpe": 1.0}
+            
+        def mock_register(*args, **kwargs):
+            return False, "incompatible_features_missing_feat1"
+            
+        monkeypatch.setattr(bridge, "compute_backfill_cpcv_metrics", mock_cpcv)
+        monkeypatch.setattr(bridge, "register_backfill_model", mock_register)
+        
+        metrics = engine.step_7_register_live_meta_labelers()
+        
+        assert metrics["timeseries_momentum_10d"]["registered"] is False
+        assert metrics["timeseries_momentum_10d"]["skip_reason"] == "incompatible_features_missing_feat1"
+        
+    def test_step_7_leaves_registry_untouched_on_cpcv_failure(self, monkeypatch):
+        from settings import settings
+        from ml.forecast_backfill import AgenticForecastBackfiller
+        import ml.forecast_backfill_registry_bridge as bridge
+        
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+        monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+        
+        engine = AgenticForecastBackfiller()
+        engine.active_strategies = ["timeseries_momentum"]
+        engine.models = {"timeseries_momentum_10d": "mock_model"}
+        import pandas as pd
+        engine._training_sets = {"timeseries_momentum_10d": (pd.DataFrame({"feat1": [1, 2]}), pd.Series([1, 0]), pd.Series(pd.to_datetime(["2020-01-01", "2020-01-02"])), ["feat1"])}
+        engine.data = pd.DataFrame({"timeseries_momentum_Signal": [1, -1]})
+        engine.metrics = {"timeseries_momentum_10d": {}}
+        
+        def mock_cpcv(*args, **kwargs):
+            # simulate missing min_events or CPCV failing to generate splits
+            return {"cpcv_dsr": None, "pbo": None, "mean_oos_sharpe": None}
+            
+        register_called = False
+        def mock_register(*args, **kwargs):
+            nonlocal register_called
+            register_called = True
+            return True, None
+            
+        monkeypatch.setattr(bridge, "compute_backfill_cpcv_metrics", mock_cpcv)
+        monkeypatch.setattr(bridge, "register_backfill_model", mock_register)
+        
+        metrics = engine.step_7_register_live_meta_labelers()
+        
+        assert register_called is True
+        assert metrics["timeseries_momentum_10d"]["cpcv_dsr"] is None
+        
+
+    def test_step_5_never_writes_meta_prefixed_pickle_regression(self, tmp_path, monkeypatch):
+        from ml.forecast_backfill import AgenticForecastBackfiller
+        import ml.forecast_backfill as module
+        
+        monkeypatch.setattr(module, "_MODELS_DIR", tmp_path)
+        engine = AgenticForecastBackfiller()
+        engine.active_strategies = ["timeseries_momentum"]
+        engine.horizons = [10]
+        
+        # We can just simulate step_5 directly or end_to_end. It's better to just mock the internals or provide synthetic data and run step 5.
+        # Let's provide synthetic data.
+        import pandas as pd
+        engine.prices = pd.DataFrame({"AAPL": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
+        # Actually it might be easier to mock `sklearn.ensemble.RandomForestClassifier.fit` and give it enough data.
+        # But wait, step 5 writes to `model_path = (_MODELS_DIR / f"backfill_meta_{model_key}.pkl").resolve()`.
+        # I can just use a synthetic engine.
+        from tests.test_forecast_backfill import _synthetic_engine
+        engine = _synthetic_engine(["AAA", "BBB"])
+        engine.step_2_calculate_technical_features()
+        engine.step_3_generate_primary_signals()
+        engine.step_4_create_meta_targets()
+        engine.step_5_backtrain_meta_labelers()
+        
+        # Check files in tmp_path
+        files = list(tmp_path.glob("*.pkl"))
+        assert len(files) > 0, "Expected at least one pickle file to be written"
+        for f in files:
+            assert not f.name.startswith("meta_"), f"Explicit regression: {f.name} starts with 'meta_' and could collide with AFML glob"
+            # Step 5's diagnostic pickles use "backfill_diag_", NOT
+            # "backfill_meta_" -- that prefix is reserved exclusively for
+            # step_7_register_live_meta_labelers' MetaLabeler-wrapped,
+            # registry-tracked artifacts (see ml/forecast_backfill.py's
+            # comment at this write site). Sharing one glob between the two
+            # would let MetaLabeler.load_latest(signal_id,
+            # prefix="backfill_meta")'s sorted()[-1] pick a raw, untyped
+            # diagnostic classifier over the real registered model.
+            assert f.name.startswith("backfill_diag_"), f"Expected {f.name} to start with 'backfill_diag_'"
+            assert not f.name.startswith("backfill_meta_"), (
+                f"Intra-namespace regression: {f.name} starts with "
+                "'backfill_meta_' and could collide with step 7's registered-model glob"
+            )

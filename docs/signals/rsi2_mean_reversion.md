@@ -157,3 +157,11 @@ See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) f
 | **Max Drawdown** | 8.13% |
 | **Deployable** | ✅ True |
 
+
+## Backfill-Screen Live Meta-Labeler Bridge
+
+This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
+- **Registry Key**: `meta_labeler_backfill_rsi2_mean_reversion`
+- **Live Horizon**: 10 days (default)
+- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
+- **Feature-Compatibility Caveat**: RESOLVED — the live per-ticker row (`strategy_engine.py::evaluate_security()`) was widened with the 9 previously-missing feature names this signal (and its 5 siblings) declare, genuinely computed in `processing_engine.py`/`ml/forecast_backfill.py`, not merely whitelisted. `check_feature_compatibility()` now returns `True` for this signal's real `meta_label_features` (see `tests/test_train_meta_labelers.py::TestSixEligibleSignalsFeatureCompatibility`). A trained model for this signal can now actually reach `global_meta_registry` once it separately clears the DSR/PBO deployability gate (unchanged by this fix).

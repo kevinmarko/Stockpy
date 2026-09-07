@@ -19,6 +19,7 @@ Covers:
 """
 
 import math
+import numpy as np
 import pandas as pd
 import os
 import tempfile
@@ -36,8 +37,11 @@ from forecasting.forecast_tracker import (
     MODEL_CNN_LSTM,
     MODEL_NAIVE,
     ALL_MODEL_NAMES,
+    MC_NOMINAL_COVERAGE,
+    MC_INTERVAL_ALPHA,
     _MIN_MSE,
     compute_skill_weights_from_stats,
+    compute_coverage_and_interval_score,
 )
 
 
@@ -557,9 +561,11 @@ class TestGetErrorByModel:
     def test_no_migration_needed_uses_existing_columns_only(self, tmp_path):
         """Regression guard for the specific claim in the method's docstring:
         forecast_price/actual_price were already persisted columns before
-        this method existed, so MAE must be derivable without any DDL change.
-        Asserts the schema is untouched (still exactly the documented 9
-        columns) while get_error_by_model still returns a real MAE."""
+        this method existed, so MAE must be derivable without any DDL change
+        BEYOND the forecast_lower/forecast_upper migration every fresh table
+        already includes (WP6 -- coverage_report/interval_score_stats).
+        Asserts the schema is exactly the documented 11 columns while
+        get_error_by_model still returns a real MAE."""
         import sqlite3
         tracker = _make_tracker(tmp_path)
         ts = datetime.now(timezone.utc) - pd.offsets.BDay(30)
@@ -570,7 +576,8 @@ class TestGetErrorByModel:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
         assert cols == {
             "id", "symbol", "model_name", "horizon_days", "forecast_ts",
-            "forecast_price", "actual_price", "squared_error", "recorded_at",
+            "forecast_price", "actual_price", "squared_error",
+            "forecast_lower", "forecast_upper", "recorded_at",
         }
 
         rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
@@ -1021,3 +1028,528 @@ class TestReadonlyMode:
         reader = ForecastTracker(db_path=db, readonly=True)
         # Would raise here if the readonly hook issued journal_mode=WAL.
         assert reader.pending_count("AAPL", 30) == 0
+
+
+# ---------------------------------------------------------------------------
+# record_forecasts -- model_bounds (forecast_lower/forecast_upper persistence)
+# ---------------------------------------------------------------------------
+
+class TestRecordForecastsModelBounds:
+    """``record_forecasts``'s new optional ``model_bounds`` parameter --
+    persists a model's published prediction-interval bounds, or NULL/NULL
+    when absent/non-finite (CONSTRAINT #4: never a fabricated/partial
+    bound)."""
+
+    def test_bounds_persisted_for_recorded_model(self, tmp_path):
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts(
+            "AAPL", 30, {MODEL_MONTE_CARLO: 100.0}, ts,
+            model_bounds={MODEL_MONTE_CARLO: (90.0, 110.0)},
+        )
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT forecast_lower, forecast_upper FROM forecast_errors WHERE model_name = ?",
+                (MODEL_MONTE_CARLO,),
+            ).fetchone()
+        assert row == (90.0, 110.0)
+
+    def test_model_absent_from_bounds_dict_gets_null(self, tmp_path):
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts(
+            "AAPL", 30, {MODEL_ARIMA: 150.0}, ts,
+            model_bounds={MODEL_MONTE_CARLO: (90.0, 110.0)},  # ARIMA isn't a key here
+        )
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT forecast_lower, forecast_upper FROM forecast_errors WHERE model_name = ?",
+                (MODEL_ARIMA,),
+            ).fetchone()
+        assert row == (None, None)
+
+    def test_default_model_bounds_none_gets_null_for_every_model(self, tmp_path):
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        # model_bounds omitted entirely -- defaults to None.
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0, MODEL_MONTE_CARLO: 152.0}, ts)
+        with sqlite3.connect(tracker._db_path) as conn:
+            rows = conn.execute(
+                "SELECT forecast_lower, forecast_upper FROM forecast_errors"
+            ).fetchall()
+        assert rows == [(None, None), (None, None)]
+
+    def test_non_finite_lower_bound_treated_as_absent(self, tmp_path):
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts(
+            "AAPL", 30, {MODEL_MONTE_CARLO: 100.0}, ts,
+            model_bounds={MODEL_MONTE_CARLO: (float("nan"), 110.0)},
+        )
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT forecast_lower, forecast_upper FROM forecast_errors WHERE model_name = ?",
+                (MODEL_MONTE_CARLO,),
+            ).fetchone()
+        assert row == (None, None)
+
+    def test_non_finite_upper_bound_also_treated_as_absent(self, tmp_path):
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts(
+            "AAPL", 30, {MODEL_MONTE_CARLO: 100.0}, ts,
+            model_bounds={MODEL_MONTE_CARLO: (90.0, float("inf"))},
+        )
+        with sqlite3.connect(tracker._db_path) as conn:
+            row = conn.execute(
+                "SELECT forecast_lower, forecast_upper FROM forecast_errors WHERE model_name = ?",
+                (MODEL_MONTE_CARLO,),
+            ).fetchone()
+        assert row == (None, None)
+
+    def test_multiple_models_only_one_carries_bounds(self, tmp_path):
+        """Recording several models in one call where only one has bounds --
+        only that model's row gets bounds, the others stay NULL/NULL."""
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts(
+            "AAPL", 30,
+            {MODEL_ARIMA: 150.0, MODEL_MONTE_CARLO: 152.0, MODEL_HOLT_WINTERS: 148.0},
+            ts,
+            model_bounds={MODEL_MONTE_CARLO: (140.0, 165.0)},
+        )
+        with sqlite3.connect(tracker._db_path) as conn:
+            by_model = {
+                r[0]: (r[1], r[2])
+                for r in conn.execute(
+                    "SELECT model_name, forecast_lower, forecast_upper FROM forecast_errors"
+                ).fetchall()
+            }
+        assert by_model[MODEL_MONTE_CARLO] == (140.0, 165.0)
+        assert by_model[MODEL_ARIMA] == (None, None)
+        assert by_model[MODEL_HOLT_WINTERS] == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Additive schema migration: forecast_lower/forecast_upper on a pre-existing
+# (old, 9-column) forecast_errors table.
+# ---------------------------------------------------------------------------
+
+class TestSchemaMigration:
+    """``_migrate_add_bound_columns`` -- an old DB (predating
+    forecast_lower/forecast_upper) gets the two columns added automatically
+    on construction, without losing pre-existing data; a DB that already has
+    them is left untouched (idempotent, no 'duplicate column' error)."""
+
+    _OLD_DDL = """
+    CREATE TABLE forecast_errors (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol         TEXT    NOT NULL,
+        model_name     TEXT    NOT NULL,
+        horizon_days   INTEGER NOT NULL,
+        forecast_ts    TEXT    NOT NULL,
+        forecast_price REAL    NOT NULL,
+        actual_price   REAL,
+        squared_error  REAL,
+        recorded_at    TEXT    NOT NULL
+    )
+    """
+
+    _NEW_COLUMNS = {
+        "id", "symbol", "model_name", "horizon_days", "forecast_ts",
+        "forecast_price", "actual_price", "squared_error",
+        "forecast_lower", "forecast_upper", "recorded_at",
+    }
+
+    def test_migrates_old_schema_preserving_data(self, tmp_path):
+        import sqlite3
+        db = os.path.join(str(tmp_path), "old_schema.db")
+
+        # Simulate a pre-existing DB written by an older build of this class.
+        raw_conn = sqlite3.connect(db)
+        raw_conn.execute(self._OLD_DDL)
+        old_ts = (datetime.now(timezone.utc) - pd.offsets.BDay(40)).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        raw_conn.execute(
+            "INSERT INTO forecast_errors (symbol, model_name, horizon_days, forecast_ts, "
+            "forecast_price, actual_price, squared_error, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("AAPL", MODEL_ARIMA, 30, old_ts, 150.0, 160.0, 100.0, now_iso),
+        )
+        raw_conn.commit()
+        raw_conn.close()
+
+        with sqlite3.connect(db) as pre_check:
+            pre_cols = {r[1] for r in pre_check.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+        assert "forecast_lower" not in pre_cols
+        assert "forecast_upper" not in pre_cols
+
+        # (Construction triggers the migration.)
+        tracker = ForecastTracker(db_path=db)
+
+        # (b) PRAGMA table_info now shows all 11 columns.
+        with sqlite3.connect(db) as check_conn:
+            cols = {r[1] for r in check_conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+        assert cols == self._NEW_COLUMNS
+
+        # (a) the old row's data is intact and readable via get_error_by_model
+        # and direct SQL.
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
+        assert len(rows) == 1
+        assert rows[0]["model_name"] == MODEL_ARIMA
+        assert rows[0]["rmse"] == pytest.approx(10.0, abs=1e-6)  # sqrt(100)
+
+        with sqlite3.connect(db) as check_conn:
+            old_row = check_conn.execute(
+                "SELECT symbol, forecast_price, actual_price, forecast_lower, forecast_upper "
+                "FROM forecast_errors WHERE model_name = ?",
+                (MODEL_ARIMA,),
+            ).fetchone()
+        assert old_row[0] == "AAPL"
+        assert old_row[1] == pytest.approx(150.0)
+        assert old_row[2] == pytest.approx(160.0)
+        assert old_row[3] is None  # new column, backfilled NULL for the old row
+        assert old_row[4] is None
+
+        # (c) a NEW record_forecasts(..., model_bounds=...) call against this
+        # migrated tracker correctly persists bounds.
+        ts = datetime.now(timezone.utc)
+        tracker.record_forecasts(
+            "MSFT", 30, {MODEL_MONTE_CARLO: 300.0}, ts,
+            model_bounds={MODEL_MONTE_CARLO: (290.0, 310.0)},
+        )
+        with sqlite3.connect(db) as check_conn:
+            new_row = check_conn.execute(
+                "SELECT forecast_lower, forecast_upper FROM forecast_errors WHERE symbol = 'MSFT'"
+            ).fetchone()
+        assert new_row == (290.0, 310.0)
+
+    def test_second_construction_against_already_migrated_db_is_a_noop(self, tmp_path):
+        """A DB that already has the new columns (the normal case, e.g. a
+        second ForecastTracker instance in the same process) must not raise
+        (no 'duplicate column name' error) and leaves the schema untouched."""
+        import sqlite3
+        db = os.path.join(str(tmp_path), "already_new.db")
+        ForecastTracker(db_path=db)  # first construction -> fresh 11-column schema
+
+        # Second construction against the SAME already-migrated db.
+        tracker2 = ForecastTracker(db_path=db)
+
+        with sqlite3.connect(db) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+        assert cols == self._NEW_COLUMNS
+
+        # tracker2 remains fully usable.
+        tracker2.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, datetime.now(timezone.utc))
+        assert tracker2.pending_count("AAPL", 30) == 1
+
+
+# ---------------------------------------------------------------------------
+# coverage_report
+# ---------------------------------------------------------------------------
+
+class TestCoverageReport:
+    """``coverage_report`` -- empirical coverage of a model's published
+    prediction interval against its nominal (e.g. 90%) coverage."""
+
+    def _record_and_actualize(
+        self, tracker, symbol, horizon, actual, bounds=(95.0, 105.0),
+        model=MODEL_MONTE_CARLO, forecast_price=100.0,
+    ):
+        """Record one forecast far enough in the past to be immediately due,
+        then actualize it against a caller-controlled ``actual`` price --
+        one row at a time, so each row can carry a distinct realized price
+        (update_actuals stamps every PENDING row for a symbol+horizon with
+        the same actual_price in one call)."""
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 5)
+        tracker.record_forecasts(symbol, horizon, {model: forecast_price}, ts, model_bounds={model: bounds})
+        tracker.update_actuals(symbol, horizon, actual, datetime.now(timezone.utc))
+
+    def test_hand_computed_six_of_eight_inside(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        inside = [100.0, 96.0, 104.0, 95.0, 105.0, 101.0]  # 95/105 boundary is inclusive
+        outside = [80.0, 120.0]
+        for actual in inside + outside:
+            self._record_and_actualize(tracker, "AAPL", horizon, actual)
+
+        report = tracker.coverage_report("AAPL", horizon, window_days=180, min_obs=5)
+        assert report["n"] == 8
+        assert report["reason"] is None
+        assert report["empirical_coverage"] == pytest.approx(0.75)
+        assert report["nominal_coverage"] == MC_NOMINAL_COVERAGE
+        assert report["symbol"] == "AAPL"
+        assert report["horizon_days"] == horizon
+        assert report["model_name"] == MODEL_MONTE_CARLO
+
+    def test_below_min_obs_returns_none_with_honest_reason(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        for actual in (100.0, 101.0, 99.0):  # only 3, below default min_obs=5
+            self._record_and_actualize(tracker, "AAPL", horizon, actual)
+
+        report = tracker.coverage_report("AAPL", horizon, window_days=180)
+        assert report["n"] == 3
+        assert report["empirical_coverage"] is None
+        assert report["reason"]
+        assert "3" in report["reason"]
+
+    def test_other_model_rows_never_counted(self, tmp_path):
+        """arima rows (which never publish bounds) must never leak into a
+        monte_carlo coverage_report call -- asserted explicitly (via a
+        distinguishing n), not merely assumed from the NULL-bounds filter."""
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        for actual in (100.0, 101.0, 99.0, 102.0, 98.0):
+            ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 5)
+            tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 100.0}, ts)
+            tracker.update_actuals("AAPL", horizon, actual, datetime.now(timezone.utc))
+        for actual in (100.0, 101.0, 99.0):
+            self._record_and_actualize(tracker, "AAPL", horizon, actual)
+
+        report = tracker.coverage_report("AAPL", horizon, window_days=180, min_obs=3)
+        assert report["n"] == 3  # not 8 -- the 5 arima rows never counted
+        assert report["empirical_coverage"] == pytest.approx(1.0)
+
+    def test_pending_row_excluded(self, tmp_path):
+        """A pending row (bounds present, actual_price still NULL) must not
+        count -- only actualized rows do."""
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        for actual in (100.0, 101.0, 99.0, 102.0, 98.0):
+            self._record_and_actualize(tracker, "AAPL", horizon, actual)
+        tracker.record_forecasts(
+            "AAPL", horizon, {MODEL_MONTE_CARLO: 100.0}, datetime.now(timezone.utc),
+            model_bounds={MODEL_MONTE_CARLO: (95.0, 105.0)},
+        )
+        report = tracker.coverage_report("AAPL", horizon, window_days=180, min_obs=5)
+        assert report["n"] == 5  # the pending row excluded
+
+    def test_window_excludes_old_rows(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        import sqlite3
+        old_ts = (datetime.now(timezone.utc) - pd.offsets.BDay(90)).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(tracker._db_path) as conn:
+            conn.execute(
+                "INSERT INTO forecast_errors (symbol, model_name, horizon_days, forecast_ts, "
+                "forecast_price, actual_price, squared_error, forecast_lower, forecast_upper, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("AAPL", MODEL_MONTE_CARLO, 30, old_ts, 100.0, 100.0, 0.0, 95.0, 105.0, now_iso),
+            )
+            conn.commit()
+        report = tracker.coverage_report("AAPL", 30, window_days=60, min_obs=1)
+        assert report["n"] == 0
+        assert report["empirical_coverage"] is None
+
+    def test_db_error_degrades_honestly(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker._db_path = "/nonexistent/path/db.sqlite"
+        report = tracker.coverage_report("AAPL", 30)
+        assert report["n"] == 0
+        assert report["empirical_coverage"] is None
+        assert report["reason"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# interval_score_stats
+# ---------------------------------------------------------------------------
+
+class TestIntervalScoreStats:
+    """``interval_score_stats`` -- mean Gneiting & Raftery (2007) interval
+    score for a model's published prediction interval."""
+
+    def _record_and_actualize(self, tracker, symbol, horizon, actual, bounds, model=MODEL_MONTE_CARLO, forecast_price=100.0):
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 5)
+        tracker.record_forecasts(symbol, horizon, {model: forecast_price}, ts, model_bounds={model: bounds})
+        tracker.update_actuals(symbol, horizon, actual, datetime.now(timezone.utc))
+
+    def test_hand_computed_mixed_inside_and_outside(self, tmp_path):
+        """alpha=0.10 -> 2/alpha = 20.
+
+        Row 1 (inside):     l=95, u=105, y=100 -> score = (105-95) = 10
+        Row 2 (above upper): l=95, u=105, y=115 -> score = 10 + 20*(115-105) = 210
+        Row 3 (below lower): l=95, u=105, y=85  -> score = 10 + 20*(95-85)  = 210
+        mean = (10 + 210 + 210) / 3 = 430/3
+        """
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        bounds = (95.0, 105.0)
+        for actual in (100.0, 115.0, 85.0):
+            self._record_and_actualize(tracker, "AAPL", horizon, actual, bounds)
+
+        result = tracker.interval_score_stats("AAPL", horizon, window_days=180, min_obs=3)
+        assert result["n"] == 3
+        assert result["reason"] is None
+        assert result["mean_interval_score"] == pytest.approx(430.0 / 3.0, rel=1e-6)
+        assert result["alpha"] == MC_INTERVAL_ALPHA
+        assert result["symbol"] == "AAPL"
+        assert result["horizon_days"] == horizon
+        assert result["model_name"] == MODEL_MONTE_CARLO
+
+    def test_below_min_obs_returns_none_with_honest_reason(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        for actual in (100.0, 101.0):  # below default min_obs=5
+            self._record_and_actualize(tracker, "AAPL", horizon, actual, (95.0, 105.0))
+
+        result = tracker.interval_score_stats("AAPL", horizon, window_days=180)
+        assert result["n"] == 2
+        assert result["mean_interval_score"] is None
+        assert result["reason"]
+
+    def test_alpha_zero_is_invalid_regardless_of_history(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        for actual in (100.0, 101.0, 99.0, 102.0, 98.0, 103.0):  # plenty of history
+            self._record_and_actualize(tracker, "AAPL", horizon, actual, (95.0, 105.0))
+
+        result = tracker.interval_score_stats("AAPL", horizon, window_days=180, alpha=0.0)
+        assert result["reason"] == "invalid_alpha"
+        assert result["mean_interval_score"] is None
+        assert result["n"] == 6  # rows were found; alpha is what's invalid, not the history
+
+    def test_negative_alpha_is_invalid(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        horizon = 30
+        for actual in (100.0, 101.0, 99.0, 102.0, 98.0, 103.0):
+            self._record_and_actualize(tracker, "AAPL", horizon, actual, (95.0, 105.0))
+
+        result = tracker.interval_score_stats("AAPL", horizon, window_days=180, alpha=-0.1)
+        assert result["reason"] == "invalid_alpha"
+        assert result["mean_interval_score"] is None
+
+    def test_db_error_degrades_honestly(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker._db_path = "/nonexistent/path/db.sqlite"
+        result = tracker.interval_score_stats("AAPL", 30)
+        assert result["n"] == 0
+        assert result["mean_interval_score"] is None
+        assert result["reason"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# compute_coverage_and_interval_score -- the pure function directly (no
+# DB/tracker involved). Proves coverage_report/interval_score_stats are thin,
+# correct wrappers around this shared formula, not reimplementing/diverging
+# from it.
+# ---------------------------------------------------------------------------
+
+class TestComputeCoverageAndIntervalScore:
+    def test_empty_sequence_returns_none_none(self):
+        assert compute_coverage_and_interval_score([], alpha=0.10) == (None, None)
+
+    def test_non_positive_alpha_returns_none_none_regardless_of_rows(self):
+        rows = [(100.0, 95.0, 105.0), (120.0, 95.0, 105.0)]
+        assert compute_coverage_and_interval_score(rows, alpha=0.0) == (None, None)
+        assert compute_coverage_and_interval_score(rows, alpha=-1.0) == (None, None)
+
+    def test_matches_coverage_reports_hand_computed_case(self):
+        """Same 8-row (6 inside / 2 outside) case as
+        TestCoverageReport::test_hand_computed_six_of_eight_inside, proving
+        the tracker method doesn't diverge from this pure formula."""
+        rows = [
+            (100.0, 95.0, 105.0), (96.0, 95.0, 105.0), (104.0, 95.0, 105.0),
+            (95.0, 95.0, 105.0), (105.0, 95.0, 105.0), (101.0, 95.0, 105.0),
+            (80.0, 95.0, 105.0), (120.0, 95.0, 105.0),
+        ]
+        coverage, _ = compute_coverage_and_interval_score(rows, alpha=0.10)
+        assert coverage == pytest.approx(0.75)
+
+    def test_matches_interval_score_stats_hand_computed_case(self):
+        """Same 3-row case as
+        TestIntervalScoreStats::test_hand_computed_mixed_inside_and_outside,
+        proving the tracker method doesn't diverge from this pure formula."""
+        rows = [(100.0, 95.0, 105.0), (115.0, 95.0, 105.0), (85.0, 95.0, 105.0)]
+        coverage, mean_score = compute_coverage_and_interval_score(rows, alpha=0.10)
+        assert coverage == pytest.approx(1.0 / 3.0)
+        assert mean_score == pytest.approx(430.0 / 3.0, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# TestCoverageWithKnownGroundTruth -- the audit's explicit statistical ask:
+# "a coverage test that fails when the 90% band's empirical coverage leaves
+# a tolerance band on synthetic data with known ground truth."
+# ---------------------------------------------------------------------------
+
+class TestCoverageWithKnownGroundTruth:
+    """Generates N=500 draws from a KNOWN normal distribution with a KNOWN,
+    analytically-computable 90% interval, then proves ``coverage_report``:
+    (1) reports ~0.90 empirical coverage for the CORRECTLY-calibrated band,
+        within a statistically-sound tolerance, and
+    (2) reports something clearly different (~0.6827, the true 2-tailed
+        1-sigma coverage of a normal) for a DELIBERATELY too-narrow band on
+        the SAME draws -- proving the test genuinely discriminates a
+        correctly-calibrated interval from a miscalibrated one, not just
+        "any coverage_report call returns a number".
+
+    Tolerance justification: the normal approximation to the binomial gives
+    a standard error of sqrt(0.90*0.10/500) ~= 0.0134 for the true-coverage
+    case. A tolerance of 0.05 around 0.90 is a ~3.7-sigma margin -- this is
+    a FIXED-seed synthetic sample (not resampled per test run), so there is
+    no run-to-run flakiness at all; the margin is chosen wide enough that
+    the test would still pass under a different seed almost surely, while
+    remaining tight enough to fail loudly on a genuine implementation defect
+    (e.g. an inclusive/exclusive boundary bug, or scoring against the wrong
+    column) rather than merely on sampling noise.
+    """
+
+    N = 500
+    LOC = 100.0
+    SCALE = 10.0
+    SEED = 20260906
+
+    def _draws(self) -> np.ndarray:
+        rng = np.random.default_rng(self.SEED)
+        return rng.normal(loc=self.LOC, scale=self.SCALE, size=self.N)
+
+    def _record_and_actualize_all(self, tracker, symbol, horizon, bounds, draws):
+        ts = datetime.now(timezone.utc) - pd.offsets.BDay(horizon + 10)
+        for actual in draws:
+            tracker.record_forecasts(
+                symbol, horizon, {MODEL_MONTE_CARLO: self.LOC}, ts,
+                model_bounds={MODEL_MONTE_CARLO: bounds},
+            )
+            tracker.update_actuals(symbol, horizon, float(actual), datetime.now(timezone.utc))
+
+    def test_correctly_calibrated_90pct_band_within_tolerance(self, tmp_path):
+        from scipy.stats import norm
+
+        tracker = _make_tracker(tmp_path)
+        draws = self._draws()
+        lo = float(norm.ppf(0.05, self.LOC, self.SCALE))
+        hi = float(norm.ppf(0.95, self.LOC, self.SCALE))
+        horizon = 5
+        self._record_and_actualize_all(tracker, "GTNORM", horizon, (lo, hi), draws)
+
+        report = tracker.coverage_report("GTNORM", horizon, window_days=60, min_obs=5)
+        assert report["n"] == self.N
+        assert report["reason"] is None
+        assert report["empirical_coverage"] is not None
+        assert abs(report["empirical_coverage"] - 0.90) < 0.05
+
+    def test_miscalibrated_1sigma_band_falls_outside_tolerance(self, tmp_path):
+        """The SAME synthetic draws, scored against a deliberately too-narrow
+        +/-1-standard-deviation band instead of the true 90% interval, must
+        land OUTSIDE the tolerance band around 0.90 -- proving the coverage
+        measurement genuinely discriminates calibration quality."""
+        tracker = _make_tracker(tmp_path)
+        draws = self._draws()
+        lo, hi = self.LOC - self.SCALE, self.LOC + self.SCALE  # +/-1 sigma, NOT the true 90% band
+        horizon = 5
+        self._record_and_actualize_all(tracker, "GTNARROW", horizon, (lo, hi), draws)
+
+        report = tracker.coverage_report("GTNARROW", horizon, window_days=60, min_obs=5)
+        assert report["n"] == self.N
+        assert report["empirical_coverage"] is not None
+        # Must NOT read as well-calibrated against the 90% nominal target.
+        assert abs(report["empirical_coverage"] - 0.90) > 0.05
+        # And it should land close to the true ~68.27% two-tailed 1-sigma
+        # coverage of a normal distribution.
+        assert abs(report["empirical_coverage"] - 0.6827) < 0.05

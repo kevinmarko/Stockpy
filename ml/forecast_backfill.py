@@ -160,6 +160,7 @@ class AgenticForecastBackfiller:
         self.data: pd.DataFrame = pd.DataFrame()
         self.models: Dict[str, Any] = {}
         self.metrics: Dict[str, Dict[str, float]] = {}
+        self._training_sets: Dict[str, Tuple[pd.DataFrame, pd.Series, pd.Index, List[str]]] = {}
         # Tickers for which no real provider (FMP nor CompositeProvider) returned
         # data. They are dropped from the run and recorded via the 3-strike rule.
         self.dropped_tickers: List[str] = []
@@ -299,6 +300,16 @@ class AgenticForecastBackfiller:
             # Additional features for various signals
             df["ROC_12M"] = df["Close"].shift(1) / df["Close"].shift(253) - 1.0
             df["ROC_6M"] = df["Close"].shift(1) / df["Close"].shift(127) - 1.0
+            # ROC_5 / ROC_20: shorter-window siblings of ROC_12M/ROC_6M above, needed by
+            # signals/options_flow_sentiment.py's declared meta_label_features -- were
+            # previously never computed here, so _resolve_meta_features() silently
+            # dropped both every time a model trained (7 of 9 declared features used,
+            # not 9). Same shift(1) no-lookahead convention as ROC_12M/ROC_6M, and must
+            # stay IDENTICAL to processing_engine.py::calculate_technical_metrics()'s
+            # live ROC_5/ROC_20 formula (a sibling agent is adding it there in this same
+            # change) so training and live inference see the same feature definition.
+            df["ROC_5"] = df["Close"].shift(1) / df["Close"].shift(6) - 1.0
+            df["ROC_20"] = df["Close"].shift(1) / df["Close"].shift(21) - 1.0
             daily_returns = df["Close"].pct_change().shift(1)
             ewma_var = daily_returns.pow(2).ewm(alpha=0.06, adjust=False).mean()
             df["GARCH_Vol"] = np.sqrt(ewma_var * 252.0)
@@ -612,6 +623,36 @@ class AgenticForecastBackfiller:
                 resolved.append(f)
         return resolved
 
+    def _build_training_set(self, model_type: str, h: int) -> Optional[Tuple[pd.DataFrame, pd.Series, pd.Index, List[str]]]:
+        from signals.registry import global_registry
+        module = global_registry.get(model_type)
+        if not module:
+            return None
+            
+        features_raw = getattr(module, "meta_label_features", [])
+        if not features_raw:
+            return None
+            
+        resolved_features = self._resolve_meta_features(model_type, features_raw)
+        if not resolved_features:
+            return None
+
+        target_col = f"{model_type}_Target_{h}d"
+        if target_col not in self.data.columns:
+            return None
+            
+        clean_df = self.data.dropna(subset=resolved_features + [target_col]).copy()
+        clean_df.sort_index(level="Date", inplace=True)
+
+        if len(clean_df) < 30:
+            logger.warning("Insufficient samples (%d) for %s_%dd model. Skipping.", len(clean_df), model_type, h)
+            return None
+            
+        X = clean_df[resolved_features]
+        y = clean_df[target_col].astype(int)
+        dates = clean_df.index.get_level_values("Date")
+        return X, y, dates, resolved_features
+
     def step_5_backtrain_meta_labelers(self) -> Dict[str, Any]:
         """Step 5: Train multi-horizon Meta-Labeling models on chronological train/test split.
 
@@ -665,26 +706,15 @@ class AgenticForecastBackfiller:
             horizons_raw = getattr(module, "meta_label_horizons", None) or self.horizons
 
             for h in horizons_raw:
-                target_col = f"{model_type}_Target_{h}d"
-                
-                if target_col not in self.data.columns:
+                train_set = self._build_training_set(model_type, h)
+                if not train_set:
                     continue
-                    
-                clean_df = self.data.dropna(subset=resolved_features + [target_col]).copy()
                 
-                # Ensure it's sorted by Date chronologically so CPCV blocks are contiguous in time
-                clean_df.sort_index(level="Date", inplace=True)
+                X, y, dates_only, resolved_features = train_set
+                self._training_sets[f"{model_type}_{h}d"] = train_set
 
-                if len(clean_df) < 30:
-                    logger.warning("Insufficient samples (%d) for %s_%dd model. Skipping.", len(clean_df), model_type, h)
-                    continue
-                    
-                X = clean_df[resolved_features]
-                y = clean_df[target_col].astype(int)
-                
                 # We need to drop MultiIndex for CombinatorialPurgedCV since it expects a single DateTimeIndex.
                 # CombinatorialPurgedCV groups sequentially. We will pass a daily index for purging.
-                dates_only = clean_df.index.get_level_values("Date")
                 X_dates = pd.DataFrame(X.values, index=dates_only, columns=X.columns)
 
                 # 1. Dynamic embargo percentage
@@ -760,7 +790,17 @@ class AgenticForecastBackfiller:
                 # from part of the data), and would be undefined entirely if
                 # every CPCV fold was skipped/failed, since it is never
                 # assigned outside the loop body.
-                model_path = (_MODELS_DIR / f"meta_{model_key}.pkl").resolve()
+                # Deliberately NOT "backfill_meta_" -- that prefix is
+                # reserved exclusively for step_7_register_live_meta_labelers'
+                # MetaLabeler-wrapped, registry-tracked artifacts. These are
+                # raw, untyped RandomForestClassifier diagnostic pickles (one
+                # per horizon, unconditional on the bridge flag); sharing the
+                # "backfill_meta_" glob with step 7's output would let
+                # sorted()[-1] pick the wrong (and wrong-typed) file as
+                # "latest" for MetaLabeler.load_latest(signal_id,
+                # prefix="backfill_meta") -- see the regression test in
+                # tests/test_forecast_backfill.py.
+                model_path = (_MODELS_DIR / f"backfill_diag_{model_key}.pkl").resolve()
                 if not is_confined(model_path, _MODELS_DIR.resolve()):
                     raise ValueError(f"Refusing to write model artifact outside {_MODELS_DIR}: {model_path}")
                 with open(model_path, "wb") as f:
@@ -874,6 +914,82 @@ class AgenticForecastBackfiller:
 
         logger.info("[+] Step 6 complete. Forecast backfill executed.")
         return self.data
+
+    def step_7_register_live_meta_labelers(self) -> Dict[str, Any]:
+        """Step 7: Wire trained models into the live position-sizing registry gate."""
+        if not getattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", False):
+            return self.metrics
+
+        from ml.forecast_backfill_registry_bridge import (
+            BACKFILL_ELIGIBLE_SIGNAL_IDS,
+            resolve_live_horizon,
+            compute_backfill_cpcv_metrics,
+            register_backfill_model
+        )
+
+        eligible = getattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", [])
+        active_and_eligible = set(self.active_strategies) & set(BACKFILL_ELIGIBLE_SIGNAL_IDS) & set(eligible)
+
+        for signal_id in active_and_eligible:
+            live_horizon = resolve_live_horizon(signal_id)
+            model_key = f"{signal_id}_{live_horizon}d"
+
+            if model_key not in self.models or model_key not in self._training_sets:
+                continue
+
+            model = self.models[model_key]
+            X, y, dates, features = self._training_sets[model_key]
+            
+            cpcv_result = compute_backfill_cpcv_metrics(
+                X=X,
+                signal_sign=self.data[f"{signal_id}_Signal"].reindex(X.index),
+                target=y,
+                dates=dates,
+                horizon_days=live_horizon,
+                theta_c=self.theta_c,
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                random_state=self.random_state
+            )
+
+            hyperparams = {
+                "n_estimators": self.n_estimators,
+                "max_depth": self.max_depth,
+                "random_state": self.random_state,
+                "theta_c": self.theta_c
+            }
+            
+            # ml.registry_io.update_model_metrics does `dict(train_window)`,
+            # so this MUST be a dict, not a "start to end" string -- matches
+            # the {start, end, n_dates} shape every other registry entry uses
+            # (see ml/registry.yaml's lgbm_ranker entry).
+            train_window = {
+                "start": dates.min().strftime("%Y-%m-%d"),
+                "end": dates.max().strftime("%Y-%m-%d"),
+                "n_dates": int(pd.Series(dates).nunique()),
+            }
+
+            registered, skip_reason = register_backfill_model(
+                signal_id=signal_id,
+                horizon_days=live_horizon,
+                model=model,
+                feature_names=features,
+                n_train=len(X),
+                cpcv_result=cpcv_result,
+                hyperparameters=hyperparams,
+                train_window=train_window
+            )
+
+            self.metrics[model_key].update({
+                "cpcv_dsr": cpcv_result.get("cpcv_dsr"),
+                "pbo": cpcv_result.get("pbo"),
+                "mean_oos_sharpe": cpcv_result.get("mean_oos_sharpe"),
+                "registry_key": f"meta_labeler_backfill_{signal_id}",
+                "registered": registered,
+                "skip_reason": skip_reason
+            })
+
+        return self.metrics
 
     def _trainable_export_columns(self) -> Tuple[List[str], List[str]]:
         """Shared column-selection logic for ``export_results()`` AND

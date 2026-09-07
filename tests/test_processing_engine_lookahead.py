@@ -133,3 +133,53 @@ class TestCalculateTechnicalMetricsLookahead:
             return result["AAPL"]["SMA_200"]
 
         assert verify_no_lookahead(calc, synthetic_ohlcv_data, t=250)
+
+    def test_vol_20_key(self, synthetic_ohlcv_data):
+        engine = ProcessingEngine()
+
+        def calc(df, t):
+            sliced = df.iloc[:t + 1]
+            result = engine.calculate_technical_metrics({"AAPL": sliced})
+            return result["AAPL"]["Vol_20"]
+
+        assert verify_no_lookahead(calc, synthetic_ohlcv_data, t=250)
+
+    def test_vol_50_key(self, synthetic_ohlcv_data):
+        engine = ProcessingEngine()
+
+        def calc(df, t):
+            sliced = df.iloc[:t + 1]
+            result = engine.calculate_technical_metrics({"AAPL": sliced})
+            return result["AAPL"]["Vol_50"]
+
+        assert verify_no_lookahead(calc, synthetic_ohlcv_data, t=250)
+
+    def test_vol_ratio_key(self, synthetic_ohlcv_data):
+        engine = ProcessingEngine()
+
+        def calc(df, t):
+            sliced = df.iloc[:t + 1]
+            result = engine.calculate_technical_metrics({"AAPL": sliced})
+            return result["AAPL"]["Vol_Ratio"]
+
+        assert verify_no_lookahead(calc, synthetic_ohlcv_data, t=250)
+
+    def test_roc_5_key(self, synthetic_ohlcv_data):
+        engine = ProcessingEngine()
+
+        def calc(df, t):
+            sliced = df.iloc[:t + 1]
+            result = engine.calculate_technical_metrics({"AAPL": sliced})
+            return result["AAPL"]["ROC_5"]
+
+        assert verify_no_lookahead(calc, synthetic_ohlcv_data, t=250)
+
+    def test_roc_20_key(self, synthetic_ohlcv_data):
+        engine = ProcessingEngine()
+
+        def calc(df, t):
+            sliced = df.iloc[:t + 1]
+            result = engine.calculate_technical_metrics({"AAPL": sliced})
+            return result["AAPL"]["ROC_20"]
+
+        assert verify_no_lookahead(calc, synthetic_ohlcv_data, t=250)

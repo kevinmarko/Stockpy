@@ -313,6 +313,343 @@ def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monke
     assert not meta_labeling.global_meta_registry.has("timeseries_momentum")
 
 
+
+def _save_dummy_backfill_model(tmp_models_dir, signal_id, feature_names=None):
+    from ml.meta_labeling import MetaLabeler
+    from sklearn.ensemble import RandomForestClassifier
+    from datetime import datetime
+    
+    if feature_names is None:
+        from ml.meta_bootstrap import LIVE_ROW_FEATURE_WHITELIST
+        feature_names = list(LIVE_ROW_FEATURE_WHITELIST)
+        
+    labeler = MetaLabeler(signal_id=signal_id)
+    labeler._model = RandomForestClassifier()
+    labeler._feature_names = feature_names
+    labeler._n_train_samples = 100
+    labeler._last_trained = datetime(2025, 1, 1)
+    
+    path = tmp_models_dir / f"backfill_meta_{signal_id}_20250101_130000.pkl"
+    labeler.save(path)
+    return path
+
+def _save_dummy_afml_model(tmp_models_dir, signal_id, feature_names=None):
+    from ml.meta_labeling import MetaLabeler
+    from sklearn.ensemble import RandomForestClassifier
+    from datetime import datetime
+    
+    if feature_names is None:
+        from ml.meta_bootstrap import LIVE_ROW_FEATURE_WHITELIST
+        feature_names = list(LIVE_ROW_FEATURE_WHITELIST)
+        
+    labeler = MetaLabeler(signal_id=signal_id)
+    labeler._model = RandomForestClassifier()
+    labeler._feature_names = feature_names
+    labeler._n_train_samples = 100
+    labeler._last_trained = datetime(2025, 1, 1)
+    
+    path = tmp_models_dir / f"meta_{signal_id}_20250101_130000.pkl"
+    labeler.save(path)
+    return path
+
+def _set_registry_deployable(yaml_path, key, deployable=True):
+    import yaml
+    with open(yaml_path, "r") as f:
+        data = yaml.safe_load(f)
+    if "models" not in data:
+        data["models"] = {}
+    if key not in data["models"]:
+        data["models"][key] = {}
+    data["models"][key]["deployable"] = deployable
+    data["models"][key]["cpcv_dsr"] = 0.99
+    data["models"][key]["pbo"] = 0.01
+    with open(yaml_path, "w") as f:
+        yaml.safe_dump(data, f)
+
+def test_bootstrap_backfill_bridge_disabled_by_default(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    # even if enabled, if bridge disabled (default), no backfill
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", False)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum")
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == []
+
+def test_bootstrap_registers_backfill_when_afml_absent_and_gate_clears(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum")
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == ["timeseries_momentum"]
+
+def test_bootstrap_prefers_afml_over_backfill_when_both_deployable(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_afml_model(tmp_models_dir, "timeseries_momentum", ["f_afml"])
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum", ["f_bf"])
+    _set_registry_deployable(tmp_registry, "meta_labeler_timeseries_momentum", True)
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == ["timeseries_momentum"]
+    
+    from ml.meta_labeling import global_meta_registry
+    assert global_meta_registry.has("timeseries_momentum")
+    # Actually wait, global_meta_registry.get_proba just returns a number. We need to check labeler object.
+    # It's better to just check the loaded instance.
+    labeler_obj = global_meta_registry._labelers["timeseries_momentum"]
+    assert labeler_obj._feature_names == ["f_afml"]
+
+def test_bootstrap_falls_back_to_backfill_when_afml_not_deployable(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    _save_dummy_afml_model(tmp_models_dir, "timeseries_momentum", ["f_afml"])
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum") # features matching whitelist
+    
+    _set_registry_deployable(tmp_registry, "meta_labeler_timeseries_momentum", False)
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == ["timeseries_momentum"]
+    
+    from ml.meta_labeling import global_meta_registry
+    labeler_obj = global_meta_registry._labelers["timeseries_momentum"]
+    # Should be backfill model since backfill was deployable and AFML was not
+    assert getattr(labeler_obj, "_feature_names", None) != ["f_afml"]
+
+def test_bootstrap_refuses_registration_on_feature_incompatible_model(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["timeseries_momentum"])
+    
+    # Save backfill model with incompatible features (e.g., 'not_a_whitelist_feature')
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum", ["not_a_whitelist_feature"])
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == []
+
+def test_bootstrap_ignores_signal_not_in_eligible_list(tmp_models_dir, tmp_registry, monkeypatch):
+    from settings import settings
+    monkeypatch.setattr(settings, "META_LABELING_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", [])
+    
+    _save_dummy_backfill_model(tmp_models_dir, "timeseries_momentum")
+    _set_registry_deployable(tmp_registry, "meta_labeler_backfill_timeseries_momentum", True)
+    
+    from ml.meta_bootstrap import bootstrap_meta_registry
+    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",), registry_path=tmp_registry)
+    assert registered == []
+
+
+def test_live_row_feature_whitelist_matches_the_real_live_row():
+    """LIVE_ROW_FEATURE_WHITELIST is hand-copied from strategy_engine.py's
+    real per-ticker `row` construction (plus the aggregator's own appended
+    "primary_score" key) since there's no dynamic introspection path without
+    executing the strategy engine. This is the drift-detection test the
+    whitelist's own module comment promises: a future edit to either site
+    that isn't mirrored to the other fails here, loudly, instead of silently
+    letting the feature-compatibility gate wrongly admit or refuse a model."""
+    import re
+
+    from ml.meta_bootstrap import LIVE_ROW_FEATURE_WHITELIST
+
+    src = Path(__file__).resolve().parent.parent / "strategy_engine.py"
+    text = src.read_text()
+    match = re.search(r"row = pd\.Series\(\{(.*?)\}\)", text, re.DOTALL)
+    assert match, "Could not locate strategy_engine.py's `row = pd.Series({...})` construction"
+    keys = set(re.findall(r'"([A-Za-z_0-9]+)":', match.group(1)))
+    # The aggregator appends this key itself (signals/aggregator.py) before
+    # querying the meta-labeler -- it's a real part of the live row shape.
+    keys.add("primary_score")
+
+    assert keys == set(LIVE_ROW_FEATURE_WHITELIST), (
+        "ml/meta_bootstrap.py::LIVE_ROW_FEATURE_WHITELIST has drifted from "
+        "strategy_engine.py's real live `row` construction -- update the "
+        f"whitelist to match. Live row keys: {sorted(keys)}; "
+        f"whitelist: {sorted(LIVE_ROW_FEATURE_WHITELIST)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2b. ml/forecast_backfill_registry_bridge.py -- real, unmocked coverage
+# ---------------------------------------------------------------------------
+# Every step_7_register_live_meta_labelers() test in test_forecast_backfill.py
+# monkeypatches compute_backfill_cpcv_metrics/register_backfill_model away
+# (correctly, to keep that file's tests fast and focused on wiring) -- these
+# tests call the REAL functions with real data so the CPCV/registry-write
+# internals themselves are actually exercised, not just their return-value
+# threading. This is the exact coverage gap the 6-agent audit found: prior to
+# this test, nothing in the suite ever called these two functions unmocked.
+
+def _synthetic_backfill_panel(n=220, seed=7):
+    """A synthetic (X, signal_sign, target, dates) panel with genuine
+    separable signal, sized comfortably above compute_backfill_cpcv_metrics's
+    default min_events=100."""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=n, freq="B")
+    f1 = rng.normal(size=n)
+    f2 = rng.normal(size=n)
+    X = pd.DataFrame({"RSI_2": f1, "SMA_5": f2})
+    signal_sign = pd.Series(rng.choice([-1, 1], size=n), index=X.index)
+    # Genuine (not pure-noise) relationship: target correlates with f1 so a
+    # real classifier has something to learn, and DSR/PBO are measuring a
+    # real (if modest) edge rather than an undefined degenerate case.
+    prob_correct = 1.0 / (1.0 + np.exp(-f1))
+    target = pd.Series((rng.random(n) < prob_correct).astype(int), index=X.index)
+    return X, signal_sign, target, pd.Series(dates)
+
+
+class TestComputeBackfillCpcvMetricsReal:
+    def test_real_cpcv_run_returns_finite_metrics_not_none(self):
+        from ml.forecast_backfill_registry_bridge import compute_backfill_cpcv_metrics
+
+        X, signal_sign, target, dates = _synthetic_backfill_panel()
+        result = compute_backfill_cpcv_metrics(
+            X, signal_sign, target, dates, horizon_days=10, min_events=100,
+        )
+        assert result["cpcv_dsr"] is not None
+        assert result["pbo"] is not None
+        assert np.isfinite(result["cpcv_dsr"])
+        assert np.isfinite(result["pbo"])
+        assert 0.0 <= result["pbo"] <= 1.0
+
+    def test_below_min_events_returns_honest_none(self):
+        from ml.forecast_backfill_registry_bridge import compute_backfill_cpcv_metrics
+
+        X, signal_sign, target, dates = _synthetic_backfill_panel(n=50)
+        result = compute_backfill_cpcv_metrics(
+            X, signal_sign, target, dates, horizon_days=10, min_events=100,
+        )
+        assert result == {"cpcv_dsr": None, "pbo": None, "mean_oos_sharpe": None}
+
+
+class TestRegisterBackfillModelReal:
+    def test_real_registration_writes_pickle_loadable_via_load_latest(self, tmp_models_dir, tmp_registry, monkeypatch):
+        """End-to-end: a real fitted classifier, saved via the real
+        register_backfill_model, must be loadable back via the exact same
+        MetaLabeler.load_latest(signal_id, prefix="backfill_meta") call
+        bootstrap_meta_registry()'s second loop uses -- proving the
+        MODELS_DIR fix actually points at the directory the loader globs."""
+        from sklearn.ensemble import RandomForestClassifier
+
+        from ml.forecast_backfill_registry_bridge import register_backfill_model
+        from ml.meta_labeling import MetaLabeler
+
+        rng = np.random.default_rng(3)
+        X = pd.DataFrame({"RSI_2": rng.normal(size=60), "SMA_5": rng.normal(size=60)})
+        y = pd.Series(rng.integers(0, 2, size=60))
+        clf = RandomForestClassifier(n_estimators=10, random_state=1).fit(X, y)
+
+        registered, skip_reason = register_backfill_model(
+            signal_id="rsi2_mean_reversion",
+            horizon_days=10,
+            model=clf,
+            feature_names=["RSI_2", "SMA_5"],
+            n_train=60,
+            cpcv_result={"cpcv_dsr": 0.97, "pbo": 0.10, "mean_oos_sharpe": 1.2},
+            hyperparameters={"n_estimators": 10},
+            train_window={"start": "2024-01-01", "end": "2024-03-01", "n_dates": 42},
+            registry_path=tmp_registry,
+        )
+        assert registered is True
+        assert skip_reason is None
+
+        loaded = MetaLabeler.load_latest("rsi2_mean_reversion", prefix="backfill_meta")
+        assert loaded is not None
+        assert loaded._feature_names == ["RSI_2", "SMA_5"]
+
+        import yaml
+        data = yaml.safe_load(tmp_registry.read_text())
+        row = data["models"]["meta_labeler_backfill_rsi2_mean_reversion"]
+        assert row["cpcv_dsr"] == 0.97
+        assert row["pbo"] == 0.10
+        assert row["n_train"] == 60
+        assert row["deployable"] is True  # re-derived from cpcv_dsr/pbo, not passed in
+        assert row["train_window"] == {"start": "2024-01-01", "end": "2024-03-01", "n_dates": 42}
+
+    def test_feature_incompatible_model_never_writes_pickle_or_registry(self, tmp_models_dir, tmp_registry):
+        from sklearn.ensemble import RandomForestClassifier
+
+        from ml.forecast_backfill_registry_bridge import register_backfill_model
+
+        clf = RandomForestClassifier().fit([[1, 2]], [1])
+        before = list(tmp_models_dir.glob("*.pkl"))
+
+        registered, skip_reason = register_backfill_model(
+            signal_id="vrp_premium_selling",
+            horizon_days=10,
+            model=clf,
+            feature_names=["Totally_Fake_Feature_Not_In_Whitelist", "Another_Fake_One"],  # not in LIVE_ROW_FEATURE_WHITELIST
+            n_train=1,
+            cpcv_result={"cpcv_dsr": 0.99, "pbo": 0.01, "mean_oos_sharpe": 2.0},
+            hyperparameters={},
+            train_window={"start": "2024-01-01", "end": "2024-01-02", "n_dates": 1},
+            registry_path=tmp_registry,
+        )
+        assert registered is False
+        assert skip_reason is not None and "incompatible_features" in skip_reason
+        after = list(tmp_models_dir.glob("*.pkl"))
+        assert before == after  # no pickle was ever written
+
+        import yaml
+        data = yaml.safe_load(tmp_registry.read_text())
+        row = data["models"]["meta_labeler_backfill_vrp_premium_selling"]
+        assert row["cpcv_dsr"] is None  # stub untouched
+
+
+class TestSixEligibleSignalsFeatureCompatibility:
+    """The actual deliverable: LIVE_ROW_FEATURE_WHITELIST now genuinely
+    resolves every one of the 6 Forecast-Backfill-eligible signals' real,
+    currently-declared meta_label_features -- previously this always failed
+    for all 6, by construction, regardless of DSR/PBO. Features are imported
+    directly from the real signal modules (not hand-copied literals) so this
+    test can never silently go stale."""
+
+    @pytest.mark.parametrize("module_path,class_name", [
+        ("signals.timeseries_momentum", "TimeSeriesMomentumSignal"),
+        ("signals.cross_sectional_momentum", "CrossSectionalMomentumSignal"),
+        ("signals.rsi2_mean_reversion", "RSI2MeanReversionSignal"),
+        ("signals.sector_quality_rank", "SectorNeutralQualitySignal"),
+        ("signals.vrp_premium_selling", "VRPPremiumSellingSignal"),
+        ("signals.options_flow_sentiment", "OptionsFlowSentimentSignal"),
+    ])
+    def test_eligible_signal_features_are_now_compatible(self, module_path, class_name):
+        import importlib
+
+        from ml.meta_bootstrap import check_feature_compatibility
+
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name)
+        features = getattr(cls, "meta_label_features", [])
+        assert features, f"{class_name} has no meta_label_features declared"
+
+        is_compat, missing = check_feature_compatibility(features)
+        assert is_compat, f"{class_name}'s declared features still incompatible: {missing}"
+
+
 # ---------------------------------------------------------------------------
 # 3. End-to-end: registered LOW-confidence labeler fires the aggregator gate
 # ---------------------------------------------------------------------------

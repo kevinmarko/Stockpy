@@ -2406,12 +2406,47 @@ export interface PortfolioForecastSkill {
  * when this symbol has no forecast history in the window yet — a symbol
  * requested via the last pipeline snapshot's signals is never silently
  * omitted from `rows` just because it has zero completed forecasts so far.
+ * `n_by_model` is the raw completed-forecast count backing each model's
+ * `skill_weights` entry — context for how much a weight should be trusted.
+ *
+ * `decay_pct`/`decay_reason` measure how much this symbol's pooled
+ * (all-models) forecast skill has degraded from an older baseline
+ * sub-window to the most recent one, both carved out of the same
+ * `window_days`: positive means skill is DEGRADING (recent RMSE worse than
+ * baseline), negative means it IMPROVED. `decay_pct` is `null` — with an
+ * honest `decay_reason` explaining why — when either sub-window has fewer
+ * than `min_obs` completed, actualized forecasts to trust its RMSE; never a
+ * fabricated percentage (CONSTRAINT #4).
+ *
+ * `mc_*` fields measure whether the platform's own published Monte Carlo
+ * forecast band (`Forecast_h_Lower`/`Forecast_h_Upper`, from `run_monte_carlo`'s
+ * 5th/95th simulated-path percentiles) is well-calibrated: does the true
+ * price actually land inside the published band roughly as often as
+ * advertised, and how tight is that band. `mc_coverage_pct` (0-100) is the
+ * empirical hit rate against `mc_coverage_n` observations; `null` (with
+ * `mc_coverage_reason` explaining why) when `mc_coverage_n < 5` — too few
+ * observations to trust a coverage rate. `mc_nominal_coverage_pct` is
+ * always present (a constant, the interval's advertised coverage — 90.0)
+ * so a caller can compare "advertised vs. actually observed" even when the
+ * observed side is unavailable. `mc_interval_score` is the Gneiting-Raftery
+ * interval score in raw price-dollar units (a real, honestly-narrower proper
+ * scoring rule — NOT CRPS, never label it that in UI copy); lower means a
+ * tighter, better-calibrated band. It shares `mc_coverage_pct`'s null
+ * condition — both come from the same insufficient-history gate.
  */
 export interface ForecastSkillSymbolRow {
   symbol: string;
   pending: number;
   completed: number;
   skill_weights: Record<string, number>;
+  n_by_model: Record<string, number>;
+  decay_pct: number | null;
+  decay_reason: string | null;
+  mc_coverage_n: number;
+  mc_coverage_pct: number | null;
+  mc_nominal_coverage_pct: number;
+  mc_interval_score: number | null;
+  mc_coverage_reason: string | null;
 }
 
 export interface ForecastSkillBySymbol {
@@ -3904,6 +3939,23 @@ export interface ForecastBackfillModelMetrics {
   n_test: number;
   split_date: string;
   is_active?: boolean;
+  /** Present only for a signal/horizon the live meta-labeler bridge
+   *  (ml/forecast_backfill_registry_bridge.py) attempted this run --
+   *  requires settings.META_LABELING_BACKFILL_BRIDGE_ENABLED plus an
+   *  explicit per-signal opt-in, so `undefined` is the default/common case.
+   *  Once attempted, `cpcv_dsr`/`pbo`/`mean_oos_sharpe` are `null` (not
+   *  `undefined`) whenever the backend genuinely could not compute them
+   *  (below the minimum event count, or CPCV produced no paths) --
+   *  CONSTRAINT #4: never a fabricated number in place of "unmeasured". */
+  cpcv_dsr?: number | null;
+  pbo?: number | null;
+  mean_oos_sharpe?: number | null;
+  registry_key?: string;
+  registered?: boolean;
+  /** Non-null only when `registered` is false -- e.g.
+   *  "incompatible_features_missing_RSI_14,Vol_20" from the
+   *  feature-compatibility gate, or a registry/CPCV failure reason. */
+  skip_reason?: string | null;
 }
 
 export interface ForecastBackfillSummary {
@@ -3930,6 +3982,7 @@ export type ForecastBackfillPhase =
   | "meta_targets"
   | "backtraining"
   | "backfilling"
+  | "registry_bridge"
   | "exporting";
 
 /** Only meaningful once `state` is a terminal failure state -- mirrors

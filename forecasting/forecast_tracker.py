@@ -52,8 +52,23 @@ Database table: ``forecast_errors``
 | actual_price   | REAL       | NULL until the horizon elapses.                  |
 | squared_error  | REAL       | (actual_price - forecast_price)^2; NULL while    |
 |                |            | actual_price is still NULL.                      |
+| forecast_lower | REAL       | Published prediction-interval lower bound (only  |
+|                |            | monte_carlo rows publish one today -- the 5th     |
+|                |            | percentile of run_monte_carlo's simulated paths). |
+|                |            | NULL for every model without a genuine interval.  |
+| forecast_upper | REAL       | Published prediction-interval upper bound (95th   |
+|                |            | percentile for monte_carlo). NULL otherwise.      |
 | recorded_at    | TEXT       | UTC ISO-8601 when the row was inserted.          |
 +----------------+------------+--------------------------------------------------+
+
+``forecast_lower``/``forecast_upper`` (2026-09, WP6 of the forecast-math audit --
+see ``docs/known_issues/forecast_ito_double_correction_and_horizon_units.md``)
+are an ADDITIVE ``ALTER TABLE ADD COLUMN`` migration (``_migrate_add_bound_columns``,
+guarded by ``PRAGMA table_info`` so it is idempotent and safe against every
+pre-existing DB, matching ``data/historical_store.py``'s established
+convention) backing ``coverage_report()``/``interval_score_stats()`` below --
+the empirical-coverage and proper-scoring-rule measurements the original
+audit asked for and that this codebase had no baseline for until now.
 """
 
 import logging
@@ -61,7 +76,7 @@ import math
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -108,6 +123,14 @@ ALL_MODEL_NAMES = (
 # accurate over a stretch.
 _MIN_MSE = 0.0001
 
+# run_monte_carlo publishes the 5th/95th simulated-path percentiles as
+# MC_Lower/MC_Upper (forecasting_engine.py) -- a 90% prediction interval,
+# alpha = 1 - 0.90 = 0.10. Only monte_carlo rows ever populate
+# forecast_lower/forecast_upper today; every other model is a point
+# forecast with no published interval.
+MC_NOMINAL_COVERAGE = 0.90
+MC_INTERVAL_ALPHA = 1.0 - MC_NOMINAL_COVERAGE
+
 
 def compute_skill_weights_from_stats(
     model_stats: Dict[str, Tuple[int, float]],
@@ -152,6 +175,53 @@ def compute_skill_weights_from_stats(
         return {name: 1.0 / n_mature for name in inv_mse}
 
     return {name: w / total for name, w in inv_mse.items()}
+
+
+def compute_coverage_and_interval_score(
+    rows: "Sequence[Tuple[float, float, float]]",
+    alpha: float,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Pure function: ``(empirical_coverage, mean_interval_score)`` from a
+    sequence of ``(actual_price, forecast_lower, forecast_upper)`` rows.
+
+    Single source of truth for the coverage-fraction / Gneiting-Raftery
+    (2007) interval-score formulas, shared by
+    ``ForecastTracker.coverage_report``/``interval_score_stats`` (single-
+    symbol) and ``pilots/observability.py``'s bulk-SQL sibling — the same
+    "one formula, not three independently-drifting copies" precedent
+    ``compute_skill_weights_from_stats`` above already established for skill
+    weights (see that function's own docstring for the incident this pattern
+    exists to prevent)::
+
+        IS_alpha(l, u, y) = (u - l)
+                            + (2/alpha) * (l - y) * 1{y < l}
+                            + (2/alpha) * (y - u) * 1{y > u}
+
+    Returns ``(None, None)`` for an empty sequence or a non-positive
+    ``alpha`` — never divides by zero, never fabricates a measurement from
+    nothing (CONSTRAINT #4). Callers own their own min-observation gating
+    (this function does no cold-start check itself, matching
+    ``compute_skill_weights_from_stats``'s own "pure math over already-
+    fetched stats" scope) and their own try/except (CONSTRAINT #6) — never
+    raises on well-formed numeric input.
+    """
+    if not rows or alpha <= 0:
+        return None, None
+
+    covered = 0
+    scores = []
+    for actual, lo, hi in rows:
+        if lo <= actual <= hi:
+            covered += 1
+        score = hi - lo
+        if actual < lo:
+            score += (2.0 / alpha) * (lo - actual)
+        elif actual > hi:
+            score += (2.0 / alpha) * (actual - hi)
+        scores.append(score)
+
+    n = len(rows)
+    return covered / n, float(sum(scores) / n)
 
 
 class ForecastTracker:
@@ -203,6 +273,8 @@ class ForecastTracker:
         forecast_price REAL    NOT NULL,
         actual_price   REAL,
         squared_error  REAL,
+        forecast_lower REAL,
+        forecast_upper REAL,
         recorded_at    TEXT    NOT NULL
     )
     """
@@ -320,11 +392,32 @@ class ForecastTracker:
             try:
                 conn.execute(self._TABLE_DDL)
                 conn.execute(self._INDEX_DDL)
+                self._migrate_add_bound_columns(conn)
                 conn.commit()
             finally:
                 conn.close()
         except Exception as exc:  # pragma: no cover
             logger.warning("ForecastTracker._ensure_table failed: %s", exc)
+
+    def _migrate_add_bound_columns(self, conn: sqlite3.Connection) -> None:
+        """Additive migration: add ``forecast_lower``/``forecast_upper`` to a
+        pre-existing ``forecast_errors`` table that predates them.
+
+        ``_TABLE_DDL``'s ``CREATE TABLE IF NOT EXISTS`` already includes both
+        columns for a brand-new DB, so this only ever fires against an older
+        one. Guarded by ``PRAGMA table_info`` (not a bare ``try/except`` on
+        the ``ALTER TABLE`` itself) so it is idempotent and safe to run on
+        every startup, matching ``data/historical_store.py``'s established
+        additive-migration convention. Never raises -- a failure here is
+        caught by ``_ensure_table``'s own try/except and only WARNS
+        (CONSTRAINT #6); the table remains usable for every pre-existing
+        column either way.
+        """
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+        if "forecast_lower" not in cols:
+            conn.execute("ALTER TABLE forecast_errors ADD COLUMN forecast_lower REAL")
+        if "forecast_upper" not in cols:
+            conn.execute("ALTER TABLE forecast_errors ADD COLUMN forecast_upper REAL")
 
     # -------------------------------------------------------------------------
     # Public API
@@ -335,6 +428,7 @@ class ForecastTracker:
         horizon_days: int,
         model_prices: Dict[str, float],
         forecast_ts: datetime,
+        model_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> None:
         """Insert per-model forecast prices for future validation.
 
@@ -351,15 +445,34 @@ class ForecastTracker:
             Mapping of model name → predicted terminal price.
         forecast_ts : datetime
             UTC timestamp when the forecast was computed.
+        model_bounds : dict[str, tuple[float, float]], optional
+            Mapping of model name → ``(lower, upper)`` published prediction-
+            interval bounds, for models that publish one (today, only
+            ``monte_carlo`` -- run_monte_carlo's 5th/95th simulated-path
+            percentiles). A model absent from this dict, or whose bound pair
+            is missing/non-finite, gets ``NULL``/``NULL`` -- never a
+            fabricated interval (CONSTRAINT #4). Backs
+            ``coverage_report()``/``interval_score_stats()`` below.
         """
+        model_bounds = model_bounds or {}
         try:
             now_iso = datetime.now(timezone.utc).isoformat()
             ts_iso = forecast_ts.isoformat() if isinstance(forecast_ts, datetime) else str(forecast_ts)
-            rows = [
-                (symbol.upper(), name, horizon_days, ts_iso, price, now_iso)
-                for name, price in model_prices.items()
-                if price and price > 0.0
-            ]
+            rows = []
+            for name, price in model_prices.items():
+                if not (price and price > 0.0):
+                    continue
+                lower: Optional[float] = None
+                upper: Optional[float] = None
+                bounds = model_bounds.get(name)
+                if bounds is not None:
+                    try:
+                        lo, hi = bounds
+                        if lo is not None and hi is not None and math.isfinite(lo) and math.isfinite(hi):
+                            lower, upper = float(lo), float(hi)
+                    except (TypeError, ValueError):
+                        pass
+                rows.append((symbol.upper(), name, horizon_days, ts_iso, price, lower, upper, now_iso))
             if not rows:
                 return
             with self._lock:
@@ -367,8 +480,8 @@ class ForecastTracker:
                 conn.executemany(
                     """INSERT INTO forecast_errors
                        (symbol, model_name, horizon_days, forecast_ts,
-                        forecast_price, recorded_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                        forecast_price, forecast_lower, forecast_upper, recorded_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     rows,
                 )
                 conn.commit()
@@ -940,3 +1053,188 @@ class ForecastTracker:
                 symbol, horizon_days, exc,
             )
             return empty_df
+
+    def coverage_report(
+        self,
+        symbol: str,
+        horizon_days: int,
+        window_days: int = 60,
+        min_obs: int = 5,
+        model_name: str = MODEL_MONTE_CARLO,
+        nominal_coverage: float = MC_NOMINAL_COVERAGE,
+    ) -> Dict[str, object]:
+        """Empirical coverage of a model's published prediction interval.
+
+        Compares the fraction of realized prices ``actual_price`` falling
+        within ``[forecast_lower, forecast_upper]`` against ``nominal_coverage``
+        (0.90 for ``monte_carlo`` -- run_monte_carlo's own 5th/95th simulated
+        -path percentile contract). Only rows that carry BOTH bounds are
+        counted -- every model besides ``monte_carlo`` is a point forecast
+        with no published interval and is silently excluded rather than
+        treated as "0% covered" (that would conflate "no interval published"
+        with "the interval missed").
+
+        This is the "no coverage check ever existed" gap named by the
+        forecast-math audit's WP6 (see
+        ``docs/known_issues/forecast_ito_double_correction_and_horizon_units.md``).
+
+        Parameters
+        ----------
+        symbol : str
+            Ticker symbol.
+        horizon_days : int
+            Forecast horizon to query.
+        window_days : int
+            Rolling window size in calendar days (default 60).
+        min_obs : int
+            Minimum bounded, completed rows before reporting a real
+            coverage figure (default 5) -- below this, ``empirical_coverage``
+            is ``None`` rather than a noisy fraction from a handful of rows
+            (CONSTRAINT #4: never fabricate a measurement from insufficient
+            data).
+        model_name : str
+            Which model's rows to score (default ``monte_carlo`` -- the only
+            model that publishes bounds today).
+        nominal_coverage : float
+            The interval's advertised coverage (default 0.90).
+
+        Returns
+        -------
+        dict
+            ``{"symbol", "horizon_days", "model_name", "n", "empirical_coverage",
+            "nominal_coverage", "reason"}``. ``empirical_coverage`` is
+            ``None`` (never fabricated) when ``n < min_obs``; ``reason``
+            names why in that case, else ``None``. Never raises
+            (CONSTRAINT #6) -- a DB error degrades to the same
+            insufficient-history shape with ``reason="error"``.
+        """
+        result: Dict[str, object] = {
+            "symbol": symbol.upper(),
+            "horizon_days": horizon_days,
+            "model_name": model_name,
+            "n": 0,
+            "empirical_coverage": None,
+            "nominal_coverage": nominal_coverage,
+            "reason": None,
+        }
+        try:
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    """SELECT actual_price, forecast_lower, forecast_upper
+                       FROM forecast_errors
+                       WHERE symbol        = ?
+                         AND horizon_days  = ?
+                         AND model_name    = ?
+                         AND actual_price  IS NOT NULL
+                         AND forecast_lower IS NOT NULL
+                         AND forecast_upper IS NOT NULL
+                         AND forecast_ts   >= ?""",
+                    (symbol.upper(), horizon_days, model_name, since_iso),
+                ).fetchall()
+
+            n = len(rows)
+            result["n"] = n
+            if n < min_obs:
+                result["reason"] = f"insufficient_history (n={n} < min_obs={min_obs})"
+                return result
+
+            # nominal_coverage -> alpha only to feed the shared formula's
+            # interval-score half, which this method doesn't report --
+            # coverage_report only ever wants the empirical-coverage output.
+            coverage, _ = compute_coverage_and_interval_score(rows, alpha=max(1e-9, 1.0 - nominal_coverage))
+            result["empirical_coverage"] = coverage
+            return result
+
+        except Exception as exc:
+            logger.warning(
+                "ForecastTracker.coverage_report(%s, h=%d) failed: %s", symbol, horizon_days, exc
+            )
+            result["reason"] = "error"
+            return result
+
+    def interval_score_stats(
+        self,
+        symbol: str,
+        horizon_days: int,
+        window_days: int = 60,
+        min_obs: int = 5,
+        model_name: str = MODEL_MONTE_CARLO,
+        alpha: float = MC_INTERVAL_ALPHA,
+    ) -> Dict[str, object]:
+        """Mean Gneiting & Raftery (2007) interval score for a model's
+        published ``(1 - alpha)`` prediction interval.
+
+        A genuine proper scoring rule for interval forecasts, computed
+        directly from the stored ``[forecast_lower, forecast_upper]`` bounds
+        and the realized ``actual_price`` -- rewards a narrow interval that
+        still contains the outcome and penalizes both a miss and needless
+        width::
+
+            IS_alpha(l, u, y) = (u - l)
+                                + (2/alpha) * (l - y) * 1{y < l}
+                                + (2/alpha) * (y - u) * 1{y > u}
+
+        Lower is better. This is deliberately NOT called "CRPS": a full CRPS
+        needs the entire predictive distribution (every simulated Monte
+        Carlo path), not just two published quantiles, and persisting every
+        simulation path per forecast per cycle would multiply this table's
+        row count by ``settings``'s simulation count for no genuinely new
+        information this interval score doesn't already capture at the
+        published-quantile level. See the WP6 measurement-layer notes in
+        ``docs/known_issues/forecast_ito_double_correction_and_horizon_units.md``.
+
+        Returns
+        -------
+        dict
+            ``{"symbol", "horizon_days", "model_name", "n", "mean_interval_score",
+            "alpha", "reason"}``. ``mean_interval_score`` is ``None`` (never
+            fabricated) when ``n < min_obs``, matching ``coverage_report``'s
+            contract. Never raises (CONSTRAINT #6).
+        """
+        result: Dict[str, object] = {
+            "symbol": symbol.upper(),
+            "horizon_days": horizon_days,
+            "model_name": model_name,
+            "n": 0,
+            "mean_interval_score": None,
+            "alpha": alpha,
+            "reason": None,
+        }
+        try:
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    """SELECT actual_price, forecast_lower, forecast_upper
+                       FROM forecast_errors
+                       WHERE symbol        = ?
+                         AND horizon_days  = ?
+                         AND model_name    = ?
+                         AND actual_price  IS NOT NULL
+                         AND forecast_lower IS NOT NULL
+                         AND forecast_upper IS NOT NULL
+                         AND forecast_ts   >= ?""",
+                    (symbol.upper(), horizon_days, model_name, since_iso),
+                ).fetchall()
+
+            n = len(rows)
+            result["n"] = n
+            if alpha <= 0:
+                result["reason"] = "invalid_alpha"
+                return result
+            if n < min_obs:
+                result["reason"] = f"insufficient_history (n={n} < min_obs={min_obs})"
+                return result
+
+            _, mean_score = compute_coverage_and_interval_score(rows, alpha=alpha)
+            result["mean_interval_score"] = mean_score
+            return result
+
+        except Exception as exc:
+            logger.warning(
+                "ForecastTracker.interval_score_stats(%s, h=%d) failed: %s", symbol, horizon_days, exc
+            )
+            result["reason"] = "error"
+            return result

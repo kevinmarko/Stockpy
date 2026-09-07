@@ -455,6 +455,11 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "inference — a real change to what the platform's scoring is "
         "trained on, not a config toggle."
     ),
+    "META_LABELING_BACKFILL_BRIDGE_ENABLED": (
+        "Master switch for the Forecast Backfill screen's live meta-labeler bridge. "
+        "Direct change to the live position-sizing gate surface, allowing screen-trained "
+        "models to gate real sizing if they pass PBO/DSR checks."
+    ),
     "JULES_ENABLED": (
         "Enables the Jules third-party autonomous coding-agent integration "
         "(data/jules_client.py) -- when on, dispatch_jules_task can make Jules "

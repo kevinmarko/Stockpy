@@ -83,7 +83,8 @@ _PHASES: Tuple[Tuple[str, int], ...] = (
     ("meta_targets", 4),
     ("backtraining", 5),
     ("backfilling", 6),
-    ("exporting", 7),
+    ("registry_bridge", 7),
+    ("exporting", 8),
 )
 _TOTAL_STEPS = len(_PHASES)
 
@@ -146,6 +147,9 @@ def _run(params: Dict[str, Any], emit) -> int:
         engine.step_6_execute_backfill()
 
         _phase(*_PHASES[6])
+        engine.step_7_register_live_meta_labelers()
+
+        _phase(*_PHASES[7])
         output_df, summary = engine.export_results()
 
         emit(

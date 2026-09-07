@@ -291,4 +291,71 @@ describe("ForecastBackfillScreen (real mock API)", () => {
 
     vi.useRealTimers();
   });
+
+  it("renders the Live Registry / CPCV DSR / PBO columns since the mock's timeseries_momentum_10d row carries a registry_key", async () => {
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+
+    expect(screen.getByRole("columnheader", { name: "Live Registry" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "CPCV DSR" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "PBO" })).toBeInTheDocument();
+    expect(screen.getByText("meta_labeler_backfill_timeseries_momentum")).toBeInTheDocument();
+    expect(screen.getByText("0.9680")).toBeInTheDocument(); // cpcv_dsr
+    expect(screen.getByText("0.3100")).toBeInTheDocument(); // pbo
+  });
+
+  it("hides the Live Registry / CPCV DSR / PBO columns entirely when no row carries a registry_key (default/pre-bridge behavior)", async () => {
+    vi.spyOn(api, "getForecastBackfill").mockResolvedValueOnce({
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      horizons: [10],
+      metrics: {
+        timeseries_momentum_10d: {
+          accuracy: 0.52, auc: 0.54, n_train: 100, n_test: 0, split_date: "CPCV", is_active: true,
+        },
+      },
+      tickers: ["AAPL"],
+    });
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+
+    expect(screen.queryByRole("columnheader", { name: "Live Registry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "CPCV DSR" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "PBO" })).not.toBeInTheDocument();
+  });
+
+  it("shows a '(Skipped)' badge with the honest skip_reason as a tooltip when the bridge attempted but did not register a model", async () => {
+    vi.spyOn(api, "getForecastBackfill").mockResolvedValueOnce({
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      horizons: [10],
+      metrics: {
+        rsi2_mean_reversion_10d: {
+          accuracy: 0.53, auc: 0.55, n_train: 200, n_test: 0, split_date: "CPCV", is_active: true,
+          cpcv_dsr: null, pbo: null, mean_oos_sharpe: null,
+          registry_key: "meta_labeler_backfill_rsi2_mean_reversion",
+          registered: false,
+          skip_reason: "incompatible_features_missing_RSI_14,Vol_20",
+        },
+      },
+      tickers: ["AAPL"],
+    });
+    renderScreen();
+    await screen.findByText("rsi2_mean_reversion_10d");
+
+    const skipped = await screen.findByText(/meta_labeler_backfill_rsi2_mean_reversion \(Skipped\)/);
+    expect(skipped).toBeInTheDocument();
+    expect(skipped).toHaveAttribute("title", "incompatible_features_missing_RSI_14,Vol_20");
+    // A skipped/blocked attempt still honestly renders "--" for CPCV DSR/PBO
+    // when the backend reports them as null, never a fabricated 0.
+    expect(screen.getAllByText("--").length).toBeGreaterThan(0);
+  });
+
+  it("discloses that the feature-compatibility gate currently blocks every eligible signal, without overclaiming the bridge is live", async () => {
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+    expect(
+      screen.getByText(/refuses every one of the 6 eligible signals/)
+    ).toBeInTheDocument();
+  });
 });

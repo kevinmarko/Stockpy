@@ -154,3 +154,11 @@ root cause, and verification for every item lives in
    cache file behind — fixed to the same write-then-rename idiom used elsewhere in this
    codebase (e.g. `execution/kill_switch.py`, `desktop/orchestrator_daemon.py`'s
    `_write_daemon_file`).
+
+## Backfill-Screen Live Meta-Labeler Bridge
+
+This signal is eligible for the `ml/forecast_backfill.py` meta-labeler bridge.
+- **Registry Key**: `meta_labeler_backfill_options_flow_sentiment`
+- **Live Horizon**: 10 days (default)
+- **Measured DSR/PBO**: Pending a successful run (requires explicit opt-in).
+- **Feature-Compatibility Caveat**: RESOLVED — the live per-ticker row (`strategy_engine.py::evaluate_security()`) was widened with the 9 previously-missing feature names this signal (and its 5 siblings) declare, genuinely computed in `processing_engine.py`/`ml/forecast_backfill.py`, not merely whitelisted. `check_feature_compatibility()` now returns `True` for this signal's real `meta_label_features` (see `tests/test_train_meta_labelers.py::TestSixEligibleSignalsFeatureCompatibility`). A trained model for this signal can now actually reach `global_meta_registry` once it separately clears the DSR/PBO deployability gate (unchanged by this fix). Note also: this signal's declared `ROC_5`/`ROC_20` features were previously silently dropped every training run since `ml/forecast_backfill.py::step_2_calculate_technical_features()` never computed them — they are now genuinely computed there too, so this signal's feature compatibility fix is real at both the training-data and live-row level, not just the live-row level.
