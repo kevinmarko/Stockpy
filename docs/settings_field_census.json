@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "5e4eec3f2afae7d62226271699444b71e546c3ff",
+    "git_commit": "553e987478ae98c71b33cd9e3b330433d96dc6dc",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3802,7 +3802,7 @@
           "route": "/data/universe",
           "method": "PUT",
           "function": "update_universe",
-          "line": 736,
+          "line": 750,
           "writes_env": true,
           "env_write_calls_direct": [
             "write_setting"
@@ -3821,7 +3821,7 @@
           "route": "/data/cache-long-short/simulate",
           "method": "POST",
           "function": "simulate_cache_long_short",
-          "line": 940,
+          "line": 954,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3838,7 +3838,7 @@
           "route": "/data/pairs/analyze",
           "method": "POST",
           "function": "analyze_pairs_ondemand",
-          "line": 966,
+          "line": 980,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3855,7 +3855,7 @@
           "route": "/data/pairs/scan",
           "method": "POST",
           "function": "scan_pairs_ondemand",
-          "line": 1003,
+          "line": 1017,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3872,7 +3872,7 @@
           "route": "/data/options/recompute",
           "method": "POST",
           "function": "recompute_options_ondemand",
-          "line": 1042,
+          "line": 1056,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3889,7 +3889,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 1269,
+          "line": 1283,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3906,7 +3906,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 1312,
+          "line": 1326,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3923,7 +3923,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 1414,
+          "line": 1428,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3940,7 +3940,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1563,
+          "line": 1577,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3961,7 +3961,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 2137,
+          "line": 2151,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -5088,7 +5088,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1552",
+          "api/data_api.py:1566",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,
