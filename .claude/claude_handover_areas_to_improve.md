@@ -9,13 +9,23 @@ don't relay.
 
 ## Recent Fixes (2026-09-07) — CORRECTED after independent re-verification
 
-1. **Forecast Universe Discrepancy — real, but narrower than originally claimed.**
-   Commit `5eb9c6c1` replaced two specific hardcoded ticker-list fallbacks (in
-   `ml/forecast_backfill.py`'s `AgenticForecastBackfiller` default training universe, and
-   `scripts/refresh_validations.py`'s `forecast_direction_arima_hw` `STRATEGY_REGISTRY`
-   validation universe) with calls to `data/portfolio_sync.py::compute_tracked_universe()`.
-   This is real and correct (one incomplete call site and two broken registry tests it
-   introduced were found and fixed on the branch). It does **not** touch
+1. **Forecast Universe Discrepancy — real, but a second, more serious bug was found and
+   fixed on top of it.** Commit `5eb9c6c1` replaced two specific hardcoded ticker-list
+   fallbacks (in `ml/forecast_backfill.py`'s `AgenticForecastBackfiller` default training
+   universe, and `scripts/refresh_validations.py`'s `forecast_direction_arima_hw`
+   `STRATEGY_REGISTRY` validation universe) with calls to
+   `data/portfolio_sync.py::compute_tracked_universe()`. The wiring itself is real. But as
+   shipped, `_get_forecast_direction_universe()` returned `compute_tracked_universe()`'s result
+   **alone**, silently *replacing* — not widening — the documented curated 10-ticker benchmark
+   (`docs/signals/forecast_alignment.md`: "the same 10-ticker universe as the EDGAR PIT
+   adapters"). Verified live against a real cached Robinhood account snapshot: the resolved
+   universe became a 26-ticker REIT/BDC/dividend book with **zero overlap** with the documented
+   benchmark — meaning the registry entry's validated numbers become non-reproducible across
+   machines (whoever's brokerage cache happens to be warm silently changes what gets backtested).
+   **Fixed**: `_get_forecast_direction_universe()` now returns the additive union of a new
+   `FORECAST_DIRECTION_CURATED_UNIVERSE` constant (the original list, never dropped) with
+   `compute_tracked_universe()`'s result — mirroring the 2026-08-21 tiered-universe-widening
+   precedent (widen via union, never silently substitute). Also does **not** touch
    `data/portfolio_sync.py::build_sync_report()` (the function the webapp's Universe
    Transparency panel actually reads) and does **not** close the broader ~26-vs-430
    forecast/trading universe mismatch described in
@@ -90,21 +100,30 @@ task — CLAUDE.md requires an Implementation Plan before building in this tier)
 - **The Issue**: As documented in `docs/JULES_INTEGRATION.md`, Jules's `confirm=True` dispatch gate relies on prompt/skill prose. There is no hard code-level interception point to physically assure that a human reviewed the exact prompt prior to dispatch.
 - **Goal**: Investigate if a physical wait/confirm intercept can be implemented at the HTTP/SDK layer when interacting with Jules, rather than trusting the LLM to follow the instructions in the prompt.
 
-### 4. Recalculate Strategy Validations
-- **The Issue (status as of this correction)**: `forecast_direction_arima_hw`'s validation
-  metrics against the widened universe are being independently re-verified in a parallel audit
-  pass as this document is being corrected; that pass's result was not yet available when this
-  correction was written. **Do not assume this is still blocked on a network outage without
-  checking the latest state** — re-verify network availability fresh (this sandbox has, at
-  times, had working `yfinance` access despite no configured `FMP_API_KEY`; do not assume
-  either direction without testing).
-- **Goal**: Re-run the `validation.harness` on the widened universe and formally update
-  `STRATEGY_REGISTRY` and the Validation Log per the `strategy-validation` skill's mandatory
-  two-place documentation rule (`docs/signals/<name>.md` + `docs/VALIDATION_STRATEGY_FIX_LOG.md`),
-  even if the honest result is `deployable=False`.
+### 4. Recalculate Strategy Validations — DONE, closed. The "network outage" claim was false.
+- **Resolved.** Both yfinance and FMP were confirmed live and reachable in this sandbox (a real
+  5-day AAPL yfinance download succeeded; a real FMP `/historical-price-eod` call with a real
+  `FMP_API_KEY` returned real data) — there was no outage blocking this at the time the original
+  claim was made. `python -m scripts.refresh_validations --strategies forecast_direction_arima_hw
+  --start 2015-01-01 --end 2026-09-07 --workers 1 --json` was run twice against real data: once
+  against the buggy tracked-only universe (item 1's bug, before the fix), once against the fixed
+  curated∪tracked universe (after). Honest result **both times**: `deployable=False` (never
+  loosened, never date-snooped) —
+
+  | Universe | Tickers | Sharpe | PBO | DSR | MaxDD |
+  |---|---|---|---|---|---|
+  | Curated-only (last recorded, 2026-08-19) | 10+SPY | 0.424 | 0.000 | 0.841 | 29.8% |
+  | Tracked-only (item 1's bug) | 26 (0 curated) | −0.441 | 0.000 | 0.145 | 38.3% |
+  | Curated ∪ tracked (fixed) | 36 (11+25) | −0.175 | 0.000 | 0.338 | 21.7% |
+
+  Documented per the `strategy-validation` skill's mandatory two-place rule:
+  `docs/signals/forecast_alignment.md` (new 2026-09-07 section) and
+  `docs/VALIDATION_STRATEGY_FIX_LOG.md` (new 2026-09-07 entry). This refutes the original
+  handover claim ("remains marked as Unvalidated") outright — a real, measured entry already
+  existed from 2026-08-19, and the strategy has never actually been deployable.
+- No further action needed on this item.
 
 ## Handoff Instructions
 Items 1-3 above need their own Implementation Plan and operator scoping conversation before any
-code is written — do not start building against them from this doc alone. Item 4 should be
-checked against whatever the latest validation-recalculation attempt found before re-running
-anything from scratch.
+code is written — do not start building against them from this doc alone. Item 4 is closed;
+see above.
