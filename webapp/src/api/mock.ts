@@ -5251,6 +5251,15 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Write & Execution Gates",
+    key: "META_LABELING_BACKFILL_BRIDGE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the Forecast Backfill screen's live meta-labeler bridge -- when True, screen-trained models can gate real position sizing if they clear the PBO/DSR deployability check.",
+  },
+  {
+    group: "Write & Execution Gates",
     key: "OFI_SHIELD_ENABLED",
     type: "boolean",
     value: false,
