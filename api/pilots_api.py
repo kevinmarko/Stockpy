@@ -5274,6 +5274,17 @@ def _build_editable_at_index() -> Dict[str, str]:
 _EDITABLE_AT_INDEX: Dict[str, str] = _build_editable_at_index()
 
 
+class SettingsReferenceUpdateRequest(BaseModel):
+    """Body for ``PUT``/``PATCH /settings/reference``. Same shape as
+    :class:`TunablesUpdateRequest` (``values`` + ``confirm``) — this endpoint
+    is not a new write mechanism, it is :func:`_validate_and_write_payload`
+    scoped to :data:`_REFERENCE_WRITE_INDEX` instead of one of the other
+    editors' hand-curated indexes."""
+
+    values: Dict[str, Any] = Field(..., max_length=64)
+    confirm: Dict[str, str] = Field(default_factory=dict, max_length=64)
+
+
 def _infer_reference_field_type(fi: Any) -> str:
     """Infer wire type ('boolean' | 'number' | 'string') from a pydantic FieldInfo."""
     if fi is None:
@@ -5291,6 +5302,50 @@ def _infer_reference_field_type(fi: Any) -> str:
     if annotation in (int, float):
         return "number"
     return "string"
+
+
+def _build_reference_write_index() -> Dict[str, tuple]:
+    """Every non-secret, non-``no_op`` BOOLEAN field on ``Settings`` — the
+    ``PUT``/``PATCH /settings/reference`` write scope, letting an operator
+    toggle any real on/off flag directly from the Settings Reference screen
+    rather than only the handful of fields a dedicated editor happens to also
+    cover.
+
+    DERIVED from live introspection (``Settings.model_fields`` +
+    ``env_io.ALLOWED_KEYS`` + ``docs/settings_liveness.json``'s ``no_op``
+    bucket), not hand-listed — mirroring this codebase's own established
+    convention for a flag registry that must never silently miss a
+    newly-added field (see ``pilots.feature_flags.FEATURE_FLAG_KEYS``
+    inheriting ``settings_keysets.DANGEROUS_KEYS`` by import rather than by
+    copy, for the identical reason). A brand-new boolean ``Settings`` field
+    becomes toggleable here automatically, with zero code change in this
+    function. Non-boolean fields are structurally excluded — even a
+    maliciously/incorrectly crafted request body cannot write one through
+    this endpoint, since ``_validate_and_write_payload`` rejects any key
+    outside its ``index_spec`` as ``unknown_key`` before it ever inspects the
+    submitted value.
+
+    ``no_op`` fields (e.g. ``OPTIONS_EARNINGS_CRUSH_ENABLED`` — read nowhere
+    in production code) are excluded on purpose, matching the exact same
+    caution already applied when choosing which fields to promote into the
+    "Options Desk Automation" Tunables group below: a live-looking Toggle
+    switch for a field that provably does nothing on write would be
+    CONSTRAINT #4-adjacent — technically not a fabricated VALUE, but a
+    fabricated IMPLICATION that the control does something. The GET response
+    still reports these fields (``writable`` mirrors this same exclusion, see
+    below) with their own honest "not read anywhere" callout instead of a
+    toggle."""
+    no_op_keys = settings_meta.load_liveness().get("no_op", frozenset())
+    return {
+        key: ("bool", {})
+        for key, fi in Settings.model_fields.items()
+        if key in env_io.ALLOWED_KEYS
+        and _infer_reference_field_type(fi) == "boolean"
+        and key not in no_op_keys
+    }
+
+
+_REFERENCE_WRITE_INDEX: Dict[str, tuple] = _build_reference_write_index()
 
 
 @app.get("/settings/reference", dependencies=[Depends(require_read_token)])
@@ -5337,10 +5392,22 @@ def get_settings_reference() -> Dict[str, Any]:
                 json.dumps(default_val)
             except (TypeError, ValueError):
                 default_val = str(default_val) if default_val is not None else None
+        # A secret field's compile-time default must never be echoed in the
+        # clear, even though `value` (the live value) already is masked above
+        # — the field-level literal `Field(default=...)` is just as much a
+        # potential credential as the running value would be (CONSTRAINT #3).
+        if is_secret:
+            default_val = "•••• (set)" if default_val else "(not set)"
 
         description = getattr(fi, "description", None) or None
         domain = settings_domains.KEY_DOMAIN.get(key, "Filesystem/Bootstrap")
         dangerous = key in settings_keysets.DANGEROUS_KEYS
+        field_type = _infer_reference_field_type(fi)
+        # True iff a bare boolean toggle on this screen actually writes
+        # somewhere real — mirrors `_REFERENCE_WRITE_INDEX`'s own membership
+        # test exactly (same two conditions), so this can never drift from
+        # what the PUT endpoint below will actually accept.
+        writable = key in _REFERENCE_WRITE_INDEX
         live_meta = settings_meta.field_metadata(
             key,
             pinned=pinned,
@@ -5355,10 +5422,11 @@ def get_settings_reference() -> Dict[str, Any]:
             "category": category,
             "value": value,
             "default": default_val,
-            "type": _infer_reference_field_type(fi),
+            "type": field_type,
             "description": description,
             "domain": domain,
             "dangerous": dangerous,
+            "writable": writable,
             "liveness": live_meta,
             "editable_at": editable_at,
         })
@@ -5368,6 +5436,35 @@ def get_settings_reference() -> Dict[str, Any]:
         "total": len(fields),
         "domains": settings_domains.DOMAINS,
     }
+
+
+@app.put(
+    "/settings/reference",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/reference",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_reference(body: SettingsReferenceUpdateRequest) -> Dict[str, Any]:
+    """Toggle any non-secret BOOLEAN ``Settings`` field on/off directly from
+    the Settings Reference screen.
+
+    Goes through the exact same shared :func:`_validate_and_write_payload`
+    every other ``/settings/*`` editor already uses — the same
+    ``DANGEROUS_KEYS`` typed-confirmation gate, the same bootstrap-key
+    live-apply refusal, the same per-key liveness reporting — scoped to
+    :data:`_REFERENCE_WRITE_INDEX` instead of a hand-curated editor group. A
+    non-boolean field, a secret, or an excluded field is rejected as
+    ``unknown_key``/``forbidden_key`` exactly as it would be on any other
+    editor; nothing new is introduced here beyond the write scope itself."""
+    return _validate_and_write_payload(body.values, _REFERENCE_WRITE_INDEX, confirm=body.confirm)
 
 
 # ---------------------------------------------------------------------------

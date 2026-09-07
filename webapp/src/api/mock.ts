@@ -2352,6 +2352,15 @@ const MOCK_DANGEROUS_KEYS = new Set([
 const MOCK_DEMO_ONLY_STATES: Record<string, "env_pinned" | "no_effect"> = {
   LOG_LEVEL: "env_pinned",
   REQUIRED_RETURN_RATE: "no_effect",
+  // Unlike the two above, this ONE entry does describe real platform
+  // behaviour: OPTIONS_EARNINGS_CRUSH_ENABLED is a genuine no_op per
+  // docs/settings_liveness.json (read nowhere in production code). Without
+  // this override it falls through to the generic live_safe/restart_required
+  // mock classification below, which -- caught live in the Settings
+  // Reference screen -- rendered it as "Applies now" with an interactive
+  // Toggle, exactly the misleading "control that does nothing" trap
+  // `writable`'s no_op exclusion (mockSettingsReference()) exists to prevent.
+  OPTIONS_EARNINGS_CRUSH_ENABLED: "no_effect",
 };
 
 function mockLiveness(key: string): TunableLiveness {
@@ -5435,7 +5444,14 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
 
 // Representative multi-domain sample for Settings Reference offline mock.
 // Covers all 14 domains with diverse types, secret masking, and liveness states.
+// Overrides key for `PUT /settings/reference` boolean toggles — a dedicated
+// storage bucket, distinct from the per-editor override keys above, since
+// this screen can write a field regardless of which (if any) dedicated
+// editor also covers it.
+const SETTINGS_REFERENCE_OVERRIDES_KEY = "stockpy_settings_reference_overrides";
+
 function mockSettingsReference(): SettingsReferenceResponse {
+  const overrides = readOverrides(SETTINGS_REFERENCE_OVERRIDES_KEY);
   const domains = [
     "Financial/Risk/Sizing",
     "Execution/Brokers",
@@ -5452,7 +5468,11 @@ function mockSettingsReference(): SettingsReferenceResponse {
     "Filesystem/Bootstrap",
     "RLHF",
   ];
-  const fields: SettingsReferenceField[] = [
+  // `writable` is a computed pass below, not per-literal here, so it can
+  // never drift from `type`/`category` the way a hand-typed boolean would —
+  // exactly the class of bug the real backend's own `writable = key in
+  // _REFERENCE_WRITE_INDEX` derivation exists to prevent (see api/pilots_api.py).
+  const baseFields: Omit<SettingsReferenceField, "writable">[] = [
     {
       key: "ADVISORY_ONLY",
       category: "allowed",
@@ -5463,7 +5483,11 @@ function mockSettingsReference(): SettingsReferenceResponse {
       domain: "Financial/Risk/Sizing",
       dangerous: true,
       liveness: mockLiveness("ADVISORY_ONLY"),
-      editable_at: "/settings/tunables",
+      // ADVISORY_ONLY is listed in BOTH _TUNABLE_GROUPS and (via
+      // settings_keysets.DANGEROUS_KEYS) _FEATURE_FLAGS_GROUPS. The real
+      // backend's _build_editable_at_index() checks /settings/feature-flags
+      // before /settings/tunables, first-match-wins -- this must match.
+      editable_at: "/settings/feature-flags",
     },
     {
       key: "KELLY_FRACTION",
@@ -5487,7 +5511,12 @@ function mockSettingsReference(): SettingsReferenceResponse {
       domain: "Execution/Brokers",
       dangerous: true,
       liveness: mockLiveness("BROKER_BACKEND"),
-      editable_at: "/settings/feature-flags",
+      // BROKER_BACKEND is also DANGEROUS_KEYS (so it's in
+      // _FEATURE_FLAGS_GROUPS too), but it's literally defined in
+      // _PAPER_BROKER_GROUPS, whose editor route is checked BEFORE
+      // /settings/feature-flags in _build_editable_at_index() -- paper-broker
+      // wins in the real backend, so it must win here too.
+      editable_at: "/settings/paper-broker",
     },
     {
       key: "OPTIONS_0DTE_ENABLED",
@@ -5646,10 +5675,119 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: "/settings/feature-flags",
     },
   ];
+  // `writable` mirrors the real backend's `key in _REFERENCE_WRITE_INDEX`
+  // exactly (non-secret boolean only) -- computed, never hand-typed per
+  // field, so it cannot drift the way the two editable_at literals above did.
+  // Applies any override an earlier `updateSettingsReference` call persisted,
+  // matching `buildTunablesResponse`'s read-overrides convention.
+  const fields: SettingsReferenceField[] = baseFields.map((f) => ({
+    ...f,
+    value: f.key in overrides ? overrides[f.key] : f.value,
+    // Mirrors the real backend's exclusion exactly: a no_op field (e.g.
+    // OPTIONS_EARNINGS_CRUSH_ENABLED, read nowhere in production) never gets
+    // a live-looking Toggle -- that would imply the control does something
+    // when it provably doesn't. `mockLiveness(key).applies === "no_effect"`
+    // is this mock's equivalent of the real backend's `no_op` bucket check.
+    writable: f.type === "boolean" && f.category === "allowed" && f.liveness.applies !== "no_effect",
+  }));
   return {
     fields,
     total: fields.length,
     domains,
+  };
+}
+
+function applySettingsReference(
+  values: Record<string, boolean>,
+  confirm: Record<string, string> = {},
+): TunablesUpdateResult {
+  // The write scope is exactly the writable rows `mockSettingsReference()`
+  // itself would report -- reusing that function (rather than re-deriving a
+  // second boolean/allowed check here) means this can never drift from what
+  // the screen actually shows as toggleable.
+  const writableKeys = new Set(
+    mockSettingsReference().fields.filter((f) => f.writable).map((f) => f.key),
+  );
+  const written: Record<string, boolean> = {};
+  const rejected: Record<string, string> = {};
+  for (const [key, val] of Object.entries(values)) {
+    if (!writableKeys.has(key)) {
+      rejected[key] = "unknown_key";
+      continue;
+    }
+    if (typeof val !== "boolean") {
+      rejected[key] = "expected_boolean";
+      continue;
+    }
+    written[key] = val;
+  }
+  // Dangerous-key confirmation gate -- identical ordering/semantics to
+  // applyTunablesGeneric's (runs after type validation, per-key, never
+  // whole-batch).
+  for (const key of Object.keys(written)) {
+    if (!MOCK_DANGEROUS_KEYS.has(key)) continue;
+    const echoed = confirm[key];
+    if (echoed === undefined) {
+      rejected[key] = "confirmation_required";
+      delete written[key];
+    } else if (echoed !== key) {
+      rejected[key] = "confirmation_mismatch";
+      delete written[key];
+    }
+  }
+
+  const perKeyApplies: Record<string, AppliesState> = {};
+  for (const key of Object.keys(written)) {
+    perKeyApplies[key] = mockLiveness(key).applies;
+  }
+  const appliedNow = Object.keys(perKeyApplies).filter((k) => perKeyApplies[k] === "immediately");
+  const pending = Object.keys(perKeyApplies).filter((k) => perKeyApplies[k] !== "immediately");
+
+  if (Object.keys(written).length > 0) {
+    try {
+      localStorage.setItem(
+        SETTINGS_REFERENCE_OVERRIDES_KEY,
+        JSON.stringify({ ...readOverrides(SETTINGS_REFERENCE_OVERRIDES_KEY), ...written }),
+      );
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  const counts: Record<AppliesState, number> = {
+    immediately: 0,
+    next_daemon_restart: 0,
+    no_effect: 0,
+    env_pinned: 0,
+  };
+  for (const s of Object.values(perKeyApplies)) counts[s] += 1;
+  const present = (Object.keys(counts) as AppliesState[]).filter((s) => counts[s] > 0);
+  const summary: AppliesSummary =
+    present.length === 1 ? present[0] : present.length === 0 ? "next_daemon_restart" : "mixed";
+
+  let note: string;
+  if (Object.keys(written).length === 0) {
+    note = "Nothing was written.";
+  } else if (appliedNow.length && !pending.length) {
+    note = "Saved to .env and applied to the running process — no restart needed.";
+  } else if (pending.length && !appliedNow.length) {
+    note =
+      "Saved to .env. The running process keeps the previous values until it restarts (POST /daemon/restart).";
+  } else {
+    note =
+      `Saved to .env. ${appliedNow.length} applied to the running process immediately; ` +
+      `${pending.length} take effect on the next restart (${pending.join(", ")}).`;
+  }
+
+  return {
+    written,
+    rejected,
+    applies: summary,
+    applies_counts: counts,
+    per_key_applies: perKeyApplies,
+    restart_required: pending.length > 0,
+    restart_endpoint: "POST /daemon/restart",
+    note,
   };
 }
 
@@ -11426,6 +11564,13 @@ export const mockApi = {
 
   async getSettingsReference(): Promise<SettingsReferenceResponse> {
     return delay(mockSettingsReference());
+  },
+
+  async updateSettingsReference(
+    values: Record<string, boolean>,
+    confirm: SettingsConfirmMap = {},
+  ): Promise<TunablesUpdateResult> {
+    return delay(applySettingsReference(values, confirm));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----

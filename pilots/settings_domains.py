@@ -47,9 +47,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "MAX_ORDER_RATE_PER_MIN": "Financial/Risk/Sizing",
     "RISK_GATE_ENFORCE_MARKET_HOURS": "Financial/Risk/Sizing",
     "META_LABEL_MIN_CONFIDENCE": "Financial/Risk/Sizing",
-    "KILLSWITCH_VIX_THRESHOLD": "Financial/Risk/Sizing",
-    "KILLSWITCH_SAHM_THRESHOLD": "Financial/Risk/Sizing",
-    "KILLSWITCH_OAS_THRESHOLD": "Financial/Risk/Sizing",
     "KILLSWITCH_VIX_THRESHOLD_AGREED": "Financial/Risk/Sizing",
     "KILLSWITCH_SAHM_THRESHOLD_AGREED": "Financial/Risk/Sizing",
     "MACRO_REGIME_GATE_ENABLED": "Financial/Risk/Sizing",
@@ -79,9 +76,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     # Market Data / DB
     "MCP_DATABASE_URL_RO": "Market Data/DB",
     "DATABASE_URL": "Market Data/DB",
-    "DB_ECHO": "Market Data/DB",
-    "SQLITE_BUSY_TIMEOUT_MS": "Market Data/DB",
-    "SQLITE_WAL_AUTOCHECKPOINT": "Market Data/DB",
     "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE": "Market Data/DB",
     "HISTORICAL_STORE_ENABLED": "Market Data/DB",
     "FUNDAMENTALS_SOURCE": "Market Data/DB",
@@ -163,7 +157,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "MCP_OAUTH_PASSWORD": "Filesystem/Bootstrap",
     "MCP_OAUTH_ISSUER_URL": "Filesystem/Bootstrap",
     "MCP_OAUTH_MULTI_USER_ENABLED": "Filesystem/Bootstrap",
-    "MCP_OAUTH_USERS": "Filesystem/Bootstrap",
     "MCP_HTTP_BEARER_TOKEN": "Filesystem/Bootstrap",
 }
 

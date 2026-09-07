@@ -452,6 +452,20 @@ class TestTunablesScopeInvariants:
         advanced_group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Advanced / Config")
         assert {k for k, _kind, _extras in advanced_group[1]} == _NEW_ADVANCED_KEYS
 
+    def test_options_desk_automation_group_has_exactly_the_intended_fields(self):
+        """Per-group membership, not just flat-index presence -- the flat
+        _TUNABLE_INDEX/group-name-list checks elsewhere would NOT catch a
+        field placed in the wrong group (e.g. a Circuit Breaker field
+        accidentally landing in Options Desk Automation)."""
+        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Options Desk Automation")
+        assert {k for k, _kind, _extras in group[1]} == _NEW_OPTIONS_DESK_KEYS
+        # The one field this promotion deliberately excludes, and why.
+        assert "OPTIONS_EARNINGS_CRUSH_ENABLED" not in _NEW_OPTIONS_DESK_KEYS
+
+    def test_circuit_breaker_group_has_exactly_the_intended_fields(self):
+        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Circuit Breaker")
+        assert {k for k, _kind, _extras in group[1]} == _NEW_CIRCUIT_BREAKER_KEYS
+
 
 # ---------------------------------------------------------------------------
 # Bounds sanity (Fix 2: bounds are NEW guardrails, not ported from settings.py)

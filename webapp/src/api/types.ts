@@ -2016,6 +2016,15 @@ export interface SettingsReferenceField {
   description: string | null;
   domain: string;
   dangerous: boolean;
+  /**
+   * True iff this field can be toggled directly from the Settings Reference
+   * screen — a non-secret BOOLEAN field, derived server-side from live
+   * introspection (never hand-listed), so a brand-new flag becomes
+   * toggleable automatically with no frontend change. `false` for every
+   * non-boolean field (numeric/string/enum/json) even when `editable_at`
+   * points somewhere else, and for every secret/excluded field.
+   */
+  writable: boolean;
   liveness: TunableLiveness;
   editable_at: string | null;
 }

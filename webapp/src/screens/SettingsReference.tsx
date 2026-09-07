@@ -1,12 +1,81 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router";
+import toast from "react-hot-toast";
 import { api } from "../api/client";
 import type { SettingsReferenceField, SettingsReferenceResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Loading, ErrorState } from "../components/ui";
+import { Loading, ErrorState, Button, Input } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { appliesBadge } from "../settingsLiveness";
+import { Toggle } from "../components/Toggle";
+import { Modal } from "../components/Modal";
+import { appliesBadge, saveOutcomeMessage } from "../settingsLiveness";
 import { theme } from "../theme";
+
+/**
+ * Confirmation for toggling ONE `dangerous` (`settings_keysets.DANGEROUS_KEYS`)
+ * boolean field. A single-field, lighter-weight sibling of
+ * `GenericSettingsEditor.tsx`'s `DangerousConfirmDialog` (that one is built
+ * for a batch of edited fields from a form's dirty-state, which this screen
+ * has no equivalent of — each field here saves immediately on its own). Same
+ * safety pattern regardless: type the field's exact name, never a bare "yes"
+ * — the real gate is enforced server-side either way, this is affordance.
+ */
+function ReferenceDangerousConfirmDialog({
+  field,
+  next,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  field: SettingsReferenceField;
+  next: boolean;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const confirmed = typed.trim() === field.key;
+
+  return (
+    <Modal ariaLabel="Confirm safety-critical settings change" onClose={onCancel}>
+      <div data-testid="reference-dangerous-confirm">
+        <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
+          Turn {field.key} {next ? "on" : "off"}?
+        </h2>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
+          This field is part of this platform&apos;s safety and execution controls.
+          {field.description ? ` ${field.description}` : ""}
+        </p>
+        <Input
+          label={`Type "${field.key}" to confirm`}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          hint="Required."
+        />
+        <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4)" }}>
+          <Button
+            variant="neutral"
+            onClick={onCancel}
+            style={{ flex: 1 }}
+            data-testid="reference-dangerous-confirm-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={onConfirm}
+            disabled={!confirmed}
+            pending={pending}
+            style={{ flex: 2 }}
+            data-testid="reference-dangerous-confirm-yes"
+          >
+            {next ? "Turn on" : "Turn off"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 export function SettingsReference() {
   const { data, loading, error, status, reload } = useApi<SettingsReferenceResponse>(
@@ -16,9 +85,61 @@ export function SettingsReference() {
 
   const [search, setSearch] = useState("");
   const [selectedDomain, setSelectedDomain] = useState<string>("ALL");
+  // A dangerous field's Toggle never writes directly (see handleToggle below)
+  // -- it opens this instead, and the confirm dialog performs the real write.
+  const [pendingConfirm, setPendingConfirm] = useState<{ field: SettingsReferenceField; next: boolean } | null>(null);
+  const [confirmSaving, setConfirmSaving] = useState(false);
 
   const fields = data?.fields ?? [];
   const domains = data?.domains ?? [];
+
+  /**
+   * A writable, non-dangerous field's Toggle calls this directly. Throwing
+   * here is what makes `Toggle` revert its optimistic flip and show an error
+   * toast -- see `Toggle`'s own `handleChange`.
+   */
+  async function handleToggle(field: SettingsReferenceField, next: boolean) {
+    if (field.dangerous) {
+      // Open the confirm dialog instead of writing. Returning normally (not
+      // throwing) lets `Toggle`'s own effect snap the switch back to the
+      // real current value once this resolves -- no premature flip, no
+      // misleading "update failed" toast for what is a pending confirmation,
+      // not a failure.
+      setPendingConfirm({ field, next });
+      return;
+    }
+    const result = await api.updateSettingsReference({ [field.key]: next });
+    const reason = result.rejected?.[field.key];
+    if (reason) {
+      throw new Error(`Could not update ${field.key}: ${reason}`);
+    }
+    const outcome = saveOutcomeMessage(result);
+    if (outcome) toast.success(outcome.text);
+    await reload();
+  }
+
+  async function handleConfirmedToggle() {
+    if (!pendingConfirm) return;
+    const { field, next } = pendingConfirm;
+    setConfirmSaving(true);
+    try {
+      const result = await api.updateSettingsReference(
+        { [field.key]: next },
+        { [field.key]: field.key },
+      );
+      const reason = result.rejected?.[field.key];
+      if (reason) {
+        toast.error(`Could not update ${field.key}: ${reason}`);
+      } else {
+        const outcome = saveOutcomeMessage(result);
+        if (outcome) toast.success(outcome.text);
+        await reload();
+      }
+      setPendingConfirm(null);
+    } finally {
+      setConfirmSaving(false);
+    }
+  }
 
   const filteredFields = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -200,6 +321,15 @@ export function SettingsReference() {
                       </div>
                     )}
 
+                    {field.writable && (
+                      <Toggle
+                        checked={Boolean(field.value)}
+                        onChange={(next) => handleToggle(field, next)}
+                        label={field.value ? "On" : "Off"}
+                        dataTestId={`toggle-${field.key}`}
+                      />
+                    )}
+
                     <div
                       style={{
                         display: "flex",
@@ -233,6 +363,16 @@ export function SettingsReference() {
             </div>
           </div>
         ))
+      )}
+
+      {pendingConfirm && (
+        <ReferenceDangerousConfirmDialog
+          field={pendingConfirm.field}
+          next={pendingConfirm.next}
+          pending={confirmSaving}
+          onCancel={() => setPendingConfirm(null)}
+          onConfirm={handleConfirmedToggle}
+        />
       )}
     </div>
   );
