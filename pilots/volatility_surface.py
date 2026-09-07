@@ -1387,10 +1387,25 @@ def get_vrp(ticker: str, current_iv: float, garch_vol: float) -> float:
     return float(current_iv - garch_vol)
 
 def calculate_true_ivr(ticker: str, current_iv: float, as_of_date: Any, store: Any, lookback_days: int = 252) -> float:
+    """Rank ``current_iv`` against strictly-prior-day history from ``store``.
+
+    ``store`` is a duck-typed ``get_historical_ivs(ticker, as_of_date,
+    lookback_days) -> List[float]`` provider -- in production this is
+    ``volatility.iv_engine.IVHistoryStore``, whose ``get_historical_ivs()``
+    excludes ``IV_SOURCE_SYNTHETIC_BOOTSTRAP`` rows (the realized-vol-derived
+    proxy ``volatility/bootstrap_iv_history.py`` writes) by DEFAULT -- this
+    function trusts that contract and does not re-filter by provenance
+    itself (CONSTRAINT #4: a real, live IV reading must never be ranked
+    against a fabricated-looking proxy without disclosure; CONSTRAINT #6: an
+    all-synthetic history correctly degrades ``history`` to empty here,
+    returning NaN rather than a value computed against unverifiable data).
+    A caller passing a different ``store`` implementation is responsible for
+    the same guarantee if it also carries non-authoritative rows.
+    """
     import math
     if math.isnan(current_iv) or current_iv <= 0:
         return float('nan')
-        
+
     history = store.get_historical_ivs(ticker, as_of_date, lookback_days)
     if not history:
         return float('nan')

@@ -101,15 +101,23 @@ does (`pilots/volatility_surface.py::calculate_true_ivr`, `volatility/iv_engine.
 against real history instead of the current chain snapshot, and this signal could
 train for real rather than via a labeled proxy.
 
-## Related, separate hazard — NOT fixed by this write-up
+## Related, separate hazard — fixed as its own follow-up
 
-`volatility/bootstrap_iv_history.py` writes a realized-vol-derived
+`volatility/bootstrap_iv_history.py` used to write a realized-vol-derived
 `estimated_iv = rolling_vol + 0.038` directly into the REAL `iv_history` table (the
 same table `calculate_true_ivr` ranks against for the LIVE trading signal), with no
 provenance/source column distinguishing a synthetic bootstrap row from a real
-chain-derived one — and its own docstring calls the output "historical ATM implied
-volatilities," which is misleading. Running that script would silently make the
-live-path `True_IVR` a realized-vol rank wearing an IV label. This is a genuine,
-separate risk, deliberately out of scope for this change — see the operator's own
-scoping decision recorded in `docs/plans/FORECAST_BACKFILL_PLAN.md`'s WP4 section.
-Flagged for a dedicated follow-up task, not silently left undocumented.
+chain-derived one — and its own docstring called the output "historical ATM implied
+volatilities," which was misleading. Running that script could have silently made
+the live-path `True_IVR` a realized-vol rank wearing an IV label. This was a genuine,
+separate risk, deliberately scoped OUT of this change — see the operator's own
+scoping decision recorded in `docs/plans/FORECAST_BACKFILL_PLAN.md`'s WP4 section —
+and flagged for a dedicated follow-up task rather than silently left undocumented.
+
+**Fixed (2026-09)**, as that dedicated follow-up: see
+`docs/known_issues/bootstrap_iv_history_provenance_fabrication_risk.md`. `iv_history`
+now carries a `source` column (`chain` / `synthetic_bootstrap` / `legacy_unknown`);
+`bootstrap_iv_history.py`'s writes are explicitly tagged `synthetic_bootstrap` and its
+docstring no longer overstates what it produces; `calculate_true_ivr()` excludes
+synthetic rows from ranking by default via `get_historical_ivs()`, so a real live IV
+reading is never silently ranked against this proxy.
