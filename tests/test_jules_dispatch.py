@@ -2,17 +2,25 @@
 tests/test_jules_dispatch.py
 ==============================
 Unit tests for ``scripts/jules_dispatch.py``'s argument parsing and dispatch
-logic. ``data.jules_client.list_sources``/``dispatch_session`` are mocked at
-the point they were imported into ``scripts.jules_dispatch``'s own
-namespace (``from data.jules_client import ...`` there), so these tests
-never touch the real Jules API and are correct regardless of whether the
-real (currently scaffolded/``NotImplementedError``) bodies in
-``data/jules_client.py`` have been implemented yet.
+logic. ``data.jules_client.list_sources``/``dispatch_session``/
+``request_dispatch_approval`` are mocked at the point they were imported
+into ``scripts.jules_dispatch``'s own namespace
+(``from data.jules_client import ...`` there), so these tests never touch
+the real Jules API and are correct regardless of whether the real (currently
+scaffolded/``NotImplementedError``) bodies in ``data/jules_client.py`` have
+been implemented yet.
 
 ``main()`` returns an int exit code (see ``scripts/jules_dispatch.py``'s own
 module docstring for why), so no ``pytest.raises(SystemExit)`` is needed
 anywhere here — only the "missing required arg" cases, where argparse
 itself calls ``sys.exit()`` before ``main()``'s own return path is reached.
+
+2026-09 hardening pass -- ``request-approval`` subcommand + ``--approval-token``
+------------------------------------------------------------------------------
+``TestRequestApproval`` covers the new ``request-approval`` subcommand.
+``TestCreateSessionWithConfirm``'s ``dispatch_session`` mock calls are now
+asserted to also carry an ``approval_token`` kwarg (``--approval-token``
+defaults to ``""``, passed through as ``None`` when empty).
 """
 
 from __future__ import annotations
@@ -68,6 +76,87 @@ class TestListSources:
 
 
 # ===========================================================================
+# request-approval
+# ===========================================================================
+
+
+class TestRequestApproval:
+    def test_success_prints_token_and_returns_zero(self, capsys) -> None:
+        fake_result = {
+            "approval_token": "tok-abc123",
+            "prompt_hash": "deadbeef" * 8,
+            "expires_at": 1893456000.0,
+        }
+        with patch(
+            "scripts.jules_dispatch.request_dispatch_approval", return_value=fake_result
+        ) as mock_fn:
+            exit_code = main(
+                [
+                    "request-approval",
+                    "--prompt",
+                    "fix the bug",
+                    "--title",
+                    "Fix bug",
+                    "--source",
+                    "sources/github/kevinmarko/Stockpy-live",
+                ]
+            )
+
+        mock_fn.assert_called_once_with(
+            prompt="fix the bug",
+            source="sources/github/kevinmarko/Stockpy-live",
+            branch="main",
+            title="Fix bug",
+        )
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "tok-abc123" in out
+        assert "approval recorded" in out.lower()
+
+    def test_failure_prints_error_to_stderr_and_returns_one(self, capsys) -> None:
+        with patch(
+            "scripts.jules_dispatch.request_dispatch_approval",
+            side_effect=JulesUnavailable("disk full"),
+        ):
+            exit_code = main(
+                [
+                    "request-approval",
+                    "--prompt",
+                    "fix the bug",
+                    "--title",
+                    "Fix bug",
+                    "--source",
+                    "sources/github/kevinmarko/Stockpy-live",
+                ]
+            )
+
+        assert exit_code == 1
+        err = capsys.readouterr().err
+        assert "disk full" in err
+
+    def test_custom_branch_passed_through(self) -> None:
+        with patch(
+            "scripts.jules_dispatch.request_dispatch_approval",
+            return_value={"approval_token": "t", "prompt_hash": "h", "expires_at": 0.0},
+        ) as mock_fn:
+            main(
+                [
+                    "request-approval",
+                    "--prompt",
+                    "fix the bug",
+                    "--title",
+                    "Fix bug",
+                    "--source",
+                    "sources/github/kevinmarko/Stockpy-live",
+                    "--branch",
+                    "develop",
+                ]
+            )
+        _, kwargs = mock_fn.call_args
+        assert kwargs["branch"] == "develop"
+
+
+# ===========================================================================
 # create-session
 # ===========================================================================
 
@@ -119,11 +208,33 @@ class TestCreateSessionWithConfirm:
             title="Fix bug",
             force=False,
             confirm=True,
+            approval_token=None,
         )
         assert exit_code == 0
         out = capsys.readouterr().out
         assert "sessions/abc123" in out
         assert "dispatched successfully" in out.lower()
+
+    def test_approval_token_flag_passed_through(self, capsys) -> None:
+        with patch(
+            "scripts.jules_dispatch.dispatch_session", return_value={"name": "sessions/abc123"}
+        ) as mock_dispatch:
+            main(
+                [
+                    "create-session",
+                    "--prompt",
+                    "fix the bug",
+                    "--title",
+                    "Fix bug",
+                    "--source",
+                    "sources/github/kevinmarko/Stockpy-live",
+                    "--confirm",
+                    "--approval-token",
+                    "tok-abc123",
+                ]
+            )
+        _, kwargs = mock_dispatch.call_args
+        assert kwargs["approval_token"] == "tok-abc123"
 
     def test_failure_prints_error_to_stderr_and_returns_one(self, capsys) -> None:
         with patch(

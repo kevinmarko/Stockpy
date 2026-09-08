@@ -65,6 +65,13 @@ specific reason to want the fire-and-forget behavior Jules provides.
   explicit-permission event, the same principle as this agent's own standing
   rule that publishing or modifying public content needs per-action
   confirmation, never a standing blanket approval.
+- **Never call `request_jules_dispatch_approval` / `request-approval`
+  either, for the exact same reason** — the two-step approve-then-dispatch
+  flow below (2026-09 hardening) does not change WHEN asking the operator is
+  required; it only adds a second, code-level check that the approved
+  content and the dispatched content are byte-identical. Requesting an
+  approval is not a lower-stakes action that can be done ahead of the
+  operator's go-ahead.
 - **Never dispatch against a `source` the operator didn't specify or
   confirm.** Always show the operator what `list_jules_sources` returned and
   let them pick or confirm it — don't guess which connected repo they mean,
@@ -75,6 +82,18 @@ specific reason to want the fire-and-forget behavior Jules provides.
   loop does — treat asking as mandatory anyway, and say so plainly if the
   operator seems to be relying on the flag alone as the safety gate. State
   this gap honestly rather than treating the tool's own gate as sufficient.
+- **`approval_token` (from `request_jules_dispatch_approval`) is real but
+  bounded — say so plainly, don't oversell it.** It closes a genuine,
+  different gap from `confirm=True`: it hash-pins the approved
+  prompt/title/source/branch, so a dispatch whose CONTENT drifted from what
+  was approved (a swap, a stale draft, a copy/paste mistake) is refused with
+  a clear error instead of silently going out with the wrong content. It
+  does **not** prove a human reviewed that content, and it does **not** stop
+  a single agent turn from calling `request_jules_dispatch_approval` and
+  `dispatch_jules_task` back-to-back with matching content — that remains
+  exactly as easy as `confirm=True` alone always was. Treat it as raising
+  the bar against accidental drift, never as a substitute for actually
+  asking the operator.
 - **Jules opens PRs, never merges them.** Never treat a Jules-created PR as
   pre-approved for merge — it still needs the same review any other PR in
   this repo gets, including the branch-workflow rules in this repo's own
@@ -91,10 +110,20 @@ specific reason to want the fire-and-forget behavior Jules provides.
    verbatim before dispatching. Do not paraphrase or summarize what will
    actually be sent — the operator needs to approve the literal text.
 4. **Only once the operator has said yes to that exact content**, call
-   `dispatch_jules_task(prompt, title, source, branch, confirm=True)` (or
-   the CLI equivalent, `scripts/jules_dispatch.py create-session --prompt
-   ... --title ... --source ... --branch ... --confirm`).
-5. **Report the dispatch and stop there.** Tell the operator the session was
+   `request_jules_dispatch_approval(prompt, title, source, branch)` (or the
+   CLI equivalent, `scripts/jules_dispatch.py request-approval --prompt ...
+   --title ... --source ... --branch ...`) with that EXACT same content, and
+   note the returned `approval_token` — it expires soon
+   (`settings.JULES_APPROVAL_TTL_SECONDS`, default 600s) and can authorize
+   at most one dispatch attempt.
+5. **Immediately call
+   `dispatch_jules_task(prompt, title, source, branch, confirm=True,
+   approval_token=<token from step 4>)`** (or the CLI equivalent,
+   `scripts/jules_dispatch.py create-session --prompt ... --title ...
+   --source ... --branch ... --confirm --approval-token <token>`) with the
+   EXACT SAME prompt/title/source/branch used in step 4 — any drift is
+   refused with a clear error naming what mismatched.
+6. **Report the dispatch and stop there.** Tell the operator the session was
    dispatched and that they'll need to check GitHub for the resulting PR —
    this skill does not poll or wait for it, and no follow-up happens
    automatically.

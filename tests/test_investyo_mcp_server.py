@@ -1937,7 +1937,89 @@ class TestListJulesSources:
         assert "boom" in result
 
 
+class TestRequestJulesDispatchApproval:
+    def test_success_returns_token(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        fake_result = {
+            "approval_token": "tok-abc123",
+            "prompt_hash": "deadbeef" * 8,
+            "expires_at": 1893456000.0,
+        }
+        monkeypatch.setattr(jules_mod, "request_dispatch_approval", lambda *a, **k: fake_result)
+
+        result = srv.request_jules_dispatch_approval(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+        )
+
+        assert "tok-abc123" in result
+        assert "Approval recorded" in result
+
+    def test_unavailable_returns_string_not_exception(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        def _raise(*a, **k):
+            raise jules_mod.JulesUnavailable("disk full")
+
+        monkeypatch.setattr(jules_mod, "request_dispatch_approval", _raise)
+
+        result = srv.request_jules_dispatch_approval(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+        )
+
+        assert "disk full" in result
+
+
 class TestDispatchJulesTask:
+    def test_approval_token_passed_through_to_dispatch_session(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        captured = {}
+
+        def _dispatch(**k):
+            captured.update(k)
+            return {"name": "sessions/abc123"}
+
+        monkeypatch.setattr(jules_mod, "dispatch_session", _dispatch)
+
+        srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+            approval_token="tok-abc123",
+        )
+
+        assert captured["approval_token"] == "tok-abc123"
+
+    def test_empty_approval_token_passed_as_none(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        captured = {}
+
+        def _dispatch(**k):
+            captured.update(k)
+            return {"name": "sessions/abc123"}
+
+        monkeypatch.setattr(jules_mod, "dispatch_session", _dispatch)
+
+        srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+        )
+
+        assert captured["approval_token"] is None
+
     def test_confirm_false_does_not_dispatch(self, monkeypatch):
         import data.jules_client as jules_mod
 

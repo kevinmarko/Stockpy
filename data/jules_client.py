@@ -13,13 +13,36 @@ circuit-breaker machinery. That machinery exists in ``fmp_client.py``
 specifically because FMP's rate limit is per-ACCOUNT and shared by MANY
 concurrent consumers (fundamentals, quotes, bars, analyst, earnings, macro,
 insider/sector) hammered from an 8-thread pool in ``data_engine.py``. Jules
-has exactly ONE consumer — one MCP tool (``investyo_mcp_server.py``) plus one
-CLI script (``scripts/jules_dispatch.py``) — invoked by a human, at human
-cadence, at most a handful of times a day. There is no shared budget to
-protect and no concurrency to serialize against, so this module has no
-throttle and no cooldown breaker. If Jules ever grows a second, high-frequency
-consumer, THAT is the point to add FMP-style shared-limiter machinery — not a
-missing piece today.
+still has exactly ONE consumer — one MCP tool (``investyo_mcp_server.py``)
+plus one CLI script (``scripts/jules_dispatch.py``). There is still no
+SHARED budget across multiple consumers to protect, and FMP-style
+per-account throttle/retry/circuit-breaker machinery remains the wrong model
+here — that reasoning is unchanged, and this module still doesn't have it.
+
+**What DID change (2026-09 hardening pass — see ``docs/JULES_INTEGRATION.md``
+Sec 4 and ``.claude/jules_confirm_hard_gate_implementation_plan.md``)**: the
+original text here reasoned from "invoked by a human, at human cadence, at
+most a handful of times a day" to "no cooldown breaker needed." That
+reasoning quietly assumed the ONLY caller is a human typing at a keyboard —
+but this module's actual callers are an MCP tool and a CLI script, both of
+which an AGENT can drive too, and an agent looping (accidentally, via a
+retry, a scheduled/unattended session, or a bug) can trivially exceed "human
+cadence" in a way a human operator physically cannot. That is a real,
+different risk from the "shared budget across many consumers" question the
+paragraph above is actually about, and closing it doesn't require FMP-style
+machinery: :func:`_enforce_dispatch_cooldown` reads the last recorded
+dispatch timestamp straight out of the existing dispatch ledger (no new
+shared-budget primitive, no new state file) and refuses a second dispatch
+within ``settings.JULES_DISPATCH_COOLDOWN_SECONDS``. This is honestly a
+friction mechanism against an ACCIDENTAL rapid/looping dispatch, not a gate
+against a single deliberate call — a determined caller trivially waits out
+the cooldown, or calls :func:`dispatch_session` directly instead of through
+whatever loop tripped it. If Jules ever grows a second, high-frequency
+consumer, FMP-style shared-limiter machinery is still the right escalation
+for THAT — not a missing piece today.
+
+See also the "Dispatch approval — prompt-hash pinning" section below for the
+second half of this hardening pass.
 
 Credential handling — ``settings.JULES_API_KEY``, NEVER ``os.environ``
 ------------------------------------------------------------------------
@@ -62,6 +85,45 @@ source/branch/title/prompt — was already dispatched today. A different day's
 identical prompt is allowed, exactly matching ``receipts_store.py``'s
 date-scoped ``dedup_key`` reasoning.
 
+Dispatch approval — prompt-hash pinning (Phase 1, 2026-09)
+-------------------------------------------------------------
+:func:`request_dispatch_approval` records a durable, single-use pre-approval
+for a LATER :func:`dispatch_session` call, pinned to a sha256 hash of the
+exact ``source|branch|title|prompt`` content (:func:`_content_hash` — the
+same normalization :func:`_compute_dedup_key` already used, now shared by
+both so the dedup ledger's truncated hash and the approval's full hash can
+never silently diverge on what counts as "the same content"). The returned
+``approval_token`` is stored in ``output/jules_pending_approvals.json``
+(a small JSON dict, not a SQL store — this is a handful of short-lived
+pending approvals, not the multi-file broker-reconciliation problem
+``execution/receipts_store.py`` solves) and expires after
+``settings.JULES_APPROVAL_TTL_SECONDS`` (default 600s). :func:`dispatch_session`
+requires a matching, unexpired, not-already-used ``approval_token`` whose
+recorded hash equals a freshly computed hash of the CURRENT dispatch content
+— on any mismatch it raises :class:`JulesApprovalMismatch` naming exactly
+which check failed (missing token / unknown token / expired / already used /
+content changed since approval), never one collapsed message.
+
+**Read this honestly, not as more than it is.** This closes the "approved
+prompt X, dispatched prompt Y" swap/drift risk — an approval can only ever
+authorize the EXACT content it was requested for. It does **not** prove a
+human reviewed that content, and it does **not** stop a single agent turn
+from calling :func:`request_dispatch_approval` and :func:`dispatch_session`
+back-to-back with matching content in one turn — that remains exactly as
+easy as setting ``confirm=True`` alone always was. See
+``docs/JULES_INTEGRATION.md`` Sec 4 for the full, unsoftened statement of
+what this does and does not achieve.
+
+The approvals store is deliberately FAIL-CLOSED on a read failure
+(:func:`_load_pending_approvals` — a missing or corrupt file degrades to
+"no pending approvals exist," never to "every token is valid"), the exact
+opposite tolerance direction from the dispatch ledger's dedup check
+(:func:`_check_dispatch_dedup`, which fails OPEN to "not a duplicate").
+That asymmetry is intentional: the dedup ledger is a convenience/
+idempotency feature where failing open is the safe default; the approvals
+store is an actual safety gate this whole mechanism exists to enforce, so a
+read failure there must never be interpreted as permission.
+
 Real implementation, not a scaffold
 -------------------------------------
 ``list_sources``/``dispatch_session`` make real HTTP calls against the Jules
@@ -84,9 +146,11 @@ both pass the dedup check before either records its dispatch.
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import json
 import os
+import secrets
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -102,6 +166,7 @@ JULES_BASE_URL = "https://jules.googleapis.com/v1alpha"
 _AUTOMATION_MODE = "AUTO_CREATE_PR"
 
 _LEDGER_FILENAME = "jules_dispatched.jsonl"
+_APPROVALS_FILENAME = "jules_pending_approvals.json"
 
 
 class JulesUnavailable(Exception):
@@ -136,11 +201,55 @@ class JulesConfirmationRequired(JulesUnavailable):
     """
 
 
+class JulesApprovalMismatch(JulesUnavailable):
+    """Raised by :func:`dispatch_session` when ``approval_token`` fails
+    validation against the pending-approvals store recorded by
+    :func:`request_dispatch_approval` — see this module's "Dispatch
+    approval — prompt-hash pinning" docstring section for the full design.
+
+    Every raise site names EXACTLY which check failed (missing token /
+    unknown token / expired / already used / content changed since
+    approval) — deliberately never one collapsed message, so a caller or a
+    log reader can tell these apart. Subclasses :class:`JulesUnavailable` so
+    the existing ``except JulesUnavailable`` boundary at every current call
+    site keeps working unchanged for this new failure mode too, exactly as
+    :class:`JulesConfirmationRequired` already does.
+
+    HONESTY (see the module docstring): this raises the bar against an
+    "approved X, dispatched Y" content mismatch. It does not, and cannot,
+    prove a human reviewed the approved content — an agent can call
+    :func:`request_dispatch_approval` and :func:`dispatch_session`
+    back-to-back with matching content in a single turn.
+    """
+
+
+class JulesDispatchCooldownActive(JulesUnavailable):
+    """Raised by :func:`dispatch_session` when called again before
+    ``settings.JULES_DISPATCH_COOLDOWN_SECONDS`` have elapsed since the last
+    successful dispatch recorded in the ledger — see this module's "Why
+    this is simpler than data/fmp_client.py" docstring section for the full
+    reasoning. Subclasses :class:`JulesUnavailable` for the same reason
+    :class:`JulesConfirmationRequired`/:class:`JulesApprovalMismatch` do.
+
+    HONESTY: this is friction against an ACCIDENTAL rapid/looping dispatch
+    (a retry, a scheduled/unattended session, a bug), not a gate against a
+    single deliberate call — waiting out the cooldown (or setting
+    ``settings.JULES_DISPATCH_COOLDOWN_SECONDS=0``) trivially clears it.
+    """
+
+
 def _ledger_path() -> Path:
     """Lazy settings read (see module docstring) — never module-level."""
     from settings import settings
 
     return settings.OUTPUT_DIR / _LEDGER_FILENAME
+
+
+def _approvals_path() -> Path:
+    """Lazy settings read (see module docstring) — never module-level."""
+    from settings import settings
+
+    return settings.OUTPUT_DIR / _APPROVALS_FILENAME
 
 
 _LOCK_FILENAME = "jules_dispatched.jsonl.lock"
@@ -150,11 +259,18 @@ _LOCK_POLL_INTERVAL_SECONDS = 0.05
 
 @contextmanager
 def _dispatch_lock() -> Iterator[None]:
-    """Cross-process advisory lock guarding the dedup-check → POST → ledger-
-    write sequence in :func:`dispatch_session`, closing the TOCTOU race where
-    two concurrent/retried calls for the same source/branch/title/prompt on
-    the same day could both pass ``_check_dispatch_dedup`` before either one
-    appends to the ledger.
+    """Cross-process advisory lock guarding two related critical sections in
+    this module: (1) the dedup-check → POST → ledger-write sequence in
+    :func:`dispatch_session`, closing the TOCTOU race where two concurrent/
+    retried calls for the same source/branch/title/prompt on the same day
+    could both pass ``_check_dispatch_dedup`` before either one appends to
+    the ledger; and (2), since the 2026-09 approval-hash-pinning addition,
+    the read-validate-mark-used-save sequence in
+    :func:`_consume_dispatch_approval` / :func:`request_dispatch_approval`
+    against ``output/jules_pending_approvals.json``. Both are local,
+    low-contention, human/agent-cadence state for this same integration —
+    reusing one lock file for both avoids a second, parallel locking
+    primitive with no real concurrency benefit here.
 
     Lock mechanism choice: this codebase has no existing ``fcntl``/
     ``filelock`` convention to follow — ``execution/receipts_store.py``,
@@ -221,15 +337,29 @@ def _dispatch_lock() -> Iterator[None]:
                 pass
 
 
+def _content_hash(source: str, branch: str, title: str, prompt: str) -> str:
+    """Full-length sha256 hex digest of the identifying dispatch fields, in
+    the exact ``source|branch|title|prompt`` order/format
+    :func:`_compute_dedup_key` used before this was extracted out of it —
+    the single shared normalization every hash derived from these four
+    fields now goes through, so the dedup ledger's truncated hash
+    (:func:`_compute_dedup_key`) and the approval-token's full hash
+    (:func:`request_dispatch_approval` / :func:`_consume_dispatch_approval`)
+    can never silently diverge on what counts as "the same dispatch
+    content."
+    """
+    return hashlib.sha256(f"{source}|{branch}|{title}|{prompt}".encode("utf-8")).hexdigest()
+
+
 def _compute_dedup_key(source: str, branch: str, title: str, prompt: str) -> str:
-    """``{UTC date}:{first 16 hex chars of a sha256 of the identifying fields}``.
+    """``{UTC date}:{first 16 hex chars of _content_hash(...)}``.
 
     Date-scoped exactly like ``execution/receipts_store.py``'s own
     ``dedup_key`` — a different day's identical prompt is a legitimate new
     dispatch, not a duplicate.
     """
     day = time.strftime("%Y-%m-%d", time.gmtime())
-    digest = hashlib.sha256(f"{source}|{branch}|{title}|{prompt}".encode("utf-8")).hexdigest()[:16]
+    digest = _content_hash(source, branch, title, prompt)[:16]
     return f"{day}:{digest}"
 
 
@@ -288,6 +418,307 @@ def _record_dispatch(
             f.write(json.dumps(record) + "\n")
     except OSError:
         pass
+
+
+# ===========================================================================
+# Dispatch approval — prompt-hash pinning (see module docstring's dedicated
+# section for the full design)
+# ===========================================================================
+
+
+def _load_pending_approvals() -> Dict[str, Any]:
+    """Return the full pending-approvals store as a dict, or ``{}`` on any
+    read failure.
+
+    FAIL-CLOSED, the opposite tolerance direction from
+    :func:`_check_dispatch_dedup`'s fail-open convention, deliberately: the
+    dedup ledger is a convenience/idempotency feature where treating a
+    corrupt read as "not a duplicate" is the safe default; this store is the
+    actual safety gate the approval mechanism exists to enforce, so a read
+    failure here must degrade to "no pending approvals exist" — every token
+    is correctly treated as unapproved — never to "every token is valid."
+    """
+    path = _approvals_path()
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        # ValueError covers json.JSONDecodeError (a ValueError subclass) --
+        # same degrade-safe treatment as list_sources()/dispatch_session()'s
+        # own response.json() handling, just fail-closed here instead.
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _prune_expired_approvals(approvals: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop any entry (used or not) whose ``expires_at`` has passed, so the
+    store never grows unbounded across many approval requests. A malformed
+    entry (non-dict, or an ``expires_at`` that isn't a real number) is
+    dropped too rather than kept in an unparseable state."""
+    now = time.time()
+    pruned: Dict[str, Any] = {}
+    for token, entry in approvals.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            expires_at = float(entry.get("expires_at", 0))
+        except (TypeError, ValueError):
+            continue
+        if now <= expires_at:
+            pruned[token] = entry
+    return pruned
+
+
+def _save_pending_approvals(approvals: Dict[str, Any]) -> None:
+    """Atomic write-then-rename (temp file + ``os.replace``), mirroring
+    ``execution/receipts_store.py::append_placed``'s convention.
+
+    Unlike that function (and unlike :func:`_record_dispatch` above), this
+    does NOT swallow ``OSError`` — a write failure here must be visible to
+    the caller. ``_record_dispatch``'s best-effort tolerance is correct
+    because the real Jules session it's logging already exists by the time
+    it runs; a failed write here, by contrast, IS the entire side effect
+    :func:`request_dispatch_approval`/:func:`_consume_dispatch_approval`
+    are trying to have — silently losing it would leave a caller believing
+    an approval was recorded (or consumed) when it wasn't. Callers translate
+    this to :class:`JulesUnavailable` at the public-function boundary.
+    """
+    path = _approvals_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(approvals, f)
+    os.replace(tmp, path)
+
+
+def request_dispatch_approval(prompt: str, source: str, branch: str, title: str) -> Dict[str, Any]:
+    """Records a durable, single-use, prompt-hash-pinned pre-approval for a
+    LATER :func:`dispatch_session` call with this EXACT
+    ``prompt``/``source``/``branch``/``title``. Returns
+    ``{"approval_token": str, "prompt_hash": str, "expires_at": float}``
+    (``expires_at`` is a UTC epoch-seconds float).
+
+    Purely local bookkeeping — no network call, and deliberately no
+    ``JULES_ENABLED``/``JULES_API_KEY`` gate here (those are re-checked at
+    dispatch time regardless, and an approval by itself authorizes nothing
+    on its own). The returned ``approval_token`` expires after
+    ``settings.JULES_APPROVAL_TTL_SECONDS`` (default 600s / 10 minutes) and,
+    once consumed by a :func:`dispatch_session` call (successful or not),
+    can never authorize a second dispatch attempt.
+
+    Raises :class:`JulesUnavailable` if the approval cannot be durably
+    persisted (see :func:`_save_pending_approvals`).
+
+    HONESTY, stated plainly (see the module docstring's dedicated section
+    and ``docs/JULES_INTEGRATION.md`` Sec 4 for the fuller context): this
+    closes an "approved X, dispatched Y" content-mismatch risk. It does NOT
+    prove a human reviewed this content, and does NOT stop a single agent
+    turn from calling this function and :func:`dispatch_session`
+    back-to-back with matching content — raises the bar against accidental
+    drift, not a deliberate bypass.
+    """
+    prompt_hash = _content_hash(source, branch, title, prompt)
+    now = time.time()
+
+    from settings import settings
+
+    ttl_seconds = float(getattr(settings, "JULES_APPROVAL_TTL_SECONDS", 600))
+    expires_at = now + ttl_seconds
+    approval_token = secrets.token_urlsafe(24)
+
+    with _dispatch_lock():
+        approvals = _load_pending_approvals()
+        approvals = _prune_expired_approvals(approvals)
+        approvals[approval_token] = {
+            "prompt_hash": prompt_hash,
+            "source": source,
+            "branch": branch,
+            "title": title,
+            "created_at": now,
+            "expires_at": expires_at,
+            "used": False,
+        }
+        try:
+            _save_pending_approvals(approvals)
+        except OSError as exc:
+            raise JulesUnavailable(
+                f"Could not persist Jules dispatch approval: {exc}"
+            ) from exc
+
+    return {
+        "approval_token": approval_token,
+        "prompt_hash": prompt_hash,
+        "expires_at": expires_at,
+    }
+
+
+def _consume_dispatch_approval(
+    approval_token: Optional[str], *, prompt: str, source: str, branch: str, title: str
+) -> None:
+    """Validate ``approval_token`` against the pending-approvals store and,
+    if every check passes, mark it used and persist that immediately — so it
+    can authorize at most one dispatch ATTEMPT (whether or not that attempt
+    goes on to succeed at the network layer), rather than only "at most one
+    successful dispatch." Raises :class:`JulesApprovalMismatch` naming
+    EXACTLY which check failed:
+
+    - no ``approval_token`` supplied at all;
+    - the token does not match any recorded pending approval (unknown,
+      already expired-and-pruned, or never existed);
+    - the token's recorded approval has expired (still present but past its
+      ``expires_at``);
+    - the token has already been used to authorize a prior dispatch attempt
+      (single-use);
+    - the token is valid and unused, but its recorded ``prompt_hash``
+      doesn't match a freshly computed hash of the CURRENT
+      ``prompt``/``source``/``branch``/``title`` — the exact swap/drift
+      attack this mechanism exists to catch.
+
+    Reuses :func:`_dispatch_lock` (the same advisory lock file the dispatch
+    ledger uses) to guard this read-modify-write — see that function's
+    docstring for why one lock file covers both critical sections.
+    """
+    if not approval_token:
+        raise JulesApprovalMismatch(
+            "dispatch_session() requires a valid approval_token. Call "
+            "request_dispatch_approval(prompt, source, branch, title) first "
+            "and pass the approval_token it returns -- no approval_token "
+            "was supplied."
+        )
+
+    current_hash = _content_hash(source, branch, title, prompt)
+
+    with _dispatch_lock():
+        approvals = _load_pending_approvals()
+        entry = approvals.get(approval_token)
+        if not isinstance(entry, dict):
+            raise JulesApprovalMismatch(
+                "No pending approval found for this approval_token -- it "
+                "may have expired, already been consumed, or never existed. "
+                "Call request_dispatch_approval(...) again."
+            )
+
+        try:
+            expires_at = float(entry.get("expires_at", 0))
+        except (TypeError, ValueError):
+            expires_at = 0.0
+        if time.time() > expires_at:
+            raise JulesApprovalMismatch(
+                "This approval_token has expired. Call "
+                "request_dispatch_approval(...) again for a fresh one."
+            )
+
+        if entry.get("used"):
+            raise JulesApprovalMismatch(
+                "This approval_token has already been used to authorize a "
+                "prior dispatch attempt (single-use). Call "
+                "request_dispatch_approval(...) again for a fresh one."
+            )
+
+        if entry.get("prompt_hash") != current_hash:
+            raise JulesApprovalMismatch(
+                "The prompt/source/branch/title being dispatched do not "
+                "match what was approved for this approval_token -- "
+                "refusing to dispatch. Call request_dispatch_approval(...) "
+                "again with the exact content you intend to dispatch."
+            )
+
+        entry["used"] = True
+        approvals[approval_token] = entry
+        approvals = _prune_expired_approvals(approvals)
+        try:
+            _save_pending_approvals(approvals)
+        except OSError:
+            # Best-effort here, UNLIKE request_dispatch_approval()'s own
+            # persist (which raises): every check above has already passed
+            # -- the operator has a valid, matching, unexpired, unused
+            # approval AND confirm=True -- so this dispatch is genuinely
+            # authorized. Failing it over a local disk hiccup recording
+            # "used" would be strictly worse than the narrow residual risk
+            # this leaves (this exact token could in principle be replayed
+            # if the disk write keeps failing), the same trade-off
+            # _record_dispatch's own docstring already makes for the
+            # dispatch ledger itself.
+            pass
+
+
+# ===========================================================================
+# Dispatch cooldown (see module docstring's "Why this is simpler than
+# data/fmp_client.py" section for the full design)
+# ===========================================================================
+
+
+def _last_dispatch_timestamp() -> Optional[float]:
+    """UTC epoch seconds of the most recently recorded successful dispatch
+    in the ledger, or ``None`` if the ledger is empty/missing/corrupt.
+
+    Fail-OPEN (mirrors :func:`_check_dispatch_dedup`'s own tolerance, NOT
+    :func:`_load_pending_approvals`'s fail-closed one): the cooldown is a
+    friction mechanism against an accidental rapid/looping dispatch, not a
+    safety-critical gate, so a read failure here must never itself block a
+    legitimate dispatch.
+    """
+    path = _ledger_path()
+    if not path.exists():
+        return None
+    last_ts: Optional[str] = None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = record.get("ts")
+                if isinstance(ts, str) and ts:
+                    last_ts = ts  # the ledger is append-only in chronological order
+    except OSError:
+        return None
+    if last_ts is None:
+        return None
+    try:
+        return calendar.timegm(time.strptime(last_ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+
+
+def _enforce_dispatch_cooldown() -> None:
+    """Raise :class:`JulesDispatchCooldownActive` if called before
+    ``settings.JULES_DISPATCH_COOLDOWN_SECONDS`` have elapsed since the last
+    successful dispatch recorded in the ledger. Called from
+    :func:`dispatch_session` BEFORE any network call and before consuming an
+    approval token, so a cooldown-blocked attempt never wastes a one-time
+    approval. ``JULES_DISPATCH_COOLDOWN_SECONDS <= 0`` disables this check
+    entirely.
+
+    Not lock-protected (unlike the approval/dedup critical sections): a race
+    between two concurrent calls both reading the ledger as "cooldown not
+    active" is a low-severity residual (this is friction, not a hard
+    concurrency-safe gate — every other gate, including the per-token
+    single-use approval check, still applies independently).
+    """
+    from settings import settings
+
+    cooldown = float(getattr(settings, "JULES_DISPATCH_COOLDOWN_SECONDS", 60.0))
+    if cooldown <= 0:
+        return
+    last_ts = _last_dispatch_timestamp()
+    if last_ts is None:
+        return
+    elapsed = time.time() - last_ts
+    if elapsed < cooldown:
+        remaining = cooldown - elapsed
+        raise JulesDispatchCooldownActive(
+            f"Jules dispatch cooldown active: {remaining:.1f}s remaining "
+            f"(cooldown={cooldown:.0f}s since the last successful dispatch). "
+            "This protects against an accidental rapid/looping dispatch, "
+            "not against a single deliberate call."
+        )
 
 
 def list_sources() -> Dict[str, Any]:
@@ -384,6 +815,7 @@ def dispatch_session(
     *,
     force: bool = False,
     confirm: bool = False,
+    approval_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """``POST /sessions`` — start a Jules session against ``source`` on
     ``branch`` with ``prompt``, in the hardcoded ``AUTO_CREATE_PR`` automation
@@ -405,6 +837,22 @@ def dispatch_session(
     additional guarantee that a future third caller cannot bypass the gate
     by forgetting its own check.
 
+    ``approval_token`` MUST be a valid, unexpired, not-already-used token
+    from a prior :func:`request_dispatch_approval` call for this EXACT
+    ``prompt``/``source``/``branch``/``title``, checked immediately after
+    the cooldown gate below and before any network call — see
+    :func:`_consume_dispatch_approval` for the five distinct failure modes
+    it raises :class:`JulesApprovalMismatch` for. This closes the "approved
+    X, dispatched Y" content-mismatch risk; see that function's docstring
+    and the module docstring's dedicated section for the honest statement
+    of what it does and doesn't achieve.
+
+    Before any of the above, ``settings.JULES_DISPATCH_COOLDOWN_SECONDS``
+    must have elapsed since the last successful dispatch, or this raises
+    :class:`JulesDispatchCooldownActive` — see :func:`_enforce_dispatch_cooldown`.
+    Checked first (before consuming the approval) so a cooldown-blocked
+    attempt never wastes a one-time approval token.
+
     Refuses (raises :class:`JulesUnavailable`) if an identical dispatch
     (same UTC day, same source/branch/title/prompt) was already recorded in
     the ledger today, unless ``force=True``. The dedup check, the POST
@@ -421,6 +869,16 @@ def dispatch_session(
             "must never be set without the operator's explicit go-ahead for "
             "this exact prompt/branch/title."
         )
+
+    # Phase 2 (cooldown) runs first and before any network call, so a
+    # cooldown-blocked attempt never burns the one-time approval token
+    # checked next.
+    _enforce_dispatch_cooldown()
+
+    # Phase 1 (prompt-hash pinning) -- also before any network call.
+    _consume_dispatch_approval(
+        approval_token, prompt=prompt, source=source, branch=branch, title=title
+    )
 
     from settings import settings
 

@@ -1,9 +1,18 @@
 # Jules Dispatch `confirm=True` Hard-Gate — Implementation Plan
 
-## Status: SCOPED, NOT YET APPROVED FOR BUILD
+## Status: PHASES 1-3 SHIPPED (2026-09-07, branch `jules-confirm-hard-gate`); PHASE 4 STILL DEFERRED, OPERATOR-REQUEST-ONLY
 
-Written from a dedicated research pass against live code (2026-09-07). No code has been
-written. This is the artifact to review/edit before any implementation begins.
+Phases 1 (prompt-hash pinning), 2 (dispatch cooldown), and 3 (branch-protection
+verification) are implemented, tested, and documented — see
+`.claude/jules_confirm_hard_gate_task.md` for the per-item checklist and
+`docs/JULES_INTEGRATION.md` Sec 4 for the full, honest write-up including the
+literal Phase 3 finding. Phase 4 (an out-of-band confirmation channel) remains
+explicitly out of scope, not built, not stubbed — build only on an explicit
+operator request with its own dedicated scoping pass, per Sec 5/7 below.
+
+Written from a dedicated research pass against live code (2026-09-07). This document's
+own §7 phase breakdown and §8/§9 testing/doc-sync requirements are what Phases 1-3 were
+built against — see the Status line above for what has since shipped.
 
 ## 0. Problem statement, as originally framed
 

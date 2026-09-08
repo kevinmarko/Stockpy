@@ -15,6 +15,17 @@ Subcommands
     (one line per source). Exits 1 with a stderr message on
     ``JulesUnavailable`` — never a raw traceback.
 
+``request-approval``
+    Records a pinned pre-approval (Phase 1 of the 2026-09 confirm=True
+    hardening pass — see ``docs/JULES_INTEGRATION.md`` Sec 4 and
+    ``data/jules_client.py``'s "Dispatch approval — prompt-hash pinning"
+    docstring section) for a LATER ``create-session`` call with the exact
+    same ``--prompt``/``--title``/``--source``/``--branch``. Prints the
+    resulting ``approval_token`` — pass it to ``create-session`` via
+    ``--approval-token``. No network call; purely local bookkeeping. The
+    token expires after ``settings.JULES_APPROVAL_TTL_SECONDS`` and can
+    authorize at most one ``create-session`` attempt.
+
 ``create-session``
     Dispatches a new Jules session (``AUTO_CREATE_PR`` automation mode —
     see ``data/jules_client.py``'s docstring for why that mode is
@@ -22,8 +33,11 @@ Subcommands
     success it opens a real, unsupervised pull request against the target
     repo. Guarded by a required ``--confirm`` flag — omitting it refuses to
     call ``dispatch_session`` at all, exiting 1 with a clear explanation
-    on stderr. ``--force`` passes through to ``dispatch_session``'s own
-    ``force`` param, overriding its same-UTC-day duplicate-dispatch guard.
+    on stderr. ALSO requires ``--approval-token`` from a prior
+    ``request-approval`` call for this exact prompt/title/source/branch —
+    neither flag substitutes for the other. ``--force`` passes through to
+    ``dispatch_session``'s own ``force`` param, overriding its same-UTC-day
+    duplicate-dispatch guard.
 
 Convention notes
 -----------------
@@ -56,7 +70,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from data.jules_client import JulesUnavailable, dispatch_session, format_sources, list_sources
+from data.jules_client import (
+    JulesUnavailable,
+    dispatch_session,
+    format_sources,
+    list_sources,
+    request_dispatch_approval,
+)
 
 
 def _cmd_list_sources(args: argparse.Namespace) -> int:
@@ -74,6 +94,26 @@ def _cmd_list_sources(args: argparse.Namespace) -> int:
     print(f"Connected Jules sources ({len(sources)}):")
     for source in sources:
         print(f"  - {source['name']}")
+    return 0
+
+
+def _cmd_request_approval(args: argparse.Namespace) -> int:
+    try:
+        result = request_dispatch_approval(
+            prompt=args.prompt, source=args.source, branch=args.branch, title=args.title
+        )
+    except JulesUnavailable as exc:
+        print(f"ERROR: could not record Jules dispatch approval: {exc}", file=sys.stderr)
+        return 1
+
+    print("Jules dispatch approval recorded.")
+    print(f"  approval_token: {result['approval_token']}")
+    print(f"  prompt_hash:    {result['prompt_hash']}")
+    print(f"  expires_at:     {result['expires_at']}")
+    print(
+        "Pass --approval-token to create-session with the EXACT SAME "
+        "--prompt/--title/--source/--branch to dispatch."
+    )
     return 0
 
 
@@ -95,6 +135,7 @@ def _cmd_create_session(args: argparse.Namespace) -> int:
             title=args.title,
             force=args.force,
             confirm=args.confirm,
+            approval_token=args.approval_token or None,
         )
     except JulesUnavailable as exc:
         print(f"ERROR: could not dispatch Jules session: {exc}", file=sys.stderr)
@@ -125,11 +166,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     list_sources_parser.set_defaults(func=_cmd_list_sources)
 
+    request_approval_parser = subparsers.add_parser(
+        "request-approval",
+        help=(
+            "Record a pinned pre-approval (prompt/title/source/branch hash) "
+            "for a later create-session call. No network call."
+        ),
+    )
+    request_approval_parser.add_argument(
+        "--prompt", required=True, type=str, help="The task prompt for the Jules session."
+    )
+    request_approval_parser.add_argument(
+        "--title", required=True, type=str, help="A short title for the Jules session."
+    )
+    request_approval_parser.add_argument(
+        "--source",
+        required=True,
+        type=str,
+        help="Connected source identifier, e.g. sources/github/OWNER/REPO.",
+    )
+    request_approval_parser.add_argument(
+        "--branch",
+        default="main",
+        type=str,
+        help="Target branch on the source repo (default: main).",
+    )
+    request_approval_parser.set_defaults(func=_cmd_request_approval)
+
     create_session_parser = subparsers.add_parser(
         "create-session",
         help=(
             "Dispatch a new Jules session (opens a real PR on success). "
-            "Requires --confirm."
+            "Requires --confirm and --approval-token."
         ),
     )
     create_session_parser.add_argument(
@@ -157,6 +225,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Required to actually dispatch — acknowledges that this opens a "
             "real, unsupervised PR on the target repo."
+        ),
+    )
+    create_session_parser.add_argument(
+        "--approval-token",
+        default="",
+        type=str,
+        help=(
+            "Token from a prior 'request-approval' call, pinning this exact "
+            "--prompt/--title/--source/--branch. Required for "
+            "dispatch_session to proceed -- see data/jules_client.py's "
+            "approval mechanism."
         ),
     )
     create_session_parser.add_argument(

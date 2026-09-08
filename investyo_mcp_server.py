@@ -1081,19 +1081,77 @@ def list_jules_sources() -> str:
     return "\n".join(lines)
 
 @mcp.tool()
-def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "main", confirm: bool = False) -> str:
+def request_jules_dispatch_approval(prompt: str, title: str, source: str, branch: str = "main") -> str:
+    """
+    Records a pinned pre-approval for a Jules dispatch: hashes the EXACT
+    prompt/title/source/branch and returns a single-use approval_token that
+    dispatch_jules_task must be called with (as approval_token=...) before it
+    will actually dispatch. The token expires after
+    settings.JULES_APPROVAL_TTL_SECONDS (default 600s / 10 minutes) and can
+    authorize at most one dispatch attempt, whether or not that attempt goes
+    on to succeed.
+
+    SAFETY, stated plainly (Phase 1 of the 2026-09 confirm=True hardening
+    pass -- see docs/JULES_INTEGRATION.md Sec 4): this raises the bar against
+    an ACCIDENTAL prompt/title/source/branch mismatch between what was
+    approved and what gets dispatched. It does NOT prove a human reviewed
+    this content -- an agent with tool access to this function can call it
+    and dispatch_jules_task back-to-back in the same turn, exactly as it
+    always could with confirm=True alone. Only call this after the operator
+    has explicitly approved THIS EXACT prompt/title/source/branch in the
+    current conversation -- the same rule that already applies to
+    confirm=True on dispatch_jules_task.
+
+    Args:
+        prompt: The task instructions for Jules (must match verbatim at dispatch time).
+        title: Short title for the Jules session / resulting PR (must match verbatim).
+        source: The Jules source name (must match verbatim).
+        branch: The starting branch (must match verbatim). Default "main".
+    """
+    from data.jules_client import request_dispatch_approval, JulesUnavailable
+
+    try:
+        result = request_dispatch_approval(prompt=prompt, source=source, branch=branch, title=title)
+    except JulesUnavailable as e:
+        return str(e)
+
+    lines = [
+        "Approval recorded. Pass this approval_token to dispatch_jules_task "
+        "(along with the EXACT SAME prompt/title/source/branch) to actually "
+        "dispatch -- it expires soon and can be used only once.",
+        f"- **approval_token**: {result['approval_token']}",
+        f"- **prompt_hash**: {result['prompt_hash']}",
+        f"- **expires_at** (UTC epoch seconds): {result['expires_at']}",
+    ]
+    return "\n".join(lines)
+
+@mcp.tool()
+def dispatch_jules_task(
+    prompt: str,
+    title: str,
+    source: str,
+    branch: str = "main",
+    confirm: bool = False,
+    approval_token: str = "",
+) -> str:
     """
     Dispatches an autonomous Jules coding-agent session against a connected
     GitHub repo. Jules will write code and, on completion, automatically open
     a real PR on that repo -- UNSUPERVISED, with no human review before the PR
     is created (review happens at merge time, same as any other PR).
 
-    SAFETY: requires confirm=True. This must NEVER be set without the
-    operator's EXPLICIT go-ahead for this exact prompt/branch/title in the
-    current conversation -- "the operator asked me to set up Jules" earlier
-    is not blanket authorization to dispatch sessions autonomously later.
-    Also requires JULES_ENABLED=true (a dangerous/typed-confirmation-gated
-    setting) and a valid JULES_API_KEY.
+    SAFETY: requires confirm=True AND a valid approval_token from a prior
+    request_jules_dispatch_approval() call for this EXACT
+    prompt/title/source/branch (Phase 1 of the 2026-09 hardening pass --
+    see docs/JULES_INTEGRATION.md Sec 4). Neither is a substitute for the
+    other, and neither must ever be set/obtained without the operator's
+    EXPLICIT go-ahead for this exact prompt/branch/title in the current
+    conversation -- "the operator asked me to set up Jules" earlier is not
+    blanket authorization to dispatch sessions autonomously later. Also
+    requires JULES_ENABLED=true (a dangerous/typed-confirmation-gated
+    setting) and a valid JULES_API_KEY, and is additionally subject to a
+    dispatch cooldown (settings.JULES_DISPATCH_COOLDOWN_SECONDS) that
+    refuses a rapid repeat dispatch.
 
     Args:
         prompt: The task instructions for Jules.
@@ -1103,6 +1161,9 @@ def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "mai
             unrecognized source is rejected).
         branch: The starting branch Jules should branch from. Default "main".
         confirm: Must be explicitly True. Required safety gate -- see above.
+        approval_token: The token returned by request_jules_dispatch_approval()
+            for this EXACT prompt/title/source/branch. Required safety gate --
+            see above.
     """
     if not confirm:
         return (
@@ -1116,7 +1177,12 @@ def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "mai
 
     try:
         result = dispatch_session(
-            prompt=prompt, source=source, branch=branch, title=title, confirm=confirm
+            prompt=prompt,
+            source=source,
+            branch=branch,
+            title=title,
+            confirm=confirm,
+            approval_token=approval_token or None,
         )
     except JulesUnavailable as e:
         return str(e)
