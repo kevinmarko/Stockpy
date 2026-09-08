@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 365,
+    "live_safe": 367,
     "no_op": 5,
     "restart_required": 100,
-    "total": 470
+    "total": 472
   },
   "dynamic_sites": [
     {
@@ -328,6 +328,8 @@
     "HMM_VOL_TERM_SPREAD_FEATURE_ENABLED",
     "JOBS_API_ENABLED",
     "JULES_API_KEY",
+    "JULES_APPROVAL_TTL_SECONDS",
+    "JULES_DISPATCH_COOLDOWN_SECONDS",
     "JULES_ENABLED",
     "JULES_REQUEST_TIMEOUT_SECONDS",
     "KELLY_CAP",
@@ -523,15 +525,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 938,
+    "attr": 939,
     "factory_param": 4,
-    "getattr_const": 394,
+    "getattr_const": 396,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 282,
     "factory_param": 4,
-    "getattr_const": 226,
+    "getattr_const": 228,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -2526,7 +2528,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6054",
+        "site": "investyo_mcp_server.py:6120",
         "via": []
       }
     ],
@@ -2546,7 +2548,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6006",
+        "site": "investyo_mcp_server.py:6072",
         "via": []
       }
     ],
@@ -2586,7 +2588,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6014",
+        "site": "investyo_mcp_server.py:6080",
         "via": []
       }
     ],

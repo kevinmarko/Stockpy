@@ -471,6 +471,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (JULES_API_KEY) is in SECRET_KEYS — CONSTRAINT #3, never GUI-writable.
     "JULES_ENABLED",                      # bool — Jules coding-agent master switch; also a DANGEROUS_KEYS member (settings_keysets.py)
     "JULES_REQUEST_TIMEOUT_SECONDS",      # int — HTTP timeout for data/jules_client.py requests
+    "JULES_APPROVAL_TTL_SECONDS",         # int — pending dispatch-approval TTL (data/jules_client.py)
+    "JULES_DISPATCH_COOLDOWN_SECONDS",    # float — min seconds between dispatch_session() calls
     # Robinhood execution bridge & portfolio controls
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",

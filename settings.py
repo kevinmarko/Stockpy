@@ -688,6 +688,33 @@ class Settings(BaseSettings):
             "(list_sources, dispatch_session)."
         ),
     )
+    JULES_APPROVAL_TTL_SECONDS: int = Field(
+        default=600,
+        description=(
+            "TTL (seconds) for a pending Jules dispatch approval recorded "
+            "by data/jules_client.py's request_dispatch_approval() (Phase 1 "
+            "of the 2026-09 confirm=True hardening pass -- see "
+            "docs/JULES_INTEGRATION.md Sec 4). An approval_token not "
+            "consumed by dispatch_session() within this window expires and "
+            "can no longer authorize a dispatch; a fresh "
+            "request_dispatch_approval() call is required. Default 600s "
+            "(10 minutes)."
+        ),
+    )
+    JULES_DISPATCH_COOLDOWN_SECONDS: float = Field(
+        default=60.0,
+        description=(
+            "Minimum seconds required between two successful "
+            "data/jules_client.py dispatch_session() calls (Phase 2 of the "
+            "2026-09 confirm=True hardening pass -- see "
+            "docs/JULES_INTEGRATION.md Sec 4), enforced by reading the last "
+            "recorded timestamp in the dispatch ledger "
+            "(output/jules_dispatched.jsonl) -- no separate rate-limiter "
+            "state. Protects against an accidental rapid/looping dispatch "
+            "(e.g. a misbehaving automation retrying in a tight loop), NOT "
+            "against a single deliberate dispatch. Set to 0 to disable."
+        ),
+    )
     # TTL (seconds) for the in-process quote cache in CompositeProvider.
     # Prevents redundant network calls within a single refresh cycle.
     # Quotes must NOT be persisted to disk — cache is in-process only.
