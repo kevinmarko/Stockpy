@@ -322,9 +322,11 @@ describe("UniverseCoverage — idle by default (Robinhood category gate)", () =>
   it("does not call GET /data/sync-report on mount when the robinhood category is off (default)", async () => {
     const spy = vi.spyOn(api, "getSyncReport");
     render(
-      <AutoRefreshProvider>
-        <UniverseCoverage />
-      </AutoRefreshProvider>
+      <MemoryRouter>
+        <AutoRefreshProvider>
+          <UniverseCoverage />
+        </AutoRefreshProvider>
+      </MemoryRouter>
     );
     expect(await screen.findByTestId("universe-coverage-idle")).toHaveTextContent(
       "Coverage report not loaded"
@@ -338,9 +340,11 @@ describe("UniverseCoverage — idle by default (Robinhood category gate)", () =>
   it("clicking 'Load coverage report' fetches exactly once and renders the live view", async () => {
     const spy = vi.spyOn(api, "getSyncReport");
     render(
-      <AutoRefreshProvider>
-        <UniverseCoverage />
-      </AutoRefreshProvider>
+      <MemoryRouter>
+        <AutoRefreshProvider>
+          <UniverseCoverage />
+        </AutoRefreshProvider>
+      </MemoryRouter>
     );
     await screen.findByTestId("universe-coverage-idle");
     expect(spy).not.toHaveBeenCalled();

@@ -568,6 +568,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "Interactive options chain for a single symbol — browse available expirations, inspect bid/ask/IV/Greeks per strike, and see the statistically-grounded Chance of Profit for each contract. Chain data comes from yfinance; the underlying spot price for Greek calculations comes from the FMP quote endpoint for reliability. Use Builder mode to construct common multi-leg strategies (spreads, straddles, calendars) from the chain, then review the combined order in the ticket — Paper orders simulate a fill, and Live orders require an explicit confirmation and remain subject to advisory-only constraints (no order is actually routed to a broker yet).",
     keyConcepts: ["options delta", "options theta", "implied volatility", "chance of profit"],
   },
+  universe: {
+    title: "Universe Transparency",
+    description:
+      "Inspect the operational status of all tracked tickers across data streams (quotes, fundamentals, forecasts). Identifies data gaps, rating exclusion, and allows syncing or re-including symbols with honest non-fabrication.",
+    keyConcepts: ["symbol rating"],
+  },
 };
 
 /**

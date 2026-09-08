@@ -20,6 +20,7 @@ import { useApi } from "../hooks/useApi";
 import { EmptyState, ErrorState, Loading, Input, Select, Table } from "./ui";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
+import { ExplainTickerButton } from "./ExplainTickerButton";
 
 const features = tableFeatures({
   columnVisibilityFeature,
@@ -109,6 +110,7 @@ export function RecommendedStocks({
               >
                 {r.symbol}
               </button>
+              <ExplainTickerButton symbol={r.symbol} />
               {r.action && (
                 <span
                   style={{

@@ -409,12 +409,18 @@ function UniverseCoverageBody({
         )}
       </div>
 
-      {data.generated_at && (
-        <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, margin: "0 0 var(--s-2-5)" }}>
-          Last checked {timeAgo(data.generated_at)}
-          {data.provider_source && ` · ${data.provider_source}`}
-        </p>
-      )}
+      <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, margin: "0 0 var(--s-2-5)" }}>
+        {data.generated_at && (
+          <>
+            Last checked {timeAgo(data.generated_at)}
+            {data.provider_source && ` · ${data.provider_source}`}
+            {" · "}
+          </>
+        )}
+        <Link to="/universe" style={{ color: "var(--growth)" }}>
+          See full breakdown →
+        </Link>
+      </p>
 
       {filtered.length === 0 ? (
         <div className="empty" data-testid="universe-coverage-no-gaps" style={{ padding: "var(--s-4)" }}>

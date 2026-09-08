@@ -19,6 +19,7 @@ import { ErrorState, Loading, Tile, InfoTip } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
+import { ExplainTickerButton } from "../components/ExplainTickerButton";
 
 /**
  * ReconciliationSection — "held vs. signal" reconciliation, the webapp port
@@ -79,9 +80,12 @@ function ReconciliationSection({
           ) : (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-1)" }}>
               {heldNoSignal.map((s) => (
-                <Link key={s} to={`/symbol/${s}`} className="chip">
-                  {s}
-                </Link>
+                <span key={s} style={{ display: "inline-flex", alignItems: "center" }}>
+                  <Link to={`/symbol/${s}`} className="chip">
+                    {s}
+                  </Link>
+                  <ExplainTickerButton symbol={s} />
+                </span>
               ))}
             </div>
           )}
@@ -95,9 +99,12 @@ function ReconciliationSection({
           ) : (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-1)" }}>
               {signalledNotHeld.map((s) => (
-                <Link key={s} to={`/symbol/${s}`} className="chip">
-                  {s}
-                </Link>
+                <span key={s} style={{ display: "inline-flex", alignItems: "center" }}>
+                  <Link to={`/symbol/${s}`} className="chip">
+                    {s}
+                  </Link>
+                  <ExplainTickerButton symbol={s} />
+                </span>
               ))}
             </div>
           )}
@@ -343,7 +350,10 @@ export function Portfolio() {
                 {realized.data.trades.slice(0, 8).map((t, i) => (
                   <Link className="row" key={`${t.symbol}-${i}`} to={`/symbol/${t.symbol}`}>
                     <div className="row-main">
-                      <span className="row-title">{t.symbol}</span>
+                      <span className="row-title" style={{ display: "inline-flex", alignItems: "center" }}>
+                        {t.symbol}
+                        <ExplainTickerButton symbol={t.symbol} />
+                      </span>
                       <span className="row-sub">
                         {t.quantity == null ? "—" : fmtNum(t.quantity, 0)} sh ·{" "}
                         {t.holding_days == null ? "—" : `${fmtNum(t.holding_days, 0)}d`}
@@ -444,7 +454,10 @@ export function Portfolio() {
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <span style={{ fontSize: "var(--t-title)", fontWeight: 700, color: theme.textPrimary }}>{pos.symbol}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center" }}>
+                    <span style={{ fontSize: "var(--t-title)", fontWeight: 700, color: theme.textPrimary }}>{pos.symbol}</span>
+                    <ExplainTickerButton symbol={pos.symbol} />
+                  </span>
                   <span className="num" style={{ fontWeight: 700, fontSize: "var(--t-subhead)", color: theme.textPrimary }}>
                     {fmtUsd(pos.market_value)}
                   </span>
