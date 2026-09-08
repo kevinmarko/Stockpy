@@ -1533,3 +1533,457 @@ def test_svi_stitching_demo_duplicate_route_stays_removed():
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/svi-stitching-demo")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Explain This Ticker — GET /data/explain/{symbol}
+# ---------------------------------------------------------------------------
+
+
+def test_explain_ticker_tracked_full_success(monkeypatch):
+    profile_data = {
+        "symbol": "AAPL",
+        "companyName": "Apple Inc.",
+        "description": "Apple Inc. designs, manufactures, and markets smartphones...",
+        "sector": "Technology",
+        "industry": "Consumer Electronics",
+        "exchange": "NASDAQ",
+        "website": "https://www.apple.com",
+        "ceo": "Timothy D. Cook",
+        "mktCap": 3450000000000.0,
+    }
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: profile_data)
+
+    symbol_status = SimpleNamespace(
+        symbol="AAPL",
+        held=True,
+        quantity=15.0,
+        avg_cost=182.50,
+        market_value=2737.50,
+        coverage=SimpleNamespace(value="full"),
+        watchlists=("file:watchlist.txt",),
+    )
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(
+        data_api,
+        "build_sync_report",
+        lambda snap, **kwargs: SimpleNamespace(symbols={"AAPL": symbol_status}),
+    )
+
+    # Shaped exactly like a real output/state_snapshot.json signals[] entry
+    # (snake_case, see reporting/state_snapshot.py / main_orchestrator.py's
+    # _write_state_snapshot) -- NOT the permanently-empty DailySignals table.
+    signals_row = {
+        "symbol": "AAPL",
+        "_as_of": "2026-09-07T12:00:00",
+        "action": "HOLD",
+        "advisory_action": "BUY",
+        "kelly_target": 0.045,
+        "buy_range": "180.00-184.00",
+        "sell_range": "195.00-205.00",
+        "hmm_risk_on": 0.85,
+        "macro_status": "EXPANSION",
+        "garch_vol": 0.18,
+        "news_sentiment": 0.62,
+        "value_z": 0.45,
+        "quality_z": 1.20,
+        "lowvol_z": 0.30,
+        "size_z": -0.10,
+        "multifactor_composite": 0.65,
+        "xsec_12_1m": 0.12,
+        "xsec_momentum_rank": 0.82,
+    }
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: signals_row)
+
+    fresh_dates = pd.date_range(end=date.today(), periods=10, freq="D")
+    bars_df = pd.DataFrame(
+        {
+            "Open": np.linspace(100, 104, 10),
+            "High": np.linspace(101, 105, 10),
+            "Low": np.linspace(99, 103, 10),
+            "Close": np.linspace(100.5, 104.5, 10),
+            "Volume": [1_000_000] * 10,
+        },
+        index=fresh_dates,
+    )
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=bars_df))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/AAPL")
+
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["symbol"] == "AAPL"
+
+    # Profile assertions
+    prof = data["company_profile"]
+    assert prof["available"] is True
+    assert prof["company_name"] == "Apple Inc."
+    assert prof["ceo"] == "Timothy D. Cook"
+    assert prof["market_cap"] == 3450000000000.0
+    assert prof["source"] == "fmp"
+    assert prof["reason"] is None
+
+    # Tracking assertions
+    trk = data["tracking"]
+    assert trk["tracked"] is True
+    assert trk["held"] is True
+    assert trk["quantity"] == 15.0
+    assert trk["avg_cost"] == 182.50
+    assert trk["market_value"] == 2737.50
+    assert trk["coverage_status"] == "full"
+    assert trk["watchlists"] == ["file:watchlist.txt"]
+    assert any("Held in portfolio" in r for r in trk["reasons"])
+    assert any("Tracked via watchlist 'file:watchlist.txt'" in r for r in trk["reasons"])
+
+    # Factor breakdown assertions
+    fb = data["factor_breakdown"]
+    assert fb["available"] is True
+    assert fb["as_of"] == "2026-09-07T12:00:00"
+    assert fb["multifactor"]["value_z"] == 0.45
+    assert fb["multifactor"]["low_vol_z"] == 0.30
+    assert fb["multifactor"]["composite"] == 0.65
+    assert fb["momentum"]["xsec_momentum_rank"] == 0.82
+    assert fb["volatility_regime"]["regime"] == "EXPANSION"
+    assert fb["volatility_regime"]["hmm_risk_on_probability"] == 0.85
+    # advisory_action (holding-aware overlay) wins over the raw "action".
+    assert fb["tactical"]["action"] == "BUY"
+    assert fb["tactical"]["buy_range"] == "180.00-184.00"
+    assert fb["sentiment"]["aggregate_score"] == 0.62
+    assert fb["raw_factors"]["macro_status"] == "EXPANSION"
+    assert fb["reason"] is None
+
+    # Price history assertions
+    ph = data["price_history_status"]
+    assert ph["available"] is True
+    assert ph["bar_count"] == 10
+    assert ph["status"] == "ok"
+    assert ph["latest_close"] is not None
+
+
+def test_explain_ticker_untracked_symbol_honesty(monkeypatch):
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: None)
+    monkeypatch.setattr(
+        data_api,
+        "build_sync_report",
+        lambda snap, **kwargs: SimpleNamespace(symbols={}),
+    )
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: None)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/XYZ")
+
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["symbol"] == "XYZ"
+
+    # Profile honesty
+    assert data["company_profile"]["available"] is False
+    assert data["company_profile"]["company_name"] is None
+    assert data["company_profile"]["reason"] == "FMP profile unavailable for XYZ"
+
+    # Tracking honesty: untracked must have quantity=None, not 0.0
+    trk = data["tracking"]
+    assert trk["tracked"] is False
+    assert trk["held"] is False
+    assert trk["quantity"] is None
+    assert trk["avg_cost"] is None
+    assert trk["coverage_status"] == "untracked"
+    assert trk["watchlists"] == []
+    assert trk["reasons"] == ["Symbol is not currently held or included in any active watchlist"]
+
+    # Factors honesty: no fabricated composite or dummy scores
+    fb = data["factor_breakdown"]
+    assert fb["available"] is False
+    assert fb["as_of"] is None
+    assert fb["multifactor"] is None
+    assert fb["raw_factors"] == {}
+    assert fb["reason"] == "No signals computed this cycle for XYZ"
+
+    # Price history honesty
+    ph = data["price_history_status"]
+    assert ph["available"] is False
+    assert ph["bar_count"] == 0
+    assert ph["status"] == "no_data"
+    assert ph["reason"] == "No cached price bars found in historical store"
+
+
+def test_explain_ticker_stale_price_bars(monkeypatch):
+    # Bars ending in 2020 (far older than 7 days)
+    old_dates = pd.date_range("2020-01-01", periods=5, freq="D")
+    old_bars = pd.DataFrame(
+        {
+            "Open": [10.0] * 5,
+            "High": [11.0] * 5,
+            "Low": [9.0] * 5,
+            "Close": [10.5] * 5,
+            "Volume": [1000] * 5,
+        },
+        index=old_dates,
+    )
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
+    monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={}))
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: None)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=old_bars))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/OLDTICKER")
+
+    assert resp.status_code == 200
+    ph = resp.json()["price_history_status"]
+    assert ph["available"] is True
+    assert ph["bar_count"] == 5
+    assert ph["status"] == "stale"
+    assert "2020-01-05" in ph["latest_date"]
+    assert ">7 days old" in ph["reason"]
+
+
+def test_explain_ticker_nan_cleaning(monkeypatch):
+    """Ensure non-finite / NaN values are recursively cleaned to JSON null."""
+    signals_row = {
+        "symbol": "NAN",
+        "_as_of": "2026-09-07T12:00:00",
+        "value_z": float("nan"),
+        "garch_vol": float("inf"),
+        "hmm_risk_on": float("-inf"),
+    }
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: {"mktCap": float("nan")})
+    symbol_status = SimpleNamespace(
+        symbol="NAN",
+        held=True,
+        quantity=10.0,
+        avg_cost=float("nan"),
+        market_value=float("nan"),
+        coverage=SimpleNamespace(value="full"),
+        watchlists=(),
+    )
+    monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={"NAN": symbol_status}))
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: signals_row)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/NAN")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["company_profile"]["market_cap"] is None
+    assert data["tracking"]["avg_cost"] is None
+    assert data["tracking"]["market_value"] is None
+    assert data["factor_breakdown"]["multifactor"]["value_z"] is None
+    assert data["factor_breakdown"]["volatility_regime"]["garch_vol"] is None
+    assert data["factor_breakdown"]["volatility_regime"]["hmm_risk_on_probability"] is None
+
+
+def test_explain_ticker_empty_symbol_validation():
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/%20%20")
+    assert resp.status_code == 422
+    assert "Symbol cannot be empty" in resp.json()["detail"]
+
+
+def test_explain_ticker_bearer_auth(monkeypatch):
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
+    monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={}))
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: None)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", "test-secret-token"):
+        # Without auth header
+        resp_unauth = client.get("/data/explain/AAPL")
+        assert resp_unauth.status_code == 401
+
+        # With bad token
+        resp_bad = client.get("/data/explain/AAPL", headers={"Authorization": "Bearer wrong-token"})
+        assert resp_bad.status_code == 401
+
+        # With valid token
+        resp_ok = client.get("/data/explain/AAPL", headers={"Authorization": "Bearer test-secret-token"})
+        assert resp_ok.status_code == 200
+
+
+def test_explain_ticker_rating_excluded_symbol(monkeypatch):
+    symbol_status = SimpleNamespace(
+        symbol="DROP",
+        held=False,
+        quantity=0.0,
+        avg_cost=float("nan"),
+        market_value=float("nan"),
+        coverage=SimpleNamespace(value="uncovered"),
+        watchlists=("watchlist1",),
+    )
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
+    monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={"DROP": symbol_status}))
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda sym: None)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    class _MockRatingStore:
+        def __init__(self, readonly=True):
+            pass
+        def get_consecutive_bad_cycles(self, sym):
+            return 7
+
+    monkeypatch.setattr("rating.symbol_rating_store.SymbolRatingStore", _MockRatingStore)
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5):
+        resp = client.get("/data/explain/DROP")
+
+    assert resp.status_code == 200
+    trk = resp.json()["tracking"]
+    assert trk["rating_consecutive_bad_cycles"] == 7
+    assert trk["rating_excluded"] is True
+    assert any("Excluded by rating filter (7 consecutive bad cycles)" in r for r in trk["reasons"])
+
+
+def test_explain_ticker_factor_breakdown_reads_real_state_snapshot(monkeypatch):
+    """Regression test for the audit finding that an earlier revision of this
+    endpoint queried the DailySignals SQLite table directly -- a table no
+    live code path in this repo ever writes a row into (see
+    docs/known_issues/daily_signals_missing_table.md), so factor_breakdown
+    would ALWAYS report unavailable in every real deployment.
+
+    Exercises the real ``load_snapshot()`` -> ``find_signal()`` path
+    end-to-end (only ``data_api.load_snapshot`` is monkeypatched, not the
+    ``_load_symbol_signal`` seam itself) so a future regression back to a
+    DailySignals-shaped query would fail this test even if
+    ``_load_symbol_signal`` were mocked elsewhere in this file.
+    """
+    fake_snapshot = {
+        "timestamp": "2026-09-07T08:00:00+00:00",
+        "signals": [
+            {
+                "symbol": "SNAP",
+                "action": "HOLD",
+                "advisory_action": "BUY",
+                "kelly_target": 0.08,
+                "buy_range": "50.00-52.00",
+                "sell_range": "60.00-62.00",
+                "hmm_risk_on": 0.71,
+                "macro_status": "RISK_ON",
+                "garch_vol": 0.22,
+                "news_sentiment": 0.4,
+                "value_z": 0.9,
+                "quality_z": 0.2,
+                "lowvol_z": -0.3,
+                "size_z": 0.1,
+                "multifactor_composite": 0.4,
+                "xsec_12_1m": 0.05,
+                "xsec_momentum_rank": 0.6,
+            },
+            # A second, unrelated symbol proves find_signal() actually
+            # matches by ticker rather than always returning the first row.
+            {"symbol": "OTHER", "action": "SELL"},
+        ],
+    }
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
+    monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={}))
+    monkeypatch.setattr(data_api, "load_snapshot", lambda: fake_snapshot)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/SNAP")
+
+    assert resp.status_code == 200
+    fb = resp.json()["factor_breakdown"]
+    assert fb["available"] is True
+    assert fb["as_of"] == "2026-09-07T08:00:00+00:00"
+    assert fb["tactical"]["action"] == "BUY"
+    assert fb["tactical"]["buy_range"] == "50.00-52.00"
+    assert fb["volatility_regime"]["regime"] == "RISK_ON"
+    assert fb["volatility_regime"]["hmm_risk_on_probability"] == 0.71
+    assert fb["sentiment"]["aggregate_score"] == 0.4
+    assert fb["multifactor"]["composite"] == 0.4
+
+
+def test_explain_ticker_factor_breakdown_absent_from_snapshot_is_honest(monkeypatch):
+    """A symbol with no entry in the real signals[] list this cycle must
+    report the honest 'no signals computed' state -- never a fabricated or
+    zeroed-out row (CONSTRAINT #4)."""
+    monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
+    monkeypatch.setattr(data_api, "build_sync_report", lambda snap, **kwargs: SimpleNamespace(symbols={}))
+    monkeypatch.setattr(
+        data_api,
+        "load_snapshot",
+        lambda: {"timestamp": "2026-09-07T08:00:00+00:00", "signals": [{"symbol": "OTHER"}]},
+    )
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/GHOST")
+
+    assert resp.status_code == 200
+    fb = resp.json()["factor_breakdown"]
+    assert fb["available"] is False
+    assert fb["as_of"] is None
+    assert fb["multifactor"] is None
+    assert fb["reason"] == "No signals computed this cycle for GHOST"
+
+
+def test_load_symbol_signal_degrades_on_missing_snapshot(monkeypatch):
+    """No output/state_snapshot.json on disk (a fresh clone/cold start) must
+    degrade to None, never raise -- CONSTRAINT #6."""
+    monkeypatch.setattr(data_api, "load_snapshot", lambda: None)
+    assert data_api._load_symbol_signal("AAPL") is None
+
+
+def test_load_symbol_signal_degrades_on_snapshot_read_failure(monkeypatch):
+    """A corrupt/unreadable snapshot file must degrade to None rather than
+    propagating out of the endpoint (CONSTRAINT #6)."""
+
+    def _raise():
+        raise OSError("disk read error")
+
+    monkeypatch.setattr(data_api, "load_snapshot", _raise)
+    assert data_api._load_symbol_signal("AAPL") is None
+
+
+def test_load_symbol_signal_degrades_on_malformed_snapshot(monkeypatch):
+    """A snapshot that parses but isn't the expected shape (e.g. 'signals'
+    is not a list) must degrade to None, never raise."""
+    monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": "not-a-list"})
+    assert data_api._load_symbol_signal("AAPL") is None
+
+
+def test_explain_ticker_malformed_quantity_degrades_honestly(monkeypatch):
+    """Regression test: a malformed (non-numeric) SymbolStatus.quantity used
+    to raise an uncaught ValueError out of the whole endpoint (HTTP 500)
+    instead of degrading -- a CONSTRAINT #6 violation for a section that is
+    supposed to always return 200 with honest per-field nulling. The fix
+    routes quantity/avg_cost/market_value through pilots.scoring._coerce_float
+    (never a bare float()/math.isnan()), so a non-numeric value degrades to
+    None instead of crashing the request."""
+    bad_status = SimpleNamespace(
+        symbol="MALFORMED_QTY",
+        held=True,
+        quantity="not-a-number",
+        avg_cost=100.0,
+        market_value=1000.0,
+        coverage=SimpleNamespace(value="full"),
+        watchlists=(),
+    )
+    monkeypatch.setattr(data_api, "company_profile", lambda s: None)
+    monkeypatch.setattr(
+        data_api,
+        "build_sync_report",
+        lambda snap, **k: SimpleNamespace(symbols={"MALFORMED_QTY": bad_status}),
+    )
+    monkeypatch.setattr(data_api, "_load_symbol_signal", lambda s: None)
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore(bars=None))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/explain/MALFORMED_QTY")
+
+    assert resp.status_code == 200
+    trk = resp.json()["tracking"]
+    assert trk["tracked"] is True
+    assert trk["held"] is True
+    # Malformed quantity degrades to None -- never fabricated as 0.0 or a
+    # crash. avg_cost is a genuine float and survives unaffected.
+    assert trk["quantity"] is None
+    assert trk["avg_cost"] == 100.0
+    assert any("Held in portfolio (0.0 shares @ $100.00)" in r for r in trk["reasons"])
+

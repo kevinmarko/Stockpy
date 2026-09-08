@@ -33,6 +33,7 @@ from __future__ import annotations
 import base64
 import logging
 import math
+from datetime import date
 from typing import Any, Dict, List, Optional
 import json
 import asyncio
@@ -58,6 +59,7 @@ _load_dotenv(ENV_PATH, override=False)
 
 from api.auth import require_read_token as require_token, require_write_token
 from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
+from data.fmp_client import company_profile
 from data.historical_store import HistoricalStore
 from data.market_data import get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
@@ -84,9 +86,16 @@ from llm.chart_insight import generate_chart_pattern_read, render_price_chart_pn
 from llm.research import generate_research_brief
 from pilots.catalog import get_pilot as _catalog_get_pilot, list_pilots as _catalog_list_pilots
 from pilots.observability import observability_summary as _pilots_observability_summary
-from pilots.scoring import load_snapshot
+from pilots.scoring import _coerce_float, load_snapshot
 from pilots.scoring import pilot_holdings as _pilots_pilot_holdings
 from pilots.scoring import pilot_trades as _pilots_pilot_trades
+# `find_signal`/`_clean_str` are the SAME persisted-per-cycle read
+# `pilots.symbols.symbol_detail` uses for the Symbol Detail / Today's Radar
+# surfaces (`output/state_snapshot.json`'s `signals[]` list) — reused here
+# (not re-derived) so GET /data/explain/{symbol}'s factor_breakdown section
+# never diverges from what the rest of the Pilots read layer already reports
+# for the same symbol on the same cycle.
+from pilots.symbols import _clean_str, find_signal
 
 logger = logging.getLogger(__name__)
 
@@ -861,6 +870,345 @@ def get_sync_report() -> Dict[str, Any]:
         # Degrade: leave symbols without the two new keys rather than failing
         # the whole endpoint (CONSTRAINT #6).
     return resp
+
+
+def _load_symbol_signal(symbol: str) -> Optional[Dict[str, Any]]:
+    """Read the most recent per-symbol signal entry for ``symbol``.
+
+    Reads ``output/state_snapshot.json`` (via ``pilots.scoring.load_snapshot`` +
+    ``pilots.symbols.find_signal``) — the SAME persisted, per-cycle read the
+    Pilots read layer already uses for the Symbol Detail page / Today's Radar
+    feed. This is deliberately **not** a query against the ``DailySignals``
+    SQLite table (an earlier revision of this endpoint queried that table
+    directly): ``DailySignals`` is structurally, permanently empty in every
+    real deployment — no live code path anywhere in this repo ever writes a
+    row into it (see ``docs/known_issues/daily_signals_missing_table.md``,
+    and the identical reasoning behind ``pilots/radar_ranking.py`` reading
+    the snapshot instead) — so a query against it would always report "no
+    signals" even while the pipeline is running and computing scores every
+    cycle. Reading the snapshot also means this is a genuine READ of
+    already-computed data, never a second/parallel score recomputation.
+
+    Returns the raw ``signals[]`` entry dict with an added ``"_as_of"`` key
+    (the snapshot's own top-level ``timestamp``), or ``None`` when no
+    snapshot exists, it is malformed, or *symbol* has no entry this cycle.
+    Read-only and dead-letter safe (CONSTRAINT #6) — never raises.
+    """
+    try:
+        snapshot = load_snapshot()
+        if not snapshot:
+            return None
+        sig = find_signal(snapshot, symbol)
+        if sig is None:
+            return None
+        enriched = dict(sig)
+        enriched["_as_of"] = snapshot.get("timestamp") if isinstance(snapshot, dict) else None
+        return enriched
+    except Exception as exc:
+        logger.warning("data_api: state snapshot signal lookup failed for %s: %s", symbol, exc)
+        return None
+
+
+@app.get("/data/explain/{symbol}", dependencies=[Depends(require_token)])
+def explain_ticker(symbol: str) -> Dict[str, Any]:
+    """Explain This Ticker aggregated endpoint.
+
+    Aggregates four independent facets for symbol:
+    1. company_profile: Description, sector, industry, exchange, website, CEO,
+       market cap via data.fmp_client.company_profile.
+    2. tracking: Universe tracking provenance (why is this symbol tracked,
+       holdings details, watchlists, rating status) via build_sync_report.
+    3. factor_breakdown: Read-only adapter over the latest
+       output/state_snapshot.json signals[] entry (the same persisted
+       per-cycle read pilots/symbols.py's Symbol Detail page and
+       pilots/radar_ranking.py's Today's Radar feed already use) — never the
+       DailySignals SQLite table, which no live code path ever writes a row
+       into (see docs/known_issues/daily_signals_missing_table.md). No
+       synthetic composite fabrication — everything here is a plain dict
+       lookup, never a recomputed score.
+    4. price_history_status: Bar count, date range, latest close, and
+       chart readiness (ok/no_data/stale) via HistoricalStore.
+
+    Returns HTTP 200 for both tracked and untracked symbols.
+    Never fabricates missing metrics or placeholder text (CONSTRAINT #4).
+    All float fields cleaned via _clean_nan().
+    """
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=422, detail="Symbol cannot be empty")
+
+    # ── 1. Company Profile (FMP) ──────────────────────────────────────────
+    prof_dict = None
+    try:
+        prof_dict = company_profile(sym)
+    except Exception as exc:
+        logger.warning("data_api: company_profile failed for %s: %s", sym, exc)
+
+    if prof_dict and isinstance(prof_dict, dict):
+        company_profile_section = {
+            "available": True,
+            "company_name": prof_dict.get("companyName") or prof_dict.get("name"),
+            "description": prof_dict.get("description"),
+            "sector": prof_dict.get("sector"),
+            "industry": prof_dict.get("industry"),
+            "exchange": prof_dict.get("exchange") or prof_dict.get("exchangeShortName"),
+            "website": prof_dict.get("website"),
+            "ceo": prof_dict.get("ceo"),
+            "market_cap": prof_dict.get("mktCap") or prof_dict.get("marketCap"),
+            "source": "fmp",
+            "reason": None,
+        }
+    else:
+        company_profile_section = {
+            "available": False,
+            "company_name": None,
+            "description": None,
+            "sector": None,
+            "industry": None,
+            "exchange": None,
+            "website": None,
+            "ceo": None,
+            "market_cap": None,
+            "source": None,
+            "reason": f"FMP profile unavailable for {sym}",
+        }
+
+    # ── 2. Universe Tracking ─────────────────────────────────────────────
+    snapshot = None
+    try:
+        snapshot = fetch_account_snapshot(force=False)
+    except Exception as exc:
+        logger.warning("data_api: account snapshot unavailable for explain %s: %s", sym, exc)
+
+    status_entry = None
+    try:
+        report = build_sync_report(snapshot, probe_market=False)
+        if report and hasattr(report, "symbols"):
+            status_entry = report.symbols.get(sym)
+    except Exception as exc:
+        logger.warning("data_api: sync report probe failed for explain %s: %s", sym, exc)
+
+    rating_bad_cycles = None
+    rating_excluded = False
+    try:
+        from rating.symbol_rating_store import SymbolRatingStore
+
+        store_rating = SymbolRatingStore(readonly=True)
+        rating_bad_cycles = store_rating.get_consecutive_bad_cycles(sym)
+        threshold = getattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        is_held_flag = bool(status_entry.held) if status_entry else False
+        rating_excluded = (not is_held_flag) and (rating_bad_cycles is not None and rating_bad_cycles >= threshold)
+    except Exception as exc:
+        logger.warning("data_api: rating lookup failed for explain %s: %s", sym, exc)
+
+    if status_entry is not None:
+        is_held = bool(status_entry.held)
+        cov_status = (
+            status_entry.coverage.value
+            if hasattr(status_entry.coverage, "value")
+            else str(status_entry.coverage)
+        )
+        watchlists_list = list(status_entry.watchlists) if status_entry.watchlists else []
+        # _coerce_float (never a bare float()/math.isnan()) so a malformed
+        # SymbolStatus field (e.g. a non-numeric quantity from a corrupted
+        # snapshot) degrades to None instead of raising an uncaught
+        # ValueError/TypeError out of the whole endpoint — CONSTRAINT #6.
+        qty = _coerce_float(status_entry.quantity) if is_held else None
+        avg_cost = _coerce_float(status_entry.avg_cost) if is_held else None
+        market_val = _coerce_float(status_entry.market_value) if is_held else None
+
+        reasons: List[str] = []
+        if is_held:
+            qty_str = f"{qty:.1f}" if qty is not None else "0.0"
+            cost_str = f"${avg_cost:.2f}" if avg_cost is not None else "N/A"
+            reasons.append(f"Held in portfolio ({qty_str} shares @ {cost_str})")
+        for w in watchlists_list:
+            reasons.append(f"Tracked via watchlist '{w}'")
+        if rating_excluded:
+            reasons.append(f"Excluded by rating filter ({rating_bad_cycles} consecutive bad cycles)")
+        if not reasons:
+            reasons.append("Tracked in universe")
+
+        tracking_section = {
+            "tracked": True,
+            "held": is_held,
+            "quantity": qty,
+            "avg_cost": avg_cost,
+            "market_value": market_val,
+            "watchlists": watchlists_list,
+            "coverage_status": cov_status,
+            "rating_consecutive_bad_cycles": rating_bad_cycles,
+            "rating_excluded": rating_excluded,
+            "reasons": reasons,
+        }
+    else:
+        tracking_section = {
+            "tracked": False,
+            "held": False,
+            "quantity": None,
+            "avg_cost": None,
+            "market_value": None,
+            "watchlists": [],
+            "coverage_status": "untracked",
+            "rating_consecutive_bad_cycles": rating_bad_cycles,
+            "rating_excluded": False,
+            "reasons": ["Symbol is not currently held or included in any active watchlist"],
+        }
+
+    # ── 3. Factor Breakdown ────────────────────────────────────────────────
+    # Read of output/state_snapshot.json's signals[] entry — the SAME
+    # persisted per-cycle data pilots/symbols.py::symbol_detail (Symbol
+    # Detail page) and pilots/radar_ranking.py (Today's Radar) already
+    # surface for this symbol. Never a second/parallel score computation —
+    # every value below is a plain dict lookup, honestly nulled when the
+    # active snapshot writer didn't populate it this cycle (CONSTRAINT #4).
+    signal_row = _load_symbol_signal(sym)
+    if signal_row and isinstance(signal_row, dict):
+        as_of_val = signal_row.get("_as_of")
+        raw_factors = {
+            k: v for k, v in signal_row.items()
+            if k not in ("symbol", "_as_of") and v is not None and v != ""
+        }
+        # advisory_action (holding-aware overlay) wins over the raw signal
+        # action when both are present — same precedence as
+        # pilots/symbols.py::symbol_detail's "advisory" block.
+        action_val = _clean_str(signal_row.get("advisory_action")) or _clean_str(signal_row.get("action"))
+        factor_breakdown_section = {
+            "available": True,
+            "as_of": str(as_of_val) if as_of_val is not None else None,
+            "multifactor": {
+                "value_z": _coerce_float(signal_row.get("value_z")),
+                "quality_z": _coerce_float(signal_row.get("quality_z")),
+                "low_vol_z": _coerce_float(signal_row.get("lowvol_z")),
+                "size_z": _coerce_float(signal_row.get("size_z")),
+                "composite": _coerce_float(signal_row.get("multifactor_composite")),
+            },
+            "momentum": {
+                "xsec_12_1m": _coerce_float(signal_row.get("xsec_12_1m")),
+                "xsec_momentum_rank": _coerce_float(signal_row.get("xsec_momentum_rank")),
+            },
+            "volatility_regime": {
+                # "regime" is the exact key ExplainTickerDrawer.tsx renders
+                # (volatility_regime.regime) — the market/macro regime label
+                # for this cycle (e.g. "EXPANSION"/"RECESSION"), not a
+                # numeric HMM state index.
+                "regime": _clean_str(signal_row.get("macro_status")),
+                "hmm_risk_on_probability": _coerce_float(signal_row.get("hmm_risk_on")),
+                "garch_vol": _coerce_float(signal_row.get("garch_vol")),
+            },
+            "tactical": {
+                "action": action_val,
+                "kelly_target": _coerce_float(signal_row.get("kelly_target")),
+                "buy_range": _clean_str(signal_row.get("buy_range")),
+                "sell_range": _clean_str(signal_row.get("sell_range")),
+            },
+            "sentiment": {
+                # "aggregate_score" is the exact key ExplainTickerDrawer.tsx
+                # renders (sentiment.aggregate_score); news_sentiment (FinBERT)
+                # is the only per-symbol sentiment scalar the snapshot carries.
+                "aggregate_score": _coerce_float(signal_row.get("news_sentiment")),
+            },
+            "raw_factors": raw_factors,
+            "reason": None,
+        }
+    else:
+        factor_breakdown_section = {
+            "available": False,
+            "as_of": None,
+            "multifactor": None,
+            "momentum": None,
+            "volatility_regime": None,
+            "tactical": None,
+            "sentiment": None,
+            "raw_factors": {},
+            "reason": f"No signals computed this cycle for {sym}",
+        }
+
+    # ── 4. Price History Status ──────────────────────────────────────────
+    bar_count = 0
+    earliest_date = None
+    latest_date = None
+    latest_close = None
+    try:
+        store = HistoricalStore(readonly=True)
+        if hasattr(store, "_get_conn"):
+            with store._lock:
+                conn = store._get_conn()
+                count_row = conn.execute(
+                    "SELECT COUNT(*), MIN(date), MAX(date) FROM price_bars WHERE symbol = ?",
+                    (sym,),
+                ).fetchone()
+                if count_row and count_row[0] and count_row[0] > 0:
+                    bar_count = int(count_row[0])
+                    earliest_date = str(count_row[1]) if count_row[1] else None
+                    latest_date = str(count_row[2]) if count_row[2] else None
+                    close_row = conn.execute(
+                        "SELECT close FROM price_bars WHERE symbol = ? AND date = ?",
+                        (sym, latest_date),
+                    ).fetchone()
+                    if close_row and close_row[0] is not None:
+                        latest_close = float(close_row[0])
+        elif hasattr(store, "get_bars"):
+            df = store.get_bars(sym)
+            if df is not None and not df.empty:
+                bar_count = len(df)
+                d_idx = df.index
+                earliest_date = str(d_idx[0].date()) if hasattr(d_idx[0], "date") else str(d_idx[0])[:10]
+                latest_date = str(d_idx[-1].date()) if hasattr(d_idx[-1], "date") else str(d_idx[-1])[:10]
+                if "Close" in df.columns and len(df["Close"]) > 0:
+                    latest_close = float(df["Close"].iloc[-1])
+    except Exception as exc:
+        logger.warning("data_api: price history status query failed for %s: %s", sym, exc)
+
+    if bar_count > 0 and latest_date:
+        is_stale = False
+        try:
+            latest_dt = date.fromisoformat(latest_date[:10])
+            today_dt = date.today()
+            if (today_dt - latest_dt).days > 7:
+                is_stale = True
+        except Exception:
+            pass
+
+        if is_stale:
+            price_history_section = {
+                "available": True,
+                "bar_count": bar_count,
+                "earliest_date": earliest_date,
+                "latest_date": latest_date,
+                "latest_close": latest_close,
+                "status": "stale",
+                "reason": f"Latest price bar is from {latest_date} (>7 days old)",
+            }
+        else:
+            price_history_section = {
+                "available": True,
+                "bar_count": bar_count,
+                "earliest_date": earliest_date,
+                "latest_date": latest_date,
+                "latest_close": latest_close,
+                "status": "ok",
+                "reason": None,
+            }
+    else:
+        price_history_section = {
+            "available": False,
+            "bar_count": 0,
+            "earliest_date": None,
+            "latest_date": None,
+            "latest_close": None,
+            "status": "no_data",
+            "reason": "No cached price bars found in historical store",
+        }
+
+    response_payload = {
+        "symbol": sym,
+        "company_profile": company_profile_section,
+        "tracking": tracking_section,
+        "factor_breakdown": factor_breakdown_section,
+        "price_history_status": price_history_section,
+    }
+    return _clean_nan(response_payload)
 
 
 @app.get("/data/account", dependencies=[Depends(require_token)])

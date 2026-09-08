@@ -56,6 +56,7 @@ import type { StrategyReportCardSnapshot,
   EdgeByStrategy,
   EquityDrawdownCurve,
   EquityDrawdownPoint,
+  ExplainTickerResponse,
   FactorExposure,
   Follow,
   FollowResult,
@@ -9810,6 +9811,362 @@ export const mockApi = {
       fundamentals_source: "yahoo_computed",
     });
   },
+
+  async getExplainTicker(symbol: string): Promise<ExplainTickerResponse> {
+    const sym = symbol.trim().toUpperCase();
+
+    // Scenario: AAPL (Complete profile & tracking)
+    if (sym === "AAPL") {
+      return delay({
+        symbol: "AAPL",
+        company_profile: {
+          available: true,
+          company_name: "Apple Inc.",
+          description:
+            "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories, and sells a variety of related services.",
+          sector: "Technology",
+          industry: "Consumer Electronics",
+          exchange: "NASDAQ",
+          website: "https://www.apple.com",
+          ceo: "Tim Cook",
+          market_cap: 3450000000000,
+          source: "fmp",
+          reason: null,
+        },
+        tracking: {
+          tracked: true,
+          held: true,
+          quantity: 40,
+          avg_cost: 168.2,
+          market_value: 8596.0,
+          watchlists: ["core", "tech_megacap"],
+          coverage_status: "full",
+          rating_consecutive_bad_cycles: 0,
+          rating_excluded: false,
+          reasons: ["Held in portfolio (40 shares)", "In watchlists: core, tech_megacap"],
+        },
+        factor_breakdown: {
+          available: true,
+          as_of: new Date(Date.now() - 3600_000).toISOString(),
+          multifactor: { value_z: 0.62, quality_z: 0.94, low_vol_z: 0.71, size_z: -0.28, composite: 0.68 },
+          momentum: { xsec_12_1m: 0.24, xsec_momentum_rank: 0.85 },
+          volatility_regime: { regime: "EXPANSION", hmm_risk_on_probability: 0.81, garch_vol: 0.19 },
+          tactical: { action: "BUY", kelly_target: 0.08, buy_range: "$208 - $214", sell_range: "$228 - $236" },
+          sentiment: { aggregate_score: 0.72 },
+          raw_factors: { beta: 1.12, pe_ratio: 31.4, forward_pe: 27.8, gross_margin: 0.46 },
+          reason: null,
+        },
+        price_history_status: {
+          available: true,
+          bar_count: 252,
+          earliest_date: "2025-09-08",
+          latest_date: "2026-09-05",
+          latest_close: 214.9,
+          status: "ok",
+          reason: null,
+        },
+      });
+    }
+
+    // Scenario: NVDA (Disabled FMP profile)
+    if (sym === "NVDA") {
+      return delay({
+        symbol: "NVDA",
+        company_profile: {
+          available: false,
+          company_name: null,
+          description: null,
+          sector: null,
+          industry: null,
+          exchange: null,
+          website: null,
+          ceo: null,
+          market_cap: null,
+          source: null,
+          reason: "Company profile provider disabled (FMP_PROFILE_ENABLED=False)",
+        },
+        tracking: {
+          tracked: true,
+          held: true,
+          quantity: 22,
+          avg_cost: 88.4,
+          market_value: 2917.2,
+          watchlists: ["semis", "ai_growth"],
+          coverage_status: "stale",
+          rating_consecutive_bad_cycles: 1,
+          rating_excluded: false,
+          reasons: ["Held in portfolio (22 shares)", "In watchlists: semis, ai_growth"],
+        },
+        factor_breakdown: {
+          available: true,
+          as_of: new Date(Date.now() - 7200_000).toISOString(),
+          multifactor: { value_z: 0.35, quality_z: 0.88, low_vol_z: -0.41, size_z: 0.52, composite: 0.44 },
+          momentum: { xsec_12_1m: 0.61, xsec_momentum_rank: 0.96 },
+          volatility_regime: { regime: "RISK_OFF", hmm_risk_on_probability: 0.34, garch_vol: 0.44 },
+          tactical: { action: "BUY", kelly_target: 0.05, buy_range: "$118 - $124", sell_range: "$145 - $152" },
+          sentiment: { aggregate_score: 0.85 },
+          raw_factors: { beta: 1.68, pe_ratio: 62.1, forward_pe: 42.0, gross_margin: 0.75 },
+          reason: null,
+        },
+        price_history_status: {
+          available: true,
+          bar_count: 252,
+          earliest_date: "2025-09-08",
+          latest_date: "2026-09-05",
+          latest_close: 132.6,
+          status: "ok",
+          reason: null,
+        },
+      });
+    }
+
+    // Scenario: XYZ (Untracked symbol)
+    if (sym === "XYZ") {
+      return delay({
+        symbol: "XYZ",
+        company_profile: {
+          available: true,
+          company_name: "XYZ Technologies Corp.",
+          description: "XYZ Technologies Corp. is a hypothetical enterprise hardware vendor.",
+          sector: "Technology",
+          industry: "Enterprise Infrastructure",
+          exchange: "NYSE",
+          website: "https://www.example.com/xyz",
+          ceo: "Jane Doe",
+          market_cap: 1250000000,
+          source: "fmp",
+          reason: null,
+        },
+        tracking: {
+          tracked: false,
+          held: false,
+          quantity: null,
+          avg_cost: null,
+          market_value: null,
+          watchlists: [],
+          // "untracked" is the exact literal `api/data_api.py`'s explain
+          // endpoint emits for a symbol that is neither held nor
+          // watchlisted — a real `CoverageStatus` enum member like
+          // "uncovered" is reserved for a *tracked* symbol the data
+          // providers can't cover, which is a different fact entirely.
+          coverage_status: "untracked",
+          rating_consecutive_bad_cycles: null,
+          rating_excluded: false,
+          reasons: [],
+        },
+        factor_breakdown: {
+          available: false,
+          as_of: null,
+          multifactor: null,
+          momentum: null,
+          volatility_regime: null,
+          tactical: null,
+          sentiment: null,
+          raw_factors: {},
+          reason: "Symbol XYZ is not tracked in the quantitative pipeline",
+        },
+        price_history_status: {
+          available: false,
+          bar_count: 0,
+          earliest_date: null,
+          latest_date: null,
+          latest_close: null,
+          status: "no_data",
+          reason: "No historical bars stored for XYZ",
+        },
+      });
+    }
+
+    // Scenario: COST (Missing DailySignals / factor breakdown)
+    if (sym === "COST") {
+      return delay({
+        symbol: "COST",
+        company_profile: {
+          available: true,
+          company_name: "Costco Wholesale Corporation",
+          description:
+            "Costco Wholesale Corporation operates membership warehouses that offer branded and private-label products in a range of merchandise categories.",
+          sector: "Consumer Defensive",
+          industry: "Discount Stores",
+          exchange: "NASDAQ",
+          website: "https://www.costco.com",
+          ceo: "Ron Vachris",
+          market_cap: 395000000000,
+          source: "fmp",
+          reason: null,
+        },
+        tracking: {
+          tracked: true,
+          held: true,
+          quantity: 6,
+          avg_cost: 712.0,
+          market_value: 5336.4,
+          watchlists: ["consumer", "defensive"],
+          coverage_status: "full",
+          rating_consecutive_bad_cycles: 0,
+          rating_excluded: false,
+          reasons: ["Held in portfolio (6 shares)", "In watchlists: consumer, defensive"],
+        },
+        factor_breakdown: {
+          available: false,
+          as_of: null,
+          multifactor: null,
+          momentum: null,
+          volatility_regime: null,
+          tactical: null,
+          sentiment: null,
+          raw_factors: {},
+          reason: "No daily signals computed for this cycle",
+        },
+        price_history_status: {
+          available: true,
+          bar_count: 252,
+          earliest_date: "2025-09-08",
+          latest_date: "2026-09-05",
+          latest_close: 889.4,
+          status: "ok",
+          reason: null,
+        },
+      });
+    }
+
+    // Scenario: XOM (Missing historical price bars)
+    if (sym === "XOM") {
+      return delay({
+        symbol: "XOM",
+        company_profile: {
+          available: true,
+          company_name: "Exxon Mobil Corporation",
+          description:
+            "Exxon Mobil Corporation explores for and produces crude oil and natural gas in North America, South America, Europe, Asia, and Africa.",
+          sector: "Energy",
+          industry: "Oil & Gas Integrated",
+          exchange: "NYSE",
+          website: "https://www.corporate.exxonmobil.com",
+          ceo: "Darren Woods",
+          market_cap: 460000000000,
+          source: "fmp",
+          reason: null,
+        },
+        tracking: {
+          tracked: true,
+          held: false,
+          quantity: null,
+          avg_cost: null,
+          market_value: null,
+          watchlists: ["energy", "dividend"],
+          coverage_status: "unknown",
+          rating_consecutive_bad_cycles: null,
+          rating_excluded: false,
+          reasons: ["In watchlists: energy, dividend"],
+        },
+        factor_breakdown: {
+          available: true,
+          as_of: new Date(Date.now() - 3600_000).toISOString(),
+          multifactor: { value_z: 0.88, quality_z: 0.81, low_vol_z: 0.65, size_z: 0.44, composite: 0.71 },
+          momentum: { xsec_12_1m: 0.11, xsec_momentum_rank: 0.54 },
+          volatility_regime: { regime: "EXPANSION", hmm_risk_on_probability: 0.66, garch_vol: 0.21 },
+          tactical: { action: "HOLD", kelly_target: 0.0, buy_range: "$102 - $106", sell_range: "$118 - $124" },
+          sentiment: { aggregate_score: 0.55 },
+          raw_factors: { beta: 0.78, pe_ratio: 14.2, forward_pe: 12.8, dividend_yield: 0.034 },
+          reason: null,
+        },
+        price_history_status: {
+          available: false,
+          bar_count: 0,
+          earliest_date: null,
+          latest_date: null,
+          latest_close: null,
+          status: "no_data",
+          reason: "Historical price bars unavailable in local store",
+        },
+      });
+    }
+
+    // Generic fallback for any other symbol
+    const held = PORTFOLIO.positions.find((p) => p.symbol === sym);
+    const knownName = NAMES[sym] ?? (SYMBOL_UNIVERSE.has(sym) ? `${sym} Corp.` : null);
+    const tracked = Boolean(held || SYMBOL_UNIVERSE.has(sym));
+    const reasons: string[] = [];
+    if (held) reasons.push(`Held in portfolio (${held.qty} shares)`);
+    if (SYMBOL_UNIVERSE.has(sym) && !held) reasons.push("In tracked universe");
+
+    return delay({
+      symbol: sym,
+      company_profile: knownName
+        ? {
+            available: true,
+            company_name: knownName,
+            description: `${knownName} is a tracked entity in the quantitative universe.`,
+            sector: SECTOR_OF[sym] ?? "Diversified",
+            industry: "General",
+            exchange: "US",
+            website: null,
+            ceo: null,
+            market_cap: held && held.market_value != null ? held.market_value * 1000000 : null,
+            source: "mock",
+            reason: null,
+          }
+        : {
+            available: false,
+            company_name: null,
+            description: null,
+            sector: null,
+            industry: null,
+            exchange: null,
+            website: null,
+            ceo: null,
+            market_cap: null,
+            source: null,
+            reason: `Company profile not found for ${sym}`,
+          },
+      tracking: {
+        tracked,
+        held: Boolean(held),
+        quantity: held?.qty ?? null,
+        avg_cost: held?.avg_cost ?? null,
+        market_value: held?.market_value ?? null,
+        watchlists: tracked ? ["default"] : [],
+        coverage_status: held ? "full" : tracked ? "quotes_only" : "uncovered",
+        rating_consecutive_bad_cycles: null,
+        rating_excluded: false,
+        reasons,
+      },
+      factor_breakdown: tracked
+        ? {
+            available: true,
+            as_of: new Date(Date.now() - 3600_000).toISOString(),
+            multifactor: { value_z: 0.5, quality_z: 0.5, low_vol_z: 0.5, size_z: 0.0, composite: 0.5 },
+            momentum: { xsec_12_1m: 0.0, xsec_momentum_rank: 0.5 },
+            volatility_regime: { regime: "EXPANSION", hmm_risk_on_probability: 0.5, garch_vol: 0.2 },
+            tactical: { action: null, kelly_target: null, buy_range: null, sell_range: null },
+            sentiment: { aggregate_score: null },
+            raw_factors: {},
+            reason: null,
+          }
+        : {
+            available: false,
+            as_of: null,
+            multifactor: null,
+            momentum: null,
+            volatility_regime: null,
+            tactical: null,
+            sentiment: null,
+            raw_factors: {},
+            reason: `Symbol ${sym} is not tracked in the quantitative pipeline`,
+          },
+      price_history_status: {
+        available: tracked,
+        bar_count: tracked ? 252 : 0,
+        earliest_date: tracked ? "2025-09-08" : null,
+        latest_date: tracked ? "2026-09-05" : null,
+        latest_close: held ? held.current_price : null,
+        status: tracked ? "ok" : "no_data",
+        reason: tracked ? null : `No historical bars stored for ${sym}`,
+      },
+    });
+  },
+
 
   async getThresholds(): Promise<Thresholds> {
     // Mirrors validation/thresholds.py + settings.py's real current defaults —

@@ -59,6 +59,7 @@ const CARDS: HubCard[] = [
     description: "Search the platform's full glossary of terms, metrics, and gates -- every definition each screen's own \"How this works\" panel draws from, in one searchable place.",
   },
   { to: "/create-data-app", label: "Create Data App", ico: "🧩", description: TAB_HELP["create-data-app"].description },
+  { to: "/universe", label: "Universe Transparency", ico: "🌐", description: TAB_HELP.universe.description },
 ];
 
 export function OperationsHub() {

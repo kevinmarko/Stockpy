@@ -8,6 +8,7 @@ import { Button, ErrorState, Input, Loading, Notice } from "./ui";
 import { SymbolInput } from "./SymbolInput";
 import { theme } from "../theme";
 import { Modal } from "./Modal";
+import { ExplainTickerButton } from "./ExplainTickerButton";
 
 export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => void }) {
   const nav = useNavigate();
@@ -137,6 +138,7 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
                   >
                     {s}
                   </button>
+                  <ExplainTickerButton symbol={s} />
                   <button
                     type="button"
                     aria-label={`Remove ${s}`}

@@ -6,6 +6,7 @@ import { Chip, EmptyState, ErrorState, Loading, StaleDataNotice } from "../ui";
 import { ModeBadge } from "../ExecutionQueueSection";
 import { theme } from "../../theme";
 import { timeAgo } from "../../format";
+import { ExplainTickerButton } from "../ExplainTickerButton";
 
 /**
  * Pilots Manager's own read-only glance at the gated Robinhood execution
@@ -88,6 +89,7 @@ function QueueRow({ intent }: { intent: ExecutionQueueIntent }) {
       >
         {intent.symbol}
       </Link>
+      <ExplainTickerButton symbol={intent.symbol} />
       <span
         style={{
           color: intent.action === "BUY" ? theme.growth : theme.decline,

@@ -24,6 +24,7 @@ function renderHub(initialPath = "/operations") {
         <Route path="/console" element={<div>Console landing</div>} />
         <Route path="/help" element={<div>Help landing</div>} />
         <Route path="/create-data-app" element={<div>Create Data App landing</div>} />
+        <Route path="/universe" element={<div>Universe Transparency landing</div>} />
       </Routes>
     </MemoryRouter>
   );
@@ -95,5 +96,12 @@ describe("OperationsHub screen", () => {
     renderHub();
     await user.click(screen.getByRole("button", { name: /Help & Glossary/ }));
     expect(await screen.findByText("Help landing")).toBeInTheDocument();
+  });
+
+  it("clicking the Universe Transparency card navigates to /universe", async () => {
+    const user = userEvent.setup();
+    renderHub();
+    await user.click(screen.getByRole("button", { name: /Universe Transparency/ }));
+    expect(await screen.findByText("Universe Transparency landing")).toBeInTheDocument();
   });
 });
