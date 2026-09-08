@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 367,
+    "live_safe": 368,
     "no_op": 5,
     "restart_required": 100,
-    "total": 472
+    "total": 473
   },
   "dynamic_sites": [
     {
@@ -42,7 +42,7 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 177,
+      "line": 186,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
@@ -145,7 +145,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 455,
+  "files_scanned": 456,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -271,6 +271,7 @@
     "FMP_OPTIONS_CONTEXT_ENABLED",
     "FMP_OPTIONS_HEALTH_ENABLED",
     "FMP_PEERS_ENABLED",
+    "FMP_PROFILE_ENABLED",
     "FMP_QUOTES_ENABLED",
     "FMP_RETRY_BACKOFF_SECONDS",
     "FMP_SCREENER_ENABLED",
@@ -527,13 +528,13 @@
   "read_forms": {
     "attr": 939,
     "factory_param": 4,
-    "getattr_const": 396,
+    "getattr_const": 401,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 282,
     "factory_param": 4,
-    "getattr_const": 228,
+    "getattr_const": 230,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -697,7 +698,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:122",
+        "site": "api/data_api.py:131",
         "via": []
       },
       {
