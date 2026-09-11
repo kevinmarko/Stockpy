@@ -1046,8 +1046,8 @@ class OrchestratorDaemon:
             # full pipeline cycle in _run_one_cycle.
             if getattr(settings, "OPTIONS_0DTE_ENABLED", False):
                 try:
-                    from pilots.zero_dte_engine import manage_0dte_exits
-                    manage_0dte_exits()
+                    from execution.options_lifecycle import run_automated_0dte_exits
+                    run_automated_0dte_exits()
                 except Exception as exc:  # noqa: BLE001 - defensive only (CONSTRAINT #6)
                     logger.debug("0DTE daemon periodic exit evaluation skipped: %s", exc)
 

@@ -27,10 +27,10 @@ import main as m
 from main import (
     RunResult,
     _build_universe,
-    _load_tickers_from_sheet2,
     _load_watchlist,
     run_once,
 )
+from data.portfolio_sync import get_sheet2_fallback_tickers
 from engine.advisory import Recommendation
 
 
@@ -180,6 +180,11 @@ class TestLoadWatchlist:
 # ---------------------------------------------------------------------------
 
 class TestBuildUniverse:
+
+    @pytest.fixture(autouse=True)
+    def mock_recently_closed(self, monkeypatch):
+        monkeypatch.setattr("main.get_recently_closed_universe_symbols", lambda held: set())
+
     """Tests for _build_universe()."""
 
     def test_held_only_no_watchlist(
@@ -210,10 +215,10 @@ class TestBuildUniverse:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         monkeypatch.setattr(m.settings, "WATCHLIST", "")
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
+        monkeypatch.setattr("settings.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2", return_value=[]):
+        with patch("main.get_sheet2_fallback_tickers", return_value=[]):
             assert _build_universe(snap) == []
 
     def test_sheet2_fallback_used_when_empty(
@@ -221,10 +226,10 @@ class TestBuildUniverse:
     ) -> None:
         """Sheet2 is consulted only when held + watchlist are both empty."""
         monkeypatch.setattr(m.settings, "WATCHLIST", "")
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
+        monkeypatch.setattr("settings.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2", return_value=["SPY", "QQQ"]):
+        with patch("main.get_sheet2_fallback_tickers", return_value=["SPY", "QQQ"]):
             result = _build_universe(snap)
         assert set(result) == {"SPY", "QQQ"}
         assert result == sorted(result)
@@ -237,7 +242,7 @@ class TestBuildUniverse:
         # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2") as mock_sheet2:
+        with patch("main.get_sheet2_fallback_tickers") as mock_sheet2:
             result = _build_universe(snap)
         mock_sheet2.assert_not_called()
         assert result == ["AAPL"]
@@ -249,7 +254,7 @@ class TestBuildUniverse:
         monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"TSLA": _make_position("TSLA")})
-        with patch("main._load_tickers_from_sheet2") as mock_sheet2:
+        with patch("main.get_sheet2_fallback_tickers") as mock_sheet2:
             result = _build_universe(snap)
         mock_sheet2.assert_not_called()
         assert "TSLA" in result
@@ -259,7 +264,7 @@ class TestBuildUniverse:
     ) -> None:
         """When SYMBOL_RATING_AUTO_DROP_ENABLED is on but SymbolRatingStore fails,
         the exception should be caught and the universe returned unaffected."""
-        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr("settings.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
         monkeypatch.setattr(m.settings, "WATCHLIST", "NVDA,MSFT")
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
@@ -292,11 +297,11 @@ class TestBuildUniverse:
 # ---------------------------------------------------------------------------
 
 class TestLoadTickersFromSheet2:
-    """Tests for _load_tickers_from_sheet2()."""
+    """Tests for get_sheet2_fallback_tickers()."""
 
     def test_returns_empty_when_no_credentials(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)  # no credentials.json here
-        assert _load_tickers_from_sheet2() == []
+        assert get_sheet2_fallback_tickers() == []
 
     def test_returns_tickers_from_sheet2_col_a(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -308,14 +313,14 @@ class TestLoadTickersFromSheet2:
         mock_gc = MagicMock()
         mock_gc.open.return_value = mock_sh
         with patch("gspread.service_account", return_value=mock_gc):
-            result = _load_tickers_from_sheet2()
+            result = get_sheet2_fallback_tickers()
         assert result == ["SPY", "QQQ", "AAPL"]  # empty + comment stripped
 
     def test_returns_empty_on_sheet_error(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "credentials.json").write_text("{}")
         with patch("gspread.service_account", side_effect=Exception("network error")):
-            assert _load_tickers_from_sheet2() == []
+            assert get_sheet2_fallback_tickers() == []
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +336,11 @@ _PATCH_CTX = "main._build_context_extras"
 
 
 class TestRunOnce:
+
+    @pytest.fixture(autouse=True)
+    def mock_recently_closed(self, monkeypatch):
+        monkeypatch.setattr("main.get_recently_closed_universe_symbols", lambda held: set())
+
     """Tests for run_once()."""
 
     @patch(_PATCH_CTX, return_value={})
@@ -542,7 +552,7 @@ class TestRunOnce:
     ) -> None:
         """No held symbols and no watchlist → empty RunResult; advisory never called."""
         monkeypatch.setattr(m.settings, "WATCHLIST", "")
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
+        monkeypatch.setattr("settings.settings.DEFAULT_TICKERS", [])
         # discovery() is neutralized file-wide by the _isolate_scan_discovery
         # autouse fixture above.
         monkeypatch.chdir(tmp_path)

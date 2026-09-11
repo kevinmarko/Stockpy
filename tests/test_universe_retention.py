@@ -26,7 +26,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import main as m
-from main import _build_universe, _recently_closed_universe_symbols
+from main import _build_universe
+from data.portfolio_sync import get_recently_closed_universe_symbols
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +60,7 @@ class TestBuildUniverseRetention:
     def test_retained_symbol_added_when_not_held(self, monkeypatch, tmp_path):
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
+        monkeypatch.setattr("main.get_recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
         result = _build_universe(snap)
@@ -70,10 +71,10 @@ class TestBuildUniverseRetention:
         """The trap: a retained symbol has held=False, so unioning it BEFORE
         the auto-drop subtraction would let it be immediately re-subtracted.
         Retention must be applied AFTER, so it survives regardless."""
-        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr("settings.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
+        monkeypatch.setattr("main.get_recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         # SymbolRatingStore says CMCL is excluded -- retention must win anyway.
         with patch(
@@ -91,17 +92,17 @@ class TestBuildUniverseRetention:
         retention alone would have made `combined` non-empty."""
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", ["SPY"])
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
+        monkeypatch.setattr("settings.settings.DEFAULT_TICKERS", ["SPY"])
+        monkeypatch.setattr("main.get_recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2", return_value=[]):
+        with patch("main.get_sheet2_fallback_tickers", return_value=[]):
             result = _build_universe(snap)
         assert "SPY" in result  # fallback still fired
         assert "CMCL" in result  # retention still unioned in after
 
     def test_zero_retention_days_byte_identical_to_disabled(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
+        monkeypatch.setattr("settings.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
 
@@ -112,14 +113,14 @@ class TestBuildUniverseRetention:
     def test_retained_held_symbol_not_double_added(self, monkeypatch, tmp_path):
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: set())
+        monkeypatch.setattr("main.get_recently_closed_universe_symbols", lambda held: set())
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
         result = _build_universe(snap)
         assert result.count("AAPL") == 1
 
     def test_store_failure_degrades_to_empty_universe_unaffected(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
+        monkeypatch.setattr("settings.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
 
@@ -137,22 +138,22 @@ class TestBuildUniverseRetention:
 
 class TestRecentlyClosedUniverseSymbols:
     def test_excludes_held(self, monkeypatch):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
+        monkeypatch.setattr("settings.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
         import data.broker_fills_store as bfs
 
         monkeypatch.setattr(bfs, "recently_closed_symbols", lambda **kw: ["AAPL", "CMCL"])
-        result = _recently_closed_universe_symbols(held={"AAPL"})
+        result = get_recently_closed_universe_symbols(held={"AAPL"})
         assert result == {"CMCL"}
 
     def test_zero_days_never_calls_store(self, monkeypatch):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
+        monkeypatch.setattr("settings.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
         import data.broker_fills_store as bfs
 
         def _boom(**kw):
             raise AssertionError("must not be called when retention is 0")
 
         monkeypatch.setattr(bfs, "recently_closed_symbols", _boom)
-        assert _recently_closed_universe_symbols(held=set()) == set()
+        assert get_recently_closed_universe_symbols(held=set()) == set()
 
 
 # ---------------------------------------------------------------------------

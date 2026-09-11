@@ -105,10 +105,13 @@ class AsyncDataFetchStep(PipelineStep):
         from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
 
         watchlist_symbols = load_env_watchlist(ctx.watchlist_file)
+        from data.portfolio_sync import get_recently_closed_universe_symbols, get_sheet2_fallback_tickers
         base_symbols = compute_tracked_universe(
             watchlist=watchlist_symbols,
             discovered=discovered_symbols,
             default_tickers=settings.DEFAULT_TICKERS,
+            recently_closed=get_recently_closed_universe_symbols(set(snapshot.positions.keys()) if snapshot else set()),
+            sheet_fallback=get_sheet2_fallback_tickers(),
         )
 
         # Permanent universe-funnel diagnostic (see

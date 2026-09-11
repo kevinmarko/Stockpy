@@ -74,6 +74,18 @@ def run_automated_delta_hedge_cycle(
         return None
 
 
+
+def run_automated_0dte_exits(executor: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+    """Runs the standalone 0DTE options exit lifecycle management."""
+    try:
+        from pilots.zero_dte_engine import manage_0dte_exits
+        if executor is not None:
+            return manage_0dte_exits(store=executor.store)
+        return manage_0dte_exits()
+    except Exception as exc:
+        logger.debug("0DTE daemon periodic exit evaluation skipped: %s", exc)
+        return None
+
 def run_automated_options_lifecycle(
     macro_dto: Optional[Any] = None,
     executor: Optional[Any] = None,

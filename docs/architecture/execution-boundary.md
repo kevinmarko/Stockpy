@@ -19,9 +19,9 @@ Both entry points derive their *base* universe from:
 `data.portfolio_sync.compute_tracked_universe(watchlist, discovered, default_tickers)`
 This function resolves the base universe as: `held ∪ watchlist (env var & text file) ∪ discovered (where action="BUY")`.
 
-However, the universe is not derived *exclusively* from this function.
-- `pipeline/production_steps.py::AsyncDataFetchStep` injects live Robinhood positions (`AccountSnapshot.positions`).
-- `main.py::_build_universe()` falls back to Google Sheets ("Sheet2") if the base is empty, and unconditionally unions in recently-closed positions (`_recently_closed_universe_symbols(held)`).
+These entry points exclusively delegate their universe resolution to:
+`data.portfolio_sync.compute_tracked_universe(..., recently_closed, sheet_fallback)`
+This function handles the union of `held ∪ watchlist ∪ discovered`, the fallback to Google Sheets, and the retention of recently-closed positions. Because both the daemon and the legacy main orchestrator route through this exact function, they are guaranteed to evaluate identical universes.
 
 Crucially, **symbols explored by a human via UI tools (e.g., `fmp_screener`) are never implicitly added to this set**. They must be explicitly added via the `/agentic/watch` endpoint (the "Add to Watchlist" button).
 
@@ -56,10 +56,8 @@ This note is attached to:
 
 ## 4. Other Automated Execution Surfaces
 
-A grep of `execution/` callers initially suggested no other scheduled/automatic surfaces exist outside of:
+A grep of `execution/` callers confirms no other scheduled/automatic surfaces exist outside of:
 1. The orchestrator daemon's `main_orchestrator.py` / `pipeline/production_steps.py` (which routes through `StrategyEngine`).
-2. The options auto-scan (`execution/options_paper_executor.py` / `execution/options_lifecycle.py`).
+2. The options auto-scan and 0DTE Fast Exits (`execution/options_paper_executor.py` / `execution/options_lifecycle.py`).
 
-**Correction (Confirmed via code read):**
-There is a **third** automated execution surface that bypasses the `execution/` package entirely:
-3. **0DTE Exit Management:** `desktop/daemon_runtime.py`'s `_timer_loop` directly imports and runs `manage_0dte_exits()` from `pilots/zero_dte_engine.py` on every interval tick during market hours. This function executes trades directly via `apply_multi_leg_fill` on `PaperAccountStore` (`data/paper_account_store.py`). Because it bypasses the `execution/` boundary, a simple grep of `execution/` callers misses it.
+

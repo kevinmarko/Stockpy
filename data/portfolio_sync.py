@@ -679,12 +679,57 @@ def load_env_watchlist(watchlist_file: str) -> List[str]:
     return list(tickers.keys())
 
 
+
+def get_recently_closed_universe_symbols(held: set) -> set:
+    try:
+        from settings import settings
+        retention_days = int(getattr(settings, "CLOSED_POSITION_RETENTION_DAYS", 0) or 0)
+    except (TypeError, ValueError):
+        return set()
+    if retention_days <= 0:
+        return set()
+    try:
+        from data.broker_fills_store import recently_closed_symbols
+        from settings import settings
+        recent = recently_closed_symbols(
+            retention_days=retention_days,
+            max_symbols=settings.CLOSED_POSITION_RETENTION_MAX_SYMBOLS,
+        )
+        return {s.upper() for s in recent} - held
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("get_recently_closed_universe_symbols failed (%s)", exc)
+        return set()
+
+def get_sheet2_fallback_tickers() -> list:
+    try:
+        import gspread
+        from pathlib import Path
+
+        creds_file = Path("credentials.json")
+        if not creds_file.exists():
+            return []
+        
+        gc = gspread.service_account(filename="credentials.json")
+        sh = gc.open("Stock Dashboard Py")
+        ws = sh.worksheet("Sheet2")
+        col_a = ws.col_values(1)
+        return [v.strip().upper() for v in col_a if v.strip() and not v.strip().startswith("#")]
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Could not read Sheet2 ticker list: %s", exc)
+        return []
+
+
 def compute_tracked_universe(
     *,
     held: Iterable[str] = (),
     watchlist: Iterable[str] = (),
     discovered: Iterable[str] = (),
     default_tickers: Iterable[str] = (),
+    recently_closed: Iterable[str] = (),
+    sheet_fallback: Iterable[str] = (),
+    sheet_fallback_factory = None,
     apply_rating_exclusion: bool = True,
 ) -> List[str]:
     """Resolve one cycle's evaluation universe: ``held ∪ watchlist ∪ discovered``,
@@ -713,6 +758,9 @@ def compute_tracked_universe(
     watchlist_set = {s.upper().strip() for s in watchlist if s and s.strip()}
     discovered_set = {s.upper().strip() for s in discovered if s and s.strip()}
     combined = held_set | watchlist_set | discovered_set
+    if not combined and not default_tickers:
+        fallback_iter = sheet_fallback_factory() if sheet_fallback_factory else sheet_fallback
+        combined |= {s.upper().strip() for s in fallback_iter if s and s.strip()}
 
     if apply_rating_exclusion and settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
         try:
@@ -738,6 +786,7 @@ def compute_tracked_universe(
             logger.info("compute_tracked_universe: using %d DEFAULT_TICKERS as fallback universe.", len(default_set))
             combined = default_set
 
+    combined |= {s.upper().strip() for s in recently_closed if s and s.strip()}
     return sorted(combined)
 
 

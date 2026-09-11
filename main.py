@@ -286,102 +286,13 @@ def _load_watchlist() -> List[str]:
     return load_env_watchlist(WATCHLIST_FILE)
 
 
-def _load_tickers_from_sheet2() -> List[str]:
-    """Return tickers from Sheet2 column A of the Google Sheet.
-
-    Used as a last-resort fallback when Robinhood is unavailable and no
-    WATCHLIST / watchlist.txt is configured.  Silently returns [] when
-    credentials.json is absent, Sheet2 doesn't exist, or any error occurs.
-    """
-    gc = get_service_account_client()
-    if gc is None:
-        return []
-    try:
-        sh = gc.open(SHEET_NAME)
-        ws = sh.worksheet("Sheet2")
-        col_a = ws.col_values(1)  # 1-indexed; returns list of strings
-        tickers = [v.strip().upper() for v in col_a if v.strip() and not v.strip().startswith("#")]
-        logger.info("Loaded %d tickers from Google Sheet Sheet2 column A.", len(tickers))
-        return tickers
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read Sheet2 ticker list: %s", exc)
-        return []
-
-
 from pilots.discovery import discovery
-
-def _recently_closed_universe_symbols(held: set) -> set:
-    """Symbols retained by settings.CLOSED_POSITION_RETENTION_DAYS (a
-    fully-sold symbol stays visible to the advisory pipeline for a bounded
-    window after its most recent real Robinhood SELL fill). Never raises;
-    degrades to an empty set on any failure so a store outage can never
-    shrink the universe (CONSTRAINT #6). `held` symbols are excluded --
-    retention only matters for a symbol that has already dropped out of
-    held positions.
-    """
-    try:
-        retention_days = int(getattr(settings, "CLOSED_POSITION_RETENTION_DAYS", 0) or 0)
-    except (TypeError, ValueError):
-        return set()
-    if retention_days <= 0:
-        return set()
-    try:
-        from data.broker_fills_store import recently_closed_symbols
-
-        recent = recently_closed_symbols(
-            retention_days=retention_days,
-            max_symbols=settings.CLOSED_POSITION_RETENTION_MAX_SYMBOLS,
-        )
-        return {s.upper() for s in recent} - held
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "_recently_closed_universe_symbols failed (%s) — universe unaffected.", exc
-        )
-        return set()
-
+from data.portfolio_sync import compute_tracked_universe, get_recently_closed_universe_symbols, get_sheet2_fallback_tickers
 
 def _build_universe(snapshot: AccountSnapshot) -> List[str]:
-    """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
-
-    priority order when building the universe:
-      1. Robinhood held positions (always included when available).
-      2. WATCHLIST env var or watchlist.txt (always merged in when present).
-      3. Discovered scan candidates from `scan_candidates.json` (always merged).
-      4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
-      5. Google Sheet → Sheet2 column A (fallback only when 1+2+3+4 are empty).
-      6. Recently-closed positions (settings.CLOSED_POSITION_RETENTION_DAYS,
-         always merged in LAST — see below for why the ordering matters).
-
-    When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, the held ∪
-    watchlist ∪ discovered union is additionally subtracted by whatever
-    ``rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols``
-    reports (a non-held symbol on a long enough consecutive-BAD streak — see
-    ``rating/symbol_rating.py::should_exclude``). Held symbols are never
-    dropped, and the lookup fails OPEN: any exception leaves the universe
-    untouched and only logs a warning (CONSTRAINT #6). Both the exclusion
-    and the ``DEFAULT_TICKERS`` fallback live inside
-    ``data.portfolio_sync.compute_tracked_universe`` (shared with
-    ``pipeline/production_steps.py``'s ``AsyncDataFetchStep`` so the daemon
-    and this orchestrator can't silently diverge on the logic); only the
-    Sheet2 fallback (Google-Sheets-specific, main.py-only) stays local here.
-
-    Source 6 (recently-closed retention) is unioned in LAST, after both the
-    auto-drop subtraction and the empty-fallback decision, deliberately:
-      * a retained symbol has ``held=False``, so unioning it before the
-        auto-drop subtraction (inside ``compute_tracked_universe``) would let
-        it be immediately re-subtracted -- reproducing the exact "sold
-        symbol silently disappears" bug this feature exists to fix, through
-        a different door;
-      * unioning it before the ``if not universe:`` check would silently
-        suppress the DEFAULT_TICKERS/Sheet2 fallback on an otherwise-cold
-        account (the fallback must be decided on the pre-retention set).
-    """
-    from data.portfolio_sync import compute_tracked_universe
-
     held = set(snapshot.positions.keys())
     watchlist = set(_load_watchlist())
 
-    # 3. Discovered candidates
     discovered = set()
     try:
         candidates = discovery(limit=None).get("candidates", [])
@@ -391,50 +302,17 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     except Exception as exc:
         logger.warning("Failed to load discovery candidates: %s", exc)
 
-    # Union + rating-exclusion + DEFAULT_TICKERS-fallback-if-empty all live in
-    # compute_tracked_universe() now, shared with pipeline/production_steps.py's
-    # AsyncDataFetchStep (the daemon's own per-cycle universe builder) so the
-    # two can no longer silently diverge on this logic.
     universe = compute_tracked_universe(
         held=held,
         watchlist=watchlist,
         discovered=discovered,
         default_tickers=settings.DEFAULT_TICKERS,
+        recently_closed=get_recently_closed_universe_symbols(held),
+        sheet_fallback_factory=get_sheet2_fallback_tickers,
     )
-    if not universe:
-        # held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS were all empty (or
-        # rating-exclusion emptied them) — last-resort Sheet2 fallback, kept
-        # main.py-only (the daemon path has no Google Sheets dependency).
-        sheet2 = set(_load_tickers_from_sheet2())
-        if sheet2:
-            logger.info(
-                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
-                len(sheet2),
-            )
-        universe = sorted(sheet2)
-
-    # 6. Recently-closed retention — applied LAST, after both the rating-
-    # exclusion subtraction and the DEFAULT_TICKERS/Sheet2 fallback decision
-    # above (both now live inside compute_tracked_universe()/the Sheet2
-    # branch), for the exact reasons in this function's own docstring.
-    recently_closed = _recently_closed_universe_symbols(held)
-    if recently_closed:
-        logger.info(
-            "Universe: retaining %d recently-closed symbol(s): %s",
-            len(recently_closed), ", ".join(sorted(recently_closed)),
-        )
-    universe = sorted(set(universe) | recently_closed)
-
-    logger.info(
-        "Universe: %d symbols (%d held, %d watchlist-only, %d discovered, %d recently-closed).",
-        len(universe),
-        len(held),
-        len((watchlist - held) - discovered),
-        len(discovered - held),
-        len(recently_closed),
-    )
-    return universe
-
+    
+    logger.info("Universe: %d symbols", len(universe))
+    return sorted(list(set(universe)))
 
 # ---------------------------------------------------------------------------
 # Macro context (FRED + HMM second opinion)
