@@ -43,9 +43,27 @@
       confirmed to hold repo `admin: true` — so the review gate is bypassable by an
       admin-privileged merge from within this very environment
 
-## Phase 4 — deferred, explicit operator request only
-- [ ] Design + cost out an out-of-band confirmation channel (option 1) — separate scoping
-      pass required, do not fold into this task list
+## Phase 4 — CLOSED 2026-09-08, not built
+- [x] Scoped (three options: PushNotification+relay, external OTP/TOTP service, ntfy
+      action-buttons) and costed per the plan's own instruction — see
+      `jules_confirm_hard_gate_implementation_plan.md`'s Phase 4 section for the full
+      analysis.
+- [x] Operator asked "why would we need this?" — closed rather than built. Reasoning: an
+      agent with this repo's normal filesystem/shell access already has far larger levers
+      than Jules dispatch (it can edit `execution/risk_gate.py`, place a live trade,
+      exfiltrate every `.env` credential, or simply delete the OTP check itself before
+      calling `dispatch_session`) — hardening this one narrow action doesn't proportionally
+      reduce exposure to a genuinely malicious/compromised agent, and the realistic failure
+      mode (accidental content drift, accidental looping) is already covered by Phases 1-3.
+      Same underlying finding as the Path A closure in
+      `per_agent_identity_implementation_plan.md`: the real control point for containing a
+      filesystem-privileged agent is process/sandbox isolation, not hardening individual
+      MCP tools one at a time.
+- [x] The two weaker options (PushNotification+relay, and ntfy action-buttons without an
+      external unreachable verifier) were found to add no real security in the scoping
+      pass anyway — a session that composes the confirmation material can also validate its
+      own dispatch against it, so they wouldn't have been worth building even absent the
+      broader "not worth it" finding above.
 
 ## Testing
 - [x] Unit test: hash mismatch rejected (+ missing/unknown/expired/already-used —

@@ -79,3 +79,17 @@ This integration was built and verified **entirely offline**, in a sandboxed dev
 The 2026-09 hardening pass's Phase 3 branch-protection check (Sec 4 above) IS a genuine live verification, unlike the rest of this integration — it was run against the real `kevinmarko/Stockpy` GitHub repo via an authenticated `gh api` call from this environment, not assumed or mocked.
 
 The operator should perform one real end-to-end dispatch (step 5 above) before relying on this integration for real work.
+
+**An out-of-band confirmation channel (a fourth hardening phase, beyond the four mechanisms
+in Sec 4) was scoped and then closed, not built (2026-09-08)** — see
+`.claude/jules_confirm_hard_gate_implementation_plan.md`'s Phase 4 entry for the three costed
+designs considered (a PushNotification-relayed code, an external OTP/TOTP verification
+service, two-way ntfy action-buttons) and the reasoning for closing rather than building any
+of them: an agent with this repo's normal filesystem/shell access already has far larger
+levers than Jules dispatch (it can edit `execution/risk_gate.py`, place a live trade,
+exfiltrate every credential in `.env`, or simply remove the check itself before calling
+`dispatch_session`), so hardening this one narrow tool doesn't proportionally reduce exposure
+to a genuinely malicious/compromised agent — the same structural finding as the Path A
+closure in `.claude/per_agent_identity_implementation_plan.md`. The realistic failure mode
+this integration actually faces (accidental content drift, accidental/looping dispatch) is
+already covered by Sec 4's four shipped mechanisms.

@@ -1,14 +1,16 @@
 # Jules Dispatch `confirm=True` Hard-Gate — Implementation Plan
 
-## Status: PHASES 1-3 SHIPPED (2026-09-07, branch `jules-confirm-hard-gate`); PHASE 4 STILL DEFERRED, OPERATOR-REQUEST-ONLY
+## Status: PHASES 1-3 SHIPPED (2026-09-07, branch `jules-confirm-hard-gate`); PHASE 4 CLOSED, NOT BUILT (2026-09-08)
 
 Phases 1 (prompt-hash pinning), 2 (dispatch cooldown), and 3 (branch-protection
 verification) are implemented, tested, and documented — see
 `.claude/jules_confirm_hard_gate_task.md` for the per-item checklist and
 `docs/JULES_INTEGRATION.md` Sec 4 for the full, honest write-up including the
-literal Phase 3 finding. Phase 4 (an out-of-band confirmation channel) remains
-explicitly out of scope, not built, not stubbed — build only on an explicit
-operator request with its own dedicated scoping pass, per Sec 5/7 below.
+literal Phase 3 finding. Phase 4 (an out-of-band confirmation channel) was scoped
+per this plan's own instruction, then closed by the operator rather than built —
+see §7's Phase 4 entry below for the three costed designs and the reasoning for
+closing rather than building any of them. Do not re-open without a materially
+different threat model.
 
 Written from a dedicated research pass against live code (2026-09-07). This document's
 own §7 phase breakdown and §8/§9 testing/doc-sync requirements are what Phases 1-3 were
@@ -173,9 +175,41 @@ mismatch.
 **Phase 3** — Verify (not assume) GitHub branch-protection/CODEOWNERS-review status on the
 target repo; document the finding in `docs/JULES_INTEGRATION.md` regardless of outcome.
 
-**Phase 4 (deferred, only on explicit operator request)** — design and cost out an
-out-of-band confirmation channel (option 1). Do not build without a fresh, dedicated scoping
-pass given its real expense.
+**Phase 4 — CLOSED 2026-09-08, not built.** Scoped per this section's own instruction (three
+concrete designs, see below) and then closed by the operator rather than built, after asking
+"why would we need this?" — a fair question the scoping pass itself should have led with.
+
+Three designs were costed:
+- **PushNotification + operator-relayed code** (uses this session's built-in notification
+  tool, no new infrastructure) — found in scoping to add essentially no real security: the
+  same agent session composes the confirmation code AND later validates a dispatch against
+  it, so it can self-satisfy the check without a genuine human round-trip ever happening.
+  Its only value would be reinforcing the existing interactive-presence convention, which
+  the prose gate already does.
+- **External OTP/TOTP verification service** (e.g. Twilio Verify, or a self-hosted
+  TOTP-checker on infrastructure this session has no deployment/read access to) — the only
+  one of the three with genuine teeth, since the secret/verification never touches anything
+  this session can read. Real, ongoing cost: a third-party account/phone number the operator
+  must personally set up and pay for (Twilio Verify ~$0.05/check + ~$1/mo number), or a
+  self-hosted service the operator maintains independently.
+- **Two-way ntfy action-buttons** (extending the existing one-way `alerting.py`/
+  `ALERT_NTFY_TOPIC` wiring, confirmed one-way-only in this scoping pass) — same
+  "receiver must live somewhere this session can't touch" requirement as the OTP option, so
+  really the same design with ntfy as transport rather than a cheaper alternative.
+
+**Why it was closed instead of built, even though option 2/3 are technically real security**:
+an agent with this repo's normal filesystem/shell access already has far larger levers than
+Jules dispatch — it can edit `execution/risk_gate.py`, place a live trade, exfiltrate every
+credential in `.env`, or simply remove the OTP check itself before calling
+`dispatch_session`. Hardening one narrow MCP tool doesn't proportionally reduce exposure to a
+genuinely malicious/compromised agent when the same agent has unrestricted access to
+everything else in the codebase — the identical structural finding as the operator-confirmed
+Path A closure in `.claude/per_agent_identity_implementation_plan.md`: the real control point
+for containing a filesystem-privileged agent is process/sandbox isolation around the agent
+itself, not hardening individual tools one at a time. The realistic failure mode this
+integration actually faces — accidental content drift, accidental/looping dispatch — is
+already covered by Phases 1-3. Do not re-open this without a materially different threat
+model than "a compromised coding agent with this repo's normal access."
 
 ## 8. Testing
 
