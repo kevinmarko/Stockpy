@@ -41,6 +41,13 @@ describe("SymbolScreener screen (real mock API)", () => {
     });
   });
 
+  it("honestly notes that a screener result is manual/paper-only and doesn't drive Autopilot", () => {
+    renderScreen();
+    expect(
+      screen.getByText(/Autopilot's automated signals only act on symbols already in your tracked universe/i)
+    ).toBeInTheDocument();
+  });
+
   it("search: finds a matching symbol by company name", async () => {
     renderScreen();
     fireEvent.change(screen.getByLabelText("Company name or ticker"), { target: { value: "Apple" } });

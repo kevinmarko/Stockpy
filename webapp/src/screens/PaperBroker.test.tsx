@@ -307,6 +307,28 @@ describe("PaperBroker", () => {
     });
   });
 
+  it("quick trade: shows an honest note that this is manual/paper-only and doesn't drive Autopilot", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 105000,
+      cash: 50000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("$105,000.00")).toBeInTheDocument();
+    expect(screen.getByText("🔍 Quick Trade — Any Symbol")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Autopilot's automated signals only act on symbols in your tracked universe/i)
+    ).toBeInTheDocument();
+  });
+
   it("quick trade: fetches a quote for an arbitrary symbol and opens the order ticket", async () => {
     vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
       equity: 105000,
