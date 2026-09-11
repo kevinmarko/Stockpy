@@ -5698,6 +5698,28 @@ class Settings(BaseSettings):
         description="Qdrant URL for RAG orchestrator.",
     )
 
+    WEEKLY_DIGEST_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the weekly digest generation. Only takes effect when the "
+            "persistent orchestrator daemon (settings.ORCHESTRATOR_DAEMON_ENABLED, "
+            "also default False) is running -- desktop/daemon_runtime.py's "
+            "OrchestratorDaemon.maybe_dispatch_weekly_digest() is the sole "
+            "caller, and that class is never constructed outside the daemon "
+            "process."
+        )
+    )
+    WEEKLY_DIGEST_INTERVAL_HOURS: float = Field(
+        default=168.0,
+        description=(
+            "Hours between weekly digest generation (default 168.0 = 7 days). "
+            "Throttling is durable across a daemon restart (see "
+            "desktop/daemon_runtime.py's weekly-digest state file, "
+            "output/weekly_digest_state.json) -- not just the in-process last-"
+            "dispatch timestamp."
+        )
+    )
+
     @model_validator(mode="after")
     def _derive_local_data_root_paths(self) -> "Settings":
         """Fill in OUTPUT_DIR and OUTPUT_DIR-relative cache paths from

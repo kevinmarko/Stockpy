@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Marketplace } from "./Marketplace";
 import { api } from "../api/client";
 import { ApiError } from "../api/types";
+import { mockDegradedDigestFixture } from "../api/mock";
 
 function renderMarketplace() {
   return render(
@@ -152,19 +153,19 @@ describe("Today's Radar panel (real mock API)", () => {
 
   it("renders ranked cards from the real mock feed, each with its server-provided reason string verbatim", async () => {
     renderMarketplace();
-    expect(await screen.findByText("Today's Radar")).toBeInTheDocument();
+    expect((await screen.findAllByText("Today's Radar")).length).toBeGreaterThan(0);
     // NVDA also appears as a top-holding chip on an unrelated PilotCard, so
     // scope the assertion to the Radar card's own reason sentence.
     expect(
-      screen.getByText(
+      screen.getAllByText(
         "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9)."
-      )
+      )[0]
     ).toBeInTheDocument();
   });
 
   it("a symbol with a missing sub-factor never renders a fabricated value for it", async () => {
     renderMarketplace();
-    await screen.findByText("Today's Radar");
+    await screen.findAllByText("Today's Radar");
     // JNJ's mock fixture entry carries lowvol_z: null -- the reason string
     // must not mention "Low-Vol Z" at all for this row.
     const jnjReason = screen.getByText(
@@ -181,7 +182,7 @@ describe("Today's Radar panel (real mock API)", () => {
       reason: "No state snapshot yet — run the pipeline first.",
     });
     renderMarketplace();
-    await screen.findByText("Today's Radar");
+    await screen.findAllByText("Today's Radar");
     expect(
       await screen.findByText("No state snapshot yet — run the pipeline first.")
     ).toBeInTheDocument();
@@ -194,16 +195,64 @@ describe("Today's Radar panel (real mock API)", () => {
     renderMarketplace();
     // The rest of the screen still renders normally.
     expect(await screen.findByText("Top Performers")).toBeInTheDocument();
-    expect(screen.queryByText("Today's Radar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Today's Radar" })).not.toBeInTheDocument();
     expect(screen.queryByText(/radar backend unreachable/)).not.toBeInTheDocument();
   });
 
   it("clicking a card navigates to the Signal Breakdown screen with the symbol as a query param", async () => {
     renderMarketplace();
-    const reason = await screen.findByText(
+    const reasons = await screen.findAllByText(
       "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9)."
     );
-    const anchor = reason.closest("a");
+    const anchor = reasons[0].closest("a");
     expect(anchor).toHaveAttribute("href", "/signals?symbol=NVDA");
+  });
+});
+
+describe("This Week's Digest panel (real mock API)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders ranked cards from the real mock feed", async () => {
+    renderMarketplace();
+    expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
+
+    expect(screen.getAllByText("Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).").length).toBeGreaterThan(0);
+    expect(screen.getByText("Personalized")).toBeInTheDocument();
+    expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
+  });
+
+  it("each card also renders its confidence_tier, not just the selection_type chip", async () => {
+    renderMarketplace();
+    await screen.findByText("This Week's Digest");
+    // The happy-path mock fixture tags NVDA/AAPL "high" and PG "medium".
+    expect(screen.getAllByText("high confidence").length).toBeGreaterThan(0);
+    expect(screen.getByText("medium confidence")).toBeInTheDocument();
+  });
+
+  it("honest empty state renders the section header + the backend's own reason, never vanishing", async () => {
+    vi.spyOn(api, "getWeeklyDigest").mockResolvedValueOnce({
+      items: [],
+      generated_at: new Date().toISOString(),
+      personalization_active: false,
+      reason: "No signals computed yet for this cycle.",
+    });
+    renderMarketplace();
+    expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No signals computed yet for this cycle.")
+    ).toBeInTheDocument();
+  });
+
+  it("a personalization_active: false digest is visibly distinguishable from the personalized happy path", async () => {
+    vi.spyOn(api, "getWeeklyDigest").mockResolvedValueOnce(mockDegradedDigestFixture);
+    renderMarketplace();
+    expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
+    // The honest fallback note (sourced from the backend's own `reason`)
+    // must be visible -- the operator should be able to tell these are
+    // today's top Radar picks, not a genuinely personalized digest.
+    expect(
+      await screen.findByText(mockDegradedDigestFixture.reason as string)
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("NVDA").length).toBeGreaterThan(0);
   });
 });

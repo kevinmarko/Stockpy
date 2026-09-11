@@ -98,6 +98,7 @@ figure.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -185,6 +186,7 @@ from pilots import (
     symbols,
     trade_history,
     validation_trend as validation_trend_reader,
+    weekly_digest,
 )
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
@@ -223,6 +225,10 @@ from data.historical_store import HistoricalStore
 # doesn't supply a price — same provider every other market-data read in this
 # codebase goes through (see settings.py's "Market-data layer" convention).
 from data.market_data import MarketDataError, get_provider
+# Durable "which symbol did the operator last look at" log for the Weekly
+# Digest's personalization filter (data/symbol_view_store.py) — recorded
+# best-effort from get_symbol_detail below.
+from data.symbol_view_store import SymbolViewStore
 from execution.kill_switch import GlobalKillSwitch
 
 # The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
@@ -1189,6 +1195,15 @@ def cancel_forecast_backfill_job(job_id: str) -> Dict[str, Any]:
     return payload
 
 
+@app.get("/pilots/weekly-digest", dependencies=[Depends(require_read_token)])
+def get_weekly_digest() -> Dict[str, Any]:
+    """Returns the weekly digest payload combining top radar signals with viewing history
+    and sector gaps.
+    """
+    payload = weekly_digest.compose_digest(_snapshot_path())
+    return dataclasses.asdict(payload)
+
+
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])
 def get_pilot_detail(pilot_id: str) -> Any:
     """Full Pilot detail: identity + top-N holdings + sector allocation +
@@ -1498,6 +1513,10 @@ def get_symbol_detail(ticker: str) -> Any:
     ``0.0`` (CONSTRAINT #4); a non-positive price is nulled. "Held by" means the
     symbol survives a Pilot's blend into its advertised top-N. Case-insensitive
     ticker. Never 500s (CONSTRAINT #6)."""
+    try:
+        SymbolViewStore().record_view(ticker.upper())
+    except Exception as exc:  # noqa: BLE001 — view-tracking is best-effort, never blocks the endpoint (CONSTRAINT #6)
+        logger.warning("get_symbol_detail: failed to record view for %s: %s", ticker, exc)
     snapshot = _load_snapshot()
     if snapshot is None:
         raise HTTPException(status_code=404, detail=_MISSING_SNAPSHOT_DETAIL)

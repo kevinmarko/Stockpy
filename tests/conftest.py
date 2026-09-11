@@ -143,3 +143,16 @@ def disable_historical_store():
     """
     with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
         yield
+
+
+# _isolate_symbol_view_db_in_tests moved to the root conftest.py as a
+# session-wide autouse fixture (see that file) -- this store is reachable
+# implicitly from api/data_api.py::explain_ticker and
+# api/pilots_api.py::get_symbol_detail, both exercised by dozens of
+# pre-existing tests with no store of their own, which is exactly the class
+# of "protect a widely-reachable shared production DB" fixture this file's
+# own docstring says does not belong here. A same-named fixture kept here
+# would only shadow the root one for tests/ without adding anything; the
+# fixture name remains resolvable from any test in this directory via the
+# normal conftest fixture-lookup chain (tests/test_symbol_view_store.py
+# still requests it by name explicitly, for documentation purposes).

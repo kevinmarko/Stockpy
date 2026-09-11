@@ -64,6 +64,7 @@ from data.historical_store import HistoricalStore
 from data.market_data import get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import async_sync_now, build_sync_report
+from data.symbol_view_store import SymbolViewStore
 from data_engine import DataEngine
 import options_ondemand
 import pairs_ondemand
@@ -933,6 +934,10 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
     Never fabricates missing metrics or placeholder text (CONSTRAINT #4).
     All float fields cleaned via _clean_nan().
     """
+    try:
+        SymbolViewStore().record_view(symbol.upper())
+    except Exception as exc:  # noqa: BLE001 — view-tracking is best-effort, never blocks the endpoint (CONSTRAINT #6)
+        logger.warning("explain_ticker: failed to record view for %s: %s", symbol, exc)
     sym = symbol.strip().upper()
     if not sym:
         raise HTTPException(status_code=422, detail="Symbol cannot be empty")

@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 368,
+    "live_safe": 370,
     "no_op": 5,
     "restart_required": 100,
-    "total": 473
+    "total": 475
   },
   "dynamic_sites": [
     {
@@ -42,35 +42,35 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 186,
+      "line": 187,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3227,
+      "line": 3246,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4368,
+      "line": 4387,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4473,
+      "line": 4492,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5407,
+      "line": 5426,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -145,7 +145,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 456,
+  "files_scanned": 460,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -513,6 +513,8 @@
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
     "WATCH_RULES_FILE",
+    "WEEKLY_DIGEST_ENABLED",
+    "WEEKLY_DIGEST_INTERVAL_HOURS",
     "WIKIPEDIA_ATTENTION_ENABLED",
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
     "WS_RISK_STREAM_INTERVAL_SECONDS"
@@ -526,13 +528,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 939,
+    "attr": 949,
     "factory_param": 4,
     "getattr_const": 401,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 282,
+    "attr": 284,
     "factory_param": 4,
     "getattr_const": 230,
     "os_environ": 2
@@ -698,7 +700,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:131",
+        "site": "api/data_api.py:132",
         "via": []
       },
       {
@@ -716,7 +718,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:335",
+        "site": "api/pilots_api.py:341",
         "via": []
       },
       {
@@ -951,6 +953,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/symbol_view_store.py:83",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/trends_store.py:42",
         "via": []
       },
@@ -1152,6 +1163,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/sector_correlation_store.py:70",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/symbol_view_store.py:87",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/symbol_view_store.py:89",
         "via": []
       },
       {
@@ -1432,6 +1461,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/symbol_view_store.py:87",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/symbol_view_store.py:89",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/trends_store.py:46",
         "via": []
       },
@@ -1638,7 +1685,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4850",
+        "site": "api/pilots_api.py:4869",
         "via": []
       }
     ],
@@ -1649,7 +1696,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4849",
+        "site": "api/pilots_api.py:4868",
         "via": []
       }
     ],
@@ -1660,7 +1707,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:5019",
+        "site": "api/pilots_api.py:5038",
         "via": []
       },
       {
@@ -1759,7 +1806,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4991",
+        "site": "api/pilots_api.py:5010",
         "via": []
       },
       {
@@ -1803,7 +1850,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:649",
+        "site": "api/pilots_api.py:655",
         "via": []
       }
     ],
@@ -2447,6 +2494,15 @@
           "cross_module_init_helper"
         ],
         "site": "data/sector_correlation_store.py:68",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/symbol_view_store.py:87",
         "via": []
       },
       {
@@ -3157,7 +3213,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:644",
+        "site": "api/pilots_api.py:650",
         "via": []
       },
       {
@@ -3213,7 +3269,7 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 95,
+    "cross_module_init_helper": 101,
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,

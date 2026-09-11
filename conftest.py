@@ -469,6 +469,68 @@ def _isolate_forecast_tracker_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 @pytest.fixture(autouse=True)
+def _isolate_symbol_view_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Point the default ``SymbolViewStore`` DB resolver at a per-test
+    temp-file db for every test, unless the test passes its own explicit
+    ``db_url`` to ``SymbolViewStore``.
+
+    Same risk class as ``_isolate_validation_runs_db_in_tests`` /
+    ``_isolate_execution_audit_db_in_tests`` / ``_isolate_broker_fills_db_in_tests``
+    / ``_isolate_trends_store_db_in_tests`` / ``_isolate_forecast_tracker_db_in_tests``
+    above: ``api/data_api.py::explain_ticker`` and
+    ``api/pilots_api.py::get_symbol_detail`` both construct
+    ``data.symbol_view_store.SymbolViewStore()`` with no explicit ``db_url``
+    on every real request (a best-effort view-tracking side effect of an
+    otherwise read-only endpoint) -- an IMPLICIT write reachable from
+    dozens of pre-existing tests that exercise either endpoint via
+    ``TestClient`` (``tests/test_data_api.py``, ``tests/test_pilots_api.py``,
+    ``tests/test_m3_explain_adversarial_stress.py``) with no store of their
+    own. Left unguarded, running this suite would silently write real
+    ``symbol_views`` rows into the operator's shared
+    ``~/.stockpy_local/quant_platform.db`` on every test run that touches
+    either endpoint -- the exact same class of live-DB test contamination
+    incident already documented for ``paper_positions``/``trades`` in
+    ``docs/known_issues/pr872_live_db_test_contamination_2026.md``.
+
+    A per-test TEMP FILE, not ``sqlite:///:memory:`` like most siblings
+    above -- ``SymbolViewStore(readonly=True)`` opens a SECOND, independent
+    SQLAlchemy engine (via ``create_readonly_db_engine``) against the same
+    resolved URL, distinct from the write-mode engine
+    ``create_db_engine``/``Base.metadata.create_all`` set up. Two separate
+    engine objects each get their own private, empty ``:memory:`` database
+    (SQLAlchemy's single-connection-pool trick that makes ``:memory:`` work
+    for the other siblings only holds WITHIN one engine, not across two), so
+    a readonly store would never see rows a write-mode store on the "same"
+    URL had already committed -- exactly the failure mode
+    ``_isolate_forecast_tracker_db_in_tests`` above documents in more detail
+    for its own, differently-caused, version of this same two-connections
+    problem. ``tests/test_symbol_view_store.py`` relies on this cross-engine
+    visibility directly (``test_symbol_view_store_readonly_enforcement``
+    writes via one store and reads via a second, ``readonly=True`` one).
+
+    This fixture previously lived in ``tests/conftest.py`` as a bare
+    ``mock.patch`` context manager, requested opt-in by only
+    ``tests/test_symbol_view_store.py`` itself; moved here (and rewritten to
+    match the ``monkeypatch.setattr`` + lazy-import style of its siblings
+    above) for the same reason ``_isolate_trends_store_db_in_tests`` was:
+    ``tests/conftest.py``'s own docstring is explicit that it is
+    "deliberately small and opt-in (no test-suite-wide autouse fixtures
+    here)" -- this class of "protect a widely-reachable shared production DB
+    from every test in the suite" fixture belongs at the root level, not in
+    the file that documents avoiding exactly this pattern.
+
+    Lazy import (mirrors the siblings above) so a broken
+    ``data/symbol_view_store.py`` import surfaces as a test failure for
+    whichever test actually touches it, not a collection-time failure for
+    the entire suite.
+    """
+    import data.symbol_view_store as _svs
+
+    fake_db = str(tmp_path / "isolated_symbol_views.db")
+    monkeypatch.setattr(_svs, "resolve_database_url", lambda: f"sqlite:///{fake_db}")
+
+
+@pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
     MetaLabelers do not leak gating decisions into subsequent test files."""

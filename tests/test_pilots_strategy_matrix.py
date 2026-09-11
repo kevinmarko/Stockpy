@@ -689,6 +689,24 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
     if module_name == "strategy_report_card":
         allowed = allowed | {"pilots", "validation", "data", "datetime"}
+    if module_name == "digest_models":
+        # Pure dataclass contract (DigestPayload/DigestItem) for the Weekly
+        # Digest -- stdlib only.
+        allowed = allowed | {"dataclasses", "datetime"}
+    if module_name == "sector_gap":
+        # Diagnostic "underrepresented sector" composition for the Weekly
+        # Digest's Sector Gap tag: data.paper_account_store (current paper
+        # holdings), data.historical_store (durable-store-only sector reads,
+        # bounded by this module's own wall-clock budget -- see its
+        # docstring), data.portfolio_sync (tracked universe). time/collections
+        # back the bounded-lookup budget and the sector-count aggregation.
+        allowed = allowed | {"data", "time", "collections"}
+    if module_name == "weekly_digest":
+        # Composes pilots.radar_ranking's Top-N (reused, not recomputed) with
+        # pilots.sector_gap's diagnostic and data.symbol_view_store's
+        # view-tracking log; pilots.scoring.load_snapshot for the same
+        # persisted-state read every sibling pilots/*.py read helper uses.
+        allowed = allowed | {"pilots", "data"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 
