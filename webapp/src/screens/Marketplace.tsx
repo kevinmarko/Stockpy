@@ -5,6 +5,8 @@ import type { PilotSummary, RadarItem } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PilotCard, PopularCard } from "../components/PilotCard";
 import { RadarCard } from "../components/RadarCard";
+import { WeeklyDigestCard } from "../components/WeeklyDigestCard";
+
 import { ErrorState, Loading, StaleDataNotice, InfoTip } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
@@ -153,6 +155,8 @@ export function Marketplace() {
       </div>
 
       <TabGuide tabKey="pilots" />
+
+      <WeeklyDigestCard />
 
       <RadarSection />
 

@@ -539,6 +539,7 @@ _EXPECTED_CONFTEST_ISOLATED = {
     "data/execution_audit_store.py",
     "data/broker_fills_store.py",
     "data/paper_account_store.py",
+    "data/symbol_view_store.py",
     "transactions_store.py",
 }
 

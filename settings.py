@@ -5627,6 +5627,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- 27. Weekly Digest ---
+    WEEKLY_DIGEST_ENABLED: bool = Field(
+        default=False,
+        description="Master switch for the Weekly Digest dispatcher."
+    )
+    WEEKLY_DIGEST_INTERVAL_HOURS: float = Field(
+        default=168.0,
+        description="Hours between automated Weekly Digest dispatches (default 7 days = 168 hours)."
+    )
+
     @property
     def fred_key_is_leaked(self) -> bool:
         """True if the configured FRED key is the known-compromised value.

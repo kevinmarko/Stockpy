@@ -1851,3 +1851,54 @@ class TestDaemonOptionsLifecycleIntegration:
         assert any("Daemon options lifecycle execution failed" in rec.message for rec in caplog.records)
 
 
+import pytest
+from unittest.mock import patch, MagicMock
+import time
+from desktop.daemon_runtime import OrchestratorDaemon
+from settings import settings
+
+class TestMaybeDispatchWeeklyDigest:
+    def test_dispatch_when_disabled(self):
+        settings.WEEKLY_DIGEST_ENABLED = False
+        daemon = OrchestratorDaemon()
+        with patch("pilots.weekly_digest.compose_weekly_digest") as mock_compose:
+            daemon.maybe_dispatch_weekly_digest()
+            mock_compose.assert_not_called()
+
+    def test_dispatch_when_enabled(self):
+        settings.WEEKLY_DIGEST_ENABLED = True
+        settings.WEEKLY_DIGEST_INTERVAL_HOURS = 168.0
+        daemon = OrchestratorDaemon()
+        
+        with patch("pilots.weekly_digest.compose_weekly_digest") as mock_compose, \
+             patch("observability.alerts.send_alert") as mock_send_alert:
+            
+            mock_compose.return_value = [{"symbol": "AAPL", "reason": "test", "type": "Personalized"}]
+            
+            daemon.maybe_dispatch_weekly_digest()
+            
+            mock_compose.assert_called_once()
+            mock_send_alert.assert_called_once()
+            args, kwargs = mock_send_alert.call_args
+            assert args[0] == "INFO"
+            assert "AAPL" in args[1]
+            assert "test" in args[1]
+            assert kwargs["dedup_key"].startswith("weekly_digest_")
+            
+            # Check throttling
+            mock_compose.reset_mock()
+            mock_send_alert.reset_mock()
+            daemon.maybe_dispatch_weekly_digest()
+            mock_compose.assert_not_called()
+            mock_send_alert.assert_not_called()
+
+    def test_dispatch_handles_exceptions(self):
+        settings.WEEKLY_DIGEST_ENABLED = True
+        daemon = OrchestratorDaemon()
+        # Reset throttle state just in case
+        if hasattr(daemon, "_last_weekly_digest_dispatch"):
+            delattr(daemon, "_last_weekly_digest_dispatch")
+            
+        with patch("pilots.weekly_digest.compose_weekly_digest", side_effect=Exception("boom")):
+            # Should not raise
+            daemon.maybe_dispatch_weekly_digest()

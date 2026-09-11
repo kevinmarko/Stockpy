@@ -1048,6 +1048,13 @@ def list_pilots() -> List[Dict[str, Any]]:
     return [_pilot_summary(p, snapshot, store) for p in catalog.list_pilots()]
 
 
+@app.get("/pilots/weekly-digest", dependencies=[Depends(require_read_token)])
+def get_weekly_digest() -> List[Dict[str, Any]]:
+    """Retrieve the weekly digest ladder."""
+    from pilots.weekly_digest import compose_weekly_digest
+    return compose_weekly_digest()
+
+
 @app.get("/pilots/forecast_backfill", dependencies=[Depends(require_read_token)])
 def get_forecast_backfill_status() -> Dict[str, Any]:
     """Return multi-horizon forecast backfill status, trained meta-labeler metrics,
