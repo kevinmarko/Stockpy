@@ -6210,3 +6210,10 @@ export interface ExplainTickerResponse {
   factor_breakdown: ExplainFactorBreakdown;
   price_history_status: ExplainPriceHistoryStatus;
 }
+
+
+export interface WeeklyDigestEntry {
+  symbol: string;
+  reason: string;
+  type: string;
+}

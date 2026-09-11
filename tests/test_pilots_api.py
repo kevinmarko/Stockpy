@@ -1,3 +1,4 @@
+
 """
 tests/test_pilots_api.py
 =========================
@@ -16,6 +17,8 @@ performance loader at ``tests/fixtures`` by monkeypatching
 from __future__ import annotations
 
 import ast
+from unittest.mock import patch
+
 import asyncio
 import json
 import os
@@ -7865,3 +7868,21 @@ class TestVolMispricingExecuteDeployabilityGate:
                 headers={"Authorization": "Bearer WRONG"},
             )
         assert resp.status_code == 401
+
+@patch("pilots.weekly_digest.compose_weekly_digest")
+def test_get_weekly_digest(mock_compose):
+    """Test the /pilots/weekly-digest endpoint returns the composed digest."""
+    mock_compose.return_value = [
+        {"symbol": "AAPL", "reason": "Test reason", "type": "Personalized"}
+    ]
+    
+    response = client.get("/pilots/weekly-digest", headers={"Authorization": "Bearer FOLLOW_API_TOKEN_MOCK_SECRET"})
+    assert response.status_code == 200
+    
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["symbol"] == "AAPL"
+    assert data[0]["reason"] == "Test reason"
+    assert data[0]["type"] == "Personalized"
+    
+    mock_compose.assert_called_once()

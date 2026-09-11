@@ -13,6 +13,7 @@ import {
   type TrendsPoint,
 } from "../utils/trendsStitch";
 import type { StrategyReportCardSnapshot,
+  WeeklyDigestEntry,
   AgenticDiscovery,
   AgenticStatus,
   AgentLoopStatus,
@@ -9587,6 +9588,14 @@ export const mockApi = {
 
   async listPilots(): Promise<PilotSummary[]> {
     return delay(CATALOG.map((p) => p.summary));
+  },
+
+  async getWeeklyDigest(): Promise<WeeklyDigestEntry[]> {
+    return delay([
+      { symbol: "AAPL", reason: "Value buy", type: "Personalized" },
+      { symbol: "MSFT", reason: "AI boom", type: "Sector Gap" },
+      { symbol: "GOOG", reason: "Strong earnings", type: "Today's Radar" }
+    ]);
   },
 
   async getPilot(id: string): Promise<PilotDetail> {

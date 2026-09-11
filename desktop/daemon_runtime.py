@@ -986,6 +986,45 @@ class OrchestratorDaemon:
             logger.warning("maybe_refresh_google_trends: unexpected failure: %s", exc)
 
 
+    def maybe_dispatch_weekly_digest(self) -> None:
+        """Periodic dispatch of the Weekly Digest.
+        
+        Gated by settings.WEEKLY_DIGEST_ENABLED. Tracks last run time internally
+        and throttles based on settings.WEEKLY_DIGEST_INTERVAL_HOURS.
+        Never raises.
+        """
+        if not getattr(settings, "WEEKLY_DIGEST_ENABLED", False):
+            return
+            
+        now = time.monotonic()
+        refresh_hours = getattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 168.0)
+        
+        # Internal throttle
+        if getattr(self, "_last_weekly_digest_dispatch", 0.0) > 0.0:
+            if (now - self._last_weekly_digest_dispatch) < (refresh_hours * 3600):
+                return
+                
+        try:
+            from pilots.weekly_digest import compose_weekly_digest
+            from observability.alerts import send_alert
+            
+            digest_data = compose_weekly_digest()
+            if digest_data:
+                lines = ["Weekly Digest:", ""]
+                for item in digest_data:
+                    lines.append(f"- {item['symbol']}: {item['reason']}")
+                message = "\n".join(lines)
+                
+                week_id = int(time.time() // (7 * 24 * 3600))
+                send_alert("INFO", message, dedup_key=f"weekly_digest_{week_id}")
+
+            logger.info("maybe_dispatch_weekly_digest: Trigger fired.")
+            
+            # Update the throttle timestamp
+            self._last_weekly_digest_dispatch = time.monotonic()
+        except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6
+            logger.warning("maybe_dispatch_weekly_digest: unexpected failure: %s", exc)
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -1013,6 +1052,7 @@ class OrchestratorDaemon:
             # true no-op, not merely "never invoked," when the flag is off.
             self.maybe_update_circuit_breaker()
             self.maybe_refresh_google_trends()
+            self.maybe_dispatch_weekly_digest()
             # Same "called unconditionally, self-gates internally" contract --
             # see maybe_alert_on_pipeline_stall's own docstring.
             self.maybe_alert_on_pipeline_stall()
@@ -1031,6 +1071,7 @@ class OrchestratorDaemon:
                 self.maybe_refresh_settings()
             self.maybe_update_circuit_breaker()
             self.maybe_refresh_google_trends()
+            self.maybe_dispatch_weekly_digest()
             self.maybe_alert_on_pipeline_stall()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.

@@ -11,6 +11,7 @@ import { mockApi, MOCK_META } from "./mock";
 import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type { StrategyReportCardSnapshot,
+  WeeklyDigestEntry,
   ExplainTickerResponse,
   AgenticDiscovery,
   AgenticStatus,
@@ -441,6 +442,7 @@ const liveApi = {
     http<RadarFeedResponse>(`/signals/radar?limit=${limit}`),
   health: () => http<{ status: string }>("/health"),
   listPilots: () => http<PilotSummary[]>("/pilots"),
+  getWeeklyDigest: () => http<WeeklyDigestEntry[]>("/pilots/weekly-digest"),
   getPilot: (id: string) =>
     http<PilotDetail>(`/pilots/${encodeURIComponent(id)}`),
   getPerformance: (id: string, range: PerfRange) =>

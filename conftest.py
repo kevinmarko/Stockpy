@@ -302,6 +302,17 @@ def _isolate_execution_audit_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_symbol_view_db_in_tests(monkeypatch):
+    """Point the default symbol-views DB resolver at an in-memory db
+    for every test, unless the test passes its own explicit ``db_url`` to
+    ``SymbolViewStore``.
+    """
+    import data.symbol_view_store as _svs
+
+    monkeypatch.setattr(_svs, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_broker_fills_db_in_tests(monkeypatch):
     """Point the default broker-order-fills DB resolver at an in-memory db
     for every test, unless the test passes its own explicit ``db_url`` to
