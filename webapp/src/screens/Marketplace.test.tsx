@@ -7,7 +7,7 @@
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Marketplace } from "./Marketplace";
 import { api } from "../api/client";
@@ -20,6 +20,11 @@ function renderMarketplace() {
       <Marketplace />
     </MemoryRouter>
   );
+}
+
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname}</div>;
 }
 
 describe("Marketplace screen (real mock API)", () => {
@@ -145,6 +150,52 @@ describe("Marketplace screen (real mock API)", () => {
     expect(screen.getByText("Top Performers")).toBeInTheDocument();
     expect(screen.getByText("Most Popular")).toBeInTheDocument();
     expect(screen.getByText("Browse by category")).toBeInTheDocument();
+  });
+});
+
+describe("Search any stock hero (real mock API)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders as a prominent entry point above Today's Radar / This Week's Digest, not buried below them", async () => {
+    renderMarketplace();
+
+    const heading = await screen.findByRole("heading", { name: "Search any stock" });
+    expect(heading).toBeInTheDocument();
+    expect(screen.getByTestId("marketplace-search")).toBeInTheDocument();
+
+    // DOM order proves it's the primary action, not an afterthought below
+    // the Radar/Digest sections (implementation plan §4/§5, Wave 1D).
+    const radarHeading = await screen.findByRole("heading", { name: "Today's Radar" });
+    expect(
+      heading.compareDocumentPosition(radarHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("also links out to the attribute-based Symbol Screener for browse-by-filter discovery", async () => {
+    renderMarketplace();
+    await screen.findByRole("heading", { name: "Search any stock" });
+    const link = screen.getByRole("link", { name: /filter the whole market/i });
+    expect(link).toHaveAttribute("href", "/symbol-screener");
+  });
+
+  it("submitting a typed ticker navigates straight to its symbol detail page, tracked or not", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/marketplace"]}>
+        <Routes>
+          <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/symbol/:ticker" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const input = await screen.findByTestId("marketplace-search");
+    await user.type(input, "nvda");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("loc")).toHaveTextContent("/symbol/NVDA")
+    );
   });
 });
 

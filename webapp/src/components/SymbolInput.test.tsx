@@ -202,6 +202,10 @@ describe("SymbolInput autocomplete", () => {
 
     await user.type(screen.getByTestId("symbol-input"), "A");
     const list = await screen.findByTestId("symbol-suggestions");
+    // Tracked matches (AAPL/AMD) can render before the debounced FMP fetch
+    // for "AA" resolves -- wait for "AA" itself so this doesn't race a slow
+    // fetch and read a stale, tracked-only intermediate DOM state.
+    await within(list).findByText("AA");
     const options = within(list).getAllByRole("option").map((el) => el.textContent);
     // AA (untracked) leads; AAPL/AMD (tracked) follow -- both start with "A".
     expect(options[0]).toContain("AA");
@@ -225,6 +229,11 @@ describe("SymbolInput autocomplete", () => {
     const { unmount } = render(<SymbolInput onSubmit={vi.fn()} testId="si-a" />);
     await user1.type(screen.getByTestId("si-a"), "A");
     const listA = await screen.findByTestId("symbol-suggestions");
+    // Tracked matches (AAPL/AMD) can render before the debounced FMP fetch
+    // for "AA" resolves -- wait for "AA" itself, not just any dropdown, so
+    // this doesn't race a slow fetch under heavy full-suite load and read a
+    // stale, tracked-only intermediate DOM state.
+    await within(listA).findByText("AA");
     const firstRowUniverseFirst = within(listA).getAllByRole("option")[0].textContent;
     unmount();
 
@@ -232,6 +241,7 @@ describe("SymbolInput autocomplete", () => {
     renderTrackedFirst(<SymbolInput onSubmit={vi.fn()} testId="si-b" />);
     await user2.type(screen.getByTestId("si-b"), "A");
     const listB = await screen.findByTestId("symbol-suggestions");
+    await within(listB).findByText("AA");
     const firstRowTrackedFirst = within(listB).getAllByRole("option")[0].textContent;
 
     // Universe-first: the untracked Alcoa ("AA") result leads.
