@@ -1,3 +1,39 @@
+"""pilots/weekly_digest.py -- "This Week's Digest" composer
+=============================================================
+
+Combines Today's Radar's (``pilots/radar_ranking.py``) top-ranked symbols
+with a minimal view-tracking log (``data/symbol_view_store.py``) and a
+sector-gap diagnostic (``pilots/sector_gap.py``) into an honestly-tagged,
+5-slot-max weekly digest. No new scoring logic lives here -- see the
+introducing implementation plan (``.claude/weekly-digest_implementation_plan.md``)
+§1/§2's explicit scope boundary.
+
+Honest 3-rung fallback ladder (plan §4), enforced by ``compose_digest``:
+
+1. **No snapshot yet, or Radar computed zero candidates this cycle**
+   (sparse ``DailySignals`` is the realistic default state, not a rare
+   edge case) -> an empty payload whose ``reason`` is reused VERBATIM from
+   ``radar_feed``'s own honest message, never re-typed here -- so the two
+   honesty strings can never drift apart.
+2. **Radar has candidates, but the view-tracking log has no recorded
+   views yet** (fresh install / cold start -- the realistic default state
+   for any new deployment) -> every item is honestly capped at
+   ``selection_type="Today's Radar"``/``confidence_tier="low"`` unless a
+   genuinely independent claim (sector-gap) applies; ``"Personalized"`` is
+   *never* minted vacuously just because the empty view log makes every
+   candidate trivially "not in an empty set" (CONSTRAINT #4 -- the
+   critical bug this module was fixed for: see
+   ``docs/known_issues/`` / this PR's own walkthrough).
+3. **Personalization active, items populated, nothing else degraded**
+   (the normal happy path) -> ``reason=None``.
+
+Sector-gap tagging (``find_underrepresented_sectors``) is a SEPARATE,
+portfolio-composition-driven claim, not gated on view-tracking history at
+all -- it can honestly apply whether or not personalization is active,
+since "you're underweight this sector" and "you haven't looked at this"
+are independent facts (plan §6: never blend the two into one opaque
+score/confidence).
+"""
 import logging
 from typing import Optional
 
@@ -9,19 +45,46 @@ from pilots.digest_models import DigestPayload, DigestItem
 
 logger = logging.getLogger(__name__)
 
+_MAX_ITEMS = 5
+
+# Mirrors DigestItem's own docstring -- kept as a single, mechanical lookup
+# so selection_type and confidence_tier can never independently drift.
+_CONFIDENCE_TIER_BY_SELECTION_TYPE = {
+    "Personalized": "high",
+    "Sector Gap": "medium",
+    "Today's Radar": "low",
+}
+
+_PERSONALIZATION_INACTIVE_REASON = (
+    "Personalization isn't active yet — view a few symbols to get "
+    "personalized picks. Showing today's top Radar picks instead."
+)
+
+_NO_RADAR_CANDIDATES_FALLBACK_REASON = "No candidates available this cycle."
+
+
 def compose_digest(snapshot_path: Optional[str] = None) -> DigestPayload:
-    """
-    Combines top-ranked radar symbols with viewing history and sector gaps
-    to produce a curated weekly digest of up to 5 items.
+    """Compose the up-to-5-item weekly digest, following the honest 3-rung
+    fallback ladder described in this module's docstring.
+
+    Never raises (CONSTRAINT #6): ``radar_feed``/``find_underrepresented_sectors``
+    already degrade honestly on failure, and a ``SymbolViewStore`` failure
+    here degrades to an empty (not fabricated) view-history set.
     """
     snapshot = load_snapshot(snapshot_path)
-    if not snapshot:
-        return DigestPayload(items=[])
 
+    # radar_feed itself honestly handles snapshot=None/malformed/empty --
+    # calling it unconditionally (rather than short-circuiting here) means
+    # this module never has to re-type its own copy of that honesty
+    # message; it just reuses whatever radar_feed says.
     feed = radar_feed(snapshot, limit=50)
     items = feed.get("items", [])
     if not items:
-        return DigestPayload(items=[])
+        return DigestPayload(
+            items=[],
+            personalization_active=False,
+            reason=feed.get("reason") or _NO_RADAR_CANDIDATES_FALLBACK_REASON,
+        )
 
     try:
         store = SymbolViewStore(readonly=True)
@@ -29,32 +92,46 @@ def compose_digest(snapshot_path: Optional[str] = None) -> DigestPayload:
     except Exception as exc:
         logger.warning(f"Failed to fetch recently viewed symbols: {exc}")
         recently_viewed = set()
-    
+
+    # CONSTRAINT #4 -- the critical fix: a symbol can only be honestly
+    # called "not recently viewed" when the view-tracking log carries at
+    # least SOME history to check it against. An empty log (fresh install,
+    # or every prior view aged out of the lookback window) means "we have
+    # zero information," not "confirmed not viewed" -- so it must never
+    # vacuously mint every candidate as "Personalized" just because an
+    # empty set contains nothing.
+    personalization_active = bool(recently_viewed)
+
     underrepresented_sectors = set(find_underrepresented_sectors())
 
     digest_items = []
     for item in items:
-        if len(digest_items) >= 5:
+        if len(digest_items) >= _MAX_ITEMS:
             break
-            
+
         symbol = item.get("symbol")
         if not symbol:
             continue
-            
+
         sector = item.get("sector", "")
         reason = item.get("reason", "")
-        
-        if symbol not in recently_viewed:
+
+        if personalization_active and symbol not in recently_viewed:
             selection_type = "Personalized"
         elif sector and sector in underrepresented_sectors:
             selection_type = "Sector Gap"
         else:
             selection_type = "Today's Radar"
-            
+
         digest_items.append(DigestItem(
             symbol=symbol,
             reason=reason,
-            selection_type=selection_type
+            selection_type=selection_type,
+            confidence_tier=_CONFIDENCE_TIER_BY_SELECTION_TYPE[selection_type],
         ))
 
-    return DigestPayload(items=digest_items)
+    return DigestPayload(
+        items=digest_items,
+        personalization_active=personalization_active,
+        reason=None if personalization_active else _PERSONALIZATION_INACTIVE_REASON,
+    )

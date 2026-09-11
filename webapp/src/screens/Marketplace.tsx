@@ -50,6 +50,32 @@ function RadarSection() {
   );
 }
 
+/** `confidence_tier` -> a color from the existing status palette. Never the
+ * ONLY encoding of tier -- always paired with the visible "<tier>
+ * confidence" text below, matching this codebase's established
+ * never-color-alone convention (see theme.ts's palette-provenance notes). */
+const CONFIDENCE_TIER_COLOR: Record<string, string> = {
+  high: theme.growth,
+  medium: theme.caution,
+  low: theme.textMuted,
+};
+
+/**
+ * "This Week's Digest" (`GET /pilots/weekly-digest`, `pilots/weekly_digest.py`)
+ * -- a periodic, honestly-personalized "names worth a look" panel, reusing
+ * Today's Radar's ranking. Mirrors `RadarSection`'s degrade pattern above:
+ * `error` returns null (an intentional, established "degrade silently on
+ * genuine backend failure" choice -- the screen's own top-level ErrorState
+ * already covers `listPilots` failures), but a SUCCESSFUL fetch that
+ * honestly has nothing to show still renders the section header plus the
+ * backend's own `reason` text -- never vanishing indistinguishably from the
+ * feature not existing at all (implementation plan §4 rung 3 / §6
+ * fabrication-risk checklist: a sparse/empty cycle is the realistic default
+ * case, not a rare edge case). When `personalization_active` is false, a
+ * muted note (also sourced from `reason`) distinguishes "today's top Radar
+ * picks" from a genuinely personalized "picked for you" digest -- these are
+ * different evidentiary-weight claims and must never look identical.
+ */
 function DigestSection() {
   const { data, loading, error } = useApi(
     () => api.getWeeklyDigest(),
@@ -57,7 +83,8 @@ function DigestSection() {
   );
 
   if (loading) return <Loading lines={2} />;
-  if (error || !data || data.items.length === 0) return null;
+  if (error) return null;
+  if (!data) return null;
 
   return (
     <section style={{ marginTop: "var(--s-6)" }}>
@@ -65,17 +92,51 @@ function DigestSection() {
         <h2>This Week's Digest</h2>
         <span className="rail-sub">Curated weekly top selections</span>
       </div>
-      <div className="rail" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--s-4)", overflowX: "visible", whiteSpace: "normal" }}>
-        {data.items.map((item) => (
-          <div key={item.symbol} className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong style={{ fontSize: "var(--t-h3)" }}>{item.symbol}</strong>
-              <span className="chip" style={{ fontSize: "var(--t-caption)", background: theme.surface2 }}>{item.selection_type}</span>
-            </div>
-            <p style={{ margin: 0, fontSize: "var(--t-body)", color: theme.textMuted }}>{item.reason}</p>
+      {data.items.length === 0 ? (
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-callout)" }}>
+          {data.reason ?? "No digest available yet."}
+        </p>
+      ) : (
+        <>
+          {!data.personalization_active && (
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-1)" }}>
+              {data.reason ?? "Personalization isn't active yet — showing today's top Radar picks instead."}
+            </p>
+          )}
+          <div
+            className="rail"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+              gap: "var(--s-4)",
+              overflowX: "visible",
+              whiteSpace: "normal",
+              marginTop: "var(--s-3)",
+            }}
+          >
+            {data.items.map((item) => (
+              <div key={item.symbol} className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ fontSize: "var(--t-title)" }}>{item.symbol}</strong>
+                  <span className="chip" style={{ fontSize: "var(--t-caption)", background: theme.surface2 }}>{item.selection_type}</span>
+                </div>
+                <span
+                  style={{
+                    fontSize: "var(--t-micro)",
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.4,
+                    color: CONFIDENCE_TIER_COLOR[item.confidence_tier] ?? theme.textMuted,
+                  }}
+                >
+                  {item.confidence_tier} confidence
+                </span>
+                <p style={{ margin: 0, fontSize: "var(--t-body)", color: theme.textMuted }}>{item.reason}</p>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
     </section>
   );
 }

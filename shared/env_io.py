@@ -789,6 +789,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTRY_ENABLED",
     "SENTRY_ENVIRONMENT",
     "SENTRY_TRACES_SAMPLE_RATE",
+    # --- Weekly Digest (pilots/weekly_digest.py, desktop/daemon_runtime.py::
+    # maybe_dispatch_weekly_digest) --- Both non-secret tunables; no
+    # credential material. WEEKLY_DIGEST_ENABLED only takes effect while the
+    # persistent orchestrator daemon (ORCHESTRATOR_DAEMON_ENABLED) is
+    # running -- see that field's own settings.py description.
+    "WEEKLY_DIGEST_ENABLED",
+    "WEEKLY_DIGEST_INTERVAL_HOURS",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.

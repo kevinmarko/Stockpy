@@ -9331,17 +9331,37 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
   ...emptySentimentDynamicsExtras,
 };
 
+/**
+ * Honest empty/degraded "This Week's Digest" fixture -- the view-tracking
+ * log had too little history to personalize this cycle, so the digest fell
+ * back to a lower rung of the fallback ladder (§4 of the implementation
+ * plan). Exported so a dedicated test can override the default happy-path
+ * mock for exactly one call, mirroring `mockNoProviderSentimentFixture`'s
+ * pattern above.
+ */
+export const mockDegradedDigestFixture: DigestPayload = {
+  items: [
+    { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar", confidence_tier: "high" },
+    { symbol: "MSFT", reason: "#2 by Multifactor Composite in the tracked universe today (Size Z +1.8, Quality Z +1.3).", selection_type: "Today's Radar", confidence_tier: "medium" },
+  ],
+  generated_at: new Date().toISOString(),
+  personalization_active: false,
+  reason: "Not enough browsing history yet to personalize this digest -- showing today's top Radar picks instead.",
+};
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
     getWeeklyDigest: async (): Promise<DigestPayload> => {
       await delay(300);
       return {
         items: [
-          { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar" },
-          { symbol: "PG", reason: "Added to balance Consumer Staples exposure.", selection_type: "Sector Gap" },
-          { symbol: "AAPL", reason: "Based on your recent viewing history.", selection_type: "Personalized" }
+          { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar", confidence_tier: "high" },
+          { symbol: "PG", reason: "Added to balance Consumer Staples exposure.", selection_type: "Sector Gap", confidence_tier: "medium" },
+          { symbol: "AAPL", reason: "Based on your recent viewing history.", selection_type: "Personalized", confidence_tier: "high" }
         ],
-        generated_at: new Date().toISOString()
+        generated_at: new Date().toISOString(),
+        personalization_active: true,
+        reason: null,
       };
     },
     getSignalsRadar: async (limit = 10): Promise<RadarFeedResponse> => {

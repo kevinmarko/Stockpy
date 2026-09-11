@@ -236,6 +236,8 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Tracked symbols are every symbol in this report — held positions plus Robinhood/file-backed watchlists. Forecast-covered are the subset with a price forecast recorded recently (the pipeline's forecast-tracking database — not a fixed sector or model list); a symbol can be tracked without one, e.g. if it's new or hasn't had a pipeline cycle run for it yet. Full coverage means a live check — run right now, not read from a cached pipeline artifact — confirmed price quotes, historical bars, and fundamental data are all available for the symbol.",
   "uncovered symbols":
     "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (e.g. FMP or Alpaca) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
+  "weekly digest":
+    "A periodic 'names worth a look' panel that reuses Today's Radar's ranking rather than a second scoring system. Each pick is tagged with which rule selected it (Personalized, Sector Gap, or Today's Radar) and a confidence tier — a Personalized pick only appears once real view-tracking history exists; otherwise the digest honestly falls back to plain Radar picks rather than pretending to know your habits.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -262,7 +264,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   pilots: {
     title: "Pilots",
     description:
-      "Browse strategy \'Pilots\' you can follow, and view curated recommendations in Today\'s Radar and the Weekly Digest. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
+      "Browse strategy 'Pilots' you can follow, and view curated recommendations in Today's Radar and the Weekly Digest. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
     keyConcepts: [
       "deployable",
       "pbo",
@@ -273,6 +275,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "buy range",
       "sell/stop range",
       "today's radar",
+      "weekly digest",
     ],
   },
   portfolio: {

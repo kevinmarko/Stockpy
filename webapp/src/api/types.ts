@@ -46,15 +46,36 @@ export interface JobRecord {
   created_at?: string;
 }
 
+/**
+ * One "This Week's Digest" pick (`GET /pilots/weekly-digest`,
+ * `pilots/weekly_digest.py`). `selection_type` names which rule picked
+ * this symbol ("Personalized" | "Sector Gap" | "Today's Radar") --
+ * `confidence_tier` ("high" | "medium" | "low") is a SEPARATE, honest
+ * signal of how strong that pick is, per the implementation plan's §4
+ * fallback ladder -- render both, never collapse one into the other.
+ */
 export interface DigestItem {
   symbol: string;
   reason: string;
   selection_type: string;
+  confidence_tier: string;
 }
 
+/**
+ * `GET /pilots/weekly-digest` response. `personalization_active` is true
+ * only when the view-tracking log actually had enough real history this
+ * cycle to personalize -- false means the digest fell back to a lower rung
+ * of the honest fallback ladder (e.g. plain Today's Radar top-N). `reason`
+ * carries the honest, server-templated explanation whenever `items` is
+ * empty OR `personalization_active` is false; it is `null` only on the
+ * normal happy path (items non-empty AND personalization active) --
+ * CONSTRAINT #4, never fabricate a confident-looking digest.
+ */
 export interface DigestPayload {
   items: DigestItem[];
   generated_at: string;
+  personalization_active: boolean;
+  reason: string | null;
 }
 
 /**

@@ -34,6 +34,7 @@ plain, importable, testable class with no OS-signal awareness at all.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -43,6 +44,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 import main_orchestrator
@@ -58,6 +60,124 @@ logger = logging.getLogger("OrchestratorDaemon")
 #: see OrchestratorDaemon.__init__'s _last_seen_store_stat for why this must
 #: be distinct from `None`.
 _STORE_UNCHECKED = object()
+
+#: How long ``_timer_loop`` parks between wake-ups when the daemon is
+#: running in strictly on-demand mode (``settings.ORCHESTRATOR_INTERVAL_SECONDS
+#: <= 0``). Previously an UNBOUNDED ``threading.Event.wait()`` -- woken only
+#: by ``set_interval()``/``shutdown()`` -- which meant every self-gated
+#: periodic check at the top of the loop (``maybe_update_circuit_breaker``,
+#: ``maybe_refresh_google_trends``, ``maybe_dispatch_weekly_digest``, ...)
+#: got at most one chance to run (the loop's first iteration, before the
+#: first park) and then never again for the rest of the process's life
+#: unless something else happened to call ``set_interval()``. A bounded park
+#: gives those checks a periodic chance regardless -- cheap and safe because
+#: every one of them already self-gates on its own settings flag internally,
+#: so waking hourly to no-op through several disabled checks costs nothing.
+#: See ``maybe_dispatch_weekly_digest``'s own docstring for the concrete
+#: case this constant was introduced to fix.
+_PARKED_TIMER_POLL_SECONDS = 3600.0
+
+#: Filename (under settings.OUTPUT_DIR) for the weekly digest's durable
+#: last-dispatch state. See ``_weekly_digest_state_path`` /
+#: ``maybe_dispatch_weekly_digest`` below.
+_WEEKLY_DIGEST_STATE_FILENAME = "weekly_digest_state.json"
+
+
+def _weekly_digest_state_path() -> Path:
+    """Path to the weekly digest's durable dispatch-state file.
+
+    Lives under ``settings.OUTPUT_DIR`` (``LOCAL_DATA_ROOT``-relative, shared
+    across every git worktree/checkout on this machine) so a daemon restart
+    can see whether this week's digest was already dispatched, instead of
+    relying solely on an in-process attribute that resets to unset on every
+    fresh ``OrchestratorDaemon()`` construction.
+    """
+    return Path(settings.OUTPUT_DIR) / _WEEKLY_DIGEST_STATE_FILENAME
+
+
+def _read_weekly_digest_last_dispatch() -> Optional[datetime]:
+    """Read the durable "last dispatched at" timestamp for the weekly digest.
+
+    Returns ``None`` -- never raises (CONSTRAINT #6) -- when the state file
+    is missing, empty, malformed, or holds no parseable timestamp. A caller
+    must treat ``None`` as "not durably known to have been dispatched" (i.e.
+    not throttled): the conservative choice on a read failure is to make the
+    digest ELIGIBLE to fire again, not to leave it silently withheld forever
+    because of a corrupt state file.
+    """
+    path = _weekly_digest_state_path()
+    try:
+        if not path.exists():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return None
+        ts_str = raw.get("last_dispatched_at")
+        if not isinstance(ts_str, str) or not ts_str:
+            return None
+        dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, a state-file read must never raise
+        logger.warning(
+            "weekly_digest: failed to read durable state file '%s' (%s); "
+            "treating as never dispatched.", path, exc,
+        )
+        return None
+
+
+def _write_weekly_digest_state(
+    *,
+    last_dispatched_at: Optional[datetime],
+    last_status: str,
+    last_error: Optional[str] = None,
+) -> None:
+    """Persist the weekly digest's dispatch outcome atomically.
+
+    Mirrors this codebase's established write-to-temp-then-rename convention
+    (``execution/kill_switch.py::activate``, ``watch_engine.py::save_watch_state``,
+    ``shared/env_io.py::write_many_atomic``) so a crash mid-write can never
+    leave a truncated/corrupt state file behind.
+
+    ``last_status`` is one of ``"sent"`` (``compose_digest()`` returned items
+    and ``send_alert()`` was called), ``"no_items"`` (``compose_digest()``
+    returned an honestly empty payload -- see the fallback ladder in
+    ``.claude/weekly-digest_implementation_plan.md`` §4), or ``"failed"`` (an
+    unexpected exception was raised before/during dispatch). ``last_error``
+    is ``str(exc)`` when ``last_status == "failed"``, else ``None``.
+
+    On a ``"failed"`` call the CALLER is responsible for passing the PRIOR
+    ``last_dispatched_at`` (or ``None``) rather than advancing it -- this
+    function always writes exactly what it is given; it never advances the
+    throttle clock on its own. That matches this feature's pre-existing
+    behavior of never updating the in-process throttle timestamp when an
+    exception was raised before a dispatch attempt completed.
+
+    Never raises (CONSTRAINT #6) -- a write failure is logged and otherwise
+    ignored. This file is a durability aid layered on top of the in-process
+    cache, not the sole mechanism by which throttling functions within one
+    process's own lifetime.
+    """
+    path = _weekly_digest_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "last_dispatched_at": (
+                last_dispatched_at.astimezone(timezone.utc).isoformat()
+                if last_dispatched_at is not None else None
+            ),
+            "last_status": last_status,
+            "last_error": last_error,
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.rename(path)
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, a state-file write must never raise
+        logger.warning(
+            "weekly_digest: failed to persist durable state file '%s': %s", path, exc,
+        )
 
 
 class RunState(str, Enum):
@@ -184,7 +304,9 @@ class OrchestratorDaemon:
 
     def start(self) -> None:
         """Build the warm DataEngine + EngineContext once, then start the
-        interval timer thread (if configured). Idempotent."""
+        interval timer thread (if configured, or if a self-gated periodic
+        check that needs the loop regardless of the pipeline interval is
+        enabled). Idempotent."""
         if self._started:
             logger.warning("OrchestratorDaemon.start() called twice; ignoring second call.")
             return
@@ -198,7 +320,27 @@ class OrchestratorDaemon:
             type(self._data_engine).__name__, self._interval_seconds,
         )
 
-        if self._interval_seconds > 0:
+        # Previously gated on `self._interval_seconds > 0` alone -- under the
+        # realistic default deployment (ORCHESTRATOR_INTERVAL_SECONDS=0, "on-
+        # demand only"), no timer thread was ever created at all, so
+        # _timer_loop never ran even once, and every self-gated periodic
+        # check at its top (maybe_dispatch_weekly_digest included) never got
+        # a chance to run automatically. WEEKLY_DIGEST_ENABLED is checked
+        # here specifically (rather than always starting a thread, which
+        # would change behavior -- and several pinned tests' assumptions --
+        # for every on-demand-only deployment regardless of whether the
+        # digest is even in use) so a daemon with the digest enabled gets a
+        # running timer loop even at interval=0; combined with
+        # _PARKED_TIMER_POLL_SECONDS bounding the loop's park below, this is
+        # what lets maybe_dispatch_weekly_digest actually fire on a
+        # recurring cadence rather than once (or never -- see above) per
+        # process lifetime. This is a startup-time snapshot of the flag --
+        # flipping WEEKLY_DIGEST_ENABLED live via runtime_flags after a
+        # thread-less daemon has already started takes effect only on the
+        # next daemon restart, the same "applies: next_daemon_restart"
+        # contract most settings in this codebase already carry.
+        needs_timer_thread = self._interval_seconds > 0 or settings.WEEKLY_DIGEST_ENABLED
+        if needs_timer_thread:
             self._stop_event.clear()
             self._wake_event.clear()
             thread = self._new_timer_thread()
@@ -988,44 +1130,117 @@ class OrchestratorDaemon:
 
     def maybe_dispatch_weekly_digest(self) -> None:
         """Periodic trigger for the weekly digest.
-        
-        Gated by settings.WEEKLY_DIGEST_ENABLED. Tracks last dispatch time internally
-        and throttles based on settings.WEEKLY_DIGEST_INTERVAL_HOURS.
-        Never raises.
+
+        Gated by ``settings.WEEKLY_DIGEST_ENABLED``. Throttled to at most
+        once per ``settings.WEEKLY_DIGEST_INTERVAL_HOURS`` via a DURABLE
+        state file (``_weekly_digest_state_path()``, under
+        ``settings.OUTPUT_DIR``) -- NOT just the in-process
+        ``self._last_weekly_digest_dispatch`` attribute, which resets to
+        unset on every fresh ``OrchestratorDaemon()`` construction (i.e.
+        every daemon restart).
+
+        Why the in-process attribute alone was not enough (2026-09 fix):
+        a restart occurring more than ``settings.ALERT_DEDUP_WINDOW_SECONDS``
+        (900s / 15 min default) after the digest's last successful send --
+        the realistic case, since restarts happen hours or days apart, not
+        minutes -- used to (a) treat the fresh instance as never having
+        dispatched (the throttle check's ``> 0.0`` guard on an unset
+        attribute is ``False``) AND (b) fall outside
+        ``observability.alerts.send_alert()``'s own ``dedup_key``
+        suppression window, which exists to collapse RAPID re-evaluation of
+        a still-true condition within roughly the same short window (its own
+        module docstring's example: "sustained portfolio heat on every
+        pipeline cycle") -- not to provide durable "already sent this exact
+        key, ever" protection hours or days later. Net effect: a daemon
+        restart mid-week used to re-fire the digest immediately. See
+        ``.claude/weekly-digest_task.md``'s WP-D/E audit for the full
+        writeup, and ``tests/test_daemon_runtime.py::TestWeeklyDigest``'s
+        durability-across-restart test for the regression proof.
+
+        ``self._last_weekly_digest_dispatch`` is kept as a fast-path
+        in-process cache (avoids a disk read on every timer wake once this
+        process has itself already checked at least once this run) -- it is
+        seeded from the durable file on the FIRST check made by a given
+        instance. The pre-existing ``dedup_key`` passed to ``send_alert()``
+        is also kept, as defense in depth for a rapid duplicate call within
+        one process's own short window -- it is no longer relied on alone.
+
+        Never raises (CONSTRAINT #6).
         """
         if not settings.WEEKLY_DIGEST_ENABLED:
             return
-            
+
         try:
-            now = time.monotonic()
-            interval_hours = settings.WEEKLY_DIGEST_INTERVAL_HOURS
-            
-            # Internal throttle
-            if getattr(self, "_last_weekly_digest_dispatch", 0.0) > 0.0:
-                if (now - self._last_weekly_digest_dispatch) < (interval_hours * 3600):
-                    return
-                    
+            interval = timedelta(hours=settings.WEEKLY_DIGEST_INTERVAL_HOURS)
+            now = datetime.now(timezone.utc)
+
+            last_dispatch = getattr(self, "_last_weekly_digest_dispatch", None)
+            if last_dispatch is None:
+                # First check made by this instance -- possibly a just-
+                # restarted daemon. Consult durable state before assuming
+                # "never dispatched".
+                last_dispatch = _read_weekly_digest_last_dispatch()
+
+            if last_dispatch is not None and (now - last_dispatch) < interval:
+                # Seed the fast-path cache even on a throttled call so a
+                # subsequent wake this process makes before the interval
+                # elapses doesn't re-read the state file every time.
+                self._last_weekly_digest_dispatch = last_dispatch
+                return
+
             from pilots.weekly_digest import compose_digest
             from observability.alerts import send_alert
-            
+
             payload = compose_digest()
             if payload and payload.items:
                 lines = [f"Weekly Digest ({len(payload.items)} items):"]
                 for item in payload.items:
                     lines.append(f"- {item.symbol} ({item.selection_type}): {item.reason}")
                 message = "\n".join(lines)
-                
-                week_id = int(time.time() / (7 * 86400))
+
+                week_id = int(now.timestamp() / (7 * 86400))
                 dedup_key = f"weekly_digest_{week_id}"
-                
+
+                # send_alert() never raises (see its own module docstring) --
+                # a channel-level failure (ntfy unreachable, an SMTP error,
+                # ...) is caught and logged at ERROR *inside* send_alert
+                # itself, per channel. There is no return value/exception
+                # from here that could distinguish "delivered" from "every
+                # channel failed", so last_status below can only honestly
+                # mean "a dispatch was attempted", not "confirmed delivered".
+                # Full webapp-surfacing of PER-CHANNEL delivery failure is a
+                # disclosed, NOT-done follow-up -- see this PR's summary.
                 send_alert("INFO", message, dedup_key=dedup_key)
-                logger.info("maybe_dispatch_weekly_digest: Dispatched weekly digest with %d items.", len(payload.items))
+                status = "sent"
+                logger.info(
+                    "maybe_dispatch_weekly_digest: Dispatched weekly digest with %d items.",
+                    len(payload.items),
+                )
             else:
+                status = "no_items"
                 logger.info("maybe_dispatch_weekly_digest: No items for weekly digest.")
-                
-            self._last_weekly_digest_dispatch = time.monotonic()
+
+            self._last_weekly_digest_dispatch = now
+            _write_weekly_digest_state(last_dispatched_at=now, last_status=status)
         except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, this check must never break the caller
             logger.warning("maybe_dispatch_weekly_digest: unexpected failure: %s", exc)
+            # Distinct, durable record of the failure -- never silently
+            # dropped (CONSTRAINT #6 / plan §6's fabrication-risk checklist)
+            # -- WITHOUT advancing the throttle clock: a genuine failure
+            # (e.g. compose_digest() itself raising) should be retried on
+            # the next check, matching this method's pre-existing behavior
+            # of never updating the throttle timestamp on this path.
+            # last_dispatched_at is RE-READ from disk (not assumed from the
+            # in-process cache) so a failure record can never clobber a real
+            # prior successful-dispatch timestamp with a stale/None value.
+            try:
+                _write_weekly_digest_state(
+                    last_dispatched_at=_read_weekly_digest_last_dispatch(),
+                    last_status="failed",
+                    last_error=str(exc),
+                )
+            except Exception:  # pragma: no cover - best-effort only
+                pass
 
 
     def _timer_loop(self) -> None:
@@ -1064,7 +1279,17 @@ class OrchestratorDaemon:
             if self._stop_event.is_set():
                 break
             if interval <= 0:
-                self._wake_event.wait()  # park; _stop_event.wait(0) would spin a core
+                # Bounded park (NOT an unbounded wait()): _stop_event.wait(0)
+                # would spin a core, but an unbounded self._wake_event.wait()
+                # -- woken only by set_interval()/shutdown() -- would leave
+                # every self-gated periodic check above (this loop's own
+                # maybe_dispatch_weekly_digest included) with no chance to
+                # run again for the rest of the process's life once parked.
+                # See _PARKED_TIMER_POLL_SECONDS's own module-level docstring
+                # for the full rationale; every check above already self-
+                # gates on its own settings flag, so a periodic wake-and-
+                # recheck costs nothing when they're disabled.
+                self._wake_event.wait(timeout=_PARKED_TIMER_POLL_SECONDS)
                 continue
             if self._wake_event.wait(timeout=interval):
                 continue  # interval changed OR shutting down -- re-check at the top

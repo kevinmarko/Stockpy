@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Marketplace } from "./Marketplace";
 import { api } from "../api/client";
 import { ApiError } from "../api/types";
+import { mockDegradedDigestFixture } from "../api/mock";
 
 function renderMarketplace() {
   return render(
@@ -214,9 +215,44 @@ describe("This Week's Digest panel (real mock API)", () => {
   it("renders ranked cards from the real mock feed", async () => {
     renderMarketplace();
     expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
-    
+
     expect(screen.getAllByText("Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).").length).toBeGreaterThan(0);
     expect(screen.getByText("Personalized")).toBeInTheDocument();
     expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
+  });
+
+  it("each card also renders its confidence_tier, not just the selection_type chip", async () => {
+    renderMarketplace();
+    await screen.findByText("This Week's Digest");
+    // The happy-path mock fixture tags NVDA/AAPL "high" and PG "medium".
+    expect(screen.getAllByText("high confidence").length).toBeGreaterThan(0);
+    expect(screen.getByText("medium confidence")).toBeInTheDocument();
+  });
+
+  it("honest empty state renders the section header + the backend's own reason, never vanishing", async () => {
+    vi.spyOn(api, "getWeeklyDigest").mockResolvedValueOnce({
+      items: [],
+      generated_at: new Date().toISOString(),
+      personalization_active: false,
+      reason: "No signals computed yet for this cycle.",
+    });
+    renderMarketplace();
+    expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No signals computed yet for this cycle.")
+    ).toBeInTheDocument();
+  });
+
+  it("a personalization_active: false digest is visibly distinguishable from the personalized happy path", async () => {
+    vi.spyOn(api, "getWeeklyDigest").mockResolvedValueOnce(mockDegradedDigestFixture);
+    renderMarketplace();
+    expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
+    // The honest fallback note (sourced from the backend's own `reason`)
+    // must be visible -- the operator should be able to tell these are
+    // today's top Radar picks, not a genuinely personalized digest.
+    expect(
+      await screen.findByText(mockDegradedDigestFixture.reason as string)
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("NVDA").length).toBeGreaterThan(0);
   });
 });
