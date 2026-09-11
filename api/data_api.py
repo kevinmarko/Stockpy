@@ -29,6 +29,7 @@ This module MAY import the engine/data layer (unlike ``api/state_api.py`` /
 data-facing service, not the kill-switch/daemon control plane.
 """
 from __future__ import annotations
+from data.symbol_view_store import SymbolViewStore
 
 import base64
 import logging
@@ -933,6 +934,11 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
     Never fabricates missing metrics or placeholder text (CONSTRAINT #4).
     All float fields cleaned via _clean_nan().
     """
+    try:
+        SymbolViewStore().record_view(symbol.upper())
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f\"Failed to record view for {symbol}: {e}\")
     sym = symbol.strip().upper()
     if not sym:
         raise HTTPException(status_code=422, detail="Symbol cannot be empty")

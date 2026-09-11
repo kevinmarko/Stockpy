@@ -97,6 +97,7 @@ figure.
 """
 
 from __future__ import annotations
+from data.symbol_view_store import SymbolViewStore
 
 import dataclasses
 import json
@@ -1509,6 +1510,11 @@ def get_symbol_detail(ticker: str) -> Any:
     ``0.0`` (CONSTRAINT #4); a non-positive price is nulled. "Held by" means the
     symbol survives a Pilot's blend into its advertised top-N. Case-insensitive
     ticker. Never 500s (CONSTRAINT #6)."""
+    try:
+        SymbolViewStore().record_view(ticker.upper())
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f\"Failed to record view for {ticker}: {e}\")
     snapshot = _load_snapshot()
     if snapshot is None:
         raise HTTPException(status_code=404, detail=_MISSING_SNAPSHOT_DETAIL)
