@@ -124,9 +124,19 @@ def test_calculate_portfolio_greeks_multi_leg_spread():
     mock_quote = MagicMock(price=150.0)
     mock_provider.get_quotes_batch.side_effect = lambda symbols: {s: mock_quote for s in symbols}
 
-    greeks = calculate_portfolio_greeks(store=store, market_provider=mock_provider, spy_spot=500.0)
+    # Beta resolution must be mocked -- left unmocked, _resolve_symbol_beta falls
+    # through to pilots.rolling_beta.rolling_beta_view -> HistoricalStore.get_bars,
+    # which does a REAL live-provider backfill fetch when the local cache is empty
+    # (the case for a fresh/isolated test run). That makes this "offline suite"
+    # test silently network-dependent and non-deterministic (a real AAPL-vs-SPY
+    # rolling beta can legitimately come back negative on some days), rather than
+    # testing this function's own sign-consistency logic. Mock it deterministically,
+    # matching the established pattern in test_calculate_portfolio_greeks_per_symbol_beta
+    # and test_beta_weighted_delta_spy_calculation just below in this same file.
+    from unittest.mock import patch
 
-
+    with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)):
+        greeks = calculate_portfolio_greeks(store=store, market_provider=mock_provider, spy_spot=500.0)
 
     assert greeks["total_positions"] == 2
     assert greeks["option_positions_count"] == 2
