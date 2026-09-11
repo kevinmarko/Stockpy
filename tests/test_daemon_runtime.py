@@ -1936,6 +1936,31 @@ class TestWeeklyDigest:
                 assert "dedup_key" in kwargs
                 assert kwargs["dedup_key"].startswith("weekly_digest_")
 
+    def test_calls_compose_digest_with_the_real_output_dir_snapshot_path(self, monkeypatch):
+        """CONFIRMED BUG regression: this method used to call
+        compose_digest() with NO argument, which falls back to
+        pilots.scoring.load_snapshot's hardcoded, CWD-relative default
+        ("output/state_snapshot.json") -- a path the daemon's working
+        directory (the repo root) essentially never matches in a real
+        deployment, since settings.OUTPUT_DIR is LOCAL_DATA_ROOT-relative
+        (e.g. ~/.stockpy_local/output) and deliberately OUTSIDE every git
+        checkout. The automatic, daemon-driven digest dispatch was
+        therefore silently and permanently dead in production. This test
+        asserts compose_digest is called with the SAME settings.OUTPUT_DIR
+        -based path api/pilots_api.py::_snapshot_path() already correctly
+        used for the on-demand GET /pilots/weekly-digest endpoint."""
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        d = OrchestratorDaemon()
+
+        from pilots.digest_models import DigestPayload
+
+        with mock.patch(
+            "pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=[])
+        ) as mock_compose:
+            d.maybe_dispatch_weekly_digest()
+
+        mock_compose.assert_called_once_with(str(settings.OUTPUT_DIR / "state_snapshot.json"))
+
     def test_throttled(self, monkeypatch):
         monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
         monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 24)
@@ -1978,11 +2003,15 @@ class TestWeeklyDigest:
         assert dispatched_at >= before
 
     def test_durable_state_file_content_on_no_items(self, monkeypatch):
-        """A "no items" cycle is an honest no-op, distinct from a "sent"
-        dispatch -- but it still must advance the throttle clock (matching
-        this method's pre-existing behavior of throttling regardless of
-        whether the composer found anything, so an empty cycle doesn't
-        retry every single timer wake)."""
+        """CONFIRMED BUG regression: a "no items" cycle is an honest no-op,
+        distinct from a "sent" dispatch, and must NOT advance the throttle
+        clock -- doing so used to defer the NEXT check by the full
+        WEEKLY_DIGEST_INTERVAL_HOURS (up to 7 days at the default), even
+        though real data could show up within hours of a fresh
+        install/restart (the realistic state this rung of the fallback
+        ladder exists for, per the introducing plan's own framing). The
+        state file still records the diagnostic "no_items" status/
+        last_checked_at -- only last_dispatched_at stays untouched."""
         monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
         monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 168.0)
         d = OrchestratorDaemon()
@@ -1996,7 +2025,25 @@ class TestWeeklyDigest:
         state_path = daemon_runtime._weekly_digest_state_path()
         recorded = json.loads(state_path.read_text(encoding="utf-8"))
         assert recorded["last_status"] == "no_items"
-        assert recorded["last_dispatched_at"] is not None
+        assert recorded["last_dispatched_at"] is None
+
+    def test_no_items_does_not_defer_the_next_check(self, monkeypatch):
+        """The actual regression proof for the fix above: a "no items"
+        check followed immediately by a second check (simulating the next
+        timer wake, well inside WEEKLY_DIGEST_INTERVAL_HOURS) must retry
+        compose_digest() again rather than being silently throttled for up
+        to a week."""
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 168.0)
+        d = OrchestratorDaemon()
+
+        from pilots.digest_models import DigestPayload
+        with mock.patch(
+            "pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=[])
+        ) as mock_compose:
+            d.maybe_dispatch_weekly_digest()
+            d.maybe_dispatch_weekly_digest()
+            assert mock_compose.call_count == 2
 
     def test_failure_before_dispatch_is_recorded_and_does_not_throttle_retry(self, monkeypatch):
         """A genuine failure (compose_digest() raising) must be (a) logged
@@ -2181,6 +2228,143 @@ class TestDurabilityAcrossRestart:
                 )
 
 
+class TestWeeklyDigestDurableWriteCatchUpRetry:
+    """CONFIRMED BUG regression: a durable-write failure right after a
+    successful dispatch used to leave the on-disk state stale forever
+    within that SAME process (self._last_weekly_digest_dispatch advanced
+    unconditionally BEFORE the write was even attempted, and the write's
+    own failure was silently swallowed with no retry) -- so a restart
+    shortly after would read the stale file and re-send, defeating the
+    "durable across restart" guarantee. The fix: on every check, this
+    process retries persisting its own in-process record whenever it is
+    more recent than what the durable file currently shows."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_weekly_digest_state_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+
+    def test_a_failed_write_is_retried_and_eventually_persisted(self, monkeypatch):
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 168.0)
+        d = OrchestratorDaemon()
+
+        from pilots.digest_models import DigestPayload, DigestItem
+        items = [DigestItem(symbol="AAPL", reason="Test", selection_type="Today's Radar")]
+
+        # First check: dispatch succeeds, but the durable write fails
+        # (simulating a transient disk issue right after a successful
+        # send_alert()).
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert:
+                with mock.patch(
+                    "desktop.daemon_runtime.atomic_write_json",
+                    side_effect=OSError("disk full"),
+                ):
+                    d.maybe_dispatch_weekly_digest()
+                    assert mock_send_alert.call_count == 1
+
+        state_path = daemon_runtime._weekly_digest_state_path()
+        assert not state_path.exists(), "the write genuinely failed -- no file should exist yet"
+
+        # Second check, moments later, well inside the interval: the write
+        # succeeds this time (the transient failure is over) -- it must
+        # NOT re-dispatch (this process already knows it sent), but it
+        # MUST catch the durable file up to reflect that.
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert_2:
+                d.maybe_dispatch_weekly_digest()
+                assert mock_send_alert_2.call_count == 0, (
+                    "the in-process record must prevent a re-send even "
+                    "though the durable write had failed"
+                )
+
+        assert state_path.exists(), "the catch-up retry must have persisted the state by now"
+        recorded = json.loads(state_path.read_text(encoding="utf-8"))
+        assert recorded["last_dispatched_at"] is not None
+        assert recorded["last_status"] == "sent"
+
+    def test_a_persistently_failed_write_still_does_not_redispatch_within_one_process(self, monkeypatch):
+        """Even if the durable write NEVER succeeds for the rest of this
+        process's life, the in-process record alone must still prevent a
+        re-send within that same process -- only a genuine restart (which
+        loses the in-process record) is exposed to a persistently-broken
+        write, and that residual risk is disclosed in this method's own
+        docstring, not silently hidden."""
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 168.0)
+        d = OrchestratorDaemon()
+
+        from pilots.digest_models import DigestPayload, DigestItem
+        items = [DigestItem(symbol="AAPL", reason="Test", selection_type="Today's Radar")]
+
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert:
+                with mock.patch(
+                    "desktop.daemon_runtime.atomic_write_json",
+                    side_effect=OSError("disk full"),
+                ):
+                    d.maybe_dispatch_weekly_digest()
+                    assert mock_send_alert.call_count == 1
+                    # A second check, write still failing.
+                    d.maybe_dispatch_weekly_digest()
+                    assert mock_send_alert.call_count == 1
+
+
+class TestWeeklyDigestCrossProcessVisibility:
+    """CONFIRMED (PLAUSIBLE-severity) finding: the durable file used to be
+    consulted only on a given process's FIRST check, then cached
+    in-process for the rest of that process's life -- so a second,
+    concurrently-running OrchestratorDaemon process's dispatch (a real,
+    CLAUDE.md-documented operational hazard: a stale/orphaned daemon
+    process can coexist with a freshly-started one) would never become
+    visible to the first process at all. The fix re-reads the durable file
+    on EVERY check, narrowing that window to roughly one polling interval
+    instead of "for the rest of the process's life"."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_weekly_digest_state_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+
+    def test_a_second_live_instances_dispatch_is_seen_on_the_firsts_next_check(self, monkeypatch):
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 168.0)
+
+        from pilots.digest_models import DigestPayload, DigestItem
+        items = [DigestItem(symbol="AAPL", reason="Test", selection_type="Today's Radar")]
+
+        # d1's FIRST check finds nothing to send yet (no items) -- it does
+        # NOT dispatch, and (per the no_items fix) does not record a
+        # last_dispatched_at either, so d1's own in-process record stays
+        # None -- it has no memory of having sent anything.
+        d1 = OrchestratorDaemon()
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=[])):
+            with mock.patch("observability.alerts.send_alert"):
+                d1.maybe_dispatch_weekly_digest()
+        assert getattr(d1, "_last_weekly_digest_dispatch", None) is None
+
+        # A SEPARATE, concurrently-running daemon process (d2, sharing only
+        # the durable file on disk -- simulated here as a second instance
+        # in the same test process) then genuinely dispatches.
+        d2 = OrchestratorDaemon()
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert_2:
+                d2.maybe_dispatch_weekly_digest()
+                assert mock_send_alert_2.call_count == 1
+
+        # d1's NEXT check (no restart -- same instance) must now see d2's
+        # dispatch and refuse to also send, because it re-reads the
+        # durable file on every check rather than trusting its own first
+        # (stale) read forever.
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert_1b:
+                d1.maybe_dispatch_weekly_digest()
+                assert mock_send_alert_1b.call_count == 0, (
+                    "d1 did not notice d2's dispatch -- it must be "
+                    "re-reading the durable file on every check, not just "
+                    "the first"
+                )
+
+
 class TestWeeklyDigestSchedulingUnderOnDemandOnly:
     """desktop/daemon_runtime.py::start() previously only created a timer
     thread when self._interval_seconds > 0 -- confirmed by direct code
@@ -2233,6 +2417,46 @@ class TestWeeklyDigestSchedulingUnderOnDemandOnly:
                 )
             finally:
                 d.shutdown(timeout=2.0)
+
+    def test_start_creates_thread_at_interval_zero_when_circuit_breaker_enabled_alone(self, monkeypatch):
+        """Regression for the generalized fix: CIRCUIT_BREAKER_ENABLED=True
+        alone (WEEKLY_DIGEST_ENABLED left at its default False) must also
+        start a timer thread at interval_seconds<=0 -- before this
+        generalization, an operator who enabled ONLY the circuit breaker
+        (a real risk-management gate, per its own docstring meant to run
+        "on every wake") got no automatic periodic checks at all under the
+        documented on-demand-only default, exactly the same class of gap
+        WEEKLY_DIGEST_ENABLED's own narrower fix closed only for itself."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        d = OrchestratorDaemon()  # interval_seconds=0 by default
+        d.start()
+        try:
+            assert d._timer_thread is not None, (
+                "CIRCUIT_BREAKER_ENABLED=True must start a timer thread "
+                "even at interval_seconds<=0, on its own, independent of "
+                "WEEKLY_DIGEST_ENABLED"
+            )
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_start_creates_thread_at_interval_zero_when_google_trends_enabled_alone(self, monkeypatch):
+        """Same regression, for GOOGLE_TRENDS_ENABLED."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
+        monkeypatch.setattr(settings, "GOOGLE_TRENDS_ENABLED", True)
+        d = OrchestratorDaemon()  # interval_seconds=0 by default
+        d.start()
+        try:
+            assert d._timer_thread is not None, (
+                "GOOGLE_TRENDS_ENABLED=True must start a timer thread "
+                "even at interval_seconds<=0, on its own, independent of "
+                "WEEKLY_DIGEST_ENABLED"
+            )
+        finally:
+            d.shutdown(timeout=2.0)
 
     def test_parked_loop_waits_with_the_bounded_poll_timeout(self, monkeypatch):
         _fast_ok_main_body(monkeypatch)

@@ -98,7 +98,7 @@ channel, and a weekly schedule trigger.
 | 2 | C | **WP-C (Digest composer)** — combines Today's Radar's Top-N + WP-A's filter + WP-B's sector-gap names, implementing the §4 fallback ladder explicitly | New composer function | Wave 1 (A, B) |
 | 3 | E | **WP-E (Delivery wiring)** — `send_alert()` integration with a `dedup_key`, new opt-in settings flag | `observability/alerts.py`, `settings.py` | Wave 2 |
 | 3 | F | **WP-F (Webapp digest panel)** — Marketplace-hub fallback view | `webapp/src/screens/...` | Wave 2 |
-| 4 | G | **WP-G (Docs sync)** | `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, `.env.example` | Wave 3 |
+| 4 | G | **WP-G (Docs sync)** | `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, `.env.example`, `docs/architecture/data-layer.md` (the new `data/symbol_view_store.py`), `docs/architecture/webapp-and-gui.md` (the new digest panel) | Wave 3 |
 
 ## 6. Fabrication-risk checklist (CONSTRAINT #4)
 

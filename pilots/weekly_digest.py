@@ -47,14 +47,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_ITEMS = 5
 
-# Mirrors DigestItem's own docstring -- kept as a single, mechanical lookup
-# so selection_type and confidence_tier can never independently drift.
-_CONFIDENCE_TIER_BY_SELECTION_TYPE = {
-    "Personalized": "high",
-    "Sector Gap": "medium",
-    "Today's Radar": "low",
-}
-
 _PERSONALIZATION_INACTIVE_REASON = (
     "Personalization isn't active yet — view a few symbols to get "
     "personalized picks. Showing today's top Radar picks instead."
@@ -76,8 +68,13 @@ def compose_digest(snapshot_path: Optional[str] = None) -> DigestPayload:
     # radar_feed itself honestly handles snapshot=None/malformed/empty --
     # calling it unconditionally (rather than short-circuiting here) means
     # this module never has to re-type its own copy of that honesty
-    # message; it just reuses whatever radar_feed says.
-    feed = radar_feed(snapshot, limit=50)
+    # message; it just reuses whatever radar_feed says. limit=_MAX_ITEMS,
+    # not some larger number: radar_feed sorts candidates by composite
+    # score BEFORE truncating to the limit, and the loop below never looks
+    # past the first _MAX_ITEMS anyway (it breaks the instant it accepts
+    # that many) -- so a larger limit would only make radar_feed build and
+    # immediately discard extra, unused per-item reason strings.
+    feed = radar_feed(snapshot, limit=_MAX_ITEMS)
     items = feed.get("items", [])
     if not items:
         return DigestPayload(
@@ -102,7 +99,10 @@ def compose_digest(snapshot_path: Optional[str] = None) -> DigestPayload:
     # empty set contains nothing.
     personalization_active = bool(recently_viewed)
 
-    underrepresented_sectors = set(find_underrepresented_sectors())
+    # snapshot is passed through so find_underrepresented_sectors can read
+    # sector data straight off it (zero network/DB cost) instead of
+    # re-fetching -- see that module's own docstring.
+    underrepresented_sectors = set(find_underrepresented_sectors(snapshot))
 
     digest_items = []
     for item in items:
@@ -113,7 +113,14 @@ def compose_digest(snapshot_path: Optional[str] = None) -> DigestPayload:
         if not symbol:
             continue
 
-        sector = item.get("sector", "")
+        # `or ""`, not `.get("sector", "")` -- radar_feed always sets the
+        # "sector" KEY but its VALUE can be None (not omitted) when a
+        # symbol has no resolved sector, so the dict.get default never
+        # actually fires for that case (a recurring bug-class this exact
+        # repo has hit before). Currently harmless either way since this
+        # is only ever used in a truthy check below, but `or ""` is
+        # correct regardless of how it's used later.
+        sector = item.get("sector") or ""
         reason = item.get("reason", "")
 
         if personalization_active and symbol not in recently_viewed:
@@ -123,11 +130,14 @@ def compose_digest(snapshot_path: Optional[str] = None) -> DigestPayload:
         else:
             selection_type = "Today's Radar"
 
+        # confidence_tier is no longer passed here -- DigestItem.__post_init__
+        # (pilots/digest_models.py) now derives and enforces it structurally
+        # from selection_type, so there is exactly one place this mapping
+        # can ever be defined or drift.
         digest_items.append(DigestItem(
             symbol=symbol,
             reason=reason,
             selection_type=selection_type,
-            confidence_tier=_CONFIDENCE_TIER_BY_SELECTION_TYPE[selection_type],
         ))
 
     return DigestPayload(

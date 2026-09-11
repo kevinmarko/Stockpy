@@ -51,6 +51,7 @@ import main_orchestrator
 import runtime_flags
 from settings import settings, validate_interval_seconds
 from data_engine import DataEngine, MockDataEngine
+from reporting.atomic_write import atomic_write_json
 from reporting.progress import read_progress
 from engine.advisory_agent import is_automatic_run_gated
 
@@ -93,6 +94,26 @@ def _weekly_digest_state_path() -> Path:
     fresh ``OrchestratorDaemon()`` construction.
     """
     return Path(settings.OUTPUT_DIR) / _WEEKLY_DIGEST_STATE_FILENAME
+
+
+def _weekly_digest_snapshot_path() -> str:
+    """Resolve ``state_snapshot.json`` the SAME way
+    ``api/pilots_api.py::_snapshot_path()`` does: ``settings.OUTPUT_DIR``
+    (``LOCAL_DATA_ROOT``-relative, e.g. ``~/.stockpy_local/output`` by
+    default -- deliberately OUTSIDE every git worktree/checkout).
+
+    CONFIRMED BUG this closes: ``maybe_dispatch_weekly_digest`` previously
+    called ``compose_digest()`` with NO argument, which falls back to
+    ``pilots.scoring.load_snapshot``'s own hardcoded, CWD-relative default
+    (``"output/state_snapshot.json"``) -- a path the daemon's working
+    directory (the repo root) essentially never matches in a real
+    deployment. The automatic, daemon-driven digest dispatch was therefore
+    silently and permanently degrading to "no state snapshot yet" (honest
+    per CONSTRAINT #6, but functionally dead) while the on-demand
+    ``GET /pilots/weekly-digest`` endpoint -- which already correctly used
+    ``_snapshot_path()`` -- worked fine, so nothing surfaced the gap.
+    """
+    return str(settings.OUTPUT_DIR / "state_snapshot.json")
 
 
 def _read_weekly_digest_last_dispatch() -> Optional[datetime]:
@@ -157,11 +178,23 @@ def _write_weekly_digest_state(
     Never raises (CONSTRAINT #6) -- a write failure is logged and otherwise
     ignored. This file is a durability aid layered on top of the in-process
     cache, not the sole mechanism by which throttling functions within one
-    process's own lifetime.
+    process's own lifetime; see ``maybe_dispatch_weekly_digest``'s own
+    docstring for how a failed write here is recovered from on a
+    subsequent check within the SAME process (a persistent failure across
+    a restart is not recoverable, since the in-process record is lost too
+    -- disclosed there, not silently papered over).
+
+    Uses ``reporting.atomic_write.atomic_write_json`` (temp-file name
+    scoped by pid+thread-id) rather than a hand-rolled
+    ``path.with_suffix(".tmp")`` write -- ``settings.OUTPUT_DIR`` is
+    shared across every git worktree/checkout on this machine, so two
+    ``OrchestratorDaemon`` processes can legitimately race on this exact
+    path; a plain ``.tmp`` suffix would let them collide on the same temp
+    file, which is the exact collision ``atomic_write_json`` exists to
+    avoid (see its own docstring).
     """
     path = _weekly_digest_state_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "last_dispatched_at": (
                 last_dispatched_at.astimezone(timezone.utc).isoformat()
@@ -171,9 +204,7 @@ def _write_weekly_digest_state(
             "last_error": last_error,
             "last_checked_at": datetime.now(timezone.utc).isoformat(),
         }
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.rename(path)
+        atomic_write_json(path, payload)
     except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, a state-file write must never raise
         logger.warning(
             "weekly_digest: failed to persist durable state file '%s': %s", path, exc,
@@ -324,22 +355,41 @@ class OrchestratorDaemon:
         # realistic default deployment (ORCHESTRATOR_INTERVAL_SECONDS=0, "on-
         # demand only"), no timer thread was ever created at all, so
         # _timer_loop never ran even once, and every self-gated periodic
-        # check at its top (maybe_dispatch_weekly_digest included) never got
-        # a chance to run automatically. WEEKLY_DIGEST_ENABLED is checked
-        # here specifically (rather than always starting a thread, which
-        # would change behavior -- and several pinned tests' assumptions --
-        # for every on-demand-only deployment regardless of whether the
-        # digest is even in use) so a daemon with the digest enabled gets a
-        # running timer loop even at interval=0; combined with
-        # _PARKED_TIMER_POLL_SECONDS bounding the loop's park below, this is
-        # what lets maybe_dispatch_weekly_digest actually fire on a
-        # recurring cadence rather than once (or never -- see above) per
-        # process lifetime. This is a startup-time snapshot of the flag --
-        # flipping WEEKLY_DIGEST_ENABLED live via runtime_flags after a
-        # thread-less daemon has already started takes effect only on the
-        # next daemon restart, the same "applies: next_daemon_restart"
-        # contract most settings in this codebase already carry.
-        needs_timer_thread = self._interval_seconds > 0 or settings.WEEKLY_DIGEST_ENABLED
+        # check at its top (maybe_update_circuit_breaker,
+        # maybe_refresh_google_trends, maybe_dispatch_weekly_digest) never
+        # got a chance to run automatically -- NOT just the digest. This
+        # was first fixed narrowly (checking WEEKLY_DIGEST_ENABLED alone),
+        # which incidentally gave maybe_update_circuit_breaker/
+        # maybe_refresh_google_trends an UNDISCLOSED, untested new hourly
+        # cadence whenever the digest happened to also be enabled --
+        # maybe_update_circuit_breaker in particular does real external
+        # market-data-provider calls per invocation with no throttle of
+        # its own (see its own docstring's cost warning), so this was a
+        # real behavior change riding on an unrelated flag. Generalized
+        # here: each self-gated periodic check that genuinely needs the
+        # timer loop now names ITS OWN flag explicitly and symmetrically,
+        # rather than accidentally depending on whichever ONE of them
+        # happens to be on. This also fixes those two checks' identical
+        # pre-existing "never fires automatically under on-demand mode"
+        # gap as a natural consequence -- both already document being
+        # "Called from _timer_loop on every wake" as their intended
+        # cadence, so giving them that wake under on-demand mode too is a
+        # correction, not a new behavior invented here.
+        #
+        # Combined with _PARKED_TIMER_POLL_SECONDS bounding the loop's park
+        # below, this is what lets these checks actually fire on a
+        # recurring cadence rather than once (or never) per process
+        # lifetime. This is a startup-time snapshot of each flag -- flipping
+        # one live via runtime_flags after a thread-less daemon has already
+        # started takes effect only on the next daemon restart, the same
+        # "applies: next_daemon_restart" contract most settings in this
+        # codebase already carry.
+        needs_timer_thread = (
+            self._interval_seconds > 0
+            or settings.WEEKLY_DIGEST_ENABLED
+            or settings.CIRCUIT_BREAKER_ENABLED
+            or settings.GOOGLE_TRENDS_ENABLED
+        )
         if needs_timer_thread:
             self._stop_event.clear()
             self._wake_event.clear()
@@ -1157,13 +1207,47 @@ class OrchestratorDaemon:
         writeup, and ``tests/test_daemon_runtime.py::TestWeeklyDigest``'s
         durability-across-restart test for the regression proof.
 
-        ``self._last_weekly_digest_dispatch`` is kept as a fast-path
-        in-process cache (avoids a disk read on every timer wake once this
-        process has itself already checked at least once this run) -- it is
-        seeded from the durable file on the FIRST check made by a given
-        instance. The pre-existing ``dedup_key`` passed to ``send_alert()``
-        is also kept, as defense in depth for a rapid duplicate call within
-        one process's own short window -- it is no longer relied on alone.
+        The durable file is now consulted on EVERY check, not just the
+        first one made by a given process (2026-09 follow-up fix) --
+        ``last_dispatch`` is the MAX of the durable file's value and this
+        process's own in-process record, for two independent reasons:
+        (1) if a prior durable-write attempt failed, this process must
+        still never forget a dispatch it ITSELF already made (see the
+        catch-up-retry paragraph below); (2) re-reading the file on every
+        check -- not caching it after the first read for the rest of the
+        process's life -- lets this process notice a DIFFERENT daemon
+        process's dispatch within one polling interval, narrowing (though
+        not eliminating; there is no cross-process file lock here) the
+        window for two co-existing daemon processes (a documented,
+        real-if-uncommon operational hazard -- see the
+        ``ORCHESTRATOR_DAEMON_ENABLED`` bullet in CLAUDE.md) to both
+        independently decide to dispatch. The pre-existing ``dedup_key``
+        passed to ``send_alert()`` is kept too, as defense in depth for a
+        rapid duplicate call within one process's own short window -- but
+        note it is PURELY in-process (``observability/alerts.py``'s own
+        docstring: "never persisted to disk"), so it offers no cross-process
+        protection at all, which is exactly why the durable file is the
+        real mechanism here.
+
+        Catch-up retry for a previously-failed durable write: if this
+        process's own in-process record is MORE RECENT than what the
+        durable file currently shows, a prior ``_write_weekly_digest_state``
+        call must have failed -- this method retries that write on every
+        subsequent check until it succeeds, rather than leaving the file
+        stuck at a stale value forever. This is what actually closes the
+        restart gap: without it, a persistently-failing write would leave
+        the durable file wrong indefinitely, and a RESTART (which loses
+        the in-process record entirely) would then re-send.
+
+        A "no_items" outcome (``compose_digest()`` returned an honestly
+        empty payload -- the realistic default state right after a fresh
+        install/restart, per the introducing plan's own framing) does
+        ``[nothing to advance the throttle]``: unlike a real "sent"
+        dispatch, it never updates ``last_dispatched_at`` (in-process or
+        durable) -- only a diagnostic ``last_status``/``last_checked_at``
+        is recorded. Advancing the throttle on a no-op check used to defer
+        the NEXT check by the full interval (up to 7 days at the default),
+        even though real data could show up within hours.
 
         Never raises (CONSTRAINT #6).
         """
@@ -1174,24 +1258,33 @@ class OrchestratorDaemon:
             interval = timedelta(hours=settings.WEEKLY_DIGEST_INTERVAL_HOURS)
             now = datetime.now(timezone.utc)
 
-            last_dispatch = getattr(self, "_last_weekly_digest_dispatch", None)
-            if last_dispatch is None:
-                # First check made by this instance -- possibly a just-
-                # restarted daemon. Consult durable state before assuming
-                # "never dispatched".
-                last_dispatch = _read_weekly_digest_last_dispatch()
+            durable_last_dispatch = _read_weekly_digest_last_dispatch()
+            in_process_last_dispatch = getattr(self, "_last_weekly_digest_dispatch", None)
+            candidates = [d for d in (durable_last_dispatch, in_process_last_dispatch) if d is not None]
+            last_dispatch = max(candidates) if candidates else None
+
+            # Catch-up retry: this process knows about a dispatch the
+            # durable file doesn't yet reflect -- a prior write attempt
+            # failed. Retry it now; see this method's own docstring.
+            if in_process_last_dispatch is not None and (
+                durable_last_dispatch is None or in_process_last_dispatch > durable_last_dispatch
+            ):
+                _write_weekly_digest_state(last_dispatched_at=in_process_last_dispatch, last_status="sent")
 
             if last_dispatch is not None and (now - last_dispatch) < interval:
-                # Seed the fast-path cache even on a throttled call so a
-                # subsequent wake this process makes before the interval
-                # elapses doesn't re-read the state file every time.
                 self._last_weekly_digest_dispatch = last_dispatch
                 return
 
             from pilots.weekly_digest import compose_digest
             from observability.alerts import send_alert
 
-            payload = compose_digest()
+            # _weekly_digest_snapshot_path(), NOT compose_digest() called
+            # bare -- see that helper's own docstring for the confirmed
+            # bug this closes (the bare-call default resolved a
+            # CWD-relative path the daemon's working directory almost
+            # never matches, so this automatic dispatch path silently
+            # never found real data in a real deployment).
+            payload = compose_digest(_weekly_digest_snapshot_path())
             if payload and payload.items:
                 lines = [f"Weekly Digest ({len(payload.items)} items):"]
                 for item in payload.items:
@@ -1211,17 +1304,19 @@ class OrchestratorDaemon:
                 # Full webapp-surfacing of PER-CHANNEL delivery failure is a
                 # disclosed, NOT-done follow-up -- see this PR's summary.
                 send_alert("INFO", message, dedup_key=dedup_key)
-                status = "sent"
                 logger.info(
                     "maybe_dispatch_weekly_digest: Dispatched weekly digest with %d items.",
                     len(payload.items),
                 )
+                self._last_weekly_digest_dispatch = now
+                _write_weekly_digest_state(last_dispatched_at=now, last_status="sent")
             else:
-                status = "no_items"
                 logger.info("maybe_dispatch_weekly_digest: No items for weekly digest.")
-
-            self._last_weekly_digest_dispatch = now
-            _write_weekly_digest_state(last_dispatched_at=now, last_status=status)
+                # Do NOT advance the throttle clock (in-process OR
+                # durable) -- see this method's own docstring on why a
+                # no-op check must retry on the next wake, not defer up to
+                # a full WEEKLY_DIGEST_INTERVAL_HOURS.
+                _write_weekly_digest_state(last_dispatched_at=last_dispatch, last_status="no_items")
         except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, this check must never break the caller
             logger.warning("maybe_dispatch_weekly_digest: unexpected failure: %s", exc)
             # Distinct, durable record of the failure -- never silently

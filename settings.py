@@ -5711,12 +5711,17 @@ class Settings(BaseSettings):
     )
     WEEKLY_DIGEST_INTERVAL_HOURS: float = Field(
         default=168.0,
+        gt=0,
         description=(
             "Hours between weekly digest generation (default 168.0 = 7 days). "
             "Throttling is durable across a daemon restart (see "
             "desktop/daemon_runtime.py's weekly-digest state file, "
             "output/weekly_digest_state.json) -- not just the in-process last-"
-            "dispatch timestamp."
+            "dispatch timestamp. Must be > 0: desktop/daemon_runtime.py builds "
+            "the throttle window as timedelta(hours=this value), and a zero or "
+            "negative value would make (now - last_dispatched_at) < interval "
+            "false on essentially every check, defeating the once-per-interval "
+            "throttle and re-dispatching the digest on every timer wake."
         )
     )
 

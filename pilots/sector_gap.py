@@ -21,37 +21,55 @@ only in a PR description, so the reasoning travels with the code):
   fundamentals row at all (never fetched before) or a cached row whose
   ``raw_json`` is missing/malformed, both of which fall through to a live
   ``provider.get_fundamentals(symbol)`` call regardless of
-  ``max_age_days``. This module's per-symbol loop is therefore capable of
-  triggering real network calls on a cold cache -- the same "unbounded
-  per-ticker live-fetch loop" bug class already fixed once in this exact
-  codebase for ``processing_engine.py``'s fundamentals-refresh loop (see
-  ``settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE`` / CLAUDE.md's
-  "Pipeline hang fix #2"). This function is NOT on any pipeline-cycle hot
-  path (it is read on-demand by the weekly digest composer, dispatched at
-  most a few times a day by the daemon's weekly-digest check), but a
-  hundreds-of-symbols tracked universe with a fully-cold cache could still
-  make this call meaningfully slow the first time it runs. Mitigated below
-  with a bounded wall-clock budget (``_MAX_SECONDS_FOR_SECTOR_LOOKUP``)
-  mirroring that same established convention, rather than a new
-  ``settings.py`` field -- this module is diagnostic/best-effort and the
-  bound only needs to be "generous but finite," not operator-tunable.
+  ``max_age_days``. Mitigated two ways: (1) ``find_underrepresented_sectors``
+  now accepts an optional already-loaded ``snapshot`` (the exact
+  ``state_snapshot.json`` payload ``pilots.weekly_digest.compose_digest``
+  has already loaded one function-call earlier in the same request) and
+  resolves ``symbol -> sector`` from its ``signals[]`` list FIRST --
+  ``reporting/state_snapshot.py`` writes a ``"sector"`` key into every
+  per-ticker entry there, at zero network/DB cost, for essentially the
+  whole per-cycle universe (see ``_sector_map_from_snapshot``); the
+  ``HistoricalStore`` path below now only runs for symbols the snapshot
+  didn't cover. (2) That residual per-symbol loop is still bounded by a
+  wall-clock budget (``_MAX_SECONDS_FOR_SECTOR_LOOKUP``) mirroring the
+  same "unbounded per-ticker live-fetch loop" fix already applied once in
+  this exact codebase for ``processing_engine.py``'s fundamentals-refresh
+  loop (``settings.PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE`` /
+  CLAUDE.md's "Pipeline hang fix #2") -- generous but finite, not
+  operator-tunable, since this stays diagnostic/best-effort.
 * **No existing bulk multi-symbol sector-classification helper was found
-  to switch to.** ``pilots/sector_selection.py``'s
-  ``HistoricalStore.get_sector_snapshots()`` (gated by
-  ``settings.FMP_SECTOR_SNAPSHOT_ENABLED``) is a DIFFERENT concept -- a
-  sector-LEVEL P/E + 1-day-change valuation snapshot keyed by sector NAME,
-  not a per-SYMBOL GICS-sector-classification lookup -- so it cannot
-  substitute for "what sector is ticker X in." ``HistoricalStore`` has no
-  batched equivalent of ``get_bars_bulk`` for fundamentals. The per-symbol
-  ``get_fundamentals_raw`` loop (deduplicated across the holdings/universe
-  union below, so a symbol held in BOTH sets is only looked up once) is
-  therefore the best available durable-store-only read for this purpose
-  today.
+  to switch to** for the residual (snapshot-uncovered) symbols.
+  ``pilots/sector_selection.py``'s ``HistoricalStore.get_sector_snapshots()``
+  (gated by ``settings.FMP_SECTOR_SNAPSHOT_ENABLED``) is a DIFFERENT
+  concept -- a sector-LEVEL P/E + 1-day-change valuation snapshot keyed by
+  sector NAME, not a per-SYMBOL GICS-sector-classification lookup -- so it
+  cannot substitute for "what sector is ticker X in." ``HistoricalStore``
+  has no batched equivalent of ``get_bars_bulk`` for fundamentals. The
+  per-symbol ``get_fundamentals_raw`` loop (deduplicated across the
+  holdings/universe union, so a symbol held in BOTH sets is only looked up
+  once) is therefore the best available durable-store-only fallback for
+  this purpose.
+* **``resolve_universe()`` is called with ``allow_live_broker_fetch=False``**
+  -- unlike this repo's other headless/background callers, an earlier
+  version of this module omitted that argument and inherited the
+  default ``True``, meaning a stale cached Robinhood snapshot plus
+  ``settings.ROBINHOOD_AUTO_REFRESH_ENABLED=True`` could trigger a real
+  Tier-3 device-approval login from what looks like a passive digest
+  read -- reachable both from the daemon's periodic weekly-digest check
+  AND from an on-demand ``GET /pilots/weekly-digest`` webapp page load,
+  turning a rare edge case into a standing, unattended, potentially
+  hourly-recurring exposure. This repo's own CLAUDE.md documents fixing
+  the identical hazard once already for ``UniverseTransparency.tsx``'s
+  ``GET /data/sync-report`` call; every other headless caller in this
+  codebase (``scripts/backfill_news_history.py``,
+  ``scripts/backfill_sentiment_history.py``,
+  ``scripts/repair_price_bars_adjustment.py``, ...) already passes
+  ``allow_live_broker_fetch=False``, and this module now matches them.
 """
 import logging
 import time
 from collections import Counter
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from data.paper_account_store import PaperAccountStore
 from data.historical_store import HistoricalStore
@@ -65,6 +83,31 @@ logger = logging.getLogger(__name__)
 # can't be resolved before the budget trips is simply excluded from this
 # cycle's gap computation -- never fabricated, never a hang (CONSTRAINT #6).
 _MAX_SECONDS_FOR_SECTOR_LOOKUP = 30.0
+
+
+def _sector_map_from_snapshot(snapshot: Optional[Any]) -> Dict[str, str]:
+    """Extract ``symbol -> sector`` directly from an already-loaded
+    ``state_snapshot.json`` payload -- zero network/DB cost. Mirrors
+    ``pilots.radar_ranking.radar_feed``'s own extraction of the identical
+    ``signals[]`` field. Returns ``{}`` on any malformed/missing input;
+    never raises (CONSTRAINT #6) -- a symbol absent here simply falls
+    through to the bounded ``HistoricalStore`` lookup in
+    ``find_underrepresented_sectors`` instead.
+    """
+    if not isinstance(snapshot, dict):
+        return {}
+    signals = snapshot.get("signals")
+    if not isinstance(signals, list):
+        return {}
+    out: Dict[str, str] = {}
+    for sig in signals:
+        if not isinstance(sig, dict):
+            continue
+        symbol = sig.get("symbol")
+        sector = sig.get("sector")
+        if symbol and sector:
+            out[str(symbol).strip().upper()] = sector
+    return out
 
 
 def _resolve_sector_map(symbols: List[str], store: HistoricalStore) -> Dict[str, str]:
@@ -102,32 +145,51 @@ def _resolve_sector_map(symbols: List[str], store: HistoricalStore) -> Dict[str,
     return sector_by_symbol
 
 
-def find_underrepresented_sectors() -> List[str]:
+def find_underrepresented_sectors(snapshot: Optional[Any] = None) -> List[str]:
     """
     Computes a diagnostic list of sectors that are missing or
     underrepresented in the current paper holdings compared to the
     tracked universe. Never raises (CONSTRAINT #6) -- degrades to ``[]``
     on any failure.
+
+    ``snapshot``: the already-loaded ``state_snapshot.json`` payload, when
+    the caller has one in hand (``pilots.weekly_digest.compose_digest``
+    always does) -- sector data is read from it FIRST, at zero network/DB
+    cost, before falling back to the bounded ``HistoricalStore`` lookup
+    for any symbol it doesn't cover. ``None`` (the default, e.g. for a
+    standalone caller with no snapshot) preserves the original
+    always-fetch behavior.
     """
     try:
-        # 1. Read current paper holdings
+        # 1. Read current paper holdings. Uppercased for consistency with
+        #    every symbol key this function compares against below
+        #    (_sector_map_from_snapshot's keys are uppercased; the codebase
+        #    convention throughout is uppercase tickers) -- avoids a
+        #    case-mismatch silently excluding a symbol from either lookup.
         paper_store = PaperAccountStore(readonly=True)
         open_positions = paper_store.get_open_positions()
-        holdings = [p.symbol for p in open_positions]
+        holdings = [p.symbol.strip().upper() for p in open_positions if p.symbol]
 
-        # 2. Get tracked universe
-        universe = resolve_universe()
+        # 2. Get tracked universe. allow_live_broker_fetch=False -- this
+        #    is a headless/background-reachable diagnostic (the daemon's
+        #    periodic digest check AND an on-demand webapp page load), and
+        #    must never attempt an interactive Robinhood login (see this
+        #    module's own docstring).
+        universe = [s.strip().upper() for s in (resolve_universe(allow_live_broker_fetch=False) or []) if s]
         if not universe:
             return []
 
-        # 3. Resolve sectors using HistoricalStore -- deduplicated across
-        #    the holdings/universe union so a symbol present in both is
-        #    only looked up once (see this module's docstring for why a
-        #    per-symbol durable-store read is the best available option
-        #    here, and why it is still bounded by a wall-clock budget).
-        store = HistoricalStore(readonly=True)
+        # 3. Resolve sectors: the already-loaded snapshot first (zero
+        #    cost), then HistoricalStore -- bounded, deduplicated -- only
+        #    for whatever the snapshot didn't cover (see this module's
+        #    docstring for why a per-symbol durable-store read is the
+        #    best available fallback here).
         all_symbols = list(dict.fromkeys([*holdings, *universe]))  # de-duped, order-stable
-        sector_by_symbol = _resolve_sector_map(all_symbols, store)
+        sector_by_symbol = _sector_map_from_snapshot(snapshot)
+        missing = [s for s in all_symbols if s not in sector_by_symbol]
+        if missing:
+            store = HistoricalStore(readonly=True)
+            sector_by_symbol.update(_resolve_sector_map(missing, store))
 
         holding_sectors = [sector_by_symbol[s] for s in holdings if s in sector_by_symbol]
         universe_sectors = [sector_by_symbol[s] for s in universe if s in sector_by_symbol]

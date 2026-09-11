@@ -1199,7 +1199,25 @@ def cancel_forecast_backfill_job(job_id: str) -> Dict[str, Any]:
 def get_weekly_digest() -> Dict[str, Any]:
     """Returns the weekly digest payload combining top radar signals with viewing history
     and sector gaps.
+
+    Gated on ``settings.WEEKLY_DIGEST_ENABLED`` (default ``False``) -- this
+    is an explicit opt-in feature per the introducing plan's own §7 ("a new
+    recurring interruption, not a passive diagnostic, deserves explicit
+    opt-in"). Before this fix, neither this endpoint nor the webapp panel
+    that calls it actually enforced that: on a completely default install,
+    every operator hit the full ``compose_digest()`` computation --
+    including a sector-gap lookup that could reach a live
+    network/broker-login path -- on every Marketplace page load, regardless
+    of the flag. When disabled, this returns an honest empty payload (never
+    a fabricated one) WITHOUT invoking ``compose_digest()`` at all.
     """
+    if not settings.WEEKLY_DIGEST_ENABLED:
+        payload = weekly_digest.DigestPayload(
+            items=[],
+            personalization_active=False,
+            reason="Weekly Digest is not enabled.",
+        )
+        return dataclasses.asdict(payload)
     payload = weekly_digest.compose_digest(_snapshot_path())
     return dataclasses.asdict(payload)
 

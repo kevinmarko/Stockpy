@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import create_db_engine, resolve_database_url, session_scope
@@ -42,13 +43,18 @@ logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
-# A real ticker/symbol is always short (the longest legitimate values in
-# this codebase — options OCC symbols, "BRK.B"-style share classes — are
-# well under this). Guards against ever attempting to persist an
-# unbounded-length string (e.g. an adversarial/malformed path segment
-# reaching record_view() before api/data_api.py::explain_ticker's own
-# length/shape validation runs) into the `symbol` column below. SQLite
-# does not enforce VARCHAR length and would silently accept it, but a
+# A real ticker/symbol passed to this store's only two call sites
+# (api/data_api.py::explain_ticker's `symbol` path param,
+# api/pilots_api.py::get_symbol_detail's `ticker` path param) is always a
+# plain equity/index ticker, never an option contract — neither endpoint
+# is reachable with an OCC-format option symbol (those are handled
+# elsewhere, e.g. the options chain/order-ticket endpoints). 20 is
+# generous for that real domain (even an unusually long share-class
+# ticker like "BRK.B" is far under it). Guards against ever attempting to
+# persist an unbounded-length string (e.g. an adversarial/malformed path
+# segment reaching record_view() before the endpoint's own length/shape
+# validation runs) into the `symbol` column below. SQLite does not
+# enforce VARCHAR length and would silently accept it, but a
 # Postgres-backed deployment (settings.DATABASE_URL) would raise a
 # DataError on insert — caught by both call sites' broad try/except
 # (CONSTRAINT #6) either way, so this is a defensive skip, not a
@@ -92,7 +98,25 @@ class SymbolViewStore:
 
     def record_view(self, symbol: str) -> None:
         """Record or update the most-recent-view timestamp for a symbol
-        (upsert-by-symbol — see module docstring)."""
+        (upsert-by-symbol — see module docstring).
+
+        The upsert itself is a SELECT-then-INSERT/UPDATE, not a single
+        atomic statement (SQLAlchemy's ORM has no dialect-portable
+        ``INSERT ... ON CONFLICT`` short enough to justify a per-dialect
+        branch for one small table). That leaves a real check-then-act
+        race window on ``symbol`` (``unique=True``): two near-simultaneous
+        first-ever views of the same brand-new symbol (a realistic
+        scenario — both call sites are plain ``def`` FastAPI handlers
+        dispatched to a thread pool, so genuine thread-level concurrency
+        is possible) can both see ``row is None`` and both attempt
+        ``session.add(...)``; the loser's ``session.commit()`` (inside
+        ``session_scope``, which propagates rather than swallows) raises
+        ``IntegrityError`` on the UNIQUE constraint. Rather than let that
+        propagate and silently drop the loser's view (the only thing
+        stopping that before this fix was both callers' own broad
+        ``except Exception``), retry once as an UPDATE against the
+        winner's now-committed row.
+        """
         if self._readonly:
             raise RuntimeError("SymbolViewStore is read-only; cannot record view.")
 
@@ -103,26 +127,53 @@ class SymbolViewStore:
             return
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        with session_scope(self.Session) as session:
-            row = session.query(SymbolView).filter(SymbolView.symbol == symbol).first()
-            if row is None:
-                session.add(SymbolView(symbol=symbol, viewed_at=now))
-            else:
-                row.viewed_at = now
+        try:
+            with session_scope(self.Session) as session:
+                row = session.query(SymbolView).filter(SymbolView.symbol == symbol).first()
+                if row is None:
+                    session.add(SymbolView(symbol=symbol, viewed_at=now))
+                else:
+                    row.viewed_at = now
+        except IntegrityError:
+            # Lost the INSERT race — a concurrent record_view() call for
+            # this same symbol committed first. Retry as an UPDATE against
+            # its row instead of losing this view.
+            with session_scope(self.Session) as session:
+                row = session.query(SymbolView).filter(SymbolView.symbol == symbol).first()
+                if row is not None:
+                    row.viewed_at = now
+                else:
+                    # Vanishingly unlikely (the winner's row would have to
+                    # be deleted between our failed insert and this retry)
+                    # -- fall back to inserting again; if this also races,
+                    # the caller's own broad except (CONSTRAINT #6,
+                    # best-effort) degrades exactly as it did before this
+                    # fix, rather than retrying indefinitely.
+                    session.add(SymbolView(symbol=symbol, viewed_at=now))
 
     def get_recently_viewed_symbols(self, days: int = 14) -> List[str]:
-        """Get symbols viewed within the last `days` days, most recent first."""
-        if days <= 0:
-            return []
-            
+        """Get symbols viewed within the last `days` days, most recent first.
+
+        Never raises (CONSTRAINT #6) -- including for a non-comparable
+        ``days`` (e.g. ``None``), which the old code let through a bare
+        ``days <= 0`` check sitting OUTSIDE the try/except below; that
+        comparison itself is now inside it.
+        """
         try:
+            if days <= 0:
+                return []
             session = self.Session()
             try:
                 cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
                 rows = (
                     session.query(SymbolView.symbol)
+                    # Secondary sort key so two views landing in the same
+                    # timestamp tick (a plausible tie on a coarse clock, or
+                    # a tight batch of calls) still resolve to a
+                    # deterministic "most recent first" order rather than
+                    # whatever order SQLite happens to return ties in.
+                    .order_by(SymbolView.viewed_at.desc(), SymbolView.id.desc())
                     .filter(SymbolView.viewed_at >= cutoff)
-                    .order_by(SymbolView.viewed_at.desc())
                     .all()
                 )
                 return [r[0] for r in rows]
