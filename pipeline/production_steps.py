@@ -104,14 +104,27 @@ class AsyncDataFetchStep(PipelineStep):
         # candidate — see docs/known_issues/daemon_universe_watchlist_divergence.md.
         from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
 
+        # Integrate Robinhood Holdings
+        rh_positions = {}
+        snapshot = None
+        try:
+            snapshot = await asyncio.to_thread(main_orchestrator.fetch_account_snapshot)
+            rh_positions = main_orchestrator.account_snapshot_to_robinhood_positions(snapshot)
+        except Exception as rh_exc:
+            telemetry.warning(
+                f"Robinhood account snapshot unavailable: {rh_exc}; "
+                "proceeding without holdings-aware overlay."
+            )
+        
         watchlist_symbols = load_env_watchlist(ctx.watchlist_file)
         from data.portfolio_sync import get_recently_closed_universe_symbols, get_sheet2_fallback_tickers
         base_symbols = compute_tracked_universe(
+            held=rh_positions.keys(),
             watchlist=watchlist_symbols,
             discovered=discovered_symbols,
             default_tickers=settings.DEFAULT_TICKERS,
             recently_closed=get_recently_closed_universe_symbols(set(snapshot.positions.keys()) if snapshot else set()),
-            sheet_fallback=get_sheet2_fallback_tickers(),
+            sheet_fallback_factory=get_sheet2_fallback_tickers,
         )
 
         # Permanent universe-funnel diagnostic (see
@@ -145,20 +158,10 @@ class AsyncDataFetchStep(PipelineStep):
         else:
             ctx.symbols = base_symbols
 
-        # Integrate Robinhood Holdings
-        rh_positions = {}
-        try:
-            snapshot = await asyncio.to_thread(main_orchestrator.fetch_account_snapshot)
-            rh_positions = main_orchestrator.account_snapshot_to_robinhood_positions(snapshot)
-            if rh_positions:
-                for tk in rh_positions.keys():
-                    if tk not in ctx.symbols:
-                        ctx.symbols.append(tk)
-        except Exception as rh_exc:
-            telemetry.warning(
-                f"Robinhood account snapshot unavailable: {rh_exc}; "
-                "proceeding without holdings-aware overlay."
-            )
+        if rh_positions:
+            for tk in rh_positions.keys():
+                if tk not in ctx.symbols:
+                    ctx.symbols.append(tk)
         ctx.context_extras["robinhood_positions"] = rh_positions
         universe_funnel["held_positions_added"] = len(rh_positions)
         universe_funnel["tracked_universe_total"] = len(ctx.symbols)
