@@ -224,9 +224,15 @@ describe("This Week's Digest panel (real mock API)", () => {
   it("each card also renders its confidence_tier, not just the selection_type chip", async () => {
     renderMarketplace();
     await screen.findByText("This Week's Digest");
-    // The happy-path mock fixture tags NVDA/AAPL "high" and PG "medium".
-    expect(screen.getAllByText("high confidence").length).toBeGreaterThan(0);
+    // The happy-path mock fixture mirrors the real backend's structurally-
+    // enforced mapping (pilots/digest_models.py::DigestItem.__post_init__):
+    // "Personalized" (AAPL) -> "high", "Sector Gap" (PG) -> "medium",
+    // "Today's Radar" (NVDA) -> "low" -- a prior fixture bug paired NVDA's
+    // "Today's Radar" with "high", the exact fabrication this field exists
+    // to prevent; asserting "low confidence" here locks the fix in.
+    expect(screen.getByText("high confidence")).toBeInTheDocument();
     expect(screen.getByText("medium confidence")).toBeInTheDocument();
+    expect(screen.getByText("low confidence")).toBeInTheDocument();
   });
 
   it("honest empty state renders the section header + the backend's own reason, never vanishing", async () => {

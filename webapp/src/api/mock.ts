@@ -9341,8 +9341,14 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
  */
 export const mockDegradedDigestFixture: DigestPayload = {
   items: [
-    { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar", confidence_tier: "high" },
-    { symbol: "MSFT", reason: "#2 by Multifactor Composite in the tracked universe today (Size Z +1.8, Quality Z +1.3).", selection_type: "Today's Radar", confidence_tier: "medium" },
+    // confidence_tier: "low" for both -- "Today's Radar" is the honest
+    // fallback selection_type (personalization isn't active this cycle),
+    // and the real backend's DigestItem.__post_init__ (pilots/digest_models.py)
+    // can never pair it with anything but "low". This fixture previously
+    // hand-typed "high"/"medium" here, exactly the fabrication this
+    // degraded-state fixture exists to demonstrate NOT rendering.
+    { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar", confidence_tier: "low" },
+    { symbol: "MSFT", reason: "#2 by Multifactor Composite in the tracked universe today (Size Z +1.8, Quality Z +1.3).", selection_type: "Today's Radar", confidence_tier: "low" },
   ],
   generated_at: new Date().toISOString(),
   personalization_active: false,
@@ -9355,7 +9361,12 @@ export const mockApi = {
       await delay(300);
       return {
         items: [
-          { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar", confidence_tier: "high" },
+          // confidence_tier here mirrors pilots/digest_models.py's real,
+          // structurally-enforced mapping: "Today's Radar" -> "low",
+          // "Sector Gap" -> "medium", "Personalized" -> "high" -- this
+          // fixture previously (wrongly) paired "Today's Radar" with
+          // "high".
+          { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar", confidence_tier: "low" },
           { symbol: "PG", reason: "Added to balance Consumer Staples exposure.", selection_type: "Sector Gap", confidence_tier: "medium" },
           { symbol: "AAPL", reason: "Based on your recent viewing history.", selection_type: "Personalized", confidence_tier: "high" }
         ],
