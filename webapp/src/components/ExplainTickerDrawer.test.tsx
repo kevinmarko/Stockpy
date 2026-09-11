@@ -87,6 +87,10 @@ describe("ExplainTickerDrawer", () => {
     // Section 2: Untracked notice
     const untrackedNotice = await screen.findByTestId("untracked-notice");
     expect(untrackedNotice).toHaveTextContent(/Not currently tracked in portfolio or watchlists/i);
+    // Legibility tie-in: browsing an untracked symbol here never implies
+    // Autopilot will act on it autonomously.
+    expect(untrackedNotice).toHaveTextContent(/Autopilot's automated signals only act/i);
+    expect(untrackedNotice).toHaveTextContent(/tracked universe/i);
     expect(screen.getByText("Add to Universe / Backfill")).toBeInTheDocument();
 
     // Section 3: No signals computed notice

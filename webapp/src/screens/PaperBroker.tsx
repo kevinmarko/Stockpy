@@ -744,6 +744,11 @@ export function PaperBroker() {
             <div style={{ color: theme.textSecondary, fontSize: 13 }}>
               Paper-trade any FMP-quotable ticker, even one outside your tracked watchlist.
             </div>
+            <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 4 }}>
+              This is a manual, paper-only trade — Autopilot's automated signals only act on
+              symbols in your tracked universe (watchlist, holdings, or discovered scan
+              candidates), so a Quick Trade here doesn't change what it does on its own.
+            </div>
           </div>
           <SymbolInput
             key={searchParams.get("quickTradeSymbol") ?? "quick-trade"}

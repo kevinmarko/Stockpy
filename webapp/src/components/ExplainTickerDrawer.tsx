@@ -606,7 +606,12 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
                         marginBottom: "var(--s-2)",
                       }}
                     >
-                      Not currently tracked in portfolio or watchlists.
+                      <div>Not currently tracked in portfolio or watchlists.</div>
+                      <div style={{ marginTop: "var(--s-1)" }}>
+                        Viewing it here is just browsing — Autopilot's automated signals only act
+                        on symbols in your tracked universe (watchlist, holdings, or discovered
+                        scan candidates), so this has no effect on what it does on its own.
+                      </div>
                     </div>
                     <button
                       type="button"
