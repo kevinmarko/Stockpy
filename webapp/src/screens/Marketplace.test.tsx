@@ -152,19 +152,19 @@ describe("Today's Radar panel (real mock API)", () => {
 
   it("renders ranked cards from the real mock feed, each with its server-provided reason string verbatim", async () => {
     renderMarketplace();
-    expect(await screen.findByText("Today's Radar")).toBeInTheDocument();
+    expect((await screen.findAllByText("Today's Radar")).length).toBeGreaterThan(0);
     // NVDA also appears as a top-holding chip on an unrelated PilotCard, so
     // scope the assertion to the Radar card's own reason sentence.
     expect(
-      screen.getByText(
+      screen.getAllByText(
         "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9)."
-      )
+      )[0]
     ).toBeInTheDocument();
   });
 
   it("a symbol with a missing sub-factor never renders a fabricated value for it", async () => {
     renderMarketplace();
-    await screen.findByText("Today's Radar");
+    await screen.findAllByText("Today's Radar");
     // JNJ's mock fixture entry carries lowvol_z: null -- the reason string
     // must not mention "Low-Vol Z" at all for this row.
     const jnjReason = screen.getByText(
@@ -181,7 +181,7 @@ describe("Today's Radar panel (real mock API)", () => {
       reason: "No state snapshot yet — run the pipeline first.",
     });
     renderMarketplace();
-    await screen.findByText("Today's Radar");
+    await screen.findAllByText("Today's Radar");
     expect(
       await screen.findByText("No state snapshot yet — run the pipeline first.")
     ).toBeInTheDocument();
@@ -194,16 +194,29 @@ describe("Today's Radar panel (real mock API)", () => {
     renderMarketplace();
     // The rest of the screen still renders normally.
     expect(await screen.findByText("Top Performers")).toBeInTheDocument();
-    expect(screen.queryByText("Today's Radar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Today's Radar" })).not.toBeInTheDocument();
     expect(screen.queryByText(/radar backend unreachable/)).not.toBeInTheDocument();
   });
 
   it("clicking a card navigates to the Signal Breakdown screen with the symbol as a query param", async () => {
     renderMarketplace();
-    const reason = await screen.findByText(
+    const reasons = await screen.findAllByText(
       "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9)."
     );
-    const anchor = reason.closest("a");
+    const anchor = reasons[0].closest("a");
     expect(anchor).toHaveAttribute("href", "/signals?symbol=NVDA");
+  });
+});
+
+describe("This Week's Digest panel (real mock API)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders ranked cards from the real mock feed", async () => {
+    renderMarketplace();
+    expect(await screen.findByText("This Week's Digest")).toBeInTheDocument();
+    
+    expect(screen.getAllByText("Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).").length).toBeGreaterThan(0);
+    expect(screen.getByText("Personalized")).toBeInTheDocument();
+    expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
   });
 });

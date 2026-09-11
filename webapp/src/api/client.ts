@@ -220,6 +220,7 @@ import type { StrategyReportCardSnapshot,
   SecRule606ReportResponse,
   CircuitBreakerStatusResponse,
   TrendsStitchDemoResponse,
+  DigestPayload,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -440,6 +441,7 @@ const liveApi = {
   getSignalsRadar: (limit = 10) =>
     http<RadarFeedResponse>(`/signals/radar?limit=${limit}`),
   health: () => http<{ status: string }>("/health"),
+  getWeeklyDigest: () => http<DigestPayload>("/pilots/weekly-digest"),
   listPilots: () => http<PilotSummary[]>("/pilots"),
   getPilot: (id: string) =>
     http<PilotDetail>(`/pilots/${encodeURIComponent(id)}`),

@@ -98,6 +98,7 @@ figure.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -185,6 +186,7 @@ from pilots import (
     symbols,
     trade_history,
     validation_trend as validation_trend_reader,
+    weekly_digest,
 )
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
@@ -1187,6 +1189,15 @@ def cancel_forecast_backfill_job(job_id: str) -> Dict[str, Any]:
     payload = forecast_backfill_job.serialize_job(job) if job else {"job_id": job_id}
     payload["cancelled"] = cancelled
     return payload
+
+
+@app.get("/pilots/weekly-digest", dependencies=[Depends(require_read_token)])
+def get_weekly_digest() -> Dict[str, Any]:
+    """Returns the weekly digest payload combining top radar signals with viewing history
+    and sector gaps.
+    """
+    payload = weekly_digest.compose_digest(_snapshot_path())
+    return dataclasses.asdict(payload)
 
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])

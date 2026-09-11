@@ -5698,6 +5698,15 @@ class Settings(BaseSettings):
         description="Qdrant URL for RAG orchestrator.",
     )
 
+    WEEKLY_DIGEST_ENABLED: bool = Field(
+        default=False,
+        description="Enable the weekly digest generation."
+    )
+    WEEKLY_DIGEST_INTERVAL_HOURS: float = Field(
+        default=168.0,
+        description="Hours between weekly digest generation (default 168.0 = 7 days)."
+    )
+
     @model_validator(mode="after")
     def _derive_local_data_root_paths(self) -> "Settings":
         """Fill in OUTPUT_DIR and OUTPUT_DIR-relative cache paths from

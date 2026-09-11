@@ -46,6 +46,17 @@ export interface JobRecord {
   created_at?: string;
 }
 
+export interface DigestItem {
+  symbol: string;
+  reason: string;
+  selection_type: string;
+}
+
+export interface DigestPayload {
+  items: DigestItem[];
+  generated_at: string;
+}
+
 /**
  * POST /jobs params for `job_type: "command"` — executes a command composed
  * by the Commands screen's autocomplete bar via the backend's gated

@@ -299,6 +299,7 @@ import type { StrategyReportCardSnapshot,
   SecRule606VenueRow,
   SecRule606CategoryBreakdown,
   TrendsStitchDemoResponse,
+  DigestPayload,
 } from "./types";
 
 const SECTORS = [
@@ -9332,6 +9333,17 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
 
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
+    getWeeklyDigest: async (): Promise<DigestPayload> => {
+      await delay(300);
+      return {
+        items: [
+          { symbol: "NVDA", reason: "Highest Multifactor Composite in the tracked universe today (Size Z +2.1, Quality Z +1.9).", selection_type: "Today's Radar" },
+          { symbol: "PG", reason: "Added to balance Consumer Staples exposure.", selection_type: "Sector Gap" },
+          { symbol: "AAPL", reason: "Based on your recent viewing history.", selection_type: "Personalized" }
+        ],
+        generated_at: new Date().toISOString()
+      };
+    },
     getSignalsRadar: async (limit = 10): Promise<RadarFeedResponse> => {
       await delay(300);
       // A realistic mixed-honesty payload, matching the real live shape

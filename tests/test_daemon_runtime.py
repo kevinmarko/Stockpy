@@ -1851,3 +1851,66 @@ class TestDaemonOptionsLifecycleIntegration:
         assert any("Daemon options lifecycle execution failed" in rec.message for rec in caplog.records)
 
 
+class TestWeeklyDigest:
+    def test_disabled(self, monkeypatch):
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
+        d = OrchestratorDaemon()
+        
+        with mock.patch("pilots.weekly_digest.compose_digest") as mock_compose:
+            d.maybe_dispatch_weekly_digest()
+            mock_compose.assert_not_called()
+
+    def test_enabled_no_items(self, monkeypatch):
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        d = OrchestratorDaemon()
+        
+        from pilots.digest_models import DigestPayload
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=[])):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert:
+                d.maybe_dispatch_weekly_digest()
+                mock_send_alert.assert_not_called()
+
+    def test_enabled_with_items(self, monkeypatch):
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 0)  # to not throttle if repeated
+        d = OrchestratorDaemon()
+        
+        from pilots.digest_models import DigestPayload, DigestItem
+        items = [
+            DigestItem(symbol="AAPL", reason="Good chart", selection_type="Today's Radar"),
+            DigestItem(symbol="MSFT", reason="Strong fundamentals", selection_type="Personalized"),
+        ]
+        
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)):
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert:
+                d.maybe_dispatch_weekly_digest()
+                
+                assert mock_send_alert.call_count == 1
+                args, kwargs = mock_send_alert.call_args
+                assert args[0] == "INFO"
+                message = args[1]
+                assert "Weekly Digest (2 items):" in message
+                assert "- AAPL (Today's Radar): Good chart" in message
+                assert "- MSFT (Personalized): Strong fundamentals" in message
+                
+                assert "dedup_key" in kwargs
+                assert kwargs["dedup_key"].startswith("weekly_digest_")
+                
+    def test_throttled(self, monkeypatch):
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", True)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_INTERVAL_HOURS", 24)
+        d = OrchestratorDaemon()
+        
+        from pilots.digest_models import DigestPayload, DigestItem
+        items = [DigestItem(symbol="AAPL", reason="Test", selection_type="Test")]
+        
+        with mock.patch("pilots.weekly_digest.compose_digest", return_value=DigestPayload(items=items)) as mock_compose:
+            with mock.patch("observability.alerts.send_alert") as mock_send_alert:
+                d.maybe_dispatch_weekly_digest()
+                assert mock_send_alert.call_count == 1
+                
+                # second time it should be throttled
+                d.maybe_dispatch_weekly_digest()
+                assert mock_send_alert.call_count == 1
+
+

@@ -143,3 +143,11 @@ def disable_historical_store():
     """
     with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
         yield
+
+
+@pytest.fixture
+def _isolate_symbol_view_db_in_tests(tmp_path):
+    """Isolate the SymbolViewStore to a temporary SQLite database for tests."""
+    db_url = f"sqlite:///{tmp_path}/test_symbol_views.db"
+    with mock.patch("data.symbol_view_store.resolve_database_url", return_value=db_url):
+        yield

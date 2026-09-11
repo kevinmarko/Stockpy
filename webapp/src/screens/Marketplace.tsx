@@ -50,6 +50,36 @@ function RadarSection() {
   );
 }
 
+function DigestSection() {
+  const { data, loading, error } = useApi(
+    () => api.getWeeklyDigest(),
+    []
+  );
+
+  if (loading) return <Loading lines={2} />;
+  if (error || !data || data.items.length === 0) return null;
+
+  return (
+    <section style={{ marginTop: "var(--s-6)" }}>
+      <div className="rail-head">
+        <h2>This Week's Digest</h2>
+        <span className="rail-sub">Curated weekly top selections</span>
+      </div>
+      <div className="rail" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--s-4)", overflowX: "visible", whiteSpace: "normal" }}>
+        {data.items.map((item) => (
+          <div key={item.symbol} className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong style={{ fontSize: "var(--t-h3)" }}>{item.symbol}</strong>
+              <span className="chip" style={{ fontSize: "var(--t-caption)", background: theme.surface2 }}>{item.selection_type}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: "var(--t-body)", color: theme.textMuted }}>{item.reason}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Rail({
   title,
   sub,
@@ -155,6 +185,8 @@ export function Marketplace() {
       <TabGuide tabKey="pilots" />
 
       <RadarSection />
+      
+      <DigestSection />
 
       {loading && <Loading lines={3} />}
 
