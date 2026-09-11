@@ -172,6 +172,8 @@ export function SymbolScreener() {
         Search or filter FMP's full symbol universe by sector, industry, market cap, price, beta,
         or dividend yield — independent of your tracked watchlist. Send a discovered symbol
         straight to Paper Broker's Quick Trade, or a whole selection to its Strategy Scan.
+        <br/><br/>
+        <em>This paper trade is manual — Autopilot's automated signals only act within your tracked universe.</em>
       </p>
 
       <TabGuide tabKey="symbol-screener" />

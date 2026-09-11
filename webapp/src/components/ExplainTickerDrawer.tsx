@@ -606,7 +606,7 @@ export const ExplainTickerDrawer: React.FC<ExplainTickerDrawerProps> = ({
                         marginBottom: "var(--s-2)",
                       }}
                     >
-                      Not currently tracked in portfolio or watchlists.
+                      Not currently tracked in portfolio or watchlists. This paper trade is manual — Autopilot's automated signals only act within your tracked universe.
                     </div>
                     <button
                       type="button"

@@ -1,0 +1,7 @@
+- [x] Trace dependency paths (Wave 0)
+- [x] Create AST structural regression test `tests/test_execution_boundary.py` (WP-A)
+- [x] Verify AST guard fails when boundary is intentionally broken and passes otherwise (Honesty checklist)
+- [x] Write `docs/architecture/execution-boundary.md` confirming tracked-universe behavior (WP-B)
+- [x] Add UI legibility tie-in note to `PaperBroker.tsx`, `SymbolScreener.tsx`, `ExplainTickerDrawer.tsx` (WP-C)
+- [x] Add Policy statement for the auto-scan override to `execution-boundary.md` (WP-D)
+- [x] Sync `CLAUDE.md` and `AGENTS.md` docs (WP-E)

@@ -775,6 +775,9 @@ export function PaperBroker() {
                 <div style={{ fontSize: 13, color: theme.textSecondary }}>
                   {quickTradeSymbol}: <strong style={{ color: theme.textPrimary }}>${quickTradeQuote.price.toFixed(2)}</strong>
                   {quickTradeQuote.is_stale && <span style={{ color: theme.caution, marginLeft: 6 }}>(delayed)</span>}
+                  <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 4, fontStyle: "italic" }}>
+                    This paper trade is manual — Autopilot's automated signals only act within your tracked universe.
+                  </div>
                 </div>
                 <button
                   onClick={() => navigate(`/symbol/${quickTradeSymbol}/options`)}
