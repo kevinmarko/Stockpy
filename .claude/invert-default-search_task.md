@@ -141,7 +141,12 @@
       per-symbol-detail data-coverage gap, unrelated to this feature).
 - [x] Auditor 6 — labeling consistency vs. Universe Transparency panel —
       done (Wave 2 pass; see walkthrough for full detail — no
-      inconsistency found).
+      inconsistency found). **Correction (same-day post-merge audit)**: this
+      pass's own supporting claim that `UniverseTransparency.tsx` shares
+      `UniverseCoverage.tsx`'s "Tracked"/"Forecast-covered"/"Full coverage"
+      vocabulary was independently re-checked and found inaccurate — see the
+      walkthrough's "Post-merge audit addendum" for the real vocabulary and
+      why the no-inconsistency conclusion still holds anyway.
 - [x] Auditors 7-8 (rollback toggle reverses every touched screen) — done
       by the closing synthesis pass, live: flipped the Settings → General
       → "Search behavior" toggle to "Search your saved list first

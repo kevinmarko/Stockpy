@@ -464,7 +464,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-general": {
     title: "General & Execution Mode",
     description:
-      "Global orchestrator behavior in one place: the kill switch, live-trading execution mode (advisory-only / dry-run / paper / live), app & update status, and a reset for the first-run onboarding flow.",
+      "Global orchestrator behavior in one place: the kill switch, live-trading execution mode (advisory-only / dry-run / paper / live), app & update status, a per-browser search-ordering preference, and a reset for the first-run onboarding flow.",
     keyConcepts: ["kill switch", "execution mode", "advisory only"],
   },
   "settings-data": {

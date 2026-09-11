@@ -283,6 +283,35 @@ describe("SymbolInput autocomplete", () => {
     expect(api.getSymbolSearch).not.toHaveBeenCalled();
   });
 
+  it("never renders a section header when enableFmpSuggestions is false, even with real tracked matches (Sector Selection's exact case)", async () => {
+    // Regression test: a live browser check found that with the
+    // universe-first default active, an enableFmpSuggestions={false} call
+    // site (Sector Selection is the one production example) spuriously
+    // rendered a "Saved" header over its entirely-tracked suggestion list --
+    // pre-2026-09 this call site's suggestions were never labeled at all,
+    // since its `!s.tracked` header condition could never be true when no
+    // untracked section can ever exist. The previous test above only
+    // covered the ZERO-tracked-matches case (no dropdown renders at all),
+    // which never exercised the buggy header logic.
+    const user = userEvent.setup();
+    render(
+      <SymbolInput
+        onSubmit={vi.fn()}
+        enableFmpSuggestions={false}
+        trackedSymbols={["XOM", "COST"]}
+      />
+    );
+
+    await user.type(screen.getByTestId("symbol-input"), "O");
+    const list = await screen.findByTestId("symbol-suggestions");
+    expect(within(list).getByText("XOM")).toBeInTheDocument();
+    expect(within(list).getByText("COST")).toBeInTheDocument();
+    expect(within(list).queryByText("Saved")).not.toBeInTheDocument();
+    expect(within(list).queryByText("Not yet tracked")).not.toBeInTheDocument();
+    // FMP is never even consulted at this call site, in either mode.
+    expect(api.getSymbolSearch).not.toHaveBeenCalled();
+  });
+
   it("trackedSymbols overrides the shared universe cache entirely", async () => {
     const getUniverseSpy = vi.spyOn(api, "getUniverse");
     const onSubmit = vi.fn();

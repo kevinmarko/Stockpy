@@ -405,7 +405,24 @@ export function SymbolInput({
               // matches the pre-2026-09 "Not yet tracked" behavior, which
               // always labeled the untracked section even with no tracked
               // matches at all) or a genuine mid-list transition.
+              //
+              // `enableFmpSuggestions` gates this entirely: when it's false
+              // (Sector Selection is the one call site that sets it), there
+              // is no untracked section at all -- `suggestions` is just
+              // `tracked` verbatim (see the useMemo above), every row has
+              // `tracked: true`, and there is no "secondary" section for a
+              // header to distinguish. Without this guard,
+              // `s.tracked === universeFirst` is trivially true for row 0
+              // whenever `universeFirst` is `true` (today's default),
+              // spuriously rendering a "Saved" header over an entirely-
+              // tracked, entirely-unsectioned list -- a real regression
+              // caught by a live browser check, since pre-2026-09 this call
+              // site's `!s.tracked` condition could never be true and so
+              // never rendered a header at all. Fixed by requiring a
+              // genuine two-section split to exist before labeling either
+              // half of it.
               const showHeader =
+                enableFmpSuggestions &&
                 s.tracked === universeFirst &&
                 (i === 0 || suggestions[i - 1].tracked !== s.tracked);
               return (

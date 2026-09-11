@@ -242,3 +242,48 @@ previously wrong for 4 of 8 screens until a real browser render caught it:
 
 **Net result**: all open items from the Wave 2 pass are closed. This plan is now fully implemented,
 tested (2054/2054), and live-verified in both toggle states.
+
+## Post-merge audit addendum (same day, 3 independent agents)
+
+Before merging, this PR was independently re-audited (not just re-read) by 3 parallel agents — a
+fresh full-suite/edge-case pass, a live browser re-verification of every claim above, and a
+docs/cross-cutting-consistency pass — matching this repo's own established convention that a first
+self-audit's "every one matches" claim has been wrong before and is worth re-checking. Findings,
+each independently re-verified a second time by the integrating session before being acted on:
+
+1. **Real bug, fixed**: a live browser re-check found that Sector Selection — 100% tracked-only by
+   construction (`enableFmpSuggestions={false}`) — spuriously rendered a "Saved" header above its
+   list under the new universe-first default, something it never did pre-2026-09 or in legacy mode.
+   Root cause: the generalized `showHeader` logic ("whichever section is secondary gets a header")
+   didn't account for a call site where no secondary section can ever exist. Fixed in
+   `SymbolInput.tsx` by gating `showHeader` on `enableFmpSuggestions`. Proven via a real
+   break-then-revert cycle (the new regression test fails without the fix, passes with it), a fresh
+   `SymbolInput.test.tsx` run (25/25), and a second live browser check confirming zero
+   `combobox-section-header` elements in the raw DOM for a real Sector Selection query. New test:
+   `SymbolInput.test.tsx`'s `"never renders a section header when enableFmpSuggestions is false,
+   even with real tracked matches (Sector Selection's exact case)"`.
+2. **Dormant, non-blocking edge case, documented not fixed**: `activeIndex` isn't reset when
+   `suggestions` reorders under a live `universeFirst` flip. Confirmed NOT reachable today — the
+   toggle lives on a separate route from any `SymbolInput` instance (React Router unmounts/resets
+   `SymbolInput`'s local state on navigation), and even a hypothetical same-page toggle click blurs
+   the input first, which already closes/resets the dropdown via the existing `onBlur` handler. Left
+   as a disclosed, low-priority robustness gap for a future change to either component to watch for,
+   not fixed here.
+3. **Doc corrections** (see the same-day `CLAUDE.md`/`AGENTS.md` bullet corrections for the full
+   detail): this walkthrough's own "154 tests" figure for the 9 call sites was wrong (re-verified,
+   real count: 105, plus `App.test.tsx`'s 56 — 161 total); the claim that both `UniverseCoverage.tsx`
+   AND `UniverseTransparency.tsx` share a "Tracked"/"Forecast-covered"/"Full coverage" vocabulary was
+   only true of the first (`UniverseTransparency.tsx`'s real vocabulary is a different 6-KPI set,
+   independently re-verified by reading both files directly); and this file's own "2054/2054,
+   181/181 files" full-suite claim was re-verified TRUE as originally stated (a same-day audit pass's
+   claim that it should have been "182 files" was itself checked and found inaccurate — both a fresh
+   `find`-based count and a direct full-suite re-run confirm 181 files). Post-fix (finding 1's new
+   test included), the full suite is **2055/2055 passing, 181 files**.
+4. **Genuine, previously-missing gap, fixed**: `helpContent.ts`'s `TAB_HELP["settings-general"]`
+   description enumerated every section on that screen except the new "Search behavior" one this PR
+   added — updated to include it.
+5. **Confirmed clean, no action needed**: the full webapp test suite (2054/2054 pre-fix, independently
+   re-run 3× fresh), `npm run typecheck`, every real `SymbolInput` call site's behavior under the
+   ordering flip, the `dummySearchDefaultContext` fallback (confirmed exercised by the large majority
+   of the test suite, not a masked gap), the `showHeader`/ordering logic's correctness for every other
+   case, the `role="switch"` a11y claim, and the zero-`.py`-file scope boundary.
