@@ -29,7 +29,6 @@ This module MAY import the engine/data layer (unlike ``api/state_api.py`` /
 data-facing service, not the kill-switch/daemon control plane.
 """
 from __future__ import annotations
-from data.symbol_view_store import SymbolViewStore
 
 import base64
 import logging
@@ -65,6 +64,7 @@ from data.historical_store import HistoricalStore
 from data.market_data import get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import async_sync_now, build_sync_report
+from data.symbol_view_store import SymbolViewStore
 from data_engine import DataEngine
 import options_ondemand
 import pairs_ondemand
@@ -936,9 +936,8 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
     """
     try:
         SymbolViewStore().record_view(symbol.upper())
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f\"Failed to record view for {symbol}: {e}\")
+    except Exception as exc:  # noqa: BLE001 — view-tracking is best-effort, never blocks the endpoint (CONSTRAINT #6)
+        logger.warning("explain_ticker: failed to record view for %s: %s", symbol, exc)
     sym = symbol.strip().upper()
     if not sym:
         raise HTTPException(status_code=422, detail="Symbol cannot be empty")

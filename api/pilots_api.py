@@ -97,7 +97,6 @@ figure.
 """
 
 from __future__ import annotations
-from data.symbol_view_store import SymbolViewStore
 
 import dataclasses
 import json
@@ -226,6 +225,10 @@ from data.historical_store import HistoricalStore
 # doesn't supply a price — same provider every other market-data read in this
 # codebase goes through (see settings.py's "Market-data layer" convention).
 from data.market_data import MarketDataError, get_provider
+# Durable "which symbol did the operator last look at" log for the Weekly
+# Digest's personalization filter (data/symbol_view_store.py) — recorded
+# best-effort from get_symbol_detail below.
+from data.symbol_view_store import SymbolViewStore
 from execution.kill_switch import GlobalKillSwitch
 
 # The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
@@ -1512,9 +1515,8 @@ def get_symbol_detail(ticker: str) -> Any:
     ticker. Never 500s (CONSTRAINT #6)."""
     try:
         SymbolViewStore().record_view(ticker.upper())
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f\"Failed to record view for {ticker}: {e}\")
+    except Exception as exc:  # noqa: BLE001 — view-tracking is best-effort, never blocks the endpoint (CONSTRAINT #6)
+        logger.warning("get_symbol_detail: failed to record view for %s: %s", ticker, exc)
     snapshot = _load_snapshot()
     if snapshot is None:
         raise HTTPException(status_code=404, detail=_MISSING_SNAPSHOT_DETAIL)
