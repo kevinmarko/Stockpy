@@ -6,9 +6,22 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 import { SymbolInput } from "./SymbolInput";
 import { __resetUniverseCache } from "./universeCache";
 import { api } from "../api/client";
+import { SearchDefaultProvider } from "../context/SearchDefaultContext";
+
+/** Renders in explicit tracked-first (rollback) mode, bypassing the
+ * component's own new universe-first default -- for tests exercising the
+ * pre-2026-09 ordering specifically. Plain `render(<SymbolInput .../>)`
+ * elsewhere in this file gets the real default (universeFirst=true) via
+ * `useSearchDefault()`'s safe-fallback-outside-provider value. */
+function renderTrackedFirst(ui: ReactElement) {
+  return render(
+    <SearchDefaultProvider initialUniverseFirst={false}>{ui}</SearchDefaultProvider>
+  );
+}
 
 const UNIVERSE = {
   symbols: [
@@ -136,7 +149,7 @@ describe("SymbolInput autocomplete", () => {
     expect(onSubmit).toHaveBeenCalledWith("AAPL");
   });
 
-  it("shows FMP results not in the tracked universe under a 'Not yet tracked' section", async () => {
+  it("in universe-first mode (the real default), shows FMP results unlabeled with no tracked matches at all -- no 'Not yet tracked' header when untracked is the only section", async () => {
     vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
       query: "XO",
       results: [{ symbol: "XOM", name: "Exxon Mobil", currency: "USD", exchange: "NYSE", exchange_full_name: null }],
@@ -149,10 +162,84 @@ describe("SymbolInput autocomplete", () => {
     await user.type(screen.getByTestId("symbol-input"), "XO");
     const list = await screen.findByTestId("symbol-suggestions");
     expect(within(list).getByText("XOM")).toBeInTheDocument();
+    // Untracked is the PRIMARY (unlabeled) section in universe-first mode --
+    // with zero tracked matches for "XO" there is no secondary section to
+    // label at all, so neither header appears.
+    expect(within(list).queryByText("Not yet tracked")).not.toBeInTheDocument();
+    expect(within(list).queryByText("Saved")).not.toBeInTheDocument();
+
+    await user.click(within(list).getByText("XOM"));
+    expect(onSubmit).toHaveBeenCalledWith("XOM");
+  });
+
+  it("in legacy tracked-first (rollback) mode, shows the same FMP results under a 'Not yet tracked' section -- reproduces the pre-2026-09 default exactly", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
+      query: "XO",
+      results: [{ symbol: "XOM", name: "Exxon Mobil", currency: "USD", exchange: "NYSE", exchange_full_name: null }],
+      reason: null,
+    });
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    renderTrackedFirst(<SymbolInput onSubmit={onSubmit} />);
+
+    await user.type(screen.getByTestId("symbol-input"), "XO");
+    const list = await screen.findByTestId("symbol-suggestions");
+    expect(within(list).getByText("XOM")).toBeInTheDocument();
     expect(within(list).getByText("Not yet tracked")).toBeInTheDocument();
 
     await user.click(within(list).getByText("XOM"));
     expect(onSubmit).toHaveBeenCalledWith("XOM");
+  });
+
+  it("in universe-first mode, a MIXED list of tracked and untracked matches puts untracked first (unlabeled) and tracked second under 'Saved'", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
+      query: "A",
+      results: [{ symbol: "AA", name: "Alcoa", currency: "USD", exchange: "NYSE", exchange_full_name: null }],
+      reason: null,
+    });
+    const user = userEvent.setup();
+    render(<SymbolInput onSubmit={vi.fn()} />);
+
+    await user.type(screen.getByTestId("symbol-input"), "A");
+    const list = await screen.findByTestId("symbol-suggestions");
+    const options = within(list).getAllByRole("option").map((el) => el.textContent);
+    // AA (untracked) leads; AAPL/AMD (tracked) follow -- both start with "A".
+    expect(options[0]).toContain("AA");
+    expect(options.slice(1).join(",")).toContain("AAPL");
+    expect(within(list).getByText("Saved")).toBeInTheDocument();
+    expect(within(list).queryByText("Not yet tracked")).not.toBeInTheDocument();
+
+    // The "Saved" header renders between the untracked and tracked rows,
+    // not before the very first (untracked) row.
+    const rows = within(list).getAllByRole("option");
+    expect(rows[0]).toHaveTextContent("AA");
+  });
+
+  it("the rollback toggle genuinely reverses the order -- same mocks, opposite mode, opposite result", async () => {
+    vi.spyOn(api, "getSymbolSearch").mockResolvedValue({
+      query: "A",
+      results: [{ symbol: "AA", name: "Alcoa", currency: "USD", exchange: "NYSE", exchange_full_name: null }],
+      reason: null,
+    });
+    const user1 = userEvent.setup();
+    const { unmount } = render(<SymbolInput onSubmit={vi.fn()} testId="si-a" />);
+    await user1.type(screen.getByTestId("si-a"), "A");
+    const listA = await screen.findByTestId("symbol-suggestions");
+    const firstRowUniverseFirst = within(listA).getAllByRole("option")[0].textContent;
+    unmount();
+
+    const user2 = userEvent.setup();
+    renderTrackedFirst(<SymbolInput onSubmit={vi.fn()} testId="si-b" />);
+    await user2.type(screen.getByTestId("si-b"), "A");
+    const listB = await screen.findByTestId("symbol-suggestions");
+    const firstRowTrackedFirst = within(listB).getAllByRole("option")[0].textContent;
+
+    // Universe-first: the untracked Alcoa ("AA") result leads.
+    expect(firstRowUniverseFirst).toBe("AA");
+    // Tracked-first (rollback): a tracked match leads instead -- never the
+    // untracked "AA" result.
+    expect(firstRowTrackedFirst).not.toBe("AA");
+    expect(["AAPLBUY", "AMD"]).toContain(firstRowTrackedFirst);
   });
 
   it("does not duplicate a symbol that is both tracked and returned by FMP search", async () => {

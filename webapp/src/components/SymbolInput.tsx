@@ -13,6 +13,7 @@ import { useDebounce } from "../hooks/useDebounce";
 import { api } from "../api/client";
 import type { UniverseSymbol, SymbolSearchResult } from "../api/types";
 import { loadUniverse, getCachedUniverse } from "./universeCache";
+import { useSearchDefault } from "../context/SearchDefaultContext";
 
 /**
  * Shared symbol entry bar for the per-symbol research screens (Data Explorer,
@@ -22,10 +23,18 @@ import { loadUniverse, getCachedUniverse } from "./universeCache";
  * tickers from the tracked universe (`GET /universe`, or `trackedSymbols` --
  * see below) so they don't have to know a symbol by heart — every tracked
  * suggestion resolves to a real detail page. It ALSO suggests any FMP-known
- * symbol not yet tracked (`GET /data/symbol-search`, debounced, rendered
- * under a "Not yet tracked" section) unless `enableFmpSuggestions={false}`.
- * Selecting a suggestion (Enter on a highlighted row, Tab, or click) loads it
- * immediately, tracked or not.
+ * symbol not yet tracked (`GET /data/symbol-search`, debounced) unless
+ * `enableFmpSuggestions={false}`. Selecting a suggestion (Enter on a
+ * highlighted row, Tab, or click) loads it immediately, tracked or not.
+ *
+ * Default ORDER of the two sections is universe-first (2026-09, "Invert The
+ * Default" -- see `../context/SearchDefaultContext.tsx`): FMP-wide results
+ * lead unlabeled, tracked matches follow under a "Saved" header. Flipping the
+ * operator's `useSearchDefault()` toggle off reproduces the pre-change
+ * tracked-first default exactly (tracked leads unlabeled, untracked follows
+ * under "Not yet tracked") -- a per-browser preference, not a per-call-site
+ * one; every call site gets the same order except Sector Selection, which is
+ * unaffected either way since it always sets `enableFmpSuggestions={false}`.
  *
  * Free-text is preserved: pressing Load — or Enter with nothing highlighted —
  * submits whatever is typed, uppercased/trimmed, even if it isn't in the
@@ -115,6 +124,7 @@ export function SymbolInput({
    * Broker's Quick Trade panel opts in. */
   autoSubmitOnExactMatch?: boolean;
 }) {
+  const { universeFirst } = useSearchDefault();
   const [value, setValue] = useState(initial);
   const [universe, setUniverse] = useState<UniverseSymbol[]>(
     trackedSymbols ? [] : getCachedUniverse() ?? []
@@ -193,9 +203,12 @@ export function SymbolInput({
     [trackedList]
   );
 
-  // Merged, flat list -- tracked first, then FMP results not already
-  // tracked -- so keyboard nav (activeIndex) stays a single flat index
-  // across both visual sections.
+  // Merged, flat list so keyboard nav (activeIndex) stays a single flat
+  // index across both visual sections. Section ORDER depends on
+  // `universeFirst` (see ../context/SearchDefaultContext.tsx): universe-first
+  // (new default) puts untracked FMP results ahead of tracked/"Saved"
+  // matches; tracked-first (rollback) puts tracked matches ahead of
+  // untracked, reproducing the pre-2026-09 default exactly.
   const suggestions = useMemo<SuggestionRow[]>(() => {
     const tracked: SuggestionRow[] = trackedSuggestions.map((u) => ({
       symbol: u.symbol,
@@ -207,8 +220,8 @@ export function SymbolInput({
       .filter((r) => r.symbol !== q && !trackedSymbolSet.has(r.symbol))
       .slice(0, MAX_FMP_SUGGESTIONS)
       .map((r) => ({ symbol: r.symbol, action: null, tracked: false }));
-    return [...tracked, ...untracked];
-  }, [trackedSuggestions, fmpResults, trackedSymbolSet, enableFmpSuggestions, q]);
+    return universeFirst ? [...untracked, ...tracked] : [...tracked, ...untracked];
+  }, [trackedSuggestions, fmpResults, trackedSymbolSet, enableFmpSuggestions, q, universeFirst]);
 
   const showDropdown = open && suggestions.length > 0;
   const activeId =
@@ -353,6 +366,10 @@ export function SymbolInput({
             ? autoSubmitOnExactMatch
               ? "Pick a suggested symbol, or finish typing a recognized ticker to load it automatically."
               : "Pick a suggested symbol -- only a recognized, quotable ticker can be submitted."
+            : enableFmpSuggestions && universeFirst
+            ? hideButton
+              ? "Type to search any stock, or pick a saved symbol below."
+              : "Type to search any stock, or enter any ticker and press Load."
             : hideButton
             ? "Type to search tracked symbols, or enter any ticker and press Enter."
             : "Type to search tracked symbols, or enter any ticker and press Load."}
@@ -378,15 +395,24 @@ export function SymbolInput({
           >
             {suggestions.map((s, i) => {
               const selected = i === activeIndex;
-              // Section header right before the first untracked row --
-              // i === 0 covers the FMP-only case (no tracked matches at
-              // all), the previous-row check covers the mixed case.
-              const showHeader = !s.tracked && (i === 0 || suggestions[i - 1].tracked);
+              // Only the SECONDARY section ever gets a header -- whichever
+              // section is primary (per `universeFirst`: untracked in the
+              // new universe-first default, tracked in tracked-first
+              // rollback mode) stays unlabeled, even when it's the entire
+              // list. The secondary section gets its header at its first row
+              // REGARDLESS of whether that's i === 0 (the primary section had
+              // zero matches, so the secondary section IS the whole list --
+              // matches the pre-2026-09 "Not yet tracked" behavior, which
+              // always labeled the untracked section even with no tracked
+              // matches at all) or a genuine mid-list transition.
+              const showHeader =
+                s.tracked === universeFirst &&
+                (i === 0 || suggestions[i - 1].tracked !== s.tracked);
               return (
                 <Fragment key={s.symbol}>
                   {showHeader && (
                     <li role="presentation" className="combobox-section-header" aria-hidden="true">
-                      Not yet tracked
+                      {s.tracked ? "Saved" : "Not yet tracked"}
                     </li>
                   )}
                   <li
