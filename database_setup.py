@@ -199,6 +199,17 @@ def initialize_database(db_file: str = DB_FILE):
 
             # 5. Retrospective Learning Loop: Migrate paper_closed_trades table additive columns
             migrate_paper_closed_trades_schema(cursor, dbapi_conn)
+
+            # 6. Retrospective Learning Loop: Migrate paper_positions.entry_snapshot_id
+            # (data/paper_account_store.py's PaperPosition ORM model has its OWN
+            # internal migration for this column, reached whenever a write-mode
+            # PaperAccountStore is constructed -- but this module is the
+            # separate schema-from-scratch entry point, and a readonly store
+            # (or any consumer touching paper_positions before a write-mode
+            # store has ever run) would otherwise hit a bare
+            # "no such column: paper_positions.entry_snapshot_id"
+            # OperationalError. See docs/known_issues for the incident.
+            migrate_paper_positions_schema(cursor, dbapi_conn)
     except Exception as e:
         # Unwrap SQLAlchemy OperationalError to raise raw sqlite3.OperationalError for tests
         if hasattr(e, "orig") and e.orig is not None:
@@ -379,8 +390,76 @@ def migrate_paper_closed_trades_schema(cursor, conn):
                 logger.info(f"paper_closed_trades migration complete. Added columns: {added}")
             except Exception as e:
                 logger.error(f"paper_closed_trades migration commit failed: {e}", exc_info=True)
+        else:
+            # Every ALTER TABLE in the loop failed -- `BEGIN TRANSACTION`
+            # above opened a transaction that would otherwise never be
+            # closed, leaving the connection unable to start a NEW
+            # transaction on its next migration call ("cannot start a
+            # transaction within a transaction"). Roll it back explicitly
+            # rather than silently leaving it dangling.
+            try:
+                conn.rollback()
+            except Exception as e:
+                logger.error(f"paper_closed_trades migration rollback failed: {e}", exc_info=True)
     else:
         logger.info("Schema migration: paper_closed_trades is already up-to-date.")
+
+
+def migrate_paper_positions_schema(cursor, conn):
+    """
+    Retrospective Learning Loop: Additive schema migration for paper_positions.
+
+    Mirrors migrate_paper_closed_trades_schema's exact pattern -- inspects
+    existing columns via PRAGMA table_info and issues ALTER TABLE statements
+    for any missing columns (entry_snapshot_id). Non-destructive, idempotent.
+
+    data/paper_account_store.py's PaperPosition ORM model already carries its
+    own internal `_migrate_paper_positions_schema` migration for this exact
+    column, run whenever a WRITE-mode PaperAccountStore is constructed -- but
+    this module (database_setup.py) is the separate schema-from-scratch entry
+    point, and a readonly store (or any other consumer reading
+    paper_positions before a write-mode store has ever run in this process)
+    would otherwise hit a bare "no such column: paper_positions.
+    entry_snapshot_id" OperationalError.
+    """
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_positions';")
+    if not cursor.fetchone():
+        logger.info("paper_positions table does not exist yet; skipping ALTER TABLE migration.")
+        return
+
+    cursor.execute("PRAGMA table_info(paper_positions);")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+
+    new_columns = [
+        ("entry_snapshot_id", "TEXT"),
+    ]
+
+    cols_to_add = [(col, col_type) for col, col_type in new_columns if col not in existing_cols]
+
+    if cols_to_add:
+        cursor.execute("BEGIN TRANSACTION;")
+        added = []
+        for col_name, col_type in cols_to_add:
+            try:
+                cursor.execute(f'ALTER TABLE paper_positions ADD COLUMN {col_name} {col_type};')
+                added.append(col_name)
+                logger.info(f"Migration: Added column '{col_name}' ({col_type}) to paper_positions.")
+            except Exception as e:
+                logger.warning(f"Could not add column '{col_name}' to paper_positions: {e}")
+        if added:
+            try:
+                conn.commit()
+                logger.info(f"paper_positions migration complete. Added columns: {added}")
+            except Exception as e:
+                logger.error(f"paper_positions migration commit failed: {e}", exc_info=True)
+        else:
+            # Same dangling-transaction guard as migrate_paper_closed_trades_schema above.
+            try:
+                conn.rollback()
+            except Exception as e:
+                logger.error(f"paper_positions migration rollback failed: {e}", exc_info=True)
+    else:
+        logger.info("Schema migration: paper_positions is already up-to-date.")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -296,7 +297,13 @@ class TestStrictAntiFabricationGates:
 
         # STRICT GATE: Provenance must NOT be upgraded to signal_driven despite strategy_id!
         assert rec["provenance"] == "unknown"
-        assert rec["snapshot"]["decision_context_status"] == "not captured"
+        # Canonical wire vocabulary is the underscore form (matching
+        # `provenance`/`bridge_status`'s own convention and
+        # webapp/src/api/types.ts's declared literal union) -- a prior
+        # version of this test asserted BOTH the space and underscore
+        # spellings two lines apart, reconciled only by a custom
+        # cross-format __eq__ shim in production code (see
+        # pilots/retrospective_composer.py's STATUS_* constants).
         assert rec["snapshot"]["decision_context_status"] == "not_captured"
         assert rec["snapshot"]["captured"] is False
         assert rec["snapshot"]["provenance"] == "unknown"
@@ -421,7 +428,7 @@ class TestStrictAntiFabricationGates:
 class TestWPEMathematicalFidelity:
     """Verify byte-for-byte mathematical alignment between composer and EvaluationEngine.evaluate_portfolio()."""
 
-    def test_wp_e_long_position_fidelity(self, composer, transactions_store_inst, evaluation_engine_inst):
+    def test_wp_e_long_position_fidelity(self, composer, transactions_store_inst, evaluation_engine_inst, isolated_db_url):
         """WP-E: Compare composer MAE, MFE, and Edge Ratio directly against evaluate_portfolio() output."""
         entry_ts = datetime(2026, 6, 1, 9, 30, 0, tzinfo=timezone.utc)
         exit_ts = datetime(2026, 6, 5, 16, 0, 0, tzinfo=timezone.utc)
@@ -444,32 +451,40 @@ class TestWPEMathematicalFidelity:
         history_df.index = history_df.index.tz_localize(None)
         data_provider = {"SPY": history_df}
 
-        # Direct evaluation engine call
+        # Direct evaluation engine call. This patches `resolve_database_url`
+        # (the default-construction fallback path -- `db_url = db_url or
+        # resolve_database_url()`, transactions_store.py) rather than
+        # `TransactionsStore.__init__` itself. That distinction is what keeps
+        # this a genuinely independent reference computation: an explicit
+        # `db_url` (as the composer's own internal isolated `:memory:` store
+        # always passes) is never overridden by `resolve_database_url`, so
+        # this patch redirects ONLY `evaluate_portfolio()`'s own default,
+        # no-store-injected construction below -- it can no longer also
+        # silently redirect the composer's supposedly-isolated single-trade
+        # store onto this same shared file-backed DB, which a prior version
+        # of this test did (via a class-level `TransactionsStore.__init__`
+        # monkeypatch), defeating the isolation this test exists to prove and
+        # making it blind to a corrupted composer reconstruction (side flip,
+        # price doubling, hold-window relocation all passed unnoticed).
         test_df = pd.DataFrame([{"Symbol": "SPY", "Price": 500.0, "position_size": 10000.0}])
-        orig_init = TransactionsStore.__init__
-        try:
-            def mock_init(self_inst, db_url=None, *, readonly=False, **kwargs):
-                self_inst.engine = transactions_store_inst.engine
-                self_inst.Session = transactions_store_inst.Session
-            TransactionsStore.__init__ = mock_init
-
+        with patch("transactions_store.resolve_database_url", return_value=isolated_db_url):
             eval_df = evaluation_engine_inst.evaluate_portfolio(test_df, data_provider=data_provider)
-            expected_mae = float(eval_df.iloc[0]["MAE"])
-            expected_mfe = float(eval_df.iloc[0]["MFE"])
-            expected_edge = float(eval_df.iloc[0]["Edge Ratio"])
+        expected_mae = float(eval_df.iloc[0]["MAE"])
+        expected_mfe = float(eval_df.iloc[0]["MFE"])
+        expected_edge = float(eval_df.iloc[0]["Edge Ratio"])
 
-            # Composer call
-            rec = composer.compose_trade_retrospective(t_id, data_provider=data_provider)
-            assert rec is not None
+        # Composer call -- its own internal single-trade store is genuinely
+        # isolated (an explicit `:memory:` db_url), unaffected by the patch
+        # above.
+        rec = composer.compose_trade_retrospective(t_id, data_provider=data_provider)
+        assert rec is not None
 
-            # BYTE-FOR-BYTE FIDELITY ASSERTIONS
-            assert math.isclose(rec["excursion"]["mae"], expected_mae, abs_tol=1e-9)
-            assert math.isclose(rec["excursion"]["mfe"], expected_mfe, abs_tol=1e-9)
-            assert math.isclose(rec["excursion"]["edge_ratio"], expected_edge, abs_tol=1e-9)
-        finally:
-            TransactionsStore.__init__ = orig_init
+        # BYTE-FOR-BYTE FIDELITY ASSERTIONS
+        assert math.isclose(rec["excursion"]["mae"], expected_mae, abs_tol=1e-9)
+        assert math.isclose(rec["excursion"]["mfe"], expected_mfe, abs_tol=1e-9)
+        assert math.isclose(rec["excursion"]["edge_ratio"], expected_edge, abs_tol=1e-9)
 
-    def test_wp_e_short_position_fidelity(self, composer, transactions_store_inst, evaluation_engine_inst):
+    def test_wp_e_short_position_fidelity(self, composer, transactions_store_inst, evaluation_engine_inst, isolated_db_url):
         """WP-E: Verify byte-for-byte fidelity for a short position."""
         entry_ts = datetime(2026, 6, 10, 9, 30, 0, tzinfo=timezone.utc)
         exit_ts = datetime(2026, 6, 14, 16, 0, 0, tzinfo=timezone.utc)
@@ -491,27 +506,23 @@ class TestWPEMathematicalFidelity:
         history_df.index = history_df.index.tz_localize(None)
         data_provider = {"TSLA": history_df}
 
+        # See test_wp_e_long_position_fidelity's comment: patching
+        # `resolve_database_url` (not `TransactionsStore.__init__`) keeps the
+        # composer's own internal isolated `:memory:` store genuinely
+        # isolated, since it always passes an explicit `db_url`.
         test_df = pd.DataFrame([{"Symbol": "TSLA", "Price": 200.0, "position_size": 2000.0}])
-        orig_init = TransactionsStore.__init__
-        try:
-            def mock_init(self_inst, db_url=None, *, readonly=False, **kwargs):
-                self_inst.engine = transactions_store_inst.engine
-                self_inst.Session = transactions_store_inst.Session
-            TransactionsStore.__init__ = mock_init
-
+        with patch("transactions_store.resolve_database_url", return_value=isolated_db_url):
             eval_df = evaluation_engine_inst.evaluate_portfolio(test_df, data_provider=data_provider)
-            expected_mae = float(eval_df.iloc[0]["MAE"])
-            expected_mfe = float(eval_df.iloc[0]["MFE"])
-            expected_edge = float(eval_df.iloc[0]["Edge Ratio"])
+        expected_mae = float(eval_df.iloc[0]["MAE"])
+        expected_mfe = float(eval_df.iloc[0]["MFE"])
+        expected_edge = float(eval_df.iloc[0]["Edge Ratio"])
 
-            rec = composer.compose_trade_retrospective(t_id, data_provider=data_provider)
-            assert rec is not None
+        rec = composer.compose_trade_retrospective(t_id, data_provider=data_provider)
+        assert rec is not None
 
-            assert math.isclose(rec["excursion"]["mae"], expected_mae, abs_tol=1e-9)
-            assert math.isclose(rec["excursion"]["mfe"], expected_mfe, abs_tol=1e-9)
-            assert math.isclose(rec["excursion"]["edge_ratio"], expected_edge, abs_tol=1e-9)
-        finally:
-            TransactionsStore.__init__ = orig_init
+        assert math.isclose(rec["excursion"]["mae"], expected_mae, abs_tol=1e-9)
+        assert math.isclose(rec["excursion"]["mfe"], expected_mfe, abs_tol=1e-9)
+        assert math.isclose(rec["excursion"]["edge_ratio"], expected_edge, abs_tol=1e-9)
 
 
 # =============================================================================
@@ -741,8 +752,9 @@ class TestCalibrationIntegration:
         assert rec is not None
 
         assert rec["provenance"] == "manual"
+        # Canonical underscore form -- see the decision_context_status note
+        # above for why this file no longer asserts both spellings.
         assert rec["calibration"]["status"] == "not_applicable"
-        assert rec["calibration"]["status"] == "not applicable"
         assert rec["calibration"]["conviction"] is None
         assert "not applicable" in rec["calibration"]["reason"].lower()
         assert "model calibration not applicable for manual trades" in rec["narrative"]

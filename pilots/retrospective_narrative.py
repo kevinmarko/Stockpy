@@ -32,6 +32,55 @@ from typing import Any
 # Numeric Formatting Safety Primitives (Survey 2 § 5.2 / WP-F Zero Leakage)
 # =============================================================================
 
+#: Placeholder substituted for a quoted operator note during assembly, so the
+#: final defense-in-depth None/NaN/null cleanup pass (WP-F) never rewrites
+#: words inside the operator's own quoted text -- restored verbatim as the
+#: very last step. Deliberately not a value any real trade field could ever
+#: legitimately equal.
+_NOTES_SENTINEL = "\x00RETRO_NOTES_SENTINEL\x00"
+
+#: Max characters retained from a free-text field (operator note or
+#: strategy_id) before truncation with an ellipsis -- bounds how much of the
+#: narrative one long/garbage value can consume, without touching content a
+#: legitimate value would ever plausibly need.
+_MAX_FREETEXT_LEN = 200
+
+
+def _sanitize_freetext(val: Any, *, max_len: int = _MAX_FREETEXT_LEN, strip_quotes: bool = False) -> str | None:
+    """Sanitize a free-text field (operator note, strategy_id) before it is
+    interpolated into the narrative.
+
+    - Collapses embedded newlines/control characters/runs of whitespace to a
+      single space, so a value can never inject a fake multi-line sentence
+      structure or visually break the surrounding prose.
+    - Optionally strips literal double-quote characters (``strip_quotes``) --
+      used for `operator_notes`, which this module always renders wrapped in
+      `"..."`; without this, a note containing its own `"` could prematurely
+      close that quotation and make whatever follows (including genuine
+      system-authored clauses) read as if it were still inside the quote, or
+      vice versa.
+    - Truncates to `max_len` characters with a trailing ellipsis, bounding
+      how much of the narrative a single long/garbage value can consume.
+
+    Returns `None` (never an empty string masquerading as "no value") if the
+    sanitized result is empty.
+    """
+    if val is None:
+        return None
+    text = str(val)
+    # Strip ASCII control characters (0x00-0x1F, 0x7F) and collapse all
+    # whitespace runs (including real newlines/tabs) to a single space.
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if strip_quotes:
+        text = text.replace('"', "'")
+    if not text:
+        return None
+    if len(text) > max_len:
+        text = text[: max_len - 1].rstrip() + "…"
+    return text
+
+
 def _is_valid_num(val: Any) -> bool:
     """Return True if val is a non-None, finite number."""
     if val is None:
@@ -169,6 +218,7 @@ def build_trade_narrative(
     )
     if strat and str(strat).strip().lower() in ("none", "null", "nan"):
         strat = None
+    strat = _sanitize_freetext(strat)
 
     # Entry Price
     ep = (
@@ -217,6 +267,12 @@ def build_trade_narrative(
     )
     if notes and str(notes).strip().lower() in ("none", "null", "nan"):
         notes = None
+    # strip_quotes=True: this value is always rendered wrapped in `"..."`
+    # below (S2.2) -- a raw embedded `"` could otherwise prematurely close
+    # that quotation and make subsequent text (including genuine
+    # system-authored clauses) misread as still being inside the operator's
+    # own quoted words, or vice versa.
+    notes = _sanitize_freetext(notes, strip_quotes=True)
 
     # Exit Price
     xp = (
@@ -381,10 +437,17 @@ def build_trade_narrative(
 
     elif prov == "manual":
         if notes and str(notes).strip():
-            # S2.2: Manual with operator note
+            # S2.2: Manual with operator note. The note is spliced in via a
+            # sentinel placeholder (restored after the final
+            # None/NaN/null-token cleanup pass below), so a genuine operator
+            # note containing the literal word "None"/"null"/"nan" as
+            # ordinary prose is never silently rewritten -- that cleanup
+            # pass exists to catch a formatting BUG in this module's own
+            # system-authored text, not to edit words out of a human's own
+            # quoted words.
             entry_clause = (
                 f'Manual discretionary {side_str} trade executed by operator at {_fmt_curr(ep)} '
-                f'(note: "{notes}").'
+                f'(note: "{_NOTES_SENTINEL}").'
             )
         else:
             # S2.1: Standard manual
@@ -404,11 +467,26 @@ def build_trade_narrative(
     # -------------------------------------------------------------------------
     # CLAUSE 2: Outcome & Hold Period
     # -------------------------------------------------------------------------
-    if realized_p is not None and realized_pct is None:
-        # O1.5: Degenerate entry price
+    if realized_p is not None and realized_pct is None and ep is not None and ep <= 0.0:
+        # O1.5: Genuinely degenerate entry price (the actual cause, verified
+        # -- not merely "we don't have a percentage for some reason"). A
+        # prior version fired this branch whenever `realized_pct` was simply
+        # absent, regardless of why -- rendering a fabricated, self-
+        # contradicting cause (e.g. alongside a perfectly valid $150.00 entry
+        # price stated one clause earlier, or alongside Clause 1's own
+        # "unverified entry price" wording for a genuinely unrecorded trade).
         outcome_clause = (
             f"Position closed at {_fmt_curr(xp)} realizing {_fmt_curr(realized_p)} "
             f"(percentage return unavailable due to degenerate entry price)."
+        )
+    elif realized_p is not None and realized_pct is None:
+        # O1.5b: A percentage return is unavailable for some OTHER reason
+        # (missing entry price, non-degenerate but percentage not computed,
+        # etc.) -- state that honestly rather than asserting a specific,
+        # unverified cause.
+        outcome_clause = (
+            f"Position closed at {_fmt_curr(xp)} realizing {_fmt_curr(realized_p)} "
+            f"(percentage return unrecorded)."
         )
     elif realized_p == 0.0:
         # O1.3: Breakeven
@@ -489,7 +567,14 @@ def build_trade_narrative(
         elif prov == "unknown":
             excursion_clause = f"{exc_prefix}; conviction calibration unavailable (provenance unrecorded)."
         else:  # signal_driven
-            if b_wr is not None and b_cnt is not None and b_cnt >= min_sample:
+            if conv is None:
+                # No conviction was ever captured for this trade -- there is
+                # nothing to bin, regardless of what bin_win_rate/bin_count
+                # happen to be. Asserting a bin placement here (a prior
+                # version's condition never checked `conv`) would name a
+                # subject -- "this trade's conviction" -- that doesn't exist.
+                excursion_clause = f"{exc_prefix}; conviction not captured, calibration unavailable."
+            elif b_wr is not None and b_cnt is not None and b_cnt >= min_sample:
                 excursion_clause = (
                     f"{exc_prefix}; entry conviction binned at historical {_fmt_pct(b_wr)} win rate (N={b_cnt})."
                 )
@@ -499,14 +584,26 @@ def build_trade_narrative(
                     f"(insufficient sample, N={b_cnt} < {min_sample})."
                 )
             else:
-                excursion_clause = f"{exc_prefix}."
+                # A real conviction exists but no bin count was ever
+                # produced (e.g. a calibration-engine error) -- an explicit
+                # missing-data statement, never silent (a prior version fell
+                # through to a bare, unqualified excursion sentence here).
+                excursion_clause = f"{exc_prefix}; historical calibration unavailable (no calibration data)."
 
     # Final assembly
     narrative = f"{entry_clause} {outcome_clause} {excursion_clause}".strip()
 
-    # Defense-in-depth: guarantee ZERO None, NaN, nan, null leakage (WP-F)
+    # Defense-in-depth: guarantee ZERO None, NaN, nan, null leakage (WP-F) in
+    # this module's OWN system-authored text. Applied BEFORE the operator's
+    # quoted note is spliced back in (below) -- a note is a human's own
+    # words, not a formatting bug this pass exists to fix, and rewriting a
+    # word inside it (e.g. a genuine note reading "null hypothesis
+    # rejected") would silently alter a direct quotation.
     narrative = re.sub(r"\bNone\b", "unrecorded", narrative)
     narrative = re.sub(r"\b(NaN|nan)\b", "unrecorded", narrative)
     narrative = re.sub(r"\bnull\b", "unrecorded", narrative)
+
+    if _NOTES_SENTINEL in narrative:
+        narrative = narrative.replace(_NOTES_SENTINEL, notes or "")
 
     return narrative

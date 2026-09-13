@@ -256,13 +256,17 @@ def test_completeness_metrics_zero_closed_trades(isolated_db, monkeypatch):
     assert m_off["status"] == "disabled"
     assert m_off["last_failure"] is None
 
-    # 2. Bridge enabled
+    # 2. Bridge enabled, but zero trades have ever been attempted through it
+    # -- CONSTRAINT #4: this is genuinely unmeasured, not a fabricated
+    # all-clear. "100%/healthy" is the honest reading ONLY when the bridge is
+    # deliberately off (nothing to bridge, case 1 above); with the bridge ON
+    # and nothing yet attempted, the honest answer is "unknown", not "100%".
     monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", True)
     m_on = store.get_bridge_completeness_metrics()
     assert m_on["bridge_enabled"] is True
     assert m_on["total_closed_trades"] == 0
-    assert m_on["completeness_pct"] == 100.0
-    assert m_on["status"] == "healthy"
+    assert m_on["completeness_pct"] is None
+    assert m_on["status"] == "unknown"
 
 
 def test_completeness_metrics_100_percent_failures(isolated_db, monkeypatch):

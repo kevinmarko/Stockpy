@@ -1199,6 +1199,14 @@ def execute_earnings_crush_trade(
     except Exception as exc:
         logger.warning("execute_earnings_crush_trade fallback to paper_broker_options_order: %s", exc)
         from pilots.paper_broker_options_order import execute_paper_order
+        # This IS still an automated earnings-crush trade -- only its
+        # PRIMARY execution path (OptionsPaperExecutor) failed, and it fell
+        # back to this generic executor for recovery. execute_paper_order
+        # defaults to tagging every fill "Manual Trade" (correct for its
+        # real intended caller, a human Quick Trade order) -- explicitly
+        # override that attribution here so a real-execution-path failure
+        # never silently reclassifies an automated trade as manual (see
+        # docs/known_issues/paper_trade_strategy_id_vocabulary.md).
         res = execute_paper_order(
             symbol=sym,
             asset_type="option",
@@ -1207,6 +1215,9 @@ def execute_earnings_crush_trade(
             quantity=float(contracts),
             limit_price=limit_price,
             is_live=False,
+            strategy_id="earnings-crush",
+            pilot_id="earnings-crush",
+            provenance="signal_driven",
         )
         return res
 

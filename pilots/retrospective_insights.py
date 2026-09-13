@@ -26,7 +26,6 @@ Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES - WP-G):
 from __future__ import annotations
 
 import logging
-import sys
 from typing import Any
 
 from pilots.retrospective_narrative import (
@@ -43,7 +42,19 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 def _extract_provenance(record: dict[str, Any]) -> str:
-    """Extract provenance tag from record or its snapshot, enforcing anti-fabrication."""
+    """Extract provenance tag from record or its snapshot, enforcing anti-fabrication.
+
+    Anti-fabrication rule (mirrors ``retrospective_composer.py``'s own gate):
+    a record EXPLICITLY marked ``captured=False`` (the composer's own
+    signal for "snapshot missing, never infer") is always "unknown",
+    regardless of whatever `provenance` string happens to also be present.
+    `captured` genuinely absent (`None` -- e.g. a caller-constructed record
+    that never carries a snapshot dict at all, the convention this
+    function's own test suite uses for direct cohort-math testing) trusts
+    the top-level `provenance` field as-is; a real composer-produced record
+    is never actually ambiguous here since `compose_trade_retrospective`
+    always sets `captured` to an explicit `True`/`False`.
+    """
     snap = record.get("entry_snapshot") or record.get("snapshot") or {}
     captured = snap.get("captured")
     if captured is None:
@@ -66,14 +77,22 @@ def _extract_provenance(record: dict[str, Any]) -> str:
     return "unknown"
 
 
-def _extract_pnl(record: dict[str, Any]) -> float:
-    """Safely extract realized PnL in dollars."""
+def _extract_pnl(record: dict[str, Any]) -> float | None:
+    """Safely extract realized PnL in dollars.
+
+    Returns ``None`` -- never a fabricated ``0.0`` (CONSTRAINT #4) -- for a
+    trade whose realized PnL was never actually recorded. Coercing a missing
+    value to `0.0` would silently count an unmeasurable trade as a measured
+    breakeven, corrupting win rate, total PnL, and the Brier score for every
+    cohort that includes it (see `_compute_cohort_metrics`, which explicitly
+    excludes `None` PnLs from every aggregate rather than folding them in).
+    """
     val = record.get("realized_pnl")
     if val is None:
         val = record.get("pnl")
     if _is_valid_num(val):
         return float(val)
-    return 0.0
+    return None
 
 
 def _extract_holding_days(record: dict[str, Any]) -> float | None:
@@ -139,6 +158,7 @@ def _compute_cohort_metrics(
             "mean_mae": None,
             "mean_mfe": None,
             "symbols": [],
+            "excluded_unmeasurable_pnl_count": 0,
         }
         if is_automated:
             base_metrics["cohort_name"] = "Automated (Signal-Driven)"
@@ -152,14 +172,23 @@ def _compute_cohort_metrics(
             base_metrics["calibration_status"] = "not_applicable"
         return base_metrics
 
-    # Compute PnLs and outcomes
-    pnls = [_extract_pnl(t) for t in trades]
+    # Compute PnLs and outcomes. `_extract_pnl` returns None (never a
+    # fabricated 0.0 -- CONSTRAINT #4) for a trade whose realized PnL was
+    # never actually recorded; such a trade is excluded from every PnL-based
+    # aggregate below rather than silently counted as a $0.00 breakeven, and
+    # the exclusion count is reported honestly instead of hidden.
+    raw_pnls = [_extract_pnl(t) for t in trades]
+    pnls = [p for p in raw_pnls if p is not None]
+    excluded_unmeasurable_pnl_count = len(raw_pnls) - len(pnls)
+
     winning_trades = sum(1 for p in pnls if p > 0)
     losing_trades = sum(1 for p in pnls if p < 0)
     breakeven_trades = sum(1 for p in pnls if p == 0)
 
-    win_rate = round(winning_trades / total_trades, 4)
-    total_realized_pnl = round(sum(pnls), 2)
+    # Win rate is computed over trades with a MEASURED outcome only -- an
+    # unmeasurable trade must never silently dilute the denominator.
+    win_rate = round(winning_trades / len(pnls), 4) if pnls else None
+    total_realized_pnl = round(sum(pnls), 2) if pnls else None
 
     # Profit Factor: Gross Gains / Gross Losses
     gross_gains = sum(p for p in pnls if p > 0)
@@ -202,17 +231,21 @@ def _compute_cohort_metrics(
         "mean_mae": mean_mae,
         "mean_mfe": mean_mfe,
         "symbols": symbols,
+        "excluded_unmeasurable_pnl_count": excluded_unmeasurable_pnl_count,
     }
 
     if is_automated:
         metrics["cohort_name"] = "Automated (Signal-Driven)"
 
-        # Calibration Brier Score: mean of (conviction - outcome)^2
+        # Calibration Brier Score: mean of (conviction - outcome)^2. A trade
+        # with a real conviction but no MEASURED PnL contributes no outcome
+        # to score against, so it is excluded here too (never scored as a
+        # fabricated loss via a coerced 0.0 PnL).
         brier_sq_errors: list[float] = []
         for t in trades:
             conv = _extract_conviction(t)
-            if conv is not None:
-                p = _extract_pnl(t)
+            p = _extract_pnl(t)
+            if conv is not None and p is not None:
                 outcome = 1.0 if p > 0 else 0.0
                 brier_sq_errors.append((conv - outcome) ** 2)
 
@@ -236,12 +269,13 @@ def _compute_cohort_metrics(
             grouped_by_strategy.setdefault(str(strat_name), []).append(t)
 
         for strat_id, s_trades in grouped_by_strategy.items():
-            s_pnls = [_extract_pnl(st) for st in s_trades]
+            s_raw_pnls = [_extract_pnl(st) for st in s_trades]
+            s_pnls = [p for p in s_raw_pnls if p is not None]
             s_wins = sum(1 for p in s_pnls if p > 0)
             s_losses = sum(1 for p in s_pnls if p < 0)
             s_count = len(s_trades)
-            s_wr = round(s_wins / s_count, 4) if s_count > 0 else None
-            s_total_pnl = round(sum(s_pnls), 2)
+            s_wr = round(s_wins / len(s_pnls), 4) if s_pnls else None
+            s_total_pnl = round(sum(s_pnls), 2) if s_pnls else None
             s_edges = [
                 e
                 for st in s_trades
@@ -258,6 +292,7 @@ def _compute_cohort_metrics(
                 "total_pnl": s_total_pnl,
                 "total_realized_pnl": s_total_pnl,
                 "mean_edge_ratio": s_mean_edge,
+                "excluded_unmeasurable_pnl_count": len(s_raw_pnls) - len(s_pnls),
             }
         metrics["strategies"] = strategies_dict
 
@@ -278,19 +313,34 @@ def _compute_cohort_metrics(
 # Contrastive Insights Synthesizer
 # =============================================================================
 
+#: Minimum trades REQUIRED in EACH cohort before a per-cohort excursion
+#: comparison is stated at all. A comparison between, say, one manual trade
+#: and one automated trade is not a pattern -- it's noise, and dressing it up
+#: as a systemic "wider loss tolerance" finding is an unearned causal claim
+#: (a true statistical-significance test is a larger follow-up; this floor is
+#: the minimum honesty bar for v1).
+_MIN_TRADES_FOR_EXCURSION_COMPARISON = 5
+
+
 def _build_contrastive_insights(
     auto_stats: dict[str, Any],
     manual_stats: dict[str, Any],
     unrecorded_stats: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Generate human-readable analytical contrastive insights comparing cohorts."""
+    """Generate human-readable analytical contrastive insights comparing cohorts.
+
+    Every statement here names the sample size (N) it is based on, and never
+    asserts a causal/behavioral explanation ("indicating wider loss
+    tolerance...") for a difference between two means -- that is an
+    inference this module has no basis for, not a measurement.
+    """
     insights: list[str] = []
 
     auto_trades = auto_stats.get("total_trades", 0)
     manual_trades = manual_stats.get("total_trades", 0)
 
     if auto_trades > 0 and manual_trades > 0:
-        # 1. Performance & Holding Period Contrast
+        # 1. Performance & Holding Period Contrast (N always disclosed)
         auto_wr_str = _fmt_pct(auto_stats.get("win_rate"))
         man_wr_str = _fmt_pct(manual_stats.get("win_rate"))
 
@@ -305,30 +355,49 @@ def _build_contrastive_insights(
 
         insights.append(
             f"Automated strategies achieved a {auto_wr_str} win rate{auto_edge_str} "
-            f"over a {auto_hold}-day average holding period, compared to manual discretionary "
-            f"trading's {man_wr_str} win rate{man_edge_str} over a {man_hold}-day average holding period."
+            f"over a {auto_hold}-day average holding period (N={auto_trades}), compared to manual "
+            f"discretionary trading's {man_wr_str} win rate{man_edge_str} over a {man_hold}-day "
+            f"average holding period (N={manual_trades})."
         )
 
-        # 2. Excursion Comparison
+        # 2. Excursion Comparison -- measurement only, no causal attribution,
+        # and gated on a minimum sample in BOTH cohorts.
         auto_mae = auto_stats.get("mean_mae")
         man_mae = manual_stats.get("mean_mae")
-        if auto_mae is not None and man_mae is not None:
+        if (
+            auto_mae is not None
+            and man_mae is not None
+            and auto_trades >= _MIN_TRADES_FOR_EXCURSION_COMPARISON
+            and manual_trades >= _MIN_TRADES_FOR_EXCURSION_COMPARISON
+        ):
             if man_mae > auto_mae:
                 insights.append(
-                    f"Manual trades experienced higher average adverse excursion "
-                    f"(MAE {_fmt_pct(man_mae)} vs {_fmt_pct(auto_mae)}), indicating wider loss tolerance "
-                    f"or delayed stop execution."
+                    f"Manual trades measured a higher average adverse excursion than automated "
+                    f"trades (MAE {_fmt_pct(man_mae)} vs {_fmt_pct(auto_mae)}; N={manual_trades} "
+                    f"manual, N={auto_trades} automated)."
                 )
             elif auto_mae > man_mae:
                 insights.append(
-                    f"Automated trades experienced higher average adverse excursion "
-                    f"(MAE {_fmt_pct(auto_mae)} vs {_fmt_pct(man_mae)})."
+                    f"Automated trades measured a higher average adverse excursion than manual "
+                    f"trades (MAE {_fmt_pct(auto_mae)} vs {_fmt_pct(man_mae)}; N={auto_trades} "
+                    f"automated, N={manual_trades} manual)."
                 )
             else:
                 insights.append(
-                    f"Automated and manual trades experienced identical average adverse excursion "
-                    f"(MAE {_fmt_pct(auto_mae)})."
+                    f"Automated and manual trades measured an identical average adverse excursion "
+                    f"(MAE {_fmt_pct(auto_mae)}; N={auto_trades} automated, N={manual_trades} manual)."
                 )
+        elif (
+            auto_mae is not None
+            and man_mae is not None
+            and (auto_trades < _MIN_TRADES_FOR_EXCURSION_COMPARISON
+                 or manual_trades < _MIN_TRADES_FOR_EXCURSION_COMPARISON)
+        ):
+            insights.append(
+                f"Excursion comparison not stated (insufficient sample: N={auto_trades} automated, "
+                f"N={manual_trades} manual; both cohorts need >= "
+                f"{_MIN_TRADES_FOR_EXCURSION_COMPARISON} trades)."
+            )
 
         # 3. Model Calibration Brier Score
         brier = auto_stats.get("calibration_brier_score")
@@ -389,37 +458,22 @@ def generate_batch_retrospective_insights(
     """
     records: list[dict[str, Any]] = []
 
-    # 1. Resolve records input
+    # 1. Resolve records input. No caller-frame inspection here (a prior
+    # version walked the call stack looking for a local variable literally
+    # named `simulated_trades`/`composed_records` -- a test-fitting hack that
+    # let a caller's unrelated local silently become this function's dataset;
+    # see docs/known_issues for the incident). The caller either passes
+    # `composed_records` explicitly, or this genuinely composes from the
+    # store -- nothing in between.
     if composed_records is not None:
         records = composed_records
     else:
-        # Context-aware fallback: check caller frames for test simulated_trades
-        candidate_records = None
         try:
-            f = sys._getframe(1)
-            for _ in range(5):
-                if f is None:
-                    break
-                locs = f.f_locals
-                if "simulated_trades" in locs and isinstance(locs["simulated_trades"], list):
-                    candidate_records = locs["simulated_trades"]
-                    break
-                if "composed_records" in locs and isinstance(locs["composed_records"], list):
-                    candidate_records = locs["composed_records"]
-                    break
-                f = f.f_back
-        except Exception:  # noqa: BLE001, S110
-            pass
-
-        if candidate_records is not None:
-            records = candidate_records
-        else:
-            try:
-                from pilots.retrospective_composer import compose_retrospectives_batch
-                records = compose_retrospectives_batch(limit=limit, paper_store=paper_store, **kwargs)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("compose_retrospectives_batch error: %s", exc)
-                records = []
+            from pilots.retrospective_composer import compose_retrospectives_batch
+            records = compose_retrospectives_batch(limit=limit, paper_store=paper_store, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("compose_retrospectives_batch error: %s", exc)
+            records = []
 
     # 2. Partition into disjoint cohorts
     automated_trades: list[dict[str, Any]] = []
@@ -458,20 +512,44 @@ def generate_batch_retrospective_insights(
         bridge_health = None
 
     if bridge_health is None:
-        comp_pct = round((bridged_count / total_records) * 100.0, 2) if total_records > 0 else 100.0
+        # Local fallback when no store (or a store lacking the method) was
+        # supplied -- mirrors PaperAccountStore.get_bridge_completeness_
+        # metrics()'s own anti-fabrication contract: `completeness_pct` is
+        # only ever a real percentage when something was actually attempted
+        # through the bridge; a cold-start/empty/all-disabled set of records
+        # reports `None`/"unknown" rather than a fabricated all-clear
+        # (CONSTRAINT #4).
+        attempted_count = bridged_count + failed_count
+        if attempted_count > 0:
+            comp_pct = round((bridged_count / attempted_count) * 100.0, 2)
+            status = "healthy" if failed_count == 0 else "degraded"
+        elif total_records == 0:
+            comp_pct = None
+            status = "unknown"
+        else:
+            # Records exist but none were ever attempted (e.g. every one is
+            # "disabled" -- the bridge was off for all of them).
+            comp_pct = None
+            status = "disabled" if disabled_count == total_records else "unknown"
         bridge_health = {
             "total_closed_trades": total_records,
+            "attempted_count": attempted_count,
             "bridged_count": bridged_count,
             "failed_count": failed_count,
             "disabled_count": disabled_count,
             "completeness_pct": comp_pct,
-            "status": "healthy" if failed_count == 0 else "degraded",
+            "status": status,
         }
 
-    # 6. Return strictly partitioned structure with ZERO blended aggregate metrics
+    # 6. Return strictly partitioned structure with ZERO blended aggregate
+    # metrics. `signal_driven_cohort` is a genuine copy of `auto_stats`, not
+    # the same dict object aliased under a second key -- both keys exist for
+    # interface-contract compatibility (some callers/tests read one name,
+    # some the other), but a caller mutating one must never silently mutate
+    # the other.
     return {
         "automated_cohort": auto_stats,
-        "signal_driven_cohort": auto_stats,  # Dual-key alias for interface contracts
+        "signal_driven_cohort": dict(auto_stats),
         "manual_cohort": manual_stats,
         "unrecorded_cohort": unrecorded_stats,
         "contrastive_insights": contrastive_insights,

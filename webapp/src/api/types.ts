@@ -6248,13 +6248,23 @@ export interface ExplainTickerResponse {
 // =============================================================================
 
 export type RetrospectiveProvenance = "signal_driven" | "manual" | "unknown";
+// Real wire values only (pilots/retrospective_composer.py's STATUS_*
+// constants) -- a prior version of this union also declared "captured" as
+// a RetrospectiveSnapshotStatus member (it IS one) but the field itself was
+// typed loosely enough elsewhere that the mismatch went unnoticed.
 export type RetrospectiveSnapshotStatus = "captured" | "not_captured";
-export type RetrospectiveEvaluationStatus =
-  | "available"
-  | "evaluation data unavailable"
-  | "bridge_unavailable"
-  | "bars_unavailable"
-  | "pending";
+// Real wire values ONLY. A prior version also declared "bridge_unavailable",
+// "bars_unavailable", and "pending" -- none of which the backend has ever
+// emitted (grep pilots/retrospective_composer.py's excursion_record
+// construction: only "available" and "evaluation data unavailable" appear).
+export type RetrospectiveEvaluationStatus = "available" | "evaluation data unavailable";
+// Real wire values only (STATUS_AVAILABLE / STATUS_INSUFFICIENT_SAMPLE /
+// STATUS_NOT_APPLICABLE in pilots/retrospective_composer.py). A prior
+// version of the frontend checked `=== "scored"` -- a value the backend has
+// never emitted -- which silently suppressed real calibration data on every
+// live render (the calibration panel rendered "not applicable" even for a
+// genuinely calibrated trade with a real measured bin win rate).
+export type RetrospectiveCalibrationStatus = "available" | "insufficient_sample" | "not_applicable";
 
 export interface RetrospectiveSnapshot {
   captured: boolean;
@@ -6272,8 +6282,14 @@ export interface RetrospectiveSnapshot {
   macro_regime?: string | null;
   signal_score?: number | null;
   raw_forecast?: number | null;
-  key_indicators?: Record<string, any> | null;
-  operator_notes?: string | null;
+  key_indicators_json?: string | null;
+  // The real wire key is `decision_rationale` (pilots/retrospective_
+  // composer.py's snapshot_record dict) -- a prior version of this type
+  // declared `operator_notes`, a field name the backend has never emitted,
+  // so the manual-trade operator note never rendered on a live response
+  // (it only appeared to work in mock mode, where the mock fixture used the
+  // same wrong name).
+  decision_rationale?: string | null;
   reason?: string | null;
 }
 
@@ -6281,6 +6297,9 @@ export interface RetrospectiveExcursion {
   evaluation_status: RetrospectiveEvaluationStatus;
   status?: string;
   bridge_reached: boolean;
+  // Fractions of entry price (e.g. 0.02 == a 2% adverse move), matching
+  // evaluation_engine.py's calculate_excursion_metrics contract -- NOT
+  // dollar amounts. Render with a percentage formatter, never `$`.
   mae: number | null;
   mfe: number | null;
   edge_ratio: number | null;
@@ -6289,14 +6308,24 @@ export interface RetrospectiveExcursion {
 }
 
 export interface RetrospectiveCalibration {
-  status: string;
-  calibration_status?: string;
+  status: RetrospectiveCalibrationStatus;
+  calibration_status?: RetrospectiveCalibrationStatus;
   conviction: number | null;
-  bin_range?: string | null;
+  // [bin_low, bin_high] as a two-element tuple, matching
+  // pilots/retrospective_composer.py's `[round(bin_low, 2), round(bin_high,
+  // 2)]` -- NOT a pre-formatted string. A prior version of this type
+  // declared `string | null`, which rendered a real `[0.8, 0.9]` value as
+  // the raw JSX child "0.80.9" once the "scored" status-string bug (above)
+  // was fixed and this branch actually started rendering.
+  bin_range?: [number, number] | null;
   bin_center?: number | null;
   bin_win_rate?: number | null;
   historical_bin_win_rate?: number | null;
-  bin_trade_count?: number;
+  // `null` -- never a fabricated `0` -- when no calibration lookup was ever
+  // attempted (vs. a genuine "we looked, found 0 historical trades in this
+  // bin" measurement, which IS a real 0). See pilots/retrospective_
+  // composer.py's not_applicable branch.
+  bin_trade_count?: number | null;
   calibration_error?: number | null;
   reason?: string | null;
 }

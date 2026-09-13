@@ -136,30 +136,10 @@ from settings import validate_interval_seconds as _validate_interval_seconds
 # because the daemon-hosted path (desktop/orchestrator_daemon.py) was the
 # only one that ever called load_dotenv().
 _load_dotenv(ENV_PATH, override=False)
-import hmac
-from fastapi.security import HTTPAuthorizationCredentials
 from api.auth import (
-    bearer_scheme,
     require_follow_command_token as require_command_token,
-    require_read_token as _upstream_require_read_token,
+    require_read_token,
 )
-
-def require_read_token(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> None:
-    token = settings.STATE_API_TOKEN
-    presented = credentials.credentials if credentials else ""
-    if presented:
-        if not token or not hmac.compare_digest(presented, token):
-            raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-        return
-    if token:
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-    host = request.client.host if request.client else None
-    if host == "testclient":
-        return
-    return _upstream_require_read_token(request, credentials)
 
 from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 

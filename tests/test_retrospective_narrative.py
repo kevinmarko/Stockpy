@@ -156,7 +156,13 @@ class TestAllFifteenNarrativePermutations:
         )
         assert "(regime: stagflation)" in text
         assert "conviction:" not in text
-        assert "Edge Ratio: 6.00)." in text
+        assert "Edge Ratio: 6.00)" in text
+        # M4 fix: a signal-driven trade with no captured conviction has
+        # nothing to bin -- this must be an explicit statement, never a
+        # silent trailing period as if calibration simply wasn't mentioned
+        # (a prior version's condition never checked conviction was present
+        # before rendering a bin-placement claim).
+        assert "conviction not captured, calibration unavailable" in text
         assert_zero_leakage(text)
 
     def test_permutation_04_signal_driven_missing_both_conviction_and_regime(self):

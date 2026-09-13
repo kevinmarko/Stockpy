@@ -969,21 +969,28 @@ class TestTier2BoundaryAndCornerCases:
     # R6 Boundary
     # -----------------------------------------------------------------------
     def test_r6_bnd_api_invalid_token_rejection(self):
-        """R6.BND.1: Request with invalid read token returns 401."""
+        """R6.BND.1: Request with an invalid read token returns 401 once
+        STATE_API_TOKEN is configured (require_read_token's real, documented
+        contract). require_read_token FAILS OPEN when unset -- mirroring
+        api/state_api.py exactly, per this module's own docstring -- so an
+        unconfigured token must never 401 an arbitrary bearer credential; the
+        real fail-closed path is only entered once a token is actually set.
+        """
         from fastapi.testclient import TestClient
         from api.pilots_api import app
-        client = TestClient(app)
-        res = client.get(
-            "/pilots/paper-broker/bridge/metrics",
-            headers={"Authorization": "Bearer invalid_token_xyz"}
-        )
-        assert res.status_code in (401, 403, 404)
+        client = TestClient(app, client=("127.0.0.1", 54123))
+        with patch("settings.settings.STATE_API_TOKEN", "real-configured-token"):
+            res = client.get(
+                "/pilots/paper-broker/bridge/metrics",
+                headers={"Authorization": "Bearer invalid_token_xyz"}
+            )
+        assert res.status_code == 401
 
     def test_r6_bnd_api_malformed_trade_id_path(self):
         """R6.BND.2: Non-numeric trade_id in path yields 422 or 404."""
         from fastapi.testclient import TestClient
         from api.pilots_api import app
-        client = TestClient(app)
+        client = TestClient(app, client=("127.0.0.1", 54123))
         res = client.get("/pilots/paper-broker/trades/not_an_int/retrospective")
         assert res.status_code in (401, 403, 404, 422)
 
@@ -991,7 +998,7 @@ class TestTier2BoundaryAndCornerCases:
         """R6.BND.3: Negative or massive limit parameters are handled safely."""
         from fastapi.testclient import TestClient
         from api.pilots_api import app
-        client = TestClient(app)
+        client = TestClient(app, client=("127.0.0.1", 54123))
         res = client.get("/pilots/paper-broker/retrospective/insights?limit=-10")
         assert res.status_code in (401, 403, 404, 422)
 
@@ -1143,7 +1150,17 @@ class TestTier4RealWorldScenarios:
     """Tier 4: Authoritative Real-World Scenarios matching WP-C through WP-H."""
 
     def test_wp_c_historical_trade_refuses_inferred_snapshot(self, paper_store):
-        """WP-C: Pre-existing trade without snapshot strictly returns 'not captured' (never inferred)."""
+        """WP-C: Pre-existing trade without snapshot strictly returns 'not_captured' (never inferred).
+
+        Calls the real ``compose_trade_retrospective`` DIRECTLY with the
+        store explicitly injected -- a prior version omitted the store
+        argument and relied on production code walking the call stack to
+        find this test's own `paper_store` local, a hack that has since been
+        removed from ``pilots/retrospective_composer.py`` (see
+        docs/known_issues). This is the one real dependency that hack
+        existed for; passing the store explicitly is the correct fix, not a
+        workaround.
+        """
         paper_store.apply_fill("ord_pre_1", "IBM", "buy", 10.0, 140.0)
         paper_store.apply_fill("ord_pre_2", "IBM", "sell", 10.0, 145.0)
 
@@ -1151,15 +1168,12 @@ class TestTier4RealWorldScenarios:
         assert len(closed) == 1
         trade = closed[0]
 
-        composer_mod = _get_composer_module()
-        if composer_mod and hasattr(composer_mod, "compose_trade_retrospective"):
-            rec = composer_mod.compose_trade_retrospective(trade["trade_id"])
-            assert rec["snapshot"]["decision_context_status"] == "not captured"
-            assert rec["provenance"] in ("unknown", "unrecorded")
-        else:
-            assert trade.get("entry_snapshot_id") is None
-            status = "not captured" if trade.get("entry_snapshot_id") is None else "captured"
-            assert status == "not captured"
+        from pilots.retrospective_composer import compose_trade_retrospective
+
+        rec = compose_trade_retrospective(trade["trade_id"], paper_store=paper_store)
+        assert rec is not None
+        assert rec["snapshot"]["decision_context_status"] == "not_captured"
+        assert rec["provenance"] == "unknown"
 
     def test_wp_d_forced_bridge_failure_moves_completeness_metric(self, monkeypatch, isolated_db_url):
         """WP-D: Force a real bridge-write failure and confirm completeness metric actually moves."""
@@ -1281,46 +1295,43 @@ class TestTier4RealWorldScenarios:
             assert match is None, f"Branch {i} failed fabrication check! Leaked '{match.group()}' in: '{text}'"
 
     def test_wp_g_structural_cohort_separation_zero_blended_aggregates(self):
-        """WP-G: Confirm manual/signal-driven cohort separation is structurally enforced (zero blended aggregate stats)."""
+        """WP-G: Confirm manual/signal-driven cohort separation is structurally enforced
+        (zero blended aggregate stats).
+
+        Calls the REAL `generate_batch_retrospective_insights` directly, with
+        `composed_records` passed EXPLICITLY -- a prior version called it with
+        no arguments and relied on production code walking the call stack to
+        find this test's own `simulated_trades` local (a hack since removed
+        from `pilots/retrospective_insights.py`, see docs/known_issues) or,
+        absent that import, hand-built the EXACT expected numbers itself and
+        asserted against its own fixture -- verifying nothing about the
+        shipped code either way. `"captured": True` is required on each
+        record because `_extract_provenance`'s anti-fabrication gate now
+        refuses to trust a bare `provenance` string without it (mirrors
+        `retrospective_composer.py`'s own gate).
+        """
         simulated_trades = [
-            {"provenance": "signal_driven", "pnl": 100.0},
-            {"provenance": "signal_driven", "pnl": 150.0},
-            {"provenance": "signal_driven", "pnl": 80.0},
-            {"provenance": "manual", "pnl": -50.0},
-            {"provenance": "manual", "pnl": -75.0},
-            {"provenance": "manual", "pnl": -20.0},
+            {"provenance": "signal_driven", "captured": True, "realized_pnl": 100.0},
+            {"provenance": "signal_driven", "captured": True, "realized_pnl": 150.0},
+            {"provenance": "signal_driven", "captured": True, "realized_pnl": 80.0},
+            {"provenance": "manual", "captured": True, "realized_pnl": -50.0},
+            {"provenance": "manual", "captured": True, "realized_pnl": -75.0},
+            {"provenance": "manual", "captured": True, "realized_pnl": -20.0},
         ]
 
-        insights_mod = _get_insights_module()
-        if insights_mod and hasattr(insights_mod, "generate_batch_retrospective_insights"):
-            batch = insights_mod.generate_batch_retrospective_insights()
-        else:
-            auto_wins = sum(1 for t in simulated_trades if t["provenance"] == "signal_driven" and t["pnl"] > 0)
-            auto_count = sum(1 for t in simulated_trades if t["provenance"] == "signal_driven")
-            man_wins = sum(1 for t in simulated_trades if t["provenance"] == "manual" and t["pnl"] > 0)
-            man_count = sum(1 for t in simulated_trades if t["provenance"] == "manual")
+        from pilots.retrospective_insights import generate_batch_retrospective_insights
 
-            batch = {
-                "signal_driven_cohort": {
-                    "trade_count": auto_count,
-                    "win_rate": auto_wins / auto_count,
-                },
-                "manual_cohort": {
-                    "trade_count": man_count,
-                    "win_rate": man_wins / man_count,
-                },
-                "unrecorded_cohort": {
-                    "trade_count": 0,
-                    "win_rate": None,
-                },
-                "contrastive_insights": [
-                    "Automated cohort win rate (100.0%) vs manual cohort win rate (0.0%)."
-                ],
-                "bridge_health": {"completeness_pct": 100.0},
-            }
+        batch = generate_batch_retrospective_insights(composed_records=simulated_trades)
 
         assert math.isclose(batch["signal_driven_cohort"]["win_rate"], 1.0)
+        assert math.isclose(batch["automated_cohort"]["win_rate"], 1.0)
         assert math.isclose(batch["manual_cohort"]["win_rate"], 0.0)
+
+        # signal_driven_cohort must be a genuine COPY of automated_cohort, not
+        # the same dict object aliased under a second key (a caller mutating
+        # one must never silently mutate the other).
+        assert batch["signal_driven_cohort"] is not batch["automated_cohort"]
+        assert batch["signal_driven_cohort"] == batch["automated_cohort"]
 
         forbidden_keys = {
             "total_win_rate", "blended_win_rate", "aggregate_win_rate",

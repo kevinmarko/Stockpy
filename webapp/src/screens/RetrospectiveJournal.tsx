@@ -107,7 +107,7 @@ export function RetrospectiveJournal() {
       // Provenance filter
       if (provenanceFilter !== "all") {
         const retro = retroMap[t.trade_id];
-        const prov = retro ? retro.provenance : t.strategy_id ? "signal_driven" : "manual";
+        const prov = retro ? retro.provenance : "unknown"; // Never infer provenance from strategy_id presence (the same anti-fabrication rule pilots/retrospective_composer.py itself enforces) -- until the composer's own read has resolved, the honest state is "unknown", not a guess.
         if (prov !== provenanceFilter) return false;
       }
       return true;
@@ -145,12 +145,22 @@ export function RetrospectiveJournal() {
                 fontWeight: 600,
                 padding: "2px 8px",
                 borderRadius: 4,
+                // completeness_pct == null means genuinely unmeasured
+                // (CONSTRAINT #4 -- the bridge store never fabricates a
+                // percentage for a state it couldn't measure), not a bad
+                // reading -- a prior version's `? pos : neg` fallback
+                // painted "unknown" the same alarming red as a real
+                // "degraded" measurement.
                 backgroundColor:
-                  bridge.data.completeness_pct != null && bridge.data.completeness_pct >= 95
+                  bridge.data.completeness_pct == null
+                    ? alpha(theme.textMuted, "20")
+                    : bridge.data.completeness_pct >= 95
                     ? alpha(theme.growth, "20")
                     : alpha(theme.decline, "20"),
                 color:
-                  bridge.data.completeness_pct != null && bridge.data.completeness_pct >= 95
+                  bridge.data.completeness_pct == null
+                    ? theme.textMuted
+                    : bridge.data.completeness_pct >= 95
                     ? theme.growth
                     : theme.decline,
               }}
@@ -174,7 +184,13 @@ export function RetrospectiveJournal() {
                 ? "…"
                 : "—"
             }
-            tone={bridge.data && bridge.data.completeness_pct != null && bridge.data.completeness_pct >= 95 ? "pos" : "neg"}
+            tone={
+              !bridge.data || bridge.data.completeness_pct == null
+                ? undefined
+                : bridge.data.completeness_pct >= 95
+                ? "pos"
+                : "neg"
+            }
           />
           <Tile
             label="Synced Trades"
@@ -365,7 +381,7 @@ export function RetrospectiveJournal() {
                 <tbody>
                   {filteredTrades.map((t) => {
                     const retro = retroMap[t.trade_id];
-                    const prov = retro ? retro.provenance : t.strategy_id ? "signal_driven" : "manual";
+                    const prov = retro ? retro.provenance : "unknown"; // Never infer provenance from strategy_id presence (the same anti-fabrication rule pilots/retrospective_composer.py itself enforces) -- until the composer's own read has resolved, the honest state is "unknown", not a guess.
                     const isWin = t.realized_pnl >= 0;
 
                     return (
@@ -473,17 +489,23 @@ export function RetrospectiveJournal() {
                           style={{
                             padding: "10px 14px",
                             textAlign: "right",
-                            color: (t.realized_pnl_pct ?? 0) >= 0 ? theme.growth : theme.decline,
+                            // A missing pct is neither a gain nor a loss --
+                            // `?? 0` previously painted it green (as if it
+                            // were a real non-negative return), a CONSTRAINT
+                            // #4-adjacent visual fabrication even though the
+                            // adjacent text already correctly showed "—".
+                            color: t.realized_pnl_pct == null ? theme.textMuted : t.realized_pnl_pct >= 0 ? theme.growth : theme.decline,
                           }}
                         >
                           {t.realized_pnl_pct != null ? `${(t.realized_pnl_pct * 100).toFixed(2)}%` : "—"}
                         </td>
 
-                        {/* MAE */}
+                        {/* MAE -- a fraction of entry price (evaluation_engine.py's
+                            contract), never a dollar amount */}
                         <td style={{ padding: "10px 14px", textAlign: "right", color: theme.decline }}>
                           {retro ? (
                             retro.excursion.mae != null ? (
-                              `$${retro.excursion.mae.toFixed(2)}`
+                              `-${(retro.excursion.mae * 100).toFixed(1)}%`
                             ) : (
                               <span style={{ fontSize: 11, color: theme.textMuted }}>
                                 {retro.bridge_status === "failed" ? "Bridge error" : "Unavailable"}
@@ -494,11 +516,11 @@ export function RetrospectiveJournal() {
                           )}
                         </td>
 
-                        {/* MFE */}
+                        {/* MFE -- likewise a fraction, never a dollar amount */}
                         <td style={{ padding: "10px 14px", textAlign: "right", color: theme.growth }}>
                           {retro ? (
                             retro.excursion.mfe != null ? (
-                              `+$${retro.excursion.mfe.toFixed(2)}`
+                              `+${(retro.excursion.mfe * 100).toFixed(1)}%`
                             ) : (
                               <span style={{ fontSize: 11, color: theme.textMuted }}>
                                 {retro.bridge_status === "failed" ? "Bridge error" : "Unavailable"}
@@ -714,7 +736,7 @@ export function RetrospectiveJournal() {
                       <div style={{ fontSize: 11, color: theme.textMuted }}>Mean MAE (Adverse)</div>
                       <div style={{ fontSize: 14, fontWeight: 600, color: theme.decline, marginTop: 2 }}>
                         {insights.data.automated_cohort.mean_mae != null
-                          ? `$${insights.data.automated_cohort.mean_mae.toFixed(2)}`
+                          ? `-${(insights.data.automated_cohort.mean_mae * 100).toFixed(1)}%`
                           : "Unavailable"}
                       </div>
                     </div>
@@ -722,7 +744,7 @@ export function RetrospectiveJournal() {
                       <div style={{ fontSize: 11, color: theme.textMuted }}>Mean MFE (Favorable)</div>
                       <div style={{ fontSize: 14, fontWeight: 600, color: theme.growth, marginTop: 2 }}>
                         {insights.data.automated_cohort.mean_mfe != null
-                          ? `+$${insights.data.automated_cohort.mean_mfe.toFixed(2)}`
+                          ? `+${(insights.data.automated_cohort.mean_mfe * 100).toFixed(1)}%`
                           : "Unavailable"}
                       </div>
                     </div>
@@ -778,7 +800,7 @@ export function RetrospectiveJournal() {
                                     {strategyId}
                                   </td>
                                   <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.total_trades}</td>
-                                  <td style={{ padding: "6px 8px", textAlign: "right", color: (s.win_rate ?? 0) >= 0.5 ? theme.growth : theme.decline }}>
+                                  <td style={{ padding: "6px 8px", textAlign: "right", color: s.win_rate == null ? theme.textMuted : s.win_rate >= 0.5 ? theme.growth : theme.decline }}>
                                     {s.win_rate != null ? `${(s.win_rate * 100).toFixed(1)}%` : "—"}
                                   </td>
                                   <td style={{ padding: "6px 8px", textAlign: "right", color: s.total_realized_pnl >= 0 ? theme.growth : theme.decline }}>
@@ -862,7 +884,7 @@ export function RetrospectiveJournal() {
                       <div style={{ fontSize: 11, color: theme.textMuted }}>Mean MAE (Adverse)</div>
                       <div style={{ fontSize: 14, fontWeight: 600, color: theme.decline, marginTop: 2 }}>
                         {insights.data.manual_cohort.mean_mae != null
-                          ? `$${insights.data.manual_cohort.mean_mae.toFixed(2)}`
+                          ? `-${(insights.data.manual_cohort.mean_mae * 100).toFixed(1)}%`
                           : "Unavailable"}
                       </div>
                     </div>
@@ -870,7 +892,7 @@ export function RetrospectiveJournal() {
                       <div style={{ fontSize: 11, color: theme.textMuted }}>Mean MFE (Favorable)</div>
                       <div style={{ fontSize: 14, fontWeight: 600, color: theme.growth, marginTop: 2 }}>
                         {insights.data.manual_cohort.mean_mfe != null
-                          ? `+$${insights.data.manual_cohort.mean_mfe.toFixed(2)}`
+                          ? `+${(insights.data.manual_cohort.mean_mfe * 100).toFixed(1)}%`
                           : "Unavailable"}
                       </div>
                     </div>

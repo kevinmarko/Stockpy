@@ -329,7 +329,7 @@ export function RetrospectiveDetailModal({
                   <div style={{ fontSize: 16, fontWeight: 700, marginTop: 4, color: theme.textPrimary }}>
                     {trade.excursion.mae != null ? (
                       <span style={{ color: theme.decline }}>
-                        ${trade.excursion.mae.toFixed(2)}
+                        -{(trade.excursion.mae * 100).toFixed(1)}%
                       </span>
                     ) : (
                       <span style={{ fontSize: 12, fontWeight: 500, color: theme.textMuted }}>
@@ -355,7 +355,7 @@ export function RetrospectiveDetailModal({
                   <div style={{ fontSize: 16, fontWeight: 700, marginTop: 4, color: theme.textPrimary }}>
                     {trade.excursion.mfe != null ? (
                       <span style={{ color: theme.growth }}>
-                        +${trade.excursion.mfe.toFixed(2)}
+                        +{(trade.excursion.mfe * 100).toFixed(1)}%
                       </span>
                     ) : (
                       <span style={{ fontSize: 12, fontWeight: 500, color: theme.textMuted }}>
@@ -467,14 +467,23 @@ export function RetrospectiveDetailModal({
                       </div>
                     </div>
                   </div>
-                ) : (
+                ) : trade.provenance === "manual" ? (
                   <div style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 1.5 }}>
                     <div>👤 Manual trade — no algorithmic signal was evaluated at entry.</div>
-                    {trade.snapshot.operator_notes && (
+                    {trade.snapshot.decision_rationale && (
                       <div style={{ marginTop: 6, fontStyle: "italic", color: theme.textPrimary }}>
-                        "{trade.snapshot.operator_notes}"
+                        "{trade.snapshot.decision_rationale}"
                       </div>
                     )}
+                  </div>
+                ) : (
+                  // Provenance "unknown" with captured=true is not the same
+                  // fact as "manual" -- collapsing the two into one branch
+                  // (a prior version did) asserts a specific claim ("no
+                  // algorithmic signal was evaluated") about a trade whose
+                  // provenance is genuinely unrecorded, not confirmed manual.
+                  <div style={{ color: theme.textMuted, fontSize: 13, fontStyle: "italic" }}>
+                    Entry provenance was not recorded as either signal-driven or manual for this trade.
                   </div>
                 )
               ) : (
@@ -510,17 +519,29 @@ export function RetrospectiveDetailModal({
                 Conviction Calibration Placement
               </div>
 
-              {trade.calibration.status === "scored" ? (
+              {trade.calibration.status === "available" ? (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
                   <div>
                     <div style={{ fontSize: 11, color: theme.textMuted }}>Conviction Bin</div>
                     <div style={{ fontSize: 15, fontWeight: 600, color: theme.textPrimary, marginTop: 2 }}>
-                      {trade.calibration.bin_range || "—"}
+                      {trade.calibration.bin_range
+                        ? `${trade.calibration.bin_range[0].toFixed(2)} – ${trade.calibration.bin_range[1].toFixed(2)}`
+                        : "—"}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: theme.textMuted }}>Historical Bin Win Rate</div>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: theme.growth, marginTop: 2 }}>
+                    <div
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 600,
+                        marginTop: 2,
+                        color:
+                          (trade.calibration.bin_win_rate ?? trade.calibration.historical_bin_win_rate) != null
+                            ? theme.growth
+                            : theme.textMuted,
+                      }}
+                    >
                       {trade.calibration.bin_win_rate != null || trade.calibration.historical_bin_win_rate != null
                         ? `${(((trade.calibration.bin_win_rate ?? trade.calibration.historical_bin_win_rate) as number) * 100).toFixed(1)}%`
                         : "—"}
@@ -529,7 +550,9 @@ export function RetrospectiveDetailModal({
                   <div>
                     <div style={{ fontSize: 11, color: theme.textMuted }}>Bin Trades Sample</div>
                     <div style={{ fontSize: 15, fontWeight: 600, color: theme.textPrimary, marginTop: 2 }}>
-                      {trade.calibration.bin_trade_count ?? 0} trades
+                      {/* CONSTRAINT #4: null (never attempted / not applicable)
+                          must never render as a fabricated "0 trades" sample. */}
+                      {trade.calibration.bin_trade_count != null ? `${trade.calibration.bin_trade_count} trades` : "—"}
                     </div>
                   </div>
                 </div>

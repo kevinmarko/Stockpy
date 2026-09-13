@@ -31,9 +31,26 @@ def execute_paper_order(
     expiration: Optional[str] = None,
     legs: Optional[List[Dict[str, Any]]] = None,
     is_live: bool = False,
+    strategy_id: Optional[str] = None,
+    pilot_id: Optional[str] = None,
+    provenance: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executes a paper order for stock or option contracts, updating PaperAccountStore.
+
+    ``strategy_id``/``pilot_id``/``provenance`` are optional overrides for a
+    caller that is NOT a genuine human placing a discretionary order -- e.g.
+    an automated writer (such as ``pilots/earnings_crush.py``'s
+    exception-recovery fallback) that reaches this generic executor after its
+    own primary, properly-attributed execution path failed. Omitting all
+    three preserves the exact original behavior: every fill is tagged
+    ``strategy_id="Manual Trade"`` (this function's real, intended caller --
+    the Options Chain / Quick Trade order ticket -- has no strategy context
+    of its own to pass). Passing them explicitly stops an AUTOMATED trade
+    from being silently misclassified as manual by `data.paper_account_store`'s
+    entry-snapshot provenance logic, which special-cases the literal string
+    "Manual Trade" as its one non-inferred signal for genuinely manual
+    orders (see docs/known_issues/paper_trade_strategy_id_vocabulary.md).
     """
     if is_live:
         return {
@@ -74,12 +91,13 @@ def execute_paper_order(
         commission = max(1.0, round(qty * 0.005, 2))
         total_cost = (qty * fill_price) + commission if side == "buy" else (qty * fill_price) - commission
 
-        # "Manual Trade" is intentional here, not a placeholder: execute_paper_order
-        # has no strategy_id/strategy_name parameter, and neither does its caller
-        # (POST /brokerage/options/order's OptionsOrderRequestModel) -- this is a
-        # human placing an order from the Options Chain / Quick Trade order ticket,
-        # with no automated-strategy context to thread through (see docs/known_issues/
-        # paper_trade_strategy_id_vocabulary.md).
+        # "Manual Trade" is the default (not a placeholder) for this
+        # function's real, intended caller -- a human placing an order from
+        # the Options Chain / Quick Trade order ticket, with no
+        # automated-strategy context of its own (see docs/known_issues/
+        # paper_trade_strategy_id_vocabulary.md). A caller that DOES have
+        # real attribution (e.g. an automated writer's exception-recovery
+        # fallback) overrides it via strategy_id/pilot_id/provenance above.
         success = store.apply_fill(
             client_order_id=client_order_id,
             symbol=symbol,
@@ -87,7 +105,9 @@ def execute_paper_order(
             qty=qty,
             fill_price=fill_price,
             commission_and_fees=commission,
-            strategy_id="Manual Trade",
+            strategy_id=strategy_id or "Manual Trade",
+            pilot_id=pilot_id,
+            provenance=provenance,
         )
 
         if not success:
@@ -251,7 +271,9 @@ def execute_paper_order(
                 net_cash_impact=net_cash_impact,
                 commission_and_fees=commission,
                 collateral_required=collateral_required,
-                strategy_id="Manual Trade",
+                strategy_id=strategy_id or "Manual Trade",
+                pilot_id=pilot_id,
+                provenance=provenance,
             )
 
             if not success:
@@ -336,9 +358,8 @@ def execute_paper_order(
             # available cash rather than unconditionally accepted.
             collateral_required = strike * 100.0 * contracts if action == "sell" else None
 
-            # "Manual Trade" is intentional here too -- see the single-leg branch's
-            # identical comment above; same function, same caller, same lack of
-            # any strategy_id context to thread through for this multi-leg branch.
+            # "Manual Trade" is the default here too -- see the stock branch's
+            # identical comment above; same override mechanism applies.
             success = store.apply_fill(
                 client_order_id=client_order_id,
                 symbol=order_symbol,
@@ -348,7 +369,9 @@ def execute_paper_order(
                 commission_and_fees=commission,
                 allow_short=True,
                 collateral_required=collateral_required,
-                strategy_id="Manual Trade",
+                strategy_id=strategy_id or "Manual Trade",
+                pilot_id=pilot_id,
+                provenance=provenance,
             )
 
             if not success:

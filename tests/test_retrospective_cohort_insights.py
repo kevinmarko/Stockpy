@@ -151,7 +151,11 @@ class TestBoundaryAndCornerCases:
         assert len(result["contrastive_insights"]) > 0
         assert "No closed trades available" in result["contrastive_insights"][0]
         assert result["bridge_health"]["total_closed_trades"] == 0
-        assert result["bridge_health"]["completeness_pct"] == 100.0
+        # CONSTRAINT #4: a genuinely empty batch has nothing to measure
+        # bridge completeness FROM -- `completeness_pct` is honestly `None`
+        # (never a fabricated 100.0 "all clear"), with `status="unknown"`.
+        assert result["bridge_health"]["completeness_pct"] is None
+        assert result["bridge_health"]["status"] == "unknown"
 
     def test_cohort_all_breakeven_trades(self):
         """Cohort where all trades have 0.0 PnL returns win_rate=0.0."""
@@ -257,7 +261,16 @@ class TestContrastiveInsightsAndBridgeHealth:
         full_text = " ".join(insights)
         assert "Automated strategies achieved" in full_text
         assert "compared to manual discretionary trading" in full_text
-        assert "Manual trades experienced higher average adverse excursion" in full_text
+        # Each cohort has only 1 trade here -- below the minimum-sample floor
+        # (`_MIN_TRADES_FOR_EXCURSION_COMPARISON`) required before an
+        # excursion comparison is stated at all. A prior version asserted the
+        # unqualified causal claim "Manual trades experienced higher average
+        # adverse excursion ... indicating wider loss tolerance or delayed
+        # stop execution" from exactly this N=1-vs-N=1 comparison -- an
+        # unearned inference this module has no statistical basis for. The
+        # honest behavior is to disclose the insufficient sample instead.
+        assert "Excursion comparison not stated (insufficient sample" in full_text
+        assert "N=1 automated, N=1 manual" in full_text
         assert "Model conviction calibration is operating" in full_text
         assert "historical trades were executed with unrecorded provenance" in full_text
 
@@ -280,5 +293,11 @@ class TestContrastiveInsightsAndBridgeHealth:
         assert health["bridged_count"] == 2
         assert health["failed_count"] == 1
         assert health["disabled_count"] == 1
-        assert math.isclose(health["completeness_pct"], 50.0)
+        # Denominator is ATTEMPTED trades (bridged + failed = 3), never raw
+        # total_closed_trades (4) -- the disabled trade was never attempted
+        # through the bridge at all, so folding it into the denominator
+        # would silently understate a real problem (a prior version computed
+        # 50.0 = 2/4 here, diluting a genuine 1-in-3 failure rate).
+        assert health["attempted_count"] == 3
+        assert math.isclose(health["completeness_pct"], round(2 / 3 * 100.0, 2), abs_tol=1e-2)
         assert health["status"] == "degraded"

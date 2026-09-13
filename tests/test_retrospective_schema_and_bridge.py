@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime, timezone, timedelta
-from unittest import mock
 import pytest
 from sqlalchemy import inspect, text
 
@@ -139,9 +138,25 @@ def test_schema_migration_idempotence_and_non_destructive(isolated_db_url):
     # Re-trigger account exists migration
     store._ensure_account_exists()
 
-    # Re-run database_setup
-    with mock.patch("settings.settings.DATABASE_URL", isolated_db_url):
-        database_setup.build_database()
+    # Re-run database_setup AGAINST THE ISOLATED TEST DB EXPLICITLY.
+    # `initialize_database(db_file=...)` accepts either a raw path or a full
+    # `sqlite:///` URL (checks for "://") -- passing `isolated_db_url`
+    # directly here is correct and requires no patching. A prior version of
+    # this test instead did `mock.patch("settings.settings.DATABASE_URL",
+    # isolated_db_url)` and called `database_setup.build_database()` with NO
+    # argument -- but `initialize_database`'s default (`db_file: str =
+    # DB_FILE`) is bound at function-DEFINITION time from
+    # `db_config.DEFAULT_DB_FILE`, and neither that constant nor
+    # `initialize_database`'s body ever reads `settings.DATABASE_URL` at all
+    # -- so the patch was a complete no-op, and this test call ran real
+    # migration DDL (WAL-mode pragma, `CREATE TABLE IF NOT EXISTS` x3,
+    # several `ALTER TABLE ADD COLUMN`) against the REAL, live, shared
+    # `~/.stockpy_local/quant_platform.db` on every run, an uncontrolled
+    # mutation of the operator's real database from a test suite. Only this
+    # sandbox's own filesystem write-allowlist (which happened to deny that
+    # path) turned it into a visible failure rather than a silent success
+    # against the wrong database. See docs/known_issues for the incident.
+    database_setup.initialize_database(db_file=isolated_db_url)
 
     # Verify data is still intact
     with store.Session() as session:

@@ -416,9 +416,18 @@ _PILOTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "pilots"
 #                           genuinely heavy diagnostic dispatch (Phase 4
 #                           LSTM-Attention forecaster), not an accidental
 #                           transitive import creeping into a read-only helper
+#   - retrospective_composer.py -> evaluation_engine, transactions_store,
+#                           data.paper_account_store, data.historical_store,
+#                           pandas, datetime, pilots.retrospective_narrative
+#                           -- same category as calibration.py above (its
+#                           entire purpose is composing a per-trade
+#                           evaluation, which needs the real evaluation
+#                           engine and the real transactions store), all
+#                           lazily imported inside function bodies except the
+#                           sibling pilots.retrospective_narrative module
 _DEPENDENCY_LIGHT_EXEMPT = {
     "attribution", "brinson", "calibration", "models", "observability", "simulation",
-    "lstm_diagnostic",
+    "lstm_diagnostic", "retrospective_composer",
 }
 
 _ALL_PILOTS_MODULES = sorted(
@@ -475,6 +484,21 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # (itself independently confirmed dependency-light below) for the
         # scan_configs section of its payload.
         allowed = allowed | {"pilots"}
+    if module_name == "retrospective_insights":
+        # pilots.retrospective_insights composes
+        # pilots.retrospective_composer.compose_retrospectives_batch (the
+        # heavy, separately-exempted composer above) via a lazy,
+        # function-body import ONLY when the caller doesn't already supply
+        # `composed_records` -- this module's own top-level imports stay
+        # stdlib (logging, typing) + pilots.retrospective_narrative's pure
+        # formatting helpers.
+        allowed = allowed | {"pilots"}
+    if module_name == "retrospective_narrative":
+        # pilots.retrospective_narrative is a pure, deterministic (non-LLM)
+        # sentence builder -- `re` backs its defense-in-depth
+        # None/NaN/null-token regex cleanup pass, its only non-stdlib-base
+        # import.
+        allowed = allowed | {"re"}
     if module_name == "scan_config_store":
         # threading backs the module-level path-keyed config cache (a fresh
         # ScanConfigStore is constructed per request by every real caller,

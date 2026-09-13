@@ -9398,8 +9398,8 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       macro_regime: "BULLISH_TREND",
       signal_score: 0.78,
       raw_forecast: 0.045,
-      key_indicators: { rsi: 58.2, macd: 1.45, adx: 28.6 },
-      operator_notes: null,
+      key_indicators_json: JSON.stringify({ rsi: 58.2, macd: 1.45, adx: 28.6 }),
+      decision_rationale: null,
     },
     bridge_status: "bridged",
     bridged_trade_id: 20101,
@@ -9409,17 +9409,19 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       evaluation_status: "available",
       status: "available",
       bridge_reached: true,
-      mae: -120.0,
-      mfe: 1450.0,
+      // Fractions of entry price (evaluation_engine.py's contract), never
+      // dollar amounts -- MAE is always a positive magnitude.
+      mae: 0.008,
+      mfe: 0.0966,
       edge_ratio: 12.08,
       realized_slippage: 0.02,
       reason: null,
     },
     calibration: {
-      status: "scored",
-      calibration_status: "scored",
+      status: "available",
+      calibration_status: "available",
       conviction: 0.85,
-      bin_range: "[0.8, 1.0]",
+      bin_range: [0.8, 1.0],
       bin_center: 0.9,
       bin_win_rate: 0.82,
       historical_bin_win_rate: 0.82,
@@ -9427,7 +9429,7 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       calibration_error: 0.03,
       reason: null,
     },
-    narrative: "Executed signal-driven BUY on AAPL with 0.85 conviction in BULLISH_TREND regime. Hold-period MFE reached +$1,450.00 against MAE of -$120.00 (Edge Ratio: 12.08x).",
+    narrative: "Executed signal-driven BUY on AAPL with 0.85 conviction in BULLISH_TREND regime. Hold-period excursion reached MFE +9.7% vs MAE -0.8% (Edge Ratio: 12.08x).",
   },
   // 2. Manual discretionary trade (calibration not applicable)
   {
@@ -9463,8 +9465,8 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       macro_regime: null,
       signal_score: null,
       raw_forecast: null,
-      key_indicators: null,
-      operator_notes: "Discretionary swing entry ahead of product announcement.",
+      key_indicators_json: null,
+      decision_rationale: "Discretionary swing entry ahead of product announcement.",
     },
     bridge_status: "bridged",
     bridged_trade_id: 20102,
@@ -9474,8 +9476,8 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       evaluation_status: "available",
       status: "available",
       bridge_reached: true,
-      mae: -80.0,
-      mfe: 450.0,
+      mae: 0.0125,
+      mfe: 0.0703,
       edge_ratio: 5.63,
       realized_slippage: 0.01,
       reason: null,
@@ -9488,7 +9490,9 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       bin_center: null,
       bin_win_rate: null,
       historical_bin_win_rate: null,
-      bin_trade_count: 0,
+      // null -- never a fabricated 0 -- no calibration lookup was ever
+      // attempted for a manual/not_applicable trade.
+      bin_trade_count: null,
       calibration_error: null,
       reason: "Model calibration not applicable for manual or uncalibrated trades",
     },
@@ -9526,8 +9530,8 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       evaluation_status: "available",
       status: "available",
       bridge_reached: true,
-      mae: -420.0,
-      mfe: 110.0,
+      mae: 0.05,
+      mfe: 0.013,
       edge_ratio: 0.26,
       realized_slippage: 0.05,
       reason: null,
@@ -9540,11 +9544,11 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       bin_center: null,
       bin_win_rate: null,
       historical_bin_win_rate: null,
-      bin_trade_count: 0,
+      bin_trade_count: null,
       calibration_error: null,
       reason: "Snapshot not captured",
     },
-    narrative: "Executed BUY on NVDA; entry context not captured. Hold-period MAE was -$420.00.",
+    narrative: "Executed BUY on NVDA; entry context not captured. Hold-period excursion reached MAE -5.0% vs MFE +1.3%.",
   },
   // 4. Failed bridge trade (excursion data unavailable)
   {
@@ -9594,10 +9598,10 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       reason: "Evaluation data unavailable: bridge status 'failed'",
     },
     calibration: {
-      status: "scored",
-      calibration_status: "scored",
+      status: "available",
+      calibration_status: "available",
       conviction: 0.72,
-      bin_range: "[0.6, 0.8]",
+      bin_range: [0.6, 0.8],
       bin_center: 0.7,
       bin_win_rate: 0.68,
       historical_bin_win_rate: 0.68,
@@ -9624,11 +9628,18 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
     realized_pnl_pct: null,
     holding_period_days: null,
     close_reason: "unknown",
-    provenance: "manual",
+    // Provenance is "unknown" -- NEVER "manual" -- when captured is false.
+    // The composer's own anti-fabrication gate forces this unconditionally
+    // for a missing snapshot (it never trusts ANY provenance value absent a
+    // genuinely captured snapshot, regardless of what a caller might have
+    // separately believed about how the trade was placed) -- this IS the
+    // worst-case scenario's whole point: three independent honest
+    // "unavailable"/"not captured" signals, never a plausible-sounding guess.
+    provenance: "unknown",
     snapshot: {
       captured: false,
       decision_context_status: "not_captured",
-      provenance: "manual",
+      provenance: "unknown",
       reason: "not captured",
     },
     bridge_status: "failed",
@@ -9653,11 +9664,11 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
       bin_center: null,
       bin_win_rate: null,
       historical_bin_win_rate: null,
-      bin_trade_count: 0,
+      bin_trade_count: null,
       calibration_error: null,
       reason: "Model calibration not applicable for manual or uncalibrated trades",
     },
-    narrative: "Manual discretionary trade on GOOGL; snapshot not captured and evaluation data unavailable.",
+    narrative: "Trade executed with unrecorded provenance; entry context not captured and evaluation data unavailable (bridge failed).",
   },
 ];
 
@@ -9674,8 +9685,10 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
     profit_factor: 2.85,
     mean_holding_period_days: 3.8,
     mean_edge_ratio: 4.12,
-    mean_mae: -95.5,
-    mean_mfe: 420.0,
+    // Fractions of entry price, always a positive magnitude for MAE
+    // (evaluation_engine.py's F-02 fix) -- never a negative dollar amount.
+    mean_mae: 0.095,
+    mean_mfe: 0.42,
     symbols: ["AAPL", "NVDA", "TSLA"],
     calibration_brier_score: 0.118,
     strategies: {
@@ -9712,8 +9725,8 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
     profit_factor: 2.85,
     mean_holding_period_days: 3.8,
     mean_edge_ratio: 4.12,
-    mean_mae: -95.5,
-    mean_mfe: 420.0,
+    mean_mae: 0.095,
+    mean_mfe: 0.42,
     symbols: ["AAPL", "NVDA", "TSLA"],
   },
   manual_cohort: {
@@ -9728,8 +9741,8 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
     profit_factor: 1.15,
     mean_holding_period_days: 1.8,
     mean_edge_ratio: 1.75,
-    mean_mae: -180.0,
-    mean_mfe: 220.0,
+    mean_mae: 0.18,
+    mean_mfe: 0.22,
     symbols: ["MSFT", "GOOGL"],
     calibration_status: "not_applicable",
   },
@@ -9745,14 +9758,18 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
     profit_factor: 0.7,
     mean_holding_period_days: 4.5,
     mean_edge_ratio: 1.1,
-    mean_mae: -210.0,
-    mean_mfe: 180.0,
+    mean_mae: 0.21,
+    mean_mfe: 0.18,
     symbols: ["NVDA", "SPY"],
     note: "Historical trades without entry snapshot; excluded from systematic model evaluation.",
   },
   contrastive_insights: [
-    "Automated strategies achieved a 75.0% win rate (Edge Ratio: 4.12) over a 3.8-day average holding period, compared to manual discretionary trading's 50.0% win rate (Edge Ratio: 1.75) over a 1.8-day average holding period.",
-    "Manual trades experienced higher average adverse excursion (MAE 18.0% vs 9.5%), indicating wider loss tolerance or delayed stop execution.",
+    "Automated strategies achieved a 75.0% win rate (Edge Ratio: 4.12) over a 3.8-day average holding period (N=12), compared to manual discretionary trading's 50.0% win rate (Edge Ratio: 1.75) over a 1.8-day average holding period (N=6).",
+    // Measurement only -- no causal attribution ("indicating wider loss
+    // tolerance or delayed stop execution" was an unearned inference this
+    // module has no statistical basis for; see pilots/retrospective_
+    // insights.py's _build_contrastive_insights).
+    "Manual trades measured a higher average adverse excursion than automated trades (MAE 18.0% vs 9.5%; N=6 manual, N=12 automated).",
     "Model conviction calibration is operating with a Brier score of 0.118 across 12 automated trades.",
   ],
   bridge_health: {

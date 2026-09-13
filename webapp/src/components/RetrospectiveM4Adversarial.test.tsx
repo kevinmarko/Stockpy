@@ -278,15 +278,21 @@ describe("Milestone 4 Adversarial UI State Testing (WP-H)", () => {
           evaluation_status: "available",
           status: "available",
           bridge_reached: true,
-          mae: -50.0,
-          mfe: 600.0,
+          // Fractions of entry price (evaluation_engine.py's contract) --
+          // MAE is always a positive magnitude, never a negative dollar
+          // amount.
+          mae: 0.05,
+          mfe: 0.10,
           edge_ratio: 12.0,
           realized_slippage: 0.01,
         },
         calibration: {
-          status: "scored",
+          // Real wire value is "available" -- the backend has never emitted
+          // "scored" (see pilots/retrospective_composer.py's STATUS_*
+          // constants).
+          status: "available",
           conviction: 0.90,
-          bin_range: "[0.8, 1.0]",
+          bin_range: [0.8, 1.0],
           bin_win_rate: 0.85,
           bin_trade_count: 30,
           calibration_error: 0.05,
@@ -309,10 +315,10 @@ describe("Milestone 4 Adversarial UI State Testing (WP-H)", () => {
       expect(screen.getByText("LOW_VOLATILITY")).toBeInTheDocument();
       expect(screen.getByText("3.5%")).toBeInTheDocument(); // Raw forecast
       expect(screen.getByText("0.85")).toBeInTheDocument(); // Signal score
-      expect(screen.getByText("$-50.00")).toBeInTheDocument(); // MAE
-      expect(screen.getByText("+$600.00")).toBeInTheDocument(); // MFE
+      expect(screen.getByText("-5.0%")).toBeInTheDocument(); // MAE
+      expect(screen.getByText("+10.0%")).toBeInTheDocument(); // MFE
       expect(screen.getByText("12.00x")).toBeInTheDocument(); // Edge ratio
-      expect(screen.getByText("[0.8, 1.0]")).toBeInTheDocument(); // Bin range
+      expect(screen.getByText("0.80 – 1.00")).toBeInTheDocument(); // Bin range
       expect(screen.getByText("85.0%")).toBeInTheDocument(); // Bin win rate
       expect(screen.getByText("30 trades")).toBeInTheDocument(); // Sample count
     });

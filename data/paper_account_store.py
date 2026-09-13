@@ -2010,6 +2010,18 @@ class PaperAccountStore:
         Queries the durable `paper_closed_trades` table to compute aggregate bridge
         telemetry: total closed trades, bridged count, failed count, disabled count,
         completeness percentage, and system health status.
+
+        CONSTRAINT #4 / #6: `completeness_pct`/`status` are NEVER reported as a
+        fabricated "100.0 / healthy" for a state this method could not actually
+        measure -- that is exactly the failure mode this metric exists to catch
+        (WP-D). The one case where `100.0`/`"disabled"` IS the honest answer is
+        when the bridge is deliberately turned off (`bridge_enabled=False`) --
+        there is genuinely nothing to bridge, so "100% of nothing" is a
+        defensible convention, not a fabrication, and is preserved unchanged.
+        Everywhere else -- the table doesn't exist yet, the query itself
+        raised, or the bridge is ON but zero trades have actually been
+        attempted through it -- reports `completeness_pct=None`/
+        `status="unknown"` rather than a fabricated all-clear.
         """
         bridge_enabled = bool(getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False))
 
@@ -2024,8 +2036,8 @@ class PaperAccountStore:
                         "bridged_count": 0,
                         "failed_count": 0,
                         "disabled_count": 0,
-                        "completeness_pct": 100.0,
-                        "status": "disabled" if not bridge_enabled else "healthy",
+                        "completeness_pct": 100.0 if not bridge_enabled else None,
+                        "status": "disabled" if not bridge_enabled else "unknown",
                         "last_failure": None,
                     }
             except Exception:
@@ -2049,8 +2061,8 @@ class PaperAccountStore:
                     "bridged_count": 0,
                     "failed_count": 0,
                     "disabled_count": 0,
-                    "completeness_pct": 100.0,
-                    "status": "disabled" if not bridge_enabled else "healthy",
+                    "completeness_pct": 100.0 if not bridge_enabled else None,
+                    "status": "disabled" if not bridge_enabled else "unknown",
                     "last_failure": None,
                 }
 
@@ -2065,11 +2077,23 @@ class PaperAccountStore:
 
             if attempted_count > 0:
                 completeness_pct = round((bridged_count / attempted_count) * 100.0, 2)
-            else:
+            elif not bridge_enabled:
+                # Bridge deliberately off -- "100% of nothing" is the
+                # honest, pre-existing convention (test_bridge_disabled_
+                # sets_disabled_status / test_bridge_completeness_metrics_
+                # zero_closed_trades), not a fabrication.
                 completeness_pct = 100.0
+            else:
+                # Bridge is ON but nothing has actually been attempted yet
+                # (a cold-start store, or every closed trade landed in the
+                # disabled/not_attempted bucket) -- genuinely unmeasured,
+                # never a fabricated all-clear.
+                completeness_pct = None
 
             if not bridge_enabled:
                 status = "disabled"
+            elif attempted_count == 0:
+                status = "unknown"
             elif failed_count > 0:
                 status = "degraded"
             else:

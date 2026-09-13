@@ -30,62 +30,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Self
-from unittest.mock import patch
+from typing import Any
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Compatibility Primitives
-# =============================================================================
-
-class DualStatusStr(str):
-    """String subclass that compares equal across formatting variations.
-    Satisfies both 'not captured' and 'not_captured', 'not applicable' and 'not_applicable',
-    or 'insufficient sample' and 'insufficient_sample'/'insufficient_data'.
-    """
-
-    _norm: str
-    _synonyms: set[str]
-
-    def __new__(cls, value: str, synonyms: tuple[str, ...] | None = None) -> Self:
-        obj = super().__new__(cls, value)
-        obj._norm = value.replace("_", " ").strip().lower()
-        obj._synonyms = {s.replace("_", " ").strip().lower() for s in (synonyms or ())}
-        return obj
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, str):
-            other_norm = other.replace("_", " ").strip().lower()
-            if self._norm == other_norm or other_norm in self._synonyms:
-                return True
-        return super().__eq__(other)
-
-    def __hash__(self) -> int:
-        return hash(self._norm)
-
-
-import sys
-import weakref
-
-_ACTIVE_PAPER_STORES: weakref.WeakSet = weakref.WeakSet()
-
-try:
-    from data.paper_account_store import PaperAccountStore as _PAS
-
-    _orig_pas_init = _PAS.__init__
-
-    def _hooked_pas_init(self: Any, *args: Any, **kwargs: Any) -> None:
-        _orig_pas_init(self, *args, **kwargs)
-        _ACTIVE_PAPER_STORES.add(self)
-
-    _PAS.__init__ = _hooked_pas_init
-except Exception:  # noqa: BLE001, S110
-    pass
-
 
 # =============================================================================
 # Numeric Formatting & Deterministic Narrative (Imported from pilots.retrospective_narrative)
@@ -94,6 +43,25 @@ except Exception:  # noqa: BLE001, S110
 from pilots.retrospective_narrative import (
     build_trade_narrative,
 )
+
+# Canonical status vocabulary this module emits on the wire (underscore form,
+# matching `provenance`/`bridge_status`'s existing convention and
+# webapp/src/api/types.ts's declared literal union) -- a single spelling, not
+# two forms reconciled via a custom str subclass with cross-format __eq__. A
+# prior version used a `DualStatusStr` shim specifically so both spellings
+# ("not captured" / "not_captured") compared equal in Python -- which masked
+# a genuine disagreement between this module and its own test suite rather
+# than resolving it, evaporated the moment the value crossed the JSON wire
+# (FastAPI serializes the plain string value, not the custom __eq__), and
+# violated the str/hash equality invariant (`DualStatusStr('x') == 'x'` but
+# `hash(...)` differs), silently breaking any future set/dict lookup on the
+# field. See docs/known_issues for the incident.
+STATUS_NOT_CAPTURED = "not_captured"
+STATUS_NOT_APPLICABLE = "not_applicable"
+STATUS_INSUFFICIENT_SAMPLE = "insufficient_sample"
+STATUS_AVAILABLE = "available"
+STATUS_CAPTURED = "captured"
+STATUS_EVALUATION_UNAVAILABLE = "evaluation data unavailable"
 
 # =============================================================================
 # Retrospective Composer
@@ -223,10 +191,24 @@ class RetrospectiveComposer:
         closed_trade: dict[str, Any],
         data_provider: Any | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """Construct an isolated in-memory TransactionsStore containing strictly the single
-        bridged trade being evaluated, patch TransactionsStore, and invoke evaluate_portfolio.
+        """Construct an isolated in-memory TransactionsStore containing strictly the
+        single trade being evaluated, and invoke evaluate_portfolio() against it
+        via EXPLICIT dependency injection (evaluate_portfolio's own
+        ``transactions_store=`` parameter).
 
-        This eliminates multi-trade excursion collisions across trades for the same symbol.
+        This eliminates multi-trade excursion collisions across trades for the
+        same symbol -- WITHOUT resorting to `unittest.mock.patch`ing the
+        process-global `transactions_store.TransactionsStore` symbol, which a
+        prior version of this method did. That approach was a genuine
+        production hazard: this method is reachable from a synchronous
+        FastAPI endpoint dispatched to Starlette's worker threadpool, and a
+        module-level monkeypatch is visible to every thread in the process
+        for the duration of the `with` block -- a concurrent request (to this
+        same endpoint for a DIFFERENT trade, or to any other code path that
+        lazily resolves `TransactionsStore`) could silently read this
+        throwaway single-trade store instead of the real one, and a
+        non-LIFO patch exit could leave the module permanently pointed at a
+        stale mock. See docs/known_issues for the incident.
         Returns: (excursion_record, bars_available)
         """
         symbol = str(closed_trade.get("symbol") or "").strip().upper()
@@ -262,25 +244,6 @@ class RetrospectiveComposer:
         else:
             exit_dt = datetime.now(timezone.utc)
 
-        # 1. Create isolated in-memory TransactionsStore containing strictly this single trade
-        from transactions_store import TransactionsStore
-        iso_store = TransactionsStore(db_url="sqlite:///:memory:")
-        t_id = iso_store.record_trade(
-            symbol=symbol,
-            side=side,
-            entry_ts=entry_dt,
-            entry_price=entry_price,
-            shares=qty,
-            strategy=closed_trade.get("strategy_id"),
-            notes=f"Isolated retrospective evaluation for trade {closed_trade.get('trade_id')}",
-            conviction=closed_trade.get("conviction"),
-        )
-        iso_store.close_trade(
-            trade_id=t_id,
-            exit_ts=exit_dt,
-            exit_price=exit_price,
-        )
-
         test_df = pd.DataFrame([{
             "Symbol": symbol,
             "Price": entry_price,
@@ -293,8 +256,34 @@ class RetrospectiveComposer:
         eval_slippage = None
 
         try:
-            with patch("transactions_store.TransactionsStore", return_value=iso_store):
-                eval_df = self.evaluation_engine.evaluate_portfolio(test_df, data_provider=data_provider)
+            # 1. Create isolated in-memory TransactionsStore containing
+            # strictly this single trade, and inject it EXPLICITLY into
+            # evaluate_portfolio() via its own `transactions_store=`
+            # parameter -- inside this try so a genuine construction/write
+            # failure dead-letters into the honest "evaluation data
+            # unavailable" record below, instead of propagating as an
+            # uncaught 500.
+            from transactions_store import TransactionsStore
+            iso_store = TransactionsStore(db_url="sqlite:///:memory:")
+            t_id = iso_store.record_trade(
+                symbol=symbol,
+                side=side,
+                entry_ts=entry_dt,
+                entry_price=entry_price,
+                shares=qty,
+                strategy=closed_trade.get("strategy_id"),
+                notes=f"Isolated retrospective evaluation for trade {closed_trade.get('trade_id')}",
+                conviction=closed_trade.get("conviction"),
+            )
+            iso_store.close_trade(
+                trade_id=t_id,
+                exit_ts=exit_dt,
+                exit_price=exit_price,
+            )
+
+            eval_df = self.evaluation_engine.evaluate_portfolio(
+                test_df, data_provider=data_provider, transactions_store=iso_store
+            )
 
             if eval_df is not None and not eval_df.empty:
                 row0 = eval_df.iloc[0]
@@ -396,51 +385,6 @@ class RetrospectiveComposer:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("TransactionsStore Trade lookup error: %s", exc)
 
-        # Context-aware store resolution for test environments (e.g. test_wp_c calling without explicit store arg)
-        if closed_trade is None:
-            candidate_stores: list[Any] = list(_ACTIVE_PAPER_STORES)
-            try:
-                f = sys._getframe()
-                for _ in range(6):
-                    if f is None:
-                        break
-                    for v in list(f.f_locals.values()):
-                        from data.paper_account_store import PaperAccountStore
-                        if isinstance(v, PaperAccountStore) and v is not target_paper_store and v not in candidate_stores:
-                            candidate_stores.append(v)
-                    f = f.f_back
-            except Exception:  # noqa: BLE001, S110
-                pass
-
-            for alt_store in candidate_stores:
-                if hasattr(alt_store, "Session"):
-                    try:
-                        from data.paper_account_store import (
-                            PaperClosedTrade,
-                            session_scope,
-                        )
-                        with session_scope(alt_store.Session) as session:
-                            if int_id is not None:
-                                row = session.query(PaperClosedTrade).filter_by(trade_id=int_id).first()
-                                if row is not None:
-                                    closed_trade = self._row_to_closed_trade_dict(row)
-                                    target_paper_store = alt_store
-                                    break
-                    except Exception:  # noqa: BLE001, S110
-                        pass
-                if closed_trade is None and hasattr(alt_store, "get_full_closed_trades"):
-                    try:
-                        all_trades = alt_store.get_full_closed_trades(limit=1000)
-                        for t in all_trades:
-                            if str(t.get("trade_id")) == str(trade_id):
-                                closed_trade = t
-                                target_paper_store = alt_store
-                                break
-                    except Exception:  # noqa: BLE001, S110
-                        pass
-                if closed_trade is not None:
-                    break
-
         if closed_trade is None:
             return None
 
@@ -485,8 +429,8 @@ class RetrospectiveComposer:
             macro_regime = None
             operator_notes = None
             snapshot_record = {
-                "decision_context_status": DualStatusStr("not captured"),
-                "status": DualStatusStr("not captured"),
+                "decision_context_status": STATUS_NOT_CAPTURED,
+                "status": STATUS_NOT_CAPTURED,
                 "captured": False,
                 "snapshot_id": None,
                 "provenance": "unknown",
@@ -572,9 +516,9 @@ class RetrospectiveComposer:
                 cal_reason = "calibration engine error"
 
             if bin_win_rate is None or bin_trade_count < 5:
-                cal_status = DualStatusStr("insufficient_sample", ("insufficient_data", "insufficient data"))
+                cal_status = STATUS_INSUFFICIENT_SAMPLE
             else:
-                cal_status = "available"
+                cal_status = STATUS_AVAILABLE
 
             calibration_record = {
                 "status": cal_status,
@@ -590,14 +534,22 @@ class RetrospectiveComposer:
             }
         else:
             calibration_record = {
-                "status": DualStatusStr("not_applicable"),
-                "calibration_status": DualStatusStr("not_applicable"),
+                "status": STATUS_NOT_APPLICABLE,
+                "calibration_status": STATUS_NOT_APPLICABLE,
                 "conviction": None,
                 "bin_range": None,
                 "bin_center": None,
                 "bin_win_rate": None,
                 "historical_bin_win_rate": None,
-                "bin_trade_count": 0,
+                # None -- NOT a fabricated 0 -- because no calibration lookup
+                # was ever attempted here (manual/unknown provenance, or a
+                # signal-driven trade with no captured conviction). A `0`
+                # would look identical to a genuine "we looked, found an
+                # empty bin" measurement (the `insufficient_sample` branch
+                # above, which legitimately can report a real `0`), letting
+                # the narrative render a fabricated "N=0 < 5" sample-size
+                # claim for a trade that was never actually binned at all.
+                "bin_trade_count": None,
                 "calibration_error": None,
                 "reason": "Model calibration not applicable for manual or uncalibrated trades",
             }
