@@ -22,7 +22,12 @@ describe("Milestone M3 Frontend Adversarial Testing", () => {
       expect(res.symbol).toBe("NVDA");
       expect(res.company_profile.available).toBe(false);
       expect(res.company_profile.description).toBeNull();
-      expect(res.company_profile.reason).toContain("FMP_PROFILE_ENABLED=False");
+      // Matches the real backend's own generic, cause-blind template
+      // ("FMP profile unavailable for {sym}") -- flag-off and a live fetch
+      // failure are deliberately indistinguishable to the end user, so the
+      // fixture must not invent a more specific reason than live produces
+      // (fixed 2026-09-12 audit: the fixture previously disclosed the cause).
+      expect(res.company_profile.reason).toBe("FMP profile unavailable for NVDA");
       expect(res.tracking.tracked).toBe(true);
       expect(res.factor_breakdown.available).toBe(true);
     });

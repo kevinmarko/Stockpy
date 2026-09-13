@@ -1,13 +1,77 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api, apiMeta } from "../api/client";
 import type { PilotSummary, RadarItem } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PilotCard, PopularCard } from "../components/PilotCard";
 import { RadarCard } from "../components/RadarCard";
+import { SymbolInput } from "../components/SymbolInput";
 import { ErrorState, Loading, StaleDataNotice, InfoTip } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
+
+/**
+ * "Search any stock" -- the primary, above-the-fold entry point on this
+ * screen (2026-09, "Invert The Default" Wave 1D). Embeds a live SymbolInput
+ * (universe-first by default -- see `useSearchDefault()`/`SymbolInput`'s own
+ * docstring) so a first-time or returning operator can jump straight to ANY
+ * ticker, tracked or not, without first navigating to a dedicated screen.
+ * Submitting routes into the existing per-symbol detail page
+ * (`/symbol/:ticker` -> `SymbolDetail`, `App.tsx`). This is complementary
+ * to, not a replacement for, the attribute-based Symbol Screener (sector /
+ * market-cap / etc. filters) -- linked here for the "browse by attribute"
+ * case, and still reachable via its own tile in the Explore grid below.
+ * Presentation-layer only: no new data fetch, no change to what the
+ * pipeline evaluates.
+ */
+function SearchHeroSection() {
+  const nav = useNavigate();
+  return (
+    <section
+      className="card card-pad"
+      style={{
+        marginTop: "var(--s-4)",
+        marginBottom: "var(--s-2)",
+        border: `1px solid ${theme.accent}`,
+        background: "rgba(99,102,241,0.06)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          flexWrap: "wrap",
+          gap: "var(--s-2)",
+        }}
+      >
+        <h2 style={{ margin: 0 }}>Search any stock</h2>
+        <Link
+          to="/symbol-screener"
+          style={{ fontSize: "var(--t-caption)", color: theme.accent, textDecoration: "none", whiteSpace: "nowrap" }}
+        >
+          Or filter the whole market →
+        </Link>
+      </div>
+      <p
+        style={{
+          color: theme.textMuted,
+          fontSize: "var(--t-callout)",
+          marginTop: "var(--s-1)",
+          marginBottom: "var(--s-3)",
+        }}
+      >
+        Not just your tracked list -- look up any ticker in the market.
+      </p>
+      <SymbolInput
+        label="Symbol"
+        buttonText="Go"
+        testId="marketplace-search"
+        onSubmit={(sym) => nav(`/symbol/${encodeURIComponent(sym)}`)}
+      />
+    </section>
+  );
+}
 
 /**
  * "Today's Radar" — a small, ranked, explainable signal-based discovery feed
@@ -244,6 +308,8 @@ export function Marketplace() {
       </div>
 
       <TabGuide tabKey="pilots" />
+
+      <SearchHeroSection />
 
       <RadarSection />
       

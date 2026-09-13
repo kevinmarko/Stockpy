@@ -76,6 +76,7 @@ import { ReportPreviewModal } from "./components/ReportPreviewModal";
 import { TickerDrawer } from "./components/TickerDrawer";
 import { ExplainTickerDrawer } from "./components/ExplainTickerDrawer";
 import { ExplainTickerProvider } from "./context/ExplainTickerContext";
+import { SearchDefaultProvider } from "./context/SearchDefaultContext";
 import { UniverseTransparency } from "./screens/UniverseTransparency";
 import { TopStatusBar } from "./components/TopStatusBar";
 import { ToastProvider } from "./components/ToastProvider";
@@ -241,6 +242,7 @@ export default function App() {
           <AutoRefreshProvider>
           <ExecutionModeProvider>
           <JobStatusProvider>
+          <SearchDefaultProvider>
           <ExplainTickerProvider>
           <div className="app app-shell">
             <Sidebar />
@@ -360,6 +362,7 @@ export default function App() {
             <ExplainTickerDrawer />
           </div>
           </ExplainTickerProvider>
+          </SearchDefaultProvider>
           </JobStatusProvider>
           </ExecutionModeProvider>
         </AutoRefreshProvider>
