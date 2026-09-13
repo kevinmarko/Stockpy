@@ -991,6 +991,19 @@ only suppresses *new* BUY allocations.
 
 ## 16. Adding Tickers or Changing the Universe
 
+### Universe Transparency Screen
+
+The **Universe Transparency** screen (under Operations → Universe Transparency) allows you to inspect the operational status of your tracked tickers. The top-line metrics show a three-number distinction:
+- **Tracked universe**: The total number of symbols processed.
+- **Forecast-covered**: Symbols with enough history for price projections.
+- **Full coverage**: Symbols with both quotes and fundamentals.
+
+If a symbol is not currently tracked and you want to look it up, you can use the **Symbol Screener** to search the wider market.
+
+### Explain This Ticker
+
+On the Universe Transparency screen (and other ticker lists), you can click the **ⓘ button** next to any symbol to open the **Explain This Ticker** slide-over drawer. This drawer breaks down exactly why a symbol is tracked (e.g., held in your account, on a watchlist, or from the fallback sheet), its current data coverage, and if it is being automatically dropped due to consecutive bad rating cycles.
+
 ### In `.env` (simplest)
 
 ```

@@ -372,7 +372,6 @@ function PromptDetailModal({
               currentBodyVersion={data.found ? data.version : null}
               onPinChanged={() => {
                 onPinChanged();
-                reload();
               }}
             />
           </>

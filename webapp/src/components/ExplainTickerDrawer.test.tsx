@@ -65,10 +65,15 @@ describe("ExplainTickerDrawer", () => {
 
     expect(await screen.findByRole("heading", { name: "NVDA" })).toBeInTheDocument();
 
-    // Notice that company profile is disabled/unavailable without hallucinating
+    // Notice that company profile is disabled/unavailable without hallucinating.
+    // The reason text matches the real backend's own generic, cause-blind
+    // template (`api/data_api.py`'s "FMP profile unavailable for {sym}") --
+    // flag-off and a live fetch failure are deliberately indistinguishable
+    // to the end user, so the fixture must not invent a more specific,
+    // cause-revealing message than live actually produces.
     const notice = await screen.findByTestId("profile-unavailable-notice");
     expect(notice).toHaveTextContent(/Company description unavailable/i);
-    expect(notice).toHaveTextContent(/FMP_PROFILE_ENABLED=False/i);
+    expect(notice).toHaveTextContent(/FMP profile unavailable for NVDA/i);
 
     // Tracking and factor breakdown are still honestly shown
     expect(screen.getByTestId("why-tracked-section")).toBeInTheDocument();

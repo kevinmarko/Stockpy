@@ -218,6 +218,16 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A highly correlated alternative security (like a sector ETF) bought when selling the original asset for tax-loss harvesting to maintain market exposure while waiting out the wash-sale rule window.",
   "correlation drift":
     "When a proxy security stops tracking its target asset closely enough. A background process continually monitors this correlation and flags if the proxy relationship weakens below a safety threshold.",
+  "tracked universe":
+    "The core set of symbols the pipeline processes every run, assembled from your holdings and watchlists. These are the symbols that get daily action signals and size recommendations.",
+  "forecast-covered":
+    "Tracked symbols with enough price history (typically ~2 years) to run the multi-horizon forecasting models (CNN-LSTM, ARIMA, Prophet). Symbols without enough history still get technical/fundamental analysis, but no price projection.",
+  "data coverage":
+    "The operational status of a symbol: Full (quotes and fundamentals), Quotes Only, Equity Only, or Uncovered. A symbol missing fundamentals falls back to technical-only evaluation.",
+  "explain this ticker":
+    "The slide-over drawer opened via the ⓘ button on the Tracked Universe table. It breaks down exactly why a symbol is tracked (is it held? on a watchlist? the fallback sheet?), what its current coverage is, and if it's dropping, how many bad cycles it has accumulated.",
+  "symbol screener":
+    "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist.",
   "options delta":
     "The rate of change of an option's price per $1 move in the underlying stock. Calls have positive delta (0 to 1), puts have negative delta (-1 to 0). A delta of 0.30 means the option price moves ~$0.30 for each $1 stock move.",
   "options theta":
@@ -574,8 +584,8 @@ export const TAB_HELP: Record<string, TabHelp> = {
   universe: {
     title: "Universe Transparency",
     description:
-      "Inspect the operational status of all tracked tickers across data streams (quotes, fundamentals, forecasts). Identifies data gaps, rating exclusion, and allows syncing or re-including symbols with honest non-fabrication.",
-    keyConcepts: ["symbol rating"],
+      "Inspect the operational status of your tracked tickers. The top-line metrics show a three-number distinction: Tracked (the total symbols processed), Forecast-covered (those with enough history for price projections), and Full coverage (those with both quotes and fundamentals). For symbols not yet tracked in the wider market, use the Symbol Screener.",
+    keyConcepts: ["tracked universe", "forecast-covered", "data coverage", "explain this ticker", "symbol rating", "symbol screener"],
   },
 };
 
