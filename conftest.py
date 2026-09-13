@@ -330,6 +330,34 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_trade_decision_snapshot_db_in_tests(monkeypatch):
+    """Point the default trade-decision-snapshot DB resolver at an in-memory
+    db for every test, unless the test passes its own explicit ``db_url`` to
+    ``TradeDecisionSnapshotStore``.
+
+    Same risk class as ``_isolate_validation_runs_db_in_tests`` /
+    ``_isolate_execution_audit_db_in_tests`` / ``_isolate_broker_fills_db_in_tests``
+    above: ``data/paper_account_store.py``'s ``apply_fill``/
+    ``apply_multi_leg_fill``/``apply_roll_fill`` best-effort construct a bare
+    ``TradeDecisionSnapshotStore()`` (no explicit URL) whenever a caller
+    passes ``decision_context`` and a genuinely new position is opened -- an
+    IMPLICIT write reachable from the dozens of pre-existing
+    ``tests/test_paper_account_store.py`` / ``tests/test_options_paper_executor.py``
+    / ``tests/test_fmp_paper_broker.py`` test cases that already drive real
+    fills through those methods. Left unguarded, running this suite would
+    mutate the operator's real ``~/.stockpy_local/quant_platform.db`` schema
+    and seed it with fake decision snapshots on every test run.
+
+    Lazy import so a broken import in the module surfaces as a test failure
+    for whichever test actually touches it, not a collection-time failure
+    for the entire suite.
+    """
+    import data.trade_decision_snapshot_store as _tdss
+
+    monkeypatch.setattr(_tdss, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
 def _no_forecast_tracker_due_date_lookup_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable ForecastTracker.update_actuals's due-date-close lookup (the F5
     fix, ``settings.FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED``) for every test.

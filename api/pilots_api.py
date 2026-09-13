@@ -159,6 +159,7 @@ from pilots import (
     agentic,
     alerts_feed,
     attribution,
+    bridge_completeness,
     brinson,
     calibration,
     catalog,
@@ -174,6 +175,9 @@ from pilots import (
     performance,
     radar_ranking,
     realized,
+    retrospective_composer,
+    retrospective_insights,
+    retrospective_narrative,
     rlhf_review_queue,
     rolling_beta,
     run_status,
@@ -6123,6 +6127,81 @@ def get_paper_broker_closed_trades(symbol: Optional[str] = None, limit: int = 10
     """Realized-PnL history for flattened/expired/rolled paper positions."""
     from pilots.paper_broker import get_closed_trades
     return get_closed_trades(symbol=symbol, limit=limit)
+
+# ---------------------------------------------------------------------------
+# Retrospective Learning Loop / Trade Journal (read-only; fail-open read tier)
+# ---------------------------------------------------------------------------
+
+@app.get("/trade-journal/entries", dependencies=[Depends(require_read_token)])
+def get_trade_journal_entries(
+    symbol: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Paginated, composed + narrated trade-journal entries.
+
+    Fetches closed paper trades (``data.paper_account_store.PaperAccountStore
+    (readonly=True).get_full_closed_trades``), composes each into a full
+    retrospective record — what happened, MFE/MAE/Edge Ratio, and decision
+    provenance, never fabricated (``pilots.retrospective_composer
+    .compose_trade_retrospectives`` — see that module's docstring for the
+    "never infer decision.state" rule) — and attaches a plain-text,
+    template-only narrative sentence (``pilots.retrospective_narrative
+    .build_trade_narrative``) to each. Never raises (CONSTRAINT #6): a
+    cold/unreadable DB or a malformed row degrades to an honest empty list,
+    never a 500. ``limit`` is capped at 200 (composition fetches OHLC bars
+    per distinct symbol, so this endpoint is heavier than a bare closed-trades
+    read — matching ``GET /decisions``'s ``Query(..., le=500)`` capping
+    convention, scaled down for that added cost)."""
+    try:
+        from data.paper_account_store import PaperAccountStore
+
+        store = PaperAccountStore(readonly=True)
+        trades = store.get_full_closed_trades(symbol=symbol, limit=limit)
+    except Exception as exc:  # noqa: BLE001 — dead-letter: cold/unreadable DB
+        logger.warning("get_trade_journal_entries: get_full_closed_trades failed: %s", exc)
+        trades = []
+
+    try:
+        composed = retrospective_composer.compose_trade_retrospectives(trades)
+    except Exception as exc:  # noqa: BLE001 — CONSTRAINT #6 defense-in-depth;
+        # compose_trade_retrospectives never raises per its own docstring, but
+        # this endpoint must not 500 even if that contract were ever violated.
+        logger.warning("get_trade_journal_entries: compose_trade_retrospectives failed: %s", exc)
+        composed = []
+
+    entries: List[Dict[str, Any]] = []
+    for retro in composed:
+        try:
+            narrative = retrospective_narrative.build_trade_narrative(retro)
+        except Exception as exc:  # noqa: BLE001 — CONSTRAINT #6 defense-in-depth
+            logger.warning("get_trade_journal_entries: build_trade_narrative failed: %s", exc)
+            narrative = "Narrative unavailable for this trade."
+        entry = dict(retro) if isinstance(retro, dict) else {}
+        entry["narrative"] = narrative
+        entries.append(entry)
+
+    return {"entries": entries, "count": len(entries)}
+
+@app.get("/trade-journal/insights", dependencies=[Depends(require_read_token)])
+def get_trade_journal_insights() -> Dict[str, Any]:
+    """Calibration reliability diagram + manual/signal-driven/unknown cohort
+    breakdown for the Trade Journal's "Patterns" panel
+    (``pilots.retrospective_insights.batch_insights`` — see that module's
+    docstring). The three cohorts are STRUCTURALLY separate keys; there is no
+    combined/"overall" figure anywhere in this response (CONSTRAINT #4 — see
+    ``batch_insights``'s own docstring for why merging them would blur a real
+    signal). Never raises (CONSTRAINT #6)."""
+    return retrospective_insights.batch_insights()
+
+@app.get("/trade-journal/bridge-status", dependencies=[Depends(require_read_token)])
+def get_trade_journal_bridge_status(window: int = Query(200, ge=1, le=1000)) -> Dict[str, Any]:
+    """Empirical paper-trade -> ``transactions_store`` bridge completeness for
+    the ``window`` most recent closed paper trades
+    (``pilots.bridge_completeness.bridge_completeness_summary`` — see that
+    module's docstring for the identity-matching contract). Diagnostic only;
+    never raises (CONSTRAINT #6) and never fabricates a completeness
+    percentage when nothing was genuinely checkable (CONSTRAINT #4)."""
+    return bridge_completeness.bridge_completeness_summary(window=window)
 
 @app.post("/pilots/paper-broker/reset", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
 def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> Dict[str, Any]:

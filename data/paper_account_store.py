@@ -110,6 +110,13 @@ class PaperAccountStore:
     def __init__(self, db_url: Optional[str] = None, *, readonly: bool = False):
         db_url = db_url or resolve_database_url()
         self._readonly = readonly
+        # Saved so any store this instance lazily constructs against the SAME
+        # database (e.g. the decision-snapshot store below) binds to the
+        # exact db_url THIS instance was built with, rather than
+        # re-resolving the default and silently landing in the wrong
+        # database -- the same bug class _init_transactions_bridge's own
+        # docstring documents and fixes for the transactions_store bridge.
+        self._db_url = db_url
         if readonly:
             from db_config import create_readonly_db_engine
             self.engine = create_readonly_db_engine(db_url)
@@ -117,6 +124,45 @@ class PaperAccountStore:
             self.engine = create_db_engine(db_url)
             Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
+        # Retrospective Learning Loop (Trade Journal): forward-only
+        # decision-context capture -- see
+        # data/trade_decision_snapshot_store.py's module docstring.
+        #
+        # The `trade_decision_snapshots` table is created directly on THIS
+        # instance's OWN `self.engine` (never a second, independently-
+        # constructed engine bound to the "same" db_url) -- for a real
+        # file-backed db_url both approaches land in the same physical
+        # file, but for `sqlite:///:memory:` (used explicitly by several
+        # existing tests, e.g. test_options_paper_executor.py) each engine
+        # object is its OWN isolated in-memory database regardless of URL
+        # string equality, so a second engine's create_all would silently
+        # create a table this instance's own session could never see or
+        # write to (confirmed empirically -- "no such table" on first
+        # write). Every read/write of this table below goes through
+        # `self.engine`/`self.Session` for the identical reason.
+        #
+        # Table creation happens HERE (at construction, outside any fill's
+        # transaction) rather than lazily inside `_maybe_record_decision_
+        # snapshot` for the same reason `_init_transactions_bridge`
+        # constructs `self._transactions_store` eagerly: a lazy DDL
+        # statement triggered while a fill's own transaction is still open
+        # on this same connection pool empirically reproduces the identical
+        # multi-second WAL-writer contention that bullet's own docstring
+        # documents for the sibling bridge.
+        self._decision_snapshot_enabled = False
+        if not readonly:
+            try:
+                from data.trade_decision_snapshot_store import Base as _SnapshotBase
+
+                _SnapshotBase.metadata.create_all(self.engine)
+                self._decision_snapshot_enabled = True
+            except Exception as exc:
+                logger.error(
+                    "trade_decision_snapshots table failed to initialize "
+                    "(decision-snapshot capture disabled for this store "
+                    "instance): %s", exc,
+                )
+                self._decision_snapshot_enabled = False
 
         # transactions_store bridge (PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED,
         # PR 872 remediation, Task 1): companion TransactionsStore, constructed
@@ -186,6 +232,100 @@ class PaperAccountStore:
         except Exception as exc:
             logger.error(f"transactions_store bridge failed to initialize (bridge disabled for this store instance): {exc}")
             self._transactions_store = None
+
+    def _maybe_record_decision_snapshot(
+        self,
+        session,
+        *,
+        symbol: str,
+        strategy_id: str,
+        pilot_id: Optional[str],
+        entry_ts: datetime,
+        decision_context: Optional[Dict[str, Any]],
+    ) -> None:
+        """Best-effort, forward-only decision-context capture at the exact
+        moment a position is newly opened (or re-opened after a
+        flip-through-zero) -- see
+        ``data/trade_decision_snapshot_store.py``'s module docstring for the
+        full design rationale.
+
+        A no-op when the caller didn't supply ``decision_context`` (the
+        default for every existing caller -- byte-identical to before this
+        feature existed).
+
+        Adds the new row to the SAME ``session``/transaction the calling
+        fill is already using, via ``session.add()`` -- NEVER a second,
+        independently-opened connection. Confirmed empirically: SQLite
+        allows only one writer at a time, and a second writer attempting to
+        write through a different connection while THIS transaction is
+        still open blocks until ``busy_timeout`` elapses and then raises
+        ``database is locked`` (the exact write-path counterpart of the
+        read/write contention ``_init_transactions_bridge``'s own docstring
+        already documents for the sibling transactions_store bridge, fixed
+        there the same way: share the session). Building the row itself
+        (JSON-safety on ``factors``, required-field validation) is wrapped
+        in try/except so a malformed ``decision_context`` still can never
+        block or roll back the fill it describes -- ``session.add()`` on an
+        already-valid ORM object is an in-memory operation and does not
+        itself touch the database; only the outer transaction's own
+        flush/commit can fail on it, exactly like every other row already
+        added to ``session`` in this method's callers.
+        """
+        if not decision_context or not self._decision_snapshot_enabled:
+            return
+        try:
+            from data.trade_decision_snapshot_store import build_snapshot_row
+
+            row = build_snapshot_row(
+                symbol=symbol,
+                strategy_id=strategy_id,
+                pilot_id=pilot_id,
+                entry_ts=entry_ts,
+                provenance=str(decision_context.get("provenance", "unknown")),
+                conviction=decision_context.get("conviction"),
+                regime=decision_context.get("regime"),
+                factors=decision_context.get("factors"),
+                notes=decision_context.get("notes"),
+            )
+            session.add(row)
+        except Exception as exc:
+            logger.warning(
+                "decision-snapshot capture failed for %s/%s (fills OPEN -- "
+                "the paper fill itself is unaffected): %s",
+                symbol, strategy_id, exc,
+            )
+
+    def _lookup_snapshot_conviction(
+        self, symbol: str, strategy_id: str, entry_ts: Optional[datetime]
+    ) -> Optional[float]:
+        """Best-effort lookup of the conviction captured at trade-open for
+        this exact (symbol, strategy_id, entry_ts), for threading through
+        the transactions_store bridge -- see ``_record_closed_trade``.
+        Returns ``None`` (never a fabricated value) when ``entry_ts`` is
+        unknown, no snapshot was captured, or the lookup itself fails.
+
+        Queries via ``self.Session()`` -- THIS instance's own engine, not a
+        second one -- for the identical reason ``__init__`` creates the
+        table directly on ``self.engine``: only this engine is guaranteed
+        to see what this instance actually wrote (see that comment for the
+        full ``:memory:`` isolation explanation).
+        """
+        if entry_ts is None or not self._decision_snapshot_enabled:
+            return None
+        try:
+            from data.trade_decision_snapshot_store import TradeDecisionSnapshot
+
+            with session_scope(self.Session) as session:
+                row = (
+                    session.query(TradeDecisionSnapshot)
+                    .filter_by(symbol=symbol.upper(), strategy_id=strategy_id, entry_ts=entry_ts)
+                    .order_by(TradeDecisionSnapshot.captured_at.desc())
+                    .first()
+                )
+                return row.conviction if row is not None else None
+        except Exception as exc:
+            logger.warning("snapshot conviction lookup failed for %s/%s: %s", symbol, strategy_id, exc)
+            return None
 
     def _ensure_account_exists(self):
         with self.engine.begin() as conn:
@@ -629,6 +769,7 @@ class PaperAccountStore:
         leg_group_id: Optional[str] = None,
         order_kind: Optional[str] = None,
         allow_untagged_fallback: bool = False,
+        decision_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
 
         """
@@ -664,6 +805,20 @@ class PaperAccountStore:
         ``retag_position()`` to explicitly move a legacy untagged position
         onto its real strategy_id once known, instead of relying on this
         fallback at fill time.
+
+        ``decision_context`` (Retrospective Learning Loop, forward-only):
+        an optional dict describing WHY this order was placed, captured
+        best-effort into ``data/trade_decision_snapshot_store.py`` at the
+        exact moment a genuinely new position is opened (or re-opened after
+        a flip-through-zero) -- never on an average-in, since ``entry_ts``
+        itself is left untouched there too. ``None`` (the default) is a
+        pure no-op, byte-identical to every existing caller. Recognized
+        keys: ``provenance`` (required if the dict is non-empty -- e.g.
+        ``"manual"`` or ``"automated:options_auto_scan"``), ``conviction``
+        (float, e.g. a meta-labeler's prob_win), ``regime`` (str), ``factors``
+        (a plain dict of real observed values), ``notes`` (str). A capture
+        failure never blocks or rolls back this fill -- see
+        ``_maybe_record_decision_snapshot``.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -724,6 +879,10 @@ class PaperAccountStore:
                         pos.qty = new_qty
                         pos.avg_entry_price = fill_price
                         pos.entry_ts = now_ts
+                        self._maybe_record_decision_snapshot(
+                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            entry_ts=now_ts, decision_context=decision_context,
+                        )
                     else:
                         pos.qty = new_qty
                 else:
@@ -746,6 +905,10 @@ class PaperAccountStore:
                     else:
                         pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=qty, avg_entry_price=fill_price, entry_ts=now_ts)
                         session.add(pos)
+                        self._maybe_record_decision_snapshot(
+                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            entry_ts=now_ts, decision_context=decision_context,
+                        )
 
             elif side == "sell":
                 if pos and pos.qty > _QTY_EPSILON:
@@ -780,6 +943,10 @@ class PaperAccountStore:
                         # the buy-side flip above.
                         pos.avg_entry_price = fill_price
                         pos.entry_ts = now_ts
+                        self._maybe_record_decision_snapshot(
+                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            entry_ts=now_ts, decision_context=decision_context,
+                        )
                 else:
                     # Selling to open short (options or short stock)
                     if not is_option_contract:
@@ -804,6 +971,10 @@ class PaperAccountStore:
                     else:
                         pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-qty, avg_entry_price=fill_price, entry_ts=now_ts)
                         session.add(pos)
+                        self._maybe_record_decision_snapshot(
+                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            entry_ts=now_ts, decision_context=decision_context,
+                        )
 
             else:
                 return False
@@ -826,6 +997,7 @@ class PaperAccountStore:
         pilot_id: Optional[str] = None,
         experiment_arm: Optional[str] = None,
         allow_untagged_fallback: bool = False,
+        decision_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Executes an atomic multi-leg options order fill across all legs and updates cash balance.
@@ -837,6 +1009,13 @@ class PaperAccountStore:
         ``False`` so a multi-leg strategy's own order flow can never
         accidentally borrow (and misattribute the PnL of) another
         strategy's or the legacy bucket's position.
+
+        ``decision_context``: see ``apply_fill``'s docstring -- same
+        forward-only, best-effort capture, applied identically to EVERY leg
+        that opens a new position in this call (a multi-leg strategy's legs
+        share one directive/conviction, so each leg's own
+        ``paper_closed_trades`` row -- itself already one-row-per-leg --
+        gets a matching snapshot at the same granularity).
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -929,6 +1108,10 @@ class PaperAccountStore:
                             pos.qty = new_qty
                             pos.avg_entry_price = leg_fill_price
                             pos.entry_ts = now_ts
+                            self._maybe_record_decision_snapshot(
+                                session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                                entry_ts=now_ts, decision_context=decision_context,
+                            )
                         else:
                             pos.qty = new_qty
                     elif pos:
@@ -939,6 +1122,10 @@ class PaperAccountStore:
                     else:
                         pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
                         session.add(pos)
+                        self._maybe_record_decision_snapshot(
+                            session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            entry_ts=now_ts, decision_context=decision_context,
+                        )
                 elif leg_side == "sell":
                     if pos and pos.qty > _QTY_EPSILON:
                         closed_qty = min(pos.qty, leg_qty)
@@ -952,6 +1139,10 @@ class PaperAccountStore:
                             # Flipped through zero -- brand-new position basis.
                             pos.avg_entry_price = leg_fill_price
                             pos.entry_ts = now_ts
+                            self._maybe_record_decision_snapshot(
+                                session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                                entry_ts=now_ts, decision_context=decision_context,
+                            )
                     elif pos:
                         # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty - leg_qty
@@ -960,6 +1151,10 @@ class PaperAccountStore:
                     else:
                         pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
                         session.add(pos)
+                        self._maybe_record_decision_snapshot(
+                            session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            entry_ts=now_ts, decision_context=decision_context,
+                        )
 
                 # Record individual leg order
                 leg_coid = f"{client_order_id}_L{idx+1}"
@@ -1426,6 +1621,18 @@ class PaperAccountStore:
                 # and leaves the outer transaction fully usable, verified in
                 # this fix's own test coverage.
                 with session.begin_nested():
+                    # Retrospective Learning Loop: thread the entry-time
+                    # conviction through the bridge when a decision snapshot
+                    # was captured for THIS exact trade (data/
+                    # trade_decision_snapshot_store.py, keyed by the same
+                    # (symbol, strategy_id, entry_ts) triple this row already
+                    # carries) -- closing the "does conviction survive the
+                    # bridge" gap this feature exists to fix. None (not a
+                    # fabricated value) for a manual trade, an un-wired
+                    # automated writer, or any trade that predates this
+                    # feature -- a lookup failure degrades to None exactly
+                    # like "no snapshot" (get_snapshot never raises).
+                    bridged_conviction = self._lookup_snapshot_conviction(pos.symbol, pos.strategy_id, entry_ts)
                     trade_id = self._transactions_store.record_trade(
                         symbol=pos.symbol,
                         side="buy" if is_long else "sell",
@@ -1443,6 +1650,7 @@ class PaperAccountStore:
                         # options).
                         shares=closed_qty_abs,
                         strategy=pos.strategy_id,
+                        conviction=bridged_conviction,
                         notes=f"Paper bridge, reason: {close_reason}",
                         # Reuse the SAME session/transaction as the pct row
                         # just above (this method's own `session` param) --

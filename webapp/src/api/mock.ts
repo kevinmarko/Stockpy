@@ -110,6 +110,10 @@ import type { StrategyReportCardSnapshot,
   RadarFeedResponse,
   RealizedPerformance,
   TradeHistoryPage,
+  TradeJournalEntriesResponse,
+  TradeJournalEntry,
+  TradeJournalInsights,
+  TradeJournalBridgeStatus,
   RegimeOverlay,
   RestartDaemonResult,
   RiskGateBlockEntry,
@@ -6021,6 +6025,176 @@ const TRADE_HISTORY_TRADES: RealizedTrade[] = [
   },
 ];
 
+// ---- Retrospective Learning Loop / Trade Journal fixture ----
+// Deliberately exercises all three decision.state values AND the
+// evaluation.available=false honesty branch (CONSTRAINT #4 mock/live
+// parity — see webapp/src/screens/TradeJournal.test.tsx). Trade #103 (GME)
+// combines "unknown" decision state with an unavailable evaluation, matching
+// the real most-common case (a trade with no captured decision snapshot
+// most often also predates any real price-history backfill for that hold
+// window); trade #102 (TSLA) separately exercises a null realized_pnl_pct
+// (degenerate entry price) while its evaluation IS available, so the two
+// honesty branches are proven independent, not conflated into one fixture.
+const TRADE_JOURNAL_ENTRIES: TradeJournalEntry[] = [
+  {
+    trade_id: 104,
+    symbol: "NFLX",
+    strategy_id: "earnings-crush",
+    pilot_id: "earnings-crush",
+    side: "BUY",
+    qty: 8,
+    entry_ts: new Date(Date.now() - 9 * 86400000).toISOString(),
+    entry_price: 612.4,
+    exit_ts: new Date(Date.now() - 6 * 86400000).toISOString(),
+    exit_price: 648.1,
+    realized_pnl: 285.6,
+    realized_pnl_pct: 0.0583,
+    holding_period_days: 3,
+    close_reason: "profit_target",
+    evaluation: {
+      available: true,
+      mfe: 0.071,
+      mae: 0.012,
+      edge_ratio: 5.9,
+      reason: null,
+    },
+    decision: {
+      state: "signal_driven",
+      provenance: "automated:options_auto_scan",
+      // No conviction recorded for this scan (Stage 4 meta-labeler didn't
+      // score this directive) -- honestly null, never fabricated.
+      conviction: null,
+      regime: "risk_on",
+      factors: { vix: 24.5, trend_bias: "bullish" },
+      notes: null,
+    },
+    narrative:
+      "Bought 8 NFLX — opened at $612.40, closed at $648.10 (profit_target). Realized P&L: +$285.60 (+5.83%). Over the hold, price moved as much as 7.1% in your favor and 1.2% against you (Edge Ratio 5.90). The model rated this an automated options auto scan trade, driven partly by a bullish trend bias.",
+  },
+  {
+    trade_id: 101,
+    symbol: "AAPL",
+    strategy_id: "trend-following",
+    pilot_id: "trend-following",
+    side: "SELL",
+    qty: 15,
+    entry_ts: new Date(Date.now() - 8 * 86400000).toISOString(),
+    entry_price: 172.5,
+    exit_ts: new Date(Date.now() - 2 * 86400000).toISOString(),
+    exit_price: 181.2,
+    realized_pnl: 130.5,
+    realized_pnl_pct: 0.0504,
+    holding_period_days: 6,
+    close_reason: "manual_close",
+    evaluation: {
+      available: true,
+      mfe: 0.082,
+      mae: 0.021,
+      edge_ratio: 3.9,
+      reason: null,
+    },
+    decision: {
+      state: "signal_driven",
+      provenance: "automated:options_auto_scan",
+      conviction: 0.78,
+      regime: "risk_on",
+      factors: {
+        ivr: 62,
+        vrp: 0.035,
+        vix: 18.2,
+        trend_bias: "bullish",
+        credit_to_width_ratio: 0.42,
+      },
+      notes: null,
+    },
+    narrative:
+      "Sold 15 AAPL — opened 6 days ago at $172.50, closed 2 days ago at $181.20 (manual_close). Realized P&L: +$130.50 (+5.04%). Over the hold, price moved as much as 8.2% in your favor and 2.1% against you (Edge Ratio 3.90). The model rated this a 0.78 conviction automated options auto scan trade, driven partly by an IVR of 62 and a VRP of 0.035.",
+  },
+  {
+    trade_id: 102,
+    symbol: "TSLA",
+    strategy_id: "Manual Trade",
+    pilot_id: null,
+    side: "BUY",
+    qty: 5,
+    entry_ts: new Date(Date.now() - 12 * 86400000).toISOString(),
+    entry_price: 0.01,
+    exit_ts: new Date(Date.now() - 4 * 86400000).toISOString(),
+    exit_price: 205.4,
+    realized_pnl: 1027.0,
+    // Degenerate entry price -> realized_pnl_pct is genuinely null, never a
+    // fabricated 0/Infinity (CONSTRAINT #4) -- exercised separately from the
+    // evaluation.available=false case below.
+    realized_pnl_pct: null,
+    holding_period_days: 8,
+    close_reason: "manual_close",
+    evaluation: {
+      available: true,
+      mfe: 0.44,
+      mae: 0.03,
+      edge_ratio: 14.7,
+      reason: null,
+    },
+    decision: {
+      state: "manual",
+      provenance: "manual",
+      conviction: null,
+      regime: null,
+      factors: null,
+      notes: "Discretionary entry ahead of the earnings call.",
+    },
+    narrative:
+      "Bought 5 TSLA — opened 12 days ago at $0.01, closed 4 days ago at $205.40 (manual_close). Realized P&L: +$1,027.00 (percentage unavailable — degenerate entry price). Over the hold, price moved as much as 44.0% in your favor and 3.0% against you (Edge Ratio 14.70). You placed this trade manually — no model signal was behind it.",
+  },
+  {
+    trade_id: 103,
+    symbol: "GME",
+    strategy_id: "zero-dte-momentum-breakout",
+    pilot_id: "zero-dte-momentum-breakout",
+    side: "SELL",
+    qty: 20,
+    entry_ts: new Date(Date.now() - 3 * 86400000).toISOString(),
+    entry_price: 18.4,
+    exit_ts: new Date(Date.now() - 3 * 86400000 + 5 * 3600000).toISOString(),
+    exit_price: 15.1,
+    realized_pnl: -66.0,
+    realized_pnl_pct: -0.1793,
+    holding_period_days: 0.21,
+    close_reason: "stop_loss",
+    evaluation: {
+      available: false,
+      mfe: null,
+      mae: null,
+      edge_ratio: null,
+      // Real reason string, never a blank/generic placeholder -- matches
+      // pilots/retrospective_composer.py's own literal reason text.
+      reason: "no price history available for this hold period",
+    },
+    decision: {
+      // zero_dte_engine.py does not yet capture a decision snapshot on
+      // open (see CLAUDE.md's Retrospective Learning Loop bullet) -- so
+      // even though this trade WAS signal-driven, it honestly reports
+      // "unknown" rather than inferring from strategy_id.
+      state: "unknown",
+      provenance: null,
+      conviction: null,
+      regime: null,
+      factors: null,
+      notes: null,
+    },
+    narrative:
+      "Sold 20 GME — opened 3 days ago at $18.40, closed 3 days ago at $15.10 (stop_loss). Realized P&L: -$66.00 (-17.93%). Evaluation data unavailable for this trade — no price history available for this hold period. Entry context wasn't captured for this trade.",
+  },
+];
+
+/** Honest cold-start fixture -- no closed paper trades exist yet. Exported
+ * (mirrors mockForecastSkillBySymbolEmpty/mockAiDisagreementsEmpty's
+ * convention) so TradeJournal.test.tsx can render the empty state directly
+ * rather than routing through mockApi's happy-path method. */
+export function mockTradeJournalEntriesEmpty(): TradeJournalEntriesResponse {
+  return { entries: [], count: 0 };
+}
+
 // ---- Alerts feed fixture ----
 function mockAlerts(): AlertsFeed {
   const now = Date.now();
@@ -11886,6 +12060,87 @@ export const mockApi = {
         },
       ],
       reason: null,
+    });
+  },
+
+  // ---- Retrospective Learning Loop / Trade Journal ----
+  async getTradeJournalEntries(
+    opts: { symbol?: string; limit?: number } = {},
+  ): Promise<TradeJournalEntriesResponse> {
+    const limit = opts.limit ?? 50;
+    const symbol = opts.symbol?.toUpperCase();
+    const filtered = symbol
+      ? TRADE_JOURNAL_ENTRIES.filter((e) => e.symbol === symbol)
+      : TRADE_JOURNAL_ENTRIES;
+    const entries = filtered.slice(0, limit);
+    return delay<TradeJournalEntriesResponse>({ entries, count: entries.length });
+  },
+
+  async getTradeJournalInsights(): Promise<TradeJournalInsights> {
+    return delay<TradeJournalInsights>({
+      calibration: {
+        bins: [
+          {
+            bin_low: 0.5,
+            bin_high: 0.6,
+            bin_center: 0.55,
+            conviction_mean: 0.56,
+            win_rate: 0.6,
+            count: 10,
+            perfect_calibration: 0.55,
+          },
+          {
+            bin_low: 0.7,
+            bin_high: 0.8,
+            bin_center: 0.75,
+            conviction_mean: 0.76,
+            win_rate: 0.71,
+            count: 7,
+            perfect_calibration: 0.75,
+          },
+          {
+            // under min_trades_per_bin -> win_rate null (insufficient data,
+            // never a fabricated rate — CONSTRAINT #4).
+            bin_low: 0.9,
+            bin_high: 1.0,
+            bin_center: 0.95,
+            conviction_mean: 0.94,
+            win_rate: null,
+            count: 3,
+            perfect_calibration: 0.95,
+          },
+        ],
+        total: 20,
+        overall_win_rate: (0.6 * 10 + 0.71 * 7) / 17,
+        calibration_error: (0.05 + 0.04) / 2,
+        n_scored_bins: 2,
+        n_bins: 10,
+        min_trades_per_bin: 5,
+        reason: null,
+      },
+      cohorts: {
+        signal_driven: { n_trades: 12, win_rate: 0.583, mean_realized_pnl_pct: 0.041 },
+        manual: { n_trades: 4, win_rate: 0.25, mean_realized_pnl_pct: -0.018 },
+        unknown: { n_trades: 7, win_rate: 0.429, mean_realized_pnl_pct: 0.012 },
+      },
+    });
+  },
+
+  async getTradeJournalBridgeStatus(
+    window = 200,
+  ): Promise<TradeJournalBridgeStatus> {
+    // Bridge disabled by default (settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED
+    // is False) -- a real, MEASURED 0% (the bridge never ran for these
+    // trades), never a fabricated None or 100 (see bridge_completeness.py's
+    // own docstring for why this distinction matters).
+    return delay<TradeJournalBridgeStatus>({
+      enabled: false,
+      window,
+      n_trades_checked: TRADE_JOURNAL_ENTRIES.length,
+      n_bridged: 0,
+      completeness_pct: 0.0,
+      reason:
+        "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED is currently False — the figures below reflect whichever transactions_store rows already exist for these trades; no new paper close is expected to bridge while the flag stays off.",
     });
   },
 

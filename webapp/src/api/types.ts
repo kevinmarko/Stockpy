@@ -6242,3 +6242,121 @@ export interface ExplainTickerResponse {
   factor_breakdown: ExplainFactorBreakdown;
   price_history_status: ExplainPriceHistoryStatus;
 }
+
+// ---------------------------------------------------------------------------
+// Retrospective Learning Loop / Trade Journal
+// (GET /trade-journal/entries, /insights, /bridge-status)
+// ---------------------------------------------------------------------------
+
+/**
+ * MFE/MAE/Edge-Ratio evaluation of a closed trade's hold period, recomputed
+ * from real OHLC bars (`pilots/retrospective_composer.py`). `available` is
+ * `false` — never a fabricated `mfe`/`mae`/`edge_ratio` — whenever the hold
+ * period couldn't be evaluated (no price history, missing entry/exit
+ * timestamps, etc.); `reason` names why. CONSTRAINT #4.
+ */
+export interface TradeJournalEvaluation {
+  available: boolean;
+  mfe: number | null;
+  mae: number | null;
+  edge_ratio: number | null;
+  reason: string | null;
+}
+
+/**
+ * Decision provenance for a closed trade, from a forward-only
+ * decision-snapshot capture (`data/trade_decision_snapshot_store.py`).
+ * `state` is NEVER inferred from `strategy_id`/`pilot_id` — a trade with no
+ * captured snapshot honestly reports `"unknown"`, even for a strategy that
+ * is, in fact, signal-driven (see `pilots/retrospective_composer.py`'s
+ * module docstring's "single most important rule"). `factors`/`notes`/
+ * `regime`/`conviction` are only ever populated when `state !== "unknown"`.
+ */
+export interface TradeJournalDecision {
+  state: "signal_driven" | "manual" | "unknown";
+  provenance: string | null;
+  conviction: number | null;
+  regime: string | null;
+  factors: Record<string, unknown> | null;
+  notes: string | null;
+}
+
+/**
+ * One composed + narrated Trade Journal entry — a closed paper trade
+ * (`data/paper_account_store.py`'s `paper_closed_trades`) joined with its
+ * MFE/MAE evaluation, its decision provenance, and a plain-text (no-LLM,
+ * fully templated) narrative sentence. `realized_pnl_pct`/`holding_period_days`/
+ * `entry_ts`/`entry_price` are `null` when genuinely unknown (e.g. a
+ * degenerate entry price, or a legacy/migrated position with no recorded
+ * entry time) — never coerced to `0`/`"0"` (CONSTRAINT #4).
+ */
+export interface TradeJournalEntry {
+  trade_id: number;
+  symbol: string | null;
+  strategy_id: string | null;
+  pilot_id: string | null;
+  side: string | null;
+  qty: number | null;
+  entry_ts: string | null;
+  entry_price: number | null;
+  exit_ts: string | null;
+  exit_price: number | null;
+  realized_pnl: number | null;
+  realized_pnl_pct: number | null;
+  holding_period_days: number | null;
+  close_reason: string | null;
+  evaluation: TradeJournalEvaluation;
+  decision: TradeJournalDecision;
+  narrative: string;
+}
+
+/** GET /trade-journal/entries. */
+export interface TradeJournalEntriesResponse {
+  entries: TradeJournalEntry[];
+  count: number;
+}
+
+/**
+ * One decision-state cohort's aggregate outcome
+ * (`pilots/retrospective_insights.py`). `win_rate`/`mean_realized_pnl_pct`
+ * are `null` for an empty cohort — never a fabricated `0` (CONSTRAINT #4).
+ */
+export interface TradeJournalCohort {
+  n_trades: number;
+  win_rate: number | null;
+  mean_realized_pnl_pct: number | null;
+}
+
+/**
+ * GET /trade-journal/insights. `calibration` is the SAME shape as
+ * `Calibration` above (`pilots.calibration.calibration_view()`'s output,
+ * reused verbatim — see `pilots/retrospective_insights.py`'s module
+ * docstring). `cohorts` is STRUCTURALLY three separate keys —
+ * `signal_driven`/`manual`/`unknown` — with no combined/"overall" figure
+ * anywhere (CONSTRAINT #4: merging cohorts would blur a real signal).
+ */
+export interface TradeJournalInsights {
+  calibration: Calibration;
+  cohorts: {
+    signal_driven: TradeJournalCohort;
+    manual: TradeJournalCohort;
+    unknown: TradeJournalCohort;
+  };
+}
+
+/**
+ * GET /trade-journal/bridge-status — empirical paper-trade ->
+ * transactions_store bridge completeness (`pilots/bridge_completeness.py`).
+ * Diagnostic only. `completeness_pct` is `null` whenever nothing was
+ * genuinely checkable in the window (never a fabricated percentage);
+ * `reason` is populated whenever `completeness_pct` is `null` OR `enabled`
+ * is `false`.
+ */
+export interface TradeJournalBridgeStatus {
+  enabled: boolean;
+  window: number;
+  n_trades_checked: number;
+  n_bridged: number;
+  completeness_pct: number | null;
+  reason: string | null;
+}

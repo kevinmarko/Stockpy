@@ -335,6 +335,11 @@ class OptionsPaperExecutor:
             action = item.get("action", "Open")
             net_premium = item.get("net_premium")
             legs_raw = item.get("legs", [])
+            # Retrospective Learning Loop: real prob_win from the Stage 4 ML
+            # Meta-Labeler when it actually scored this directive (set inside
+            # the "5b" gating block below) -- None otherwise, never
+            # fabricated. Used as this trade's `conviction` at capture time.
+            ml_score_for_snapshot: Optional[Dict[str, Any]] = None
             target_dte = item.get("target_dte", 30)
 
             strategy_id = item.get("strategy_id", strategy)
@@ -420,6 +425,7 @@ class OptionsPaperExecutor:
                 try:
                     from ml.options_meta_labeler import global_options_meta_labeler
                     ml_score = global_options_meta_labeler.score_option_directive(item)
+                    ml_score_for_snapshot = ml_score
                     # prob_win is None (not a fabricated number) when the ML
                     # score was unavailable -- see score_option_directive's
                     # docstring. A plain f"{...:.2f}" on None would raise, so
@@ -513,6 +519,31 @@ class OptionsPaperExecutor:
                     "fill_price": l["fill_price"],
                 } for l in parsed_legs]
 
+                # Retrospective Learning Loop: real, named factor context
+                # this scan actually had for THIS directive -- every value
+                # here is copied verbatim from `item` (built by
+                # get_actionable_directives above from a real
+                # technical_options_engine directive), never interpolated or
+                # inferred. `conviction` is the Stage 4 ML Meta-Labeler's own
+                # prob_win when it scored this directive, else None.
+                decision_context = {
+                    "provenance": "automated:options_auto_scan",
+                    "conviction": (
+                        ml_score_for_snapshot.get("prob_win")
+                        if ml_score_for_snapshot is not None
+                        else None
+                    ),
+                    "factors": {
+                        "strategy": strategy,
+                        "ivr": item.get("ivr"),
+                        "vrp": item.get("vrp"),
+                        "vix": item.get("vix"),
+                        "trend_bias": item.get("trend_bias"),
+                        "short_delta": item.get("short_delta"),
+                        "credit_to_width_ratio": item.get("credit_to_width_ratio"),
+                        "net_premium": net_premium,
+                    },
+                }
                 success = self.store.apply_multi_leg_fill(
                     client_order_id=client_order_id,
                     symbol=sym,
@@ -525,6 +556,7 @@ class OptionsPaperExecutor:
                     strategy_id=strategy_id,
                     pilot_id=pilot_id,
                     experiment_arm=experiment_arm,
+                    decision_context=decision_context,
                 )
 
                 if success:
