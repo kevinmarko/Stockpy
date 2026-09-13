@@ -9926,7 +9926,14 @@ export const mockApi = {
           ceo: null,
           market_cap: null,
           source: null,
-          reason: "Company profile provider disabled (FMP_PROFILE_ENABLED=False)",
+          // Live `api/data_api.py` always emits this exact generic template
+          // regardless of cause (flag off, missing key, or a live fetch
+          // failure all collapse to the identical string) — that
+          // cause-blindness is deliberate (see the flag-off-vs-fetch-failure
+          // fabrication-risk invariant), so the mock must not invent a
+          // more specific, cause-revealing message here (verified against
+          // the real endpoint — .claude/explain-this-ticker audit, 2026-09-12).
+          reason: "FMP profile unavailable for NVDA",
         },
         tracking: {
           tracked: true,
@@ -9995,7 +10002,12 @@ export const mockApi = {
           coverage_status: "untracked",
           rating_consecutive_bad_cycles: null,
           rating_excluded: false,
-          reasons: [],
+          // Live `api/data_api.py` always populates at least this one
+          // reason for an untracked symbol (verified against the real
+          // endpoint — see .claude/explain-this-ticker audit, 2026-09-12);
+          // an empty array here would let the drawer's optional "Tracking
+          // reasons:" bullet list silently disappear in mock mode only.
+          reasons: ["Symbol is not currently held or included in any active watchlist"],
         },
         factor_breakdown: {
           available: false,
