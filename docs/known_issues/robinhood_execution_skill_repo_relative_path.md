@@ -2,10 +2,10 @@
 
 **Status: fixed.** Found while re-verifying the (separate, sibling) fix for
 `shared/robinhood_execution_panel.py`'s repo-relative `EXECUTION_QUEUE_PATH`
-(see `docs/known_issues/execution_queue_panel_repo_relative_path.md`, branch
-`fix-execution-queue-local-data-root`) — that fix's own author flagged this
-as "the SAME underlying bug in a much more safety-relevant place that was
-explicitly out of scope for that fix."
+(see `docs/known_issues/execution_queue_panel_repo_relative_path.md`, landed
+in [PR #1039](https://github.com/kevinmarko/Stockpy/pull/1039)) — that fix's
+own author flagged this as "the SAME underlying bug in a much more
+safety-relevant place that was explicitly out of scope for that fix."
 
 ## What happened
 
@@ -111,9 +111,9 @@ and `tests/test_skill_directory_parity.py`).
 ## Related
 
 - `docs/known_issues/execution_queue_panel_repo_relative_path.md` — the
-  sibling fix (`shared/robinhood_execution_panel.py`, branch
-  `fix-execution-queue-local-data-root`) that surfaced this issue as
-  explicitly out of scope for itself.
+  sibling fix (`shared/robinhood_execution_panel.py`,
+  [PR #1039](https://github.com/kevinmarko/Stockpy/pull/1039)) that
+  surfaced this issue as explicitly out of scope for itself.
 - CLAUDE.md's `settings.LOCAL_DATA_ROOT` bullet — the migration this
   incident is a gap in.
 - `docs/known_issues/skill_directory_manual_copy_drift.md` — why the
