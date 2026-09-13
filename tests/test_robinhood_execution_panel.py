@@ -108,6 +108,65 @@ class TestModuleSurface:
         assert EXECUTION_QUEUE_PATH.parent.name == "output"
         assert EXECUTION_RECEIPTS_PATH.parent.name == "output"
 
+    def test_canonical_paths_resolve_under_settings_output_dir_not_repo_root(self):
+        """Regression coverage for a real incident: EXECUTION_QUEUE_PATH (and
+        its three siblings) used to be hardcoded to
+        ``<repo_root>/output/...`` — a plain ``Path(__file__).resolve()``
+        anchor — bypassing ``settings.OUTPUT_DIR``/``settings.LOCAL_DATA_ROOT``
+        entirely. execution/queue_builder.py (the real writer of
+        execution_queue.json + execution_queue_notified.json) and
+        execution/receipts_store.py (the real writer of
+        execution_receipts.jsonl + execution_placed.jsonl) both already
+        resolved via settings.OUTPUT_DIR, so this reader silently looked at a
+        different, usually-empty-or-stale location than the one the real
+        orchestrator daemon was actually writing to — worse across this
+        repo's many concurrent git worktrees, where a repo-root-relative path
+        is worktree-local and the LOCAL_DATA_ROOT-anchored one is shared
+        machine-wide. See docs/known_issues/execution_queue_panel_repo_relative_path.md
+        and the two prior confirmed instances of this same bug class in
+        data/historical_store.py (PR #718) and forecasting/forecast_tracker.py
+        (PR #720)."""
+        # Pinned against the live settings.OUTPUT_DIR value (whatever it
+        # resolves to for this environment -- its own default-vs-override
+        # composition is settings.py's concern, already covered by
+        # test_env_loading.py) rather than a hardcoded absolute string, so
+        # this stays correct under an operator's LOCAL_DATA_ROOT/OUTPUT_DIR
+        # override too -- the real point of the fix.
+        assert EXECUTION_QUEUE_PATH == settings.OUTPUT_DIR / "execution_queue.json"
+        assert EXECUTION_RECEIPTS_PATH == settings.OUTPUT_DIR / "execution_receipts.jsonl"
+        assert NOTIFIED_STATE_PATH == settings.OUTPUT_DIR / "execution_queue_notified.json"
+        assert EXECUTION_PLACED_PATH == settings.OUTPUT_DIR / "execution_placed.jsonl"
+
+    def test_resolve_output_dir_reflects_current_settings_output_dir(self, monkeypatch, tmp_path):
+        """``_resolve_output_dir()`` (the function the four module-level
+        constants above are computed from once, at import time) must read
+        ``settings.OUTPUT_DIR`` live -- proven here by monkeypatching it to a
+        throwaway directory and calling the function directly, since the
+        already-bound module constants were fixed at the real import time and
+        can't retroactively pick up a monkeypatch."""
+        import shared.robinhood_execution_panel as mod
+
+        fake_output_dir = tmp_path / "custom_local_data_root" / "output"
+        monkeypatch.setattr(settings, "OUTPUT_DIR", fake_output_dir)
+        assert mod._resolve_output_dir() == fake_output_dir
+
+    def test_resolve_output_dir_falls_back_when_settings_unavailable(self, monkeypatch):
+        """Mirrors execution/receipts_store.py::_resolve_output_dir's own
+        degrade path exactly (CONSTRAINT #6: never raise) -- if importing
+        ``settings`` itself fails, fall back to a CWD-relative ``./output``
+        rather than propagating."""
+        import sys
+
+        import shared.robinhood_execution_panel as mod
+
+        class _BrokenSettingsModule:
+            """Stands in for the real settings module but has no ``settings``
+            attribute, so ``from settings import settings`` inside
+            _resolve_output_dir raises ImportError."""
+
+        monkeypatch.setitem(sys.modules, "settings", _BrokenSettingsModule())
+        assert mod._resolve_output_dir() == Path("./output")
+
     def test_stale_threshold_is_thirty_minutes(self):
         assert STALE_QUEUE_SECONDS == pytest.approx(30 * 60.0)
 
