@@ -42,6 +42,7 @@ import { AIControlCenter } from "./screens/AIControlCenter";
 import { DataExplorer } from "./screens/DataExplorer";
 import { SymbolScreener } from "./screens/SymbolScreener";
 import { TradeHistory } from "./screens/TradeHistory";
+import { TradeJournal } from "./screens/TradeJournal";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { SentimentDynamics } from "./screens/SentimentDynamics";
 import { ForecastViewer } from "./screens/ForecastViewer";
@@ -268,6 +269,7 @@ export default function App() {
                   <Route path="/data-explorer" element={<DataExplorer />} />
                   <Route path="/symbol-screener" element={<SymbolScreener />} />
                   <Route path="/trade-history" element={<TradeHistory />} />
+                  <Route path="/trade-journal" element={<TradeJournal />} />
                   <Route path="/signals" element={<SignalBreakdown />} />
                   <Route path="/sentiment" element={<SentimentDynamics />} />
                   <Route path="/forecast" element={<ForecastViewer />} />

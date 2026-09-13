@@ -416,9 +416,27 @@ _PILOTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "pilots"
 #                           genuinely heavy diagnostic dispatch (Phase 4
 #                           LSTM-Attention forecaster), not an accidental
 #                           transitive import creeping into a read-only helper
+#   - retrospective_composer.py -> evaluation_engine, data.historical_store,
+#                           data.trade_decision_snapshot_store (all lazy,
+#                           function-body imports) -- reuses
+#                           calibration.py::edge_by_strategy_view's EXACT
+#                           heavy-import pattern (same two engine calls) plus
+#                           the forward-only decision-snapshot store, per the
+#                           Retrospective Learning Loop / Trade Journal design
+#   - bridge_completeness.py -> data.paper_account_store, transactions_store,
+#                           pandas (all lazy, function-body imports) -- WP-D's
+#                           empirical bridge-reliability metric, matching
+#                           observability.py's own reasoning for reusing the
+#                           same two heavy stores read-only
+#   - retrospective_insights.py -> pilots.calibration (itself already exempt
+#                           above), data.paper_account_store,
+#                           data.trade_decision_snapshot_store, transactions_store
+#                           (all lazy) -- WP-G's batch/pattern insights, reusing
+#                           calibration.py::calibration_view verbatim rather
+#                           than re-deriving it
 _DEPENDENCY_LIGHT_EXEMPT = {
     "attribution", "brinson", "calibration", "models", "observability", "simulation",
-    "lstm_diagnostic",
+    "lstm_diagnostic", "retrospective_composer", "bridge_completeness", "retrospective_insights",
 }
 
 _ALL_PILOTS_MODULES = sorted(
@@ -487,6 +505,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # re (strict ticker-shape validation), dataclasses (result container),
         # datetime (audit-comment timestamp).
         allowed = allowed | {"os", "re", "dataclasses", "datetime"}
+    if module_name == "retrospective_narrative":
+        # Retrospective Learning Loop (WP-F): datetime for parsing the ISO
+        # entry_ts/exit_ts strings a composed retrospective record carries
+        # -- this module has no heavier dependency (it renders a plain
+        # template string from an already-composed dict; no engine/store
+        # imports at all, lazy or otherwise).
+        allowed = allowed | {"datetime"}
     if module_name == "validation_trend":
         # pilots.validation_trend reuses scripts.snapshot_diff's rotated-
         # snapshot reader (list_rotated_snapshots/load_snapshot) — confirmed

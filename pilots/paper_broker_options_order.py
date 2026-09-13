@@ -88,6 +88,7 @@ def execute_paper_order(
             fill_price=fill_price,
             commission_and_fees=commission,
             strategy_id="Manual Trade",
+            decision_context={"provenance": "manual"},
         )
 
         if not success:
@@ -252,6 +253,7 @@ def execute_paper_order(
                 commission_and_fees=commission,
                 collateral_required=collateral_required,
                 strategy_id="Manual Trade",
+                decision_context={"provenance": "manual"},
             )
 
             if not success:
@@ -349,6 +351,7 @@ def execute_paper_order(
                 allow_short=True,
                 collateral_required=collateral_required,
                 strategy_id="Manual Trade",
+                decision_context={"provenance": "manual"},
             )
 
             if not success:

@@ -76,6 +76,9 @@ import type { StrategyReportCardSnapshot,
   RollingBeta,
   RunRecord,
   TradeHistoryPage,
+  TradeJournalEntriesResponse,
+  TradeJournalInsights,
+  TradeJournalBridgeStatus,
   SectorSelectionView,
   StrategyMatrix,
   StrategyHealthRow,
@@ -566,6 +569,17 @@ const liveApi = {
     http<CalibrationSummary>(`/calibration/summary?horizon=${horizon}`),
   getEdgeByStrategy: () =>
     http<EdgeByStrategy>("/calibration/edge-by-strategy"),
+  // ---- Retrospective Learning Loop / Trade Journal (pilots base, :8602) ----
+  getTradeJournalEntries: (opts: { symbol?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts.limit ?? 50));
+    if (opts.symbol) params.set("symbol", opts.symbol);
+    return http<TradeJournalEntriesResponse>(`/trade-journal/entries?${params.toString()}`);
+  },
+  getTradeJournalInsights: () =>
+    http<TradeJournalInsights>("/trade-journal/insights"),
+  getTradeJournalBridgeStatus: (window = 200) =>
+    http<TradeJournalBridgeStatus>(`/trade-journal/bridge-status?window=${window}`),
   logDecision: (body: DecisionCreateRequest) =>
     http<DecisionCreateResult>("/decisions", {
       method: "POST",
