@@ -13,6 +13,14 @@ only: it never contacts the MCP, never mutates the queue, and never writes
 receipts.  It mirrors the shape of :mod:`shared.dead_letter` and
 :mod:`shared.robinhood_mode` (tolerant, Streamlit-free, headlessly testable).
 
+Every ``output/...`` path mentioned below resolves under
+``settings.OUTPUT_DIR`` (``settings.LOCAL_DATA_ROOT``-anchored, default
+``~/.stockpy_local/output``) — the same directory ``execution/queue_builder.py``
+and ``execution/receipts_store.py`` already write to — never a bare
+repo-root-relative ``<repo>/output/`` literal; see
+:data:`EXECUTION_QUEUE_PATH` et al.'s own comment for why that distinction
+matters in a multi-worktree checkout.
+
 Public API
 ----------
 :class:`QueuedIntent`      — one proposed order from the queue (frozen).
@@ -53,17 +61,57 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Resolve output paths without importing the full settings object so this
-# module stays importable in minimal test environments (mirrors gui/dead_letter.py).
+# Resolve output paths via settings.LOCAL_DATA_ROOT-derived settings.OUTPUT_DIR
+# -- NOT a repo-root-relative literal.  This repo runs many concurrent git
+# worktrees; a bare `<repo_root>/output/...` path is worktree-local, so a
+# queue/receipts/ledger file written by the real orchestrator daemon in one
+# worktree/checkout would be invisible from every other one, even though
+# execution/queue_builder.py (the writer of execution_queue.json +
+# execution_queue_notified.json) and execution/receipts_store.py (the writer
+# of execution_receipts.jsonl + execution_placed.jsonl) both already
+# correctly resolve via settings.OUTPUT_DIR -- this reader was the one piece
+# of the Tier 8 bridge still pointing at the old location. Same bug class as
+# the two prior confirmed instances in data/historical_store.py (PR #718) and
+# forecasting/forecast_tracker.py (PR #720); see
+# docs/known_issues/execution_queue_panel_repo_relative_path.md.
+#
+# ``settings`` is imported lazily (inside ``_resolve_output_dir``, not at
+# module top level) so this module stays import-light in minimal test
+# environments (mirrors execution/receipts_store.py's own
+# ``_resolve_output_dir`` -- the sibling Tier 8 module that WRITES the
+# receipts/placed-ledger files this module reads; mirroring its exact
+# fallback too keeps both sides' degraded-settings behaviour identical).
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-EXECUTION_QUEUE_PATH: Path = _REPO_ROOT / "output" / "execution_queue.json"
-EXECUTION_RECEIPTS_PATH: Path = _REPO_ROOT / "output" / "execution_receipts.jsonl"
-NOTIFIED_STATE_PATH: Path = _REPO_ROOT / "output" / "execution_queue_notified.json"
+
+
+def _resolve_output_dir() -> Path:
+    """Return the output directory, defaulting to ``settings.OUTPUT_DIR``.
+
+    Falls back to ``./output`` (CWD-relative, matching
+    ``execution/receipts_store.py::_resolve_output_dir``'s own fallback) only
+    if importing ``settings`` itself fails -- never raises.
+    """
+    try:
+        from settings import settings  # local import -- avoid import cycle
+
+        return Path(settings.OUTPUT_DIR)
+    except Exception as exc:
+        logger.debug(
+            "robinhood_execution_panel: settings.OUTPUT_DIR unavailable (%s); using ./output",
+            exc,
+        )
+        return Path("./output")
+
+
+_OUTPUT_DIR = _resolve_output_dir()
+EXECUTION_QUEUE_PATH: Path = _OUTPUT_DIR / "execution_queue.json"
+EXECUTION_RECEIPTS_PATH: Path = _OUTPUT_DIR / "execution_receipts.jsonl"
+NOTIFIED_STATE_PATH: Path = _OUTPUT_DIR / "execution_queue_notified.json"
 # Append-only placement ledger written by the execution agent's receipts store
 # (a sibling module — this panel reads the file format directly and never
 # imports that module, so the two stay decoupled).
-EXECUTION_PLACED_PATH: Path = _REPO_ROOT / "output" / "execution_placed.jsonl"
+EXECUTION_PLACED_PATH: Path = _OUTPUT_DIR / "execution_placed.jsonl"
 
 # Mirrors the staleness threshold documented in
 # .claude/skills/robinhood-execution/SKILL.md ("more than ~30 minutes old").

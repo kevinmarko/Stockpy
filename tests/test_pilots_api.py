@@ -4889,8 +4889,15 @@ class TestDecisionsRead:
 def _fake_queue_snapshot(**overrides):
     """A real ExecutionQueueSnapshot (not a Mock) so the REAL
     is_queue_stale/queue_age_seconds functions can process it — only
-    read_execution_queue itself is mocked (it ignores settings.OUTPUT_DIR;
-    see gui/robinhood_execution_panel.py's module-top EXECUTION_QUEUE_PATH)."""
+    read_execution_queue itself is mocked. EXECUTION_QUEUE_PATH is now
+    genuinely settings.OUTPUT_DIR-anchored (fixed -- it used to be a
+    hardcoded repo-root-relative literal, see
+    docs/known_issues/execution_queue_panel_repo_relative_path.md), but it is
+    still a module-level constant computed ONCE at import time, so the
+    mock.patch.object(settings, "OUTPUT_DIR", tmp_path) below can never
+    retroactively change an already-bound EXECUTION_QUEUE_PATH -- mocking
+    read_execution_queue directly sidesteps that structural (and unrelated)
+    limitation rather than the fixed bug itself."""
     from datetime import datetime, timezone
 
     from shared.robinhood_execution_panel import ExecutionQueueSnapshot
