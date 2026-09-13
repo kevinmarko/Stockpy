@@ -3,8 +3,8 @@ name: robinhood-execution
 description: >-
   Execute the Stockpy advisory platform's gated order queue against the Robinhood
   Trading MCP, PAPER-FIRST. Use when the operator asks to review or place the
-  pending Robinhood trades, run the execution queue, or act on
-  output/execution_queue.json. Always previews via review_equity_order; only
+  pending Robinhood trades, run the execution queue, or act on the execution
+  queue (`execution_queue.json`). Always previews via review_equity_order; only
   places real orders in `live` mode with explicit per-trade human confirmation.
 ---
 
@@ -13,9 +13,14 @@ description: >-
 This skill is the **only** actor permitted to call the Robinhood Trading MCP
 write tools. The headless Stockpy pipeline (`main.py`) cannot call MCP tools; it
 only writes a gated, dry-run proposed-order queue to
-`output/execution_queue.json` (via `execution/queue_builder.py`). You read that
-queue and turn eligible intents into MCP calls — **previewing always, placing
-only under strict conditions.**
+`$OUTPUT_DIR/execution_queue.json` (via `execution/queue_builder.py`) —
+see Prerequisites step 1 below for how to resolve `$OUTPUT_DIR`, the
+platform's configured output directory (`settings.OUTPUT_DIR`, **not** a
+literal `output/` subdirectory of this checkout — this repo runs many
+concurrent git worktrees, and a literal relative path resolves against
+whichever worktree you happen to be in, not the real shared location). You
+read that queue and turn eligible intents into MCP calls — **previewing
+always, placing only under strict conditions.**
 
 You may arrive here two ways: the operator asks you to run this skill, or
 `execution/queue_builder.py` pushed them an ntfy notification (if
@@ -30,27 +35,56 @@ not — read them a checklist only if they ask for one.
 
 ## Prerequisites (verify before doing anything else)
 
-1. The `robinhood-trading` MCP server is connected (tools `review_equity_order`,
+1. **Resolve the output directory once.** Every artifact this skill reads or
+   writes — the execution queue, the kill-switch sentinel, the placed-intent
+   ledger, the receipts ledger — lives under the platform's configured
+   `settings.OUTPUT_DIR` (default `~/.stockpy_local/output`, but
+   operator-configurable via `LOCAL_DATA_ROOT`/`OUTPUT_DIR` in `.env`) —
+   **never** a literal `output/` subdirectory of this checkout, which may be
+   stale, empty, or a different worktree's leftovers entirely. Run this once,
+   at the very start of the session, and reuse the result (called
+   `$OUTPUT_DIR` throughout the rest of this skill) for every reference
+   below — do not re-derive it per file or per step:
+   ```bash
+   python3 -c "from settings import settings; print(settings.OUTPUT_DIR)"
+   ```
+   If that errors (e.g. a missing dependency because the active `python3`
+   isn't this repo's own environment), retry with
+   `.venv/bin/python3 -c "from settings import settings; print(settings.OUTPUT_DIR)"`
+   if this worktree has its own `.venv`, or point at another checkout's
+   `.venv/bin/python` — the value doesn't depend on which worktree computed
+   it, since `settings.OUTPUT_DIR` is a fixed, operator-configured path, not
+   worktree-relative. If you still cannot resolve it, **stop and ask the
+   operator** for the directory rather than guessing or falling back to a
+   bare `output/` path — the whole point of this step is that a repo-relative
+   guess can silently read a stale or empty queue instead of the real one.
+
+   `$OUTPUT_DIR` now names:
+   - `$OUTPUT_DIR/execution_queue.json` — the gated queue (step 3 below).
+   - `$OUTPUT_DIR/execution_placed.jsonl` — the placed-intent ledger (step 4).
+   - `$OUTPUT_DIR/execution_receipts.jsonl` — the outcome audit trail.
+   - `$OUTPUT_DIR/KILL_SWITCH` — the kill-switch sentinel file.
+2. The `robinhood-trading` MCP server is connected (tools `review_equity_order`,
    `place_equity_order`, `get_accounts`, `get_portfolio`, `get_equity_positions`,
    `get_equity_quotes`, `get_equity_orders` are available). If not, tell the
    operator to run `claude mcp add robinhood-trading --transport http
    https://agent.robinhood.com/mcp/trading` and authenticate via `/mcp`. Stop.
-2. `output/execution_queue.json` exists. If missing, the platform is in
+3. `$OUTPUT_DIR/execution_queue.json` exists. If missing, the platform is in
    `ROBINHOOD_EXECUTION_MODE=off` (or hasn't run). Tell the operator to set the
    mode to `review` or `live` in `.env` and run `python3 main.py`. Stop.
-3. `output/execution_placed.jsonl` is the append-only **placed-intent ledger**
+4. `$OUTPUT_DIR/execution_placed.jsonl` is the append-only **placed-intent ledger**
    (may not exist yet — that just means nothing has been placed). Each line is
    one JSON record:
    `{"ts","dedup_key","symbol","side","qty","target_notional","client_order_id","mcp_order_id"}`,
    where `dedup_key = "YYYY-MM-DD:SYMBOL:SIDE"` in **UTC**. You consult it for
    the idempotency check (step 5) and append to it after every successful
-   placement. It is distinct from `output/execution_receipts.jsonl` (the broader
-   reviewed/placed/skipped audit trail) — write BOTH on a placement.
+   placement. It is distinct from `$OUTPUT_DIR/execution_receipts.jsonl` (the
+   broader reviewed/placed/skipped audit trail) — write BOTH on a placement.
 
 ## Hard stops (refuse and explain — do not proceed)
 
-- `output/KILL_SWITCH` exists **OR** the queue's `kill_switch_active` is `true`
-  → the platform is paused. Refuse all placement. (Deactivate with
+- `$OUTPUT_DIR/KILL_SWITCH` exists **OR** the queue's `kill_switch_active` is
+  `true` → the platform is paused. Refuse all placement. (Deactivate with
   `python -m execution.kill_switch --deactivate` only on operator instruction.)
 - The queue's `mode` is `off` → nothing to do.
 - The queue's `generated_at` is more than ~30 minutes old → it is STALE. Refuse
@@ -62,7 +96,7 @@ not — read them a checklist only if they ask for one.
 
 ## Procedure
 
-1. **Load state and orient the operator.** Read `output/execution_queue.json`.
+1. **Load state and orient the operator.** Read `$OUTPUT_DIR/execution_queue.json`.
    Note `mode`, `kill_switch_active`, `max_notional_per_order`, and the
    `intents` list. Run the hard-stop checks above. Then, before touching any
    MCP tool, give the operator a short spoken overview — mode, how many
@@ -124,33 +158,34 @@ not — read them a checklist only if they ask for one.
      (`gate_reasons`).
 5. **Place (live only, one at a time, human-confirmed).** For each
    `allow_place: true` intent:
-   a. Re-read `output/KILL_SWITCH`; if it now exists, abort the whole run.
+   a. Re-read `$OUTPUT_DIR/KILL_SWITCH`; if it now exists, abort the whole run.
    b. **Idempotency check.** Compute this intent's
       `dedup_key = "YYYY-MM-DD:SYMBOL:SIDE"` using **today's UTC date**, then
-      read `output/execution_placed.jsonl` and check whether that `dedup_key`
-      already appears for today. If it does, treat the intent as **ALREADY
-      PLACED**: skip it, tell the operator plainly ("MSFT BUY was already placed
-      today — mcp_order_id ‹…› — skipping to avoid a double-fill"), record a
-      `skipped` receipt with a note, and move on. Do **not** re-place. (If the
-      ledger file is absent, no intent has been placed today — proceed.)
+      read `$OUTPUT_DIR/execution_placed.jsonl` and check whether that
+      `dedup_key` already appears for today. If it does, treat the intent as
+      **ALREADY PLACED**: skip it, tell the operator plainly ("MSFT BUY was
+      already placed today — mcp_order_id ‹…› — skipping to avoid a
+      double-fill"), record a `skipped` receipt with a note, and move on. Do
+      **not** re-place. (If the ledger file is absent, no intent has been
+      placed today — proceed.)
    c. Show the final order and ask the operator to confirm THIS specific order
       ("place / skip / stop"). Require an explicit affirmative per order — never
       batch-confirm, and never treat silence or a topic change as consent.
    d. On "place", call `place_equity_order` (with the resolved limit price for
       limit intents). On "skip", move on. On "stop", end.
    e. **On a successful placement, append to BOTH ledgers (append-only):**
-      - `output/execution_placed.jsonl` — the placed-intent ledger:
+      - `$OUTPUT_DIR/execution_placed.jsonl` — the placed-intent ledger:
         `{"ts","dedup_key","symbol","side","qty","target_notional",
         "client_order_id","mcp_order_id"}` (use the same `dedup_key` you computed
         in step 5b; this is what makes the next run's idempotency check work).
-      - `output/execution_receipts.jsonl` — the outcome audit trail:
+      - `$OUTPUT_DIR/execution_receipts.jsonl` — the outcome audit trail:
         `{"ts","symbol","side","qty","action":"reviewed|placed|skipped",
         "mcp_order_id","note"}`.
       For reviewed-only or skipped intents, append only the receipts record (no
       ledger line — nothing was placed).
 6. **Report, and stay open.** Summarise what was previewed, placed, and
-   skipped, point the operator to `output/execution_receipts.jsonl`,
-   `output/execution_placed.jsonl`, and the Robinhood app, and invite any
+   skipped, point the operator to `$OUTPUT_DIR/execution_receipts.jsonl`,
+   `$OUTPUT_DIR/execution_placed.jsonl`, and the Robinhood app, and invite any
    follow-up questions rather than treating the run as over the moment the last
    intent is handled. Note that after the run, `execution/receipts_store.py`
    reconciles the receipts/ledger against the account's **actual** Robinhood
@@ -169,16 +204,17 @@ not — read them a checklist only if they ask for one.
   placement.
 - **Agentic account only.** Never act against the operator's main account.
 - **Idempotent placement.** Before placing, check the placed-intent ledger
-  (`execution_placed.jsonl`) for today's `dedup_key`; if present, the intent is
-  already placed — skip it, never double-place. Append a ledger line after every
-  successful placement so the next run sees it.
+  (`$OUTPUT_DIR/execution_placed.jsonl`) for today's `dedup_key`; if present,
+  the intent is already placed — skip it, never double-place. Append a ledger
+  line after every successful placement so the next run sees it.
 - **Limit price from the live quote.** For a `limit` intent, always derive the
   limit price from the review-time MCP quote (BUY ≤ quote·(1+bps/10000), SELL ≥
   quote·(1−bps/10000)) — never from the queue's stale snapshot price — and pass
   the same price to both `review_equity_order` and `place_equity_order`.
-- **Receipts, not intents.** You append outcomes to `execution_receipts.jsonl`
-  (and placements to `execution_placed.jsonl`); you never edit
-  `execution_queue.json` (the platform owns it).
+- **Receipts, not intents.** You append outcomes to
+  `$OUTPUT_DIR/execution_receipts.jsonl` (and placements to
+  `$OUTPUT_DIR/execution_placed.jsonl`); you never edit
+  `$OUTPUT_DIR/execution_queue.json` (the platform owns it).
 - **Conversation, not consent.** Narrating, answering questions, and
   discussing an intent is encouraged and never itself counts as the operator's
   explicit per-order confirmation — that confirmation still has to be asked

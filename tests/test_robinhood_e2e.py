@@ -776,3 +776,72 @@ class TestSkillMdInvariantsPinned:
                 assert phrase in content, (
                     f"Missing critical safety invariant phrase in {skill_md_path}: '{phrase}'"
                 )
+
+    def test_skill_md_never_references_bare_repo_relative_output_path(self):
+        """Regression test for the bug documented in
+        docs/known_issues/robinhood_execution_skill_repo_relative_path.md:
+        the skill instructions used to tell an agent to read/write the queue,
+        kill switch, and both ledgers via a LITERAL relative `output/...`
+        path. Since the skill is followed by an agent using Read/Write/Bash
+        tools (not a Python import), a bare `output/...` resolves against
+        the agent's CWD -- the repo/worktree root -- not
+        `settings.OUTPUT_DIR` (default `~/.stockpy_local/output`, and this
+        repo runs many concurrent git worktrees, so the two can easily
+        diverge). Both SKILL.md copies and the /rh-execute command must
+        route every reference to these four artifacts through a resolved
+        `$OUTPUT_DIR` instead.
+        """
+        candidate_paths = [
+            Path(".claude/skills/robinhood-execution/SKILL.md"),
+            Path(".agents/skills/robinhood-execution/SKILL.md"),
+            Path(".claude/commands/rh-execute.md"),
+        ]
+        paths = [p for p in candidate_paths if p.exists()]
+        assert paths, f"Could not find any of {candidate_paths}"
+
+        forbidden_literal_paths = [
+            "output/execution_queue.json",
+            "output/execution_placed.jsonl",
+            "output/execution_receipts.jsonl",
+            "output/KILL_SWITCH",
+        ]
+
+        for path in paths:
+            content = path.read_text(encoding="utf-8")
+            for forbidden in forbidden_literal_paths:
+                assert forbidden not in content, (
+                    f"{path} still references the bare, repo-relative "
+                    f"'{forbidden}' -- this must be resolved through "
+                    f"$OUTPUT_DIR (settings.OUTPUT_DIR) instead, since an "
+                    f"agent following these instructions with Read/Write/"
+                    f"Bash tools resolves a literal 'output/...' path "
+                    f"against its own CWD, not settings.OUTPUT_DIR."
+                )
+
+    def test_skill_md_resolves_output_dir_via_settings(self):
+        """The two SKILL.md copies must actually teach the agent HOW to
+        resolve the real output directory, not just avoid the bad literal
+        path -- pins the concrete recipe (settings.OUTPUT_DIR via a one-shot
+        `python3 -c` call, reused as $OUTPUT_DIR) so it can't be quietly
+        dropped in a future edit."""
+        candidate_paths = [
+            Path(".claude/skills/robinhood-execution/SKILL.md"),
+            Path(".agents/skills/robinhood-execution/SKILL.md"),
+        ]
+        skill_md_paths = [p for p in candidate_paths if p.exists()]
+        assert skill_md_paths, f"Could not find any of {candidate_paths}"
+
+        required_phrases = [
+            "Resolve the output directory once.",
+            "settings.OUTPUT_DIR",
+            "from settings import settings",
+            "$OUTPUT_DIR",
+        ]
+
+        for skill_md_path in skill_md_paths:
+            content = skill_md_path.read_text(encoding="utf-8")
+            for phrase in required_phrases:
+                assert phrase in content, (
+                    f"Missing output-directory-resolution phrase in "
+                    f"{skill_md_path}: '{phrase}'"
+                )
