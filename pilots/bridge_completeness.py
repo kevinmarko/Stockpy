@@ -232,6 +232,29 @@ def bridge_completeness_summary(window: int = 200, *, db_url: Optional[str] = No
         logger.warning("bridge_completeness_summary: transactions_store read failed: %s", exc)
         return _degraded_result(window, enabled, "Could not read transactions_store.")
 
+    # Normalize each symbol's transactions_store history to (entry, exit)
+    # tuples ONCE here, rather than re-parsing (`_to_naive_utc`) the same
+    # rows once per checked paper trade below -- several paper trades sharing
+    # one symbol previously re-scanned and re-parsed that symbol's FULL
+    # history from scratch for each of them (O(n_trades x history_size)).
+    # This is still a per-row pass (tolerance-based matching on parsed
+    # datetimes isn't a hashable-key operation), but now bounded to exactly
+    # one pass per symbol regardless of how many trades in the window share
+    # it -- O(n_trades + total_history_rows) instead.
+    try:
+        history_pairs: Dict[str, list] = {}
+        for symbol, history in histories.items():
+            if history is None or history.empty:
+                history_pairs[symbol] = []
+                continue
+            history_pairs[symbol] = [
+                (_to_naive_utc(row.get("entry_ts")), _to_naive_utc(row.get("exit_ts")))
+                for _, row in history.iterrows()
+            ]
+    except Exception as exc:  # noqa: BLE001 — dead-letter: malformed row/frame
+        logger.warning("bridge_completeness_summary: history normalization failed: %s", exc)
+        return _degraded_result(window, enabled, "Bridge-completeness matching failed.")
+
     n_checked = 0
     n_bridged = 0
     n_unmatchable = 0
@@ -249,16 +272,12 @@ def bridge_completeness_summary(window: int = 200, *, db_url: Optional[str] = No
 
             exit_ts = _to_naive_utc(trade.get("exit_ts"))
             symbol = str(trade.get("symbol") or "").strip().upper()
-            history = histories.get(symbol)
+            pairs = history_pairs.get(symbol, [])
 
-            matched = False
-            if history is not None and not history.empty:
-                for _, row in history.iterrows():
-                    row_entry = _to_naive_utc(row.get("entry_ts"))
-                    row_exit = _to_naive_utc(row.get("exit_ts"))
-                    if _timestamps_match(entry_ts, row_entry) and _timestamps_match(exit_ts, row_exit):
-                        matched = True
-                        break
+            matched = any(
+                _timestamps_match(entry_ts, row_entry) and _timestamps_match(exit_ts, row_exit)
+                for row_entry, row_exit in pairs
+            )
             if matched:
                 n_bridged += 1
     except Exception as exc:  # noqa: BLE001 — dead-letter: malformed row/frame

@@ -313,3 +313,55 @@ def test_never_raises_when_transactions_store_import_itself_fails(tmp_path, monk
     assert result["n_trades_checked"] == 0
     assert result["completeness_pct"] is None
     assert result["reason"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Code-review finding: the per-trade matching loop used to re-scan (and
+# re-parse via _to_naive_utc) a symbol's FULL transactions_store history
+# once per trade sharing that symbol -- O(n_trades x history_size). Fixed to
+# normalize each symbol's history ONCE. This test proves the fix, not just
+# that matching still works: with 5 trades sharing one symbol against a
+# 4-row history, _to_naive_utc must be called on the history rows' 8
+# timestamps (4 rows x 2 fields) exactly ONCE each -- 8 total -- never 5x8.
+# ---------------------------------------------------------------------------
+
+
+def test_history_normalization_happens_once_per_symbol_not_once_per_trade(tmp_path, monkeypatch):
+    import pilots.bridge_completeness as bc_module
+
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", True)
+    db_url = f"sqlite:///{tmp_path / 'normalize_once.db'}"
+    store = PaperAccountStore(db_url=db_url)
+
+    # 5 real closed round-trips on the SAME symbol, all genuinely bridged.
+    for i in range(5):
+        assert store.apply_fill(f"SHARED_buy_{i}", "SHARED", "buy", 10.0, 100.0, strategy_id="s1") is True
+        assert store.apply_fill(f"SHARED_sell_{i}", "SHARED", "sell", 10.0, 110.0, strategy_id="s1") is True
+
+    real_to_naive_utc = bc_module._to_naive_utc
+    call_count = {"n": 0}
+
+    def _counting_to_naive_utc(value):
+        call_count["n"] += 1
+        return real_to_naive_utc(value)
+
+    monkeypatch.setattr(bc_module, "_to_naive_utc", _counting_to_naive_utc)
+
+    result = bc_module.bridge_completeness_summary(window=200, db_url=db_url)
+
+    assert result["n_trades_checked"] == 5
+    assert result["n_bridged"] == 5
+
+    # History normalization: 5 rows x 2 fields (entry_ts, exit_ts) = 10
+    # calls, done ONCE regardless of how many trades share the symbol.
+    # Per-trade calls: entry_ts + exit_ts for each of the 5 checked trades
+    # = 10 more. Total = 20 -- NOT 5 (trades) x 10 (history calls) = 50,
+    # which is what the pre-fix O(n_trades x history_size) re-scan would
+    # have produced (10 history calls repeated once per trade, plus the
+    # same 10 per-trade calls = 60). Asserting the exact bounded total
+    # proves the history pass happens once, not once per trade.
+    assert call_count["n"] == 20, (
+        f"expected exactly 20 _to_naive_utc calls (10 one-time history-normalization "
+        f"+ 10 per-trade), got {call_count['n']} -- history is being re-normalized "
+        f"per trade instead of once per symbol"
+    )

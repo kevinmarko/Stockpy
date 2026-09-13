@@ -23,10 +23,12 @@ never merged into one combined figure:
    * anything else -> ``"unknown"`` (defensive; should not happen given the
      snapshot store's own write-side validation)
 
-   This is the SAME rule as, and deliberately kept in lockstep with,
-   ``pilots.retrospective_composer``'s own decision-state derivation
-   (``decision.state`` is NEVER inferred from ``strategy_id`` — see that
-   module's docstring's anti-shortcut rule). Per-cohort ``n_trades``/
+   This is THE SAME rule as ``pilots.retrospective_composer``'s own
+   decision-state derivation (``decision.state`` is NEVER inferred from
+   ``strategy_id`` — see that module's docstring's anti-shortcut rule) —
+   ``classify_decision_state`` below delegates to the composer's
+   ``_classify_provenance`` directly rather than reimplementing the mapping,
+   so the two can no longer silently drift apart. Per-cohort ``n_trades``/
    ``win_rate``/``mean_realized_pnl_pct`` are computed independently for
    each of the three cohorts and there is NO combined/"overall" figure
    anywhere in the returned shape — merging manual and signal-driven
@@ -133,16 +135,23 @@ def classify_decision_state(snapshot: Optional[Dict[str, Any]]) -> str:
     snapshot -> ``"unknown"``; ``provenance == "manual"`` -> ``"manual"``;
     ``provenance`` starting with ``"automated:"`` -> ``"signal_driven"``;
     anything else -> ``"unknown"``. Exposed (not underscore-prefixed) so a
-    caller — or a test proving lockstep with the composer — can reuse this
-    exact classification rather than re-deriving it."""
+    caller can reuse this exact classification rather than re-deriving it.
+
+    Delegates the actual provenance -> state mapping to
+    ``pilots.retrospective_composer._classify_provenance`` (lazy import,
+    matching this module's own dependency-light convention) rather than
+    maintaining a second, independent copy of the same rule — a prior
+    version of this function reimplemented the rule inline, which risked
+    silently drifting from the composer's copy with no test to catch it.
+    The composer is the single source of truth for this classification;
+    this function only ever adds the "no snapshot -> unknown" short-circuit,
+    which the composer's own ``_decision_from_snapshot`` applies identically
+    for a ``None`` snapshot."""
     if not snapshot:
         return "unknown"
-    provenance = snapshot.get("provenance")
-    if provenance == "manual":
-        return "manual"
-    if isinstance(provenance, str) and provenance.startswith("automated:"):
-        return "signal_driven"
-    return "unknown"
+    from pilots.retrospective_composer import _classify_provenance
+
+    return _classify_provenance(snapshot.get("provenance"))
 
 
 def _parse_entry_ts(value: Any) -> Optional[datetime]:
@@ -180,7 +189,8 @@ def _summarize_cohort(trades: List[Dict[str, Any]]) -> Dict[str, Optional[float]
         if pct is not None:
             pct_values.append(pct)
 
-    win_rate = (wins / n) if n > 0 else None
+    # n > 0 always holds here -- the n == 0 case already returned above.
+    win_rate = wins / n
     mean_pct = (sum(pct_values) / len(pct_values)) if pct_values else None
     return {"n_trades": n, "win_rate": win_rate, "mean_realized_pnl_pct": mean_pct}
 

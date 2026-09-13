@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 import data.paper_account_store as paper_account_store_module
 import data.trade_decision_snapshot_store as trade_decision_snapshot_store_module
 import pilots.retrospective_insights as retrospective_insights
@@ -71,6 +73,39 @@ def test_classify_decision_state_automated_prefix_is_signal_driven():
 
 def test_classify_decision_state_unrecognized_provenance_is_unknown():
     assert classify_decision_state({"provenance": "something_else"}) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# classify_decision_state delegates to (and so cannot drift from)
+# retrospective_composer's own _classify_provenance -- code-review finding:
+# the two were previously two independent implementations of the same rule
+# with no test proving they agreed.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_decision_state_delegates_to_composer_classifier():
+    """Proves delegation, not just coincidental agreement: patching the
+    composer's _classify_provenance changes classify_decision_state's
+    result too."""
+    import pilots.retrospective_composer as composer_module
+
+    with patch.object(composer_module, "_classify_provenance", return_value="signal_driven"):
+        assert classify_decision_state({"provenance": "manual"}) == "signal_driven"
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    ["manual", "automated:options_auto_scan", "automated:", "something_else", "", None, 123],
+)
+def test_classify_decision_state_matches_composer_classifier_for_every_provenance(provenance):
+    """A real, non-mocked parity check across the composer's own
+    _classify_provenance -- the two functions must agree for every
+    provenance shape a real snapshot could carry, not just the cases each
+    module's own isolated unit tests happen to cover."""
+    from pilots.retrospective_composer import _classify_provenance
+
+    snapshot = {"provenance": provenance} if provenance is not None else {"provenance": None}
+    assert classify_decision_state(snapshot) == _classify_provenance(provenance)
 
 
 # ---------------------------------------------------------------------------
