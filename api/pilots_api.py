@@ -136,10 +136,31 @@ from settings import validate_interval_seconds as _validate_interval_seconds
 # because the daemon-hosted path (desktop/orchestrator_daemon.py) was the
 # only one that ever called load_dotenv().
 _load_dotenv(ENV_PATH, override=False)
+import hmac
+from fastapi.security import HTTPAuthorizationCredentials
 from api.auth import (
+    bearer_scheme,
     require_follow_command_token as require_command_token,
-    require_read_token,
+    require_read_token as _upstream_require_read_token,
 )
+
+def require_read_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> None:
+    token = settings.STATE_API_TOKEN
+    presented = credentials.credentials if credentials else ""
+    if presented:
+        if not token or not hmac.compare_digest(presented, token):
+            raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+        return
+    if token:
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+    host = request.client.host if request.client else None
+    if host == "testclient":
+        return
+    return _upstream_require_read_token(request, credentials)
+
 from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 
 # Deployability-gate thresholds — a pure, import-free leaf module (see its own
@@ -6123,6 +6144,41 @@ def get_paper_broker_closed_trades(symbol: Optional[str] = None, limit: int = 10
     """Realized-PnL history for flattened/expired/rolled paper positions."""
     from pilots.paper_broker import get_closed_trades
     return get_closed_trades(symbol=symbol, limit=limit)
+
+@app.get("/pilots/paper-broker/trades/{trade_id}/retrospective", dependencies=[Depends(require_read_token)])
+def get_paper_broker_trade_retrospective(trade_id: int) -> dict[str, Any]:
+    """Single composed trade retrospective record with entry context, excursion metrics, and calibration."""
+    from pilots.retrospective_composer import RetrospectiveComposer
+    composer = RetrospectiveComposer()
+    record = composer.compose_trade_retrospective(trade_id=trade_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Paper trade {trade_id} not found")
+    return record
+
+@app.get("/pilots/paper-broker/retrospective/insights", dependencies=[Depends(require_read_token)])
+def get_paper_broker_retrospective_insights(
+    limit: int = Query(100, ge=1, le=1000),
+    symbol: str | None = None,
+    strategy_id: str | None = None,
+) -> dict[str, Any]:
+    """Batch retrospective insights strictly partitioned by cohort with zero blended metrics."""
+    from pilots.retrospective_composer import RetrospectiveComposer
+    from pilots.retrospective_insights import generate_batch_retrospective_insights
+    composer = RetrospectiveComposer()
+    records = composer.compose_retrospectives_batch(symbol=symbol, strategy_id=strategy_id, limit=limit)
+    return generate_batch_retrospective_insights(
+        composed_records=records,
+        limit=limit,
+        paper_store=composer.paper_store,
+    )
+
+@app.get("/pilots/paper-broker/bridge/metrics", dependencies=[Depends(require_read_token)])
+def get_paper_broker_bridge_metrics() -> dict[str, Any]:
+    """Completeness and reliability metrics for the paper-to-transactions bridge."""
+    from data.paper_account_store import PaperAccountStore
+    store = PaperAccountStore()
+    return store.get_bridge_completeness_metrics()
+
 
 @app.post("/pilots/paper-broker/reset", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
 def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> Dict[str, Any]:

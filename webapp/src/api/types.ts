@@ -6242,3 +6242,153 @@ export interface ExplainTickerResponse {
   factor_breakdown: ExplainFactorBreakdown;
   price_history_status: ExplainPriceHistoryStatus;
 }
+
+// =============================================================================
+// Retrospective Learning Loop Types (R4, R5, R6)
+// =============================================================================
+
+export type RetrospectiveProvenance = "signal_driven" | "manual" | "unknown";
+export type RetrospectiveSnapshotStatus = "captured" | "not_captured";
+export type RetrospectiveEvaluationStatus =
+  | "available"
+  | "evaluation data unavailable"
+  | "bridge_unavailable"
+  | "bars_unavailable"
+  | "pending";
+
+export interface RetrospectiveSnapshot {
+  captured: boolean;
+  decision_context_status: RetrospectiveSnapshotStatus;
+  snapshot_id?: string | null;
+  trade_id?: number | null;
+  symbol?: string;
+  strategy_id?: string | null;
+  entry_ts?: string | null;
+  entry_price?: number | null;
+  side?: string | null;
+  qty?: number | null;
+  provenance: RetrospectiveProvenance;
+  conviction?: number | null;
+  macro_regime?: string | null;
+  signal_score?: number | null;
+  raw_forecast?: number | null;
+  key_indicators?: Record<string, any> | null;
+  operator_notes?: string | null;
+  reason?: string | null;
+}
+
+export interface RetrospectiveExcursion {
+  evaluation_status: RetrospectiveEvaluationStatus;
+  status?: string;
+  bridge_reached: boolean;
+  mae: number | null;
+  mfe: number | null;
+  edge_ratio: number | null;
+  realized_slippage?: number | null;
+  reason?: string | null;
+}
+
+export interface RetrospectiveCalibration {
+  status: string;
+  calibration_status?: string;
+  conviction: number | null;
+  bin_range?: string | null;
+  bin_center?: number | null;
+  bin_win_rate?: number | null;
+  historical_bin_win_rate?: number | null;
+  bin_trade_count?: number;
+  calibration_error?: number | null;
+  reason?: string | null;
+}
+
+export interface RetrospectiveTradeRecord {
+  trade_id: number;
+  symbol: string;
+  strategy_id: string | null;
+  pilot_id: string | null;
+  experiment_arm?: string | null;
+  side: "BUY" | "SELL" | string;
+  qty: number;
+  entry_ts: string | null;
+  entry_price: number;
+  exit_ts: string | null;
+  exit_price: number;
+  commission: number;
+  realized_pnl: number;
+  realized_pnl_pct: number | null;
+  holding_period_days: number | null;
+  close_reason: string;
+  provenance: RetrospectiveProvenance;
+  snapshot: RetrospectiveSnapshot | null;
+  entry_snapshot?: RetrospectiveSnapshot | null;
+  bridge_status: "bridged" | "failed" | "disabled" | "not_attempted" | string;
+  bridged_trade_id: number | null;
+  bridge_error: string | null;
+  bridged_at: string | null;
+  excursion: RetrospectiveExcursion;
+  evaluation?: RetrospectiveExcursion;
+  calibration: RetrospectiveCalibration;
+  narrative: string;
+  narrative_text?: string;
+}
+
+export interface StrategyCohortBreakdown {
+  trades: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number | null;
+  total_pnl: number;
+  total_realized_pnl: number;
+  mean_edge_ratio: number | null;
+}
+
+export interface CohortInsightMetrics {
+  cohort_name?: string;
+  total_trades: number;
+  trade_count?: number;
+  winning_trades: number;
+  losing_trades: number;
+  breakeven_trades: number;
+  win_rate: number | null;
+  total_realized_pnl: number;
+  profit_factor: number | null;
+  mean_holding_period_days: number | null;
+  mean_edge_ratio: number | null;
+  mean_mae: number | null;
+  mean_mfe: number | null;
+  symbols: string[];
+  calibration_brier_score?: number | null;
+  calibration_status?: string;
+  strategies?: Record<string, StrategyCohortBreakdown>;
+  note?: string;
+}
+
+export interface BridgeHealthMetrics {
+  bridge_enabled?: boolean;
+  total_closed_trades: number;
+  attempted_count?: number;
+  bridged_count: number;
+  failed_count: number;
+  disabled_count: number;
+  completeness_pct: number | null;
+  status: "healthy" | "degraded" | "disabled" | "unconfigured" | string;
+  last_failure?: {
+    trade_id: number;
+    symbol: string;
+    timestamp: string | null;
+    error: string | null;
+  } | null;
+}
+
+export interface BatchRetrospectiveInsightsResponse {
+  automated_cohort: CohortInsightMetrics;
+  signal_driven_cohort?: CohortInsightMetrics;
+  manual_cohort: CohortInsightMetrics;
+  unrecorded_cohort: CohortInsightMetrics;
+  contrastive_insights: string[];
+  bridge_health: BridgeHealthMetrics;
+}
+
+export interface BridgeReliabilityResponse extends BridgeHealthMetrics {}
+

@@ -63,6 +63,7 @@ import { PaperBroker } from "./screens/PaperBroker";
 import { SettingsPaperBroker } from "./screens/SettingsPaperBroker";
 import { LiveTradeApprovals } from "./screens/LiveTradeApprovals";
 import { TrendsVisualizer } from "./screens/TrendsVisualizer";
+import { RetrospectiveJournal } from "./screens/RetrospectiveJournal";
 
 import { StrategyInsights } from "./screens/StrategyInsights";
 import { CreateDataApp } from "./screens/CreateDataApp";
@@ -257,6 +258,7 @@ export default function App() {
                   <Route path="/models" element={<Models />} />
                   <Route path="/pairs" element={<PairsRadar />} />
                   <Route path="/options" element={<OptionsMatrix />} />
+                  <Route path="/retrospective" element={<RetrospectiveJournal />} />
                   <Route path="/attribution" element={<Attribution />} />
                   <Route path="/observability" element={<Observability />} />
                   <Route path="/strategy-health" element={<StrategyHealth />} />

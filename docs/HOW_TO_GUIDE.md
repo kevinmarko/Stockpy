@@ -26,6 +26,8 @@ A practical reference for running, configuring, and interpreting every part of t
 18. [Google Sheets Integration (Legacy)](#18-google-sheets-integration-legacy)
 19. [Running Tests](#19-running-tests)
 20. [Troubleshooting Common Problems](#20-troubleshooting-common-problems)
+21. [Running the Read-Only State API Securely](#21-running-the-read-only-state-api-securely)
+22. [Using the Retrospective Learning Loop](#22-using-the-retrospective-learning-loop)
 
 ---
 
@@ -2115,3 +2117,70 @@ convenient for zero-config local use — a localhost-only API bound to your own
 machine is fine unauthenticated. But if you expose port 8600 to a network or
 the internet, **always set `STATE_API_TOKEN`** first; otherwise anyone who can
 reach the port can read your persisted state and closed-trade history.
+
+---
+
+## 22. Using the Retrospective Learning Loop
+
+The **Retrospective Learning Loop** provides systematic post-mortem trade autopsies and pattern intelligence across your paper-trading history. Rather than simply logging trade profit and loss, the learning loop captures point-in-time quantitative context at order entry (model conviction, signals, macro indicators, and market regime) and evaluates realized outcomes against excursion bounds (MAE/MFE) and strategy calibration expectations.
+
+### Accessing the Retrospective Journal
+
+You can explore retrospective autopsies and cohort analytics through multiple interfaces:
+
+1. **Pilots PWA (Web Application)**:
+   - Navigate to **Trading > Retrospective Journal** (`/retrospective`) via the desktop sidebar or mobile "More" menu.
+   - Alternatively, open **Trading > Trading Hub** and select the "Retrospective Journal" card.
+   - From the **Paper Broker** (`/paper-broker`) screen, click the "View Retrospective Journal →" link above the Closed Trades table or click the **Autopsy →** button on any closed trade row.
+2. **REST API**:
+   - `GET /pilots/paper-broker/trades/{trade_id}/retrospective`: Fetch full post-mortem autopsy for a single trade.
+   - `GET /pilots/paper-broker/retrospective/insights?limit=100&symbol=&strategy_id=`: Retrieve batch pattern intelligence and cohort breakdowns.
+   - `GET /pilots/paper-broker/bridge/metrics`: Retrieve synchronization health and completeness metrics.
+
+### Trade Journal & Excursion Autopsy
+
+Tab 1 of the Retrospective Journal lists closed paper trades with multi-axis filtering (by symbol, strategy, and provenance). Clicking on any trade opens the **Retrospective Detail Modal**, which brings together:
+
+- **Execution Realization**: Realized P&L ($ and %), fill prices, slippage against target order price, execution commissions, and holding duration.
+- **Entry Decision Context**: What the engine saw at the moment the position opened — macro regime (e.g., RISK ON, NEUTRAL), key macro indicators (VIX, yield curve spread, high yield OAS), top active signal modules, and model conviction score ($[0.0, 1.0]$).
+- **Excursion Analysis**:
+  - **Maximum Adverse Excursion (MAE)**: The deepest unrealized drawdown experienced while the trade was open. Helps assess whether stop-losses were set too wide or entries were poorly timed.
+  - **Maximum Favorable Excursion (MFE)**: The peak unrealized profit achieved during the trade life.
+  - **Edge Ratio**: Ratio of favorable to adverse excursion ($\text{MFE} / \text{MAE}$). An edge ratio $> 1.0$ indicates positive intraday directional edge.
+  - **Holding Period Efficiency**: Realized P&L relative to MFE, measuring how effectively profit was captured before exit.
+- **Model Calibration Placement**: Compares the entry conviction score to the strategy's historical backtest validation reports (`ValidationReport`), placing the trade in its conviction decile bin to evaluate whether higher-conviction bets produce higher realized win rates.
+- **Deterministic Narrative Autopsy**: A rule-based post-mortem analysis generated without external LLM latency or hallucination risks, structured into Execution Summary, Conviction Calibration, Excursion Analysis, and Actionable Lessons.
+
+### Strict Cohort Isolation (Pattern Insights)
+
+Tab 2 of the Retrospective Journal presents aggregated cohort analytics (`generate_batch_retrospective_insights`). To guarantee mathematical honesty and prevent distorted performance statistics, trades are strictly partitioned into three mutually exclusive cohorts:
+
+1. **Automated Cohort**: Algorithmic trades initiated by platform strategies with forward-captured entry snapshots.
+   - Evaluated for algorithmic win rate, profit factor, mean edge ratio, mean MAE/MFE, and Brier score calibration quality.
+   - Includes per-strategy breakdown tables isolating individual Pilot performance.
+2. **Manual Cohort**: Discretionary trades submitted manually by the operator.
+   - Tracked with independent win rate and profit factor metrics.
+   - Conviction calibration is explicitly flagged as **"Not Applicable"** because manual entries do not carry model-generated probability distributions.
+3. **Unrecorded Cohort**: Historical trades executed prior to the rollout of retrospective snapshot capture.
+   - Isolated to prevent missing historical context from poisoning current algorithmic samples.
+
+**Quant Integrity Invariant**: The platform **NEVER** blends automated and manual trades into unified top-level metrics. You will never see a combined "portfolio win rate" or "overall profit factor" that conflates model-driven signals with operator discretion.
+
+### Honest Fallback States (Anti-Fabrication Policy)
+
+In accordance with platform integrity constraints, the retrospective engine never hallucinates, estimates, or synthesizes missing historical data:
+
+| State / Display Badge | Condition | System Behavior |
+|-----------------------|-----------|-----------------|
+| `"Snapshot not captured at entry for this trade"` | Trade executed before retrospective capture was enabled, or manual entry without an active engine cycle. | `entry_context` is set to `None`. Decision context panel displays honest missing notice. No pseudo-snapshot is fabricated. |
+| `"Evaluation data unavailable"` | Trade excursion cannot be computed due to missing market price bars or unbridged state. | `mae`, `mfe`, and `edge_ratio` are set to `null` (`None`). UI displays `"Unavailable"`. |
+| `"Model calibration not applicable"` | Discretionary manual trade or uncataloged/custom strategy ID. | Calibration status is `"not_applicable"`. No theoretical curve is invented. |
+| `"Insufficient sample in conviction bin (n < 5)"` | Fewer than 5 closed trades recorded in the given conviction bin ($[0.0, 0.2)$, etc.). | Calibration status displays `"insufficient_sample"`. The system refrains from claiming statistical significance. |
+| `"Bridge error"` | Paper trade failed synchronization into the analytical transactions store. | Error diagnostic message and failure timestamp are exposed in the modal's diagnostics drawer. |
+
+### Synchronization Bridge & Completeness Telemetry
+
+When paper trades close in `PaperAccountStore`, an atomic database bridge records them into `TransactionsStore` for unified portfolio evaluation.
+- **Fail-Open Isolation**: Order fills and closures always succeed. If an error occurs during bridge synchronization, the trade is committed with `bridge_status="failed"` and the error details are recorded for inspection.
+- **Completeness Metrics**: The banner at the top of the Retrospective Journal monitors `getBridgeReliability()`, displaying the percentage of successfully bridged trades, total synchronized count, and failure count.
+

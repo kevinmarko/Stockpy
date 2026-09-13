@@ -30,6 +30,7 @@ import {
   LineChart,
   LayoutTemplate,
   ShieldCheck,
+  History,
 } from "lucide-react";
 import { useCustomViews } from "./customViews";
 
@@ -104,6 +105,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/trade-history", label: "Trade History", ico: Briefcase, match: (p) => p.startsWith("/trade-history"), section: "research" },
   { to: "/research/trends-stitcher", label: "SVI Stitching Algorithm Demo", ico: Activity, match: (p) => p.startsWith("/research/trends-stitcher"), section: "research" },
   // Trading Tools
+  { to: "/retrospective", label: "Retrospective Journal", ico: History, match: (p) => p.startsWith("/retrospective"), section: "trading" },
   { to: "/attribution", label: "Attribution", ico: Calculator, match: (p) => p.startsWith("/attribution"), section: "trading" },
   { to: "/calibration", label: "Calibration", ico: Sliders, match: (p) => p.startsWith("/calibration"), section: "trading" },
   { to: "/commands", label: "Commands", ico: Terminal, match: (p) => p.startsWith("/commands"), section: "trading" },

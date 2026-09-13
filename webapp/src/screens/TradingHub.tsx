@@ -30,6 +30,13 @@ interface HubCard {
 }
 
 const CARDS: HubCard[] = [
+  {
+    to: "/retrospective",
+    label: "Retrospective Journal",
+    icon: "📖",
+    description:
+      "Post-trade causal autopsies, hold-period excursion metrics (MAE/MFE), and cohort-isolated pattern insights.",
+  },
   { to: "/attribution", label: "Attribution", icon: "🧮", description: TAB_HELP.attribution.description },
   { to: "/calibration", label: "Calibration", icon: "🎚️", description: TAB_HELP.calibration.description },
   { to: "/commands", label: "Commands", icon: "⌨️", description: TAB_HELP.commands.description },
