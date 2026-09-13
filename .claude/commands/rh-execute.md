@@ -4,12 +4,16 @@ description: Review (and in live mode, place with confirmation) the Robinhood ex
 
 Run the **robinhood-execution** skill against the platform's gated order queue.
 
-Read `output/execution_queue.json` and act on it strictly per the
-`robinhood-execution` skill. Treat this as a conversation with the operator,
-not a scripted checklist — narrate what's in the queue and why, and invite
-questions before and during the per-order review (they may be arriving here
-because of an ntfy push `execution/queue_builder.py` sent, not just because
-they typed this command):
+Act on the execution queue strictly per the `robinhood-execution` skill —
+including its Prerequisites step 1, which resolves the platform's real
+output directory (`$OUTPUT_DIR`, via `settings.OUTPUT_DIR`) once at the
+start of the session; every file this command touches (`execution_queue.json`,
+`execution_placed.jsonl`, `execution_receipts.jsonl`, `KILL_SWITCH`) lives
+there, never at a literal repo-relative `output/` path. Treat this as a
+conversation with the operator, not a scripted checklist — narrate what's in
+the queue and why, and invite questions before and during the per-order
+review (they may be arriving here because of an ntfy push
+`execution/queue_builder.py` sent, not just because they typed this command):
 
 1. Verify the `robinhood-trading` MCP is connected and the queue exists and is
    fresh; honor every hard stop (kill switch, `mode: off`, stale queue,
@@ -23,7 +27,7 @@ they typed this command):
 5. If `mode == "live"`, place ONLY `allow_place: true` intents, one at a time,
    each with an explicit per-order human confirmation, re-checking the kill
    switch before each placement, and append outcomes to
-   `output/execution_receipts.jsonl`.
+   `$OUTPUT_DIR/execution_receipts.jsonl`.
 
 Never place an order in `review` mode, never place an `allow_place: false`
 intent, never batch-confirm (discussion is not consent — the explicit
