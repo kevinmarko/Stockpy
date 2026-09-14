@@ -250,13 +250,32 @@ class TestThreadSafety:
         original single-lock implementation. At the original 0.02s interval /
         0.8x tolerance this occasionally clipped below the floor by ~1ms under
         12-thread contention (measured, not theoretical) -- bumped to 0.04s /
-        0.6x here to keep comfortable margin above that overhead while still
-        failing hard on a genuinely unlocked/broken throttle (near-zero gaps).
+        0.6x, and then to 0.15s / 0.6x after that ALSO failed in CI.
+
+        The second failure is the interesting one, because it says the previous
+        fix moved the wrong variable. The tolerance was already loose (0.6x);
+        what was marginal was the ABSOLUTE floor. At 0.04s that floor is 24ms,
+        and GitHub's runner has 2 vCPUs shared by two xdist workers plus these
+        12 threads -- scheduler jitter there is routinely tens of milliseconds,
+        so one descheduled thread clips a gap under 24ms and the build goes
+        red. It passed locally every time (10 cores) and failed on the runner:
+        the signature of a contention-sensitive threshold, not a real defect.
+
+        Raising the INTERVAL rather than loosening the tolerance again is what
+        actually buys margin. At 0.15s the floor is 90ms, so the same jitter is
+        a small fraction of it instead of most of it, while a genuinely
+        unlocked throttle still produces ~0 gaps and still fails by an order of
+        magnitude. Cost is ~1.8s for this one test (12 x 0.15s serialized).
+
+        If this goes marginal a THIRD time, do not widen the margin again --
+        assert the property directly instead (median gap near the interval AND
+        minimum gap far above zero). 'every gap >= a fixed fraction of the
+        interval' is inherently jitter-fragile on a contended runner.
         """
         import threading
         import time
 
-        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.04)
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.15)
         monkeypatch.setattr(
             edgar_fundamentals, "_edgar_throttle_state_path_override", tmp_path / "edgar.state"
         )
@@ -294,10 +313,11 @@ class TestThreadSafety:
         assert len(issued) == n
         issued.sort()
         gaps = [b - a for a, b in zip(issued, issued[1:])]
-        # 0.6x tolerance for scheduler jitter (see the docstring above for why
-        # this is looser than a single-lock throttle would need); a broken
-        # throttle produces ~0 gaps, an order of magnitude below this floor.
-        assert all(g >= 0.04 * 0.6 for g in gaps), gaps
+        # 0.6x tolerance for scheduler jitter, now against a 0.15s interval --
+        # so the floor is 90ms, comfortably above the tens-of-ms jitter a
+        # 2-vCPU CI runner produces under this much contention. A broken
+        # throttle produces ~0 gaps, still an order of magnitude below it.
+        assert all(g >= 0.15 * 0.6 for g in gaps), gaps
 
 
 class TestCooldownCircuitBreaker:
