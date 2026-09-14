@@ -1245,9 +1245,11 @@ def request_jules_dispatch_approval(
         return str(e)
 
     lines = [
-        ("Approval recorded. Pass this approval_token to dispatch_jules_task "
-        "(along with the EXACT SAME prompt/title/source/branch) to actually "
-        "dispatch -- it expires soon and can be used only once."),
+        (
+            "Approval recorded. Pass this approval_token to dispatch_jules_task "
+            "(along with the EXACT SAME prompt/title/source/branch) to actually "
+            "dispatch -- it expires soon and can be used only once."
+        ),
         f"- **approval_token**: {result['approval_token']}",
         f"- **prompt_hash**: {result['prompt_hash']}",
         f"- **expires_at** (UTC epoch seconds): {result['expires_at']}",
@@ -1911,7 +1913,9 @@ def update_universe_tickers(action: str, symbol: str) -> str:
     except env_io.SecretWriteError as e:
         return f"Failed to update universe: DEFAULT_TICKERS write blocked ({e!s})."
     except env_io.DisallowedKeyError as e:
-        return f"Failed to update universe: DEFAULT_TICKERS is not an allowed key ({e!s})."
+        return (
+            f"Failed to update universe: DEFAULT_TICKERS is not an allowed key ({e!s})."
+        )
     except Exception as e:
         return f"Failed to write DEFAULT_TICKERS setting: {e!s}"
 
@@ -3361,8 +3365,10 @@ def get_execution_queue() -> str:
 
         lines = [
             "# Execution Queue",
-            (f"Mode: `{mode}` · Generated: {generated_at} · Kill switch: {kill_switch} · "
-            f"{n_placeable}/{len(intents)} placeable\n"),
+            (
+                f"Mode: `{mode}` · Generated: {generated_at} · Kill switch: {kill_switch} · "
+                f"{n_placeable}/{len(intents)} placeable\n"
+            ),
             "| Symbol | Action | Side | Qty | Target Notional | Gated | Rationale | Gate Reasons |",
             "|--------|--------|------|-----|------------------|-------|-----------|--------------|",
         ]
@@ -6052,9 +6058,11 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
                     (
                         "vrp_premium_selling_regime",
                         "UNAVAILABLE",
-                        (f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
-                        "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
-                        "-- cannot fully evaluate the macro half"),
+                        (
+                            f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
+                            "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
+                            "-- cannot fully evaluate the macro half"
+                        ),
                     )
                 )
             else:
@@ -6062,8 +6070,10 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
                     (
                         "vrp_premium_selling_regime",
                         "PASS",
-                        (f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
-                        f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}"),
+                        (
+                            f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
+                            f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}"
+                        ),
                     )
                 )
 
@@ -6195,8 +6205,10 @@ def inspect_webapp_screen(route: str = "/") -> str:
                 f"- **Title**: {payload['title']}",
                 f"- **DOM Elements**: {payload['domNodeCount']}",
                 f"- **Console Issues**: {len(payload['consoleMessages'])}",
-                ("- _Accessibility/best-practices/SEO and a composite performance score "
-                "are not computed by this tool -- unavailable, not simulated._"),
+                (
+                    "- _Accessibility/best-practices/SEO and a composite performance score "
+                    "are not computed by this tool -- unavailable, not simulated._"
+                ),
                 "\n```json",
                 json.dumps(payload, indent=2),
                 "```",
@@ -6343,8 +6355,10 @@ def audit_webapp_vitals(route: str = "/") -> str:
                 f"# PWA Performance & Lighthouse Scorecard: `{route}`\n",
                 "- **Status**: 🟢 Online",
                 f"- **Time To First Byte (TTFB)**: {(str(vitals.get('ttfb_ms')) + 'ms') if vitals.get('ttfb_ms') is not None else 'unavailable'}",
-                ("- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
-                "computed by this tool -- unavailable, not simulated._"),
+                (
+                    "- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
+                    "computed by this tool -- unavailable, not simulated._"
+                ),
                 "\n```json",
                 json.dumps(payload, indent=2),
                 "```",
@@ -6400,10 +6414,12 @@ def audit_webapp_vitals(route: str = "/") -> str:
         f"# PWA Performance & Lighthouse Scorecard: `{route}`\n",
         f"- **Status**: {'🟢 Online' if is_online else '🔴 Offline'}",
         f"- **Time To First Byte (TTFB)**: {(str(vitals['ttfb_ms']) + 'ms') if vitals['ttfb_ms'] is not None else 'unavailable'}",
-        ("- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
-        "computed by this tool (no headless audit capability) -- unavailable, not simulated. "
-        "Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` package) "
-        "for real Core Web Vitals._"),
+        (
+            "- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
+            "computed by this tool (no headless audit capability) -- unavailable, not simulated. "
+            "Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` package) "
+            "for real Core Web Vitals._"
+        ),
         "\n```json",
         json.dumps(payload, indent=2),
         "```",
@@ -6614,13 +6630,19 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
 
     lines = [
         f"# Visual Diff Comparison: `{route}`\n",
-        (f"- **Status**: {'🟢 Reachable' if reachable else '🔴 Offline'} "
-        "(reachability check only -- no real image comparison performed)"),
-        (f"- **Diff Percentage**: {payload['diff_pct']:.1f}% (Threshold: {threshold_pct}%, "
-        "reachability proxy, not a pixel diff)"),
+        (
+            f"- **Status**: {'🟢 Reachable' if reachable else '🔴 Offline'} "
+            "(reachability check only -- no real image comparison performed)"
+        ),
+        (
+            f"- **Diff Percentage**: {payload['diff_pct']:.1f}% (Threshold: {threshold_pct}%, "
+            "reachability proxy, not a pixel diff)"
+        ),
         f"- **Latency**: {elapsed} ms",
-        ("- _Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` "
-        "package) for a real screenshot-based pixel diff._"),
+        (
+            "- _Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` "
+            "package) for a real screenshot-based pixel diff._"
+        ),
         "\n```json",
         json.dumps(payload, indent=2),
         "```",
