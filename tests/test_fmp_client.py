@@ -217,6 +217,85 @@ class TestThrottleSpacing:
         assert clock.sleeps == [0.25]
 
 
+class TestThrottleLayersIndependently:
+    """``_fmp_throttle`` has TWO spacing layers -- the in-process
+    ``threading.Lock`` block above, whose sleeps ``TestThrottleSpacing``
+    asserts on directly, and ``cross_process_throttle.wait_turn``'s ``flock``,
+    called immediately after. The ``clock`` fixture patches ONLY
+    ``data.fmp_client.time`` (not ``data.cross_process_throttle.time``), so
+    ``TestThrottleSpacing``'s ``clock.sleeps`` assertions structurally cannot
+    see anything ``wait_turn`` does -- it really sleeps in the background
+    (unpatched, real ``time.sleep``) whether or not it's actually enforcing
+    anything. Verified by direct sabotage, not by reading: breaking
+    ``wait_turn``'s own sleep, or deleting the call to it from
+    ``_fmp_throttle`` entirely, leaves every ``TestThrottleSpacing`` assertion
+    green.
+
+    Mirrors ``tests/test_edgar_fundamentals.py``'s
+    ``TestThrottleLayersIndependently`` -- see that class's docstring for why
+    the two layers matter for different, non-interchangeable reasons (threads
+    within one process vs. this repo's many concurrent git worktrees).
+    """
+
+    def test_in_process_layer_alone_serializes_request_issuance(
+        self, clock, client_settings, monkeypatch
+    ):
+        """Neutralize wait_turn entirely (so it cannot contribute any
+        spacing, real or fake) and confirm the in-process fake-clock spacing
+        is unchanged from ``TestThrottleSpacing``'s own assertion.
+
+        Fails if the in-process sleep is removed or the lock stops being held
+        across it; unaffected by anything done to ``wait_turn``.
+        """
+        monkeypatch.setattr(
+            "data.cross_process_throttle.wait_turn", lambda *a, **k: None
+        )
+        with patch("data.fmp_client.requests.get", return_value=_resp()) as get:
+            _fmp_get("quote", {"symbol": "AAPL"})
+            _fmp_get("quote", {"symbol": "MSFT"})
+            _fmp_get("quote", {"symbol": "NVDA"})
+        assert get.call_count == 3
+        assert clock.sleeps == [0.25, 0.25]
+
+    def test_cross_process_layer_alone_serializes_request_issuance(
+        self, clock, client_settings, monkeypatch
+    ):
+        """Defeat the in-process layer's ability to actually delay anything --
+        its ``sleep`` becomes a no-op, so its own fake clock never advances
+        and it always measures ~0 elapsed, matching the "in-process delay set
+        to 0" framing -- then measure REAL wall-clock spacing between request
+        issuances (``data.cross_process_throttle.time`` is deliberately left
+        unpatched by the ``clock`` fixture, so ``wait_turn`` really sleeps).
+
+        Fails if ``wait_turn``'s sleep is removed, if it stops holding the
+        lock across that sleep, or if ``_fmp_throttle`` simply stops calling
+        it. Unaffected by anything done to the in-process block.
+        """
+        monkeypatch.setattr(clock, "sleep", lambda *_a, **_k: None)
+
+        import time as real_time
+
+        issued: list[float] = []
+
+        def _fake_get(*_args, **_kwargs):
+            issued.append(real_time.monotonic())
+            return _resp()
+
+        with patch("data.fmp_client.requests.get", side_effect=_fake_get) as get:
+            _fmp_get("quote", {"symbol": "AAPL"})
+            _fmp_get("quote", {"symbol": "MSFT"})
+            _fmp_get("quote", {"symbol": "NVDA"})
+
+        assert get.call_count == 3
+        gaps = [b - a for a, b in zip(issued, issued[1:])]
+        # Sequential, single-threaded calls -- no thread-contention jitter to
+        # budget for here (unlike tests/test_edgar_fundamentals.py's 12-way
+        # concurrent case), so a tighter tolerance than that test's 0.6x is
+        # fine. A broken wait_turn produces ~0 gaps, still an order of
+        # magnitude below either floor.
+        assert all(g >= 0.25 * 0.8 for g in gaps), gaps
+
+
 class TestUnthrottledEquivalence:
     def test_zero_interval_zero_retries_zero_threshold_reproduce_raw_behaviour(
         self, clock, api_key, monkeypatch

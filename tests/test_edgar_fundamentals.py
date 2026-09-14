@@ -320,6 +320,143 @@ class TestThreadSafety:
         assert all(g >= 0.15 * 0.6 for g in gaps), gaps
 
 
+class _NoSleepClock:
+    """A stand-in for the ``time`` MODULE that delegates everything except
+    ``sleep``, which becomes a no-op.
+
+    Substituted for ONE of ``_throttle()``'s two throttle layers so that layer
+    can no longer actually block, leaving the other one solely responsible for
+    the spacing the test then asserts. Note this replaces the module-level
+    ``time`` *reference* inside one module (``monkeypatch.setattr("<mod>.time",
+    ...)``) rather than setting an attribute on the real ``time`` module --
+    the latter is a single shared object, so poking ``sleep`` on it would
+    neutralize BOTH layers at once and defeat the purpose. This mirrors the
+    module-reference patching ``tests/test_gdelt_rate_limiter.py``'s ``clock``
+    fixture already uses.
+    """
+
+    def __init__(self, base):
+        self._base = base
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+    def sleep(self, seconds):
+        # `seconds` is intentionally unused -- this stand-in exists precisely
+        # to make the sleep a no-op.
+        return None
+
+
+class TestThrottleLayersIndependently:
+    """``_throttle()`` has TWO spacing layers -- an in-process ``threading.Lock``
+    and ``cross_process_throttle.wait_turn``'s ``flock`` -- and both enforce the
+    SAME ``_REQUEST_DELAY``. That makes them fully redundant for
+    ``TestThreadSafety``'s assertion above: sabotaging either one alone leaves
+    that test green (verified by direct sabotage, not by reading), so either
+    layer could be deleted, deadlocked, or silently made to return early with no
+    test noticing.
+
+    They are NOT interchangeable in production. The in-process lock spaces
+    threads within ONE process; ``wait_turn`` spaces requests across this repo's
+    many concurrent git worktrees, each of which is an independent process that
+    otherwise believes it owns the whole ~10 req/s SEC budget (the reason F8 --
+    docs/module_efficiency_redundancy_audit.md -- added it). Losing either one
+    silently means blowing that budget in exactly one of those two dimensions.
+
+    These two tests pin each layer on its own by neutralizing the other, so a
+    regression in either is caught by a failing test rather than by an IP block.
+    """
+
+    # Eight threads rather than TestThreadSafety's twelve: layer attribution,
+    # not peak contention, is what these two assert (the W > 10 case stays
+    # covered by that test), and fewer threads means less scheduler jitter
+    # against the same 90 ms floor and ~1.2 s instead of ~1.8 s per test.
+    N_THREADS = 8
+
+    def _run_concurrent_gets(self, monkeypatch, tmp_path):
+        """Fire N concurrent ``_http_get`` calls and return the sorted gaps
+        between successive request issuances."""
+        import threading
+        import time
+
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.15)
+        monkeypatch.setattr(
+            edgar_fundamentals, "_edgar_throttle_state_path_override", tmp_path / "edgar.state"
+        )
+
+        issued: list[float] = []
+        issued_lock = threading.Lock()
+
+        class _FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        def _fake_urlopen(req, timeout=10):
+            with issued_lock:
+                issued.append(time.monotonic())
+            return _FakeResp()
+
+        monkeypatch.setattr(edgar_fundamentals.urllib.request, "urlopen", _fake_urlopen)
+
+        threads = [
+            threading.Thread(target=lambda: edgar_fundamentals._http_get("https://x.test/y"))
+            for _ in range(self.N_THREADS)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(issued) == self.N_THREADS
+        issued.sort()
+        return [b - a for a, b in zip(issued, issued[1:])]
+
+    def test_in_process_layer_alone_serializes_request_issuance(
+        self, monkeypatch, reset_edgar_state, tmp_path
+    ):
+        """With the cross-process layer unable to block, the in-process
+        ``threading.Lock`` must still space consecutive requests on its own.
+
+        Fails if the in-process sleep is removed or the lock stops being held
+        across it; unaffected by anything done to ``wait_turn``.
+        """
+        import time as _real_time
+
+        from data import cross_process_throttle
+
+        monkeypatch.setattr(cross_process_throttle, "time", _NoSleepClock(_real_time))
+
+        gaps = self._run_concurrent_gets(monkeypatch, tmp_path)
+        # Same 0.15 s interval and 0.6x tolerance as TestThreadSafety -- see
+        # that test's docstring for why the margin is where it is and why
+        # widening it again is the wrong fix.
+        assert all(g >= 0.15 * 0.6 for g in gaps), gaps
+
+    def test_cross_process_layer_alone_serializes_request_issuance(
+        self, monkeypatch, reset_edgar_state, tmp_path
+    ):
+        """With the in-process layer unable to block, ``wait_turn``'s ``flock``
+        must still space consecutive requests on its own.
+
+        Fails if ``wait_turn``'s sleep is removed, if it stops holding the lock
+        across that sleep, or if ``_throttle()`` simply stops calling it --
+        i.e. this covers the wiring, not just the implementation. Unaffected by
+        anything done to the in-process block.
+        """
+        import time as _real_time
+
+        monkeypatch.setattr(edgar_fundamentals, "time", _NoSleepClock(_real_time))
+
+        gaps = self._run_concurrent_gets(monkeypatch, tmp_path)
+        assert all(g >= 0.15 * 0.6 for g in gaps), gaps
+
+
 class TestCooldownCircuitBreaker:
     """New for F8 (docs/module_efficiency_redundancy_audit.md): EDGAR
     previously had the spacing throttle but no cooldown/circuit-breaker at
