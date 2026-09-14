@@ -99,6 +99,15 @@ venv/
 # and fails CI if this file drifts, so regenerate after any change to
 # settings.py or to how any consumer reads a setting.
 !docs/settings_liveness.json
+# The committed per-file test-duration map, used by scripts/ci_shard.py to
+# split the suite into BALANCED parallel CI shards. Measured rather than
+# guessed because it matters: splitting 577 files four ways is 1.56x skew
+# round-robin vs 1.00x greedy bin-packed, and a shard is only as fast as its
+# slowest member. It is a hint, not a source of truth -- a file missing from it
+# is still assigned (see tests/test_ci_shard.py), so a stale map costs balance,
+# never coverage. Regenerate with pytest --durations=0 --durations-min=0 and
+# re-derive per-file totals.
+!.test_durations.json
 # Antigravity's hook config (the .agents/ equivalent of .claude/settings.json's
 # `hooks` block, which is exempt from the blanket rule above only because it
 # predates it). Must be tracked for the guardrail/verification hooks in
