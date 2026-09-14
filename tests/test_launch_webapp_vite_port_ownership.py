@@ -125,6 +125,19 @@ def _run_repo_common_dir(probe: Path | str) -> str:
     return result.stdout.strip()
 
 
+def _run_repo_toplevel(probe: Path | str) -> str:
+    """Run the REAL ``_repo_toplevel`` helper from the launcher on ``probe``."""
+    fn = _extract_bash_function(_launcher_source(), "_repo_toplevel")
+    script = f'{fn}\n_repo_toplevel "$1"\n'
+    result = subprocess.run(
+        ["bash", "-c", script, "bash", str(probe)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return result.stdout.strip()
+
+
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None or shutil.which("bash") is None,
     reason="git and bash are required to exercise the launcher's shell helpers",
@@ -257,3 +270,85 @@ class TestPortCheckRunsBeforeBackends:
             timeout=60,
         )
         assert result.returncode == 0, f"bash -n failed:\n{result.stderr}"
+
+
+# ===========================================================================
+# 3. "which checkout?" is answered by toplevel, never a path prefix
+# ===========================================================================
+class TestNestedWorktreeIsNotMisreportedAsThisCheckout:
+    """A sibling worktree lives UNDER the main checkout in this repo.
+
+    Real geometry: ``SCRIPT_DIR`` is ``/Users/kevinlee/Stockpy-live`` and agent
+    worktrees are at ``/Users/kevinlee/Stockpy-live/.claude/worktrees/<name>``.
+    Every sibling worktree is therefore literally prefixed by the main
+    checkout's own path, so the original ``${vite_cwd#"$SCRIPT_DIR"}`` prefix
+    test reported each of them as "a previous run of this project" — and that
+    branch printed no cwd, dropping exactly the diagnostic detail that made the
+    original incident traceable. Ownership (kill/don't-kill) was always right;
+    only the message was wrong.
+    """
+
+    def _nested_worktree(self, tmp_path):
+        main = _make_repo(tmp_path / "main")
+        nested = main / ".claude" / "worktrees" / "agent-x"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        _git("worktree", "add", "-q", "-b", "wt", str(nested), cwd=main)
+        return main, nested
+
+    def test_launcher_defines_repo_toplevel(self):
+        assert "_repo_toplevel() {" in _launcher_source()
+
+    def test_nested_worktree_shares_common_dir_but_not_toplevel(self, tmp_path):
+        main, nested = self._nested_worktree(tmp_path)
+
+        # Same repository — so it is still ours, still recyclable.
+        assert _run_repo_common_dir(nested) == _run_repo_common_dir(main)
+        # Different checkout — so it must NOT be called "this checkout".
+        assert _run_repo_toplevel(nested) != _run_repo_toplevel(main)
+
+        # And the prefix test the message branch used to rely on is exactly
+        # the thing that gets this wrong: nested IS prefixed by main.
+        assert str(nested).startswith(str(main)), (
+            "fixture is wrong: the point of this test is a worktree nested "
+            "inside the main checkout"
+        )
+
+    def test_same_checkout_matches_on_both(self, tmp_path):
+        main, _ = self._nested_worktree(tmp_path)
+        webapp = main / "webapp"
+        webapp.mkdir(exist_ok=True)
+        assert _run_repo_toplevel(webapp) == _run_repo_toplevel(main)
+
+    def test_message_branch_uses_toplevel_not_a_path_prefix(self):
+        check = _extract_bash_function(_launcher_source(), "_check_vite_port")
+        assert '${vite_cwd#"$SCRIPT_DIR"}' not in check, (
+            "the message branch regressed to a $SCRIPT_DIR prefix test, which "
+            "misreports every .claude/worktrees/* sibling as this checkout"
+        )
+        assert "_repo_toplevel" in check
+
+    def test_the_offending_cwd_is_printed_in_BOTH_branches(self):
+        """The path must be echoed OUTSIDE the if/else, not only in one arm.
+
+        Counting occurrences is not enough — the pre-fix launcher also
+        contained this echo exactly once, buried in the ``else``, so the
+        same-checkout arm printed no path at all. The real invariant is
+        positional: the echo has to sit after the ``fi`` that closes the
+        branch, where both arms fall through to it.
+        """
+        check = _extract_bash_function(_launcher_source(), "_check_vite_port")
+        recycle = check.split('kill "$pid"')[0]
+
+        cwd_echo = recycle.find('${vite_cwd:-<unknown cwd>}')
+        assert cwd_echo != -1, "the offending cwd is never printed at all"
+
+        fi_at = recycle.find("\n        fi\n")
+        assert fi_at != -1, (
+            "expected an if/else closed by `fi` at 8-space indent in the "
+            "recycle block; if the formatting changed, update this test"
+        )
+        assert cwd_echo > fi_at, (
+            "the cwd echo sits INSIDE the if/else, so only one of the two "
+            "cases reports which directory the dev server belonged to — that "
+            "is exactly the diagnostic detail the original incident needed"
+        )
