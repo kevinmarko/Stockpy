@@ -48,8 +48,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: test (offline suite) [${{ matrix.shard }}/4]
+  test-shards:
+    name: test shard (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     # Sharded because the runner, not the test code, is the binding constraint.
     # Measured: this suite runs in ~3 minutes on a 10-core machine and ~18 on
@@ -191,11 +191,29 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  coverage:
-    name: coverage (combined)
+  test:
+    # MUST stay named exactly "test (offline suite)": that string is a REQUIRED
+    # status check on main (alongside "test (slow suite)", "webapp (Pilots
+    # PWA)", "bandit (SAST)", "security (pip-audit)" and the three CodeQL
+    # "Analyze (...)" contexts). Sharding renamed the jobs that used to carry
+    # it, so without an aggregator holding the name, the required check would
+    # never report and every PR would sit BLOCKED forever with all checks
+    # green.
+    name: test (offline suite)
     runs-on: ubuntu-latest
-    needs: test
+    needs: test-shards
+    # always() so this reports pass/fail even when a shard failed. Without it
+    # the job is SKIPPED on shard failure, and a skipped required check does
+    # not report a failure -- the exact shape that lets a red PR look
+    # mergeable. The explicit result gate below is what makes it fail.
+    if: always()
     steps:
+      - name: Fail if any shard failed
+        if: needs.test-shards.result != 'success'
+        run: |
+          echo "::error::one or more test shards failed (result=${{ needs.test-shards.result }})"
+          exit 1
+
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
