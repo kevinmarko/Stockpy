@@ -173,7 +173,15 @@ jobs:
           # writes no report here; only the raw data file is wanted.
           #
           # -n auto still fans each shard across that runner's own CPUs, and
-          # --dist loadgroup keeps @pytest.mark.xdist_group tests together.
+          # --dist loadgroup keeps every @pytest.mark.xdist_group("...")-tagged
+          # test together on one worker (currently: test_settings_liveness.py,
+          # test_train_lgbm.py, test_backtest_sector_configs_cli.py's
+          # TestOfflineCLIRun, test_settings_keysets.py, test_orchestrator_e2e.py,
+          # test_etf_transmission_sensitivity_sweep.py,
+          # test_sector_forecast_backtest.py) so their module/class-scoped
+          # fixtures build once, not once per worker. Note each group now sits
+          # wholly inside one shard too, since scripts/ci_shard.py splits by
+          # FILE -- a group is never torn across shards.
           # --timeout=180 --timeout-method=thread turns a hang into a fast
           # failure (`thread` because `signal` cannot interrupt blocking C
           # extensions like statsmodels/lightgbm/arch).
