@@ -72,6 +72,12 @@ conservative `exit 1` branch. The change can never kill a process it failed to i
   new tests; restoring it passes 9/9. The test catches the bug rather than merely passing
   alongside it.
 * `bash -n launch_webapp.command` clean.
+* **End-to-end, against live processes.** The 9 tests cover `_repo_common_dir` and pin
+  `_check_vite_port`'s source, but never execute `_check_vite_port` itself — an integration slip
+  would have passed them. So it was run for real against a listener on `:5173`: a `vite` process
+  whose cwd was a true sibling worktree got **recycled** (rc 0, port freed); the same binary run
+  from `$HOME` was **left alive** (rc 1, actionable message). Kept out of the pytest suite on
+  purpose — binding a fixed port and killing processes would be flaky under parallel CI.
 * Webapp: 2057/2057 vitest tests pass, `typecheck` and `build` clean at HEAD — the frontend was
   ruled out, not assumed innocent.
 * Structural guards: `test_measure_settings_census.py`, `test_no_missing_call_timeouts.py`,

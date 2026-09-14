@@ -102,6 +102,17 @@ Two changes, both in `launch_webapp.command`:
   both the ownership condition and the call ordering. Reverting the fix was confirmed to fail 8 of
   the 9 — the test genuinely catches the regression rather than merely passing.
 * `bash -n launch_webapp.command` clean.
+* **End-to-end against live processes, not just the helpers.** The unit tests above exercise
+  `_repo_common_dir` and pin `_check_vite_port`'s source, but never *execute* `_check_vite_port`
+  itself — an integration slip (a mistyped variable, a kill that never fires) would have passed
+  them. So the real function was run twice against a real listener on `:5173`:
+  a `vite`-named process whose cwd was a genuine sibling worktree
+  (`.claude/worktrees/agent-a088e0f07eaa5c9b6`) was **recycled** — the "another worktree of this
+  same repository" branch fired, the process was killed, the port freed, return code 0 — and the
+  same binary started from `$HOME` was **left running** with return code 1 and the actionable
+  `kill <pid>` message. Both halves of the fix therefore work in situ, not merely in unit tests.
+  This is a manual verification: it is deliberately NOT in the pytest suite, because binding a
+  fixed port and killing processes would be flaky under parallel CI runs.
 
 ## Deliberately not changed
 
