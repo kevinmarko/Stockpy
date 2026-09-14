@@ -15,8 +15,19 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from diagnostics_and_visuals import telemetry
+
+if TYPE_CHECKING:
+    # Type-checking-only import so the `transactions_store: Optional[
+    # "TransactionsStore"]` annotation on evaluate_portfolio() below resolves
+    # under static analysis (ruff's F821 "undefined name" check flags a
+    # quoted forward reference to a name that is never bound anywhere in the
+    # module, TYPE_CHECKING-guarded or not) -- the real import stays
+    # function-local inside evaluate_portfolio() itself so this module keeps
+    # its existing lazy-import discipline for the heavy transactions_store
+    # dependency at runtime.
+    from transactions_store import TransactionsStore
 
 # Configure module logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
