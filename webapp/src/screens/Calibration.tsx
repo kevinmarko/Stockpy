@@ -38,7 +38,11 @@ const HORIZONS = [10, 30, 60, 90] as const;
 // Reliability diagram (inline SVG — recharts has no y=x-referenced bar chart)
 // ---------------------------------------------------------------------------
 
-function ReliabilityDiagram({ bins }: { bins: CalibrationBin[] }) {
+// Exported so a future screen needing the same reliability-diagram
+// rendering (e.g. a calibration section reusing this exact
+// pilots.calibration.calibration_view()-shaped data) can import this
+// instead of inventing a second renderer.
+export function ReliabilityDiagram({ bins }: { bins: CalibrationBin[] }) {
   const W = 320,
     H = 240,
     padL = 34,

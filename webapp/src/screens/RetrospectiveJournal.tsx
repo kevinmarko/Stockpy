@@ -9,6 +9,7 @@ import type {
   RetrospectiveTradeRecord,
 } from "../api/types";
 import { RetrospectiveDetailModal } from "../components/RetrospectiveDetailModal";
+import { TabGuide } from "../components/TabGuide";
 import { Tile, Loading, EmptyState, ErrorState, Select, Notice } from "../components/ui";
 import {
   BrainCircuit,
@@ -128,6 +129,8 @@ export function RetrospectiveJournal() {
           Post-trade causal autopsy, hold-period excursion metrics (MAE/MFE), and cohort-isolated pattern insights.
         </p>
       </div>
+
+      <TabGuide tabKey="retrospective" />
 
       {/* Bridge Health Banner */}
       <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>

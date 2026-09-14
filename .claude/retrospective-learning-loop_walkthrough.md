@@ -136,13 +136,61 @@ the *fixed* state; see the findings list below for what was wrong and why.
   the real contract throughout.
 
 ## Known, disclosed follow-ups (not fabrication risks — feature-completeness gaps)
-- The generic options auto-scan path (the majority of automated paper-trade
-  volume) still captures no entry snapshot at all, since its directives never
-  carry a `pilot_id` — wiring real conviction/macro-regime context through
-  that path is a larger, separate follow-up.
+- ~~The generic options auto-scan path captures no entry snapshot at all~~ —
+  **closed in the merge-reconciliation pass below**: `execution/
+  options_paper_executor.py`'s automated strategy-options auto-scan now
+  passes `provenance="automated:options_auto_scan"`, a real `conviction`
+  (the Stage 4 ML Meta-Labeler's `prob_win` when it scored the directive,
+  else honestly `None`), and a JSON-serialized `key_indicators_json` (ivr,
+  vrp, vix, trend_bias, etc. — all copied verbatim from the real directive,
+  never inferred) into `apply_multi_leg_fill`.
+- `pilots/dispersion_trading.py`, `pilots/copula_stat_arb.py`, and
+  `pilots/zero_dte_engine.py` still don't pass a `pilot_id` to
+  `apply_multi_leg_fill`, so those three pilots' trades still honestly
+  report `decision_context_status="not_captured"` — a genuinely separate,
+  still-open follow-up (`_create_entry_snapshot`'s inference-from-ID-presence
+  mechanism itself is also still in place, not just these three call sites —
+  see the audit findings above).
 - `mock.ts` still has no dedicated "genuinely empty" cohort-insights fixture
   (a zero-trade cold start currently reuses the happy-path numbers rather than
   an honestly-zeroed one).
+
+## Merge-reconciliation with PR #1037 (post-push, same day)
+
+While this PR was open, an independent session — unaware this PR existed,
+per its own commit message ("the branch was byte-identical to `main`; the
+actual prior work sat entirely uncommitted in an unrelated, stale worktree")
+— built and merged **PR #1037** ("Retrospective Learning Loop / Trade
+Journal") directly to `main`: a second, complete, independently-designed
+implementation of the identical feature, using the SAME file names
+(`pilots/retrospective_composer.py`, `retrospective_narrative.py`,
+`retrospective_insights.py`) but a different architecture underneath (a
+standalone `data/trade_decision_snapshot_store.py` table instead of this
+PR's `paper_entry_snapshots` addition to `data/paper_account_store.py`, a
+standalone `pilots/bridge_completeness.py` instead of this PR's
+`PaperAccountStore.get_bridge_completeness_metrics()`, a `TradeJournal.tsx`
+screen instead of this PR's `RetrospectiveJournal.tsx`, and `/trade-journal/*`
+routes instead of `/pilots/paper-broker/...`).
+
+Per explicit operator direction, this PR's implementation was kept and
+PR #1037's now-redundant modules were removed rather than attempting to run
+both architectures side by side: `data/trade_decision_snapshot_store.py`,
+`pilots/bridge_completeness.py`, `webapp/src/screens/TradeJournal.tsx` (+
+its test file), and their dedicated backend tests
+(`tests/test_bridge_completeness_metric.py`,
+`tests/test_paper_account_store_snapshot_capture_coverage.py`,
+`tests/test_pilots_trade_journal_api.py`,
+`tests/test_trade_decision_snapshot_store.py`) were deleted, along with every
+downstream reference (API routes, webapp nav/routing/mock fixtures/help
+content, a conftest.py DB-isolation fixture, and doc bullets in
+`AGENTS.md`/`CLAUDE.md`/`docs/architecture/simulation-eval-reporting.md`
+describing the now-deleted modules). One genuinely valuable piece of
+PR #1037's work was ported rather than discarded — see the auto-scan fix
+above. Verified after reconciliation: the full retrospective-specific suite,
+the full `test_pilots_api.py`/`test_paper_account_store.py`/
+`test_options_paper_executor.py` suites, a clean webapp typecheck, the full
+webapp vitest suite, and a full offline `pytest` run — see the updated test
+counts below.
 
 ## What was actually tested (this pass, independently re-run — not assumed)
 - **Backend**: the 12 real `tests/test_retrospective_*.py`/

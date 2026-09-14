@@ -6420,4 +6420,3 @@ export interface BatchRetrospectiveInsightsResponse {
 }
 
 export interface BridgeReliabilityResponse extends BridgeHealthMetrics {}
-

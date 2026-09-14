@@ -176,6 +176,13 @@ class PaperAccountStore:
     def __init__(self, db_url: Optional[str] = None, *, readonly: bool = False):
         db_url = db_url or resolve_database_url()
         self._readonly = readonly
+        # Saved so any store this instance lazily constructs against the SAME
+        # database (e.g. the decision-snapshot store below) binds to the
+        # exact db_url THIS instance was built with, rather than
+        # re-resolving the default and silently landing in the wrong
+        # database -- the same bug class _init_transactions_bridge's own
+        # docstring documents and fixes for the transactions_store bridge.
+        self._db_url = db_url
         if readonly:
             from db_config import create_readonly_db_engine
             self.engine = create_readonly_db_engine(db_url)
@@ -1157,6 +1164,13 @@ class PaperAccountStore:
         ``False`` so a multi-leg strategy's own order flow can never
         accidentally borrow (and misattribute the PnL of) another
         strategy's or the legacy bucket's position.
+
+        ``decision_context``: see ``apply_fill``'s docstring -- same
+        forward-only, best-effort capture, applied identically to EVERY leg
+        that opens a new position in this call (a multi-leg strategy's legs
+        share one directive/conviction, so each leg's own
+        ``paper_closed_trades`` row -- itself already one-row-per-leg --
+        gets a matching snapshot at the same granularity).
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")

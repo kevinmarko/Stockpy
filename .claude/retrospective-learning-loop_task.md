@@ -27,3 +27,16 @@ composer. All findings were fixed in this pass; see
 [`.claude/retrospective-learning-loop_walkthrough.md`](retrospective-learning-loop_walkthrough.md)
 for the complete, verified list of findings and fixes, and the real
 (re-run, not assumed) test counts.
+
+## Merge-reconciliation with an independently-merged duplicate PR (#1037)
+
+While this PR was open, `main` merged an independent, complete second
+implementation of the identical feature (PR #1037, "Retrospective Learning
+Loop / Trade Journal") built by a session unaware this PR existed. Per
+explicit operator direction, this PR's implementation was kept as
+authoritative and PR #1037's now-redundant modules/tests/webapp screen were
+removed during the merge; one genuinely valuable piece of PR #1037's work
+(real decision-context capture for the generic options auto-scan path) was
+ported onto this PR's own architecture rather than discarded. See the
+walkthrough's "Merge-reconciliation with PR #1037" section for the full
+list of what was removed, ported, and re-verified.

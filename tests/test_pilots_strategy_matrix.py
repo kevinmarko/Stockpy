@@ -511,6 +511,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # re (strict ticker-shape validation), dataclasses (result container),
         # datetime (audit-comment timestamp).
         allowed = allowed | {"os", "re", "dataclasses", "datetime"}
+    if module_name == "retrospective_narrative":
+        # Retrospective Learning Loop (WP-F): datetime for parsing the ISO
+        # entry_ts/exit_ts strings a composed retrospective record carries
+        # -- this module has no heavier dependency (it renders a plain
+        # template string from an already-composed dict; no engine/store
+        # imports at all, lazy or otherwise).
+        allowed = allowed | {"datetime"}
     if module_name == "validation_trend":
         # pilots.validation_trend reuses scripts.snapshot_diff's rotated-
         # snapshot reader (list_rotated_snapshots/load_snapshot) — confirmed

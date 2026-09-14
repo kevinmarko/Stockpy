@@ -248,6 +248,10 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (e.g. FMP or Alpaca) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
   "weekly digest":
     "A periodic 'names worth a look' panel that reuses Today's Radar's ranking rather than a second scoring system. Each pick is tagged with which rule selected it (Personalized, Sector Gap, or Today's Radar) and a confidence tier — a Personalized pick only appears once real view-tracking history exists; otherwise the digest honestly falls back to plain Radar picks rather than pretending to know your habits.",
+  "decision snapshot":
+    "A forward-only capture of what the platform knew at the moment a trade was opened — its provenance (manual vs. an automated strategy), conviction, macro regime, and named factors. Only trades opened by a writer that's been wired into this capture show one; a trade with none honestly reports 'unknown' on the Trade Journal, never a guess inferred from its strategy name.",
+  "evaluation bridge":
+    "A best-effort, non-blocking copy of each closed paper trade into transactions_store, so downstream evaluation tooling built for that older table can see paper trades too. Off by default; a trade that closes while it's off is never retroactively bridged. The Trade Journal's 'Evaluation bridge' figure is measured empirically by matching real rows, never fabricated — a real 0% (measured, bridge never ran) reads differently from a 'nothing to check yet' cold start.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -428,6 +432,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Your full, real Robinhood closed-trade ledger — every FIFO round-trip reconstructed from your actual filled orders, paginated and filterable by symbol. Ingested during a device-approval login (`python3 main.py --refresh-account`) and persisted durably, so it survives across sessions. Equities only — options and crypto activity aren't covered. This is a read-only record of what already happened; it never feeds position sizing.",
     keyConcepts: ["fifo round-trip", "realized p&l", "win rate", "profit factor", "advisory only"],
+  },
+  retrospective: {
+    title: "Retrospective Journal",
+    description:
+      "Every closed PAPER trade, composed into a full retrospective: what happened (entry/exit, realized P&L), the real post-trade move recomputed from price history (MFE/MAE/Edge Ratio), and — only when an entry-time decision snapshot was captured — why. The Pattern Insights tab partitions outcomes into strictly separate automated/manual/unrecorded cohorts, always shown separately, never blended into one overall number. Distinct from Trade History (your real Robinhood ledger, equities only): this reads the internal paper-trading ledger across every automated strategy, not just equities.",
+    keyConcepts: ["decision snapshot", "evaluation bridge", "conviction", "advisory only"],
   },
   attribution: {
     title: "Portfolio attribution",
