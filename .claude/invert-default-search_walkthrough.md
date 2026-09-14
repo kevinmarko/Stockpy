@@ -87,6 +87,19 @@ Test Files  1 passed (1)
 **Result: PASS.** Nothing in this feature touched this screen, and its test suite confirms
 unchanged behavior.
 
+**Correction (code review, PR #1034): this "PASS" was wrong.** The screen's OWN code was
+genuinely untouched, but the SHARED `SymbolInput.tsx` component's `showHeader` logic was --
+and its rewritten condition (`s.tracked === universeFirst`, no `enableFmpSuggestions` check)
+fired a spurious "Saved" header on this screen's tracked-only dropdown under the default
+`universeFirst=true`, something that never happened before this feature. "13/13 passing" was
+never evidence against this: none of those 13 tests open the dropdown or assert on header
+text, so a real regression in a different file's shared logic could (and did) slip past a
+green test count here. Fixed in `SymbolInput.tsx` by gating `showHeader` on
+`enableFmpSuggestions` explicitly; see `CLAUDE.md`'s "Invert The Default" entry for the full
+detail, including two related bugs (a keyboard-highlight index-drift and a stale-FMP-result
+staleness issue, both introduced/worsened by the same reordering change) found and fixed in
+the same review pass.
+
 ### 3. Marketplace reframing (Wave 1D) — observed in the working tree, not independently tested by this pass
 
 `webapp/src/screens/Marketplace.tsx` shows as modified in `git status`, and reading it confirms a
@@ -129,9 +142,11 @@ surface is also planned is not something this pass can answer; flag it for the c
 
 ## Part 1: Sector Selection regression-check result
 
-**PASS**, in full — see item 2 above. `SectorSelection.tsx`'s opt-out is byte-identical to its
-pre-existing form (same prop, same comment), and `SectorSelection.test.tsx` passes 13/13
-unmodified.
+**Corrected to FAIL, then fixed — see item 2's correction above.** `SectorSelection.tsx`'s own
+opt-out prop/comment were indeed byte-identical, but that was never sufficient evidence: the
+regression lived in the shared `SymbolInput.tsx` component this screen renders, not in this
+screen's own file, and the un-updated `SectorSelection.test.tsx` never exercised the dropdown
+enough to catch it.
 
 ## Part 2: Terminology/copy consistency findings
 

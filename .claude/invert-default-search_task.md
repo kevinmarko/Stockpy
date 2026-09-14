@@ -132,7 +132,17 @@
       anywhere.
 - [x] Auditor 4 — confirm Sector Selection's opt-out is genuinely untouched
       — done (Wave 2 pass, re-confirmed: `enableFmpSuggestions={false}`
-      intact, `SectorSelection.test.tsx` 13/13 passing).
+      intact, `SectorSelection.test.tsx` 13/13 passing). **Correction (code
+      review, PR #1034): this was wrong.** The prop being unchanged didn't
+      mean the rendered dropdown was unaffected — `SymbolInput.tsx`'s
+      `showHeader` logic keyed off `universeFirst` with no
+      `enableFmpSuggestions` gate, so under the default `universeFirst=true`
+      Sector Selection's tracked-only list picked up a spurious "Saved"
+      header that never appeared before. This checkbox's own verification
+      (an unchanged prop + an unrelated 13/13 test count) never actually
+      rendered the dropdown against a tracked-matching query, which is what
+      it would have taken to catch it. Fixed in `SymbolInput.tsx` — see
+      `CLAUDE.md`'s "Invert The Default" entry for the full detail.
 - [x] Auditor 5 — live click-through of new Marketplace landing flow —
       done by the closing synthesis pass: live dev server, `/marketplace`
       screenshot confirms "Search any stock" hero renders above "Today's

@@ -179,11 +179,18 @@ export function SymbolInput({
   // Debounced live FMP symbol search for the "not yet tracked" section.
   // Non-fatal: a failed/disabled fetch just leaves this section empty,
   // matching the tracked-universe fetch's own degrade-silently contract.
+  // Clears any leftover result from a PRIOR query immediately, rather than
+  // leaving it visible until the new fetch resolves -- otherwise a stale,
+  // unrelated symbol from an earlier keystroke can render as the top,
+  // unlabeled (i.e. seemingly authoritative) suggestion for the current
+  // query, since it survives the merge's `r.symbol !== q` filter below
+  // whenever the stale symbol happens to differ from the new `q`.
   useEffect(() => {
     if (!enableFmpSuggestions || !q) {
       setFmpResults([]);
       return;
     }
+    setFmpResults([]);
     let alive = true;
     api
       .getSymbolSearch(q, MAX_FMP_SUGGESTIONS)
@@ -197,6 +204,21 @@ export function SymbolInput({
       alive = false;
     };
   }, [q, enableFmpSuggestions]);
+
+  // Reset the keyboard highlight whenever new async FMP data reorders the
+  // suggestion list -- otherwise a stale numeric `activeIndex` can silently
+  // end up pointing at a different symbol than the one the user actually
+  // highlighted. This matters specifically because `universeFirst=true`
+  // (the default) prepends untracked results -- which only ever arrive
+  // asynchronously -- ahead of tracked ones, so a row highlighted while
+  // only tracked results were rendered can have an untracked row inserted
+  // in front of it once the FMP fetch resolves, silently shifting which
+  // symbol Enter would submit. Never a concern pre-PR / in rollback mode,
+  // where untracked results are always appended after, never inserted
+  // before, an already-rendered index.
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [fmpResults]);
 
   const trackedSymbolSet = useMemo(
     () => new Set(trackedList.map((u) => u.symbol)),
@@ -281,6 +303,13 @@ export function SymbolInput({
     e.preventDefault();
     commit(value);
   };
+
+  // The hint text below references the button's own label -- mirrors the
+  // exact fallback the rendered <Button> itself uses (`{buttonText || "Load"}`
+  // further down) so the hint never tells the operator to "press Load" when
+  // a caller (e.g. Marketplace's "Search any stock" hero, `buttonText="Go"`)
+  // has actually renamed the button.
+  const effectiveButtonText = buttonText || "Load";
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
@@ -369,10 +398,10 @@ export function SymbolInput({
             : enableFmpSuggestions && universeFirst
             ? hideButton
               ? "Type to search any stock, or pick a saved symbol below."
-              : "Type to search any stock, or enter any ticker and press Load."
+              : `Type to search any stock, or enter any ticker and press ${effectiveButtonText}.`
             : hideButton
             ? "Type to search tracked symbols, or enter any ticker and press Enter."
-            : "Type to search tracked symbols, or enter any ticker and press Load."}
+            : `Type to search tracked symbols, or enter any ticker and press ${effectiveButtonText}.`}
         </div>
         {requireExactMatch && value.trim().length > 0 && !isKnownSymbol && (
           <div
@@ -405,7 +434,18 @@ export function SymbolInput({
               // matches the pre-2026-09 "Not yet tracked" behavior, which
               // always labeled the untracked section even with no tracked
               // matches at all) or a genuine mid-list transition.
+              //
+              // Gated on `enableFmpSuggestions` explicitly: when it's false
+              // (Sector Selection), `suggestions` is unconditionally the
+              // tracked-only array (see the early return above), so there is
+              // no second section to ever label -- `s.tracked === universeFirst`
+              // alone can't tell "this is the secondary section" apart from
+              // "there is only one section and it happens to match
+              // `universeFirst`'s polarity", which is exactly what let a
+              // spurious "Saved" header render on Sector Selection's
+              // tracked-only list under the default `universeFirst=true`.
               const showHeader =
+                enableFmpSuggestions &&
                 s.tracked === universeFirst &&
                 (i === 0 || suggestions[i - 1].tracked !== s.tracked);
               return (
