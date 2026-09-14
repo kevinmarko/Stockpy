@@ -43,9 +43,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# `python scripts/ci_shard.py` puts scripts/ on sys.path[0], not the repo root,
+# so `from scripts._bootstrap import bootstrap` below would not resolve.
+# Mirrors scripts/backfill_edgar_fundamentals.py and its siblings.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 DURATIONS_FILE = REPO_ROOT / ".test_durations.json"
 TESTS_DIR = REPO_ROOT / "tests"
 
@@ -135,4 +142,18 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Venv re-exec + .env loading, per this repo's scripts/ convention
+    # (enforced by tests/test_scripts_bootstrap.py). Placed here rather than
+    # at module top because tests/test_ci_shard.py imports this module as a
+    # library; a module-top call would fire the re-exec check on every such
+    # import, not just when this file is the entry point -- the same reasoning
+    # scripts/preflight_check.py documents for its own guarded call.
+    #
+    # Safe on a CI runner with no .venv: bootstrap() warns to stderr and
+    # continues (CONSTRAINT #6), and the workflow captures only stdout via
+    # `FILES=$(python scripts/ci_shard.py ...)`, so that warning cannot end up
+    # in the file list. This module is stdlib-only regardless.
+    from scripts._bootstrap import bootstrap
+
+    bootstrap()
     raise SystemExit(main())
