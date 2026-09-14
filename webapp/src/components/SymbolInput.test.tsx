@@ -213,10 +213,17 @@ describe("SymbolInput autocomplete", () => {
     expect(within(list).getByText("Saved")).toBeInTheDocument();
     expect(within(list).queryByText("Not yet tracked")).not.toBeInTheDocument();
 
-    // The "Saved" header renders between the untracked and tracked rows,
-    // not before the very first (untracked) row.
-    const rows = within(list).getAllByRole("option");
-    expect(rows[0]).toHaveTextContent("AA");
+    // The "Saved" header renders BETWEEN the untracked and tracked rows,
+    // not before the very first (untracked) row -- checked by actual DOM
+    // position, since `getAllByRole("option")` excludes the
+    // `role="presentation"` header <li> entirely and can't prove this on
+    // its own (a header rendered unconditionally at the top would leave
+    // `options[0]` unaffected and this assertion would still pass).
+    const allRows = Array.from(list.querySelectorAll<HTMLElement>("li"));
+    const headerIndex = allRows.findIndex((el) => el.textContent === "Saved");
+    const [firstOption, secondOption] = within(list).getAllByRole("option");
+    expect(headerIndex).toBeGreaterThan(allRows.indexOf(firstOption));
+    expect(headerIndex).toBeLessThan(allRows.indexOf(secondOption));
   });
 
   it("the rollback toggle genuinely reverses the order -- same mocks, opposite mode, opposite result", async () => {

@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsGeneral } from "./SettingsGeneral";
 import { api } from "../api/client";
 import type { AutomationStatus } from "../api/types";
+import { SearchDefaultProvider } from "../context/SearchDefaultContext";
 
 vi.mock("virtual:pwa-register/react", () => ({
   useRegisterSW: (opts?: { onRegisteredSW?: () => void }) => {
@@ -81,6 +82,57 @@ function renderScreen() {
     </MemoryRouter>
   );
 }
+
+function renderScreenWithSearchDefault(initialUniverseFirst: boolean) {
+  return render(
+    <SearchDefaultProvider initialUniverseFirst={initialUniverseFirst}>
+      <MemoryRouter initialEntries={["/settings"]}>
+        <SettingsGeneral />
+      </MemoryRouter>
+    </SearchDefaultProvider>
+  );
+}
+
+describe("SettingsGeneral screen — Search behavior section", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the Search behavior section (with its toggle) between App status and Reset onboarding", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    renderScreen();
+
+    const appStatusHeading = await screen.findByRole("heading", { name: "App status" });
+    const searchHeading = screen.getByRole("heading", { name: "Search behavior" });
+    const resetHeading = screen.getByRole("heading", { name: "Reset onboarding" });
+
+    expect(screen.getByTestId("search-default-toggle")).toBeInTheDocument();
+    // DOM order proves the section actually landed where SettingsGeneral.tsx
+    // places it, not merely that it exists somewhere on the page.
+    expect(
+      appStatusHeading.compareDocumentPosition(searchHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      searchHeading.compareDocumentPosition(resetHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("is genuinely wired to a real SearchDefaultContext -- clicking it flips the real universeFirst state, not just a local no-op", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    renderScreenWithSearchDefault(true);
+
+    expect(
+      await screen.findByRole("switch", { name: "Search any stock first (default)" })
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("search-default-toggle"));
+
+    expect(
+      screen.getByRole("switch", { name: "Search your saved list first (legacy)" })
+    ).toHaveAttribute("aria-checked", "false");
+  });
+});
 
 describe("SettingsGeneral screen — Execution mode (typed confirmation)", () => {
   beforeEach(() => {
