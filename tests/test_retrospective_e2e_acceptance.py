@@ -25,7 +25,6 @@ Isolation Guarantee:
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import math
@@ -42,7 +41,27 @@ from sqlalchemy import inspect, text
 
 from settings import settings
 
+# Real M2/M3 deliverables, imported directly (not via the resilient
+# `_get_*_module()` adapters below) -- both milestones are complete (see
+# .claude/retrospective-learning-loop_task.md), so a genuine breakage in
+# either module should fail THIS acceptance suite loudly (an ImportError at
+# collection time), not silently fall through to a hand-built reference
+# implementation that always trivially agrees with itself. See
+# docs/known_issues for the self-confirming-test incident this replaces.
+from pilots.retrospective_narrative import build_trade_narrative
+
 logger = logging.getLogger(__name__)
+
+
+class _NoOpHistoricalStore:
+    """Offline-safe stand-in for HistoricalStore -- a real one falls through
+    to a live network fetch on every cache-miss symbol (correct production
+    behavior, see RetrospectiveComposer._evaluate_trade_excursion), which
+    would make a test that doesn't explicitly inject its own `data_provider`
+    silently depend on outbound network access."""
+
+    def get_bars(self, symbol, lookback_days=504, **kwargs):
+        return pd.DataFrame()
 
 
 # ===========================================================================
@@ -94,181 +113,6 @@ def transactions_store_inst(isolated_db_url: str):
     """TransactionsStore bound explicitly to isolated temp database."""
     from transactions_store import TransactionsStore
     return TransactionsStore(db_url=isolated_db_url)
-
-
-# ===========================================================================
-# Milestone Component Resolvers (Progressive Testability Adapters)
-# ===========================================================================
-
-def _get_composer_module():
-    """Attempt to import pilots.retrospective_composer (M2 deliverable)."""
-    try:
-        return importlib.import_module("pilots.retrospective_composer")
-    except ImportError:
-        return None
-
-
-def _get_narrative_module():
-    """Attempt to import pilots.retrospective_narrative (M3 deliverable)."""
-    try:
-        return importlib.import_module("pilots.retrospective_narrative")
-    except ImportError:
-        return None
-
-
-def _get_insights_module():
-    """Attempt to import pilots.retrospective_insights (M3 deliverable)."""
-    try:
-        return importlib.import_module("pilots.retrospective_insights")
-    except ImportError:
-        return None
-
-
-# ===========================================================================
-# Reference Formatters & Specifications (Authoritative from Survey 2 / PROJECT.md)
-# ===========================================================================
-
-def ref_fmt_curr(val: Optional[float], fallback: str = "unrecorded") -> str:
-    if val is None or not math.isfinite(val):
-        return fallback
-    return f"${val:,.2f}"
-
-
-def ref_fmt_pct(val: Optional[float], signed: bool = False, fallback: str = "unrecorded") -> str:
-    if val is None or not math.isfinite(val):
-        return fallback
-    pct = val * 100.0
-    sign = "+" if signed and pct > 0 else ""
-    return f"{sign}{pct:.1f}%"
-
-
-def ref_fmt_float(val: Optional[float], decimals: int = 2, fallback: str = "unrecorded") -> str:
-    if val is None or not math.isfinite(val):
-        return fallback
-    return f"{val:.{decimals}f}"
-
-
-def ref_build_trade_narrative(
-    provenance: str,
-    side: str,
-    strategy_id: Optional[str] = None,
-    entry_price: Optional[float] = None,
-    conviction: Optional[float] = None,
-    macro_regime: Optional[str] = None,
-    operator_notes: Optional[str] = None,
-    exit_price: Optional[float] = None,
-    holding_days: Optional[float] = None,
-    pnl: Optional[float] = None,
-    pnl_pct: Optional[float] = None,
-    mfe: Optional[float] = None,
-    mae: Optional[float] = None,
-    edge_ratio: Optional[float] = None,
-    bin_win_rate: Optional[float] = None,
-    bin_count: Optional[int] = None,
-    min_sample: int = 5,
-    bridge_reached: bool = True,
-    bars_available: bool = True,
-) -> str:
-    """Authoritative Reference Narrative Builder (15 permutations from PROJECT.md R5)."""
-    # Clause 1: Entry & Provenance
-    if provenance == "signal_driven":
-        if conviction is not None and macro_regime is not None:
-            entry_clause = (
-                f"Signal-driven {side} trade entered on {strategy_id or 'automated strategy'} recommendation "
-                f"at {ref_fmt_curr(entry_price)} (conviction: {ref_fmt_float(conviction)}, regime: {macro_regime})."
-            )
-        elif conviction is not None and macro_regime is None:
-            entry_clause = (
-                f"Signal-driven {side} trade entered on {strategy_id or 'automated strategy'} recommendation "
-                f"at {ref_fmt_curr(entry_price)} (conviction: {ref_fmt_float(conviction)}, regime: unrecorded)."
-            )
-        elif conviction is None and macro_regime is not None:
-            entry_clause = (
-                f"Signal-driven {side} trade entered on {strategy_id or 'automated strategy'} recommendation "
-                f"at {ref_fmt_curr(entry_price)} (regime: {macro_regime})."
-            )
-        elif strategy_id is not None:
-            entry_clause = (
-                f"Signal-driven {side} trade entered on {strategy_id} recommendation at {ref_fmt_curr(entry_price)}."
-            )
-        else:
-            entry_clause = f"Signal-driven {side} trade entered via automated strategy at {ref_fmt_curr(entry_price)}."
-    elif provenance == "manual":
-        if operator_notes:
-            entry_clause = f'Manual discretionary {side} trade executed by operator at {ref_fmt_curr(entry_price)} (note: "{operator_notes}").'
-        else:
-            entry_clause = f"Manual discretionary {side} trade executed by operator at {ref_fmt_curr(entry_price)}."
-    else:  # unknown / unrecorded
-        if entry_price is not None:
-            entry_clause = f"Trade executed at {ref_fmt_curr(entry_price)} with unrecorded provenance (entry-time context not captured)."
-        else:
-            entry_clause = "Trade executed with unrecorded provenance and unverified entry price."
-
-    # Clause 2: Outcome & Hold Period
-    if pnl is not None and pnl_pct is None:
-        outcome_clause = (
-            f"Position closed at {ref_fmt_curr(exit_price)} realizing {ref_fmt_curr(pnl)} "
-            f"(percentage return unavailable due to degenerate entry price)."
-        )
-    elif pnl == 0.0:
-        if holding_days is not None:
-            outcome_clause = (
-                f"Position closed at {ref_fmt_curr(exit_price)} after {ref_fmt_float(holding_days, 1)} days "
-                f"at breakeven ($0.00 realized PnL)."
-            )
-        else:
-            outcome_clause = f"Position closed at {ref_fmt_curr(exit_price)} at breakeven ($0.00 realized PnL)."
-    elif pnl is not None and pnl > 0:
-        if holding_days is not None:
-            outcome_clause = (
-                f"Position closed at {ref_fmt_curr(exit_price)} after {ref_fmt_float(holding_days, 1)} days, "
-                f"realizing a gain of +{ref_fmt_curr(pnl)} ({ref_fmt_pct(pnl_pct, signed=True)})."
-            )
-        else:
-            outcome_clause = (
-                f"Position closed at {ref_fmt_curr(exit_price)} (holding duration unrecorded), "
-                f"realizing a gain of +{ref_fmt_curr(pnl)} ({ref_fmt_pct(pnl_pct, signed=True)})."
-            )
-    elif pnl is not None and pnl < 0:
-        if holding_days is not None:
-            outcome_clause = (
-                f"Position closed at {ref_fmt_curr(exit_price)} after {ref_fmt_float(holding_days, 1)} days, "
-                f"realizing a loss of -{ref_fmt_curr(abs(pnl))} ({ref_fmt_pct(pnl_pct, signed=True)})."
-            )
-        else:
-            outcome_clause = (
-                f"Position closed at {ref_fmt_curr(exit_price)} (holding duration unrecorded), "
-                f"realizing a loss of -{ref_fmt_curr(abs(pnl))} ({ref_fmt_pct(pnl_pct, signed=True)})."
-            )
-    else:
-        outcome_clause = f"Position closed at {ref_fmt_curr(exit_price)}."
-
-    # Clause 3: Excursion & Calibration
-    if not bridge_reached:
-        if provenance == "manual":
-            excursion_clause = "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge); model calibration not applicable for manual trades."
-        elif provenance == "signal_driven":
-            excursion_clause = "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge)."
-        else:
-            excursion_clause = "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge); conviction calibration unavailable."
-    elif not bars_available:
-        excursion_clause = "Hold-period excursion metrics unavailable (pricing data missing for hold period)."
-    else:
-        # Excursion available
-        exc_prefix = f"Hold-period excursion reached MFE +{ref_fmt_pct(mfe)} vs MAE -{ref_fmt_pct(mae)} (Edge Ratio: {ref_fmt_float(edge_ratio)})"
-        if provenance == "manual":
-            excursion_clause = f"{exc_prefix}; model calibration not applicable for manual trades."
-        elif provenance == "unknown":
-            excursion_clause = f"{exc_prefix}; conviction calibration unavailable (provenance unrecorded)."
-        else:  # signal_driven
-            if bin_win_rate is not None and bin_count is not None and bin_count >= min_sample:
-                excursion_clause = f"{exc_prefix}; entry conviction binned at historical {ref_fmt_pct(bin_win_rate)} win rate (N={bin_count})."
-            elif bin_count is not None and bin_count < min_sample:
-                excursion_clause = f"{exc_prefix}; historical calibration unavailable for this conviction level (insufficient sample, N={bin_count} < {min_sample})."
-            else:
-                excursion_clause = f"{exc_prefix}."
-
-    return f"{entry_clause} {outcome_clause} {excursion_clause}"
 
 
 # ===========================================================================
@@ -510,31 +354,35 @@ class TestTier1FeatureCoverage:
     # -----------------------------------------------------------------------
     # R4: Read-Only Retrospective Composer
     # -----------------------------------------------------------------------
-    def test_r4_composer_combines_closed_trade_and_snapshot(self):
-        """R4.1: Retrospective record combines closed trade and snapshot context."""
-        composer_mod = _get_composer_module()
-        if composer_mod and hasattr(composer_mod, "compose_trade_retrospective"):
-            pass
-        else:
-            record = {
-                "trade_id": "trade_1",
-                "symbol": "AAPL",
-                "side": "buy",
-                "qty": 10.0,
-                "entry_price": 150.0,
-                "exit_price": 160.0,
-                "realized_pnl": 100.0,
-                "realized_pnl_pct": 0.0667,
-                "holding_period_days": 2.5,
-                "provenance": "signal_driven",
-                "snapshot": {"decision_context_status": "captured", "conviction": 0.85},
-                "bridge_status": "bridged",
-                "excursion": {"evaluation_status": "available", "mae": 0.02, "mfe": 0.08, "edge_ratio": 4.0},
-                "calibration": {"status": "calibrated", "bin_win_rate": 0.80},
-                "narrative": "Sample narrative",
-            }
-            assert record["provenance"] == "signal_driven"
-            assert record["excursion"]["evaluation_status"] == "available"
+    def test_r4_composer_combines_closed_trade_and_snapshot(self, paper_store, isolated_db_url):
+        """R4.1: Retrospective record combines closed trade and snapshot context.
+
+        Exercises the REAL RetrospectiveComposer against a real closed
+        trade -- a prior version of this test asserted purely against a
+        hand-built dict whenever the real module imported cleanly (which it
+        always does), never actually calling production code. See
+        docs/known_issues for the self-confirming-test incident.
+        """
+        from pilots.retrospective_composer import RetrospectiveComposer
+
+        paper_store.apply_fill(
+            "r4_open", "AAPL", "buy", 10.0, 150.0,
+            provenance="signal_driven", conviction=0.85,
+        )
+        paper_store.apply_fill("r4_close", "AAPL", "sell", 10.0, 160.0)
+
+        composer = RetrospectiveComposer(
+            paper_store=paper_store, db_url=isolated_db_url, historical_store=_NoOpHistoricalStore()
+        )
+        closed = paper_store.get_full_closed_trades(symbol="AAPL", limit=1)
+        assert len(closed) == 1
+
+        record = composer.compose_trade_retrospective(closed[0]["trade_id"])
+        assert record is not None
+        assert record["symbol"] == "AAPL"
+        assert record["provenance"] == "signal_driven"
+        assert record["snapshot"]["captured"] is True
+        assert math.isclose(record["snapshot"]["conviction"], 0.85, abs_tol=1e-6)
 
     def test_r4_composer_calls_evaluate_portfolio_for_excursion(self):
         """R4.2: Excursion math matches EvaluationEngine.calculate_excursion_metrics."""
@@ -547,19 +395,50 @@ class TestTier1FeatureCoverage:
         assert math.isclose(mae, 0.05, abs_tol=1e-4)
         assert math.isclose(mfe, 0.10, abs_tol=1e-4)
 
-    def test_r4_composer_strict_gate_unbridged_excursion_unavailable(self):
-        """R4.3: If bridge_status != 'bridged', excursion reports unavailable."""
-        record_unbridged = {
-            "bridge_status": "failed",
-            "excursion": {
-                "evaluation_status": "evaluation data unavailable",
-                "mae": None,
-                "mfe": None,
-                "edge_ratio": None,
-            },
-        }
-        assert record_unbridged["excursion"]["evaluation_status"] == "evaluation data unavailable"
-        assert record_unbridged["excursion"]["mae"] is None
+    def test_r4_composer_strict_gate_unbridged_excursion_unavailable(self, paper_store, isolated_db_url):
+        """R4.3: A trade whose bridge_status != 'bridged' still gets a real
+        excursion evaluation ATTEMPT (bridge_status no longer gates it --
+        _evaluate_trade_excursion builds its own isolated in-memory store
+        from the trade's own fields and never reads the real
+        transactions_store bridge). Without a real data_provider, that
+        attempt honestly reports 'evaluation data unavailable' for a
+        DIFFERENT reason -- missing hold-period pricing data, not a bridge
+        gate -- confirmed against the real RetrospectiveComposer, not a
+        hand-built dict."""
+        from data.paper_account_store import PaperClosedTrade, session_scope
+        from pilots.retrospective_composer import RetrospectiveComposer
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        with session_scope(paper_store.Session) as session:
+            session.add(PaperClosedTrade(
+                trade_id=9101,
+                strategy_id="mean_reversion",
+                symbol="AAPL",
+                side="BUY",
+                qty=15.0,
+                entry_ts=now - timedelta(days=2),
+                entry_price=150.0,
+                exit_ts=now,
+                exit_price=155.0,
+                commission=0.0,
+                realized_pnl=75.0,
+                realized_pnl_pct=0.0333,
+                holding_period_days=2.0,
+                close_reason="close",
+                bridge_status="failed",
+                bridge_error="OperationalError: database is locked",
+            ))
+
+        composer = RetrospectiveComposer(
+            paper_store=paper_store, db_url=isolated_db_url, historical_store=_NoOpHistoricalStore()
+        )
+        record = composer.compose_trade_retrospective(9101)
+        assert record is not None
+        assert record["bridge_status"] == "failed"
+        assert record["excursion"]["evaluation_status"] == "evaluation data unavailable"
+        assert record["excursion"]["bridge_reached"] is True
+        assert record["excursion"]["mae"] is None
+        assert record["excursion"]["mfe"] is None
 
     def test_r4_composer_integrates_calibration_bin(self):
         """R4.4: Calibration binning maps conviction score to empirical win rate."""
@@ -578,8 +457,10 @@ class TestTier1FeatureCoverage:
     # -----------------------------------------------------------------------
     def test_r5_narrative_builder_signal_driven_branch(self):
         """R5.1: Signal-driven narrative includes conviction and regime."""
-        narrative_mod = _get_narrative_module()
-        builder = getattr(narrative_mod, "build_trade_narrative", ref_build_trade_narrative)
+        # Real module, imported directly at file top -- see the comment
+        # there for why this must not silently fall back to the hand-built
+        # reference implementation on an import hiccup.
+        builder = build_trade_narrative
         text = builder(
             provenance="signal_driven",
             side="buy",
@@ -604,8 +485,10 @@ class TestTier1FeatureCoverage:
 
     def test_r5_narrative_builder_manual_branch(self):
         """R5.2: Manual narrative explicitly excludes model calibration."""
-        narrative_mod = _get_narrative_module()
-        builder = getattr(narrative_mod, "build_trade_narrative", ref_build_trade_narrative)
+        # Real module, imported directly at file top -- see the comment
+        # there for why this must not silently fall back to the hand-built
+        # reference implementation on an import hiccup.
+        builder = build_trade_narrative
         text = builder(
             provenance="manual",
             side="buy",
@@ -623,8 +506,10 @@ class TestTier1FeatureCoverage:
 
     def test_r5_narrative_builder_unknown_branch(self):
         """R5.3: Unknown provenance narrative explicitly states unrecorded context."""
-        narrative_mod = _get_narrative_module()
-        builder = getattr(narrative_mod, "build_trade_narrative", ref_build_trade_narrative)
+        # Real module, imported directly at file top -- see the comment
+        # there for why this must not silently fall back to the hand-built
+        # reference implementation on an import hiccup.
+        builder = build_trade_narrative
         text = builder(
             provenance="unknown",
             side="sell",
@@ -937,7 +822,7 @@ class TestTier2BoundaryAndCornerCases:
         ]
         forbidden_regex = re.compile(r"\b(None|NaN|nan|null)\b", re.IGNORECASE)
         for p in permutations:
-            text = ref_build_trade_narrative(**p)
+            text = build_trade_narrative(**p)
             match = forbidden_regex.search(text)
             assert match is None, f"Permutation leaked forbidden token '{match.group()}' in: '{text}'"
 
@@ -962,7 +847,7 @@ class TestTier2BoundaryAndCornerCases:
 
     def test_r5_bnd_unknown_provenance_fallback(self):
         """R5.BND.5: Arbitrary unexpected provenance string falls back to unknown."""
-        text = ref_build_trade_narrative(provenance="alien_ai", side="buy", entry_price=10.0, exit_price=12.0)
+        text = build_trade_narrative(provenance="alien_ai", side="buy", entry_price=10.0, exit_price=12.0)
         assert "unrecorded provenance" in text
 
     # -----------------------------------------------------------------------
@@ -1054,7 +939,7 @@ class TestTier3CrossFeatureCombinations:
         provenance = "manual"
         bridge_status = "bridged"
 
-        narrative = ref_build_trade_narrative(
+        narrative = build_trade_narrative(
             provenance=provenance,
             side="buy",
             entry_price=100.0,
@@ -1083,7 +968,7 @@ class TestTier3CrossFeatureCombinations:
         excursion_status = "available" if bridge_status == "bridged" else "unavailable"
         context_status = "captured" if has_snapshot else "not captured"
 
-        narrative = ref_build_trade_narrative(
+        narrative = build_trade_narrative(
             provenance="unknown",
             side="buy",
             entry_price=50.0,
@@ -1104,7 +989,7 @@ class TestTier3CrossFeatureCombinations:
     def test_t3_r2_automated_r3_disabled_bridge_r4_composer_r5_narrative(self):
         """T3.4 (R2+R3+R4+R5): Automated trade with disabled bridge."""
         bridge_status = "disabled"
-        narrative = ref_build_trade_narrative(
+        narrative = build_trade_narrative(
             provenance="signal_driven",
             side="buy",
             strategy_id="breakout",
@@ -1170,7 +1055,9 @@ class TestTier4RealWorldScenarios:
 
         from pilots.retrospective_composer import compose_trade_retrospective
 
-        rec = compose_trade_retrospective(trade["trade_id"], paper_store=paper_store)
+        rec = compose_trade_retrospective(
+            trade["trade_id"], paper_store=paper_store, historical_store=_NoOpHistoricalStore()
+        )
         assert rec is not None
         assert rec["snapshot"]["decision_context_status"] == "not_captured"
         assert rec["provenance"] == "unknown"
@@ -1215,6 +1102,7 @@ class TestTier4RealWorldScenarios:
 
         store = TransactionsStore(db_url=isolated_db_url)
         entry_ts = datetime(2026, 7, 1, 9, 30, 0)
+        exit_ts = datetime(2026, 7, 5, 16, 0, 0)
         t_id = store.record_trade(
             symbol="AAPL",
             side="long",
@@ -1222,6 +1110,14 @@ class TestTier4RealWorldScenarios:
             entry_price=100.0,
             shares=50.0,
         )
+        # Genuinely close the trade (real exit_ts/exit_price) -- the
+        # composer's own TransactionsStore.Trade fallback lookup now refuses
+        # (returns None rather than fabricating a closed record) an OPEN
+        # position with null exit fields (CONSTRAINT #4; see
+        # RetrospectiveComposer.compose_trade_retrospective's fallback
+        # guard), so an un-closed trade here would make this test's own
+        # composer-path assertion below unreachable.
+        store.close_trade(t_id, exit_ts, 103.0)
 
         date_range = pd.date_range(start="2026-07-01", end="2026-07-05", freq="D")
         mock_history = pd.DataFrame({
@@ -1239,35 +1135,52 @@ class TestTier4RealWorldScenarios:
             "stop_loss_pct": [0.05],
         })
 
-        orig_init = TransactionsStore.__init__
-        try:
-            def mock_init(self_inst, db_url=None, *, readonly=False, **kwargs):
-                self_inst.engine = store.engine
-                self_inst.Session = store.Session
-            TransactionsStore.__init__ = mock_init
-
+        # Patches `resolve_database_url` (the default-construction fallback
+        # path -- `db_url = db_url or resolve_database_url()`,
+        # transactions_store.py) rather than `TransactionsStore.__init__`
+        # itself. That distinction is what makes this a genuinely independent
+        # reference computation: an explicit `db_url` (as the composer's own
+        # internal isolated `:memory:` store always passes) is never
+        # overridden by `resolve_database_url`, so this patch redirects ONLY
+        # evaluate_portfolio()'s own default, no-store-injected construction
+        # below -- it can no longer also silently redirect the composer's
+        # supposedly-isolated single-trade store onto this same shared
+        # file-backed DB, which a prior version of this test did (via a
+        # class-level `TransactionsStore.__init__` monkeypatch), defeating
+        # the isolation this test exists to prove and making it blind to a
+        # corrupted composer reconstruction (side flip, price doubling, hold-
+        # window relocation would all have passed unnoticed). See
+        # tests/test_retrospective_composer.py::TestWPEMathematicalFidelity
+        # for the sibling test this mirrors.
+        with patch("transactions_store.resolve_database_url", return_value=isolated_db_url):
             processed_df = ee.evaluate_portfolio(test_df, data_provider=data_provider)
-            eval_mae = float(processed_df.iloc[0]["MAE"])
-            eval_mfe = float(processed_df.iloc[0]["MFE"])
-            eval_edge = float(processed_df.iloc[0]["Edge Ratio"])
+        eval_mae = float(processed_df.iloc[0]["MAE"])
+        eval_mfe = float(processed_df.iloc[0]["MFE"])
+        eval_edge = float(processed_df.iloc[0]["Edge Ratio"])
 
-            assert math.isclose(eval_mae, 0.06, abs_tol=1e-5)
-            assert math.isclose(eval_mfe, 0.12, abs_tol=1e-5)
-            assert math.isclose(eval_edge, 2.0, abs_tol=1e-5)
+        assert math.isclose(eval_mae, 0.06, abs_tol=1e-5)
+        assert math.isclose(eval_mfe, 0.12, abs_tol=1e-5)
+        assert math.isclose(eval_edge, 2.0, abs_tol=1e-5)
 
-            composer_mod = _get_composer_module()
-            if composer_mod and hasattr(composer_mod, "compose_trade_retrospective"):
-                comp_res = composer_mod.compose_trade_retrospective(t_id, data_provider=data_provider)
-                assert math.isclose(comp_res["excursion"]["mae"], eval_mae, abs_tol=1e-6)
-                assert math.isclose(comp_res["excursion"]["mfe"], eval_mfe, abs_tol=1e-6)
-                assert math.isclose(comp_res["excursion"]["edge_ratio"], eval_edge, abs_tol=1e-6)
-        finally:
-            TransactionsStore.__init__ = orig_init
+        from pilots.retrospective_composer import compose_trade_retrospective
+
+        comp_res = compose_trade_retrospective(
+            t_id,
+            data_provider=data_provider,
+            db_url=isolated_db_url,
+            historical_store=_NoOpHistoricalStore(),
+        )
+        assert comp_res is not None
+        assert math.isclose(comp_res["excursion"]["mae"], eval_mae, abs_tol=1e-6)
+        assert math.isclose(comp_res["excursion"]["mfe"], eval_mfe, abs_tol=1e-6)
+        assert math.isclose(comp_res["excursion"]["edge_ratio"], eval_edge, abs_tol=1e-6)
 
     def test_wp_f_fabrication_risk_check_across_all_template_branches(self):
         """WP-F: Check every template branch against the fabrication-risk checklist (no None/NaN leakage)."""
-        narrative_mod = _get_narrative_module()
-        builder = getattr(narrative_mod, "build_trade_narrative", ref_build_trade_narrative)
+        # Real module, imported directly at file top -- see the comment
+        # there for why this must not silently fall back to the hand-built
+        # reference implementation on an import hiccup.
+        builder = build_trade_narrative
 
         matrix = [
             {"provenance": "signal_driven", "side": "buy", "strategy_id": "trend", "entry_price": 100.0, "conviction": 0.9, "macro_regime": "expansion", "exit_price": 110.0, "pnl": 10.0, "pnl_pct": 0.1, "mfe": 0.12, "mae": 0.02, "edge_ratio": 6.0, "bin_win_rate": 0.8, "bin_count": 10},
@@ -1372,7 +1285,7 @@ class TestTier4RealWorldScenarios:
             },
         }
 
-        narrative = ref_build_trade_narrative(
+        narrative = build_trade_narrative(
             provenance="manual",
             side="buy",
             entry_price=10.0,

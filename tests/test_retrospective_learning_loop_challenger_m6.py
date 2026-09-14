@@ -93,6 +93,17 @@ def evaluation_engine() -> EvaluationEngine:
     return EvaluationEngine()
 
 
+class _NoOpHistoricalStore:
+    """Offline-safe stand-in for HistoricalStore -- a real one falls through
+    to a live network fetch on every cache-miss symbol (correct production
+    behavior, see RetrospectiveComposer._evaluate_trade_excursion), which
+    would make tests that don't explicitly inject their own `data_provider`
+    silently depend on outbound network access."""
+
+    def get_bars(self, symbol, lookback_days=504, **kwargs):
+        return pd.DataFrame()
+
+
 @pytest.fixture
 def composer(
     paper_store: PaperAccountStore,
@@ -105,6 +116,7 @@ def composer(
         paper_store=paper_store,
         transactions_store=transactions_store,
         evaluation_engine=evaluation_engine,
+        historical_store=_NoOpHistoricalStore(),
         db_url=isolated_db_url,
     )
 

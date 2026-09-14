@@ -15,7 +15,11 @@ Assembles per-trade retrospective records by combining:
 5. Non-LLM deterministic narrative builder (provenance & context summary)
 
 Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES):
-- If bridge_status != 'bridged': excursion reports 'evaluation data unavailable' and null metrics.
+- Excursion evaluation is attempted regardless of bridge_status (see
+  _evaluate_trade_excursion's own docstring: it builds an isolated store
+  from the trade's own fields, never the real transactions_store bridge) --
+  it reports 'evaluation data unavailable' and null metrics only when real
+  hold-period pricing data genuinely isn't available.
 - If entry snapshot is missing: report decision_context_status: 'not captured' / 'not_captured',
   provenance: 'unknown', reason: 'not captured', and NEVER infer or upgrade from strategy_id.
 - Direct reuse of EvaluationEngine.evaluate_portfolio() / calculate_excursion_metrics guaranteeing
@@ -63,6 +67,15 @@ STATUS_AVAILABLE = "available"
 STATUS_CAPTURED = "captured"
 STATUS_EVALUATION_UNAVAILABLE = "evaluation data unavailable"
 
+#: Sentinel distinguishing "no precomputed calibration curve was supplied --
+#: compute one internally" (the default, single-trade-fetch behavior) from
+#: "a precomputed calibration curve was supplied and is `None`/empty because
+#: the batch-level attempt genuinely found nothing" -- `None` itself can't be
+#: used as that default, since compose_retrospectives_batch legitimately
+#: needs to pass a real `None` down for the latter case. See
+#: compose_retrospectives_batch's own N+1 comment for why this exists.
+_CALIBRATION_UNSET = object()
+
 # =============================================================================
 # Retrospective Composer
 # =============================================================================
@@ -87,7 +100,17 @@ class RetrospectiveComposer:
             self.paper_store = paper_store
         else:
             from data.paper_account_store import PaperAccountStore
-            self.paper_store = PaperAccountStore(db_url=db_url)
+            # readonly=True: this composer only ever READS closed trades and
+            # entry snapshots (see module docstring, "Read-only execution
+            # with zero state mutation or side effects") -- a write-mode
+            # PaperAccountStore runs real schema/data side effects at
+            # construction time (Base.metadata.create_all, seeding a funded
+            # PaperAccount row via _ensure_account_exists, and a migration
+            # that takes a whole-file DB backup and can outright raise on a
+            # partially-migrated DB), none of which belong behind a pure GET
+            # request. It also makes get_bridge_completeness_metrics()'s own
+            # `if self._readonly:` cold-start honesty branch reachable here.
+            self.paper_store = PaperAccountStore(db_url=db_url, readonly=True)
 
         if transactions_store is not None:
             self.transactions_store = transactions_store
@@ -281,8 +304,31 @@ class RetrospectiveComposer:
                 exit_price=exit_price,
             )
 
+            # 2. Resolve a real hold-period OHLC data_provider when the
+            # caller didn't already supply one. Without this, MAE/MFE/Edge
+            # Ratio were structurally unreachable: evaluate_portfolio()'s
+            # hold-period High/Low lookup is entirely gated behind
+            # `if data_provider is not None:`, and neither of this module's
+            # two API call sites ever passed one. self.historical_store was
+            # already constructed for exactly this purpose (see __init__)
+            # but never actually referenced anywhere until now. A dict-
+            # shaped provider ({symbol: bars_df}) is the same shape
+            # pipeline/production_steps.py's own evaluate_portfolio() call
+            # already uses (`data_provider=ctx.tech_raw`).
+            resolved_data_provider = data_provider
+            if resolved_data_provider is None and self.historical_store is not None:
+                try:
+                    bars_df = self.historical_store.get_bars(symbol)
+                    if bars_df is not None and not bars_df.empty:
+                        resolved_data_provider = {symbol: bars_df}
+                except Exception as exc:  # noqa: BLE001 -- dead-letter: falls through to NaN excursion
+                    logger.warning(
+                        "HistoricalStore.get_bars(%s) failed for retrospective excursion: %s",
+                        symbol, exc,
+                    )
+
             eval_df = self.evaluation_engine.evaluate_portfolio(
-                test_df, data_provider=data_provider, transactions_store=iso_store
+                test_df, data_provider=resolved_data_provider, transactions_store=iso_store
             )
 
             if eval_df is not None and not eval_df.empty:
@@ -336,8 +382,21 @@ class RetrospectiveComposer:
         data_provider: Any | None = None,
         paper_store: Any | None = None,
         transactions_store: Any | None = None,
+        calibration_df: Any = _CALIBRATION_UNSET,
     ) -> dict[str, Any] | None:
         """Compose a complete retrospective record for a single closed trade.
+
+        ``calibration_df``: an optional PRECOMPUTED ``calibration_curve()``
+        result. Left at its default sentinel, this method computes its own
+        (a full ``trades`` table scan) -- the correct behavior for a single-
+        trade fetch. ``compose_retrospectives_batch`` computes this ONCE for
+        the whole batch and passes it down here, since re-running the same
+        table scan (plus a fresh isolated in-memory ``TransactionsStore``
+        construction inside ``_evaluate_trade_excursion``) once per trade was
+        measured to dominate per-trade compose time (~83% at 20k rows) --
+        a real N+1. Passing an explicit ``None`` (as the batch path does when
+        its own precompute attempt found nothing) is honored as-is, never
+        silently re-queried.
 
         Returns None if trade_id does not exist. Never mutates database state.
         """
@@ -380,7 +439,16 @@ class RetrospectiveComposer:
                 from transactions_store import Trade, session_scope
                 with session_scope(target_tx_store.Session) as session:
                     t_row = session.query(Trade).filter_by(trade_id=int_id).first()
-                    if t_row is not None:
+                    # A Trade row with a null exit_price/exit_ts is a STILL-OPEN
+                    # position -- _tx_row_to_closed_trade_dict would otherwise
+                    # coerce those Nones to a fabricated 0.0/'closed', letting
+                    # this endpoint return a confident, entirely made-up
+                    # "closed at $0.00, breakeven" autopsy for a trade that
+                    # was never actually closed (CONSTRAINT #4). Refuse it
+                    # here instead -- `closed_trade` stays None and this
+                    # falls through to the documented 404 below, exactly as
+                    # for a trade_id that doesn't exist at all.
+                    if t_row is not None and t_row.exit_price is not None and t_row.exit_ts is not None:
                         closed_trade = self._tx_row_to_closed_trade_dict(t_row)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("TransactionsStore Trade lookup error: %s", exc)
@@ -450,38 +518,51 @@ class RetrospectiveComposer:
                 "reason": "not captured",
             }
 
-        # 3. Bridge Reachability & Excursion Analytics (WP-E)
+        # 3. Excursion Analytics (WP-E). This does NOT gate on
+        # closed_trade["bridge_status"] -- `_evaluate_trade_excursion` builds
+        # its OWN isolated in-memory TransactionsStore directly from this
+        # trade's own entry/exit fields (see that method's docstring); it
+        # never reads the real transactions_store bridge, so a trade that
+        # never reached that bridge (bridge disabled by default, or a bridge
+        # write failure) can still have its hold-period excursion measured.
+        # A prior version short-circuited here whenever bridge_status !=
+        # "bridged", which -- combined with the bridge being OFF by default
+        # (settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED) -- made
+        # MAE/MFE/Edge Ratio structurally unreachable for every real trade.
+        # The trade's real `bridge_status` is still reported on the record
+        # below for its own sake (a separate, unrelated fact: whether this
+        # trade's PnL was mirrored into transactions_store for other
+        # consumers), it just no longer blocks excursion evaluation.
         bridge_status = closed_trade.get("bridge_status") or "not_attempted"
-        if bridge_status != "bridged":
-            excursion_record = {
-                "evaluation_status": "evaluation data unavailable",
-                "status": "evaluation data unavailable",
-                "bridge_reached": False,
-                "mae": None,
-                "mfe": None,
-                "edge_ratio": None,
-                "realized_slippage": None,
-                "reason": "Trade did not reach TransactionsStore bridge (bridge disabled or write failed)",
-            }
-            bars_available = False
-        else:
-            excursion_record, bars_available = self._evaluate_trade_excursion(
-                closed_trade, data_provider=data_provider
-            )
+        excursion_record, bars_available = self._evaluate_trade_excursion(
+            closed_trade, data_provider=data_provider
+        )
 
         # 4. Calibration Curve Mapping
         if snapshot_record.get("captured") and provenance == "signal_driven" and conviction is not None:
             bin_range = None
             bin_center = None
             bin_win_rate = None
-            bin_trade_count = 0
+            # None -- NOT a fabricated 0 -- until a real calibration_curve()
+            # query actually returns a matched bin's own count below. `0`
+            # here would be indistinguishable from a genuine "we looked,
+            # found an empty bin" measurement, letting the narrative assert
+            # a specific fabricated sample size (e.g. "N=0 < 5") for a
+            # conviction that was never actually binned at all -- exactly
+            # the CONSTRAINT #4 violation the `not_applicable` branch below
+            # already guards against; this closes the same gap for the
+            # no-matching-bin, empty-cal_df, and calibration-engine-error
+            # paths, none of which ever produce a real count either.
+            bin_trade_count = None
             cal_error = None
             cal_status = "available"
             cal_reason = None
 
             try:
-                from evaluation_engine import calibration_curve
-                cal_df = calibration_curve(target_tx_store or self.transactions_store, n_bins=10, min_trades_per_bin=5)
+                cal_df = calibration_df
+                if cal_df is _CALIBRATION_UNSET:
+                    from evaluation_engine import calibration_curve
+                    cal_df = calibration_curve(target_tx_store or self.transactions_store, n_bins=10, min_trades_per_bin=5)
                 if cal_df is not None and not cal_df.empty:
                     matched_row = None
                     for _, brow in cal_df.iterrows():
@@ -501,6 +582,10 @@ class RetrospectiveComposer:
                         else:
                             cal_reason = f"insufficient sample in conviction bin (N={bin_trade_count} < 5)"
                     else:
+                        # No bin in the real, successfully-queried cal_df
+                        # covers this conviction level -- a genuine "we
+                        # looked and found nothing for this value", not a
+                        # measured N=0, so bin_trade_count stays None.
                         cal_reason = "insufficient sample in conviction bin"
                 else:
                     # Nominal bin fallback when cal_df has no conviction-annotated trades
@@ -515,7 +600,7 @@ class RetrospectiveComposer:
                 logger.warning("calibration curve query error: %s", exc)
                 cal_reason = "calibration engine error"
 
-            if bin_win_rate is None or bin_trade_count < 5:
+            if bin_win_rate is None or bin_trade_count is None or bin_trade_count < 5:
                 cal_status = STATUS_INSUFFICIENT_SAMPLE
             else:
                 cal_status = STATUS_AVAILABLE
@@ -625,7 +710,19 @@ class RetrospectiveComposer:
             return []
 
         try:
-            trades = target_paper_store.get_full_closed_trades(symbol=symbol, limit=limit)
+            # `get_full_closed_trades` only ever filters by `symbol` at the
+            # SQL level; `strategy_id` is applied in Python below. Requesting
+            # only `limit` rows here and THEN filtering by strategy_id would
+            # apply the recency cap BEFORE the filter -- a strategy whose
+            # matching trades sit outside the `limit` most-recent trades
+            # OVERALL would silently under-sample (or come back empty)
+            # instead of returning its own most-recent `limit` trades. Widen
+            # the fetch window whenever a strategy_id filter is requested,
+            # then truncate to `limit` AFTER filtering.
+            fetch_limit = limit
+            if strategy_id is not None:
+                fetch_limit = max(limit * 20, 2000)
+            trades = target_paper_store.get_full_closed_trades(symbol=symbol, limit=fetch_limit)
         except Exception as exc:  # noqa: BLE001
             logger.warning("compose_retrospectives_batch error: %s", exc)
             return []
@@ -635,6 +732,24 @@ class RetrospectiveComposer:
 
         if strategy_id is not None:
             trades = [t for t in trades if t.get("strategy_id") == strategy_id]
+            trades = trades[:limit]
+
+        # Precompute the calibration curve ONCE for the whole batch instead
+        # of once per trade inside compose_trade_retrospective -- measured to
+        # be ~83% of per-trade compose time at 20k rows (a real N+1; see that
+        # method's own `calibration_df` docstring). A genuine query failure
+        # here still lets the batch proceed: `calibration_df` stays the
+        # UNSET sentinel and each trade's own compose call falls back to
+        # computing (and honestly failing) its own, exactly as if no
+        # precompute had been attempted.
+        target_tx_store = transactions_store or self.transactions_store
+        calibration_df = _CALIBRATION_UNSET
+        try:
+            from evaluation_engine import calibration_curve
+            calibration_df = calibration_curve(target_tx_store, n_bins=10, min_trades_per_bin=5)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("compose_retrospectives_batch: calibration_curve precompute failed: %s", exc)
+            calibration_df = _CALIBRATION_UNSET
 
         results = []
         for t in trades:
@@ -645,6 +760,7 @@ class RetrospectiveComposer:
                     data_provider=data_provider,
                     paper_store=target_paper_store,
                     transactions_store=transactions_store,
+                    calibration_df=calibration_df,
                 )
                 if composed is not None:
                     results.append(composed)

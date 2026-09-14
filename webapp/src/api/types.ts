@@ -6367,8 +6367,11 @@ export interface StrategyCohortBreakdown {
   winning_trades: number;
   losing_trades: number;
   win_rate: number | null;
-  total_pnl: number;
-  total_realized_pnl: number;
+  // Both are `None` on the wire (never a fabricated 0.0) when every trade
+  // in this strategy bucket has an unmeasurable PnL -- see
+  // pilots/retrospective_insights.py::_compute_cohort_metrics.
+  total_pnl: number | null;
+  total_realized_pnl: number | null;
   mean_edge_ratio: number | null;
 }
 
@@ -6380,7 +6383,7 @@ export interface CohortInsightMetrics {
   losing_trades: number;
   breakeven_trades: number;
   win_rate: number | null;
-  total_realized_pnl: number;
+  total_realized_pnl: number | null;
   profit_factor: number | null;
   mean_holding_period_days: number | null;
   mean_edge_ratio: number | null;
