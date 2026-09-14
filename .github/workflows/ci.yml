@@ -49,8 +49,25 @@ permissions:
 
 jobs:
   test:
-    name: test (offline suite)
+    name: test (offline suite) [${{ matrix.shard }}/4]
     runs-on: ubuntu-latest
+    # Sharded because the runner, not the test code, is the binding constraint.
+    # Measured: this suite runs in ~3 minutes on a 10-core machine and ~18 on
+    # ubuntu-latest, which has 2 vCPUs -- so `-n auto` gets two workers and no
+    # in-process tuning can close a ~6x gap. Four shards is four runners, i.e.
+    # 8 effective workers. Every other lever measured smaller: dropping
+    # coverage entirely ~2x, COVERAGE_CORE=sysmon ~5%.
+    #
+    # scripts/ci_shard.py splits by MEASURED per-file duration
+    # (.test_durations.json), not by name: round-robin over 577 files is 1.56x
+    # skew and a shard is only as fast as its slowest member. A file missing
+    # from the durations map is still assigned, so a stale map costs balance
+    # and never coverage -- tests/test_ci_shard.py pins that partition property
+    # for several shard counts against the real repo layout.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -118,6 +135,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Lint (ruff)
+        if: matrix.shard == 1
         run: |
           # Scoped to genuine-bug rules only (undefined names, syntax errors)
           # -- NOT the full default ruleset, which the existing codebase has
@@ -125,66 +143,90 @@ jobs:
           # deliberate tensorflow-before-pandas E402 import-order pattern,
           # etc.) that a focused PR should not be gated on fixing wholesale.
           # Widening `--select` is a deliberate follow-up, not an accident.
+          #
+          # Only on shard 1: linting the tree is shard-independent, so running
+          # it in all four would just burn three extra runners on the same work.
           python -m ruff check . --select=F821,F822,F823,E9
 
-      - name: Run offline test suite
+      - name: Run offline test suite (shard ${{ matrix.shard }}/4)
         run: |
-          # --cov reads .coveragerc, which sets fail_under=58 (a coverage-floor
-          # ratchet — see docs/test_coverage_analysis.md Phase 5 item 8). A
-          # regression below that floor fails this step even if every test
-          # passes; coverage.json is still written first, so the summary step
-          # below still runs (it's `if: always()`).
-          # --cov-report=json is the only coverage report written here; the
-          # expensive --cov-report=term-missing table (300+ source files) was
-          # dropped because the CI summary step reads only coverage.json and
-          # the fail_under gate is enforced by the run itself, not the table.
-          #
-          # -n auto (pytest-xdist) fans the suite out across the runner's CPUs.
-          # pytest-cov auto-detects xdist and combines each worker's coverage
-          # data before writing the reports below, so --cov-report output is
-          # unaffected; no .coveragerc changes are needed. --durations=10
-          # (pytest.ini) prints the 10 slowest tests, aggregated across workers,
-          # at the end of the run.
-          #
-          # --dist loadgroup keeps every @pytest.mark.xdist_group("...")-tagged
-          # test together on one worker (currently: test_settings_liveness.py,
-          # test_train_lgbm.py, test_backtest_sector_configs_cli.py's
-          # TestOfflineCLIRun, test_settings_keysets.py, test_orchestrator_e2e.py,
-          # test_etf_transmission_sensitivity_sweep.py,
-          # test_sector_forecast_backtest.py) so their module/class-scoped
-          # fixtures build once, not once per worker that happens to get a
-          # split share of the group. Every other (unmarked) test still balances
-          # freely across workers exactly as under the default `load` distribution.
-          #
-          # --timeout=180 --timeout-method=thread (pytest-timeout) turns a
-          # hang into a fast failure instead of burning the full 6h job
-          # budget. `thread` (not `signal`) is required to interrupt blocking
-          # C extensions (statsmodels/lightgbm/arch) — `signal` cannot. 180s
-          # is a wide margin over the slowest test on this job (`not slow`
-          # deselects the real ARIMA/GARCH/LightGBM-fit-heavy tests below).
-          #
-          # -m "not network and not slow": network tests need live upstreams
-          # (see nightly.yml); slow tests run in the parallel `test-slow` job
-          # below instead of serially in this one.
           # coverage.py's sys.monitoring backend (PEP 669, Python 3.12+).
-          # Measured ~-5% CPU on a 743-test subset and produces byte-identical
-          # coverage (77.52% either way on a full offline run), so it is a free
-          # win rather than a trade-off. The larger lever -- statement-only
-          # coverage -- was measured, found to crash the JSON report, and
-          # rejected; see .coveragerc's `branch` comment for that evidence.
+          # Measured ~-5% CPU and byte-identical coverage. The larger lever --
+          # statement-only coverage -- was measured, found to crash the JSON
+          # report, and rejected; see .coveragerc's `branch` comment.
           export COVERAGE_CORE=sysmon
-          python -m pytest -m "not network and not slow" -v --tb=short \
-            --cov --cov-report=json \
+          # Each shard writes its own data file for the combine job below.
+          # .coveragerc sets relative_files=True, without which data recorded
+          # on one runner cannot be merged with another's.
+          export COVERAGE_FILE=".coverage.shard${{ matrix.shard }}"
+
+          FILES=$(python scripts/ci_shard.py --shard-id ${{ matrix.shard }} --num-shards 4)
+          if [ -z "$FILES" ]; then
+            echo "::error::shard ${{ matrix.shard }} resolved to zero test files"
+            exit 1
+          fi
+          echo "shard ${{ matrix.shard }}/4: $(echo "$FILES" | wc -w) test files"
+
+          # --cov-fail-under=0 disables the floor PER SHARD: a quarter of the
+          # suite covers nowhere near it, and the real gate is enforced once,
+          # on the combined data, in the `coverage` job below. --cov-report=
+          # writes no report here; only the raw data file is wanted.
+          #
+          # -n auto still fans each shard across that runner's own CPUs, and
+          # --dist loadgroup keeps @pytest.mark.xdist_group tests together.
+          # --timeout=180 --timeout-method=thread turns a hang into a fast
+          # failure (`thread` because `signal` cannot interrupt blocking C
+          # extensions like statsmodels/lightgbm/arch).
+          python -m pytest $FILES -m "not network and not slow" -v --tb=short \
+            --cov --cov-report= --cov-fail-under=0 \
             -n auto --dist loadgroup --timeout=180 --timeout-method=thread
 
-      - name: Coverage summary
+      - name: Upload shard coverage data
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: .coverage.shard${{ matrix.shard }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage:
+    name: coverage (combined)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install coverage
         run: |
-          if [ -f coverage.json ]; then
-            python -c "import json; d=json.load(open('coverage.json')); print(f'Total coverage: {d[\"totals\"][\"percent_covered\"]:.1f}%')" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "coverage.json not found; skipping coverage summary" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python -m pip install --upgrade pip
+          pip install coverage
+
+      - name: Download shard coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-shard-*
+          merge-multiple: true
+
+      - name: Combine and enforce the coverage floor
+        run: |
+          # The fail_under gate lives here, once, on the combined data -- no
+          # individual shard sees enough of the codebase to be judged against
+          # it. `coverage combine` requires .coveragerc's relative_files=True,
+          # since each data file was recorded on a different runner.
+          ls -la .coverage.shard* || true
+          python -m coverage combine .coverage.shard*
+          python -m coverage json
+          python -m coverage report --skip-covered
+          python -c "import json; d=json.load(open('coverage.json')); print(f'Total coverage: {d[\"totals\"][\"percent_covered\"]:.2f}%')" >> "$GITHUB_STEP_SUMMARY"
 
   test-slow:
     name: test (slow suite)

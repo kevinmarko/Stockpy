@@ -1,5 +1,9 @@
 [run]
 source = .
+# Required for sharded CI: each shard writes its own data file on its own
+# runner, and `coverage combine` can only merge them if paths are recorded
+# relative to the repo root rather than as absolute runner paths.
+relative_files = True
 # Branch coverage stays ON.
 #
 # Turning it off was measured as a real speedup (on a 743-test subset, CPU went
@@ -51,15 +55,23 @@ omit =
 show_missing = True
 skip_covered = True
 # Coverage-floor ratchet (docs/test_coverage_analysis.md Phase 5 item 8).
-# Measured whole-suite total at the time this was added: 61% (`pytest -m
-# "not network" --cov`, 2026-07-14, after the Phase 5 test-coverage pass).
-# Set a few points below that measured baseline, not the baseline itself,
-# so ordinary coverage-neutral PRs and minor measurement noise (branch
-# coverage of conditionally-imported optional deps, etc.) don't fail CI --
-# this exists to catch a real regression, not to block unrelated work.
-# Raise this number as coverage improves; never lower it to paper over a
-# real drop.
-fail_under = 58
+#
+# Re-measured 2026-09-14: 77.51% on a full offline run (`pytest -m "not
+# network and not slow" --cov`, branch coverage, after the #1048/#1049 test
+# speed-ups). The previous floor of 58 was set against a 61% baseline measured
+# 2026-07-14 and was never raised as coverage climbed, so it had drifted ~19
+# points below reality -- wide enough that a substantial real regression could
+# land without tripping it, which is the one job this number has.
+#
+# Set a few points below the measured baseline, not the baseline itself, so
+# ordinary coverage-neutral PRs and minor measurement noise (branch coverage
+# of conditionally-imported optional deps, etc.) don't fail CI -- this exists
+# to catch a real regression, not to block unrelated work. 74 leaves ~3.5
+# points of headroom against the measured 77.51%.
+#
+# Raise this number as coverage improves; never lower it to paper over a real
+# drop. If it ever needs lowering, re-measure first and say so here.
+fail_under = 74
 
 [json]
 output = coverage.json
