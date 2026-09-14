@@ -2,7 +2,7 @@
 # watch_rules.yaml — InvestYo Symbol Watch Alert Configuration
 # ==============================================================================
 # Processed by watch_engine.py at the end of every run_once() cycle.
-# Matching rules fire ntfy push notifications (NTFY_TOPIC must be set in .env).
+# Matching rules fire ntfy push notifications (ALERT_NTFY_TOPIC must be set in .env).
 #
 # Rule schema
 # -----------
@@ -40,9 +40,9 @@
 #
 # Prerequisites
 # -------------
-#   1. NTFY_TOPIC must be set in .env (or exported in the shell).
+#   1. ALERT_NTFY_TOPIC must be set in .env (or exported in the shell).
 #      When unset, the entire watch engine is a silent no-op.
-#   2. Install the ntfy app (iOS/Android) and subscribe to your NTFY_TOPIC.
+#   2. Install the ntfy app (iOS/Android) and subscribe to your ALERT_NTFY_TOPIC.
 #   3. Optional: set NTFY_DASHBOARD_URL in .env to a deep-link URL (e.g.
 #      "http://localhost:8501") that is appended to every notification body.
 # ==============================================================================

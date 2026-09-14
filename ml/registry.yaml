@@ -189,9 +189,9 @@ models:
     pbo: null
     n_train: 0
     deployable: false
-    notes: Options meta labeler for dynamic position sizing and entry filtering based
-      on paper closed trades. Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo
-      are null rather than a fabricated 0.0/1.0 (CONSTRAINT
+    notes: 'Options meta labeler for dynamic position sizing and entry filtering based on paper closed trades.
+      Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo are null rather than a fabricated
+      0.0/1.0 (CONSTRAINT #4); this is "not evaluated," not "evaluated and failed."'
   meta_labeler_backfill_timeseries_momentum:
     role: meta_labeler
     owner: TBD

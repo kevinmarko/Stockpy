@@ -1572,6 +1572,43 @@ def propose_paper_trade_for_review(
         
     return f"{msg}\n\n```json\n{json.dumps(payload, indent=2)}\n```"
 
+def _write_watch_rules(yaml_path: str, data: dict) -> None:
+    """Persist watch_rules.yaml without wiping its documentation.
+
+    This file is 90 lines, 76 of them documentation — the rule schema, the
+    edge-trigger semantics, the ntfy setup steps. A plain ``yaml.safe_dump``
+    collapsed it from 4246 bytes to 206 on a single call, because PyYAML does
+    not preserve comments.
+
+    So: splice the rules list surgically, re-serializing only genuinely-new
+    items and carrying every other byte through verbatim. If the file's shape
+    is outside what the splicer can apply exactly it declines, and we fall back
+    to a full dump that at least re-emits the file's own leading header.
+    See ``yaml_comment_io`` and
+    ``tests/test_watch_rules_comment_preservation.py``.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from yaml_comment_io import (  # noqa: PLC0415
+        splice_sequence_section,
+        write_yaml_preserving_header,
+    )
+
+    target = _Path(yaml_path)
+    try:
+        existing = target.read_text(encoding="utf-8")
+    except Exception:
+        existing = ""
+
+    if existing:
+        spliced = splice_sequence_section(existing, data, "rules")
+        if spliced is not None:
+            target.write_text(spliced, encoding="utf-8")
+            return
+
+    write_yaml_preserving_header(data, target)
+
+
 @mcp.tool()
 def update_watch_rules(
     action: str,
@@ -1614,8 +1651,7 @@ def update_watch_rules(
             return f"No watch rules found for symbol: {symbol_upper}."
         data["rules"] = new_rules
         try:
-            with open(yaml_path, "w") as f:
-                yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+            _write_watch_rules(yaml_path, data)
             return f"Successfully removed all watch rules for {symbol_upper}."
         except Exception as e:
             return f"Failed to write watch_rules.yaml: {str(e)}"
@@ -1639,8 +1675,7 @@ def update_watch_rules(
         data["rules"] = rules
         
         try:
-            with open(yaml_path, "w") as f:
-                yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+            _write_watch_rules(yaml_path, data)
             return f"Successfully {action_lower}ed watch rule for {symbol_upper}."
         except Exception as e:
             return f"Failed to write watch_rules.yaml: {str(e)}"

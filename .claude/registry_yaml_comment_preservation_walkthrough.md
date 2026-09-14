@@ -128,3 +128,113 @@ Backups of both pre-edit files are in this session's scratchpad.
   mid-sentence (`"...rather than a fabricated 0.0/1.0 (CONSTRAINT"`). This is present in the
   committed file and is **not** caused by this bug class. Flagged for the operator rather
   than guessing an ending.
+
+---
+
+# Follow-up — the two items the first commit flagged as out of scope
+
+## 1. `options_meta_labeler.notes` was truncated — a THIRD, distinct bug class
+
+Not the comment-erosion bug, and **the new writer would not have prevented it**: the loss
+happens on *read*, before `_dump_registry` ever sees the value.
+
+The note was hand-written as an **unquoted (plain) YAML scalar** containing `(CONSTRAINT #4)`.
+In YAML, ` #` inside a plain scalar starts a comment — so PyYAML's *reader* silently discarded
+everything from ` #4);` onward at parse time, and the next `safe_dump` wrote the
+already-truncated value back, making it permanent.
+
+Reproduced directly:
+
+```
+PARSED BACK: ' -- cpcv_dsr/pbo are null rather than a fabricated 0.0/1.0 (CONSTRAINT'
+TRUNCATED AT ' #': True
+```
+
+Traced through history: intact at `339d2b0b` / `ff718ea3` (2026-08-28), truncated at
+`e7b2ac74` (2026-09-06) — **the same 6-agent audit pass CLAUDE.md already records for the
+header loss on this file.**
+
+**The ending was recovered, not invented.** Verbatim from `ff718ea3`:
+
+> `... (CONSTRAINT #4); this is "not evaluated," not "evaluated and failed."`
+
+Restored by re-serializing that one note through PyYAML, which quotes a string containing
+` #` so it round-trips (verified). Writing it back unquoted by hand would have re-armed the
+same bomb.
+
+### The guard
+
+`_unquoted_hash_offenders` flags a ` #` sitting inside an unquoted scalar — both
+`key: <unquoted value>` and plain-scalar continuation lines. It tracks quote state across
+lines, so a continuation of an *already-quoted* scalar is correctly skipped (that was a real
+false positive on the first draft, caught and fixed).
+
+Proven against the real history rather than only synthetic input:
+
+| version | flagged |
+|---|---|
+| `ff718ea3` — intact but vulnerable | **1** (exactly the offending line) |
+| `e7b2ac74` — after the damage | 0 (data already gone — an honest limit, not a pass) |
+| working tree — fixed | 0 |
+
+So this would have failed CI on the commit that introduced the hazard, before the next
+retrain made it permanent. That is the realistic window; a writer cannot recover data the
+reader already dropped.
+
+## 2. `watch_rules.yaml` — I was wrong about this one
+
+My earlier note said it has "no doc header today." That was incorrect. It is 90 lines,
+**76 of them documentation** — the rule schema, edge-trigger semantics, ntfy setup steps,
+worked examples. It is the only place any of that is written down.
+
+Measured, before the fix: a single `update_watch_rules` call collapsed it **4246 → 247 bytes**.
+That is a total documentation wipe on an operator-facing config file, and it was live, not
+latent.
+
+Comments there are **interleaved among the rules** (lines 51–53, 60–62, 68–90), not confined
+to a header — so header-only preservation would still have lost ~28 lines and is explicitly
+not what the tests accept.
+
+### The fix
+
+New `yaml_comment_io.py` — one home for comment-safe YAML writes, so a third copy of this
+logic never gets written:
+
+- `leading_comment_block` — read a file's own header back off disk (never a hardcoded copy).
+  `ml/registry_io.py` now imports this instead of keeping its own duplicate.
+- `splice_sequence_section` — the sequence-shaped sibling of the registry's mapping splicer.
+  Re-serializes only genuinely-new list items; kept items pass through verbatim with their
+  attached comments. Same two rules: never write a partial result, and re-parse to verify
+  before returning.
+
+`investyo_mcp_server.py::update_watch_rules`'s two `yaml.safe_dump` call sites now both go
+through `_write_watch_rules`.
+
+**The verify-before-write step earned its keep during development**: emptying the rules list
+produced a bare `rules:`, which parses back as `None`, not `[]` — the splicer correctly
+*refused* rather than writing a file that meant something different. Fixed by emitting
+`rules: []` explicitly for that case.
+
+## Verification
+
+| suite | result |
+|---|---|
+| `test_registry_yaml_comment_preservation.py` | **14 passed** (was 10) |
+| `test_watch_rules_comment_preservation.py` (new) | **9 passed** |
+| `test_registry_load.py` + `test_train_lgbm.py` + `test_train_meta_labelers.py` | passed |
+| genuine-bug lint (`F821,F822,F823,E9`) | clean |
+
+The watch_rules tests were written first and confirmed failing against the old writer, with
+the collapse measured in the assertion output (`assert 247 > (4246 * 0.9)`).
+
+**`tests/test_investyo_mcp_server.py` has 21 failures — all pre-existing.** Verified by
+running it against `HEAD`'s `investyo_mcp_server.py` and against the changed one and
+diffing the failing test names: **identical**, 21 failed / 294 passed both ways. They are in
+`TestRunBacktest` and unrelated to watch_rules.
+
+## Also fixed in passing
+
+`watch_rules.yaml` referenced `NTFY_TOPIC` in 3 places. That variable was renamed to
+`ALERT_NTFY_TOPIC` (confirmed: `settings.py:1862`; CLAUDE.md records the rename and notes the
+old name was "a silent no-op due to a mismatched env var read"). Updated — an operator
+following those setup steps verbatim would have configured a dead variable.

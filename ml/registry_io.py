@@ -38,6 +38,8 @@ from typing import Any, Optional
 
 import yaml
 
+from yaml_comment_io import leading_comment_block as _leading_comment_block
+
 logger = logging.getLogger("ML.RegistryIO")
 
 _DEFAULT_REGISTRY_PATH = Path(__file__).parent / "registry.yaml"
@@ -372,30 +374,6 @@ def _dump_yaml(obj: Any, *, width: int = _DUMP_WIDTH) -> str:
         allow_unicode=True,
         width=width,
     )
-
-
-def _leading_comment_block(text: str) -> Optional[str]:
-    """Return the file's leading run of comment/blank lines, verbatim.
-
-    ``None`` when the file has no leading comment block at all (so the caller
-    can fall back to the bootstrap constant rather than emitting nothing).
-    """
-    lines = text.splitlines(keepends=True)
-    end = 0
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == "" or stripped.startswith("#"):
-            end = i + 1
-            continue
-        break
-    block = lines[:end]
-    # Trim trailing blank lines — the caller re-adds the single separator blank.
-    while block and block[-1].strip() == "":
-        block.pop()
-    if not block or not any(ln.lstrip().startswith("#") for ln in block):
-        return None
-    out = "".join(block)
-    return out if out.endswith("\n") else out + "\n"
 
 
 def _find_models_blocks(lines: list[str]) -> Optional[tuple[int, int, list[tuple[str, int, int]]]]:

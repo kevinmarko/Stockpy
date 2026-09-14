@@ -267,3 +267,143 @@ def test_no_op_write_leaves_the_file_byte_identical(tmp_registry: Path):
     before = tmp_registry.read_text(encoding="utf-8")
     _dump_registry(load_registry(tmp_registry), tmp_registry)
     assert tmp_registry.read_text(encoding="utf-8") == before
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# A THIRD, distinct data-loss class on the same file: ' #' inside a plain scalar
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# `ml/registry.yaml`'s `options_meta_labeler.notes` was hand-written as an
+# UNQUOTED (plain) scalar containing "(CONSTRAINT #4)". In YAML, ' #' inside a
+# plain scalar starts a comment — so PyYAML's *reader* silently discarded
+# everything from ' #4);' onward at parse time, and the next safe_dump wrote the
+# already-truncated value back. The sentence was permanently cut mid-clause:
+#
+#     "...rather than a fabricated 0.0/1.0 (CONSTRAINT"
+#
+# The full text was recovered verbatim from commit ff718ea3 and rewritten
+# through PyYAML, which quotes it correctly so it round-trips.
+#
+# The writer cannot defend against this: the loss happens on READ, before
+# `_dump_registry` ever sees the value. The realistic window to catch it is the
+# commit after a hand-edit, before the next retrain makes it permanent — which
+# is what these tests do.
+
+def _scalar_closes_on_line(fragment: str, quote: str) -> bool:
+    """Does a quoted scalar opened by ``quote`` close within ``fragment``?
+
+    Handles YAML's escapes: `''` inside a single-quoted scalar and `\\"` inside a
+    double-quoted one are literal characters, not terminators.
+    """
+    i = 0
+    while i < len(fragment):
+        ch = fragment[i]
+        if quote == "'" and ch == "'":
+            if i + 1 < len(fragment) and fragment[i + 1] == "'":
+                i += 2          # escaped '' — keep going
+                continue
+            return True
+        if quote == '"':
+            if ch == "\\":
+                i += 2          # escaped char — skip it
+                continue
+            if ch == '"':
+                return True
+        i += 1
+    return False
+
+
+def _unquoted_hash_offenders(text: str) -> list[tuple[int, str]]:
+    """Lines where a ' #' sits inside an UNQUOTED scalar and will be eaten.
+
+    Two shapes are checked, both unambiguous:
+      * ``key: <unquoted value containing ' #'>``
+      * a plain-scalar continuation line (indented, no ``key:``, not a comment)
+
+    A ``#`` on a plain-scalar continuation line always terminates the scalar, so
+    there is no such thing as a legitimate trailing comment there — no false
+    positives. Continuation lines of a *quoted* scalar (whose opening quote sits
+    on an earlier line) are tracked and skipped, since ``#`` is literal there.
+    """
+    offenders: list[tuple[int, str]] = []
+    open_quote: str | None = None
+
+    for n, raw in enumerate(text.splitlines(), start=1):
+        if open_quote is not None:
+            if _scalar_closes_on_line(raw, open_quote):
+                open_quote = None
+            continue  # inside a quoted scalar — '#' is literal, nothing to flag
+
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("- "):
+            continue
+
+        key, sep, value = stripped.partition(": ")
+        if sep and not key.startswith(("'", '"')):
+            candidate = value.strip()
+        elif not sep and raw.startswith("  "):
+            candidate = stripped  # plain-scalar continuation
+        else:
+            continue
+
+        if candidate.startswith(("'", '"')):
+            quote = candidate[0]
+            if not _scalar_closes_on_line(candidate[1:], quote):
+                open_quote = quote  # multi-line quoted scalar starts here
+            continue  # quoted — safe either way
+
+        if " #" in candidate:
+            offenders.append((n, raw.rstrip()))
+    return offenders
+
+
+def test_no_unquoted_hash_scalars_in_the_committed_registry():
+    """A ' #' in an unquoted scalar is silently truncated on the next read."""
+    offenders = _unquoted_hash_offenders(REPO_REGISTRY.read_text(encoding="utf-8"))
+    assert not offenders, (
+        "These lines contain ' #' inside an unquoted YAML scalar. PyYAML will "
+        "read that as a comment and silently discard the rest of the value on "
+        "the next load — quote the scalar (wrap the value in single quotes), or "
+        "move the text to its own full-line comment:\n"
+        + "\n".join(f"  line {n}: {t}" for n, t in offenders)
+    )
+
+
+def test_the_detector_actually_catches_the_original_defect():
+    """Pin the detector against the exact text that was lost, so it can't rot."""
+    bad = (
+        "models:\n"
+        "  m:\n"
+        "    notes: Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo are\n"
+        "      null rather than a fabricated 0.0/1.0 (CONSTRAINT #4); this is not evaluated.\n"
+    )
+    assert _unquoted_hash_offenders(bad), "detector missed the real defect"
+    # ...and that PyYAML really does eat it, so the test is guarding something real.
+    assert yaml.safe_load(bad)["models"]["m"]["notes"].endswith("(CONSTRAINT")
+
+    good = yaml.safe_dump({"models": {"m": {"notes": "a 0.0/1.0 (CONSTRAINT #4); ok"}}})
+    assert not _unquoted_hash_offenders(good), "detector flags correctly-quoted output"
+    assert yaml.safe_load(good)["models"]["m"]["notes"].endswith("#4); ok")
+
+
+def test_options_meta_labeler_note_is_no_longer_truncated():
+    data = yaml.safe_load(REPO_REGISTRY.read_text(encoding="utf-8"))
+    notes = data["models"]["options_meta_labeler"]["notes"]
+    assert not notes.rstrip().endswith("(CONSTRAINT"), "note is still truncated"
+    assert notes.rstrip().endswith('not "evaluated and failed."')
+
+
+def test_restored_note_survives_a_real_metrics_write(tmp_registry: Path):
+    """The restored text must survive the writer, not just sit in the file."""
+    from ml.registry_io import load_registry, update_model_metrics
+
+    before = load_registry(tmp_registry)["models"]["options_meta_labeler"]["notes"]
+    assert before.rstrip().endswith('not "evaluated and failed."')
+
+    update_model_metrics(
+        "lgbm_ranker", trained_date="2026-09-04", cpcv_dsr=0.5, pbo=0.2,
+        n_train=460, path=tmp_registry,
+    )
+
+    after = load_registry(tmp_registry)["models"]["options_meta_labeler"]["notes"]
+    assert after == before, "the restored note did not survive a registry write"
