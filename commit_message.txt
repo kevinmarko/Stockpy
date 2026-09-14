@@ -1,0 +1,13 @@
+⚡ Bolt: Replace .iterrows() loops with .to_dict('records') in investyo_mcp_server.py
+
+💡 What:
+Replaced `.iterrows()` loops in `investyo_mcp_server.py` with `.to_dict('records')`. When iterating over pandas DataFrames (`open_df`, `closed_df`, `recent`, and `all_trades`), using `to_dict('records')` avoids the overhead of creating a new `pd.Series` object for every row.
+
+🎯 Why:
+`.iterrows()` is known to be very slow for large DataFrames because it yields index and `pd.Series` pairs inside a Python loop, paying the Pandas object creation cost repeatedly.
+
+📊 Impact:
+Massive performance improvement in the MCP server endpoints that handle order execution history and account holdings. This scales down iteration from O(N * cols) with high constant overhead to a near-instantaneous loop over native Python dictionaries.
+
+🔬 Measurement:
+No regressions; the MCP server unit tests successfully pass with identical formatting.

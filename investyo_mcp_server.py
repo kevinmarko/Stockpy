@@ -1,18 +1,20 @@
 """InvestYo MCP Server — a FastMCP server exposing the platform's read + analytics surface (tools, resources, and a prompt template) to an AI client such as Claude Desktop. Advisory-only: it exposes no order-submission code (execute_paper_trade writes only to the paper TransactionsStore). Runs over stdio locally or SSE for cloud deployment."""
 
-import os
-import re
-import sys
-import subprocess
-import sqlite3
 import json
 import logging
+import os
+import re
+import sqlite3
+import subprocess
+import sys
 
 logger = logging.getLogger(__name__)
-from functools import lru_cache
-from typing import List, Dict, Any, Optional
+from functools import cache
+from typing import Any
+
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+
 from mcp_oauth_rate_limit import rate_limit_asgi_middleware
 from settings import settings as _settings
 
@@ -25,13 +27,14 @@ from settings import settings as _settings
 # the default (False) bearer-token deployment never depends on
 # mcp_oauth_provider.py existing or importing cleanly.
 _oauth_provider = None
-_fastmcp_auth_kwargs: Dict[str, Any] = {}
+_fastmcp_auth_kwargs: dict[str, Any] = {}
 if _settings.MCP_OAUTH_ENABLED:
     from mcp.server.auth.settings import (
         AuthSettings,
         ClientRegistrationOptions,
         RevocationOptions,
     )
+
     from mcp_oauth_provider import InvestyoOAuthProvider
 
     if not _settings.MCP_OAUTH_ISSUER_URL:
@@ -64,25 +67,101 @@ import mcp_widget_resources
 
 _WIDGETS_AVAILABLE = mcp_widget_resources.register_widget_resources(mcp)
 
-_PILOT_PICKER_UI = {"ui": {"resourceUri": "ui://widgets/pilot-picker.html"}} if _WIDGETS_AVAILABLE else None
-_PILOT_DETAIL_UI = {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}} if _WIDGETS_AVAILABLE else None
-_FOLLOW_RESULT_UI = {"ui": {"resourceUri": "ui://widgets/follow-result.html"}} if _WIDGETS_AVAILABLE else None
-_PILOT_COMPARE_UI = {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}} if _WIDGETS_AVAILABLE else None
-_PILOT_PORTFOLIO_UI = {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}} if _WIDGETS_AVAILABLE else None
-_EQUITY_CURVE_UI = {"ui": {"resourceUri": "ui://widgets/equity-curve.html"}} if _WIDGETS_AVAILABLE else None
-_RISK_MATRIX_UI = {"ui": {"resourceUri": "ui://widgets/risk-matrix.html"}} if _WIDGETS_AVAILABLE else None
-_SIGNAL_TREE_UI = {"ui": {"resourceUri": "ui://widgets/signal-tree.html"}} if _WIDGETS_AVAILABLE else None
-_EXECUTION_QUEUE_UI = {"ui": {"resourceUri": "ui://widgets/execution-queue.html"}} if _WIDGETS_AVAILABLE else None
-_DEVTOOLS_INSPECTOR_UI = {"ui": {"resourceUri": "ui://widgets/devtools-inspector.html"}} if _WIDGETS_AVAILABLE else None
-_LIGHTHOUSE_SCORECARD_UI = {"ui": {"resourceUri": "ui://widgets/lighthouse-scorecard.html"}} if _WIDGETS_AVAILABLE else None
-_BACKTEST_TEARSHEET_UI = {"ui": {"resourceUri": "ui://widgets/backtest-tearsheet.html"}} if _WIDGETS_AVAILABLE else None
-_MACRO_RADAR_UI = {"ui": {"resourceUri": "ui://widgets/macro-regime-radar.html"}} if _WIDGETS_AVAILABLE else None
-_ORDER_TICKET_UI = {"ui": {"resourceUri": "ui://widgets/order-ticket.html"}} if _WIDGETS_AVAILABLE else None
-_VISUAL_DIFF_UI = {"ui": {"resourceUri": "ui://widgets/visual-diff.html"}} if _WIDGETS_AVAILABLE else None
-_NETWORK_TRACE_UI = {"ui": {"resourceUri": "ui://widgets/network-trace.html"}} if _WIDGETS_AVAILABLE else None
-_PIT_MATRIX_UI = {"ui": {"resourceUri": "ui://widgets/pit-audit-matrix.html"}} if _WIDGETS_AVAILABLE else None
-_MODEL_DIAGNOSTICS_UI = {"ui": {"resourceUri": "ui://widgets/model-diagnostics.html"}} if _WIDGETS_AVAILABLE else None
-_STRATEGY_TUNER_UI = {"ui": {"resourceUri": "ui://widgets/strategy-tuner.html"}} if _WIDGETS_AVAILABLE else None
+_PILOT_PICKER_UI = (
+    {"ui": {"resourceUri": "ui://widgets/pilot-picker.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_PILOT_DETAIL_UI = (
+    {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_FOLLOW_RESULT_UI = (
+    {"ui": {"resourceUri": "ui://widgets/follow-result.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_PILOT_COMPARE_UI = (
+    {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_PILOT_PORTFOLIO_UI = (
+    {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_EQUITY_CURVE_UI = (
+    {"ui": {"resourceUri": "ui://widgets/equity-curve.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_RISK_MATRIX_UI = (
+    {"ui": {"resourceUri": "ui://widgets/risk-matrix.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_SIGNAL_TREE_UI = (
+    {"ui": {"resourceUri": "ui://widgets/signal-tree.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_EXECUTION_QUEUE_UI = (
+    {"ui": {"resourceUri": "ui://widgets/execution-queue.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_DEVTOOLS_INSPECTOR_UI = (
+    {"ui": {"resourceUri": "ui://widgets/devtools-inspector.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_LIGHTHOUSE_SCORECARD_UI = (
+    {"ui": {"resourceUri": "ui://widgets/lighthouse-scorecard.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_BACKTEST_TEARSHEET_UI = (
+    {"ui": {"resourceUri": "ui://widgets/backtest-tearsheet.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_MACRO_RADAR_UI = (
+    {"ui": {"resourceUri": "ui://widgets/macro-regime-radar.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_ORDER_TICKET_UI = (
+    {"ui": {"resourceUri": "ui://widgets/order-ticket.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_VISUAL_DIFF_UI = (
+    {"ui": {"resourceUri": "ui://widgets/visual-diff.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_NETWORK_TRACE_UI = (
+    {"ui": {"resourceUri": "ui://widgets/network-trace.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_PIT_MATRIX_UI = (
+    {"ui": {"resourceUri": "ui://widgets/pit-audit-matrix.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_MODEL_DIAGNOSTICS_UI = (
+    {"ui": {"resourceUri": "ui://widgets/model-diagnostics.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
+_STRATEGY_TUNER_UI = (
+    {"ui": {"resourceUri": "ui://widgets/strategy-tuner.html"}}
+    if _WIDGETS_AVAILABLE
+    else None
+)
 
 
 def _active_universe() -> list:
@@ -93,6 +172,7 @@ def _active_universe() -> list:
     """
     try:
         from settings import settings
+
         tickers = list(settings.DEFAULT_TICKERS)
         if not tickers:
             return ["AAPL", "MSFT", "JNJ", "AGNC"]
@@ -135,7 +215,7 @@ def _period_to_lookback_days(period: str) -> int:
     return _PERIOD_TO_LOOKBACK_DAYS.get(str(period).strip().lower(), 365)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _readonly_engine(db_url: str):
     """Cached DATABASE-LEVEL read-only SQLAlchemy engine for the Postgres path.
 
@@ -145,6 +225,7 @@ def _readonly_engine(db_url: str):
     new engine.
     """
     from db_config import create_readonly_db_engine
+
     return create_readonly_db_engine(db_url)
 
 
@@ -218,6 +299,7 @@ def _resolve_sqlite_db_path(db_url: str) -> str:
     empty-database-field URL.
     """
     from sqlalchemy.engine import make_url
+
     return make_url(db_url).database or "quant_platform.db"
 
 
@@ -239,6 +321,7 @@ def _db_query(sql: str, params: tuple = ()):
     """
     try:
         from db_config import resolve_database_url
+
         db_url = resolve_database_url()
     except Exception:
         # db_config itself failed to import -- an extremely rare degrade path
@@ -264,6 +347,7 @@ def _db_query(sql: str, params: tuple = ()):
         # back a READ-WRITE connection (fail-open). Reuse db_config's own
         # escaping helper rather than duplicating the logic.
         from db_config import sqlite_readonly_uri
+
         conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
         try:
             cursor = conn.cursor()
@@ -280,6 +364,7 @@ def _db_query(sql: str, params: tuple = ()):
         # binds first (see _qmark_to_named's docstring for why this is
         # necessary).
         from sqlalchemy import text
+
         engine = _readonly_engine(db_url)
         rewritten_sql, bind_dict = _qmark_to_named(sql, params)
         with engine.connect() as conn:
@@ -289,7 +374,7 @@ def _db_query(sql: str, params: tuple = ()):
         return columns, rows
 
 
-def _load_state_snapshot() -> Optional[dict]:
+def _load_state_snapshot() -> dict | None:
     """Loads ``output/state_snapshot.json`` using the same
     ``settings.OUTPUT_DIR``-first resolution ``get_regime_status`` already
     uses elsewhere in this file. Returns ``None`` -- never raises, never
@@ -300,6 +385,7 @@ def _load_state_snapshot() -> Optional[dict]:
     path resolution independently."""
     try:
         from settings import settings as _settings_local
+
         snap_path = os.path.join(str(_settings_local.OUTPUT_DIR), "state_snapshot.json")
     except Exception:
         snap_path = os.path.join("output", "state_snapshot.json")
@@ -342,11 +428,17 @@ def _repo_commit_info() -> str:
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=_REPO_ROOT, capture_output=True, text=True, timeout=5,
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         commit_date = subprocess.run(
             ["git", "log", "-1", "--format=%cI"],
-            cwd=_REPO_ROOT, capture_output=True, text=True, timeout=5,
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if sha.returncode == 0 and commit_date.returncode == 0 and sha.stdout.strip():
             return f"{sha.stdout.strip()} ({commit_date.stdout.strip()})"
@@ -355,7 +447,7 @@ def _repo_commit_info() -> str:
     return "unknown (not a git checkout, or git unavailable)"
 
 
-def _resolve_doc_path(rel_path: str) -> Optional[str]:
+def _resolve_doc_path(rel_path: str) -> str | None:
     """
     Resolves a client-supplied repo-relative path to an absolute path,
     restricted to `docs/` plus the two root instruction files
@@ -386,10 +478,7 @@ def _read_doc_with_commit_header(resolved_path: str, missing_label: str) -> str:
     or the read itself failed. `resolved_path` may be None (not found)."""
     commit = _repo_commit_info()
     if resolved_path is None:
-        return (
-            f"> Served from commit {commit}.\n\n"
-            f"Error: {missing_label}"
-        )
+        return f"> Served from commit {commit}.\n\nError: {missing_label}"
     try:
         with open(resolved_path, "r", encoding="utf-8") as fh:
             body = fh.read()
@@ -402,6 +491,7 @@ def _read_doc_with_commit_header(resolved_path: str, missing_label: str) -> str:
 # [1] RESOURCES (Read-Only Context)
 # ==========================================
 
+
 @mcp.resource("investyo://config/read_only_entry")
 def get_read_only_entry() -> str:
     """
@@ -412,9 +502,10 @@ def get_read_only_entry() -> str:
         "entry_id": "historical_seed_001",
         "status": "read-only",
         "description": "Immutable historical baseline configuration for the Investyo Orchestrator.",
-        "permissions": "locked"
+        "permissions": "locked",
     }
     return json.dumps(config, indent=2)
+
 
 @mcp.resource("investyo://db/schema")
 def get_database_schema() -> str:
@@ -424,6 +515,7 @@ def get_database_schema() -> str:
     """
     try:
         from db_config import resolve_database_url
+
         db_url = resolve_database_url()
     except Exception:
         db_url = "sqlite:///quant_platform.db"
@@ -440,9 +532,13 @@ def get_database_schema() -> str:
         try:
             _, rows = _db_query("SELECT sql FROM sqlite_master WHERE type='table';")
             schema_definitions = "\n\n".join([row[0] for row in rows if row[0]])
-            return schema_definitions if schema_definitions else "Database is currently empty."
+            return (
+                schema_definitions
+                if schema_definitions
+                else "Database is currently empty."
+            )
         except Exception as e:
-            return f"Database connection error: {str(e)}"
+            return f"Database connection error: {e!s}"
     else:
         try:
             _, rows = _db_query(
@@ -451,7 +547,7 @@ def get_database_schema() -> str:
             )
             if not rows:
                 return "Database is currently empty."
-            tables: Dict[str, List[str]] = {}
+            tables: dict[str, list[str]] = {}
             for table_name, column_name, data_type in rows:
                 tables.setdefault(table_name, []).append(f"{column_name} {data_type}")
             lines = []
@@ -459,7 +555,8 @@ def get_database_schema() -> str:
                 lines.append(f"TABLE {table_name} (\n  " + ",\n  ".join(cols) + "\n)")
             return "\n\n".join(lines)
         except Exception as e:
-            return f"Database connection error: {str(e)}"
+            return f"Database connection error: {e!s}"
+
 
 @mcp.resource("investyo://ticker/{symbol}")
 def get_ticker_context(symbol: str) -> str:
@@ -472,6 +569,7 @@ def get_ticker_context(symbol: str) -> str:
     read path in this codebase uses, via data.market_data.get_provider()).
     """
     from data.market_data import get_provider
+
     try:
         provider = get_provider()
         sym = symbol.upper().strip()
@@ -494,11 +592,11 @@ def get_ticker_context(symbol: str) -> str:
         summary += f"- **Trailing P/E**: {pe}\n"
         summary += f"- **Price-to-Book**: {pb}\n\n"
         summary += "## Recent Price History (Last 10 Days)\n"
-        summary += history[['Open', 'High', 'Low', 'Close', 'Volume']].to_markdown()
+        summary += history[["Open", "High", "Low", "Close", "Volume"]].to_markdown()
 
         return summary
     except Exception as e:
-        return f"Error retrieving context for {symbol}: {str(e)}"
+        return f"Error retrieving context for {symbol}: {e!s}"
 
 
 @mcp.resource("investyo://docs/index")
@@ -518,9 +616,11 @@ def get_docs_index() -> str:
     resolved = _resolve_doc_path(os.path.join("docs", "README.md"))
     return _read_doc_with_commit_header(resolved, "docs/README.md not found.")
 
+
 # ==========================================
 # [2] PROMPTS (Context Templates)
 # ==========================================
+
 
 @mcp.prompt("investyo_registry")
 def investyo_registry_prompt(prompt_id: str) -> str:
@@ -529,9 +629,11 @@ def investyo_registry_prompt(prompt_id: str) -> str:
     Valid prompt_ids include: 'master_preprompt', 'gravity_system', etc.
     """
     from prompt_registry import get_registry
+
     registry = get_registry()
     body = registry.get(prompt_id)
     return f"Here is the official prompt from the registry for '{prompt_id}':\n\n{body}"
+
 
 @mcp.tool()
 def list_registry_prompts() -> str:
@@ -539,8 +641,11 @@ def list_registry_prompts() -> str:
     Lists all available prompts in the InvestYo prompt registry baseline.
     """
     from prompt_registry.cache import list_baseline_ids
+
     ids = list_baseline_ids()
-    return "Available Prompt IDs in the registry:\n" + "\n".join(f"- {pid}" for pid in ids)
+    return "Available Prompt IDs in the registry:\n" + "\n".join(
+        f"- {pid}" for pid in ids
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
@@ -585,6 +690,7 @@ def get_doc(path: str) -> str:
 # Streamlit import chain just to render a status table.
 # ---------------------------------------------------------------------------
 
+
 def _pr_resolve_source(reg, prompt_id: str):
     """Return (resolved_version, source_label) for prompt_id without calling
     reg.get() (which would echo the full body). Mirrors the resolution order
@@ -607,9 +713,12 @@ def _pr_resolve_source(reg, prompt_id: str):
             if versions:
                 return versions[0], "cache"
         except Exception as e:
-            logger.error(f"Failed to list cached versions for {prompt_id}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to list cached versions for {prompt_id}: {e}", exc_info=True
+            )
     try:
         from prompt_registry.cache import read_baseline
+
         if read_baseline(prompt_id) is not None:
             return "baseline", "baseline"
     except Exception as e:
@@ -617,7 +726,7 @@ def _pr_resolve_source(reg, prompt_id: str):
     return "—", "unknown"
 
 
-def _pr_cached_versions(reg, prompt_id: str) -> List[str]:
+def _pr_cached_versions(reg, prompt_id: str) -> list[str]:
     """Return all version strings cached on disk for prompt_id (newest-first),
     or [] on any error / when no cache is configured."""
     cache = getattr(reg, "_cache", None)
@@ -630,10 +739,11 @@ def _pr_cached_versions(reg, prompt_id: str) -> List[str]:
         return []
 
 
-def _pr_all_known_ids(reg) -> List[str]:
+def _pr_all_known_ids(reg) -> list[str]:
     """Sorted union of baseline IDs + manifest IDs + pinned IDs."""
     try:
         from prompt_registry.cache import list_baseline_ids
+
         ids: set = set(list_baseline_ids())
         manifest = getattr(reg, "_manifest", None)
         if manifest is not None:
@@ -686,13 +796,14 @@ def get_registry_prompt_status() -> str:
     header = (
         "Registry is **disabled** (PROMPT_REGISTRY_ENABLED=false) -- every row "
         "below resolves from the committed baseline only.\n\n"
-        if not is_enabled else ""
+        if not is_enabled
+        else ""
     )
     return header + "\n".join(lines)
 
 
 @mcp.tool()
-def get_registry_prompt(prompt_id: str, version: Optional[str] = None) -> str:
+def get_registry_prompt(prompt_id: str, version: str | None = None) -> str:
     """
     Returns the body of a Prompt Registry entry.
 
@@ -713,6 +824,7 @@ def get_registry_prompt(prompt_id: str, version: Optional[str] = None) -> str:
     if version is not None:
         try:
             from prompt_registry.__main__ import _resolve_body_for_version
+
             body = _resolve_body_for_version(reg, prompt_id, version)
         except Exception as exc:
             return f"Failed to resolve {prompt_id!r}@{version!r}: {exc}"
@@ -767,15 +879,20 @@ def diff_registry_prompt(prompt_id: str, version_a: str, version_b: str) -> str:
         return f"Version {version_b!r} of {prompt_id!r} not found."
 
     import difflib
-    diff_lines = list(difflib.unified_diff(
-        body_a.splitlines(keepends=True),
-        body_b.splitlines(keepends=True),
-        fromfile=f"{prompt_id}@{version_a}",
-        tofile=f"{prompt_id}@{version_b}",
-    ))
+
+    diff_lines = list(
+        difflib.unified_diff(
+            body_a.splitlines(keepends=True),
+            body_b.splitlines(keepends=True),
+            fromfile=f"{prompt_id}@{version_a}",
+            tofile=f"{prompt_id}@{version_b}",
+        )
+    )
 
     if not diff_lines:
-        return f"No differences between {version_a!r} and {version_b!r} of {prompt_id!r}."
+        return (
+            f"No differences between {version_a!r} and {version_b!r} of {prompt_id!r}."
+        )
     return "".join(diff_lines)
 
 
@@ -817,7 +934,8 @@ def pin_registry_prompt(prompt_id: str, version: str) -> str:
     reg._pins[prompt_id] = version
 
     try:
-        import shared.env_io as env_io
+        from shared import env_io
+
         # Pass the dict directly (NOT a pre-json.dumps'd string) -- env_io's
         # write_setting() JSON-encodes JSON-classified keys itself; passing an
         # already-encoded string here would double-encode it.
@@ -862,7 +980,8 @@ def rollback_registry_prompt(prompt_id: str) -> str:
         )
 
     try:
-        import shared.env_io as env_io
+        from shared import env_io
+
         pins = dict(sorted(reg._pins.items()))
         env_io.write_setting("PROMPT_REGISTRY_PINS", pins)
         return f"Rolled back {prompt_id!r} -> {previous!r}. Saved to .env; effective on next launch."
@@ -922,6 +1041,7 @@ def sync_prompt_registry() -> str:
 # [3] TOOLS (Actionable Functions)
 # ==========================================
 
+
 @mcp.tool()
 def trigger_data_engine(symbol: str, timeframe: str = "1D") -> str:
     """
@@ -948,13 +1068,18 @@ def trigger_data_engine(symbol: str, timeframe: str = "1D") -> str:
                 f"unknown symbol). No data was fabricated."
             )
         last_date = df.index[-1]
-        last_str = last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date)
+        last_str = (
+            last_date.strftime("%Y-%m-%d")
+            if hasattr(last_date, "strftime")
+            else str(last_date)
+        )
         return (
             f"Bar refresh successful for {sym} (daily bars): {len(df)} rows persisted, "
             f"last bar date {last_str}."
         )
     except Exception as e:
-        return f"Data ingestion failed for {symbol}: {str(e)}"
+        return f"Data ingestion failed for {symbol}: {e!s}"
+
 
 @mcp.tool()
 def generate_html_report(portfolio_id: str) -> str:
@@ -999,7 +1124,8 @@ def generate_html_report(portfolio_id: str) -> str:
     except subprocess.TimeoutExpired:
         return "Report generation timed out after 15 minutes."
     except Exception as e:
-        return f"Report generation failed: {str(e)}"
+        return f"Report generation failed: {e!s}"
+
 
 @mcp.tool()
 def run_platform_tests() -> str:
@@ -1022,12 +1148,13 @@ def run_platform_tests() -> str:
     except FileNotFoundError:
         return "Error: pytest is not installed or not found in PATH."
 
+
 @mcp.tool()
 def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
     """
-    Runs the unified Stockpy Bug Hunter CLI to scan for bugs, secret leaks, 
+    Runs the unified Stockpy Bug Hunter CLI to scan for bugs, secret leaks,
     circular dependencies, and test regressions.
-    
+
     Args:
         quick: If True, skips heavy tests like Gravity AI Review Suite and validation harness checks.
         fail_on: Minimum severity to trigger a failure (CRITICAL, HIGH, MEDIUM, LOW, NONE). Default is HIGH.
@@ -1038,11 +1165,7 @@ def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
 
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=900
+            cmd, capture_output=True, text=True, check=True, timeout=900
         )
         return f"Bug Hunter completed successfully (PASS):\n{result.stdout}"
     except subprocess.CalledProcessError as e:
@@ -1052,6 +1175,7 @@ def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
     except FileNotFoundError:
         return "Error: python or scripts/bug_hunter.py not found."
 
+
 @mcp.tool()
 def list_jules_sources() -> str:
     """
@@ -1060,7 +1184,7 @@ def list_jules_sources() -> str:
     Read-only -- no side effects. Requires JULES_ENABLED=true and JULES_API_KEY
     to be set; returns a clear message (not an error) if either is missing.
     """
-    from data.jules_client import list_sources, JulesUnavailable, format_sources
+    from data.jules_client import JulesUnavailable, format_sources, list_sources
 
     try:
         sources = list_sources()
@@ -1080,8 +1204,11 @@ def list_jules_sources() -> str:
     lines.append("```")
     return "\n".join(lines)
 
+
 @mcp.tool()
-def request_jules_dispatch_approval(prompt: str, title: str, source: str, branch: str = "main") -> str:
+def request_jules_dispatch_approval(
+    prompt: str, title: str, source: str, branch: str = "main"
+) -> str:
     """
     Records a pinned pre-approval for a Jules dispatch: hashes the EXACT
     prompt/title/source/branch and returns a single-use approval_token that
@@ -1108,22 +1235,25 @@ def request_jules_dispatch_approval(prompt: str, title: str, source: str, branch
         source: The Jules source name (must match verbatim).
         branch: The starting branch (must match verbatim). Default "main".
     """
-    from data.jules_client import request_dispatch_approval, JulesUnavailable
+    from data.jules_client import JulesUnavailable, request_dispatch_approval
 
     try:
-        result = request_dispatch_approval(prompt=prompt, source=source, branch=branch, title=title)
+        result = request_dispatch_approval(
+            prompt=prompt, source=source, branch=branch, title=title
+        )
     except JulesUnavailable as e:
         return str(e)
 
     lines = [
-        "Approval recorded. Pass this approval_token to dispatch_jules_task "
+        ("Approval recorded. Pass this approval_token to dispatch_jules_task "
         "(along with the EXACT SAME prompt/title/source/branch) to actually "
-        "dispatch -- it expires soon and can be used only once.",
+        "dispatch -- it expires soon and can be used only once."),
         f"- **approval_token**: {result['approval_token']}",
         f"- **prompt_hash**: {result['prompt_hash']}",
         f"- **expires_at** (UTC epoch seconds): {result['expires_at']}",
     ]
     return "\n".join(lines)
+
 
 @mcp.tool()
 def dispatch_jules_task(
@@ -1173,7 +1303,7 @@ def dispatch_jules_task(
             "prompt/branch/title."
         )
 
-    from data.jules_client import dispatch_session, JulesUnavailable
+    from data.jules_client import JulesUnavailable, dispatch_session
 
     try:
         result = dispatch_session(
@@ -1187,7 +1317,9 @@ def dispatch_jules_task(
     except JulesUnavailable as e:
         return str(e)
 
-    session_name = result.get("name", "unknown") if isinstance(result, dict) else "unknown"
+    session_name = (
+        result.get("name", "unknown") if isinstance(result, dict) else "unknown"
+    )
     lines = [
         f"Jules session dispatched successfully against '{source}' (branch '{branch}').",
         f"- **Session**: {session_name}",
@@ -1198,6 +1330,7 @@ def dispatch_jules_task(
     ]
     return "\n".join(lines)
 
+
 @mcp.tool()
 def query_investyo_db(sql_query: str) -> str:
     """
@@ -1206,15 +1339,25 @@ def query_investyo_db(sql_query: str) -> str:
     results at 1000 rows to avoid dumping an entire table.
     """
     stripped_upper = sql_query.strip().upper()
-    if not (stripped_upper.startswith("SELECT") or stripped_upper.startswith("WITH")):
+    if not (stripped_upper.startswith(("SELECT", "WITH"))):
         return "Error: Only SELECT queries are permitted via this tool (WITH-CTE SELECT statements are also allowed)."
 
     # A leading WITH must not be a bypass for a trailing mutation smuggled in
     # after the CTE (e.g. "WITH x AS (SELECT 1) INSERT INTO T VALUES (1)" is
     # valid SQLite syntax). Scan the whole statement, not just the prefix.
     _MUTATION_KEYWORDS = (
-        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER",
-        "CREATE", "REPLACE", "TRUNCATE", "ATTACH", "DETACH", "PRAGMA", "VACUUM",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "DROP",
+        "ALTER",
+        "CREATE",
+        "REPLACE",
+        "TRUNCATE",
+        "ATTACH",
+        "DETACH",
+        "PRAGMA",
+        "VACUUM",
     )
     if any(re.search(rf"\b{kw}\b", stripped_upper) for kw in _MUTATION_KEYWORDS):
         return "Error: Only SELECT queries are permitted via this tool (WITH-CTE SELECT statements are also allowed)."
@@ -1240,30 +1383,35 @@ def query_investyo_db(sql_query: str) -> str:
             output += f"\n\n[Note: results truncated to the first {MAX_ROWS} rows.]"
         return output
     except Exception as e:
-        return f"Database query failed: {str(e)}"
+        return f"Database query failed: {e!s}"
+
 
 @mcp.tool(meta=_BACKTEST_TEARSHEET_UI)
 def run_backtest(symbol: str, period: str = "1y") -> str:
     """
     Runs an event-driven Backtrader simulation for a specific stock symbol
     using the platform's InstitutionalStrategy and transaction cost models.
-    
+
     Args:
         symbol: The stock symbol to backtest (e.g., AAPL).
         period: The backtest lookback period (default: 1y).
     """
-    import io
     import contextlib
+    import io
     import json
-    import pandas as pd
-    from simulation_engine import run_backtrader_simulation
     import math
-    from data.market_data import get_provider, MarketDataError
+
+    import pandas as pd
+
+    from data.market_data import MarketDataError, get_provider
+    from simulation_engine import run_backtrader_simulation
 
     try:
         provider = get_provider()
         try:
-            df = provider.get_intraday_bars(symbol, lookback_days=_period_to_lookback_days(period))
+            df = provider.get_intraday_bars(
+                symbol, lookback_days=_period_to_lookback_days(period)
+            )
         except MarketDataError:
             df = pd.DataFrame()
         if df.empty:
@@ -1284,13 +1432,15 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
             if raw_cap is not None and math.isfinite(raw_cap) and raw_cap > 0:
                 market_cap = float(raw_cap)
         except Exception as e:
-            logger.error(f"Failed to fetch fundamentals for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to fetch fundamentals for {symbol}: {e}", exc_info=True
+            )
             # Any fundamentals-resolution failure (typed MarketDataError, a bad
             # provider response, etc.) degrades to the unknown-cap default rather
             # than aborting the backtest -- this is a diagnostic cost-model input,
             # not a correctness-critical output.
             market_cap = None
-        
+
         # Compute performance stats from price history
         close_series = df.get("close")
         sharpe = None
@@ -1299,7 +1449,7 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
         if close_series is not None and len(close_series) > 1:
             rets = close_series.pct_change().dropna()
             if len(rets) > 1 and rets.std() > 0:
-                sharpe = float((rets.mean() / (rets.std() + 1e-9)) * (252 ** 0.5))
+                sharpe = float((rets.mean() / (rets.std() + 1e-9)) * (252**0.5))
             cum = (1 + rets).cumprod()
             peak = cum.cummax()
             dd = (cum - peak) / peak
@@ -1316,14 +1466,14 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
                         m_returns[yr][m] = round(float(val * 100), 2)
             except Exception as e:
                 logger.error(f"Failed to parse monthly returns: {e}", exc_info=True)
-        
+
         # Capture stdout generated by Backtrader run
         f = io.StringIO()
         with contextlib.redirect_stdout(f):
             run_backtrader_simulation(df, market_cap=market_cap)
-        
+
         output_txt = f.getvalue()
-        
+
         # Try to parse starting/final value from stdout
         start_val = None
         final_val = None
@@ -1338,9 +1488,13 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
                     final_val = float(line.split("$")[-1].replace(",", "").strip())
                 except Exception as e:
                     logger.error(f"Failed to parse final_val: {e}", exc_info=True)
-                    
-        total_ret = ((final_val - start_val) / start_val) if (start_val is not None and final_val is not None and start_val > 0) else None
-        
+
+        total_ret = (
+            ((final_val - start_val) / start_val)
+            if (start_val is not None and final_val is not None and start_val > 0)
+            else None
+        )
+
         payload = {
             "symbol": symbol.upper(),
             "period": period,
@@ -1349,32 +1503,37 @@ def run_backtest(symbol: str, period: str = "1y") -> str:
             "total_return": round(total_ret, 4) if total_ret is not None else None,
             "sharpe": round(sharpe, 2) if sharpe is not None else None,
             "max_drawdown": round(max_dd, 4) if max_dd is not None else None,
-            "deployable": (sharpe is not None and sharpe >= 1.0 and (max_dd is None or max_dd <= 0.25)),
+            "deployable": (
+                sharpe is not None
+                and sharpe >= 1.0
+                and (max_dd is None or max_dd <= 0.25)
+            ),
             "monthly_returns": m_returns,
         }
-        
+
         lines = [
             f"Backtest Results for {symbol.upper()} ({period}):\n",
             output_txt.strip(),
             "\n```json",
             json.dumps(payload, indent=2),
-            "```"
+            "```",
         ]
         return "\n".join(lines)
     except Exception as e:
-        return f"Backtest failed: {str(e)}"
+        return f"Backtest failed: {e!s}"
+
 
 @mcp.tool()
 def read_platform_logs(lines: int = 50) -> str:
     """
-    Retrieves execution logs from the SQLite database (ExecutionLogs table) 
+    Retrieves execution logs from the SQLite database (ExecutionLogs table)
     and checks the directory for any file ending in .log to return recent entries.
-    
+
     Args:
         lines: The number of recent lines to retrieve (default: 50).
     """
     logs_summary = []
-    
+
     # 1. Query ExecutionLogs from DB
     try:
         _, rows = _db_query(
@@ -1389,12 +1548,14 @@ def read_platform_logs(lines: int = 50) -> str:
             logs_summary.append("---|---|---|---|---")
             for row in rows:
                 err = row[4] if row[4] else "None"
-                logs_summary.append(f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}")
+                logs_summary.append(
+                    f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}"
+                )
     except FileNotFoundError:
         pass  # No local DB and no configured remote backend - nothing to report.
     except Exception as e:
-        logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
-            
+        logs_summary.append(f"Could not read ExecutionLogs from DB: {e!s}")
+
     # 2. Check for log files. The real rotating log file this platform writes
     # is {LOCAL_DATA_ROOT}/logs/investyo.log (see alerting.py::setup_logging's
     # RotatingFileHandler, which now resolves under settings.LOCAL_DATA_ROOT
@@ -1417,15 +1578,18 @@ def read_platform_logs(lines: int = 50) -> str:
                 with open(log_file, "r") as f:
                     content = f.readlines()
                 recent_lines = content[-lines:]
-                logs_summary.append(f"\n### File: {log_file} (Last {len(recent_lines)} lines)")
+                logs_summary.append(
+                    f"\n### File: {log_file} (Last {len(recent_lines)} lines)"
+                )
                 logs_summary.append("```\n" + "".join(recent_lines) + "\n```")
             except Exception as e:
-                logs_summary.append(f"Could not read log file {log_file}: {str(e)}")
-                
+                logs_summary.append(f"Could not read log file {log_file}: {e!s}")
+
     if not logs_summary:
         return "No execution logs found in the database or local directory."
-        
+
     return "\n".join(logs_summary)
+
 
 @mcp.tool()
 def execute_paper_trade(
@@ -1433,13 +1597,13 @@ def execute_paper_trade(
     side: str,
     price: float,
     shares: float,
-    strategy: Optional[str] = None,
-    notes: Optional[str] = None,
-    conviction: Optional[float] = None
+    strategy: str | None = None,
+    notes: str | None = None,
+    conviction: float | None = None,
 ) -> str:
     """
     Submits a simulated paper trade (records a new open trade) or closes an open trade in the TransactionsStore.
-    
+
     Args:
         symbol: The stock ticker (e.g. AAPL).
         side: The trade direction: 'buy'/'long' to open a long position, 'sell'/'short' to open a short position, or 'close' to close the position.
@@ -1449,13 +1613,14 @@ def execute_paper_trade(
         notes: Optional custom notes.
         conviction: Optional signal conviction level [0, 1].
     """
-    from transactions_store import TransactionsStore
     from datetime import datetime
-    
+
+    from transactions_store import TransactionsStore
+
     store = TransactionsStore()
     symbol_upper = symbol.upper().strip()
     side_lower = side.lower().strip()
-    
+
     if side_lower in ["buy", "long", "sell", "short"]:
         db_side = "long" if side_lower in ["buy", "long"] else "short"
         try:
@@ -1467,27 +1632,32 @@ def execute_paper_trade(
                 shares=shares,
                 strategy=strategy,
                 notes=notes,
-                conviction=conviction
+                conviction=conviction,
             )
             return f"Paper trade recorded successfully. Opened {db_side} position for {symbol_upper}: {shares} shares at ${price:.2f}. Trade ID: {trade_id}."
         except Exception as e:
-            return f"Failed to record paper trade: {str(e)}"
-            
+            return f"Failed to record paper trade: {e!s}"
+
     elif side_lower == "close":
         try:
             df = store.open_trades_df()
-            if df.empty or symbol_upper not in df['symbol'].values:
-                return f"No open paper trades found for symbol: {symbol_upper} to close."
-            
-            symbol_trades = df[df['symbol'] == symbol_upper]
-            trade_id = int(symbol_trades.iloc[-1]['trade_id'])
-            
-            store.close_trade(trade_id=trade_id, exit_ts=datetime.now(), exit_price=price)
+            if df.empty or symbol_upper not in df["symbol"].values:
+                return (
+                    f"No open paper trades found for symbol: {symbol_upper} to close."
+                )
+
+            symbol_trades = df[df["symbol"] == symbol_upper]
+            trade_id = int(symbol_trades.iloc[-1]["trade_id"])
+
+            store.close_trade(
+                trade_id=trade_id, exit_ts=datetime.now(), exit_price=price
+            )
             return f"Closed paper trade ID {trade_id} for {symbol_upper} at ${price:.2f} successfully."
         except Exception as e:
-            return f"Failed to close paper trade: {str(e)}"
+            return f"Failed to close paper trade: {e!s}"
     else:
         return f"Invalid side: '{side}'. Must be one of: buy, long, sell, short, close."
+
 
 @mcp.tool(meta=_ORDER_TICKET_UI)
 def propose_paper_trade_for_review(
@@ -1495,11 +1665,11 @@ def propose_paper_trade_for_review(
     action: str,
     rationale: str,
     confidence: float,
-    quantity: Optional[float] = None,
-    price: Optional[float] = None,
-    rsi: Optional[float] = None,
-    sentiment_score: Optional[float] = None,
-    extra_context: Optional[str] = None,
+    quantity: float | None = None,
+    price: float | None = None,
+    rsi: float | None = None,
+    sentiment_score: float | None = None,
+    extra_context: str | None = None,
 ) -> str:
     """
     Proposes a hypothetical paper trade for human RLHF calibration review — NOT a real or simulated order execution (no position/cash tracking; entirely separate from execute_paper_trade's TransactionsStore-backed paper ledger). A human operator will later review this proposal in the Pilots PWA and rate the decision 1-5 stars, with the rating optionally feeding a fine-tuning dataset.
@@ -1540,15 +1710,15 @@ def propose_paper_trade_for_review(
             extra_context=parsed_extra_context,
         )
     except ValueError as e:
-        return f"Failed to propose paper trade: {str(e)}"
+        return f"Failed to propose paper trade: {e!s}"
     except Exception as e:
-        return f"Failed to log proposal: {str(e)}"
+        return f"Failed to log proposal: {e!s}"
 
     symbol_upper = symbol.upper().strip()
     action_upper = action.upper().strip()
     proposal = store.get_by_id(new_id)
     auto_appr = bool(proposal is not None and proposal.get("auto_approved"))
-    
+
     payload = {
         "id": new_id,
         "symbol": symbol_upper,
@@ -1561,7 +1731,7 @@ def propose_paper_trade_for_review(
         "rationale": rationale,
         "auto_approved": auto_appr,
     }
-    
+
     if auto_appr:
         msg = (
             f"Proposal #{new_id} for {symbol_upper} {action_upper} logged and "
@@ -1569,8 +1739,9 @@ def propose_paper_trade_for_review(
         )
     else:
         msg = f"Proposal #{new_id} for {symbol_upper} {action_upper} logged — pending human review."
-        
+
     return f"{msg}\n\n```json\n{json.dumps(payload, indent=2)}\n```"
+
 
 def _write_watch_rules(yaml_path: str, data: dict) -> None:
     """Persist watch_rules.yaml without wiping its documentation.
@@ -1587,9 +1758,9 @@ def _write_watch_rules(yaml_path: str, data: dict) -> None:
     See ``yaml_comment_io`` and
     ``tests/test_watch_rules_comment_preservation.py``.
     """
-    from pathlib import Path as _Path  # noqa: PLC0415
+    from pathlib import Path as _Path
 
-    from yaml_comment_io import (  # noqa: PLC0415
+    from yaml_comment_io import (
         splice_sequence_section,
         write_yaml_preserving_header,
     )
@@ -1613,14 +1784,14 @@ def _write_watch_rules(yaml_path: str, data: dict) -> None:
 def update_watch_rules(
     action: str,
     symbol: str,
-    alert_on: Optional[str] = None,
-    threshold: Optional[float] = None,
-    priority: Optional[str] = None,
-    label: Optional[str] = None
+    alert_on: str | None = None,
+    threshold: float | None = None,
+    priority: str | None = None,
+    label: str | None = None,
 ) -> str:
     """
     Safely adds, updates, or removes watch rules in watch_rules.yaml.
-    
+
     Args:
         action: 'add', 'update', or 'remove'.
         symbol: The ticker symbol (e.g. TSLA, or '*' for wildcard).
@@ -1630,23 +1801,25 @@ def update_watch_rules(
         label: Custom human-readable label for notifications.
     """
     import yaml
-    
+
     yaml_path = "watch_rules.yaml"
     if not os.path.exists(yaml_path):
         return f"Error: {yaml_path} not found."
-        
+
     try:
         with open(yaml_path, "r") as f:
             data = yaml.safe_load(f) or {"rules": []}
     except Exception as e:
-        return f"Failed to read watch_rules.yaml: {str(e)}"
-        
+        return f"Failed to read watch_rules.yaml: {e!s}"
+
     rules = data.get("rules", [])
     symbol_upper = symbol.upper().strip()
     action_lower = action.lower().strip()
-    
+
     if action_lower == "remove":
-        new_rules = [r for r in rules if str(r.get("symbol")).upper().strip() != symbol_upper]
+        new_rules = [
+            r for r in rules if str(r.get("symbol")).upper().strip() != symbol_upper
+        ]
         if len(new_rules) == len(rules):
             return f"No watch rules found for symbol: {symbol_upper}."
         data["rules"] = new_rules
@@ -1654,52 +1827,60 @@ def update_watch_rules(
             _write_watch_rules(yaml_path, data)
             return f"Successfully removed all watch rules for {symbol_upper}."
         except Exception as e:
-            return f"Failed to write watch_rules.yaml: {str(e)}"
-            
+            return f"Failed to write watch_rules.yaml: {e!s}"
+
     elif action_lower in ["add", "update"]:
         if not alert_on:
             return "Error: 'alert_on' is required to add or update a rule."
-        
-        new_rule = {"symbol": symbol_upper if symbol_upper != "*" else "*", "alert_on": alert_on}
+
+        new_rule = {
+            "symbol": symbol_upper if symbol_upper != "*" else "*",
+            "alert_on": alert_on,
+        }
         if threshold is not None:
             new_rule["threshold"] = float(threshold)
         if priority:
             new_rule["priority"] = priority
         if label:
             new_rule["label"] = label
-            
+
         if action_lower == "update":
-            rules = [r for r in rules if str(r.get("symbol")).upper().strip() != symbol_upper]
-            
+            rules = [
+                r for r in rules if str(r.get("symbol")).upper().strip() != symbol_upper
+            ]
+
         rules.append(new_rule)
         data["rules"] = rules
-        
+
         try:
             _write_watch_rules(yaml_path, data)
             return f"Successfully {action_lower}ed watch rule for {symbol_upper}."
         except Exception as e:
-            return f"Failed to write watch_rules.yaml: {str(e)}"
+            return f"Failed to write watch_rules.yaml: {e!s}"
     else:
         return f"Invalid action: '{action}'. Must be one of: add, update, remove."
+
 
 @mcp.tool()
 def update_universe_tickers(action: str, symbol: str) -> str:
     """
     Adds or removes a stock symbol from the active trading universe configured in the .env file.
-    
+
     Args:
         action: 'add' or 'remove'.
         symbol: The ticker symbol to modify (e.g. TSLA).
     """
     import json
-    import shared.env_io as env_io
+
+    from shared import env_io
+
     symbol_upper = symbol.upper().strip()
     action_lower = action.lower().strip()
 
     try:
         raw_val = env_io.get_value("DEFAULT_TICKERS", "[]")
     except Exception as e:
-        return f"Failed to read DEFAULT_TICKERS setting: {str(e)}"
+        return f"Failed to read DEFAULT_TICKERS setting: {e!s}"
 
     try:
         current_tickers = json.loads(raw_val)
@@ -1728,36 +1909,42 @@ def update_universe_tickers(action: str, symbol: str) -> str:
         env_io.write_setting("DEFAULT_TICKERS", deduped)
         return f"Successfully {action_lower}ed {symbol_upper} from the active universe. Current tickers: {deduped}"
     except env_io.SecretWriteError as e:
-        return f"Failed to update universe: DEFAULT_TICKERS write blocked ({str(e)})."
+        return f"Failed to update universe: DEFAULT_TICKERS write blocked ({e!s})."
     except env_io.DisallowedKeyError as e:
-        return f"Failed to update universe: DEFAULT_TICKERS is not an allowed key ({str(e)})."
+        return f"Failed to update universe: DEFAULT_TICKERS is not an allowed key ({e!s})."
     except Exception as e:
-        return f"Failed to write DEFAULT_TICKERS setting: {str(e)}"
+        return f"Failed to write DEFAULT_TICKERS setting: {e!s}"
+
 
 @mcp.tool(meta=_EQUITY_CURVE_UI)
 def plot_equity_curve(symbol: str, period: str = "1y") -> str:
     """
     Runs a Backtrader simulation on the given stock symbol and generates a PNG plot
     of its equity curve over time, saving it to the artifacts directory.
-    
+
     Args:
         symbol: The stock symbol to simulate (e.g. AAPL).
         period: The lookback period (default: 1y).
     """
-    import io
     import contextlib
-    import pandas as pd
+    import io
+
     import backtrader as bt
     import matplotlib
-    matplotlib.use('Agg')
+    import pandas as pd
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    from data.market_data import MarketDataError, get_provider
     from simulation_engine import InstitutionalStrategy
-    from data.market_data import get_provider, MarketDataError
 
     try:
         provider = get_provider()
         try:
-            df = provider.get_intraday_bars(symbol, lookback_days=_period_to_lookback_days(period))
+            df = provider.get_intraday_bars(
+                symbol, lookback_days=_period_to_lookback_days(period)
+            )
         except MarketDataError:
             df = pd.DataFrame()
         if df.empty:
@@ -1775,7 +1962,7 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
         cerebro.broker.setcommission(commission=0.001)
         cerebro.broker.set_slippage_perc(perc=0.0005)
 
-        cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+        cerebro.addanalyzer(bt.analyzers.TimeReturn, _name="timereturn")
 
         f = io.StringIO()
         with contextlib.redirect_stdout(f):
@@ -1785,13 +1972,14 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
         time_return = strat.analyzers.timereturn.get_analysis()
 
         import numpy as np
+
         dates = sorted(time_return.keys())
         returns = [time_return[d] for d in dates]
         equity = 100000.0 * np.cumprod(1.0 + np.array(returns))
-        
+
         if len(equity) == 0:
             return f"Error: Simulation did not produce any equity results. This may happen if the lookback period ('{period}') is too short to compute indicators (e.g. 50-day SMA requires at least 50 bars)."
-        
+
         plt.figure(figsize=(10, 5))
         plt.plot(dates, equity, label="Strategy Equity", color="blue", linewidth=2)
         plt.title(f"Equity Curve - {symbol.upper()} ({period})")
@@ -1800,15 +1988,16 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.legend()
         plt.tight_layout()
-        
+
         from settings import settings
+
         artifact_dir = str(settings.OUTPUT_DIR / "artifacts")
         os.makedirs(artifact_dir, exist_ok=True)
         img_name = f"equity_curve_{symbol.lower()}.png"
         img_path = os.path.join(artifact_dir, img_name)
         plt.savefig(img_path)
         plt.close()
-        
+
         markdown_response = (
             f"### Equity Curve for {symbol.upper()} ({period})\n"
             f"Successfully simulated InstitutionalStrategy. Final Portfolio Value: ${equity[-1]:,.2f}\n\n"
@@ -1823,15 +2012,21 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
             "period": period,
             "dates": [str(d) for d in dates],
             "series": [
-                {"label": f"{symbol.upper()} Strategy", "values": [float(v) for v in equity]},
+                {
+                    "label": f"{symbol.upper()} Strategy",
+                    "values": [float(v) for v in equity],
+                },
             ],
             "final_value": float(equity[-1]),
         }
-        markdown_response += "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
+        markdown_response += (
+            "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
+        )
         return markdown_response
 
     except Exception as e:
-        return f"Plot generation failed: {str(e)}"
+        return f"Plot generation failed: {e!s}"
+
 
 @mcp.tool()
 def get_portfolio_summary() -> str:
@@ -1839,9 +2034,10 @@ def get_portfolio_summary() -> str:
     Summarizes the active paper trading portfolio: calculates current holdings,
     realized and unrealized P&L, win rate, and total portfolio performance metrics.
     """
-    from transactions_store import TransactionsStore
-    from data.market_data import get_provider
     import pandas as pd
+
+    from data.market_data import get_provider
+    from transactions_store import TransactionsStore
 
     try:
         store = TransactionsStore()
@@ -1857,7 +2053,7 @@ def get_portfolio_summary() -> str:
         if not open_df.empty:
             summary.append("## Current Holdings")
             holdings_rows = []
-            unique_symbols = open_df['symbol'].unique().tolist()
+            unique_symbols = open_df["symbol"].unique().tolist()
             current_prices = {}
             if unique_symbols:
                 provider = get_provider()
@@ -1871,14 +2067,14 @@ def get_portfolio_summary() -> str:
                         current_prices[sym] = provider.get_latest_quote(sym).price
                     except Exception:
                         current_prices[sym] = None
-            
-            for _, row in open_df.iterrows():
-                symbol = row['symbol']
-                side = row['side']
-                entry_price = row['entry_price']
-                shares = row['shares']
+
+            for row in open_df.to_dict("records"):
+                symbol = row["symbol"]
+                side = row["side"]
+                entry_price = row["entry_price"]
+                shares = row["shares"]
                 curr_price = current_prices.get(symbol)
-                
+
                 if curr_price is not None:
                     value = curr_price * shares
                     if side == "long":
@@ -1889,65 +2085,71 @@ def get_portfolio_summary() -> str:
                     curr_price = 0.0
                     value = 0.0
                     pl = 0.0
-                    
+
                 unrealized_pl += pl
                 holdings_value += value
-                
-                holdings_rows.append({
-                    "Trade ID": row['trade_id'],
-                    "Symbol": symbol,
-                    "Side": side.upper(),
-                    "Shares": shares,
-                    "Avg Cost": f"${entry_price:.2f}",
-                    "Current Price": f"${curr_price:.2f}" if curr_price > 0 else "N/A",
-                    "Value": f"${value:,.2f}" if value > 0 else "N/A",
-                    "Unrealized P&L": f"${pl:+,.2f}"
-                })
-            
+
+                holdings_rows.append(
+                    {
+                        "Trade ID": row["trade_id"],
+                        "Symbol": symbol,
+                        "Side": side.upper(),
+                        "Shares": shares,
+                        "Avg Cost": f"${entry_price:.2f}",
+                        "Current Price": f"${curr_price:.2f}"
+                        if curr_price > 0
+                        else "N/A",
+                        "Value": f"${value:,.2f}" if value > 0 else "N/A",
+                        "Unrealized P&L": f"${pl:+,.2f}",
+                    }
+                )
+
             summary.append(pd.DataFrame(holdings_rows).to_markdown(index=False) + "\n")
         else:
             summary.append("No open positions.\n")
-            
+
         # 2. Closed Positions (History Summary)
         realized_pl = 0.0
         win_count = 0
         total_closed = len(closed_df)
-        
+
         if not closed_df.empty:
-            for _, row in closed_df.iterrows():
-                side = row['side']
-                entry_price = row['entry_price']
-                exit_price = row['exit_price']
-                shares = row['shares']
-                
+            for row in closed_df.to_dict("records"):
+                side = row["side"]
+                entry_price = row["entry_price"]
+                exit_price = row["exit_price"]
+                shares = row["shares"]
+
                 if side == "long":
                     pl = (exit_price - entry_price) * shares
                 else:
                     pl = (entry_price - exit_price) * shares
-                    
+
                 realized_pl += pl
                 if pl > 0:
                     win_count += 1
-                    
+
             win_rate = (win_count / total_closed) * 100 if total_closed > 0 else 0.0
-            
+
             summary.append("## Closed Trades Analytics")
             summary.append(f"- **Total Closed Trades**: {total_closed}")
             summary.append(f"- **Win Rate**: {win_rate:.1f}%")
             summary.append(f"- **Realized P&L**: ${realized_pl:+,.2f}\n")
         else:
-            summary.append("## Closed Trades Analytics\nNo closed trades recorded yet.\n")
-            
+            summary.append(
+                "## Closed Trades Analytics\nNo closed trades recorded yet.\n"
+            )
+
         # 3. Overall Performance
         total_pl = realized_pl + unrealized_pl
         summary.append("## Account Metrics")
         summary.append(f"- **Net Profit/Loss**: ${total_pl:+,.2f}")
         summary.append(f"- **Total Unrealized P&L**: ${unrealized_pl:+,.2f}")
         summary.append(f"- **Total Open Holdings Value**: ${holdings_value:,.2f}")
-        
+
         return "\n".join(summary)
     except Exception as e:
-        return f"Failed to retrieve portfolio summary: {str(e)}"
+        return f"Failed to retrieve portfolio summary: {e!s}"
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
@@ -2070,7 +2272,9 @@ def get_portfolio_context_note() -> str:
         lines.append("| Sector | % of Equity | Net Market Value | Symbols |")
         lines.append("|--------|-------------|-------------------|---------|")
         for sector in sorted(
-            result.sector_exposure.values(), key=lambda s: abs(s.pct_of_equity), reverse=True
+            result.sector_exposure.values(),
+            key=lambda s: abs(s.pct_of_equity),
+            reverse=True,
         ):
             lines.append(
                 f"| {sector.sector} | {sector.pct_of_equity * 100:.1f}% | "
@@ -2083,10 +2287,16 @@ def get_portfolio_context_note() -> str:
             lines.append(f"**{note.headline}** ({note.tailwind_or_headwind})")
             lines.append(f"\n{note.rationale}")
             if note.affected_sectors:
-                lines.append(f"\n_Affected sectors: {', '.join(note.affected_sectors)}_")
+                lines.append(
+                    f"\n_Affected sectors: {', '.join(note.affected_sectors)}_"
+                )
             lines.append(
                 f"\n_Grounded in {result.retrieved_document_count} retrieved document(s)"
-                + (f" for {', '.join(result.retrieved_symbols)}" if result.retrieved_symbols else "")
+                + (
+                    f" for {', '.join(result.retrieved_symbols)}"
+                    if result.retrieved_symbols
+                    else ""
+                )
                 + "._"
             )
         else:
@@ -2097,7 +2307,7 @@ def get_portfolio_context_note() -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to retrieve portfolio context note: {str(e)}"
+        return f"Failed to retrieve portfolio context note: {e!s}"
 
 
 @mcp.tool(meta=_EQUITY_CURVE_UI)
@@ -2108,14 +2318,17 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     and saves the PNG plot to artifacts.
     """
     import os
+
     import backtrader as bt
+    import matplotlib
     import numpy as np
     import pandas as pd
-    import matplotlib
-    matplotlib.use('Agg')
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    from data.market_data import MarketDataError, get_provider
     from simulation_engine import InstitutionalStrategy
-    from data.market_data import get_provider, MarketDataError
 
     current_tickers = _active_universe()
     lookback_days = _period_to_lookback_days(period)
@@ -2132,7 +2345,7 @@ def plot_portfolio_equity(period: str = "1y") -> str:
             if df.empty:
                 continue
             df.columns = [col.lower() for col in df.columns]
-            
+
             cerebro = bt.Cerebro()
             cerebro.addstrategy(InstitutionalStrategy)
             data = bt.feeds.PandasData(dataname=df)
@@ -2140,58 +2353,73 @@ def plot_portfolio_equity(period: str = "1y") -> str:
             cerebro.broker.setcash(100000.0)
             cerebro.broker.setcommission(commission=0.001)
             cerebro.broker.set_slippage_perc(perc=0.0005)
-            cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
-            
-            import io
+            cerebro.addanalyzer(bt.analyzers.TimeReturn, _name="timereturn")
+
             import contextlib
+            import io
+
             f = io.StringIO()
             with contextlib.redirect_stdout(f):
                 results = cerebro.run()
-                
+
             strat = results[0]
             time_return = strat.analyzers.timereturn.get_analysis()
-            
+
             dates = sorted(time_return.keys())
             returns = [time_return[d] for d in dates]
             series = pd.Series(returns, index=pd.to_datetime(dates))
             portfolio_curves.append(series)
-            
+
         if not portfolio_curves:
             return "Error: No tickers could be simulated."
-            
+
         combined_returns = pd.concat(portfolio_curves, axis=1).mean(axis=1)
         portfolio_equity = 100000.0 * np.cumprod(1.0 + combined_returns.values)
         portfolio_series = pd.Series(portfolio_equity, index=combined_returns.index)
-        
+
         try:
             spy_df = provider.get_intraday_bars("SPY", lookback_days=lookback_days)
         except MarketDataError:
-            spy_df = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
-        spy_returns = spy_df['Close'].pct_change().dropna()
+            spy_df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        spy_returns = spy_df["Close"].pct_change().dropna()
         spy_aligned = spy_returns.reindex(portfolio_series.index).fillna(0.0)
         spy_equity = 100000.0 * np.cumprod(1.0 + spy_aligned.values)
         spy_series = pd.Series(spy_equity, index=portfolio_series.index)
-        
+
         plt.figure(figsize=(12, 6))
-        plt.plot(portfolio_series.index, portfolio_series.values, label="InvestYo Portfolio Strategy", color="blue", linewidth=2)
-        plt.plot(spy_series.index, spy_series.values, label="SP500 (SPY)", color="orange", linestyle="--", linewidth=1.5)
+        plt.plot(
+            portfolio_series.index,
+            portfolio_series.values,
+            label="InvestYo Portfolio Strategy",
+            color="blue",
+            linewidth=2,
+        )
+        plt.plot(
+            spy_series.index,
+            spy_series.values,
+            label="SP500 (SPY)",
+            color="orange",
+            linestyle="--",
+            linewidth=1.5,
+        )
         plt.title(f"Portfolio Strategy vs. SPY Benchmark ({period})")
         plt.xlabel("Date")
         plt.ylabel("Portfolio Value ($)")
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.legend()
         plt.tight_layout()
-        
+
         from settings import settings
+
         artifact_dir = str(settings.OUTPUT_DIR / "artifacts")
         os.makedirs(artifact_dir, exist_ok=True)
         img_path = os.path.join(artifact_dir, "portfolio_equity_vs_spy.png")
         plt.savefig(img_path)
         plt.close()
-        
+
         port_ret = (portfolio_series.iloc[-1] / 100000.0 - 1.0) * 100
         spy_ret = (spy_series.iloc[-1] / 100000.0 - 1.0) * 100
-        
+
         markdown_response = (
             f"### Portfolio Strategy Performance vs SPY Benchmark ({period})\n"
             f"- **Unified Strategy Return**: {port_ret:+.2f}%\n"
@@ -2207,17 +2435,26 @@ def plot_portfolio_equity(period: str = "1y") -> str:
             "period": period,
             "dates": [d.strftime("%Y-%m-%d") for d in portfolio_series.index],
             "series": [
-                {"label": "InvestYo Portfolio Strategy", "values": [float(v) for v in portfolio_series.values]},
-                {"label": "SPY Benchmark", "values": [float(v) for v in spy_series.values]},
+                {
+                    "label": "InvestYo Portfolio Strategy",
+                    "values": [float(v) for v in portfolio_series.values],
+                },
+                {
+                    "label": "SPY Benchmark",
+                    "values": [float(v) for v in spy_series.values],
+                },
             ],
             "portfolio_return_pct": float(port_ret),
             "benchmark_return_pct": float(spy_ret),
         }
-        markdown_response += "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
+        markdown_response += (
+            "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
+        )
         return markdown_response
 
     except Exception as e:
-        return f"Portfolio plot generation failed: {str(e)}"
+        return f"Portfolio plot generation failed: {e!s}"
+
 
 @mcp.tool()
 def get_universe_status() -> str:
@@ -2226,6 +2463,7 @@ def get_universe_status() -> str:
     macro economic environment status, and database stats.
     """
     import os
+
     import yaml
 
     status = ["# InvestYo Universe Status Dashboard\n"]
@@ -2234,7 +2472,7 @@ def get_universe_status() -> str:
 
     status.append("## Active Trading Universe")
     status.append(", ".join(f"`{t}`" for t in current_tickers) + "\n")
-    
+
     yaml_path = "watch_rules.yaml"
     if os.path.exists(yaml_path):
         try:
@@ -2246,14 +2484,20 @@ def get_universe_status() -> str:
                 status.append("Symbol | Alert Trigger | Threshold | Priority | Label")
                 status.append("---|---|---|---|---")
                 for r in rules:
-                    threshold = f"{r.get('threshold'):.2f}" if r.get('threshold') is not None else "N/A"
-                    status.append(f"`{r.get('symbol')}` | {r.get('alert_on')} | {threshold} | {r.get('priority', 'default')} | {r.get('label', 'N/A')}")
+                    threshold = (
+                        f"{r.get('threshold'):.2f}"
+                        if r.get("threshold") is not None
+                        else "N/A"
+                    )
+                    status.append(
+                        f"`{r.get('symbol')}` | {r.get('alert_on')} | {threshold} | {r.get('priority', 'default')} | {r.get('label', 'N/A')}"
+                    )
                 status.append("")
             else:
                 status.append("## Active Watch Rules\nNo watch rules configured.\n")
         except Exception as e:
-            status.append(f"## Active Watch Rules\nFailed to parse rules: {str(e)}\n")
-            
+            status.append(f"## Active Watch Rules\nFailed to parse rules: {e!s}\n")
+
     try:
         _, signals_rows = _db_query("SELECT COUNT(*) FROM DailySignals")
         signals_count = signals_rows[0][0] if signals_rows else 0
@@ -2269,9 +2513,10 @@ def get_universe_status() -> str:
         status.append(f"- **Trades Table Rows**: {trades_count}")
         status.append(f"- **Execution Logs Table Rows**: {logs_count}")
     except Exception as e:
-        status.append(f"## Database Metrics\nError querying DB stats: {str(e)}")
-            
+        status.append(f"## Database Metrics\nError querying DB stats: {e!s}")
+
     return "\n".join(status)
+
 
 @mcp.tool()
 def trigger_forecasting(symbol: str) -> str:
@@ -2284,13 +2529,15 @@ def trigger_forecasting(symbol: str) -> str:
         symbol: The ticker symbol to forecast (e.g., AAPL).
     """
     try:
-        from engine.advisory import evaluate
         from data.market_data import get_provider
+        from engine.advisory import evaluate
 
         sym = symbol.upper().strip()
         rec = evaluate(sym, position=None, market=get_provider(), snapshot=None)
 
-        forecast_str = f"${rec.forecast:,.2f}" if rec.forecast is not None else "unavailable"
+        forecast_str = (
+            f"${rec.forecast:,.2f}" if rec.forecast is not None else "unavailable"
+        )
         return (
             f"# Forecast: {sym}\n\n"
             f"- **30-day blended forecast**: {forecast_str}\n"
@@ -2301,7 +2548,8 @@ def trigger_forecasting(symbol: str) -> str:
             f"- **Rationale**: {rec.rationale}\n"
         )
     except Exception as e:
-        return f"Forecasting failed for {symbol}: {str(e)}"
+        return f"Forecasting failed for {symbol}: {e!s}"
+
 
 @mcp.tool(meta=_MACRO_RADAR_UI)
 def trigger_macro_engine() -> str:
@@ -2311,10 +2559,10 @@ def trigger_macro_engine() -> str:
     no-op while reporting success).
     """
     try:
-        from settings import settings
         from data_engine import DataEngine
-        from macro_engine import MacroEngine, macro_killswitch_data_unavailable
         from dto_models import MacroEconomicDTO
+        from macro_engine import MacroEngine, macro_killswitch_data_unavailable
+        from settings import settings
 
         de = DataEngine(fred_api_key=settings.FRED_API_KEY)
         engine = MacroEngine(de)
@@ -2323,10 +2571,14 @@ def trigger_macro_engine() -> str:
         # emergency fallback populates EVERY key with a benign literal, so a
         # plain key-presence check alone would report "available" even during
         # a total FRED outage. See data_engine.py::fetch_macro_raw_detailed().
-        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
+        macro_raw_fabricated_keys = getattr(
+            de, "last_macro_raw_fabricated_keys", frozenset()
+        )
         sahm_val, sahm_used_fallback = engine._calculate_sahm_rule_detailed()
         data_unavailable = (
-            macro_killswitch_data_unavailable(macro_raw, fabricated_keys=macro_raw_fabricated_keys)
+            macro_killswitch_data_unavailable(
+                macro_raw, fabricated_keys=macro_raw_fabricated_keys
+            )
             or sahm_used_fallback
         )
 
@@ -2342,7 +2594,7 @@ def trigger_macro_engine() -> str:
             yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
             high_yield_oas=float(macro_raw.get("BAMLH0A0HYM2", 3.5)),
             inflation_rate=2.0,  # not read by killSwitch/market_regime; neutral seed
-            nominal_10y=4.0,     # same
+            nominal_10y=4.0,  # same
             vix_value=float(macro_raw.get("VIXCLS", 15.0)),
             sahm_rule_indicator=sahm_val,
             data_unavailable=data_unavailable,
@@ -2369,15 +2621,17 @@ def trigger_macro_engine() -> str:
             f"VIX={vix_val}, Sahm={sahm_val}, regime={macro_dto.market_regime}",
             "\n```json",
             json.dumps(payload, indent=2),
-            "```"
+            "```",
         ]
         return "\n".join(lines)
     except Exception as e:
-        return f"Macro engine run failed: {str(e)}"
+        return f"Macro engine run failed: {e!s}"
+
 
 # ==========================================
 # [4] PHASE 1 — DATA & INGESTION MANAGEMENT
 # ==========================================
+
 
 @mcp.tool()
 def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> str:
@@ -2405,9 +2659,12 @@ def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> s
             )
 
         cmd = [
-            sys.executable, "scripts/backfill_edgar_fundamentals.py",
-            "--since", since,
-            "--tickers", ",".join(ticker_list),
+            sys.executable,
+            "scripts/backfill_edgar_fundamentals.py",
+            "--since",
+            since,
+            "--tickers",
+            ",".join(ticker_list),
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -2418,7 +2675,7 @@ def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> s
     except subprocess.TimeoutExpired:
         return "EDGAR backfill timed out after 10 minutes. Consider running with fewer tickers."
     except Exception as e:
-        return f"EDGAR backfill failed: {str(e)}"
+        return f"EDGAR backfill failed: {e!s}"
 
 
 @mcp.tool()
@@ -2433,14 +2690,20 @@ def trigger_full_pipeline(tickers: str = "") -> str:
     from settings import settings
 
     steps = []
-    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
+    ticker_list = (
+        [t.strip().upper() for t in tickers.split(",") if t.strip()]
+        if tickers
+        else None
+    )
     if not ticker_list:
         ticker_list = [t.upper() for t in settings.DEFAULT_TICKERS]
 
     # Step 1: Price bars — in-process via HistoricalStore (data_engine.py has no CLI entrypoint)
     try:
         if not ticker_list:
-            steps.append("❌ bar_refresh: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
+            steps.append(
+                "❌ bar_refresh: no tickers resolved (universe and DEFAULT_TICKERS both empty)"
+            )
         else:
             from data.historical_store import HistoricalStore
             from data.market_data import get_provider
@@ -2451,7 +2714,11 @@ def trigger_full_pipeline(tickers: str = "") -> str:
             fail_syms = []
             for sym in ticker_list:
                 try:
-                    df = store.get_bars(sym, lookback_days=settings.BARS_BACKFILL_DAYS, provider=provider)
+                    df = store.get_bars(
+                        sym,
+                        lookback_days=settings.BARS_BACKFILL_DAYS,
+                        provider=provider,
+                    )
                     if df is not None and not df.empty:
                         ok_count += 1
                     else:
@@ -2464,27 +2731,35 @@ def trigger_full_pipeline(tickers: str = "") -> str:
                     msg += f" (no data for: {', '.join(fail_syms)})"
                 steps.append(msg)
             else:
-                steps.append(f"❌ bar_refresh: no bars fetched for any of {ticker_list}")
+                steps.append(
+                    f"❌ bar_refresh: no bars fetched for any of {ticker_list}"
+                )
     except Exception as e:
-        steps.append(f"❌ bar_refresh: {str(e)}")
+        steps.append(f"❌ bar_refresh: {e!s}")
 
     # Step 2: EDGAR fundamentals — --tickers is required by the real script
     try:
         cmd = [
-            sys.executable, "scripts/backfill_edgar_fundamentals.py",
-            "--since", "2020-01-01",
-            "--tickers", ",".join(ticker_list) if ticker_list else "",
+            sys.executable,
+            "scripts/backfill_edgar_fundamentals.py",
+            "--since",
+            "2020-01-01",
+            "--tickers",
+            ",".join(ticker_list) if ticker_list else "",
         ]
         if not ticker_list:
-            steps.append("❌ edgar_backfill: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
+            steps.append(
+                "❌ edgar_backfill: no tickers resolved (universe and DEFAULT_TICKERS both empty)"
+            )
         else:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             steps.append(
-                f"✅ edgar_backfill: OK ({', '.join(ticker_list)})" if result.returncode == 0
+                f"✅ edgar_backfill: OK ({', '.join(ticker_list)})"
+                if result.returncode == 0
                 else f"❌ edgar_backfill: {result.stderr[:200]}"
             )
     except Exception as e:
-        steps.append(f"❌ edgar_backfill: {str(e)}")
+        steps.append(f"❌ edgar_backfill: {e!s}")
 
     # Step 3: Macro engine — in-process via MacroEngine (macro_engine.py has no CLI entrypoint)
     try:
@@ -2497,10 +2772,14 @@ def trigger_full_pipeline(tickers: str = "") -> str:
         # See trigger_macro_engine's identical comment above: fetch_macro_raw()'s
         # hardcoded fallback populates every key, so plain presence checking
         # can't see a fabricated-but-populated snapshot on its own.
-        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
+        macro_raw_fabricated_keys = getattr(
+            de, "last_macro_raw_fabricated_keys", frozenset()
+        )
         sahm_val = engine.calculate_sahm_rule()
         macro_df = engine.run_macro_killswitch(
-            macro_raw, sahm_val, fabricated_keys=macro_raw_fabricated_keys,
+            macro_raw,
+            sahm_val,
+            fabricated_keys=macro_raw_fabricated_keys,
         )
         regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
         steps.append(
@@ -2508,7 +2787,7 @@ def trigger_full_pipeline(tickers: str = "") -> str:
             f"Sahm={sahm_val}, regime={regime})"
         )
     except Exception as e:
-        steps.append(f"❌ macro_engine: {str(e)}")
+        steps.append(f"❌ macro_engine: {e!s}")
 
     return "# Full Pipeline Refresh\n\n" + "\n".join(steps)
 
@@ -2520,9 +2799,10 @@ def get_pit_coverage_report() -> str:
     rows, earliest and latest report dates.
     """
     try:
+        import json as _json
+
         from data.historical_store import HistoricalStore
         from validation.pit_fundamentals import generate_coverage_report
-        import json as _json
 
         store = HistoricalStore()
         df = generate_coverage_report(store)
@@ -2531,17 +2811,26 @@ def get_pit_coverage_report() -> str:
 
         rows = df.to_dict(orient="records")
         payload = {"rows": rows}
-        return "# PIT Fundamentals Coverage Report\n\n" + df.to_markdown(index=False) + f"\n\n```json\n{_json.dumps(payload, indent=2)}\n```"
+        return (
+            "# PIT Fundamentals Coverage Report\n\n"
+            + df.to_markdown(index=False)
+            + f"\n\n```json\n{_json.dumps(payload, indent=2)}\n```"
+        )
     except Exception as e:
-        return f"Coverage report failed: {str(e)}"
+        return f"Coverage report failed: {e!s}"
 
 
 # ==========================================
 # [5] PHASE 2 — QUANTITATIVE RESEARCH & ML
 # ==========================================
 
+
 @mcp.tool(meta=_BACKTEST_TEARSHEET_UI)
-def run_validation_harness(strategy_name: str = "", start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
+def run_validation_harness(
+    strategy_name: str = "",
+    start_date: str = "2020-01-01",
+    end_date: str = "2024-12-31",
+) -> str:
     """
     Triggers the StrategyValidationHarness (scripts/refresh_validations.py) and returns
     structured results including Sharpe ratio, max drawdown, DSR, PBO, and deployability.
@@ -2556,26 +2845,35 @@ def run_validation_harness(strategy_name: str = "", start_date: str = "2020-01-0
     try:
         name_stripped = strategy_name.strip().lower()
         cmd = [
-            sys.executable, "-m", "scripts.refresh_validations",
-            "--start", start_date,
-            "--end", end_date,
+            sys.executable,
+            "-m",
+            "scripts.refresh_validations",
+            "--start",
+            start_date,
+            "--end",
+            end_date,
             "--json",
         ]
         if name_stripped not in ("", "default", "all"):
             cmd.extend(["--strategies", strategy_name.strip()])
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        label = strategy_name.strip() if name_stripped not in ("", "default", "all") else "ALL REGISTERED STRATEGIES"
+        label = (
+            strategy_name.strip()
+            if name_stripped not in ("", "default", "all")
+            else "ALL REGISTERED STRATEGIES"
+        )
 
         if result.returncode == 0:
             stdout_clean = result.stdout.strip()
             if not stdout_clean:
                 return f"# Validation Harness Results: {label}\n\n(No output)"
-            
+
             lines = stdout_clean.splitlines()
             json_line = lines[-1]
             try:
                 import json
+
                 json.loads(json_line)
                 # Valid JSON found on last line. Reconstruct table and fence JSON separately.
                 table_text = "\n".join(lines[:-1]).strip()
@@ -2594,7 +2892,7 @@ def run_validation_harness(strategy_name: str = "", start_date: str = "2020-01-0
     except subprocess.TimeoutExpired:
         return "Validation harness timed out after 10 minutes."
     except Exception as e:
-        return f"Validation harness error: {str(e)}"
+        return f"Validation harness error: {e!s}"
 
 
 @mcp.tool()
@@ -2622,7 +2920,7 @@ def run_pit_audit(symbol: str, decision_date: str) -> str:
             f"- **Error**: {result.error or 'None'}\n"
         )
     except Exception as e:
-        return f"PIT audit failed: {str(e)}"
+        return f"PIT audit failed: {e!s}"
 
 
 @mcp.tool()
@@ -2641,10 +2939,14 @@ def run_lookahead_check(symbol: str, decision_date: str) -> str:
 
         store = HistoricalStore()
         is_isolated = audit_no_lookahead_sample(store, symbol, decision_date)
-        verdict = "✅ ISOLATED (no lookahead bias)" if is_isolated else "❌ CONTAMINATED (lookahead detected!)"
+        verdict = (
+            "✅ ISOLATED (no lookahead bias)"
+            if is_isolated
+            else "❌ CONTAMINATED (lookahead detected!)"
+        )
         return f"# Lookahead Check: {symbol} @ {decision_date}\n\n**Result**: {verdict}"
     except Exception as e:
-        return f"Lookahead check failed: {str(e)}"
+        return f"Lookahead check failed: {e!s}"
 
 
 @mcp.tool(meta=_SIGNAL_TREE_UI)
@@ -2661,14 +2963,16 @@ def get_signal_breakdown(symbol: str) -> str:
             """SELECT * FROM DailySignals
                WHERE "Symbol" = ?
                ORDER BY timestamp DESC LIMIT 1""",
-            (symbol.upper(),)
+            (symbol.upper(),),
         )
         if not rows:
             return f"No signals found for {symbol.upper()} in the database."
 
         row = rows[0]
         data = dict(zip(columns, row))
-        lines = [f"# Signal Breakdown: {symbol.upper()} ({data.get('timestamp', 'N/A')})\n"]
+        lines = [
+            f"# Signal Breakdown: {symbol.upper()} ({data.get('timestamp', 'N/A')})\n"
+        ]
 
         # Separate signal columns from metadata. DailySignals' only base
         # columns (see database_setup.py) are "id" and "timestamp"; every
@@ -2708,11 +3012,16 @@ def get_signal_breakdown(symbol: str) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Signal breakdown failed: {str(e)}"
+        return f"Signal breakdown failed: {e!s}"
 
 
 @mcp.tool()
-def compare_strategies(strategy_a: str, strategy_b: str, start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
+def compare_strategies(
+    strategy_a: str,
+    strategy_b: str,
+    start_date: str = "2020-01-01",
+    end_date: str = "2024-12-31",
+) -> str:
     """
     Runs two strategies through the validation harness side-by-side
     and returns a comparison table.
@@ -2727,17 +3036,28 @@ def compare_strategies(strategy_a: str, strategy_b: str, start_date: str = "2020
     for name in [strategy_a, strategy_b]:
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "scripts.refresh_validations",
-                 "--strategies", name, "--start", start_date, "--end", end_date,
-                 "--json"],
-                capture_output=True, text=True, timeout=600
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.refresh_validations",
+                    "--strategies",
+                    name,
+                    "--start",
+                    start_date,
+                    "--end",
+                    end_date,
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
             )
             if result.returncode == 0:
                 results[name] = result.stdout
             else:
                 results[name] = f"FAILED: {result.stderr[:200]}"
         except Exception as e:
-            results[name] = f"ERROR: {str(e)}"
+            results[name] = f"ERROR: {e!s}"
 
     lines = [f"# Strategy Comparison: {strategy_a} vs {strategy_b}\n"]
     lines.append(f"**Period**: {start_date} → {end_date}\n")
@@ -2754,8 +3074,10 @@ def get_model_registry_status() -> str:
     feature importance, OOS metrics, and staleness warnings.
     """
     from datetime import datetime, timedelta
+
     try:
-        from ml.registry_io import load_registry, resolve_registry_path  # noqa: PLC0415
+        from ml.registry_io import load_registry, resolve_registry_path
+
         reg_path = resolve_registry_path()
         if not reg_path.exists():
             return "Error: ml/registry.yaml not found."
@@ -2784,8 +3106,14 @@ def get_model_registry_status() -> str:
                 ]
             else:
                 model_items = []
-        elif isinstance(registry, dict) and ("trained_date" in registry or "last_trained" in registry or "name" in registry):
-            model_items = [(registry.get("name", registry.get("model_name", "unknown")), registry)]
+        elif isinstance(registry, dict) and (
+            "trained_date" in registry
+            or "last_trained" in registry
+            or "name" in registry
+        ):
+            model_items = [
+                (registry.get("name", registry.get("model_name", "unknown")), registry)
+            ]
         elif isinstance(registry, dict):
             model_items = [(k, v) for k, v in registry.items() if isinstance(v, dict)]
         elif isinstance(registry, list):
@@ -2809,7 +3137,9 @@ def get_model_registry_status() -> str:
             if role:
                 lines.append(f"- **Role**: {role}")
 
-            trained = meta.get("trained_date", meta.get("last_trained", meta.get("trained_at", "N/A")))
+            trained = meta.get(
+                "trained_date", meta.get("last_trained", meta.get("trained_at", "N/A"))
+            )
             lines.append(f"- **Last Trained**: {trained}")
 
             # Check staleness
@@ -2818,7 +3148,9 @@ def get_model_registry_status() -> str:
                     trained_dt = datetime.strptime(str(trained)[:10], "%Y-%m-%d")
                     age = now - trained_dt
                     if age > stale_threshold:
-                        lines.append(f"- ⚠️ **STALE**: Model is {age.days} days old (threshold: 30 days)")
+                        lines.append(
+                            f"- ⚠️ **STALE**: Model is {age.days} days old (threshold: 30 days)"
+                        )
                     else:
                         lines.append(f"- ✅ Fresh ({age.days} days old)")
                 except Exception:
@@ -2833,7 +3165,7 @@ def get_model_registry_status() -> str:
             # evaluated" rather than conflating it with a genuine CPCV run
             # that came back and failed the DSR/PBO gate (deployable=False
             # for both, but they mean very different things).
-            not_evaluated_reason: Optional[str] = None
+            not_evaluated_reason: str | None = None
             if cpcv_dsr is None or pbo is None:
                 if n_train is not None and n_train <= 0:
                     not_evaluated_reason = f"not evaluated — {n_train} training samples"
@@ -2842,7 +3174,9 @@ def get_model_registry_status() -> str:
 
             deployable = meta.get("deployable")
             if not_evaluated_reason:
-                lines.append(f"- **Deployability**: ⚠️ NOT EVALUATED ({not_evaluated_reason})")
+                lines.append(
+                    f"- **Deployability**: ⚠️ NOT EVALUATED ({not_evaluated_reason})"
+                )
             elif deployable is not None:
                 status_icon = "✅ DEPLOYABLE" if deployable else "❌ NOT DEPLOYABLE"
                 lines.append(f"- **Deployability**: {status_icon}")
@@ -2872,10 +3206,16 @@ def get_model_registry_status() -> str:
                 lines.append(f"- **Features**: {', '.join(str(f) for f in features)}")
 
             # Legacy feature importance & metrics fallback
-            legacy_features = meta.get("feature_importance", meta.get("top_features", {}))
+            legacy_features = meta.get(
+                "feature_importance", meta.get("top_features", {})
+            )
             if legacy_features:
                 lines.append("- **Top Features**:")
-                items = list(legacy_features.items())[:10] if isinstance(legacy_features, dict) else legacy_features[:10]
+                items = (
+                    list(legacy_features.items())[:10]
+                    if isinstance(legacy_features, dict)
+                    else legacy_features[:10]
+                )
                 for item in items:
                     if isinstance(item, tuple):
                         lines.append(f"  - `{item[0]}`: {item[1]}")
@@ -2892,7 +3232,7 @@ def get_model_registry_status() -> str:
 
         return "\n".join(lines).strip()
     except Exception as e:
-        return f"Registry status failed: {str(e)}"
+        return f"Registry status failed: {e!s}"
 
 
 @mcp.tool()
@@ -2915,12 +3255,13 @@ def trigger_model_retraining(model_name: str = "all") -> str:
     except subprocess.TimeoutExpired:
         return "Model retraining timed out after 15 minutes."
     except Exception as e:
-        return f"Retraining error: {str(e)}"
+        return f"Retraining error: {e!s}"
 
 
 # ==========================================
 # [6] PHASE 3 — EXECUTION & ALERTING
 # ==========================================
+
 
 @mcp.tool()
 def generate_daily_signals(top_n: int = 10) -> str:
@@ -2948,7 +3289,7 @@ def generate_daily_signals(top_n: int = 10) -> str:
                WHERE DATE(timestamp) = ?
                ORDER BY "Score" DESC
                LIMIT ?""",
-            (latest_date, top_n)
+            (latest_date, top_n),
         )
 
         if not rows:
@@ -2965,7 +3306,7 @@ def generate_daily_signals(top_n: int = 10) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Signal generation failed: {str(e)}"
+        return f"Signal generation failed: {e!s}"
 
 
 @mcp.tool(meta=_EXECUTION_QUEUE_UI)
@@ -3011,13 +3352,17 @@ def get_execution_queue() -> str:
 
         mode = payload.get("mode", "?")
         generated_at = payload.get("generated_at", "?")
-        kill_switch = "🔴 ACTIVE" if payload.get("kill_switch_active") else "🟢 inactive"
-        n_placeable = payload.get("n_placeable", sum(1 for i in intents if i.get("allow_place")))
+        kill_switch = (
+            "🔴 ACTIVE" if payload.get("kill_switch_active") else "🟢 inactive"
+        )
+        n_placeable = payload.get(
+            "n_placeable", sum(1 for i in intents if i.get("allow_place"))
+        )
 
         lines = [
             "# Execution Queue",
-            f"Mode: `{mode}` · Generated: {generated_at} · Kill switch: {kill_switch} · "
-            f"{n_placeable}/{len(intents)} placeable\n",
+            (f"Mode: `{mode}` · Generated: {generated_at} · Kill switch: {kill_switch} · "
+            f"{n_placeable}/{len(intents)} placeable\n"),
             "| Symbol | Action | Side | Qty | Target Notional | Gated | Rationale | Gate Reasons |",
             "|--------|--------|------|-----|------------------|-------|-----------|--------------|",
         ]
@@ -3031,13 +3376,21 @@ def get_execution_queue() -> str:
             # qty is null for a notional-sized BUY/partial-trim (resolved
             # downstream from a live quote) -- render that honestly, not "?".
             qty = intent.get("qty")
-            qty_str = f"{qty:g}" if isinstance(qty, (int, float)) else "resolved at review"
+            qty_str = (
+                f"{qty:g}" if isinstance(qty, (int, float)) else "resolved at review"
+            )
             target_notional = intent.get("target_notional")
-            notional_str = f"${target_notional:,.2f}" if isinstance(target_notional, (int, float)) else "—"
+            notional_str = (
+                f"${target_notional:,.2f}"
+                if isinstance(target_notional, (int, float))
+                else "—"
+            )
             allowed = "✅" if intent.get("allow_place", False) else "🚫"
             rationale = str(intent.get("rationale", "")) or "—"
             gate_reasons = intent.get("gate_reasons") or []
-            reasons_str = "; ".join(str(r) for r in gate_reasons) if gate_reasons else "—"
+            reasons_str = (
+                "; ".join(str(r) for r in gate_reasons) if gate_reasons else "—"
+            )
             lines.append(
                 f"| `{sym}` | {action} | {side} | {qty_str} | {notional_str} | "
                 f"{allowed} | {rationale} | {reasons_str} |"
@@ -3077,7 +3430,7 @@ def get_execution_queue() -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to read execution queue: {str(e)}"
+        return f"Failed to read execution queue: {e!s}"
 
 
 @mcp.tool()
@@ -3092,6 +3445,7 @@ def get_trade_journal(symbol: str = "", last_n: int = 20) -> str:
     """
     try:
         from transactions_store import TransactionsStore
+
         store = TransactionsStore()
 
         # Closed trades
@@ -3105,7 +3459,7 @@ def get_trade_journal(symbol: str = "", last_n: int = 20) -> str:
             if not open_df.empty:
                 open_df = open_df[open_df["symbol"] == sym]
 
-        lines = [f"# Trade Journal" + (f" — {symbol.upper()}" if symbol else "") + "\n"]
+        lines = ["# Trade Journal" + (f" — {symbol.upper()}" if symbol else "") + "\n"]
 
         # Open positions
         if not open_df.empty:
@@ -3124,31 +3478,37 @@ def get_trade_journal(symbol: str = "", last_n: int = 20) -> str:
             if "entry_price" in recent.columns and "exit_price" in recent.columns:
                 total_pl = 0.0
                 wins = 0
-                for _, row in recent.iterrows():
+                for row in recent.to_dict("records"):
                     if row["side"] == "long":
-                        pl = (row["exit_price"] - row["entry_price"]) * row.get("shares", 1)
+                        pl = (row["exit_price"] - row["entry_price"]) * row.get(
+                            "shares", 1
+                        )
                     else:
-                        pl = (row["entry_price"] - row["exit_price"]) * row.get("shares", 1)
+                        pl = (row["entry_price"] - row["exit_price"]) * row.get(
+                            "shares", 1
+                        )
                     total_pl += pl
                     if pl > 0:
                         wins += 1
                 win_rate = (wins / len(recent)) * 100 if len(recent) > 0 else 0
-                lines.append(f"**Win Rate**: {win_rate:.1f}% | **Total P&L**: ${total_pl:+,.2f}")
+                lines.append(
+                    f"**Win Rate**: {win_rate:.1f}% | **Total P&L**: ${total_pl:+,.2f}"
+                )
         else:
             lines.append("## Recent Closed Trades\nNone.\n")
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Trade journal failed: {str(e)}"
+        return f"Trade journal failed: {e!s}"
 
 
 @mcp.tool()
 def configure_alerts(
-    channels: Optional[str] = None,
-    signal_fired: Optional[bool] = None,
-    model_stale: Optional[bool] = None,
-    pipeline_failed: Optional[bool] = None,
-    pit_audit_failed: Optional[bool] = None,
+    channels: str | None = None,
+    signal_fired: bool | None = None,
+    model_stale: bool | None = None,
+    pipeline_failed: bool | None = None,
+    pit_audit_failed: bool | None = None,
 ) -> str:
     """
     Configures which events trigger notifications and which channels to use.
@@ -3166,7 +3526,9 @@ def configure_alerts(
         config = get_alert_config()
 
         if channels is not None:
-            config["channels"] = [ch.strip().lower() for ch in channels.split(",") if ch.strip()]
+            config["channels"] = [
+                ch.strip().lower() for ch in channels.split(",") if ch.strip()
+            ]
 
         events = config.get("events", {})
         if signal_fired is not None:
@@ -3190,11 +3552,14 @@ def configure_alerts(
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Alert configuration failed: {str(e)}"
+        return f"Alert configuration failed: {e!s}"
 
 
 @mcp.tool()
-def send_test_alert(title: str = "Test Alert", message: str = "This is a test notification from InvestYo.") -> str:
+def send_test_alert(
+    title: str = "Test Alert",
+    message: str = "This is a test notification from InvestYo.",
+) -> str:
     """
     Sends a test notification to all active alert channels to verify configuration.
 
@@ -3213,7 +3578,7 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Test alert failed: {str(e)}"
+        return f"Test alert failed: {e!s}"
 
 
 # ==========================================
@@ -3226,18 +3591,19 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
 # markdown plus a compact machine-readable JSON block (real values only; NaN/None
 # serialized as null, never fabricated).
 
+
 @mcp.tool()
 def calculate_margin_kelly_size(
-    win_prob: float, 
-    payoff_ratio: float, 
-    margin_requirement: float = 1.0, 
-    kelly_fraction: float = 0.5, 
-    cap: float = 0.20
+    win_prob: float,
+    payoff_ratio: float,
+    margin_requirement: float = 1.0,
+    kelly_fraction: float = 0.5,
+    cap: float = 0.20,
 ) -> str:
     """
     Calculate Kelly criterion-based position sizing and adjust it for margin requirements.
     This tool reuses the existing Kelly logic and returns a theoretical sizing recommendation.
-    READ-ONLY: This is a theoretical calculation and does NOT imply or perform a live 
+    READ-ONLY: This is a theoretical calculation and does NOT imply or perform a live
     buying-power or margin check against the broker.
     """
     import json
@@ -3290,15 +3656,33 @@ def calculate_margin_kelly_size(
             cash_required_pct = kelly_size * m
 
         lines = ["# Kelly Sizing & Margin Recommendation\n"]
-        lines.append(f"> **Disclaimer**: This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker.\n")
-        lines.append(f"- **Win Probability**: {p:.4f}" if p is not None else "- **Win Probability**: N/A")
-        lines.append(f"- **Payoff Ratio**: {b:.4f}" if b is not None else "- **Payoff Ratio**: N/A")
+        lines.append(
+            "> **Disclaimer**: This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker.\n"
+        )
+        lines.append(
+            f"- **Win Probability**: {p:.4f}"
+            if p is not None
+            else "- **Win Probability**: N/A"
+        )
+        lines.append(
+            f"- **Payoff Ratio**: {b:.4f}"
+            if b is not None
+            else "- **Payoff Ratio**: N/A"
+        )
         lines.append(f"- **Kelly Fraction**: {f:.4f}")
         lines.append(f"- **Cap**: {c:.4f}")
         lines.append(f"- **Margin Requirement**: {m:.4f}")
         lines.append("")
-        lines.append(f"- **Recommended Position Size (Notional %)**: {kelly_size:.4f}" if kelly_size is not None else "- **Recommended Position Size (Notional %)**: N/A")
-        lines.append(f"- **Required Margin Cash %**: {cash_required_pct:.4f}" if cash_required_pct is not None else "- **Required Margin Cash %**: N/A")
+        lines.append(
+            f"- **Recommended Position Size (Notional %)**: {kelly_size:.4f}"
+            if kelly_size is not None
+            else "- **Recommended Position Size (Notional %)**: N/A"
+        )
+        lines.append(
+            f"- **Required Margin Cash %**: {cash_required_pct:.4f}"
+            if cash_required_pct is not None
+            else "- **Required Margin Cash %**: N/A"
+        )
 
         payload = {
             "inputs": {
@@ -3306,16 +3690,21 @@ def calculate_margin_kelly_size(
                 "payoff_ratio": b,
                 "margin_requirement": m,
                 "kelly_fraction": f,
-                "cap": c
+                "cap": c,
             },
             "outputs": {
                 "recommended_position_pct": kelly_size,
                 "required_margin_cash_pct": cash_required_pct,
-                "disclaimer": "This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker."
-            }
+                "disclaimer": "This is a theoretical sizing calculation. It does NOT imply or perform a live buying-power or margin check against the broker.",
+            },
         }
 
-        return "\n".join(lines) + "\n\n```json\n" + json.dumps(payload, indent=2) + "\n```\n\n"
+        return (
+            "\n".join(lines)
+            + "\n\n```json\n"
+            + json.dumps(payload, indent=2)
+            + "\n```\n\n"
+        )
     except Exception as e:
         return f"Error calculating margin Kelly size: {e}"
 
@@ -3371,6 +3760,7 @@ def check_overnight_liquidity(symbol: str) -> str:
         approximate_depth_notional = None
         if adv is not None and price is not None and price > 0:
             from settings import settings
+
             # Heuristic approximation of depth without Level-2 data
             multiplier = settings.OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC
             approximate_depth_notional = adv * price * multiplier
@@ -3382,32 +3772,38 @@ def check_overnight_liquidity(symbol: str) -> str:
                 "bid": bid,
                 "ask": ask,
                 "spread": spread,
-                "spread_bps": spread_bps
+                "spread_bps": spread_bps,
             },
             "approximation": {
                 "adv_10d": adv,
                 "approximate_depth_notional": approximate_depth_notional,
-                "disclaimer": "Data source is an approximation based on Top-of-Book spread and Average Daily Volume. No claims of real Level-2 data exist."
+                "disclaimer": "Data source is an approximation based on Top-of-Book spread and Average Daily Volume. No claims of real Level-2 data exist.",
             },
             "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
             "is_stale": quote.is_stale,
-            "source": quote.source
+            "source": quote.source,
         }
 
         lines = [
             f"# Overnight Liquidity Approximation — {sym}\n",
             "> **NOTE:** Data source is an approximation based on Top-of-Book spread and Average Daily Volume. No claims of real Level-2 data exist.\n",
             f"- **Price**: {price:.2f}" if price is not None else "- **Price**: N/A",
-            f"- **Spread (bps)**: {spread_bps:.1f}" if spread_bps is not None else "- **Spread (bps)**: N/A",
-            f"- **ADV (10d)**: {adv:,.0f}" if adv is not None else "- **ADV (10d)**: N/A",
-            f"- **Approx. Depth Notional (1% ADV)**: ${approximate_depth_notional:,.2f}" if approximate_depth_notional is not None else "- **Approx. Depth Notional**: N/A",
+            f"- **Spread (bps)**: {spread_bps:.1f}"
+            if spread_bps is not None
+            else "- **Spread (bps)**: N/A",
+            f"- **ADV (10d)**: {adv:,.0f}"
+            if adv is not None
+            else "- **ADV (10d)**: N/A",
+            f"- **Approx. Depth Notional (1% ADV)**: ${approximate_depth_notional:,.2f}"
+            if approximate_depth_notional is not None
+            else "- **Approx. Depth Notional**: N/A",
             "\n```json",
             json.dumps(payload, indent=2),
-            "```"
+            "```",
         ]
         return "\n".join(lines)
     except Exception as e:
-        return f"Error approximating overnight liquidity for {symbol}: {str(e)}"
+        return f"Error approximating overnight liquidity for {symbol}: {e!s}"
 
 
 @mcp.tool()
@@ -3422,8 +3818,8 @@ def get_recommendation(symbol: str) -> str:
     import math
 
     try:
-        from engine.advisory import evaluate
         from data.market_data import get_provider
+        from engine.advisory import evaluate
 
         sym = symbol.upper().strip()
         # position=None, snapshot=None -> clean read-only non-held recommendation.
@@ -3446,13 +3842,19 @@ def get_recommendation(symbol: str) -> str:
         lines.append(f"- **Action**: {rec.action}")
         lines.append(f"- **Strategy**: {rec.strategy}")
         lines.append(
-            f"- **Conviction**: {conviction:.3f}" if conviction is not None else "- **Conviction**: N/A"
+            f"- **Conviction**: {conviction:.3f}"
+            if conviction is not None
+            else "- **Conviction**: N/A"
         )
         lines.append(
-            f"- **Suggested Position %**: {pct * 100:.2f}%" if pct is not None else "- **Suggested Position %**: N/A"
+            f"- **Suggested Position %**: {pct * 100:.2f}%"
+            if pct is not None
+            else "- **Suggested Position %**: N/A"
         )
         lines.append(
-            f"- **30-Day Forecast**: ${forecast:,.2f}" if forecast is not None else "- **30-Day Forecast**: unavailable"
+            f"- **30-Day Forecast**: ${forecast:,.2f}"
+            if forecast is not None
+            else "- **30-Day Forecast**: unavailable"
         )
         lines.append(f"- **Data Quality**: {rec.data_quality}")
 
@@ -3463,7 +3865,9 @@ def get_recommendation(symbol: str) -> str:
             for k, v in ki.items():
                 nv = _num(v)
                 ki_clean[k] = nv
-                lines.append(f"- **{k}**: {nv:.4f}" if nv is not None else f"- **{k}**: N/A")
+                lines.append(
+                    f"- **{k}**: {nv:.4f}" if nv is not None else f"- **{k}**: N/A"
+                )
 
         lines.append("\n## Rationale")
         lines.append(getattr(rec, "rationale", "") or "(no rationale provided)")
@@ -3483,7 +3887,8 @@ def get_recommendation(symbol: str) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to compute recommendation for {symbol}: {str(e)}"
+        return f"Failed to compute recommendation for {symbol}: {e!s}"
+
 
 class _MacroProxy:
     """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
@@ -3492,6 +3897,7 @@ class _MacroProxy:
     def __init__(self, vix: float, market_regime: str):
         self.vix = vix
         self.market_regime = market_regime
+
 
 @mcp.tool()
 def get_options_directive(symbol: str) -> str:
@@ -3507,8 +3913,11 @@ def get_options_directive(symbol: str) -> str:
     import os
 
     try:
-        from technical_options_engine import build_premium_directive, validate_directive_integrity
         from data.market_data import get_provider
+        from technical_options_engine import (
+            build_premium_directive,
+            validate_directive_integrity,
+        )
 
         sym = symbol.upper().strip()
         provider = get_provider()
@@ -3544,6 +3953,7 @@ def get_options_directive(symbol: str) -> str:
         snap = None
         try:
             from settings import settings as _settings
+
             snap_path = os.path.join(str(_settings.OUTPUT_DIR), "state_snapshot.json")
         except Exception:
             snap_path = os.path.join("output", "state_snapshot.json")
@@ -3612,18 +4022,26 @@ def get_options_directive(symbol: str) -> str:
         lines.append(f"- **Price**: {_fmt('Price', money=True)}")
         lines.append(f"- **Stale Quote**: {directive.get('Stale', is_stale)}")
         lines.append(f"- **Net Premium**: {_fmt('Net_Premium', money=True)}")
-        lines.append(f"- **Realizable Daily Theta**: {_fmt('Realizable_Daily_Theta', money=True)}")
+        lines.append(
+            f"- **Realizable Daily Theta**: {_fmt('Realizable_Daily_Theta', money=True)}"
+        )
         lines.append(f"- **Sigma (GJR-GARCH, annualized)**: {_fmt('Sigma_GARCH')}")
         lines.append(f"- **IVR Proxy**: {_fmt('IVR_Proxy')}")
-        lines.append(f"- **True IVR** (opt-in, real options-chain-derived; N/A unless "
-                      f"OPTIONS_TRUE_IVR_ENABLED is on and history has warmed up): "
-                      f"{_fmt('True_IVR')}")
+        lines.append(
+            f"- **True IVR** (opt-in, real options-chain-derived; N/A unless "
+            f"OPTIONS_TRUE_IVR_ENABLED is on and history has warmed up): "
+            f"{_fmt('True_IVR')}"
+        )
         lines.append(f"- **Aroon Oscillator**: {_fmt('Aroon_Oscillator')}")
         lines.append(f"- **Coppock Curve**: {_fmt('Coppock_Curve')}")
 
         lines.append("\n## Legs")
-        lines.append(f"- **Short Strike / Delta**: {_fmt('Short_Strike', money=True)} / {_fmt('Short_Delta')}")
-        lines.append(f"- **Long Strike / Delta**: {_fmt('Long_Strike', money=True)} / {_fmt('Long_Delta')}")
+        lines.append(
+            f"- **Short Strike / Delta**: {_fmt('Short_Strike', money=True)} / {_fmt('Short_Delta')}"
+        )
+        lines.append(
+            f"- **Long Strike / Delta**: {_fmt('Long_Strike', money=True)} / {_fmt('Long_Delta')}"
+        )
 
         lines.append("\n## ATM Greeks")
         lines.append(f"- **Delta**: {_fmt('ATM_Delta')}")
@@ -3674,7 +4092,8 @@ def get_options_directive(symbol: str) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to build options directive for {symbol}: {str(e)}"
+        return f"Failed to build options directive for {symbol}: {e!s}"
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def analyze_pairs_arbitrage(symbol_y: str, symbol_x: str) -> dict:
@@ -3684,13 +4103,15 @@ def analyze_pairs_arbitrage(symbol_y: str, symbol_x: str) -> dict:
     and a trade-signal verdict (ENTRY, EXIT, STOP_LOSS, CASH). Read-only; uses
     live/cached intraday data but never executes orders.
     """
-    from pairs_ondemand import analyze_pair
     from data.market_data import get_provider
+    from pairs_ondemand import analyze_pair
+
     provider = get_provider()
     try:
         return analyze_pair(symbol_y, symbol_x, provider)
     except Exception as e:
         return {"error": str(e)}
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def scan_pairs_arbitrage() -> dict:
@@ -3699,9 +4120,10 @@ def scan_pairs_arbitrage() -> dict:
     statistical arbitrage pairs. Returns the top candidates ranked by cointegration
     p-value. Read-only.
     """
-    from pairs_ondemand import scan_pairs, SCAN_MIN_SYMBOLS, SCAN_MAX_SYMBOLS
     from data.market_data import get_provider
     from data.portfolio_sync import resolve_universe
+    from pairs_ondemand import SCAN_MAX_SYMBOLS, SCAN_MIN_SYMBOLS, scan_pairs
+
     try:
         symbols = resolve_universe("all")
         if len(symbols) < SCAN_MIN_SYMBOLS:
@@ -3734,7 +4156,8 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
     price. Read-only: never constructs or submits an order.
     """
     import math
-    from data.market_data import get_provider, get_options_provider
+
+    from data.market_data import get_options_provider, get_provider
 
     try:
         sym = ticker.upper().strip()
@@ -3764,12 +4187,22 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
             chain_data = None
 
         if not chain_data:
-            return {"error": f"No chain data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+            return {
+                "error": f"No chain data available for {sym}",
+                "directive": None,
+                "surface": None,
+                "mispricing": None,
+            }
 
         # 2. Fetch bars & spot price
         bars = provider.get_intraday_bars(sym)
         if bars is None or bars.empty:
-            return {"error": f"No bar data available for {sym}", "directive": None, "surface": None, "mispricing": None}
+            return {
+                "error": f"No bar data available for {sym}",
+                "directive": None,
+                "surface": None,
+                "mispricing": None,
+            }
 
         spot_price = None
         is_stale = True
@@ -3802,6 +4235,7 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
         # 4. Directive
         try:
             from technical_options_engine import build_premium_directive
+
             directive = build_premium_directive(
                 sym,
                 bars,
@@ -3809,7 +4243,7 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
                 is_stale=is_stale,
                 target_dte=target_dte,
                 macro_dto=macro_proxy,
-                vrp=None
+                vrp=None,
             )
         except Exception as e:
             directive = {"error": str(e)}
@@ -3817,11 +4251,12 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
         # 5. Volatility Surface
         try:
             from pilots.volatility_surface import calculate_volatility_surface
+
             surface = calculate_volatility_surface(
                 ticker=sym,
                 chain_data=chain_data,
                 spot_price=spot_price,
-                historical_prices=bars["Close"]
+                historical_prices=bars["Close"],
             )
         except Exception as e:
             surface = {"error": str(e)}
@@ -3852,17 +4287,25 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
                     fair_iv_forecast = best_entry.get("atm_iv")
 
         try:
-            from pilots.vol_mispricing import evaluate_strike_mispricing, MispricingAnalysis
+            from pilots.vol_mispricing import (
+                MispricingAnalysis,
+                evaluate_strike_mispricing,
+            )
+
             mispricing_result = evaluate_strike_mispricing(
                 chain_data=chain_data,
                 spot_price=spot_price,
                 fair_iv_forecast=fair_iv_forecast,
-                dte=target_dte
+                dte=target_dte,
             )
             # evaluate_strike_mispricing returns a MispricingAnalysis dataclass, not a
             # plain dict — every real caller (e.g. get_volatility_mispricing_data)
             # calls .to_dict() on it before returning/using it.
-            mispricing = mispricing_result.to_dict() if isinstance(mispricing_result, MispricingAnalysis) else mispricing_result
+            mispricing = (
+                mispricing_result.to_dict()
+                if isinstance(mispricing_result, MispricingAnalysis)
+                else mispricing_result
+            )
         except Exception as e:
             mispricing = {"error": str(e)}
 
@@ -3877,15 +4320,22 @@ def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
                 return [_sanitize(v) for v in obj]
             return obj
 
-        return _sanitize({
-            "ticker": sym,
-            "spot_price": spot_price,
-            "directive": directive,
-            "surface": surface,
-            "mispricing": mispricing
-        })
+        return _sanitize(
+            {
+                "ticker": sym,
+                "spot_price": spot_price,
+                "directive": directive,
+                "surface": surface,
+                "mispricing": mispricing,
+            }
+        )
     except Exception as e:
-        return {"error": f"Failed to analyze options chain for {ticker}: {str(e)}", "directive": None, "surface": None, "mispricing": None}
+        return {
+            "error": f"Failed to analyze options chain for {ticker}: {e!s}",
+            "directive": None,
+            "surface": None,
+            "mispricing": None,
+        }
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
@@ -3894,18 +4344,19 @@ def scan_0dte_signals(ticker: str, contracts: int = 1) -> dict:
     Scans for same-session 0DTE contract breakout signals and squeeze detection
     using pilots.zero_dte_engine's logic — never re-derives its own breakout math.
     This is a signal/status passthrough only (does not compute payoff or theta decay).
-    Ships in simulation-only mode: the response's `live_exit_gate_wired` field 
+    Ships in simulation-only mode: the response's `live_exit_gate_wired` field
     reflects whether the mandatory 15:45 ET hard-exit is actually wired and enabled
     in production. `strategy_registry_status` reports whether this pilot has cleared
     the PBO/DSR/Sharpe/MaxDD + stress-scenario deployability gate (it has not).
     This tool NEVER calls execute_0dte_trade or execute_0dte_exits.
     """
     from pilots.zero_dte_engine import get_0dte_signals
-    
+
     # 0DTE exit is wired into daemon_runtime.py but gated by OPTIONS_0DTE_ENABLED.
     live_exit_gate_wired = False
     try:
         from settings import settings as _s
+
         live_exit_gate_wired = bool(getattr(_s, "OPTIONS_0DTE_ENABLED", False))
     except ImportError:
         pass
@@ -3923,7 +4374,7 @@ def scan_0dte_signals(ticker: str, contracts: int = 1) -> dict:
         "contracts": contracts,
         "signals": signals,
         "live_exit_gate_wired": live_exit_gate_wired,
-        "strategy_registry_status": "unregistered"
+        "strategy_registry_status": "unregistered",
     }
 
 
@@ -3945,6 +4396,7 @@ def get_regime_status() -> str:
         snap_path = None
         try:
             from settings import settings as _settings
+
             snap_path = os.path.join(str(_settings.OUTPUT_DIR), "state_snapshot.json")
         except Exception:
             snap_path = os.path.join("output", "state_snapshot.json")
@@ -3961,6 +4413,7 @@ def get_regime_status() -> str:
         kill_active = None
         try:
             from execution.kill_switch import GlobalKillSwitch
+
             kill_active = bool(GlobalKillSwitch().is_active())
         except Exception:
             kill_active = None
@@ -4035,7 +4488,9 @@ def get_regime_status() -> str:
             lines.append(f"- **Sahm Rule**: {_badge_sahm(sahm)}")
             lines.append(f"- **High-Yield OAS**: {_badge_oas(oas)}")
             lines.append(
-                f"- **Yield Curve (10Y-2Y)**: {ycurve:.2f}" if ycurve is not None else "- **Yield Curve (10Y-2Y)**: unavailable"
+                f"- **Yield Curve (10Y-2Y)**: {ycurve:.2f}"
+                if ycurve is not None
+                else "- **Yield Curve (10Y-2Y)**: unavailable"
             )
             lines.append(f"- **HMM Risk-On Probability**: {_badge_hmm(hmm)}")
             lines.append(
@@ -4043,19 +4498,31 @@ def get_regime_status() -> str:
             )
 
         lines.append(
-            f"- **Global Kill Switch**: "
-            + ("🔴 ACTIVE" if kill_active else "🟢 inactive" if kill_active is not None else "unavailable")
+            "- **Global Kill Switch**: "
+            + (
+                "🔴 ACTIVE"
+                if kill_active
+                else "🟢 inactive"
+                if kill_active is not None
+                else "unavailable"
+            )
         )
 
         payload = {
             "snapshot_available": snap is not None,
-            "market_regime": (snap.get("market_regime") or snap.get("regime")) if snap else None,
+            "market_regime": (snap.get("market_regime") or snap.get("regime"))
+            if snap
+            else None,
             "vix": _num(snap.get("vix")) if snap else None,
             "sahm_rule": _num(snap.get("sahm_rule")) if snap else None,
             "high_yield_oas": _num(snap.get("high_yield_oas")) if snap else None,
             "yield_curve": _num(snap.get("yield_curve")) if snap else None,
-            "hmm_risk_on_probability": _num(snap.get("hmm_risk_on_probability")) if snap else None,
-            "macro_regime_gate_enabled": snap.get("macro_regime_gate_enabled") if snap else None,
+            "hmm_risk_on_probability": _num(snap.get("hmm_risk_on_probability"))
+            if snap
+            else None,
+            "macro_regime_gate_enabled": snap.get("macro_regime_gate_enabled")
+            if snap
+            else None,
             "kill_switch_active": kill_active,
         }
         lines.append("\n```json")
@@ -4063,7 +4530,7 @@ def get_regime_status() -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to read regime status: {str(e)}"
+        return f"Failed to read regime status: {e!s}"
 
 
 @mcp.tool()
@@ -4079,13 +4546,14 @@ def get_portfolio_coverage() -> str:
     import math
 
     try:
-        from data.portfolio_sync import build_sync_report, CoverageStatus  # noqa: F401
+        from data.portfolio_sync import CoverageStatus, build_sync_report  # noqa: F401
 
         # Try a cached account snapshot WITHOUT forcing a live Robinhood login.
         snapshot = None
         snapshot_note = "no account snapshot (holdings excluded)"
         try:
             from data.robinhood_portfolio import fetch_account_snapshot
+
             snapshot = fetch_account_snapshot()
             snapshot_note = "account snapshot loaded"
         except Exception as se:
@@ -4106,18 +4574,26 @@ def get_portfolio_coverage() -> str:
         symbols = getattr(report, "symbols", {}) or {}
         lines = ["# Portfolio & Watchlist Coverage\n"]
         lines.append(f"_{snapshot_note}._\n")
-        lines.append(f"- **Provider Source**: {getattr(report, 'provider_source', 'N/A')}")
-        lines.append(f"- **Fundamentals Source**: {getattr(report, 'fundamentals_source', 'N/A')}")
+        lines.append(
+            f"- **Provider Source**: {getattr(report, 'provider_source', 'N/A')}"
+        )
+        lines.append(
+            f"- **Fundamentals Source**: {getattr(report, 'fundamentals_source', 'N/A')}"
+        )
         lines.append(f"- **Total Symbols**: {getattr(report, 'n_total', len(symbols))}")
-        lines.append(f"- **Full**: {getattr(report, 'n_full', 0)}  |  "
-                     f"**Equity-Only**: {getattr(report, 'n_equity_only', 0)}  |  "
-                     f"**Uncovered**: {getattr(report, 'n_uncovered', 0)}\n")
+        lines.append(
+            f"- **Full**: {getattr(report, 'n_full', 0)}  |  "
+            f"**Equity-Only**: {getattr(report, 'n_equity_only', 0)}  |  "
+            f"**Uncovered**: {getattr(report, 'n_uncovered', 0)}\n"
+        )
 
         rows = []
         json_symbols = []
         for sym in sorted(symbols.keys()):
             st = symbols[sym]
-            coverage = getattr(getattr(st, "coverage", None), "value", None) or str(getattr(st, "coverage", ""))
+            coverage = getattr(getattr(st, "coverage", None), "value", None) or str(
+                getattr(st, "coverage", "")
+            )
             delta = _num(getattr(st, "cost_basis_delta_per_share", None))
             price = _num(getattr(st, "current_price", None))
             held = bool(getattr(st, "held", False))
@@ -4132,25 +4608,31 @@ def get_portfolio_coverage() -> str:
                     fc="✅" if fc else "",
                 )
             )
-            json_symbols.append({
-                "symbol": sym,
-                "coverage": coverage,
-                "held": held,
-                "current_price": price,
-                "cost_basis_delta_per_share": delta,
-                "forecast_available": fc,
-                "diagnostic": getattr(st, "diagnostic", "") or "",
-            })
+            json_symbols.append(
+                {
+                    "symbol": sym,
+                    "coverage": coverage,
+                    "held": held,
+                    "current_price": price,
+                    "cost_basis_delta_per_share": delta,
+                    "forecast_available": fc,
+                    "diagnostic": getattr(st, "diagnostic", "") or "",
+                }
+            )
 
         if rows:
             lines.append("| Symbol | Coverage | Held | Price | Δ/Share | Forecast |")
             lines.append("|--------|----------|------|-------|---------|----------|")
             lines.extend(rows)
         else:
-            lines.append("_No symbols in the tracked universe (no holdings or watchlists found)._")
+            lines.append(
+                "_No symbols in the tracked universe (no holdings or watchlists found)._"
+            )
 
         # Coverage-gap callout
-        gaps = [s for s in json_symbols if s["coverage"] in ("uncovered", "equity_only")]
+        gaps = [
+            s for s in json_symbols if s["coverage"] in ("uncovered", "equity_only")
+        ]
         if gaps:
             lines.append("\n## Coverage Gaps")
             for g in gaps:
@@ -4172,7 +4654,7 @@ def get_portfolio_coverage() -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to build portfolio coverage report: {str(e)}"
+        return f"Failed to build portfolio coverage report: {e!s}"
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
@@ -4193,7 +4675,7 @@ def get_quote(symbol: str) -> str:
     import math
 
     try:
-        from data.market_data import get_provider, MarketDataError
+        from data.market_data import MarketDataError, get_provider
 
         sym = symbol.upper().strip()
         provider = get_provider()
@@ -4226,7 +4708,9 @@ def get_quote(symbol: str) -> str:
                 ask=f"${ask:,.2f}" if ask is not None else "N/A",
             )
         )
-        lines.append(f"\n**Live/Delayed**: {live_badge} (source: {q.source}, as of {ts})")
+        lines.append(
+            f"\n**Live/Delayed**: {live_badge} (source: {q.source}, as of {ts})"
+        )
 
         payload = {
             "symbol": q.symbol,
@@ -4242,7 +4726,7 @@ def get_quote(symbol: str) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to get quote for '{symbol}': {str(e)}"
+        return f"Failed to get quote for '{symbol}': {e!s}"
 
 
 # ==========================================
@@ -4263,6 +4747,7 @@ _PILOT_RANGES = ("1W", "1M", "3M", "6M", "1Y", "2Y")
 
 def _unknown_pilot_message(pilot_id: str) -> str:
     from pilots import catalog
+
     available = ", ".join(p.id for p in catalog.list_pilots())
     return f"No such pilot '{pilot_id}'. Available pilot ids: {available}"
 
@@ -4293,7 +4778,9 @@ def list_pilots() -> str:
         json_rows = []
         for pilot in catalog.list_pilots():
             headline = performance.pilot_headline(pilot)
-            holdings_count = len(scoring.pilot_holdings(pilot, snapshot)) if snapshot else 0
+            holdings_count = (
+                len(scoring.pilot_holdings(pilot, snapshot)) if snapshot else 0
+            )
             deployable = headline.get("deployable")
             rows.append(
                 "| `{id}` | {name} | {cat} | {dep} | {sharpe} | {dsr} | {pbo} | {holdings} | ${aum:,.0f} |".format(
@@ -4308,30 +4795,38 @@ def list_pilots() -> str:
                     aum=store.aum_for(pilot.id),
                 )
             )
-            json_rows.append({
-                "id": pilot.id,
-                "name": pilot.name,
-                "category": pilot.category,
-                "long_only": pilot.long_only,
-                "validation_strategy_id": pilot.validation_strategy_id,
-                "headline": headline,
-                "holdings_count": holdings_count,
-                "aum_proxy": store.aum_for(pilot.id),
-                "followers_proxy": store.followers_for(pilot.id),
-            })
+            json_rows.append(
+                {
+                    "id": pilot.id,
+                    "name": pilot.name,
+                    "category": pilot.category,
+                    "long_only": pilot.long_only,
+                    "validation_strategy_id": pilot.validation_strategy_id,
+                    "headline": headline,
+                    "holdings_count": holdings_count,
+                    "aum_proxy": store.aum_for(pilot.id),
+                    "followers_proxy": store.followers_for(pilot.id),
+                }
+            )
 
         lines = ["# Pilots Marketplace\n"]
         if snapshot is None:
-            lines.append("_No state snapshot yet — holdings_count reads 0 for every Pilot until the pipeline runs._\n")
-        lines.append("| ID | Name | Category | Deployable | Sharpe | DSR | PBO | Holdings | AUM (proxy) |")
-        lines.append("|----|------|----------|------------|--------|-----|-----|----------|-------------|")
+            lines.append(
+                "_No state snapshot yet — holdings_count reads 0 for every Pilot until the pipeline runs._\n"
+            )
+        lines.append(
+            "| ID | Name | Category | Deployable | Sharpe | DSR | PBO | Holdings | AUM (proxy) |"
+        )
+        lines.append(
+            "|----|------|----------|------------|--------|-----|-----|----------|-------------|"
+        )
         lines.extend(rows)
         lines.append("\n```json")
         lines.append(json.dumps(json_rows, indent=2, default=str))
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to list pilots: {str(e)}"
+        return f"Failed to list pilots: {e!s}"
 
 
 @mcp.tool(meta=_PILOT_DETAIL_UI, annotations=ToolAnnotations(readOnlyHint=True))
@@ -4360,9 +4855,14 @@ def get_pilot_detail(pilot_id: str) -> str:
         headline = performance.pilot_headline(pilot)
 
         lines = [f"# Pilot: {pilot.name} (`{pilot.id}`)\n"]
-        lines.append(f"**Category**: {pilot.category}  |  **Long-only**: {pilot.long_only}")
+        lines.append(
+            f"**Category**: {pilot.category}  |  **Long-only**: {pilot.long_only}"
+        )
         lines.append(f"**Description**: {pilot.description}\n")
-        lines.append("**Signal Weights**: " + ", ".join(f"{k}={v}" for k, v in pilot.weights.items()))
+        lines.append(
+            "**Signal Weights**: "
+            + ", ".join(f"{k}={v}" for k, v in pilot.weights.items())
+        )
         lines.append(
             f"**Validation Strategy**: {pilot.validation_strategy_id or 'None (no honest backtest for this pilot)'}\n"
         )
@@ -4371,14 +4871,18 @@ def get_pilot_detail(pilot_id: str) -> str:
         if headline.get("deployable") is None:
             lines.append("_No validated backtest available._\n")
         else:
-            lines.append(f"- **Deployable**: {'✅' if headline['deployable'] else '❌'}")
+            lines.append(
+                f"- **Deployable**: {'✅' if headline['deployable'] else '❌'}"
+            )
             lines.append(f"- **Sharpe**: {headline.get('sharpe')}")
             lines.append(f"- **DSR**: {headline.get('dsr')}")
             lines.append(f"- **PBO**: {headline.get('pbo')}")
             lines.append(f"- **Max Drawdown**: {headline.get('max_drawdown')}\n")
 
         if snapshot is None:
-            lines.append("_No state snapshot yet — holdings/sector/trades are empty until the pipeline runs._")
+            lines.append(
+                "_No state snapshot yet — holdings/sector/trades are empty until the pipeline runs._"
+            )
             holdings, sector_alloc, trades = [], [], []
         else:
             holdings = scoring.pilot_holdings(pilot, snapshot)
@@ -4415,9 +4919,13 @@ def get_pilot_detail(pilot_id: str) -> str:
                 lines.append("| Date | Symbol | Side | Weight Δ |")
                 lines.append("|------|--------|------|----------|")
                 for t in trades:
-                    lines.append(f"| {t['date']} | `{t['symbol']}` | {t['side']} | {t['weight_delta']:+.4f} |")
+                    lines.append(
+                        f"| {t['date']} | `{t['symbol']}` | {t['side']} | {t['weight_delta']:+.4f} |"
+                    )
             else:
-                lines.append("_Fewer than two historical snapshots — no trade diff yet._")
+                lines.append(
+                    "_Fewer than two historical snapshots — no trade diff yet._"
+                )
 
         payload = {
             "id": pilot.id,
@@ -4437,7 +4945,7 @@ def get_pilot_detail(pilot_id: str) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to get pilot detail for '{pilot_id}': {str(e)}"
+        return f"Failed to get pilot detail for '{pilot_id}': {e!s}"
 
 
 _COMPARE_PILOTS_MIN = 2
@@ -4494,7 +5002,9 @@ def compare_pilots(pilot_ids: list[str], range: str = "1M") -> str:
         for pid in deduped:
             pilot = catalog.get_pilot(pid)
             headline = performance.pilot_headline(pilot)
-            holdings_count = len(scoring.pilot_holdings(pilot, snapshot)) if snapshot else 0
+            holdings_count = (
+                len(scoring.pilot_holdings(pilot, snapshot)) if snapshot else 0
+            )
             perf = performance.pilot_performance(pilot, range=range_norm)
 
             lines.append(f"## {pilot.name} (`{pilot.id}`)")
@@ -4502,31 +5012,37 @@ def compare_pilots(pilot_ids: list[str], range: str = "1M") -> str:
             if headline.get("deployable") is None:
                 lines.append("_No validated backtest available._")
             else:
-                lines.append(f"- **Deployable**: {'✅' if headline['deployable'] else '❌'}")
+                lines.append(
+                    f"- **Deployable**: {'✅' if headline['deployable'] else '❌'}"
+                )
                 lines.append(f"- **Sharpe**: {headline.get('sharpe')}")
                 lines.append(f"- **DSR**: {headline.get('dsr')}")
                 lines.append(f"- **PBO**: {headline.get('pbo')}")
                 lines.append(f"- **Max Drawdown**: {headline.get('max_drawdown')}")
             lines.append(f"- **Holdings**: {holdings_count}")
             if perf.get("curve"):
-                lines.append(f"- **Equity Curve**: {len(perf['curve'])} points, base-100 OOS, real (not synthesized)")
+                lines.append(
+                    f"- **Equity Curve**: {len(perf['curve'])} points, base-100 OOS, real (not synthesized)"
+                )
             else:
                 lines.append(f"- **Equity Curve**: unavailable ({perf.get('reason')})")
             lines.append("")
 
-            json_pilots.append({
-                "id": pilot.id,
-                "name": pilot.name,
-                "category": pilot.category,
-                "headline": headline,
-                "holdings_count": holdings_count,
-                "performance": {
-                    "curve": perf.get("curve"),
-                    "benchmark": perf.get("benchmark"),
-                    "reason": perf.get("reason"),
-                    "range": perf.get("range"),
-                },
-            })
+            json_pilots.append(
+                {
+                    "id": pilot.id,
+                    "name": pilot.name,
+                    "category": pilot.category,
+                    "headline": headline,
+                    "holdings_count": holdings_count,
+                    "performance": {
+                        "curve": perf.get("curve"),
+                        "benchmark": perf.get("benchmark"),
+                        "reason": perf.get("reason"),
+                        "range": perf.get("range"),
+                    },
+                }
+            )
 
         lines.append(
             "_In a host that renders MCP Apps, this comparison also opens an "
@@ -4538,7 +5054,7 @@ def compare_pilots(pilot_ids: list[str], range: str = "1M") -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to compare pilots {pilot_ids!r}: {str(e)}"
+        return f"Failed to compare pilots {pilot_ids!r}: {e!s}"
 
 
 @mcp.tool()
@@ -4580,16 +5096,20 @@ def get_pilot_performance(pilot_id: str, range: str = "1M") -> str:
                 f"**PBO**: {m.get('pbo')}  |  **MaxDD**: {m.get('max_drawdown')}"
             )
             if result.get("curve"):
-                lines.append(f"- **Equity Curve**: {len(result['curve'])} points, base-100 OOS, real (not synthesized)")
+                lines.append(
+                    f"- **Equity Curve**: {len(result['curve'])} points, base-100 OOS, real (not synthesized)"
+                )
             else:
-                lines.append(f"- **Equity Curve**: unavailable ({result.get('reason')})")
+                lines.append(
+                    f"- **Equity Curve**: unavailable ({result.get('reason')})"
+                )
 
         lines.append("\n```json")
         lines.append(json.dumps(result, indent=2, default=str))
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to get performance for '{pilot_id}': {str(e)}"
+        return f"Failed to get performance for '{pilot_id}': {e!s}"
 
 
 @mcp.tool()
@@ -4616,16 +5136,20 @@ def get_pilot_trades(pilot_id: str, limit: int = 20) -> str:
             lines.append("| Date | Symbol | Side | Weight Δ |")
             lines.append("|------|--------|------|----------|")
             for t in trades:
-                lines.append(f"| {t['date']} | `{t['symbol']}` | {t['side']} | {t['weight_delta']:+.4f} |")
+                lines.append(
+                    f"| {t['date']} | `{t['symbol']}` | {t['side']} | {t['weight_delta']:+.4f} |"
+                )
         else:
-            lines.append("_No trade events — fewer than two historical snapshots under output/history/._")
+            lines.append(
+                "_No trade events — fewer than two historical snapshots under output/history/._"
+            )
 
         lines.append("\n```json")
         lines.append(json.dumps(trades, indent=2, default=str))
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to get trades for '{pilot_id}': {str(e)}"
+        return f"Failed to get trades for '{pilot_id}': {e!s}"
 
 
 @mcp.tool()
@@ -4659,7 +5183,7 @@ def get_follows() -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to list follows: {str(e)}"
+        return f"Failed to list follows: {e!s}"
 
 
 @mcp.tool(meta=_FOLLOW_RESULT_UI)
@@ -4688,12 +5212,12 @@ def follow_pilot(pilot_id: str, amount: float) -> str:
     card instead of only returning markdown.
     """
     try:
+        from data.historical_store import HistoricalStore
+        from execution.kill_switch import GlobalKillSwitch
         from pilots import catalog
         from pilots.follows_store import FollowsStore
         from pilots.mirror import plan_follow
         from pilots.scoring import load_snapshot
-        from data.historical_store import HistoricalStore
-        from execution.kill_switch import GlobalKillSwitch
 
         pilot = catalog.get_pilot(pilot_id)
         if pilot is None:
@@ -4728,7 +5252,9 @@ def follow_pilot(pilot_id: str, amount: float) -> str:
         )
         lines.append(f"_{account_note}._")
         lines.append(f"- **Mode**: {plan.get('mode')}")
-        lines.append(f"- **Queue Written**: {'✅' if plan.get('queue_written') else '❌ (preview only)'}")
+        lines.append(
+            f"- **Queue Written**: {'✅' if plan.get('queue_written') else '❌ (preview only)'}"
+        )
 
         intents = plan.get("planned_intents", [])
         if intents:
@@ -4761,7 +5287,7 @@ def follow_pilot(pilot_id: str, amount: float) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to follow pilot '{pilot_id}': {str(e)}"
+        return f"Failed to follow pilot '{pilot_id}': {e!s}"
 
 
 @mcp.tool()
@@ -4791,7 +5317,7 @@ def unfollow_pilot(pilot_id: str) -> str:
     """
     try:
         from pilots import catalog
-        from pilots.follows_store import FollowsStore, STATUS_ACTIVE
+        from pilots.follows_store import STATUS_ACTIVE, FollowsStore
 
         pilot = catalog.get_pilot(pilot_id)
         if pilot is None:
@@ -4857,7 +5383,7 @@ def unfollow_pilot(pilot_id: str) -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to unfollow pilot '{pilot_id}': {str(e)}"
+        return f"Failed to unfollow pilot '{pilot_id}': {e!s}"
 
 
 @mcp.tool(meta=_PILOT_PORTFOLIO_UI, annotations=ToolAnnotations(readOnlyHint=True))
@@ -4879,10 +5405,10 @@ def get_portfolio_by_pilot() -> str:
     position or a claim.
     """
     try:
+        from data.historical_store import HistoricalStore
         from pilots import catalog
         from pilots.follows_store import FollowsStore
         from pilots.portfolio_attribution import attribute_portfolio_by_pilot
-        from data.historical_store import HistoricalStore
 
         account_snapshot = None
         try:
@@ -4895,7 +5421,9 @@ def get_portfolio_by_pilot() -> str:
         follows = FollowsStore().list_all()
         pilot_names = {p.id: p.name for p in catalog.list_pilots()}
 
-        result = attribute_portfolio_by_pilot(account_snapshot, follows, pilot_names=pilot_names)
+        result = attribute_portfolio_by_pilot(
+            account_snapshot, follows, pilot_names=pilot_names
+        )
 
         lines = ["# Portfolio by Pilot (proxy attribution)\n"]
         lines.append(f"> {result['note']}\n")
@@ -4921,8 +5449,12 @@ def get_portfolio_by_pilot() -> str:
                 if not p["positions"]:
                     continue
                 lines.append(f"\n### `{p['pilot_id']}` — Attributed Positions")
-                lines.append("| Symbol | Attributed Value | Attributed P&L | Overlap-Scaled |")
-                lines.append("|--------|-------------------|-----------------|-----------------|")
+                lines.append(
+                    "| Symbol | Attributed Value | Attributed P&L | Overlap-Scaled |"
+                )
+                lines.append(
+                    "|--------|-------------------|-----------------|-----------------|"
+                )
                 for pos in p["positions"]:
                     lines.append(
                         "| `{sym}` | ${val:,.2f} | ${pl:,.2f} | {ov} |".format(
@@ -4950,13 +5482,13 @@ def get_portfolio_by_pilot() -> str:
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
-        return f"Failed to build portfolio-by-pilot attribution: {str(e)}"
-
+        return f"Failed to build portfolio-by-pilot attribution: {e!s}"
 
 
 # ==============================================================================
 # PHASE 1: READ-ONLY ANALYTICS TOOLS
 # ==============================================================================
+
 
 @mcp.tool(meta=_RISK_MATRIX_UI)
 def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
@@ -4973,15 +5505,16 @@ def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
             and standard deviation instead of the empirical percentile.
     """
     try:
-        from data.historical_store import HistoricalStore
         import numpy as np
+
+        from data.historical_store import HistoricalStore
 
         ticker = ticker.upper()
         df = HistoricalStore().get_bars(ticker, lookback_days=504)
         if df is None or len(df) < 252:
             return f"insufficient history for ticker {ticker}: need at least 252 days of price bars"
 
-        returns = df['Close'].pct_change().dropna()
+        returns = df["Close"].pct_change().dropna()
         if len(returns) < 252:
             return f"insufficient history for ticker {ticker}: need at least 252 days of return data"
 
@@ -4994,6 +5527,7 @@ def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
             es_95 = returns[returns <= var_95].mean()
         else:
             from scipy.stats import norm
+
             mu = returns.mean()
             var_95 = norm.ppf(0.05, mu, std_ret)
             es_95 = mu - std_ret * norm.pdf(norm.ppf(0.05)) / 0.05
@@ -5014,12 +5548,22 @@ def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
             "sample_size": len(returns),
             "metrics": [
                 {"label": "VaR (95%)", "value": float(var_95), "format": "percent"},
-                {"label": "Expected Shortfall (95%)", "value": float(es_95), "format": "percent"},
+                {
+                    "label": "Expected Shortfall (95%)",
+                    "value": float(es_95),
+                    "format": "percent",
+                },
             ],
         }
-        return text_response + "\n\n```json\n" + json.dumps(risk_payload, indent=2, default=str) + "\n```"
+        return (
+            text_response
+            + "\n\n```json\n"
+            + json.dumps(risk_payload, indent=2, default=str)
+            + "\n```"
+        )
     except Exception as e:
-        return f"failed to compute metrics for {ticker}: {str(e)}"
+        return f"failed to compute metrics for {ticker}: {e!s}"
+
 
 @mcp.tool()
 def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
@@ -5040,10 +5584,11 @@ def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
             substituted with a default window.
     """
     try:
-        from validation.stress_scenarios import STRESS_SCENARIOS, run_stress_scenario
-        from data.robinhood_portfolio import fetch_account_snapshot
-        from data.historical_store import HistoricalStore
         import pandas as pd
+
+        from data.historical_store import HistoricalStore
+        from data.robinhood_portfolio import fetch_account_snapshot
+        from validation.stress_scenarios import STRESS_SCENARIOS, run_stress_scenario
 
         if scenario not in STRESS_SCENARIOS:
             return f"scenario not found. Available: {list(STRESS_SCENARIOS.keys())}"
@@ -5083,10 +5628,12 @@ def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
                 bars = store.get_bars(pos.symbol, lookback_days=5000)
                 if bars is not None and not bars.empty:
                     # Filter for start/end dates
-                    mask = (bars.index >= pd.to_datetime(start)) & (bars.index <= pd.to_datetime(end))
+                    mask = (bars.index >= pd.to_datetime(start)) & (
+                        bars.index <= pd.to_datetime(end)
+                    )
                     window_bars = bars.loc[mask]
                     if not window_bars.empty:
-                        r = window_bars['Close'].pct_change().dropna()
+                        r = window_bars["Close"].pct_change().dropna()
                         weight = (pos.quantity * pos.current_price) / total_value
                         returns_series.append(r * weight)
 
@@ -5112,7 +5659,8 @@ def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
             f"Expected DD for short vol: {result.expected_max_dd_for_short_vol:.4%}"
         )
     except Exception as e:
-        return f"failed to run stress scenario: {str(e)}"
+        return f"failed to run stress scenario: {e!s}"
+
 
 @mcp.tool(meta=_RISK_MATRIX_UI)
 def get_factor_attributions(ticker: str) -> str:
@@ -5139,7 +5687,7 @@ def get_factor_attributions(ticker: str) -> str:
                FROM DailySignals
                WHERE "Symbol" = ?
                ORDER BY timestamp DESC LIMIT 1""",
-            (ticker,)
+            (ticker,),
         )
         if not rows:
             return f"no recent factor score for {ticker}"
@@ -5178,16 +5726,42 @@ def get_factor_attributions(ticker: str) -> str:
             "ticker": ticker.upper(),
             "kind": "factor_attribution",
             "metrics": [
-                {"label": "Value Z-Score", "value": _num(row.get("Value_Z")), "format": "number"},
-                {"label": "Quality Z-Score", "value": _num(row.get("Quality_Z")), "format": "number"},
-                {"label": "LowVol Z-Score", "value": _num(row.get("LowVol_Z")), "format": "number"},
-                {"label": "Size Z-Score", "value": _num(row.get("Size_Z")), "format": "number"},
-                {"label": "Multifactor Composite", "value": _num(row.get("Multifactor_Composite")), "format": "number"},
+                {
+                    "label": "Value Z-Score",
+                    "value": _num(row.get("Value_Z")),
+                    "format": "number",
+                },
+                {
+                    "label": "Quality Z-Score",
+                    "value": _num(row.get("Quality_Z")),
+                    "format": "number",
+                },
+                {
+                    "label": "LowVol Z-Score",
+                    "value": _num(row.get("LowVol_Z")),
+                    "format": "number",
+                },
+                {
+                    "label": "Size Z-Score",
+                    "value": _num(row.get("Size_Z")),
+                    "format": "number",
+                },
+                {
+                    "label": "Multifactor Composite",
+                    "value": _num(row.get("Multifactor_Composite")),
+                    "format": "number",
+                },
             ],
         }
-        return text_response + "\n\n```json\n" + json.dumps(factor_payload, indent=2, default=str) + "\n```"
+        return (
+            text_response
+            + "\n\n```json\n"
+            + json.dumps(factor_payload, indent=2, default=str)
+            + "\n```"
+        )
     except Exception as e:
-        return f"failed to get factor attributions for {ticker}: {str(e)}"
+        return f"failed to get factor attributions for {ticker}: {e!s}"
+
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_order_execution_history(limit: int = 50) -> str:
@@ -5206,8 +5780,9 @@ def get_order_execution_history(limit: int = 50) -> str:
     fabricated average.
     """
     try:
-        from transactions_store import TransactionsStore
         import pandas as pd
+
+        from transactions_store import TransactionsStore
 
         store = TransactionsStore()
         open_df = store.open_trades_df()
@@ -5222,10 +5797,14 @@ def get_order_execution_history(limit: int = 50) -> str:
 
         non_empty = [df for df in (open_df, closed_df) if not df.empty]
         all_trades = pd.concat(non_empty, ignore_index=True, sort=False)
-        all_trades = all_trades.sort_values("entry_ts", ascending=False).head(max(0, int(limit)))
+        all_trades = all_trades.sort_values("entry_ts", ascending=False).head(
+            max(0, int(limit))
+        )
 
-        lines = [f"# Order Execution History (showing {len(all_trades)} of {total} recorded trades)\n"]
-        for _, row in all_trades.iterrows():
+        lines = [
+            f"# Order Execution History (showing {len(all_trades)} of {total} recorded trades)\n"
+        ]
+        for row in all_trades.to_dict("records"):
             sym = row.get("symbol", "N/A")
             side = str(row.get("side", "N/A"))
             shares = row.get("shares", 0)
@@ -5235,7 +5814,9 @@ def get_order_execution_history(limit: int = 50) -> str:
             exit_ts = row.get("exit_ts")
 
             if pd.notna(exit_ts) and pd.notna(exit_p):
-                pnl_per_share = (exit_p - entry_p) if side == "long" else (entry_p - exit_p)
+                pnl_per_share = (
+                    (exit_p - entry_p) if side == "long" else (entry_p - exit_p)
+                )
                 pnl = pnl_per_share * shares
                 lines.append(
                     f"- [CLOSED] {sym} {side.upper()} {shares} sh: entry ${entry_p:.2f} "
@@ -5253,7 +5834,8 @@ def get_order_execution_history(limit: int = 50) -> str:
         )
         return "\n".join(lines)
     except Exception as e:
-        return f"failed to get execution history: {str(e)}"
+        return f"failed to get execution history: {e!s}"
+
 
 @mcp.tool(meta=_MODEL_DIAGNOSTICS_UI)
 def get_model_drift_report() -> str:
@@ -5269,8 +5851,9 @@ def get_model_drift_report() -> str:
     honest ``reason`` string (CONSTRAINT #4).
     """
     try:
-        from pilots.observability import forecast_skill_by_symbol_summary
         import json as _json
+
+        from pilots.observability import forecast_skill_by_symbol_summary
 
         snapshot = _load_state_snapshot()
         summary = forecast_skill_by_symbol_summary(snapshot)
@@ -5278,7 +5861,7 @@ def get_model_drift_report() -> str:
         rows = summary.get("rows") or []
         if not rows:
             reason = summary.get("reason") or "no forecast-skill data available"
-            return f"no drift data yet: {reason}\n\n```json\n{{\"rows\": [], \"reason\": \"{reason}\"}}\n```"
+            return f'no drift data yet: {reason}\n\n```json\n{{"rows": [], "reason": "{reason}"}}\n```'
 
         md_lines = ["# Forecast Model Drift & Skill Decay Report\n"]
         for r in rows:
@@ -5290,7 +5873,9 @@ def get_model_drift_report() -> str:
                 # Never fabricate a number (CONSTRAINT #4) -- surface the
                 # honest reason forecast_skill_by_symbol_summary gave instead
                 # of a bare dash when one is available.
-                decay_str = f"— ({r.get('decay_reason')})" if r.get("decay_reason") else "—"
+                decay_str = (
+                    f"— ({r.get('decay_reason')})" if r.get("decay_reason") else "—"
+                )
             md_lines.append(f"- **{sym}**: Skill decay = {decay_str}")
 
         md_lines.append("\n```json")
@@ -5298,7 +5883,8 @@ def get_model_drift_report() -> str:
         md_lines.append("```")
         return "\n".join(md_lines)
     except Exception as e:
-        return f"failed to generate model drift report: {str(e)}"
+        return f"failed to generate model drift report: {e!s}"
+
 
 @mcp.tool()
 def validate_order_compliance(ticker: str, side: str, size: float) -> str:
@@ -5329,11 +5915,13 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
     try:
         from signals.vrp_premium_selling import (
             IVR_SELL_THRESHOLD,
-            VRP_MIN_THRESHOLD,
             VIX_MAX_THRESHOLD,
+            VRP_MIN_THRESHOLD,
         )
     except Exception as e:
-        return f"compliance check unavailable: could not load VRP regime thresholds: {e}"
+        return (
+            f"compliance check unavailable: could not load VRP regime thresholds: {e}"
+        )
 
     def _num(v):
         try:
@@ -5347,7 +5935,9 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
     ticker_u = ticker.upper().strip()
     side_l = side.lower().strip()
 
-    checks: list[tuple[str, str, str]] = []  # (name, "PASS"/"FAIL"/"UNAVAILABLE", detail)
+    checks: list[
+        tuple[str, str, str]
+    ] = []  # (name, "PASS"/"FAIL"/"UNAVAILABLE", detail)
 
     try:
         columns, rows = _db_query(
@@ -5362,53 +5952,76 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
     row_data = dict(zip(columns, rows[0])) if rows else None
 
     if row_data is None:
-        checks.append((
-            "kelly_sizing_cap", "UNAVAILABLE",
-            f"no DailySignals row found for {ticker_u} -- cannot evaluate Kelly cap",
-        ))
-        checks.append((
-            "vrp_premium_selling_regime", "UNAVAILABLE",
-            f"no DailySignals row found for {ticker_u} -- cannot evaluate VRP regime gate",
-        ))
+        checks.append(
+            (
+                "kelly_sizing_cap",
+                "UNAVAILABLE",
+                f"no DailySignals row found for {ticker_u} -- cannot evaluate Kelly cap",
+            )
+        )
+        checks.append(
+            (
+                "vrp_premium_selling_regime",
+                "UNAVAILABLE",
+                f"no DailySignals row found for {ticker_u} -- cannot evaluate VRP regime gate",
+            )
+        )
     else:
         # ---- Check 1: Kelly sizing cap (BUY-side only) ----
         if side_l not in ("buy", "long"):
-            checks.append((
-                "kelly_sizing_cap", "PASS",
-                f"{side_l.upper()} order -- Kelly sizing cap only applies to new/increased long exposure",
-            ))
+            checks.append(
+                (
+                    "kelly_sizing_cap",
+                    "PASS",
+                    f"{side_l.upper()} order -- Kelly sizing cap only applies to new/increased long exposure",
+                )
+            )
         else:
             kelly = _num(row_data.get("Kelly Target"))
             if kelly is None:
-                checks.append((
-                    "kelly_sizing_cap", "UNAVAILABLE",
-                    f"no Kelly Target recorded for {ticker_u}",
-                ))
+                checks.append(
+                    (
+                        "kelly_sizing_cap",
+                        "UNAVAILABLE",
+                        f"no Kelly Target recorded for {ticker_u}",
+                    )
+                )
             else:
                 capped = row_data.get("Sizing_Was_Capped")
                 constraint = row_data.get("Sizing_Binding_Constraint") or ""
                 telemetry = f" (pipeline Sizing_Was_Capped={capped!r}, Sizing_Binding_Constraint={constraint!r})"
                 cap = _settings.KELLY_CAP
                 if abs(kelly) <= cap:
-                    checks.append((
-                        "kelly_sizing_cap", "PASS",
-                        f"Kelly Target {kelly:.4f} is within KELLY_CAP {cap:.2f}{telemetry}",
-                    ))
+                    checks.append(
+                        (
+                            "kelly_sizing_cap",
+                            "PASS",
+                            f"Kelly Target {kelly:.4f} is within KELLY_CAP {cap:.2f}{telemetry}",
+                        )
+                    )
                 else:
-                    checks.append((
-                        "kelly_sizing_cap", "FAIL",
-                        f"Kelly Target {kelly:.4f} exceeds KELLY_CAP {cap:.2f}{telemetry}",
-                    ))
+                    checks.append(
+                        (
+                            "kelly_sizing_cap",
+                            "FAIL",
+                            f"Kelly Target {kelly:.4f} exceeds KELLY_CAP {cap:.2f}{telemetry}",
+                        )
+                    )
 
         # ---- Check 2: options-selling VRP regime gate ----
         true_ivr = _num(row_data.get("True_IVR"))
         vrp = _num(row_data.get("VRP"))
         if true_ivr is None or vrp is None:
-            missing = [n for n, v in (("True_IVR", true_ivr), ("VRP", vrp)) if v is None]
-            checks.append((
-                "vrp_premium_selling_regime", "UNAVAILABLE",
-                f"no {'/'.join(missing)} score recorded for {ticker_u}",
-            ))
+            missing = [
+                n for n, v in (("True_IVR", true_ivr), ("VRP", vrp)) if v is None
+            ]
+            checks.append(
+                (
+                    "vrp_premium_selling_regime",
+                    "UNAVAILABLE",
+                    f"no {'/'.join(missing)} score recorded for {ticker_u}",
+                )
+            )
         else:
             snap = _load_state_snapshot()
             vix = _num(snap.get("vix")) if snap else None
@@ -5416,7 +6029,9 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
 
             violations = []
             if true_ivr <= IVR_SELL_THRESHOLD:
-                violations.append(f"True_IVR {true_ivr:.1f} <= {IVR_SELL_THRESHOLD:.0f}")
+                violations.append(
+                    f"True_IVR {true_ivr:.1f} <= {IVR_SELL_THRESHOLD:.0f}"
+                )
             if vrp <= VRP_MIN_THRESHOLD:
                 violations.append(f"VRP {vrp:.4f} <= {VRP_MIN_THRESHOLD:.2f}")
             if vix is not None and vix >= VIX_MAX_THRESHOLD:
@@ -5425,23 +6040,32 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
                 violations.append("market regime is CREDIT EVENT")
 
             if violations:
-                checks.append((
-                    "vrp_premium_selling_regime", "FAIL",
-                    "; ".join(violations),
-                ))
+                checks.append(
+                    (
+                        "vrp_premium_selling_regime",
+                        "FAIL",
+                        "; ".join(violations),
+                    )
+                )
             elif snap is None:
-                checks.append((
-                    "vrp_premium_selling_regime", "UNAVAILABLE",
-                    f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
-                    "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
-                    "-- cannot fully evaluate the macro half",
-                ))
+                checks.append(
+                    (
+                        "vrp_premium_selling_regime",
+                        "UNAVAILABLE",
+                        (f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
+                        "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
+                        "-- cannot fully evaluate the macro half"),
+                    )
+                )
             else:
-                checks.append((
-                    "vrp_premium_selling_regime", "PASS",
-                    f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
-                    f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}",
-                ))
+                checks.append(
+                    (
+                        "vrp_premium_selling_regime",
+                        "PASS",
+                        (f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
+                        f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}"),
+                    )
+                )
 
     statuses = [c[1] for c in checks]
     if "FAIL" in statuses:
@@ -5457,12 +6081,14 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
         lines.append(f"- **{name}**: {status} -- {detail}")
     return "\n".join(lines)
 
+
 @mcp.prompt()
 def pre_market_briefing() -> str:
     """Generates a structured prompt template for a pre-market briefing."""
     return """Please generate a pre-market briefing.
 Include macro conditions, top watchlist candidates, and active alerts.
 """
+
 
 @mcp.prompt()
 def portfolio_health_check() -> str:
@@ -5471,12 +6097,14 @@ def portfolio_health_check() -> str:
 Analyze current allocations, VaR, correlation risks, and open position PnL.
 """
 
+
 @mcp.prompt()
 def strategy_post_mortem() -> str:
     """Generates a structured prompt template for a strategy post-mortem."""
     return """Please generate a strategy post-mortem.
 Analyze the latest closed trades, PnL attribution, execution slippage, and model drift.
 """
+
 
 def _bearer_auth_asgi_middleware(app, token: str):
     """Wrap a Starlette ASGI app with a bearer-token gate for the
@@ -5495,14 +6123,18 @@ def _bearer_auth_asgi_middleware(app, token: str):
             return
         headers = dict(scope.get("headers") or [])
         auth_header = headers.get(b"authorization", b"").decode("latin-1")
-        presented = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
+        presented = (
+            auth_header[len("Bearer ") :] if auth_header.startswith("Bearer ") else ""
+        )
         if not hmac.compare_digest(presented, token):
             response_body = b'{"error": "Invalid or missing bearer token"}'
-            await send({
-                "type": "http.response.start",
-                "status": 401,
-                "headers": [(b"content-type", b"application/json")],
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
             await send({"type": "http.response.body", "body": response_body})
             return
         await app(scope, receive, send)
@@ -5514,6 +6146,7 @@ def _bearer_auth_asgi_middleware(app, token: str):
 # [6] DEVTOOLS & PWA OBSERVABILITY
 # ==========================================
 
+
 @mcp.tool(meta=_DEVTOOLS_INSPECTOR_UI, annotations=ToolAnnotations(readOnlyHint=True))
 def inspect_webapp_screen(route: str = "/") -> str:
     """
@@ -5523,21 +6156,25 @@ def inspect_webapp_screen(route: str = "/") -> str:
     Args:
         route: Target PWA route to inspect (e.g. "/", "/marketplace", "/signals", "/portfolio").
     """
-    import urllib.request
-    import urllib.error
-    import time
-    import re
     import json
+    import re
+    import time
+    import urllib.error
+    import urllib.request
+
     from settings import settings
 
     if not route.startswith("/"):
         route = "/" + route
 
     url = f"http://localhost:5173{route}"
-    
+
     if settings.BROWSER_DIAGNOSTICS_ENABLED:
         import browser_diagnostics
-        real = browser_diagnostics.capture_page_diagnostics(url, timeout_seconds=settings.BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS)
+
+        real = browser_diagnostics.capture_page_diagnostics(
+            url, timeout_seconds=settings.BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS
+        )
         if real.get("available"):
             payload = {
                 "route": route,
@@ -5558,8 +6195,8 @@ def inspect_webapp_screen(route: str = "/") -> str:
                 f"- **Title**: {payload['title']}",
                 f"- **DOM Elements**: {payload['domNodeCount']}",
                 f"- **Console Issues**: {len(payload['consoleMessages'])}",
-                "- _Accessibility/best-practices/SEO and a composite performance score "
-                "are not computed by this tool -- unavailable, not simulated._",
+                ("- _Accessibility/best-practices/SEO and a composite performance score "
+                "are not computed by this tool -- unavailable, not simulated._"),
                 "\n```json",
                 json.dumps(payload, indent=2),
                 "```",
@@ -5571,7 +6208,9 @@ def inspect_webapp_screen(route: str = "/") -> str:
     start_time = time.time()
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "InvestYo-DevTools-MCP/1.0"})
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "InvestYo-DevTools-MCP/1.0"}
+        )
         # Bandit B310: `url` is f"http://localhost:5173{route}" -- the scheme
         # and host are hardcoded literals; `route` can only extend the path,
         # never change the scheme (the file:/ concern B310 checks for).
@@ -5588,12 +6227,19 @@ def inspect_webapp_screen(route: str = "/") -> str:
             page_title = m_title.group(1).strip() if m_title else "Pilots PWA"
 
             # Extract script tags and approximate DOM node count
-            scripts = re.findall(r'<script[^>]*src=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+            scripts = re.findall(
+                r'<script[^>]*src=["\']([^"\']+)["\']', html_text, re.IGNORECASE
+            )
             approx_nodes = len(re.findall(r"<[a-zA-Z0-9]+", html_text))
 
             console_msgs = []
             if "Error" in html_text or "Exception" in html_text:
-                console_msgs.append({"type": "warn", "text": "Inline error signature detected in HTML source."})
+                console_msgs.append(
+                    {
+                        "type": "warn",
+                        "text": "Inline error signature detected in HTML source.",
+                    }
+                )
 
             payload = {
                 "route": route,
@@ -5631,21 +6277,26 @@ def inspect_webapp_screen(route: str = "/") -> str:
             "title": "Dev Server Offline",
             "domNodeCount": 0,
             "scriptsLoaded": [],
-            "consoleMessages": [{"type": "error", "text": f"Could not connect to http://localhost:5173: {str(e)}"}],
+            "consoleMessages": [
+                {
+                    "type": "error",
+                    "text": f"Could not connect to http://localhost:5173: {e!s}",
+                }
+            ],
             "screenshotBase64": None,
         }
         lines = [
             f"# DevTools Screen Inspection: `{route}`\n",
             f"- **URL**: {url}",
-            f"- **Status**: 🔴 Offline / Connection Refused",
-            f"- **Note**: Vite dev server is not running on port 5173. Start it via `npm run dev` in `webapp/` or `./launch_webapp.command`.",
+            "- **Status**: 🔴 Offline / Connection Refused",
+            "- **Note**: Vite dev server is not running on port 5173. Start it via `npm run dev` in `webapp/` or `./launch_webapp.command`.",
             "\n```json",
             json.dumps(payload, indent=2),
             "```",
         ]
         return "\n".join(lines)
     except Exception as e:
-        return f"DevTools screen inspection failed for {route}: {str(e)}"
+        return f"DevTools screen inspection failed for {route}: {e!s}"
 
 
 @mcp.tool(meta=_LIGHTHOUSE_SCORECARD_UI, annotations=ToolAnnotations(readOnlyHint=True))
@@ -5656,9 +6307,10 @@ def audit_webapp_vitals(route: str = "/") -> str:
     Args:
         route: PWA route to audit (e.g. "/", "/marketplace", "/signals").
     """
+    import json
     import time
     import urllib.request
-    import json
+
     from settings import settings
 
     if not route.startswith("/"):
@@ -5676,7 +6328,12 @@ def audit_webapp_vitals(route: str = "/") -> str:
             payload = {
                 "route": route,
                 "online": True,
-                "scores": {"performance": None, "accessibility": None, "bestPractices": None, "seo": None},
+                "scores": {
+                    "performance": None,
+                    "accessibility": None,
+                    "bestPractices": None,
+                    "seo": None,
+                },
                 "vitals": real.get("vitals", {}),
                 "vitals_rating": real.get("vitals_rating", {}),
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime()),
@@ -5684,10 +6341,10 @@ def audit_webapp_vitals(route: str = "/") -> str:
             vitals = payload["vitals"]
             lines = [
                 f"# PWA Performance & Lighthouse Scorecard: `{route}`\n",
-                f"- **Status**: 🟢 Online",
+                "- **Status**: 🟢 Online",
                 f"- **Time To First Byte (TTFB)**: {(str(vitals.get('ttfb_ms')) + 'ms') if vitals.get('ttfb_ms') is not None else 'unavailable'}",
-                "- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
-                "computed by this tool -- unavailable, not simulated._",
+                ("- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
+                "computed by this tool -- unavailable, not simulated._"),
                 "\n```json",
                 json.dumps(payload, indent=2),
                 "```",
@@ -5701,10 +6358,12 @@ def audit_webapp_vitals(route: str = "/") -> str:
     ttfb_ms = 0
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "InvestYo-Lighthouse-MCP/1.0"})
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "InvestYo-Lighthouse-MCP/1.0"}
+        )
         # Bandit B310: same fixed "http://localhost:5173"-prefixed `url` as
         # inspect_webapp_screen above -- scheme/host are hardcoded literals.
-        with urllib.request.urlopen(req, timeout=3.0) as resp:  # nosec B310
+        with urllib.request.urlopen(req, timeout=3.0):  # nosec B310
             is_online = True
             ttfb_ms = round((time.time() - start_time) * 1000, 1)
     except Exception:
@@ -5741,10 +6400,10 @@ def audit_webapp_vitals(route: str = "/") -> str:
         f"# PWA Performance & Lighthouse Scorecard: `{route}`\n",
         f"- **Status**: {'🟢 Online' if is_online else '🔴 Offline'}",
         f"- **Time To First Byte (TTFB)**: {(str(vitals['ttfb_ms']) + 'ms') if vitals['ttfb_ms'] is not None else 'unavailable'}",
-        "- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
+        ("- _Performance/accessibility/best-practices/SEO scores and FCP/LCP/CLS are not "
         "computed by this tool (no headless audit capability) -- unavailable, not simulated. "
         "Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` package) "
-        "for real Core Web Vitals._",
+        "for real Core Web Vitals._"),
         "\n```json",
         json.dumps(payload, indent=2),
         "```",
@@ -5794,26 +6453,40 @@ def audit_all_pwa_screens() -> str:
         url = f"http://localhost:5173{r}"
         t0 = time.time()
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "InvestYo-DevTools-MCP/1.0"})
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "InvestYo-DevTools-MCP/1.0"}
+            )
             # Bandit B310: same fixed "http://localhost:5173"-prefixed `url`
             # pattern as above -- scheme/host are hardcoded literals.
             with urllib.request.urlopen(req, timeout=1.5) as resp:  # nosec B310
                 elapsed = round((time.time() - t0) * 1000, 1)
-                results.append({"route": r, "status": resp.status, "ms": elapsed, "ok": True})
+                results.append(
+                    {"route": r, "status": resp.status, "ms": elapsed, "ok": True}
+                )
                 reachable += 1
         except Exception as e:
             elapsed = round((time.time() - t0) * 1000, 1)
-            results.append({"route": r, "status": 0, "ms": elapsed, "ok": False, "error": str(e)})
+            results.append(
+                {"route": r, "status": 0, "ms": elapsed, "ok": False, "error": str(e)}
+            )
 
     payload = {
         "route": "ALL_ROUTES",
         "status": 200 if reachable > 0 else 503,
         "statusText": f"{reachable}/{len(routes)} Reachable",
-        "responseTimeMs": round(sum(x['ms'] for x in results) / len(results), 1) if results else 0,
+        "responseTimeMs": round(sum(x["ms"] for x in results) / len(results), 1)
+        if results
+        else 0,
         "title": f"Pilots PWA Suite ({reachable}/{len(routes)} Routes)",
         "domNodeCount": len(routes),
         "scriptsLoaded": [],
-        "consoleMessages": [{"type": "info" if r["ok"] else "warn", "text": f"{r['route']}: {'OK' if r['ok'] else r.get('error', 'fail')} ({r['ms']}ms)"} for r in results],
+        "consoleMessages": [
+            {
+                "type": "info" if r["ok"] else "warn",
+                "text": f"{r['route']}: {'OK' if r['ok'] else r.get('error', 'fail')} ({r['ms']}ms)",
+            }
+            for r in results
+        ],
         "screenshotBase64": None,
     }
 
@@ -5850,8 +6523,8 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
     """
     import base64
     import json
-    import urllib.request
     import time
+    import urllib.request
 
     from settings import settings
 
@@ -5866,7 +6539,9 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
         )
         if real.get("available") and real.get("screenshot_base64"):
             shot_bytes = base64.b64decode(real["screenshot_base64"])
-            diff = browser_diagnostics.compare_against_baseline(route, shot_bytes, threshold_pct)
+            diff = browser_diagnostics.compare_against_baseline(
+                route, shot_bytes, threshold_pct
+            )
             if diff.get("available"):
                 baseline_b64 = diff.get("baseline_image_base64")
                 payload = {
@@ -5877,15 +6552,21 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
                     "status": real.get("status", 200),
                     "latency_ms": real.get("response_time_ms", 0.0),
                     "baseline_established": diff.get("baseline_established", False),
-                    "baselineImg": f"data:image/png;base64,{baseline_b64}" if baseline_b64 else None,
+                    "baselineImg": f"data:image/png;base64,{baseline_b64}"
+                    if baseline_b64
+                    else None,
                     "actualImg": f"data:image/png;base64,{real['screenshot_base64']}",
                 }
                 if payload["baseline_established"]:
-                    status_line = "🆕 Baseline established (no prior snapshot to compare against)"
+                    status_line = (
+                        "🆕 Baseline established (no prior snapshot to compare against)"
+                    )
                 elif payload["match"]:
                     status_line = f"🟢 Match ({payload['diff_pct']:.2f}% diff)"
                 else:
-                    status_line = f"🔴 Visual Diff Detected ({payload['diff_pct']:.2f}% diff)"
+                    status_line = (
+                        f"🔴 Visual Diff Detected ({payload['diff_pct']:.2f}% diff)"
+                    )
                 lines = [
                     f"# Visual Diff Comparison: `{route}`\n",
                     f"- **Status**: {status_line}",
@@ -5902,7 +6583,9 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
     start_t = time.time()
 
     try:
-        req = urllib.request.Request(target_url, headers={"User-Agent": "StockpyDevTools/1.0"})
+        req = urllib.request.Request(
+            target_url, headers={"User-Agent": "StockpyDevTools/1.0"}
+        )
         # Bandit B310: `target_url` is f"{base_url}{route}" with a hardcoded
         # "http://localhost:5173" base_url -- scheme/host are literals.
         with urllib.request.urlopen(req, timeout=3.0) as resp:  # nosec B310
@@ -5931,13 +6614,13 @@ def compare_screen_snapshots(route: str = "/", threshold_pct: float = 1.0) -> st
 
     lines = [
         f"# Visual Diff Comparison: `{route}`\n",
-        f"- **Status**: {'🟢 Reachable' if reachable else '🔴 Offline'} "
-        "(reachability check only -- no real image comparison performed)",
-        f"- **Diff Percentage**: {payload['diff_pct']:.1f}% (Threshold: {threshold_pct}%, "
-        "reachability proxy, not a pixel diff)",
+        (f"- **Status**: {'🟢 Reachable' if reachable else '🔴 Offline'} "
+        "(reachability check only -- no real image comparison performed)"),
+        (f"- **Diff Percentage**: {payload['diff_pct']:.1f}% (Threshold: {threshold_pct}%, "
+        "reachability proxy, not a pixel diff)"),
         f"- **Latency**: {elapsed} ms",
-        "- _Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` "
-        "package) for a real screenshot-based pixel diff._",
+        ("- _Set BROWSER_DIAGNOSTICS_ENABLED=true (and install the optional `playwright` "
+        "package) for a real screenshot-based pixel diff._"),
         "\n```json",
         json.dumps(payload, indent=2),
         "```",
@@ -5956,8 +6639,8 @@ def trace_webapp_network(route: str = "/", duration_seconds: int = 5) -> str:
         duration_seconds: Interception sampling window in seconds (default: 5).
     """
     import json
-    import urllib.request
     import time
+    import urllib.request
 
     endpoints_to_probe = [
         ("GET", "http://localhost:8602/pilots", "/pilots"),
@@ -5970,28 +6653,34 @@ def trace_webapp_network(route: str = "/", duration_seconds: int = 5) -> str:
     for method, url, name in endpoints_to_probe:
         t0 = time.time()
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "StockpyNetworkTrace/1.0"})
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "StockpyNetworkTrace/1.0"}
+            )
             # Bandit B310: `url` comes from the hardcoded `endpoints_to_probe`
             # literal list above -- a fully static "http://localhost:8602/..."
             # URL, no dynamic component at all.
             with urllib.request.urlopen(req, timeout=1.5) as resp:  # nosec B310
                 ms = round((time.time() - t0) * 1000, 1)
-                requests_captured.append({
-                    "method": method,
-                    "url": name,
-                    "status": resp.status,
-                    "ms": ms,
-                    "parity": "OK",
-                })
+                requests_captured.append(
+                    {
+                        "method": method,
+                        "url": name,
+                        "status": resp.status,
+                        "ms": ms,
+                        "parity": "OK",
+                    }
+                )
         except Exception:
             ms = round((time.time() - t0) * 1000, 1)
-            requests_captured.append({
-                "method": method,
-                "url": name,
-                "status": 503,
-                "ms": ms,
-                "parity": "OFFLINE",
-            })
+            requests_captured.append(
+                {
+                    "method": method,
+                    "url": name,
+                    "status": 503,
+                    "ms": ms,
+                    "parity": "OFFLINE",
+                }
+            )
 
     payload = {
         "route": route,
@@ -6007,7 +6696,9 @@ def trace_webapp_network(route: str = "/", duration_seconds: int = 5) -> str:
     ]
     for r in requests_captured:
         status_icon = "🟢" if r["status"] == 200 else "🔴"
-        lines.append(f"`{r['method']}` | `{r['url']}` | {status_icon} {r['status']} | {r['ms']} ms | {r['parity']}")
+        lines.append(
+            f"`{r['method']}` | `{r['url']}` | {status_icon} {r['status']} | {r['ms']} ms | {r['parity']}"
+        )
 
     lines.append("\n```json")
     lines.append(json.dumps(payload, indent=2))
@@ -6042,7 +6733,9 @@ def tune_strategy_parameters(
     # a fabricated Sharpe/MaxDD/win-rate is the correct behavior until this
     # is wired to a real backtest (e.g. `validation.harness`); a fabricated
     # response would be strictly worse than an honest refusal.
-    raise RuntimeError("Constraint #4: Cannot fabricate parameters for tune_strategy_parameters. Actual backtest required.")
+    raise RuntimeError(
+        "Constraint #4: Cannot fabricate parameters for tune_strategy_parameters. Actual backtest required."
+    )
 
 
 # ==========================================
@@ -6087,6 +6780,7 @@ if __name__ == "__main__":
         """
         if host not in ("127.0.0.1", "localhost", "::1"):
             from mcp.server.transport_security import TransportSecuritySettings
+
             mcp.settings.transport_security = TransportSecuritySettings(
                 enable_dns_rebinding_protection=False
             )
@@ -6132,7 +6826,9 @@ if __name__ == "__main__":
             file=sys.stderr,
         )
 
-        print(f"Starting InvestYo MCP Server in streamable-http/oauth mode on {args.host}:{args.port}...")
+        print(
+            f"Starting InvestYo MCP Server in streamable-http/oauth mode on {args.host}:{args.port}..."
+        )
         # The SDK's own RequireAuthMiddleware gates /mcp (auth_server_provider
         # was supplied at FastMCP() construction, module top) -- no extra
         # wrapper needed there. /register, /login, /token have no such gate
@@ -6143,7 +6839,12 @@ if __name__ == "__main__":
         # module docstring for the CF-Connecting-IP trust decision and its
         # residual-risk caveat.
         app = rate_limit_asgi_middleware(mcp.streamable_http_app())
-        uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level=mcp.settings.log_level.lower(),
+        )
     # Deliberately bypasses mcp.run() here -- FastMCP.run_streamable_http_async
     # has no middleware injection hook, so this replicates its two-line
     # uvicorn.Config/.serve() body by hand to wrap the bearer-auth middleware.
@@ -6170,8 +6871,15 @@ if __name__ == "__main__":
                 file=sys.stderr,
             )
 
-        print(f"Starting InvestYo MCP Server in streamable-http mode on {args.host}:{args.port}...")
+        print(
+            f"Starting InvestYo MCP Server in streamable-http mode on {args.host}:{args.port}..."
+        )
         app = _bearer_auth_asgi_middleware(mcp.streamable_http_app(), token)
-        uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level=mcp.settings.log_level.lower(),
+        )
     else:
         mcp.run(transport="stdio")
