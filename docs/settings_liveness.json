@@ -2053,7 +2053,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2456",
+        "site": "data/market_data.py:2490",
         "via": []
       }
     ],
@@ -2100,7 +2100,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2457",
+        "site": "data/market_data.py:2491",
         "via": []
       }
     ],
@@ -2358,7 +2358,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2245",
+        "site": "data/market_data.py:2279",
         "via": []
       }
     ],
