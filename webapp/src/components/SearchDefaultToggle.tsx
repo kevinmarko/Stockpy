@@ -2,6 +2,12 @@ import { useSearchDefault } from "../context/SearchDefaultContext";
 import { Toggle } from "./Toggle";
 import { theme } from "../theme";
 
+/** Shared with `SettingsGeneral.tsx`'s `SearchBehaviorSection` subtitle, so
+ * the two adjacent pieces of copy describing which screens this preference
+ * affects can't silently drift apart if `SymbolInput`'s call-site list ever
+ * changes. */
+export const SEARCH_DEFAULT_AFFECTED_SCREENS = "Data Explorer, Signal Breakdown, Paper Broker, and more";
+
 /**
  * SearchDefaultToggle — the operator-facing control for
  * `SearchDefaultContext`'s `universeFirst` preference (see that file's own
@@ -49,7 +55,7 @@ export function SearchDefaultToggle() {
         }}
       >
         {universeFirst
-          ? "The search box across the app (Data Explorer, Signal Breakdown, Paper Broker, and more) leads with results from the whole market. Symbols on your tracked/saved list still appear, labeled \"Saved\", further down."
+          ? `The search box across the app (${SEARCH_DEFAULT_AFFECTED_SCREENS}) leads with results from the whole market. Symbols on your tracked/saved list still appear, labeled "Saved", further down.`
           : "The search box across the app leads with your tracked/saved symbols first, exactly like it did before September 2026. Wider market results still appear, labeled \"Not yet tracked\", further down."}
       </p>
     </div>
