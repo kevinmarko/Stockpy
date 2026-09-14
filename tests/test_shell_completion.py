@@ -107,3 +107,42 @@ def test_zsh_syntax_valid(tmp_path: Path):
     f = tmp_path / "c.zsh"
     f.write_text(script, encoding="utf-8")
     assert subprocess.run(["zsh", "-n", str(f)]).returncode == 0
+
+
+class TestCommittedArtifactIsFresh:
+    """completions/investyo.{bash,zsh} are committed, machine-generated artifacts
+    (scripts/generate_shell_completion.py, driven by the committed
+    cli_introspect/command_manifest.json). Nothing previously asserted they were
+    regenerated after a manifest change -- this closes that gap, matching the
+    established pattern in tests/test_settings_liveness.py /
+    tests/test_measure_settings_census.py's own TestCommittedArtifactIsFresh
+    classes.
+    """
+
+    @staticmethod
+    def _load_real_manifest():
+        import json as _json
+
+        return _json.loads((_REPO_ROOT / "cli_introspect" / "command_manifest.json").read_text(encoding="utf-8")).get(
+            "commands", []
+        )
+
+    def test_committed_bash_matches_a_fresh_run(self):
+        commands = self._load_real_manifest()
+        expected = gen.render_bash(commands, gen.build_contexts(commands))
+        committed = (_REPO_ROOT / "completions" / "investyo.bash").read_text(encoding="utf-8")
+        assert committed == expected, (
+            "completions/investyo.bash is stale relative to "
+            "cli_introspect/command_manifest.json. Regenerate with "
+            "`python scripts/generate_shell_completion.py` and commit the result."
+        )
+
+    def test_committed_zsh_matches_a_fresh_run(self):
+        commands = self._load_real_manifest()
+        expected = gen.render_zsh(commands, gen.build_contexts(commands))
+        committed = (_REPO_ROOT / "completions" / "investyo.zsh").read_text(encoding="utf-8")
+        assert committed == expected, (
+            "completions/investyo.zsh is stale relative to "
+            "cli_introspect/command_manifest.json. Regenerate with "
+            "`python scripts/generate_shell_completion.py` and commit the result."
+        )
