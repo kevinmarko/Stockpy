@@ -71,9 +71,28 @@ def _resp(status: int = 200, *, payload=None, retry_after=None) -> MagicMock:
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch, tmp_path):
     fake = FakeClock()
+    # Isolate the CROSS-PROCESS throttle's state file. Without this these
+    # tests read and write the operator's real
+    # ~/.stockpy_local/rate_limits/gdelt.state — the same
+    # shared-real-state-in-tests hazard tests/test_fmp_client.py and
+    # tests/test_edgar_fundamentals.py already guard against via their own
+    # *_state_path_override. It also matters for speed: under `-n auto` two
+    # xdist workers otherwise contend on that one file, which is why CI
+    # measured ~90s for a single test where a serial local run saw ~45s.
+    monkeypatch.setattr(
+        "data.sentiment_sources._gdelt_throttle_state_path_override",
+        tmp_path / "gdelt.state",
+    )
     monkeypatch.setattr("data.sentiment_sources.time", fake)
+    # _gdelt_throttle's SECOND layer lives in another module
+    # (data/cross_process_throttle.py::wait_turn, which has its own `import
+    # time`), so patching sentiment_sources alone left that half sleeping for
+    # real: this file took 5m40s of wall clock for 0.95s of CPU, and in CI —
+    # where `-n auto` yields only 2 workers on a 2-vCPU runner — it blocked
+    # half the available parallelism for minutes of an 18-minute job.
+    monkeypatch.setattr("data.cross_process_throttle.time", fake)
     reset_gdelt_rate_limiter()
     yield fake
     reset_gdelt_rate_limiter()
