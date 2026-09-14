@@ -151,6 +151,102 @@ class TestThrottleSpacing:
         assert clock.sleeps == []  # exactly one request each, no waiting
 
 
+class _NoOpSleepFakeClock(FakeClock):
+    """Same as FakeClock, but ``sleep`` is a pure no-op -- it neither records
+    anything nor advances ``now``. Used to make one throttle layer structurally
+    unable to enforce any spacing (its own "elapsed" always reads ~0 against a
+    clock that never moves), the fake-clock equivalent of the "in-process
+    delay set to 0" framing, without ever touching real wall-clock time.
+    """
+
+    def sleep(self, seconds: float) -> None:
+        # `seconds` is intentionally unused -- this stand-in exists precisely
+        # to make the sleep a no-op.
+        return None
+
+
+class TestThrottleLayersIndependently:
+    """``_gdelt_throttle`` has TWO spacing layers -- the in-process
+    ``threading.Lock`` block above, and ``cross_process_throttle.wait_turn``'s
+    ``flock``, called immediately after. The ``clock`` fixture patches BOTH
+    ``data.sentiment_sources.time`` and ``data.cross_process_throttle.time`` to
+    the SAME ``FakeClock`` instance (see that fixture's own comment -- it
+    exists so ``wait_turn`` doesn't really sleep for 5 s per call and blow up
+    this suite's runtime). That means ``TestThrottleSpacing``'s
+    ``clock.sleeps == [5.0, 5.0]`` assertion cannot tell which layer produced
+    those two entries -- either layer alone is sufficient to pass it, since
+    both write into the identical list. Verified by direct sabotage, not by
+    reading: breaking EITHER layer alone (including removing the call to
+    ``wait_turn`` entirely) leaves ``TestThrottleSpacing`` green; only
+    breaking both together fails it.
+
+    Fixed here the same way as ``tests/test_edgar_fundamentals.py``'s and
+    ``tests/test_fmp_client.py``'s ``TestThrottleLayersIndependently`` classes,
+    adapted to this file's own "no real sleeps, ever" convention (git history:
+    "stop the GDELT limiter tests sleeping for real (5m40s -> 1.5s)") by
+    giving each layer its OWN disjoint fake clock instead of measuring real
+    wall-clock gaps -- a real 5 s-interval sleep per call is exactly what that
+    prior fix removed, and reintroducing it here would undo it.
+    """
+
+    def test_in_process_layer_alone_serializes_request_issuance(
+        self, monkeypatch, limiter_settings
+    ):
+        """Neutralize wait_turn entirely (so it cannot contribute any
+        spacing) and confirm the in-process fake-clock spacing is unchanged
+        from ``TestThrottleSpacing``'s own assertion.
+
+        Fails if the in-process sleep is removed or the lock stops being held
+        across it; unaffected by anything done to ``wait_turn``.
+        """
+        fake = FakeClock()
+        monkeypatch.setattr("data.sentiment_sources.time", fake)
+        monkeypatch.setattr(
+            "data.cross_process_throttle.wait_turn", lambda *a, **k: None
+        )
+        reset_gdelt_rate_limiter()
+
+        with patch("data.sentiment_sources.requests.get", return_value=_resp()) as get:
+            _gdelt_get({"query": "AAPL"})
+            _gdelt_get({"query": "MSFT"})
+            _gdelt_get({"query": "NVDA"})
+
+        assert get.call_count == 3
+        assert fake.sleeps == [5.0, 5.0]
+        reset_gdelt_rate_limiter()
+
+    def test_cross_process_layer_alone_serializes_request_issuance(
+        self, monkeypatch, limiter_settings, tmp_path
+    ):
+        """Defeat the in-process layer's ability to actually delay anything
+        (its clock's ``sleep`` is a no-op, so it always measures ~0 elapsed)
+        while giving ``wait_turn`` its OWN separate fake clock that genuinely
+        advances on sleep -- proving the cross-process layer enforces the
+        spacing alone, entirely in fake time.
+
+        Fails if ``wait_turn``'s sleep is removed, if it stops holding the
+        lock across that sleep, or if ``_gdelt_throttle`` simply stops calling
+        it. Unaffected by anything done to the in-process block.
+        """
+        monkeypatch.setattr("data.sentiment_sources.time", _NoOpSleepFakeClock())
+        cross_process_clock = FakeClock()
+        monkeypatch.setattr("data.cross_process_throttle.time", cross_process_clock)
+        monkeypatch.setattr(
+            "data.sentiment_sources._gdelt_throttle_state_path_override",
+            tmp_path / "gdelt.state",
+        )
+        reset_gdelt_rate_limiter()
+
+        with patch("data.sentiment_sources.requests.get", return_value=_resp()) as get:
+            _gdelt_get({"query": "AAPL"})
+            _gdelt_get({"query": "MSFT"})
+            _gdelt_get({"query": "NVDA"})
+
+        assert get.call_count == 3
+        assert cross_process_clock.sleeps == [5.0, 5.0]
+        reset_gdelt_rate_limiter()
+
+
 class TestRetryAndBackoff:
     def test_429_is_retried_with_exponential_backoff_then_raises(
         self, clock, limiter_settings
