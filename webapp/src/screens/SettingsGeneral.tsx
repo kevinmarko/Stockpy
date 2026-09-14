@@ -8,7 +8,7 @@ import { Button, Input, Loading, ErrorState, Notice } from "../components/ui";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
 import { PwaStatusSection } from "../components/PwaStatusSection";
-import { SearchDefaultToggle } from "../components/SearchDefaultToggle";
+import { SearchDefaultToggle, SEARCH_DEFAULT_AFFECTED_SCREENS } from "../components/SearchDefaultToggle";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
 import { SectionCard } from "../components/SectionCard";
@@ -66,7 +66,7 @@ function SearchBehaviorSection() {
   return (
     <SectionCard
       title="Search behavior"
-      sub="Controls what the search box across the app (Data Explorer, Signal Breakdown, Paper Broker, and more) leads with. This is a per-browser display preference only — it does not change what the pipeline evaluates or what's in your tracked universe."
+      sub={`Controls what the search box across the app (${SEARCH_DEFAULT_AFFECTED_SCREENS}) leads with. This is a per-browser display preference only — it does not change what the pipeline evaluates or what's in your tracked universe.`}
     >
       <SearchDefaultToggle />
     </SectionCard>
