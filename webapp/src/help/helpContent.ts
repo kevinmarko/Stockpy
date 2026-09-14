@@ -433,10 +433,10 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "Your full, real Robinhood closed-trade ledger — every FIFO round-trip reconstructed from your actual filled orders, paginated and filterable by symbol. Ingested during a device-approval login (`python3 main.py --refresh-account`) and persisted durably, so it survives across sessions. Equities only — options and crypto activity aren't covered. This is a read-only record of what already happened; it never feeds position sizing.",
     keyConcepts: ["fifo round-trip", "realized p&l", "win rate", "profit factor", "advisory only"],
   },
-  "trade-journal": {
-    title: "Trade Journal",
+  retrospective: {
+    title: "Retrospective Journal",
     description:
-      "Every closed PAPER trade, composed into a full retrospective: what happened (entry/exit, realized P&L), the real post-trade move recomputed from price history (MFE/MAE/Edge Ratio), and — only when a decision snapshot was captured at entry — why. The Patterns panel below reuses the Calibration screen's own reliability diagram and breaks outcomes out by decision state (signal-driven / manual / unknown), always shown separately, never blended into one overall number. Distinct from Trade History (your real Robinhood ledger, equities only): this reads the internal paper-trading ledger and every automated strategy, not just equities.",
+      "Every closed PAPER trade, composed into a full retrospective: what happened (entry/exit, realized P&L), the real post-trade move recomputed from price history (MFE/MAE/Edge Ratio), and — only when an entry-time decision snapshot was captured — why. The Pattern Insights tab partitions outcomes into strictly separate automated/manual/unrecorded cohorts, always shown separately, never blended into one overall number. Distinct from Trade History (your real Robinhood ledger, equities only): this reads the internal paper-trading ledger across every automated strategy, not just equities.",
     keyConcepts: ["decision snapshot", "evaluation bridge", "conviction", "advisory only"],
   },
   attribution: {

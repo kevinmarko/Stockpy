@@ -145,7 +145,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 465,
+  "files_scanned": 463,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -528,9 +528,9 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 960,
+    "attr": 954,
     "factory_param": 4,
-    "getattr_const": 402,
+    "getattr_const": 403,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
@@ -935,7 +935,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:111",
+        "site": "data/paper_account_store.py:177",
         "via": []
       },
       {
@@ -954,15 +954,6 @@
           "cross_module_init_helper"
         ],
         "site": "data/symbol_view_store.py:89",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "data/trade_decision_snapshot_store.py:181",
         "via": []
       },
       {
@@ -1144,7 +1135,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:122",
+        "site": "data/paper_account_store.py:188",
         "via": []
       },
       {
@@ -1153,7 +1144,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:124",
+        "site": "data/paper_account_store.py:190",
         "via": []
       },
       {
@@ -1190,24 +1181,6 @@
           "cross_module_init_helper"
         ],
         "site": "data/symbol_view_store.py:95",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "data/trade_decision_snapshot_store.py:186",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "data/trade_decision_snapshot_store.py:188",
         "via": []
       },
       {
@@ -1452,7 +1425,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:122",
+        "site": "data/paper_account_store.py:188",
         "via": []
       },
       {
@@ -1461,7 +1434,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:124",
+        "site": "data/paper_account_store.py:190",
         "via": []
       },
       {
@@ -1498,24 +1471,6 @@
           "cross_module_init_helper"
         ],
         "site": "data/symbol_view_store.py:95",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "data/trade_decision_snapshot_store.py:186",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "data/trade_decision_snapshot_store.py:188",
         "via": []
       },
       {
@@ -1871,9 +1826,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:358",
+        "site": "data/paper_account_store.py:309",
         "via": [
-          182
+          209
         ]
       }
     ],
@@ -2529,7 +2484,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:122",
+        "site": "data/paper_account_store.py:188",
         "via": []
       },
       {
@@ -2548,15 +2503,6 @@
           "cross_module_init_helper"
         ],
         "site": "data/symbol_view_store.py:93",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "data/trade_decision_snapshot_store.py:186",
         "via": []
       },
       {
@@ -2776,9 +2722,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "execution/options_paper_executor.py:158",
+        "site": "execution/options_paper_executor.py:159",
         "via": [
-          180
+          181
         ]
       }
     ],
@@ -3067,7 +3013,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/paper_account_store.py:183",
+        "site": "data/paper_account_store.py:210",
         "via": []
       }
     ],
@@ -3323,7 +3269,7 @@
     "STATE_API_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 107,
+    "cross_module_init_helper": 101,
     "decorator_arg": 13,
     "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,

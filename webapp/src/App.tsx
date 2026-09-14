@@ -42,7 +42,6 @@ import { AIControlCenter } from "./screens/AIControlCenter";
 import { DataExplorer } from "./screens/DataExplorer";
 import { SymbolScreener } from "./screens/SymbolScreener";
 import { TradeHistory } from "./screens/TradeHistory";
-import { TradeJournal } from "./screens/TradeJournal";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { SentimentDynamics } from "./screens/SentimentDynamics";
 import { ForecastViewer } from "./screens/ForecastViewer";
@@ -64,6 +63,7 @@ import { PaperBroker } from "./screens/PaperBroker";
 import { SettingsPaperBroker } from "./screens/SettingsPaperBroker";
 import { LiveTradeApprovals } from "./screens/LiveTradeApprovals";
 import { TrendsVisualizer } from "./screens/TrendsVisualizer";
+import { RetrospectiveJournal } from "./screens/RetrospectiveJournal";
 
 import { StrategyInsights } from "./screens/StrategyInsights";
 import { CreateDataApp } from "./screens/CreateDataApp";
@@ -260,6 +260,7 @@ export default function App() {
                   <Route path="/models" element={<Models />} />
                   <Route path="/pairs" element={<PairsRadar />} />
                   <Route path="/options" element={<OptionsMatrix />} />
+                  <Route path="/retrospective" element={<RetrospectiveJournal />} />
                   <Route path="/attribution" element={<Attribution />} />
                   <Route path="/observability" element={<Observability />} />
                   <Route path="/strategy-health" element={<StrategyHealth />} />
@@ -269,7 +270,6 @@ export default function App() {
                   <Route path="/data-explorer" element={<DataExplorer />} />
                   <Route path="/symbol-screener" element={<SymbolScreener />} />
                   <Route path="/trade-history" element={<TradeHistory />} />
-                  <Route path="/trade-journal" element={<TradeJournal />} />
                   <Route path="/signals" element={<SignalBreakdown />} />
                   <Route path="/sentiment" element={<SentimentDynamics />} />
                   <Route path="/forecast" element={<ForecastViewer />} />

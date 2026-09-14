@@ -58,11 +58,17 @@ def execute_paper_order(
     limit_price: Optional[float] = None,
     expiration: Optional[str] = None,
     legs: Optional[List[Dict[str, Any]]] = None,
-    is_live: bool = False
+    is_live: bool = False,
+    strategy_id: Optional[str] = None,
+    pilot_id: Optional[str] = None,
+    provenance: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executes a paper order for stock or options, updating PaperAccountStore.
     Delegates directly to pilots.paper_broker_options_order.execute_paper_order.
+
+    strategy_id/pilot_id/provenance are optional attribution overrides for a
+    non-human (automated writer) caller -- see that function's own docstring.
     """
     from pilots.paper_broker_options_order import execute_paper_order as _exec_order
     return _exec_order(
@@ -76,6 +82,9 @@ def execute_paper_order(
         expiration=expiration,
         legs=legs,
         is_live=is_live,
+        strategy_id=strategy_id,
+        pilot_id=pilot_id,
+        provenance=provenance,
     )
 
 def get_strategy_options_candidates(symbols: Optional[List[str]] = None) -> List[Dict[str, Any]]:

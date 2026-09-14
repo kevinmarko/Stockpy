@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `cf1675b65d76763e6c2fb253bc346ee330bf571f`
+- Measured at commit: `dc6637bb55b7516c87fb7948eb989befd6f943b8`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -224,7 +224,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **465** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **463** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -238,7 +238,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 853 | 281 |
-| (b) `getattr(settings, "KEY", default)` | 402 | 230 |
+| (b) `getattr(settings, "KEY", default)` | 403 | 230 |
 | (c) `getattr(settings, <var>)` (dynamic) | 18 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
@@ -440,7 +440,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `PAIRS_SNAPSHOT_ENABLED` | b | 1 | 0 |
 | `PAIRS_SNAPSHOT_MAX_PAIRS` | b | 1 | 0 |
 | `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | b | 2 | 0 |
-| `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` | b | 2 | 0 |
+| `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` | b | 3 | 0 |
 | `RAG_EMBEDDING_PROVIDER` | b | 1 | 0 |
 | `RAG_INDEX_LOOKBACK_DAYS` | b | 1 | 0 |
 | `RAG_INDEX_MAX_DOCUMENTS` | b | 1 | 0 |

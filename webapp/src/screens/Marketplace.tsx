@@ -456,9 +456,9 @@ export function Marketplace() {
                 Your full real, closed-trade ledger
               </div>
             </Link>
-            <Link to="/trade-journal" className="card card-pad" style={{ textDecoration: "none" }}>
+            <Link to="/retrospective" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: "var(--t-display)" }} aria-hidden>📓</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Trade journal</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Retrospective journal</div>
               <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 What happened, the real move, and why — per closed paper trade
               </div>

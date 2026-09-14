@@ -15,8 +15,19 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from diagnostics_and_visuals import telemetry
+
+if TYPE_CHECKING:
+    # Type-checking-only import so the `transactions_store: Optional[
+    # "TransactionsStore"]` annotation on evaluate_portfolio() below resolves
+    # under static analysis (ruff's F821 "undefined name" check flags a
+    # quoted forward reference to a name that is never bound anywhere in the
+    # module, TYPE_CHECKING-guarded or not) -- the real import stays
+    # function-local inside evaluate_portfolio() itself so this module keeps
+    # its existing lazy-import discipline for the heavy transactions_store
+    # dependency at runtime.
+    from transactions_store import TransactionsStore
 
 # Configure module logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -484,30 +495,47 @@ class EvaluationEngine:
         # and create an empty DataFrame inside the function body instead.
         benchmark_df: Optional[pd.DataFrame] = None,
         data_provider=None,
+        transactions_store: Optional["TransactionsStore"] = None,
     ) -> pd.DataFrame:
         """
-        Main execution method mapping MAE, MFE, Portfolio Heat, and Brinson-Fachler 
+        Main execution method mapping MAE, MFE, Portfolio Heat, and Brinson-Fachler
         metrics identically to internal DTO keys requested by config.py.
         Uses transactions_store to pull actual entry prices/timestamps and fetches
         actual historical OHLC of the hold period from data_provider.
+
+        ``transactions_store``: optional explicit injection of the
+        ``TransactionsStore`` instance to read from, in place of the default
+        ``TransactionsStore(readonly=True)`` construction. Exists specifically
+        so a caller evaluating one isolated, already-known trade (e.g.
+        ``pilots/retrospective_composer.py``'s single-trade excursion
+        evaluation) can pass its own throwaway store directly, rather than
+        monkeypatching the ``TransactionsStore`` symbol globally via
+        ``unittest.mock.patch`` -- a real prior bug: that approach rebinds a
+        PROCESS-GLOBAL module attribute for the duration of the call, which is
+        not thread-safe against a concurrent request in this same FastAPI
+        process (this method is reachable from a sync ``def`` endpoint,
+        dispatched to Starlette's worker threadpool) and can leave the
+        namespace permanently pointed at a stale mock on a non-LIFO patch
+        exit. See docs/known_issues for the incident.
         """
         logger.info("Running post-trade execution analytics...")
-        from transactions_store import TransactionsStore
+        from transactions_store import TransactionsStore as _TransactionsStoreCls
 
         if benchmark_df is None:
             benchmark_df = pd.DataFrame()
 
         df = df.copy()
-        
+
         # Ensure target columns exist in the DataFrame
         for col in ['Entry_Price', 'MAE', 'MFE', 'Edge Ratio', 'Realized Slippage']:
             if col not in df.columns:
                 df[col] = np.nan
-        
+
         # This function only ever reads (store.get_trade_history below) — never
         # writes — so a DATABASE-LEVEL read-only store closes the gap where a
-        # future bug in this analytics path could otherwise write to `trades`.
-        store = TransactionsStore(readonly=True)
+        # future bug in this analytics path could otherwise write to `trades`,
+        # for the default (no explicit store injected) case.
+        store = transactions_store if transactions_store is not None else _TransactionsStoreCls(readonly=True)
 
         # Batch pre-fetch technical history for ALL symbols ONCE, up front, instead
         # of a per-row fetch_technical_raw([symbol]) call inside the loop below.

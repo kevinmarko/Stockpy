@@ -38,11 +38,10 @@ const HORIZONS = [10, 30, 60, 90] as const;
 // Reliability diagram (inline SVG — recharts has no y=x-referenced bar chart)
 // ---------------------------------------------------------------------------
 
-// Exported so TradeJournal.tsx's "Patterns" panel can reuse this exact
-// diagram for GET /trade-journal/insights' calibration section (the SAME
-// underlying pilots.calibration.calibration_view() data, reused verbatim —
-// see pilots/retrospective_insights.py's module docstring) instead of
-// inventing a second reliability-diagram renderer.
+// Exported so a future screen needing the same reliability-diagram
+// rendering (e.g. a calibration section reusing this exact
+// pilots.calibration.calibration_view()-shaped data) can import this
+// instead of inventing a second renderer.
 export function ReliabilityDiagram({ bins }: { bins: CalibrationBin[] }) {
   const W = 320,
     H = 240,

@@ -5,15 +5,17 @@ SQLite store tracking virtual cash balance, open positions, and order history
 across process restarts for the FMP-based paper trading engine.
 """
 
+import json
 import logging
 import re
 import shutil
 import sqlite3
+import uuid
 from datetime import datetime, timezone, date
 from typing import Optional, List, Dict, Any
 
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text
+from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text, Text, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import resolve_database_url, create_db_engine, session_scope
@@ -51,6 +53,8 @@ class PaperPosition(Base):
     # averaging in. NULL only for a legacy/migrated position whose true entry
     # time is genuinely unknown -- never fabricated (CONSTRAINT #4).
     entry_ts = Column(DateTime, nullable=True)
+    # Retrospective Learning Loop (M1): Forward-only pointer to entry decision context
+    entry_snapshot_id = Column(String(64), nullable=True)
 
 
 
@@ -98,6 +102,68 @@ class PaperClosedTrade(Base):
     close_reason = Column(String(20), nullable=False)
     leg_group_id = Column(String(100), nullable=True)
 
+    # Retrospective Learning Loop (M1) additive fields
+    entry_snapshot_id = Column(String(64), nullable=True)
+    bridge_status = Column(String(20), nullable=False, default="not_attempted")
+    bridged_trade_id = Column(Integer, nullable=True)
+    bridge_error = Column(Text, nullable=True)
+    bridged_at = Column(DateTime, nullable=True)
+
+
+class PaperEntrySnapshot(Base):
+    __tablename__ = 'paper_entry_snapshots'
+
+    snapshot_id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trade_id = Column(String(100), nullable=True)
+    symbol = Column(String(64), nullable=False)
+    strategy_id = Column(String(100), nullable=True, default="untagged")
+    pilot_id = Column(String(100), nullable=True)
+    experiment_arm = Column(String(100), nullable=True)
+    entry_ts = Column(DateTime, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    side = Column(String(10), nullable=False)
+    qty = Column(Float, nullable=False)
+    client_order_id = Column(String(100), nullable=True)
+    provenance = Column(String(20), nullable=False, default="unknown")
+    provenance_tag = Column(String(100), nullable=True)
+    conviction = Column(Float, nullable=True)
+    macro_regime = Column(String(50), nullable=True)
+    signal_score = Column(Float, nullable=True)
+    raw_forecast = Column(Float, nullable=True)
+    forecast_model = Column(String(50), nullable=True)
+    key_indicators_json = Column(Text, nullable=True)
+    decision_rationale = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "snapshot_id": self.snapshot_id,
+            "trade_id": self.trade_id,
+            "symbol": self.symbol,
+            "strategy_id": self.strategy_id,
+            "pilot_id": self.pilot_id,
+            "experiment_arm": self.experiment_arm,
+            "entry_ts": self.entry_ts.replace(tzinfo=timezone.utc).isoformat() if self.entry_ts else None,
+            "entry_price": self.entry_price,
+            "side": self.side,
+            "qty": self.qty,
+            "client_order_id": self.client_order_id,
+            "provenance": self.provenance,
+            "provenance_tag": self.provenance_tag,
+            "conviction": self.conviction,
+            "macro_regime": self.macro_regime,
+            "signal_score": self.signal_score,
+            "raw_forecast": self.raw_forecast,
+            "forecast_model": self.forecast_model,
+            "key_indicators_json": self.key_indicators_json,
+            "decision_rationale": self.decision_rationale,
+            "created_at": self.created_at.replace(tzinfo=timezone.utc).isoformat() if self.created_at else None,
+        }
+
 
 _OPTION_SYMBOL_REGEX = re.compile(
     r"^([A-Z0-9]+)\s+(\d{4}-\d{2}-\d{2})\s+\$?(\d+(?:\.\d+)?)\s+(CALL|PUT)$",
@@ -124,45 +190,6 @@ class PaperAccountStore:
             self.engine = create_db_engine(db_url)
             Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
-        # Retrospective Learning Loop (Trade Journal): forward-only
-        # decision-context capture -- see
-        # data/trade_decision_snapshot_store.py's module docstring.
-        #
-        # The `trade_decision_snapshots` table is created directly on THIS
-        # instance's OWN `self.engine` (never a second, independently-
-        # constructed engine bound to the "same" db_url) -- for a real
-        # file-backed db_url both approaches land in the same physical
-        # file, but for `sqlite:///:memory:` (used explicitly by several
-        # existing tests, e.g. test_options_paper_executor.py) each engine
-        # object is its OWN isolated in-memory database regardless of URL
-        # string equality, so a second engine's create_all would silently
-        # create a table this instance's own session could never see or
-        # write to (confirmed empirically -- "no such table" on first
-        # write). Every read/write of this table below goes through
-        # `self.engine`/`self.Session` for the identical reason.
-        #
-        # Table creation happens HERE (at construction, outside any fill's
-        # transaction) rather than lazily inside `_maybe_record_decision_
-        # snapshot` for the same reason `_init_transactions_bridge`
-        # constructs `self._transactions_store` eagerly: a lazy DDL
-        # statement triggered while a fill's own transaction is still open
-        # on this same connection pool empirically reproduces the identical
-        # multi-second WAL-writer contention that bullet's own docstring
-        # documents for the sibling bridge.
-        self._decision_snapshot_enabled = False
-        if not readonly:
-            try:
-                from data.trade_decision_snapshot_store import Base as _SnapshotBase
-
-                _SnapshotBase.metadata.create_all(self.engine)
-                self._decision_snapshot_enabled = True
-            except Exception as exc:
-                logger.error(
-                    "trade_decision_snapshots table failed to initialize "
-                    "(decision-snapshot capture disabled for this store "
-                    "instance): %s", exc,
-                )
-                self._decision_snapshot_enabled = False
 
         # transactions_store bridge (PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED,
         # PR 872 remediation, Task 1): companion TransactionsStore, constructed
@@ -233,100 +260,6 @@ class PaperAccountStore:
             logger.error(f"transactions_store bridge failed to initialize (bridge disabled for this store instance): {exc}")
             self._transactions_store = None
 
-    def _maybe_record_decision_snapshot(
-        self,
-        session,
-        *,
-        symbol: str,
-        strategy_id: str,
-        pilot_id: Optional[str],
-        entry_ts: datetime,
-        decision_context: Optional[Dict[str, Any]],
-    ) -> None:
-        """Best-effort, forward-only decision-context capture at the exact
-        moment a position is newly opened (or re-opened after a
-        flip-through-zero) -- see
-        ``data/trade_decision_snapshot_store.py``'s module docstring for the
-        full design rationale.
-
-        A no-op when the caller didn't supply ``decision_context`` (the
-        default for every existing caller -- byte-identical to before this
-        feature existed).
-
-        Adds the new row to the SAME ``session``/transaction the calling
-        fill is already using, via ``session.add()`` -- NEVER a second,
-        independently-opened connection. Confirmed empirically: SQLite
-        allows only one writer at a time, and a second writer attempting to
-        write through a different connection while THIS transaction is
-        still open blocks until ``busy_timeout`` elapses and then raises
-        ``database is locked`` (the exact write-path counterpart of the
-        read/write contention ``_init_transactions_bridge``'s own docstring
-        already documents for the sibling transactions_store bridge, fixed
-        there the same way: share the session). Building the row itself
-        (JSON-safety on ``factors``, required-field validation) is wrapped
-        in try/except so a malformed ``decision_context`` still can never
-        block or roll back the fill it describes -- ``session.add()`` on an
-        already-valid ORM object is an in-memory operation and does not
-        itself touch the database; only the outer transaction's own
-        flush/commit can fail on it, exactly like every other row already
-        added to ``session`` in this method's callers.
-        """
-        if not decision_context or not self._decision_snapshot_enabled:
-            return
-        try:
-            from data.trade_decision_snapshot_store import build_snapshot_row
-
-            row = build_snapshot_row(
-                symbol=symbol,
-                strategy_id=strategy_id,
-                pilot_id=pilot_id,
-                entry_ts=entry_ts,
-                provenance=str(decision_context.get("provenance", "unknown")),
-                conviction=decision_context.get("conviction"),
-                regime=decision_context.get("regime"),
-                factors=decision_context.get("factors"),
-                notes=decision_context.get("notes"),
-            )
-            session.add(row)
-        except Exception as exc:
-            logger.warning(
-                "decision-snapshot capture failed for %s/%s (fills OPEN -- "
-                "the paper fill itself is unaffected): %s",
-                symbol, strategy_id, exc,
-            )
-
-    def _lookup_snapshot_conviction(
-        self, symbol: str, strategy_id: str, entry_ts: Optional[datetime]
-    ) -> Optional[float]:
-        """Best-effort lookup of the conviction captured at trade-open for
-        this exact (symbol, strategy_id, entry_ts), for threading through
-        the transactions_store bridge -- see ``_record_closed_trade``.
-        Returns ``None`` (never a fabricated value) when ``entry_ts`` is
-        unknown, no snapshot was captured, or the lookup itself fails.
-
-        Queries via ``self.Session()`` -- THIS instance's own engine, not a
-        second one -- for the identical reason ``__init__`` creates the
-        table directly on ``self.engine``: only this engine is guaranteed
-        to see what this instance actually wrote (see that comment for the
-        full ``:memory:`` isolation explanation).
-        """
-        if entry_ts is None or not self._decision_snapshot_enabled:
-            return None
-        try:
-            from data.trade_decision_snapshot_store import TradeDecisionSnapshot
-
-            with session_scope(self.Session) as session:
-                row = (
-                    session.query(TradeDecisionSnapshot)
-                    .filter_by(symbol=symbol.upper(), strategy_id=strategy_id, entry_ts=entry_ts)
-                    .order_by(TradeDecisionSnapshot.captured_at.desc())
-                    .first()
-                )
-                return row.conviction if row is not None else None
-        except Exception as exc:
-            logger.warning("snapshot conviction lookup failed for %s/%s: %s", symbol, strategy_id, exc)
-            return None
-
     def _ensure_account_exists(self):
         with self.engine.begin() as conn:
             try:
@@ -342,6 +275,24 @@ class PaperAccountStore:
                 conn.execute(text("ALTER TABLE paper_orders ADD COLUMN order_kind VARCHAR(20)"))
             except Exception:
                 pass
+
+            # Retrospective Learning Loop (M1): Migrate paper_closed_trades columns
+            try:
+                insp = inspect(conn)
+                if insp.has_table("paper_closed_trades"):
+                    existing = {c["name"] for c in insp.get_columns("paper_closed_trades")}
+                    new_cols = [
+                        ("entry_snapshot_id", "VARCHAR(64)"),
+                        ("bridge_status", "VARCHAR(20) DEFAULT 'not_attempted'"),
+                        ("bridged_trade_id", "INTEGER"),
+                        ("bridge_error", "TEXT"),
+                        ("bridged_at", "DATETIME"),
+                    ]
+                    for col_name, col_type in new_cols:
+                        if col_name not in existing:
+                            conn.execute(text(f"ALTER TABLE paper_closed_trades ADD COLUMN {col_name} {col_type}"))
+            except Exception as exc:
+                logger.debug("Migration of paper_closed_trades columns encountered notice: %s", exc)
 
         # `paper_positions` migration (legacy single-column-PK schema ->
         # composite (symbol, strategy_id) PK schema) is deliberately its OWN
@@ -439,6 +390,9 @@ class PaperAccountStore:
                 # time), never a fabricated timestamp -- CONSTRAINT #4.
                 with self.engine.begin() as conn:
                     conn.execute(text("ALTER TABLE paper_positions ADD COLUMN entry_ts DATETIME"))
+            if "entry_snapshot_id" not in existing_cols:
+                with self.engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE paper_positions ADD COLUMN entry_snapshot_id VARCHAR(64)"))
             return
 
         # Legacy (pre-strategy_id) schema detected -- destructive rebuild
@@ -502,6 +456,7 @@ class PaperAccountStore:
             "qty REAL NOT NULL, "
             "avg_entry_price REAL NOT NULL, "
             "entry_ts DATETIME, "
+            "entry_snapshot_id VARCHAR(64), "
             "PRIMARY KEY (symbol, strategy_id)"
             ")"
         )
@@ -751,6 +706,171 @@ class PaperAccountStore:
                 acc = PaperAccount(id=1, cash_balance=cash_value)
                 session.add(acc)
 
+    def _create_entry_snapshot(
+        self,
+        session,
+        symbol: str,
+        strategy_id: Optional[str],
+        pilot_id: Optional[str],
+        experiment_arm: Optional[str],
+        entry_ts: datetime,
+        entry_price: float,
+        side: str,
+        qty: float,
+        client_order_id: Optional[str],
+        provenance: Optional[str] = None,
+        provenance_tag: Optional[str] = None,
+        conviction: Optional[float] = None,
+        macro_regime: Optional[str] = None,
+        signal_score: Optional[float] = None,
+        raw_forecast: Optional[float] = None,
+        forecast_model: Optional[str] = None,
+        key_indicators_json: Optional[str] = None,
+        decision_rationale: Optional[str] = None,
+        explicit_snapshot_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Forward-only entry context snapshot capture."""
+        # If no snapshot context is supplied (e.g. historical/plain fill where
+        # provenance and all signal metadata are omitted), do not capture or fabricate
+        # a snapshot (ANTI-FABRICATION invariant).
+        has_context = bool(
+            provenance is not None
+            or conviction is not None
+            or macro_regime is not None
+            or signal_score is not None
+            or raw_forecast is not None
+            or forecast_model is not None
+            or key_indicators_json is not None
+            or decision_rationale is not None
+            or explicit_snapshot_id is not None
+            or (strategy_id == "Manual Trade")
+            or (strategy_id not in ("untagged", None, "") and pilot_id is not None)
+        )
+        if not has_context:
+            return None
+
+        if provenance is not None:
+            prov = str(provenance).lower().strip()
+            if prov not in ("signal_driven", "manual", "unknown"):
+                prov = "unknown"
+            tag = provenance_tag
+        elif strategy_id == "Manual Trade":
+            prov = "manual"
+            tag = provenance_tag or "manual:ticket"
+        elif (strategy_id not in ("untagged", None)) or (pilot_id is not None):
+            prov = "signal_driven"
+            tag = provenance_tag or (f"pilot:{pilot_id}" if pilot_id else f"strategy:{strategy_id}")
+        else:
+            prov = "unknown"
+            tag = provenance_tag or "unknown:untagged"
+
+        # Anti-fabrication strict rule: if provenance is manual, do not retain conviction/forecast
+        if prov == "manual":
+            conv_val = None
+            raw_fc = None
+            sig_score = None
+        else:
+            conv_val = float(conviction) if conviction is not None else None
+            raw_fc = float(raw_forecast) if raw_forecast is not None else None
+            sig_score = float(signal_score) if signal_score is not None else None
+
+        snap_id = explicit_snapshot_id or f"snap_{uuid.uuid4().hex[:16]}"
+        naive_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.now(timezone.utc).replace(tzinfo=None)
+
+        snapshot = PaperEntrySnapshot(
+            snapshot_id=snap_id,
+            trade_id=None,
+            symbol=symbol.upper().strip(),
+            strategy_id=strategy_id or "untagged",
+            pilot_id=pilot_id,
+            experiment_arm=experiment_arm,
+            entry_ts=naive_ts,
+            entry_price=float(entry_price),
+            side=side.lower().strip(),
+            qty=float(qty),
+            client_order_id=client_order_id,
+            provenance=prov,
+            provenance_tag=tag,
+            conviction=conv_val,
+            macro_regime=str(macro_regime) if macro_regime else None,
+            signal_score=sig_score,
+            raw_forecast=raw_fc,
+            forecast_model=str(forecast_model) if forecast_model else None,
+            key_indicators_json=key_indicators_json,
+            decision_rationale=decision_rationale,
+        )
+        session.add(snapshot)
+        return snap_id
+
+    def record_entry_snapshot(
+        self,
+        symbol: str,
+        strategy_id: Optional[str],
+        entry_ts: datetime,
+        entry_price: float,
+        side: str,
+        qty: float,
+        provenance: str = "unknown",
+        conviction: Optional[float] = None,
+        macro_regime: Optional[str] = None,
+        signal_score: Optional[float] = None,
+        raw_forecast: Optional[float] = None,
+        key_indicators: Optional[Dict[str, Any]] = None,
+        snapshot_id: Optional[str] = None,
+        trade_id: Optional[str] = None,
+        *,
+        pilot_id: Optional[str] = None,
+        experiment_arm: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        provenance_tag: Optional[str] = None,
+        forecast_model: Optional[str] = None,
+        key_indicators_json: Optional[str] = None,
+        decision_rationale: Optional[str] = None,
+        session=None,
+    ) -> str:
+        """Records an entry decision snapshot for an opening paper trade."""
+        if self._readonly:
+            raise RuntimeError("Cannot record entry snapshot in readonly mode.")
+
+        snap_id = snapshot_id or f"snap_{uuid.uuid4().hex[:16]}"
+        indicators_json = key_indicators_json or (json.dumps(key_indicators) if key_indicators else None)
+        naive_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.now(timezone.utc).replace(tzinfo=None)
+
+        snapshot = PaperEntrySnapshot(
+            snapshot_id=snap_id,
+            trade_id=trade_id,
+            symbol=symbol.upper().strip(),
+            strategy_id=strategy_id or "untagged",
+            pilot_id=pilot_id,
+            experiment_arm=experiment_arm,
+            entry_ts=naive_ts,
+            entry_price=float(entry_price),
+            side=side.lower().strip(),
+            qty=float(qty),
+            client_order_id=client_order_id,
+            provenance=provenance,
+            provenance_tag=provenance_tag,
+            conviction=float(conviction) if conviction is not None else None,
+            macro_regime=macro_regime,
+            signal_score=float(signal_score) if signal_score is not None else None,
+            raw_forecast=float(raw_forecast) if raw_forecast is not None else None,
+            forecast_model=forecast_model,
+            key_indicators_json=indicators_json,
+            decision_rationale=decision_rationale,
+        )
+
+        def _do_write(s):
+            s.add(snapshot)
+            s.flush()
+
+        if session is not None:
+            _do_write(session)
+        else:
+            with session_scope(self.Session) as s:
+                _do_write(s)
+
+        return snap_id
+
     def apply_fill(
         self,
         client_order_id: str,
@@ -769,7 +889,17 @@ class PaperAccountStore:
         leg_group_id: Optional[str] = None,
         order_kind: Optional[str] = None,
         allow_untagged_fallback: bool = False,
-        decision_context: Optional[Dict[str, Any]] = None,
+        *,
+        provenance: Optional[str] = None,
+        provenance_tag: Optional[str] = None,
+        conviction: Optional[float] = None,
+        macro_regime: Optional[str] = None,
+        signal_score: Optional[float] = None,
+        raw_forecast: Optional[float] = None,
+        forecast_model: Optional[str] = None,
+        key_indicators_json: Optional[str] = None,
+        decision_rationale: Optional[str] = None,
+        entry_snapshot_id: Optional[str] = None,
     ) -> bool:
 
         """
@@ -805,20 +935,6 @@ class PaperAccountStore:
         ``retag_position()`` to explicitly move a legacy untagged position
         onto its real strategy_id once known, instead of relying on this
         fallback at fill time.
-
-        ``decision_context`` (Retrospective Learning Loop, forward-only):
-        an optional dict describing WHY this order was placed, captured
-        best-effort into ``data/trade_decision_snapshot_store.py`` at the
-        exact moment a genuinely new position is opened (or re-opened after
-        a flip-through-zero) -- never on an average-in, since ``entry_ts``
-        itself is left untouched there too. ``None`` (the default) is a
-        pure no-op, byte-identical to every existing caller. Recognized
-        keys: ``provenance`` (required if the dict is non-empty -- e.g.
-        ``"manual"`` or ``"automated:options_auto_scan"``), ``conviction``
-        (float, e.g. a meta-labeler's prob_win), ``regime`` (str), ``factors``
-        (a plain dict of real observed values), ``notes`` (str). A capture
-        failure never blocks or rolls back this fill -- see
-        ``_maybe_record_decision_snapshot``.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -876,13 +992,19 @@ class PaperAccountStore:
                         # brand-new long -- reset entry_ts along with
                         # avg_entry_price rather than leaving it pinned to the
                         # now-fully-closed short's open time.
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=fill_price,
+                            side="buy", qty=new_qty, client_order_id=client_order_id,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale, explicit_snapshot_id=entry_snapshot_id,
+                        )
                         pos.qty = new_qty
                         pos.avg_entry_price = fill_price
                         pos.entry_ts = now_ts
-                        self._maybe_record_decision_snapshot(
-                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                            entry_ts=now_ts, decision_context=decision_context,
-                        )
+                        pos.entry_snapshot_id = snap_id
                     else:
                         pos.qty = new_qty
                 else:
@@ -903,12 +1025,21 @@ class PaperAccountStore:
                         pos.avg_entry_price = ((pos.qty * pos.avg_entry_price) + cost_basis_impact) / new_qty
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=qty, avg_entry_price=fill_price, entry_ts=now_ts)
-                        session.add(pos)
-                        self._maybe_record_decision_snapshot(
-                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                            entry_ts=now_ts, decision_context=decision_context,
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=fill_price,
+                            side="buy", qty=qty, client_order_id=client_order_id,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale, explicit_snapshot_id=entry_snapshot_id,
                         )
+                        pos = PaperPosition(
+                            symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, qty=qty, avg_entry_price=fill_price,
+                            entry_ts=now_ts, entry_snapshot_id=snap_id
+                        )
+                        session.add(pos)
 
             elif side == "sell":
                 if pos and pos.qty > _QTY_EPSILON:
@@ -941,12 +1072,18 @@ class PaperAccountStore:
                         # Long fully closed and flipped through zero into a
                         # brand-new short -- same entry_ts reset reasoning as
                         # the buy-side flip above.
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=fill_price,
+                            side="sell", qty=abs(pos.qty), client_order_id=client_order_id,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale, explicit_snapshot_id=entry_snapshot_id,
+                        )
                         pos.avg_entry_price = fill_price
                         pos.entry_ts = now_ts
-                        self._maybe_record_decision_snapshot(
-                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                            entry_ts=now_ts, decision_context=decision_context,
-                        )
+                        pos.entry_snapshot_id = snap_id
                 else:
                     # Selling to open short (options or short stock)
                     if not is_option_contract:
@@ -969,12 +1106,21 @@ class PaperAccountStore:
                         pos.avg_entry_price = ((abs(pos.qty) * pos.avg_entry_price) + cost_basis_impact) / abs(new_qty)
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-qty, avg_entry_price=fill_price, entry_ts=now_ts)
-                        session.add(pos)
-                        self._maybe_record_decision_snapshot(
-                            session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                            entry_ts=now_ts, decision_context=decision_context,
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=fill_price,
+                            side="sell", qty=qty, client_order_id=client_order_id,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale, explicit_snapshot_id=entry_snapshot_id,
                         )
+                        pos = PaperPosition(
+                            symbol=symbol.upper(), strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, qty=-qty, avg_entry_price=fill_price,
+                            entry_ts=now_ts, entry_snapshot_id=snap_id
+                        )
+                        session.add(pos)
 
             else:
                 return False
@@ -997,7 +1143,16 @@ class PaperAccountStore:
         pilot_id: Optional[str] = None,
         experiment_arm: Optional[str] = None,
         allow_untagged_fallback: bool = False,
-        decision_context: Optional[Dict[str, Any]] = None,
+        *,
+        provenance: Optional[str] = None,
+        provenance_tag: Optional[str] = None,
+        conviction: Optional[float] = None,
+        macro_regime: Optional[str] = None,
+        signal_score: Optional[float] = None,
+        raw_forecast: Optional[float] = None,
+        forecast_model: Optional[str] = None,
+        key_indicators_json: Optional[str] = None,
+        decision_rationale: Optional[str] = None,
     ) -> bool:
         """
         Executes an atomic multi-leg options order fill across all legs and updates cash balance.
@@ -1078,6 +1233,7 @@ class PaperAccountStore:
 
             # Update each constituent leg position
             for idx, leg in enumerate(legs):
+                leg_coid = f"{client_order_id}_L{idx+1}"
                 leg_symbol = str(leg["symbol"]).upper().strip()
                 leg_side = str(leg.get("side", "buy")).lower().strip()
                 leg_qty = float(leg.get("qty", contracts))
@@ -1105,13 +1261,19 @@ class PaperAccountStore:
                             session.delete(pos)
                         elif new_qty > 0:
                             # Flipped through zero -- brand-new position basis.
+                            snap_id = self._create_entry_snapshot(
+                                session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                                experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                                side="buy", qty=new_qty, client_order_id=leg_coid,
+                                provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                                macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                                forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                                decision_rationale=decision_rationale,
+                            )
                             pos.qty = new_qty
                             pos.avg_entry_price = leg_fill_price
                             pos.entry_ts = now_ts
-                            self._maybe_record_decision_snapshot(
-                                session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                                entry_ts=now_ts, decision_context=decision_context,
-                            )
+                            pos.entry_snapshot_id = snap_id
                         else:
                             pos.qty = new_qty
                     elif pos:
@@ -1120,12 +1282,17 @@ class PaperAccountStore:
                         pos.avg_entry_price = ((pos.qty * pos.avg_entry_price) + leg_cost) / new_qty
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
-                        session.add(pos)
-                        self._maybe_record_decision_snapshot(
-                            session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                            entry_ts=now_ts, decision_context=decision_context,
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                            side="buy", qty=leg_qty, client_order_id=leg_coid,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale,
                         )
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts, entry_snapshot_id=snap_id)
+                        session.add(pos)
                 elif leg_side == "sell":
                     if pos and pos.qty > _QTY_EPSILON:
                         closed_qty = min(pos.qty, leg_qty)
@@ -1137,27 +1304,37 @@ class PaperAccountStore:
                             session.delete(pos)
                         elif pos.qty < -_QTY_EPSILON:
                             # Flipped through zero -- brand-new position basis.
+                            snap_id = self._create_entry_snapshot(
+                                session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                                experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                                side="sell", qty=abs(pos.qty), client_order_id=leg_coid,
+                                provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                                macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                                forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                                decision_rationale=decision_rationale,
+                            )
                             pos.avg_entry_price = leg_fill_price
                             pos.entry_ts = now_ts
-                            self._maybe_record_decision_snapshot(
-                                session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                                entry_ts=now_ts, decision_context=decision_context,
-                            )
+                            pos.entry_snapshot_id = snap_id
                     elif pos:
                         # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty - leg_qty
                         pos.avg_entry_price = ((abs(pos.qty) * pos.avg_entry_price) + leg_cost) / abs(new_qty)
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
-                        session.add(pos)
-                        self._maybe_record_decision_snapshot(
-                            session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
-                            entry_ts=now_ts, decision_context=decision_context,
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                            side="sell", qty=leg_qty, client_order_id=leg_coid,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale,
                         )
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts, entry_snapshot_id=snap_id)
+                        session.add(pos)
 
                 # Record individual leg order
-                leg_coid = f"{client_order_id}_L{idx+1}"
                 self._insert_order(
                     session, leg_coid, leg_symbol, leg_side, leg_qty, leg_qty, leg_fill_price, status, leg_qty,
                     strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
@@ -1190,6 +1367,16 @@ class PaperAccountStore:
         pilot_id: Optional[str] = None,
         experiment_arm: Optional[str] = None,
         allow_untagged_fallback: bool = False,
+        *,
+        provenance: Optional[str] = None,
+        provenance_tag: Optional[str] = None,
+        conviction: Optional[float] = None,
+        macro_regime: Optional[str] = None,
+        signal_score: Optional[float] = None,
+        raw_forecast: Optional[float] = None,
+        forecast_model: Optional[str] = None,
+        key_indicators_json: Optional[str] = None,
+        decision_rationale: Optional[str] = None,
     ) -> bool:
         """
         Executes an atomic roll order: closes existing position legs and opens new expiration legs in a single transaction.
@@ -1295,6 +1482,7 @@ class PaperAccountStore:
 
             # Update each constituent leg position
             for idx, leg in enumerate(all_legs):
+                leg_coid = f"{client_order_id}_L{idx+1}"
                 leg_symbol = str(leg["symbol"]).upper().strip()
                 leg_side = str(leg.get("side", "buy")).lower().strip()
                 leg_qty = float(leg.get("qty", contracts))
@@ -1325,9 +1513,19 @@ class PaperAccountStore:
                             session.delete(pos)
                         elif new_qty > 0:
                             # Flipped through zero -- brand-new position basis.
+                            snap_id = self._create_entry_snapshot(
+                                session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                                experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                                side="buy", qty=new_qty, client_order_id=leg_coid,
+                                provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                                macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                                forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                                decision_rationale=decision_rationale,
+                            )
                             pos.qty = new_qty
                             pos.avg_entry_price = leg_fill_price
                             pos.entry_ts = now_ts
+                            pos.entry_snapshot_id = snap_id
                         else:
                             pos.qty = new_qty
                     elif pos:
@@ -1336,7 +1534,16 @@ class PaperAccountStore:
                         pos.avg_entry_price = ((pos.qty * pos.avg_entry_price) + leg_cost) / new_qty
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                            side="buy", qty=leg_qty, client_order_id=leg_coid,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale,
+                        )
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts, entry_snapshot_id=snap_id)
                         session.add(pos)
                 elif leg_side == "sell":
                     if pos and pos.qty > _QTY_EPSILON:
@@ -1349,19 +1556,37 @@ class PaperAccountStore:
                             session.delete(pos)
                         elif pos.qty < -_QTY_EPSILON:
                             # Flipped through zero -- brand-new position basis.
+                            snap_id = self._create_entry_snapshot(
+                                session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                                experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                                side="sell", qty=abs(pos.qty), client_order_id=leg_coid,
+                                provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                                macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                                forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                                decision_rationale=decision_rationale,
+                            )
                             pos.avg_entry_price = leg_fill_price
                             pos.entry_ts = now_ts
+                            pos.entry_snapshot_id = snap_id
                     elif pos:
                         # Averaging in -- entry_ts left untouched.
                         new_qty = pos.qty - leg_qty
                         pos.avg_entry_price = ((abs(pos.qty) * pos.avg_entry_price) + leg_cost) / abs(new_qty)
                         pos.qty = new_qty
                     else:
-                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts)
+                        snap_id = self._create_entry_snapshot(
+                            session=session, symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id,
+                            experiment_arm=experiment_arm, entry_ts=now_ts, entry_price=leg_fill_price,
+                            side="sell", qty=leg_qty, client_order_id=leg_coid,
+                            provenance=provenance, provenance_tag=provenance_tag, conviction=conviction,
+                            macro_regime=macro_regime, signal_score=signal_score, raw_forecast=raw_forecast,
+                            forecast_model=forecast_model, key_indicators_json=key_indicators_json,
+                            decision_rationale=decision_rationale,
+                        )
+                        pos = PaperPosition(symbol=leg_symbol, strategy_id=strategy_id, pilot_id=pilot_id, experiment_arm=experiment_arm, qty=-leg_qty, avg_entry_price=leg_fill_price, entry_ts=now_ts, entry_snapshot_id=snap_id)
                         session.add(pos)
 
                 # Record individual leg order
-                leg_coid = f"{client_order_id}_L{idx+1}"
                 self._insert_order(
                     session, leg_coid, leg_symbol, leg_side, leg_qty, leg_qty, leg_fill_price, status, leg_qty,
                     strategy_id, pilot_id, experiment_arm, client_order_id, "leg"
@@ -1548,6 +1773,9 @@ class PaperAccountStore:
             (now - entry_ts).total_seconds() / 86400.0 if entry_ts is not None else None
         )
 
+        entry_snapshot_id = getattr(pos, "entry_snapshot_id", None)
+        bridge_enabled = bool(getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False))
+
         pct = PaperClosedTrade(
             strategy_id=pos.strategy_id,
             pilot_id=pos.pilot_id,
@@ -1565,117 +1793,83 @@ class PaperAccountStore:
             holding_period_days=holding_period_days,
             close_reason=close_reason,
             leg_group_id=None,
+            entry_snapshot_id=entry_snapshot_id,
+            bridge_status="not_attempted" if bridge_enabled else "disabled",
+            bridged_trade_id=None,
+            bridge_error=None,
+            bridged_at=None,
         )
         session.add(pct)
         session.flush()
 
-        # transactions_store bridge (PR 872 remediation, Task 1).
-        #
-        # EMPIRICAL FINDING on the predicted same-process WAL-writer deadlock:
-        # REFUTED as a hard deadlock/failure, but the underlying contention it
-        # predicted is real. A standalone repro (real file-backed SQLite,
-        # WAL + busy_timeout=5000ms, matching db_config.py's own PRAGMAs) that
-        # opened+closed a paper position with a SECOND, independently-
-        # constructed `transactions_store.TransactionsStore()` bridged mid-
-        # transaction (the exact prior code below this comment) never raised
-        # `sqlite3.OperationalError: database is locked` and the bridged row
-        # DID land -- but the closing call's wall-clock cost was ~30-100x the
-        # baseline single-writer cost (0.28-0.48s vs. ~0.005s), consistent
-        # with the second connection genuinely contending for and eventually
-        # winning the WAL writer lock via busy_timeout retries rather than
-        # failing outright. Under heavier concurrency or a slower disk this
-        # is exactly the kind of contention that COULD cross the 5s
-        # busy_timeout and start raising for real, so it is fixed rather than
-        # left as "doesn't reproduce today" -- see PaperAccountStore.
-        # _init_transactions_bridge's docstring for the fix (write through
-        # the SAME session/connection/transaction as the paper close,
-        # instead of opening a second one mid-transaction), which also fixes
-        # two bugs the repro surfaced independently: (a) a bare
-        # `TransactionsStore()` here re-resolves the DEFAULT db_url rather
-        # than reusing whichever db_url this PaperAccountStore was
-        # constructed with, so a non-default-db_url store's bridge writes
-        # used to land in the WRONG database entirely; (b) the two writes
-        # were not atomic with each other -- a rollback of the outer paper-
-        # close transaction left an already-committed, phantom row in
-        # `trades`. Sharing one session/transaction fixes both.
-        if self._transactions_store is not None:
+        conviction_val = None
+        if entry_snapshot_id:
             try:
-                # SAVEPOINT isolation, not a bare try/except around the raw
-                # session calls: an exception raised mid-flush on a SHARED
-                # SQLAlchemy Session (e.g. an IntegrityError, or any other
-                # DBAPI error) leaves that Session's transaction marked
-                # inactive -- SQLAlchemy then refuses ANY further use of it
-                # (`PendingRollbackError: ... first issue Session.rollback()`)
-                # until an explicit rollback happens. Since `session` here is
-                # the SAME session the outer apply_fill/apply_multi_leg_fill/
-                # apply_roll_fill call is still using for the REST of that
-                # fill (further position/cash updates after this call
-                # returns), catching the bridge's exception alone is NOT
-                # enough to keep "fails open" honest -- confirmed
-                # empirically: without begin_nested(), a forced bridge
-                # failure corrupted the outer session and made the very
-                # apply_fill call that triggered it raise, too. `with
-                # session.begin_nested()` issues a SAVEPOINT for just this
-                # block; on the exception path below it rolls back to that
-                # SAVEPOINT (undoing only the bridge's own partial writes)
-                # and leaves the outer transaction fully usable, verified in
-                # this fix's own test coverage.
-                with session.begin_nested():
-                    # Retrospective Learning Loop: thread the entry-time
-                    # conviction through the bridge when a decision snapshot
-                    # was captured for THIS exact trade (data/
-                    # trade_decision_snapshot_store.py, keyed by the same
-                    # (symbol, strategy_id, entry_ts) triple this row already
-                    # carries) -- closing the "does conviction survive the
-                    # bridge" gap this feature exists to fix. None (not a
-                    # fabricated value) for a manual trade, an un-wired
-                    # automated writer, or any trade that predates this
-                    # feature -- a lookup failure degrades to None exactly
-                    # like "no snapshot" (get_snapshot never raises).
-                    bridged_conviction = self._lookup_snapshot_conviction(pos.symbol, pos.strategy_id, entry_ts)
-                    trade_id = self._transactions_store.record_trade(
-                        symbol=pos.symbol,
-                        side="buy" if is_long else "sell",
-                        # Real entry time when known; None lets
-                        # transactions_store.record_trade's own documented
-                        # fallback apply (it substitutes "now" internally when
-                        # entry_ts is falsy) rather than us fabricating a "now"
-                        # here and passing it off as real.
-                        entry_ts=entry_ts,
-                        entry_price=pos.avg_entry_price,
-                        # No option_multiplier scaling -- shares/contracts is
-                        # the raw closed quantity, unscaled (same fix as
-                        # realized_pnl above; entry_price/exit_price already
-                        # carry the correct per-contract convention for
-                        # options).
-                        shares=closed_qty_abs,
-                        strategy=pos.strategy_id,
-                        conviction=bridged_conviction,
-                        notes=f"Paper bridge, reason: {close_reason}",
-                        # Reuse the SAME session/transaction as the pct row
-                        # just above (this method's own `session` param) --
-                        # see the comment block above for why.
-                        session=session,
-                    )
-                    self._transactions_store.close_trade(trade_id, now, exit_price, session=session)
-            except Exception as exc:
-                # This fails OPEN, not closed: the paper close above has
-                # already been added to `session` and will still commit (or
-                # roll back together with a genuine paper-side failure) --
-                # only this bridge write is lost. A silently-failing bridge
-                # defeats the entire point of this feature (sizing.kelly /
-                # evaluation_engine staying starved), so make repeated
-                # failure observable rather than a single swallowed log line:
-                # a stable, greppable message prefix plus an in-process
-                # counter a caller/test can inspect
-                # (`self._transactions_bridge_failures`).
+                snap = session.query(PaperEntrySnapshot).filter_by(snapshot_id=str(entry_snapshot_id)).first()
+                if snap is not None:
+                    if snap.trade_id is None:
+                        snap.trade_id = str(pct.trade_id)
+                    if snap.conviction is not None:
+                        conviction_val = float(snap.conviction)
+            except Exception as snap_err:
+                logger.debug("Failed to query PaperEntrySnapshot for bridge conviction: %s", snap_err)
+
+        # transactions_store bridge (PR 872 remediation, Task 1; Retrospective Learning Loop M1).
+        if bridge_enabled:
+            if self._transactions_store is None:
                 self._transactions_bridge_failures += 1
+                pct.bridge_status = "failed"
+                pct.bridge_error = "transactions_store bridge companion store is None"
                 logger.warning(
                     f"transactions_store bridge failed (fails OPEN -- paper "
-                    f"close still succeeded; only this bridge write did not "
-                    f"land; {self._transactions_bridge_failures} failure(s) "
-                    f"on this store instance so far): {exc}"
+                    f"close still succeeded; bridge uninitialized; "
+                    f"{self._transactions_bridge_failures} failure(s)): {pct.bridge_error}"
                 )
+            else:
+                try:
+                    # SAVEPOINT isolation, not a bare try/except around the raw
+                    # session calls: an exception raised mid-flush on a SHARED
+                    # SQLAlchemy Session (e.g. an IntegrityError, or any other
+                    # DBAPI error) leaves that Session's transaction marked
+                    # inactive until an explicit rollback happens. `with
+                    # session.begin_nested()` issues a SAVEPOINT for just this
+                    # block; on the exception path below it rolls back to that
+                    # SAVEPOINT (undoing only the bridge's own partial writes)
+                    # and leaves the outer transaction fully usable.
+                    with session.begin_nested():
+                        bridge_side = "long" if is_long else "short"
+                        trade_id = self._transactions_store.record_trade(
+                            symbol=pos.symbol,
+                            side=bridge_side,
+                            entry_ts=entry_ts,
+                            entry_price=pos.avg_entry_price,
+                            shares=closed_qty_abs,
+                            strategy=pos.strategy_id,
+                            notes=f"Paper bridge, reason: {close_reason}",
+                            conviction=conviction_val,
+                            session=session,
+                        )
+                        self._transactions_store.close_trade(trade_id, now, exit_price, session=session)
+                        pct.bridge_status = "bridged"
+                        pct.bridged_trade_id = trade_id
+                        pct.bridged_at = now
+                        pct.bridge_error = None
+                except Exception as exc:
+                    self._transactions_bridge_failures += 1
+                    pct.bridge_status = "failed"
+                    pct.bridged_trade_id = None
+                    pct.bridged_at = None
+                    pct.bridge_error = str(exc)[:500]
+                    logger.warning(
+                        f"transactions_store bridge failed (fails OPEN -- paper "
+                        f"close still succeeded; only this bridge write did not "
+                        f"land; {self._transactions_bridge_failures} failure(s) "
+                        f"on this store instance so far): {exc}"
+                    )
+            session.flush()
+        else:
+            pct.bridge_status = "disabled"
+            session.flush()
 
     def get_orders(self, status: Optional[str] = None, limit: int = 100) -> List[OrderResult]:
         if self._readonly:
@@ -1789,8 +1983,166 @@ class PaperAccountStore:
                     "holding_period_days": t.holding_period_days,
                     "close_reason": t.close_reason,
                     "leg_group_id": t.leg_group_id,
+                    "entry_snapshot_id": t.entry_snapshot_id,
+                    "bridge_status": t.bridge_status,
+                    "bridged_trade_id": t.bridged_trade_id,
+                    "bridge_error": t.bridge_error,
+                    "bridged_at": t.bridged_at.replace(tzinfo=timezone.utc).isoformat() if t.bridged_at else None,
                 })
         return results
+
+    def get_entry_snapshot(self, snapshot_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Retrieve an entry-time decision snapshot by snapshot_id.
+
+        Returns None if snapshot_id is None, empty, or not found in `paper_entry_snapshots`.
+        Never attempts retroactive inference or reconstruction for historical rows (ANTI-FABRICATION).
+        """
+        if not snapshot_id:
+            return None
+
+        if self._readonly:
+            try:
+                insp = inspect(self.engine)
+                if not insp.has_table("paper_entry_snapshots"):
+                    return None
+            except Exception:
+                return None
+
+        with session_scope(self.Session) as session:
+            try:
+                snap = session.query(PaperEntrySnapshot).filter_by(snapshot_id=str(snapshot_id)).first()
+                if snap is None:
+                    return None
+                return snap.to_dict()
+            except Exception as exc:
+                logger.warning("get_entry_snapshot query error for snapshot_id=%s: %s", snapshot_id, exc)
+                return None
+
+    def get_bridge_completeness_metrics(self) -> Dict[str, Any]:
+        """Return queryable completeness and reliability metrics for the paper-to-transactions bridge.
+
+        Queries the durable `paper_closed_trades` table to compute aggregate bridge
+        telemetry: total closed trades, bridged count, failed count, disabled count,
+        completeness percentage, and system health status.
+
+        CONSTRAINT #4 / #6: `completeness_pct`/`status` are NEVER reported as a
+        fabricated "100.0 / healthy" for a state this method could not actually
+        measure -- that is exactly the failure mode this metric exists to catch
+        (WP-D). The one case where `100.0`/`"disabled"` IS the honest answer is
+        when the bridge is deliberately turned off (`bridge_enabled=False`) --
+        there is genuinely nothing to bridge, so "100% of nothing" is a
+        defensible convention, not a fabrication, and is preserved unchanged.
+        Everywhere else -- the table doesn't exist yet, the query itself
+        raised, or the bridge is ON but zero trades have actually been
+        attempted through it -- reports `completeness_pct=None`/
+        `status="unknown"` rather than a fabricated all-clear.
+        """
+        bridge_enabled = bool(getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False))
+
+        if self._readonly:
+            try:
+                insp = inspect(self.engine)
+                if not insp.has_table("paper_closed_trades"):
+                    return {
+                        "bridge_enabled": bridge_enabled,
+                        "total_closed_trades": 0,
+                        "attempted_count": 0,
+                        "bridged_count": 0,
+                        "failed_count": 0,
+                        "disabled_count": 0,
+                        "completeness_pct": 100.0 if not bridge_enabled else None,
+                        "status": "disabled" if not bridge_enabled else "unknown",
+                        "last_failure": None,
+                    }
+            except Exception:
+                pass
+
+        with session_scope(self.Session) as session:
+            try:
+                total_closed = session.query(func.count(PaperClosedTrade.trade_id)).scalar() or 0
+                counts = dict(
+                    session.query(
+                        PaperClosedTrade.bridge_status,
+                        func.count(PaperClosedTrade.trade_id),
+                    ).group_by(PaperClosedTrade.bridge_status).all()
+                )
+            except Exception as exc:
+                logger.warning("get_bridge_completeness_metrics query error: %s", exc)
+                return {
+                    "bridge_enabled": bridge_enabled,
+                    "total_closed_trades": 0,
+                    "attempted_count": 0,
+                    "bridged_count": 0,
+                    "failed_count": 0,
+                    "disabled_count": 0,
+                    "completeness_pct": 100.0 if not bridge_enabled else None,
+                    "status": "disabled" if not bridge_enabled else "unknown",
+                    "last_failure": None,
+                }
+
+            bridged_count = counts.get("bridged", 0)
+            failed_count = counts.get("failed", 0)
+            disabled_count = (
+                counts.get("disabled", 0)
+                + counts.get("not_attempted", 0)
+                + counts.get(None, 0)
+            )
+            attempted_count = bridged_count + failed_count
+
+            if attempted_count > 0:
+                completeness_pct = round((bridged_count / attempted_count) * 100.0, 2)
+            elif not bridge_enabled:
+                # Bridge deliberately off -- "100% of nothing" is the
+                # honest, pre-existing convention (test_bridge_disabled_
+                # sets_disabled_status / test_bridge_completeness_metrics_
+                # zero_closed_trades), not a fabrication.
+                completeness_pct = 100.0
+            else:
+                # Bridge is ON but nothing has actually been attempted yet
+                # (a cold-start store, or every closed trade landed in the
+                # disabled/not_attempted bucket) -- genuinely unmeasured,
+                # never a fabricated all-clear.
+                completeness_pct = None
+
+            if not bridge_enabled:
+                status = "disabled"
+            elif attempted_count == 0:
+                status = "unknown"
+            elif failed_count > 0:
+                status = "degraded"
+            else:
+                status = "healthy"
+
+            last_failure_record = None
+            if failed_count > 0:
+                try:
+                    last_fail = (
+                        session.query(PaperClosedTrade)
+                        .filter(PaperClosedTrade.bridge_status == "failed")
+                        .order_by(PaperClosedTrade.exit_ts.desc())
+                        .first()
+                    )
+                    if last_fail:
+                        last_failure_record = {
+                            "trade_id": last_fail.trade_id,
+                            "symbol": last_fail.symbol,
+                            "timestamp": last_fail.exit_ts.isoformat() if last_fail.exit_ts else None,
+                            "error": last_fail.bridge_error,
+                        }
+                except Exception:
+                    pass
+
+            return {
+                "bridge_enabled": bridge_enabled,
+                "total_closed_trades": total_closed,
+                "attempted_count": attempted_count,
+                "bridged_count": bridged_count,
+                "failed_count": failed_count,
+                "disabled_count": disabled_count,
+                "completeness_pct": completeness_pct,
+                "status": status,
+                "last_failure": last_failure_record,
+            }
 
     def settle_expired_options(
         self,

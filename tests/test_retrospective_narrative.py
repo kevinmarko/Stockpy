@@ -1,450 +1,575 @@
-"""Tests for pilots/retrospective_narrative.py -- the strictly-templated (no
-LLM) per-trade narrative for the Retrospective Learning Loop (Trade Journal).
+"""tests/test_retrospective_narrative.py — Unit Tests for Templated Narrative Generator
+=====================================================================================
 
-Fixtures construct plain dicts matching the LOCKED
-``pilots.retrospective_composer.compose_trade_retrospective`` output shape
-directly (per this work package's brief) rather than importing that sibling
-module, which may not exist on disk / may still be under active edit.
+Authoritative Requirements:
+- .agents/ORIGINAL_REQUEST.md (§ R5, WP-F)
+- .agents/PROJECT.md (§ 4 Retrospective Core Engine, Milestone 3)
+- .agents/worker_m3/DISPATCH.md
+- .agents/explorer_survey_2/retrospective_learning_loop_survey_report.md (§ 5)
+
+Coverage:
+1. Safe formatting primitives (_fmt_curr, _fmt_pct, _fmt_float).
+2. All 15 template permutations across signal-driven, manual, and unknown branches.
+3. Strict WP-F anti-fabrication assertions: zero 'None', 'NaN', 'nan', or 'null' leakage.
+4. Calling conventions: full dictionary input vs kwargs vs positional args.
+5. Boundary conditions: degenerate prices, zero durations, failed bridges, adversarial strings.
 """
 
 from __future__ import annotations
 
-import copy
-from typing import Any, Dict
-
-import pytest
+import re
 
 from pilots.retrospective_narrative import (
-    _factor_clause,
-    _move_sentence,
-    _outcome_sentence,
-    _provenance_label,
-    _what_happened_sentence,
-    _why_sentence,
+    _fmt_curr,
+    _fmt_float,
+    _fmt_pct,
+    _is_valid_num,
     build_trade_narrative,
 )
 
-
-def _retro(**overrides: Any) -> Dict[str, Any]:
-    """A fully-populated, valid retrospective record. Individual fields (top
-    level or nested ``evaluation``/``decision``) can be overridden via
-    dotted-ish kwargs handled below, or the caller can pass whole replacement
-    sub-dicts directly."""
-    base: Dict[str, Any] = {
-        "trade_id": 42,
-        "symbol": "AAPL",
-        "strategy_id": "earnings-crush",
-        "pilot_id": "earnings-crush",
-        "side": "BUY",
-        "qty": 10.0,
-        "entry_ts": "2026-01-05T14:30:00+00:00",
-        "entry_price": 150.0,
-        "exit_ts": "2026-01-10T09:15:00+00:00",
-        "exit_price": 162.0,
-        "realized_pnl": 120.0,
-        "realized_pnl_pct": 0.08,
-        "holding_period_days": 5.0,
-        "close_reason": "flatten",
-        "evaluation": {
-            "available": True,
-            "mfe": 0.15,
-            "mae": 0.03,
-            "edge_ratio": 5.0,
-            "reason": None,
-        },
-        "decision": {
-            "state": "signal_driven",
-            "provenance": "automated:options_auto_scan",
-            "conviction": 0.72,
-            "regime": "RISK_ON",
-            "factors": {"ivr": 62.3, "trend_bias": "Bullish"},
-            "notes": "auto-scanned",
-        },
-    }
-    out = copy.deepcopy(base)
-    for key, value in overrides.items():
-        out[key] = value
-    return out
-
-
-# ---------------------------------------------------------------------------
-# _what_happened_sentence
-# ---------------------------------------------------------------------------
-
-
-def test_what_happened_normal_values():
-    sentence = _what_happened_sentence(_retro())
-    assert sentence == (
-        "Bought 10 AAPL — opened 2026-01-05 14:30 UTC at $150.00, "
-        "closed 2026-01-10 09:15 UTC at $162.00 (flatten)."
-    )
-
-
-def test_what_happened_entry_ts_none():
-    sentence = _what_happened_sentence(_retro(entry_ts=None))
-    assert "opened at an unknown time" in sentence
-    assert "closed 2026-01-10 09:15 UTC at $162.00" in sentence
-
-
-def test_what_happened_sell_side():
-    sentence = _what_happened_sentence(_retro(side="SELL"))
-    assert sentence.startswith("Sold 10 AAPL")
-
-
-def test_what_happened_unknown_side_does_not_fabricate_bought_or_sold():
-    sentence = _what_happened_sentence(_retro(side="FLIP"))
-    assert "Bought" not in sentence
-    assert "Sold" not in sentence
-    assert "FLIP" in sentence
-
-
-def test_what_happened_missing_qty_and_symbol_degrades_gracefully():
-    retro = _retro(qty=None, symbol=None)
-    sentence = _what_happened_sentence(retro)
-    assert "an unknown quantity of" in sentence
-    assert "the position" in sentence
-
-
-# ---------------------------------------------------------------------------
-# _outcome_sentence
-# ---------------------------------------------------------------------------
-
-
-def test_outcome_sentence_normal_values():
-    sentence = _outcome_sentence(_retro())
-    assert sentence == "Realized P&L: +$120.00 (+8.00%)."
-
-
-def test_outcome_sentence_negative_pnl():
-    sentence = _outcome_sentence(_retro(realized_pnl=-45.5, realized_pnl_pct=-0.03))
-    assert sentence == "Realized P&L: -$45.50 (-3.00%)."
-
-
-def test_outcome_sentence_realized_pnl_pct_none_omits_percentage_clause():
-    sentence = _outcome_sentence(_retro(realized_pnl_pct=None))
-    assert sentence == "Realized P&L: +$120.00 (percentage unavailable — degenerate entry price)."
-
-
-def test_outcome_sentence_realized_pnl_pct_nan_treated_like_none():
-    sentence = _outcome_sentence(_retro(realized_pnl_pct=float("nan")))
-    assert "percentage unavailable" in sentence
-    assert "nan" not in sentence.lower()
-
-
-# ---------------------------------------------------------------------------
-# _move_sentence
-# ---------------------------------------------------------------------------
-
-
-def test_move_sentence_available():
-    sentence = _move_sentence(_retro())
-    assert "15.0%" in sentence
-    assert "3.0%" in sentence
-    assert "5.00" in sentence
-    assert "in your favor" in sentence
-    assert "against you" in sentence
-
-
-def test_move_sentence_unavailable_renders_reason_verbatim():
-    reason = "No pricing data found between entry and exit dates."
-    retro = _retro(evaluation={"available": False, "mfe": None, "mae": None, "edge_ratio": None, "reason": reason})
-    sentence = _move_sentence(retro)
-    assert sentence == f"Evaluation data unavailable for this trade — {reason}."
-
-
-def test_move_sentence_unavailable_missing_reason_uses_generic_fallback_not_none():
-    retro = _retro(evaluation={"available": False, "mfe": None, "mae": None, "edge_ratio": None, "reason": None})
-    sentence = _move_sentence(retro)
-    assert "None" not in sentence
-    assert "unavailable" in sentence
-
-
-def test_move_sentence_available_but_edge_ratio_missing():
-    retro = _retro(
-        evaluation={"available": True, "mfe": 0.10, "mae": 0.05, "edge_ratio": None, "reason": None}
-    )
-    sentence = _move_sentence(retro)
-    assert "Edge Ratio unavailable" in sentence
-    assert "None" not in sentence
-
-
-# ---------------------------------------------------------------------------
-# _why_sentence -- the fabrication-sensitive branch
-# ---------------------------------------------------------------------------
-
-
-def test_why_sentence_signal_driven():
-    sentence = _why_sentence(_retro())
-    assert sentence == (
-        "The model rated this a 0.72 conviction automated options trade, "
-        "driven partly by an IVR of 62.3 and a bullish trend bias."
-    )
-
-
-def test_why_sentence_manual_exact_required_wording():
-    retro = _retro(decision={"state": "manual", "provenance": "manual", "conviction": None,
-                              "regime": None, "factors": None, "notes": None})
-    sentence = _why_sentence(retro)
-    assert sentence == "You placed this trade manually — no model signal was behind it."
-
-
-def test_why_sentence_unknown_exact_required_wording():
-    retro = _retro(decision={"state": "unknown", "provenance": None, "conviction": None,
-                              "regime": None, "factors": None, "notes": None})
-    sentence = _why_sentence(retro)
-    assert sentence == "Entry context wasn't captured for this trade."
-
-
-def test_why_sentence_unexpected_state_falls_back_to_unknown_wording():
-    """CONSTRAINT #6: an out-of-contract decision.state defends into the
-    "unknown" text rather than crashing or guessing."""
-    retro = _retro(decision={"state": "some_future_state", "provenance": "whatever",
-                              "conviction": 0.9, "regime": None, "factors": None, "notes": None})
-    sentence = _why_sentence(retro)
-    assert sentence == "Entry context wasn't captured for this trade."
-
-
-def test_why_sentence_missing_decision_key_falls_back_to_unknown_wording():
-    retro = _retro()
-    del retro["decision"]
-    sentence = _why_sentence(retro)
-    assert sentence == "Entry context wasn't captured for this trade."
-
-
-def test_why_sentence_signal_driven_conviction_none_never_renders_none():
-    retro = _retro(decision={"state": "signal_driven", "provenance": "automated:options_auto_scan",
-                              "conviction": None, "regime": "RISK_ON", "factors": None, "notes": None})
-    sentence = _why_sentence(retro)
-    assert "None" not in sentence
-    assert "conviction" not in sentence  # the whole "X conviction" clause is dropped, not just the number
-    assert "automated options trade" in sentence
-
-
-def test_why_sentence_signal_driven_no_factors_omits_factor_clause():
-    retro = _retro(decision={"state": "signal_driven", "provenance": "automated:options_auto_scan",
-                              "conviction": 0.5, "regime": None, "factors": None, "notes": None})
-    sentence = _why_sentence(retro)
-    assert sentence == "The model rated this a 0.50 conviction automated options trade."
-    assert "driven partly by" not in sentence
-
-
-def test_why_sentence_signal_driven_factors_never_invents_a_key_not_present():
-    factors = {"vix": 18.2}
-    retro = _retro(decision={"state": "signal_driven", "provenance": "automated:zero_dte_engine",
-                              "conviction": 0.6, "regime": None, "factors": factors, "notes": None})
-    sentence = _why_sentence(retro)
-    assert "18.2" in sentence
-    assert "ivr" not in sentence.lower()  # never invents a factor that wasn't in the dict
-    assert "trend" not in sentence.lower()
-
-
-def test_why_sentence_signal_driven_factors_skip_none_valued_entries():
-    factors = {"ivr": None, "vrp": 0.031}
-    retro = _retro(decision={"state": "signal_driven", "provenance": "automated:options_auto_scan",
-                              "conviction": 0.6, "regime": None, "factors": factors, "notes": None})
-    sentence = _why_sentence(retro)
-    assert "None" not in sentence
-    assert "0.031" in sentence
-
-
-# ---------------------------------------------------------------------------
-# _provenance_label / _factor_clause -- small direct unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_provenance_label_derivation():
-    assert _provenance_label("automated:options_auto_scan") == "automated options"
-    assert _provenance_label(None) == "automated"
-    assert _provenance_label("") == "automated"
-    assert _provenance_label("manual") == "manual"
-
-
-def test_factor_clause_none_and_empty_dict_both_omit():
-    assert _factor_clause(None) is None
-    assert _factor_clause({}) is None
-
-
-def test_factor_clause_caps_at_two_factors():
-    factors = {"ivr": 62.3, "vrp": 0.031, "vix": 18.2}
-    clause = _factor_clause(factors)
-    assert clause is not None
-    assert clause.count(" and ") == 1  # exactly two factors joined, never more
-
-
-# ---------------------------------------------------------------------------
-# build_trade_narrative -- full integration + robustness
-# ---------------------------------------------------------------------------
-
-
-def test_build_trade_narrative_normal_case_joins_four_sentences():
-    narrative = build_trade_narrative(_retro())
-    assert narrative.count(".") >= 4
-    assert narrative.startswith("Bought 10 AAPL")
-    assert "Realized P&L: +$120.00 (+8.00%)." in narrative
-    assert "in your favor" in narrative
-    assert "The model rated this a 0.72 conviction automated options trade" in narrative
-
-
-def test_build_trade_narrative_malformed_dict_missing_decision_key_does_not_raise():
-    retro = _retro()
-    del retro["decision"]
-    narrative = build_trade_narrative(retro)
-    assert isinstance(narrative, str)
-    assert "Entry context wasn't captured for this trade." in narrative
-
-
-def test_build_trade_narrative_missing_evaluation_key_does_not_raise():
-    retro = _retro()
-    del retro["evaluation"]
-    narrative = build_trade_narrative(retro)
-    assert isinstance(narrative, str)
-    assert "Evaluation data unavailable" in narrative
-
-
-def test_build_trade_narrative_completely_empty_dict_does_not_raise():
-    narrative = build_trade_narrative({})
-    assert isinstance(narrative, str)
-    assert narrative  # non-empty best-effort narrative
-
-
-def test_build_trade_narrative_non_dict_input_does_not_raise():
-    narrative = build_trade_narrative(None)  # type: ignore[arg-type]
-    assert isinstance(narrative, str)
-    narrative2 = build_trade_narrative("not a dict")  # type: ignore[arg-type]
-    assert isinstance(narrative2, str)
-
-
-def test_build_trade_narrative_manual_state_end_to_end():
-    retro = _retro(decision={"state": "manual", "provenance": "manual", "conviction": None,
-                              "regime": None, "factors": None, "notes": "quick trade click"})
-    narrative = build_trade_narrative(retro)
-    assert "You placed this trade manually — no model signal was behind it." in narrative
-
-
-def test_build_trade_narrative_unknown_state_end_to_end():
-    retro = _retro(decision={"state": "unknown", "provenance": None, "conviction": None,
-                              "regime": None, "factors": None, "notes": None})
-    narrative = build_trade_narrative(retro)
-    assert "Entry context wasn't captured for this trade." in narrative
-
-
-# ---------------------------------------------------------------------------
-# The fabrication-risk sweep: across EVERY fixture constructed in this file,
-# no rendered narrative may ever contain the literal substring
-# "None"/"nan"/"NaN".
-# ---------------------------------------------------------------------------
-
-
-def _all_fixture_retros() -> list:
-    """Every distinct retro shape exercised by the tests above, re-assembled
-    here so the "never renders None/nan/NaN" sweep covers all of them in one
-    place."""
-    fixtures = [
-        _retro(),
-        _retro(entry_ts=None),
-        _retro(side="SELL"),
-        _retro(side="FLIP"),
-        _retro(qty=None, symbol=None),
-        _retro(realized_pnl_pct=None),
-        _retro(realized_pnl_pct=float("nan")),
-        _retro(realized_pnl=-45.5, realized_pnl_pct=-0.03),
-        _retro(evaluation={"available": False, "mfe": None, "mae": None, "edge_ratio": None,
-                            "reason": "No pricing data found between entry and exit dates."}),
-        _retro(evaluation={"available": False, "mfe": None, "mae": None, "edge_ratio": None, "reason": None}),
-        _retro(evaluation={"available": True, "mfe": 0.10, "mae": 0.05, "edge_ratio": None, "reason": None}),
-        _retro(decision={"state": "manual", "provenance": "manual", "conviction": None,
-                          "regime": None, "factors": None, "notes": None}),
-        _retro(decision={"state": "unknown", "provenance": None, "conviction": None,
-                          "regime": None, "factors": None, "notes": None}),
-        _retro(decision={"state": "some_future_state", "provenance": "whatever", "conviction": 0.9,
-                          "regime": None, "factors": None, "notes": None}),
-        _retro(decision={"state": "signal_driven", "provenance": "automated:options_auto_scan",
-                          "conviction": None, "regime": "RISK_ON", "factors": None, "notes": None}),
-        _retro(decision={"state": "signal_driven", "provenance": "automated:options_auto_scan",
-                          "conviction": 0.5, "regime": None, "factors": None, "notes": None}),
-        _retro(decision={"state": "signal_driven", "provenance": "automated:zero_dte_engine",
-                          "conviction": 0.6, "regime": None, "factors": {"vix": 18.2}, "notes": None}),
-        _retro(decision={"state": "signal_driven", "provenance": "automated:options_auto_scan",
-                          "conviction": 0.6, "regime": None, "factors": {"ivr": None, "vrp": 0.031},
-                          "notes": None}),
-        {},
-    ]
-    return fixtures
-
-
-@pytest.mark.parametrize("retro", _all_fixture_retros())
-def test_no_fixture_ever_renders_none_nan_or_NaN(retro):
-    narrative = build_trade_narrative(retro)
-    assert "None" not in narrative, narrative
-    assert "nan" not in narrative.lower(), narrative
-    assert "NaN" not in narrative, narrative
-
-
-def test_malformed_and_non_dict_inputs_also_never_render_none_nan():
-    for bad_input in (None, "not a dict", 42, [], {"decision": None, "evaluation": None}):
-        narrative = build_trade_narrative(bad_input)  # type: ignore[arg-type]
-        assert "None" not in narrative, narrative
-        assert "nan" not in narrative.lower(), narrative
-        assert "NaN" not in narrative, narrative
-
-
-# ---------------------------------------------------------------------------
-# Optional integration proof with the REAL sibling composer, if it exists on
-# disk in this worktree. The CORE test suite above does not import or
-# depend on pilots.retrospective_composer at all -- this is purely a bonus
-# end-to-end wiring check.
-# ---------------------------------------------------------------------------
-
-
-def test_integration_with_real_retrospective_composer_if_present(monkeypatch):
-    try:
-        from pilots.retrospective_composer import compose_trade_retrospective
-    except Exception:
-        pytest.skip("pilots/retrospective_composer.py not available in this worktree yet")
-
-    # Force the evaluation section to an honest "unavailable" degrade rather
-    # than attempting a real network/DB bars fetch -- this test only proves
-    # the two modules WIRE UP correctly end-to-end, not the composer's own
-    # evaluation math (that belongs to tests/test_retrospective_composer.py).
-    import data.historical_store as historical_store_module
-
-    class _BoomHistoricalStore:
-        def __init__(self, *args, **kwargs):
-            raise RuntimeError("no bars in this smoke test")
-
-    monkeypatch.setattr(historical_store_module, "HistoricalStore", _BoomHistoricalStore)
-
-    # Shaped exactly like a PaperAccountStore.get_full_closed_trades() row.
-    closed_trade = {
-        "trade_id": 999,
-        "strategy_id": "sig-integration",
-        "pilot_id": None,
-        "experiment_arm": None,
-        "symbol": "AAPL",
-        "side": "BUY",
-        "qty": 10.0,
-        "entry_ts": "2026-01-05T14:30:00+00:00",
-        "entry_price": 150.0,
-        "exit_ts": "2026-01-10T09:15:00+00:00",
-        "exit_price": 162.0,
-        "commission": 1.0,
-        "realized_pnl": 119.0,
-        "realized_pnl_pct": 0.0793,
-        "holding_period_days": 5.0,
-        "close_reason": "flatten",
-        "leg_group_id": None,
-    }
-
-    composed = compose_trade_retrospective(closed_trade)
-
-    for key in (
-        "trade_id", "symbol", "strategy_id", "side", "qty", "entry_price",
-        "exit_ts", "exit_price", "realized_pnl", "close_reason", "evaluation", "decision",
-    ):
-        assert key in composed
-
-    narrative = build_trade_narrative(composed)
-    assert isinstance(narrative, str)
-    assert "None" not in narrative
-    assert "nan" not in narrative.lower()
-    assert "AAPL" in narrative
+FORBIDDEN_REGEX = re.compile(r"\b(None|NaN|nan|null)\b", re.IGNORECASE)
+
+
+def assert_zero_leakage(text: str) -> None:
+    """Strict WP-F check: assert no forbidden placeholder tokens appear in text."""
+    match = FORBIDDEN_REGEX.search(text)
+    assert match is None, f"WP-F Violation: Leaked '{match.group()}' in narrative: '{text}'"
+
+
+# =============================================================================
+# 1. Formatting Safety Primitives
+# =============================================================================
+
+class TestFormattingPrimitives:
+    """Test numeric safe formatters guaranteeing zero None/NaN leakage."""
+
+    def test_is_valid_num(self):
+        assert _is_valid_num(100) is True
+        assert _is_valid_num(100.5) is True
+        assert _is_valid_num("100.5") is True
+        assert _is_valid_num(None) is False
+        assert _is_valid_num(float("nan")) is False
+        assert _is_valid_num(float("inf")) is False
+        assert _is_valid_num(float("-inf")) is False
+        assert _is_valid_num("invalid") is False
+
+    def test_fmt_curr(self):
+        assert _fmt_curr(1234.56) == "$1,234.56"
+        assert _fmt_curr(0.0) == "$0.00"
+        assert _fmt_curr(-50.25) == "-$50.25"
+        assert _fmt_curr(None) == "unrecorded"
+        assert _fmt_curr(float("nan")) == "unrecorded"
+        assert _fmt_curr(float("inf")) == "unrecorded"
+        assert _fmt_curr(None, fallback="missing") == "missing"
+
+    def test_fmt_pct(self):
+        assert _fmt_pct(0.125) == "12.5%"
+        assert _fmt_pct(0.125, signed=True) == "+12.5%"
+        assert _fmt_pct(-0.05, signed=True) == "-5.0%"
+        assert _fmt_pct(0.0, signed=True) == "0.0%"
+        assert _fmt_pct(-0.0, signed=True) == "0.0%"
+        assert _fmt_pct(None) == "unrecorded"
+        assert _fmt_pct(float("nan")) == "unrecorded"
+        assert _fmt_pct(float("inf")) == "unrecorded"
+
+    def test_fmt_float(self):
+        assert _fmt_float(3.14159, decimals=2) == "3.14"
+        assert _fmt_float(3.14159, decimals=4) == "3.1416"
+        assert _fmt_float(0.0) == "0.00"
+        assert _fmt_float(None) == "unrecorded"
+        assert _fmt_float(float("nan")) == "unrecorded"
+        assert _fmt_float(float("inf")) == "unrecorded"
+
+
+# =============================================================================
+# 2. All 15 Template Permutations
+# =============================================================================
+
+class TestAllFifteenNarrativePermutations:
+    """Verify each of the 15 authoritative permutations from Survey §5.3."""
+
+    def test_permutation_01_signal_driven_full_context(self):
+        """P1 (S1.1 + O1.1 + E1.1): Complete context with gain and calibration."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="momentum_alpha",
+            entry_price=150.0,
+            conviction=0.85,
+            macro_regime="expansion",
+            exit_price=165.0,
+            holding_days=4.5,
+            pnl=150.0,
+            pnl_pct=0.10,
+            mfe=0.12,
+            mae=0.02,
+            edge_ratio=6.0,
+            bin_win_rate=0.75,
+            bin_count=12,
+            min_sample=5,
+        )
+        assert "Signal-driven buy trade entered on momentum_alpha recommendation at $150.00" in text
+        assert "(conviction: 0.85, regime: expansion)" in text
+        assert "Position closed at $165.00 after 4.5 days, realizing a gain of +$150.00 (+10.0%)" in text
+        assert "Hold-period excursion reached MFE +12.0% vs MAE -2.0% (Edge Ratio: 6.00)" in text
+        assert "entry conviction binned at historical 75.0% win rate (N=12)" in text
+        assert_zero_leakage(text)
+
+    def test_permutation_02_signal_driven_missing_regime(self):
+        """P2 (S1.2): Conviction present, regime unrecorded."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="trend_follow",
+            entry_price=100.0,
+            conviction=0.70,
+            macro_regime=None,
+            exit_price=110.0,
+            holding_days=2.0,
+            pnl=10.0,
+            pnl_pct=0.10,
+            mfe=0.12,
+            mae=0.02,
+            edge_ratio=6.0,
+            bin_win_rate=0.65,
+            bin_count=8,
+        )
+        assert "(conviction: 0.70, regime: unrecorded)" in text
+        assert_zero_leakage(text)
+
+    def test_permutation_03_signal_driven_missing_conviction(self):
+        """P3 (S1.3 + E1.3): Regime present, conviction missing (no calibration bin)."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="mean_revert",
+            entry_price=100.0,
+            conviction=None,
+            macro_regime="stagflation",
+            exit_price=110.0,
+            holding_days=2.0,
+            pnl=10.0,
+            pnl_pct=0.10,
+            mfe=0.12,
+            mae=0.02,
+            edge_ratio=6.0,
+        )
+        assert "(regime: stagflation)" in text
+        assert "conviction:" not in text
+        assert "Edge Ratio: 6.00)" in text
+        # M4 fix: a signal-driven trade with no captured conviction has
+        # nothing to bin -- this must be an explicit statement, never a
+        # silent trailing period as if calibration simply wasn't mentioned
+        # (a prior version's condition never checked conviction was present
+        # before rendering a bin-placement claim).
+        assert "conviction not captured, calibration unavailable" in text
+        assert_zero_leakage(text)
+
+    def test_permutation_04_signal_driven_missing_both_conviction_and_regime(self):
+        """P4 (S1.4): Known strategy_id, missing both conviction and regime."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="sell",
+            strategy_id="breakout_short",
+            entry_price=80.0,
+            conviction=None,
+            macro_regime=None,
+            exit_price=72.0,
+            holding_days=1.5,
+            pnl=8.0,
+            pnl_pct=0.10,
+            mfe=0.11,
+            mae=0.01,
+            edge_ratio=11.0,
+        )
+        assert "Signal-driven sell trade entered on breakout_short recommendation at $80.00." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_05_signal_driven_missing_strategy_id(self):
+        """P5 (S1.5): Missing strategy_id entirely."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id=None,
+            entry_price=120.0,
+            conviction=None,
+            macro_regime=None,
+            exit_price=125.0,
+            holding_days=1.0,
+            pnl=5.0,
+            pnl_pct=0.042,
+            mfe=0.05,
+            mae=0.01,
+            edge_ratio=5.0,
+        )
+        assert "Signal-driven buy trade entered via automated strategy at $120.00." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_06_outcome_loss_with_duration(self):
+        """P6 (O1.2): Position closed with realized loss."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="s1",
+            entry_price=100.0,
+            exit_price=90.0,
+            holding_days=3.2,
+            pnl=-10.0,
+            pnl_pct=-0.10,
+            mfe=0.01,
+            mae=0.11,
+            edge_ratio=0.09,
+        )
+        assert "Position closed at $90.00 after 3.2 days, realizing a loss of -$10.00 (-10.0%)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_07_outcome_breakeven(self):
+        """P7 (O1.3): Position closed at breakeven ($0.00 PnL)."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="s1",
+            entry_price=100.0,
+            exit_price=100.0,
+            holding_days=1.0,
+            pnl=0.0,
+            pnl_pct=0.0,
+            mfe=0.02,
+            mae=0.02,
+            edge_ratio=1.0,
+        )
+        assert "Position closed at $100.00 after 1.0 days at breakeven ($0.00 realized PnL)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_08_outcome_missing_duration(self):
+        """P8 (O1.4): Position closed without recorded holding duration."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="s1",
+            entry_price=100.0,
+            exit_price=105.0,
+            holding_days=None,
+            pnl=5.0,
+            pnl_pct=0.05,
+            mfe=0.05,
+            mae=0.01,
+            edge_ratio=5.0,
+        )
+        assert "Position closed at $105.00 (holding duration unrecorded), realizing a gain of +$5.00 (+5.0%)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_09_degenerate_entry_price(self):
+        """P9 (O1.5): Degenerate entry price <= 0.0 suppresses percentage return."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="s1",
+            entry_price=0.0,
+            exit_price=10.0,
+            holding_days=1.0,
+            pnl=10.0,
+            pnl_pct=None,
+            mfe=0.0,
+            mae=0.0,
+            edge_ratio=0.0,
+        )
+        assert "Position closed at $10.00 realizing $10.00 (percentage return unavailable due to degenerate entry price)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_10_bridge_unreached(self):
+        """P10 (E1.4): Trade did not reach evaluation bridge."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="s1",
+            entry_price=100.0,
+            exit_price=105.0,
+            holding_days=1.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            bridge_reached=False,
+        )
+        assert "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_11_bars_missing(self):
+        """P11 (E1.5): Hold-period pricing data missing or insufficient."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="s1",
+            entry_price=100.0,
+            exit_price=105.0,
+            holding_days=1.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            bars_available=False,
+        )
+        assert "Hold-period excursion metrics unavailable (pricing data missing for hold period)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_12_manual_standard(self):
+        """P12 (S2.1 + E2.1): Standard manual trade with model calibration excluded."""
+        text = build_trade_narrative(
+            provenance="manual",
+            side="buy",
+            entry_price=100.0,
+            exit_price=105.0,
+            holding_days=1.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            mfe=0.06,
+            mae=0.01,
+            edge_ratio=6.0,
+        )
+        assert "Manual discretionary buy trade executed by operator at $100.00." in text
+        assert "model calibration not applicable for manual trades." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_13_manual_with_operator_notes(self):
+        """P13 (S2.2): Manual trade with operator note."""
+        text = build_trade_narrative(
+            provenance="manual",
+            side="buy",
+            entry_price=100.0,
+            operator_notes="earnings hedge ahead of Q3 call",
+            exit_price=105.0,
+            holding_days=1.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            mfe=0.06,
+            mae=0.01,
+            edge_ratio=6.0,
+        )
+        assert 'Manual discretionary buy trade executed by operator at $100.00 (note: "earnings hedge ahead of Q3 call").' in text
+        assert "model calibration not applicable for manual trades." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_14_unknown_standard(self):
+        """P14 (S3.1 + E3.1): Unrecorded provenance with entry price captured."""
+        text = build_trade_narrative(
+            provenance="unknown",
+            side="sell",
+            entry_price=100.0,
+            exit_price=95.0,
+            holding_days=1.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            mfe=0.06,
+            mae=0.01,
+            edge_ratio=6.0,
+        )
+        assert "Trade executed at $100.00 with unrecorded provenance (entry-time context not captured)." in text
+        assert "conviction calibration unavailable (provenance unrecorded)." in text
+        assert_zero_leakage(text)
+
+    def test_permutation_15_unknown_missing_entry_price_unbridged(self):
+        """P15 (S3.2 + E3.2): Unrecorded provenance, unverified entry price, unbridged."""
+        text = build_trade_narrative(
+            provenance="unknown",
+            side="sell",
+            entry_price=None,
+            exit_price=95.0,
+            holding_days=None,
+            pnl=5.0,
+            pnl_pct=None,
+            bridge_reached=False,
+        )
+        assert "Trade executed with unrecorded provenance and unverified entry price." in text
+        assert "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge); conviction calibration unavailable." in text
+        assert_zero_leakage(text)
+
+
+# =============================================================================
+# 3. Calibration Sample Size & Insufficient Data Handling
+# =============================================================================
+
+class TestCalibrationSampleHandling:
+    """Test calibration binning with sufficient vs insufficient samples."""
+
+    def test_insufficient_calibration_sample(self):
+        """E1.2: Sample < min_sample explicitly states insufficient sample."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="alpha",
+            entry_price=100.0,
+            conviction=0.9,
+            exit_price=105.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            mfe=0.06,
+            mae=0.01,
+            edge_ratio=6.0,
+            bin_win_rate=0.8,
+            bin_count=3,
+            min_sample=5,
+        )
+        assert "historical calibration unavailable for this conviction level (insufficient sample, N=3 < 5)" in text
+        assert_zero_leakage(text)
+
+    def test_sufficient_calibration_sample(self):
+        """E1.1: Sample >= min_sample displays empirical win rate."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="alpha",
+            entry_price=100.0,
+            conviction=0.9,
+            exit_price=105.0,
+            pnl=5.0,
+            pnl_pct=0.05,
+            mfe=0.06,
+            mae=0.01,
+            edge_ratio=6.0,
+            bin_win_rate=0.8,
+            bin_count=5,
+            min_sample=5,
+        )
+        assert "entry conviction binned at historical 80.0% win rate (N=5)" in text
+        assert_zero_leakage(text)
+
+
+# =============================================================================
+# 4. Calling Conventions & Dictionary Input
+# =============================================================================
+
+class TestCallingConventions:
+    """Test calling build_trade_narrative with dict, kwargs, or mixed."""
+
+    def test_composed_record_dictionary_input(self):
+        """Composed trade record dictionary from RetrospectiveComposer."""
+        composed_record = {
+            "trade_id": "t_101",
+            "symbol": "NVDA",
+            "side": "BUY",
+            "entry_price": 450.0,
+            "exit_price": 480.0,
+            "holding_period_days": 5.0,
+            "realized_pnl": 3000.0,
+            "realized_pnl_pct": 0.0667,
+            "provenance": "signal_driven",
+            "strategy_id": "trend_following",
+            "entry_snapshot": {
+                "captured": True,
+                "provenance": "signal_driven",
+                "conviction": 0.88,
+                "macro_regime": "expansion",
+            },
+            "bridge_status": "bridged",
+            "excursion": {
+                "evaluation_status": "available",
+                "mae": 0.015,
+                "mfe": 0.082,
+                "edge_ratio": 5.47,
+            },
+            "calibration": {
+                "bin_win_rate": 0.78,
+                "bin_trade_count": 9,
+            },
+        }
+        text = build_trade_narrative(composed_record)
+        assert "Signal-driven buy trade entered on trend_following recommendation at $450.00" in text
+        assert "(conviction: 0.88, regime: expansion)" in text
+        assert "Position closed at $480.00 after 5.0 days, realizing a gain of +$3,000.00 (+6.7%)" in text
+        assert "MFE +8.2% vs MAE -1.5% (Edge Ratio: 5.47)" in text
+        assert "entry conviction binned at historical 78.0% win rate (N=9)" in text
+        assert_zero_leakage(text)
+
+    def test_captured_false_forces_unrecorded_provenance(self):
+        """If captured is False, provenance must strictly be unknown even if strategy_id exists."""
+        trade_record = {
+            "side": "BUY",
+            "entry_price": 100.0,
+            "exit_price": 110.0,
+            "realized_pnl": 10.0,
+            "strategy_id": "trend_following",
+            "entry_snapshot": {
+                "captured": False,
+                "provenance": "unknown",
+            },
+        }
+        text = build_trade_narrative(trade_record)
+        assert "with unrecorded provenance (entry-time context not captured)" in text
+        assert "trend_following" not in text
+        assert_zero_leakage(text)
+
+    def test_positional_arguments_compatibility(self):
+        """Positional arguments calling convention."""
+        text = build_trade_narrative(
+            "signal_driven",
+            "buy",
+            "my_strategy",
+            100.0,
+            0.8,
+            "expansion",
+            None,
+            110.0,
+            2.0,
+            10.0,
+            0.1,
+            0.12,
+            0.02,
+            6.0,
+            0.75,
+            10,
+        )
+        assert "Signal-driven buy trade entered on my_strategy recommendation" in text
+        assert_zero_leakage(text)
+
+
+# =============================================================================
+# 5. Adversarial Inputs & Anti-Fabrication Stress Tests
+# =============================================================================
+
+class TestAdversarialInputsAndAntiFabrication:
+    """Test adversarial edge cases, string injection, and NaN/Inf floats."""
+
+    def test_nan_and_inf_floats_sanitized(self):
+        """NaN and Inf floats must never leak into narrative text."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="bad_math",
+            entry_price=float("nan"),
+            conviction=float("nan"),
+            exit_price=float("inf"),
+            holding_days=float("-inf"),
+            pnl=float("nan"),
+            pnl_pct=float("nan"),
+            mfe=float("nan"),
+            mae=float("nan"),
+            edge_ratio=float("nan"),
+        )
+        assert_zero_leakage(text)
+        assert "at unrecorded" in text
+        assert "Hold-period excursion metrics unavailable" in text
+
+    def test_adversarial_string_tokens(self):
+        """Strings like 'None', 'NaN', 'null' in metadata are safely neutralized."""
+        text = build_trade_narrative(
+            provenance="signal_driven",
+            side="buy",
+            strategy_id="None",
+            macro_regime="null",
+            operator_notes="NaN",
+            entry_price=100.0,
+            exit_price=110.0,
+            pnl=10.0,
+            pnl_pct=0.1,
+        )
+        assert_zero_leakage(text)
+
+    def test_unknown_arbitrary_provenance_fallback(self):
+        """Arbitrary provenance string (e.g. 'alien_algo') defaults to unrecorded."""
+        text = build_trade_narrative(
+            provenance="quantum_telepathy",
+            side="sell",
+            entry_price=50.0,
+            exit_price=45.0,
+            pnl=5.0,
+            pnl_pct=0.1,
+        )
+        assert "unrecorded provenance" in text
+        assert_zero_leakage(text)

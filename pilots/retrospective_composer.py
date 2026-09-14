@@ -1,435 +1,707 @@
-"""pilots/retrospective_composer.py — Per-trade retrospective composer
-(READ-ONLY), backing the Retrospective Learning Loop / Trade Journal.
+"""pilots/retrospective_composer.py — Read-Only Retrospective Composer
 
-Composes ONE closed paper trade (a ``data.paper_account_store
-.PaperAccountStore.get_full_closed_trades()`` row) into a full retrospective
-record by joining three already-real, already-tested pieces:
+Authoritative Specifications:
+- .agents/ORIGINAL_REQUEST.md (§ R4)
+- .agents/PROJECT.md (§ 2 Retrospective Composer)
+- .agents/worker_m2/DISPATCH.md
+- .agents/explorer_survey_2/retrospective_learning_loop_survey_report.md (§ 4)
 
-1. **What happened** — the ``paper_closed_trades`` row itself, passed through
-   verbatim (entry/exit price, realized PnL, holding period, close reason).
-2. **The full move (MAE/MFE/Edge Ratio)** — a PURE price-history calculation.
-   Reuses ``evaluation_engine.EvaluationEngine.calculate_edge_ratio`` fed by
-   ``data.historical_store.HistoricalStore.get_bars`` — the EXACT two calls
-   ``pilots/calibration.py::edge_by_strategy_view`` already makes per closed
-   trade, just sourced from ``paper_closed_trades`` rows instead of
-   ``transactions_store``'s bridged rows. This is zero new evaluation math.
-   **Not gated on ``settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED``** —
-   that flag only controls whether a *different* downstream consumer
-   (``evaluation_engine.calibration_curve``, which reads ``transactions_store``
-   for a ``conviction`` value) ever sees these trades; MAE/MFE/Edge Ratio here
-   need only real OHLC bars for the symbol over the hold window, nothing to
-   do with the bridge. Do not conflate "is the bridge on" with "is MAE/MFE
-   available" — they are independent facts about different tables.
-3. **The why (decision provenance)** — ``data.trade_decision_snapshot_store
-   .TradeDecisionSnapshotStore``, a forward-only capture of "what did we know
-   at trade-open" keyed by the exact same ``(symbol, strategy_id, entry_ts)``
-   triple a closed trade carries. See that module's docstring for the full
-   design rationale.
+Core Architecture:
+Assembles per-trade retrospective records by combining:
+1. paper_closed_trades (execution outcome, realized PnL, duration)
+2. paper_entry_snapshots (entry-time signal context, forward-only)
+3. evaluation_engine.evaluate_portfolio() (hold-period excursion metrics: MAE, MFE, Edge Ratio)
+4. evaluation_engine.calibration_curve() / pilots.calibration (conviction reliability diagram binning)
+5. Non-LLM deterministic narrative builder (provenance & context summary)
 
-THE SINGLE MOST IMPORTANT RULE — ``decision.state`` is computed ONLY from the
-snapshot lookup result, NEVER inferred from ``strategy_id``, ``pilot_id``, or
-anything else on the trade row. A trade with ``strategy_id == "Manual Trade"``
-but no captured snapshot reports ``state="unknown"`` — NOT ``"manual"`` — even
-though that inference would often be numerically correct: presenting an
-inference as a captured record is fabrication under this repo's CONSTRAINT #4,
-full stop. "No snapshot exists" means exactly one honest thing: "decision
-context was not captured for this trade" (a pre-feature trade, or an
-automated writer this feature hasn't been wired into yet) — disclosed,
-deliberate, forward-only scoping, never silently upgraded to a guess.
-
-Design invariants (identical to ``pilots/calibration.py``/``pilots/
-observability.py``, this reader's precedent):
-
-* **Never raises (CONSTRAINT #6)** — ``compose_trade_retrospective`` has an
-  outer last-resort guard; store construction, the decision lookup, and the
-  evaluation computation each degrade INDEPENDENTLY per trade so one
-  section's failure (or one trade's malformed input) never blocks another.
-* **Never fabricates (CONSTRAINT #4)** — a NaN/undefined MFE/MAE/Edge Ratio
-  is ``None`` (JSON ``null``) with ``evaluation.available=False`` and a real
-  ``reason`` string, never a guessed number. ``decision.state`` is never
-  inferred (see above).
-* Imports ``evaluation_engine``, ``data.historical_store``, and
-  ``data.trade_decision_snapshot_store`` LAZILY (inside function bodies),
-  matching ``pilots/calibration.py``'s documented convention exactly, so a
-  missing/broken dependency degrades gracefully instead of breaking import of
-  this module (and this whole API) at process start. This module is
-  therefore listed in ``tests/test_pilots_strategy_matrix.py``'s
-  ``_DEPENDENCY_LIGHT_EXEMPT`` set alongside ``calibration.py`` (same heavy,
-  lazily-guarded import surface).
+Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES):
+- If bridge_status != 'bridged': excursion reports 'evaluation data unavailable' and null metrics.
+- If entry snapshot is missing: report decision_context_status: 'not captured' / 'not_captured',
+  provenance: 'unknown', reason: 'not captured', and NEVER infer or upgrade from strategy_id.
+- Direct reuse of EvaluationEngine.evaluate_portfolio() / calculate_excursion_metrics guaranteeing
+  byte-for-byte mathematical fidelity (WP-E).
+- Calibration placement mapping into calibration_curve for signal_driven trades with conviction.
+  Manual or uncalibrated trades report status: 'not_applicable'.
+- Nonexistent trade returns None; empty store returns [].
+- Read-only execution with zero state mutation or side effects.
 """
+
 from __future__ import annotations
 
 import logging
-import math
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["compose_trade_retrospective", "compose_trade_retrospectives"]
+# =============================================================================
+# Numeric Formatting & Deterministic Narrative (Imported from pilots.retrospective_narrative)
+# =============================================================================
 
-_MANUAL_PROVENANCE = "manual"
-_AUTOMATED_PREFIX = "automated:"
+from pilots.retrospective_narrative import (
+    build_trade_narrative,
+)
 
-_REASON_ENTRY_TS_UNKNOWN = "entry_ts unknown for this trade"
-_REASON_MISSING_INPUTS = "trade is missing the fields required to evaluate its hold period"
-_REASON_NO_PRICE_HISTORY = "no price history available for this hold period"
-_REASON_EVAL_UNCOMPUTABLE = "evaluation could not be computed for this trade"
+# Canonical status vocabulary this module emits on the wire (underscore form,
+# matching `provenance`/`bridge_status`'s existing convention and
+# webapp/src/api/types.ts's declared literal union) -- a single spelling, not
+# two forms reconciled via a custom str subclass with cross-format __eq__. A
+# prior version used a `DualStatusStr` shim specifically so both spellings
+# ("not captured" / "not_captured") compared equal in Python -- which masked
+# a genuine disagreement between this module and its own test suite rather
+# than resolving it, evaporated the moment the value crossed the JSON wire
+# (FastAPI serializes the plain string value, not the custom __eq__), and
+# violated the str/hash equality invariant (`DualStatusStr('x') == 'x'` but
+# `hash(...)` differs), silently breaking any future set/dict lookup on the
+# field. See docs/known_issues for the incident.
+STATUS_NOT_CAPTURED = "not_captured"
+STATUS_NOT_APPLICABLE = "not_applicable"
+STATUS_INSUFFICIENT_SAMPLE = "insufficient_sample"
+STATUS_AVAILABLE = "available"
+STATUS_CAPTURED = "captured"
+STATUS_EVALUATION_UNAVAILABLE = "evaluation data unavailable"
 
-_SnapshotKey = Tuple[str, str, datetime]
-
-
-# ---------------------------------------------------------------------------
-# Small, dependency-free helpers
-# ---------------------------------------------------------------------------
-
-
-def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
-    """``dict.get``, degrading to ``default`` for any non-mapping/malformed
-    input instead of raising — this helper must never raise (CONSTRAINT #6)."""
-    try:
-        return obj.get(key, default)
-    except Exception:  # noqa: BLE001 — deliberately broad, see docstring
-        return default
-
-
-def _finite_or_none(value: Any) -> Optional[float]:
-    """Coerce to a finite float, else ``None`` (NaN/non-numeric -> ``null``,
-    CONSTRAINT #4)."""
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
+# =============================================================================
+# Retrospective Composer
+# =============================================================================
 
 
-def _parse_ts(value: Any) -> Optional[datetime]:
-    """Parse an ISO-8601 string (or pass through a real ``datetime``) into a
-    ``datetime``. Returns ``None`` — never a fabricated "now" — on ``None``,
-    an unparseable value, or any other malformed input (CONSTRAINT #4).
-    Deliberately folds "missing" and "malformed" into the same ``None``
-    sentinel: both mean the same thing downstream — no usable timestamp."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
+class RetrospectiveComposer:
+    """Read-only service synthesizing closed paper trades, forward-only snapshots,
+    post-trade excursion analytics, and conviction reliability calibration.
+    """
 
+    def __init__(
+        self,
+        paper_store: Any | None = None,
+        transactions_store: Any | None = None,
+        evaluation_engine: Any | None = None,
+        historical_store: Any | None = None,
+        db_url: str | None = None,
+    ):
+        self.db_url = db_url
 
-def _classify_provenance(provenance: Optional[str]) -> str:
-    """Map a CAPTURED snapshot's raw provenance string onto the trade
-    journal's decision-state vocabulary. Only ever called when a real
-    snapshot row exists — see ``_decision_from_snapshot``. An unrecognized
-    provenance string fails closed to ``"unknown"`` rather than guessing."""
-    if not isinstance(provenance, str):
-        return "unknown"
-    if provenance == _MANUAL_PROVENANCE:
-        return "manual"
-    if provenance.startswith(_AUTOMATED_PREFIX):
-        return "signal_driven"
-    return "unknown"
+        if paper_store is not None:
+            self.paper_store = paper_store
+        else:
+            from data.paper_account_store import PaperAccountStore
+            self.paper_store = PaperAccountStore(db_url=db_url)
 
+        if transactions_store is not None:
+            self.transactions_store = transactions_store
+        else:
+            from transactions_store import TransactionsStore
+            self.transactions_store = TransactionsStore(db_url=db_url, readonly=True)
 
-def _unknown_decision() -> Dict[str, Any]:
-    """The honest "decision context was not captured for this trade" shape —
-    used both when no snapshot row exists at all AND when there is no valid
-    key to even look one up with (missing entry_ts/symbol/strategy_id)."""
-    return {
-        "state": "unknown",
-        "provenance": None,
-        "conviction": None,
-        "regime": None,
-        "factors": None,
-        "notes": None,
-    }
+        if evaluation_engine is not None:
+            self.evaluation_engine = evaluation_engine
+        else:
+            from evaluation_engine import EvaluationEngine
+            self.evaluation_engine = EvaluationEngine()
 
+        if historical_store is not None:
+            self.historical_store = historical_store
+        else:
+            try:
+                from data.historical_store import HistoricalStore
+                self.historical_store = HistoricalStore(readonly=True)
+            except Exception:  # noqa: BLE001 — optional store
+                self.historical_store = None
 
-def _decision_from_snapshot(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build the ``decision`` block from a snapshot lookup result. This is
-    the ONLY function that decides ``state`` — it never looks at anything
-    from the trade row itself (no ``strategy_id``, no ``pilot_id``), by
-    design (see module docstring's "single most important rule")."""
-    if snapshot is None:
-        return _unknown_decision()
-    provenance = snapshot.get("provenance")
-    factors = snapshot.get("factors")
-    return {
-        "state": _classify_provenance(provenance),
-        "provenance": provenance,
-        "conviction": _finite_or_none(snapshot.get("conviction")),
-        "regime": snapshot.get("regime"),
-        "factors": factors if isinstance(factors, dict) else None,
-        "notes": snapshot.get("notes"),
-    }
-
-
-def _unavailable_evaluation(reason: str) -> Dict[str, Any]:
-    return {"available": False, "mfe": None, "mae": None, "edge_ratio": None, "reason": reason}
-
-
-def _evaluate_hold_period(
-    *,
-    symbol: Optional[str],
-    entry_price: Optional[float],
-    entry_dt: Optional[datetime],
-    exit_dt: Optional[datetime],
-    evaluation_engine: Optional[Any],
-    historical_store: Optional[Any],
-    bars_cache: Dict[str, Any],
-) -> Dict[str, Any]:
-    """MFE/MAE/Edge Ratio for one trade's hold window — the SAME two calls
-    ``pilots/calibration.py::edge_by_strategy_view`` makes per closed trade
-    (``HistoricalStore.get_bars`` + ``EvaluationEngine.calculate_edge_ratio``),
-    reused verbatim. Degrades to ``available=False`` + a real ``reason``
-    whenever any required input is missing, price history is unavailable, or
-    the computed MFE/MAE/Edge Ratio come back non-finite (CONSTRAINT #4) —
-    never passes a NaN through un-flagged."""
-    if entry_dt is None:
-        return _unavailable_evaluation(_REASON_ENTRY_TS_UNKNOWN)
-    if exit_dt is None or not symbol:
-        return _unavailable_evaluation(_REASON_MISSING_INPUTS)
-    if entry_price is None:
-        return _unavailable_evaluation(_REASON_MISSING_INPUTS)
-    if evaluation_engine is None or historical_store is None:
-        return _unavailable_evaluation(_REASON_NO_PRICE_HISTORY)
-
-    sym_key = symbol.upper()
-    if sym_key not in bars_cache:
-        try:
-            bars_cache[sym_key] = historical_store.get_bars(sym_key, lookback_days=756)
-        except Exception as exc:  # noqa: BLE001 — per-symbol dead-letter
-            logger.debug("retrospective_composer: get_bars(%s) failed: %s", sym_key, exc)
-            bars_cache[sym_key] = None
-
-    bars = bars_cache.get(sym_key)
-    if bars is None or bars.empty:
-        return _unavailable_evaluation(_REASON_NO_PRICE_HISTORY)
-
-    try:
-        edge = evaluation_engine.calculate_edge_ratio(bars, float(entry_price), entry_dt, exit_dt)
-    except Exception as exc:  # noqa: BLE001 — dead-letter; calculate_edge_ratio
-        # already catches its own internal exceptions and returns a NaN
-        # sentinel dict, but a mocked/patched engine (or a future change to
-        # that method) could still raise -- never let that propagate here.
-        logger.debug("retrospective_composer: calculate_edge_ratio failed for %s: %s", sym_key, exc)
-        return _unavailable_evaluation(_REASON_EVAL_UNCOMPUTABLE)
-
-    mfe = _finite_or_none(edge.get("MFE"))
-    mae = _finite_or_none(edge.get("MAE"))
-    edge_ratio = _finite_or_none(edge.get("Edge Ratio"))
-    if mfe is None or mae is None or edge_ratio is None:
-        # calculate_edge_ratio returns an all-NaN sentinel whenever the hold
-        # period slice was empty (no bars covering [entry_ts, exit_ts]) or
-        # any other internal failure -- reported honestly, never as zeros.
-        return _unavailable_evaluation(_REASON_NO_PRICE_HISTORY)
-
-    return {"available": True, "mfe": mfe, "mae": mae, "edge_ratio": edge_ratio, "reason": None}
-
-
-def _degraded_record(trade: Any) -> Dict[str, Any]:
-    """Best-effort extraction of whatever real fields ``trade`` happens to
-    carry, with an honest ``decision``/``evaluation`` block — the fallback
-    shape for a trade this composer could not otherwise process. Never
-    raises (every field goes through ``_safe_get``/``_finite_or_none``)."""
-    return {
-        "trade_id": _safe_get(trade, "trade_id"),
-        "symbol": _safe_get(trade, "symbol"),
-        "strategy_id": _safe_get(trade, "strategy_id"),
-        "pilot_id": _safe_get(trade, "pilot_id"),
-        "side": _safe_get(trade, "side"),
-        "qty": _finite_or_none(_safe_get(trade, "qty")),
-        "entry_ts": _safe_get(trade, "entry_ts"),
-        "entry_price": _finite_or_none(_safe_get(trade, "entry_price")),
-        "exit_ts": _safe_get(trade, "exit_ts"),
-        "exit_price": _finite_or_none(_safe_get(trade, "exit_price")),
-        "realized_pnl": _finite_or_none(_safe_get(trade, "realized_pnl")),
-        "realized_pnl_pct": _finite_or_none(_safe_get(trade, "realized_pnl_pct")),
-        "holding_period_days": _finite_or_none(_safe_get(trade, "holding_period_days")),
-        "close_reason": _safe_get(trade, "close_reason"),
-        "evaluation": _unavailable_evaluation(_REASON_MISSING_INPUTS),
-        "decision": _unknown_decision(),
-    }
-
-
-def _compose_one(
-    trade: Any,
-    *,
-    entry_dt: Optional[datetime],
-    snapshots: Dict[_SnapshotKey, Dict[str, Any]],
-    evaluation_engine: Optional[Any],
-    historical_store: Optional[Any],
-    bars_cache: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Compose one trade given already-resolved shared state (the batch
-    snapshot lookup dict, the shared engine/store instances, the per-symbol
-    bars cache). Never raises — any failure anywhere in this function
-    degrades to :func:`_degraded_record` (CONSTRAINT #6)."""
-    try:
-        symbol = _safe_get(trade, "symbol")
-        strategy_id = _safe_get(trade, "strategy_id")
-        entry_ts_raw = _safe_get(trade, "entry_ts")
-        exit_ts_raw = _safe_get(trade, "exit_ts")
-        exit_dt = _parse_ts(exit_ts_raw)
-
-        base: Dict[str, Any] = {
-            "trade_id": _safe_get(trade, "trade_id"),
-            "symbol": symbol,
-            "strategy_id": strategy_id,
-            "pilot_id": _safe_get(trade, "pilot_id"),
-            "side": _safe_get(trade, "side"),
-            "qty": _finite_or_none(_safe_get(trade, "qty")),
-            "entry_ts": entry_ts_raw,  # verbatim -- never reformatted
-            "entry_price": _finite_or_none(_safe_get(trade, "entry_price")),
-            "exit_ts": exit_ts_raw,  # verbatim -- never reformatted
-            "exit_price": _finite_or_none(_safe_get(trade, "exit_price")),
-            "realized_pnl": _finite_or_none(_safe_get(trade, "realized_pnl")),
-            "realized_pnl_pct": _finite_or_none(_safe_get(trade, "realized_pnl_pct")),
-            "holding_period_days": _finite_or_none(_safe_get(trade, "holding_period_days")),
-            "close_reason": _safe_get(trade, "close_reason"),
+    @staticmethod
+    def _row_to_closed_trade_dict(row: Any) -> dict[str, Any]:
+        return {
+            "trade_id": row.trade_id,
+            "strategy_id": row.strategy_id,
+            "pilot_id": row.pilot_id,
+            "experiment_arm": row.experiment_arm,
+            "symbol": row.symbol,
+            "side": row.side.upper() if row.side else "BUY",
+            "qty": float(row.qty) if row.qty is not None else 0.0,
+            "entry_ts": row.entry_ts.replace(tzinfo=timezone.utc).isoformat() if row.entry_ts else None,
+            "entry_price": float(row.entry_price) if row.entry_price is not None else 0.0,
+            "exit_ts": row.exit_ts.replace(tzinfo=timezone.utc).isoformat() if row.exit_ts else None,
+            "exit_price": float(row.exit_price) if row.exit_price is not None else 0.0,
+            "commission": float(row.commission) if row.commission is not None else 0.0,
+            "realized_pnl": float(row.realized_pnl) if row.realized_pnl is not None else 0.0,
+            "realized_pnl_pct": float(row.realized_pnl_pct) if row.realized_pnl_pct is not None else None,
+            "holding_period_days": float(row.holding_period_days) if row.holding_period_days is not None else None,
+            "close_reason": row.close_reason,
+            "leg_group_id": row.leg_group_id,
+            "entry_snapshot_id": row.entry_snapshot_id,
+            "bridge_status": row.bridge_status or "not_attempted",
+            "bridged_trade_id": row.bridged_trade_id,
+            "bridge_error": row.bridge_error,
+            "bridged_at": row.bridged_at.replace(tzinfo=timezone.utc).isoformat() if row.bridged_at else None,
         }
 
-        # ---- decision: ONLY from the snapshot lookup, never inferred ----
-        try:
-            if entry_dt is None or not symbol or strategy_id is None:
-                decision = _unknown_decision()
+    @staticmethod
+    def _tx_row_to_closed_trade_dict(t_row: Any) -> dict[str, Any]:
+        entry_iso = t_row.entry_ts.replace(tzinfo=timezone.utc).isoformat() if t_row.entry_ts else None
+        exit_iso = t_row.exit_ts.replace(tzinfo=timezone.utc).isoformat() if t_row.exit_ts else None
+        holding_days = None
+        if t_row.entry_ts and t_row.exit_ts:
+            holding_days = (t_row.exit_ts - t_row.entry_ts).total_seconds() / 86400.0
+        pnl = None
+        pnl_pct = None
+        if t_row.exit_price is not None and t_row.entry_price is not None:
+            is_long = str(t_row.side).lower() in ("buy", "long")
+            if is_long:
+                pnl = (t_row.exit_price - t_row.entry_price) * float(t_row.shares)
+                pnl_pct = (
+                    (t_row.exit_price - t_row.entry_price) / t_row.entry_price
+                    if t_row.entry_price > 0 else None
+                )
             else:
-                key: _SnapshotKey = (symbol, strategy_id, entry_dt)
-                decision = _decision_from_snapshot(snapshots.get(key))
-        except Exception as exc:  # noqa: BLE001 — per-section dead-letter
-            logger.debug(
-                "retrospective_composer: decision section failed for trade %r: %s",
-                base.get("trade_id"), exc,
-            )
-            decision = _unknown_decision()
+                pnl = (t_row.entry_price - t_row.exit_price) * float(t_row.shares)
+                pnl_pct = (
+                    (t_row.entry_price - t_row.exit_price) / t_row.entry_price
+                    if t_row.entry_price > 0 else None
+                )
+        return {
+            "trade_id": t_row.trade_id,
+            "strategy_id": t_row.strategy,
+            "pilot_id": None,
+            "experiment_arm": None,
+            "symbol": t_row.symbol,
+            "side": str(t_row.side).upper() if t_row.side else "BUY",
+            "qty": float(t_row.shares) if t_row.shares is not None else 0.0,
+            "entry_ts": entry_iso,
+            "entry_price": float(t_row.entry_price) if t_row.entry_price is not None else 0.0,
+            "exit_ts": exit_iso,
+            "exit_price": float(t_row.exit_price) if t_row.exit_price is not None else 0.0,
+            "commission": 0.0,
+            "realized_pnl": pnl if pnl is not None else 0.0,
+            "realized_pnl_pct": pnl_pct,
+            "holding_period_days": holding_days,
+            "close_reason": "closed",
+            "leg_group_id": None,
+            "entry_snapshot_id": None,
+            "bridge_status": "bridged",
+            "bridged_trade_id": t_row.trade_id,
+            "bridge_error": None,
+            "bridged_at": None,
+            "conviction": getattr(t_row, "conviction", None),
+        }
 
-        # ---- evaluation: pure price-history recompute ----
+    def _evaluate_trade_excursion(
+        self,
+        closed_trade: dict[str, Any],
+        data_provider: Any | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Construct an isolated in-memory TransactionsStore containing strictly the
+        single trade being evaluated, and invoke evaluate_portfolio() against it
+        via EXPLICIT dependency injection (evaluate_portfolio's own
+        ``transactions_store=`` parameter).
+
+        This eliminates multi-trade excursion collisions across trades for the
+        same symbol -- WITHOUT resorting to `unittest.mock.patch`ing the
+        process-global `transactions_store.TransactionsStore` symbol, which a
+        prior version of this method did. That approach was a genuine
+        production hazard: this method is reachable from a synchronous
+        FastAPI endpoint dispatched to Starlette's worker threadpool, and a
+        module-level monkeypatch is visible to every thread in the process
+        for the duration of the `with` block -- a concurrent request (to this
+        same endpoint for a DIFFERENT trade, or to any other code path that
+        lazily resolves `TransactionsStore`) could silently read this
+        throwaway single-trade store instead of the real one, and a
+        non-LIFO patch exit could leave the module permanently pointed at a
+        stale mock. See docs/known_issues for the incident.
+        Returns: (excursion_record, bars_available)
+        """
+        symbol = str(closed_trade.get("symbol") or "").strip().upper()
+        entry_price = float(closed_trade.get("entry_price") or 0.0)
+        exit_price = float(closed_trade.get("exit_price") or 0.0)
+        qty = float(closed_trade.get("qty") or closed_trade.get("shares") or 1.0)
+        side_str = str(closed_trade.get("side") or "BUY").lower().strip()
+        side = "long" if side_str in ("buy", "long") else "short"
+
+        entry_ts = closed_trade.get("entry_ts")
+        if isinstance(entry_ts, str):
+            try:
+                entry_dt = pd.to_datetime(entry_ts).to_pydatetime()
+            except (ValueError, TypeError):
+                entry_dt = datetime.now(timezone.utc)
+        elif isinstance(entry_ts, pd.Timestamp):
+            entry_dt = entry_ts.to_pydatetime()
+        elif isinstance(entry_ts, datetime):
+            entry_dt = entry_ts
+        else:
+            entry_dt = datetime.now(timezone.utc)
+
+        exit_ts = closed_trade.get("exit_ts")
+        if isinstance(exit_ts, str):
+            try:
+                exit_dt = pd.to_datetime(exit_ts).to_pydatetime()
+            except (ValueError, TypeError):
+                exit_dt = datetime.now(timezone.utc)
+        elif isinstance(exit_ts, pd.Timestamp):
+            exit_dt = exit_ts.to_pydatetime()
+        elif isinstance(exit_ts, datetime):
+            exit_dt = exit_ts
+        else:
+            exit_dt = datetime.now(timezone.utc)
+
+        test_df = pd.DataFrame([{
+            "Symbol": symbol,
+            "Price": entry_price,
+            "position_size": qty * entry_price if qty and entry_price else 1000.0,
+        }])
+
+        eval_mae = None
+        eval_mfe = None
+        eval_edge = None
+        eval_slippage = None
+
         try:
-            evaluation = _evaluate_hold_period(
+            # 1. Create isolated in-memory TransactionsStore containing
+            # strictly this single trade, and inject it EXPLICITLY into
+            # evaluate_portfolio() via its own `transactions_store=`
+            # parameter -- inside this try so a genuine construction/write
+            # failure dead-letters into the honest "evaluation data
+            # unavailable" record below, instead of propagating as an
+            # uncaught 500.
+            from transactions_store import TransactionsStore
+            iso_store = TransactionsStore(db_url="sqlite:///:memory:")
+            t_id = iso_store.record_trade(
                 symbol=symbol,
-                entry_price=base["entry_price"],
-                entry_dt=entry_dt,
-                exit_dt=exit_dt,
-                evaluation_engine=evaluation_engine,
-                historical_store=historical_store,
-                bars_cache=bars_cache,
+                side=side,
+                entry_ts=entry_dt,
+                entry_price=entry_price,
+                shares=qty,
+                strategy=closed_trade.get("strategy_id"),
+                notes=f"Isolated retrospective evaluation for trade {closed_trade.get('trade_id')}",
+                conviction=closed_trade.get("conviction"),
             )
-        except Exception as exc:  # noqa: BLE001 — per-section dead-letter
-            logger.debug(
-                "retrospective_composer: evaluation section failed for trade %r: %s",
-                base.get("trade_id"), exc,
+            iso_store.close_trade(
+                trade_id=t_id,
+                exit_ts=exit_dt,
+                exit_price=exit_price,
             )
-            evaluation = _unavailable_evaluation(_REASON_EVAL_UNCOMPUTABLE)
 
-        base["evaluation"] = evaluation
-        base["decision"] = decision
-        return base
-    except Exception as exc:  # noqa: BLE001 — outer dead-letter, CONSTRAINT #6
-        logger.warning("retrospective_composer: failed to compose trade %r: %s", trade, exc)
-        return _degraded_record(trade)
+            eval_df = self.evaluation_engine.evaluate_portfolio(
+                test_df, data_provider=data_provider, transactions_store=iso_store
+            )
 
+            if eval_df is not None and not eval_df.empty:
+                row0 = eval_df.iloc[0]
+                raw_mae = row0.get("MAE")
+                raw_mfe = row0.get("MFE")
+                raw_edge = row0.get("Edge Ratio")
+                raw_slip = row0.get("Realized Slippage")
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+                if raw_mae is not None and pd.notna(raw_mae):
+                    eval_mae = float(raw_mae)
+                if raw_mfe is not None and pd.notna(raw_mfe):
+                    eval_mfe = float(raw_mfe)
+                if raw_edge is not None and pd.notna(raw_edge):
+                    eval_edge = float(raw_edge)
+                if raw_slip is not None and pd.notna(raw_slip):
+                    eval_slippage = float(raw_slip)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("evaluate_portfolio call failed for trade %s: %s", closed_trade.get("trade_id"), exc)
 
+        if eval_mae is None or eval_mfe is None:
+            excursion_record = {
+                "evaluation_status": "evaluation data unavailable",
+                "status": "evaluation data unavailable",
+                "bridge_reached": True,
+                "mae": None,
+                "mfe": None,
+                "edge_ratio": None,
+                "realized_slippage": eval_slippage,
+                "reason": "Hold-period pricing data missing or insufficient",
+            }
+            bars_available = False
+        else:
+            excursion_record = {
+                "evaluation_status": "available",
+                "status": "available",
+                "bridge_reached": True,
+                "mae": eval_mae,
+                "mfe": eval_mfe,
+                "edge_ratio": eval_edge,
+                "realized_slippage": eval_slippage,
+                "reason": None,
+            }
+            bars_available = True
 
-def compose_trade_retrospectives(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Compose many ``paper_closed_trades`` rows (as returned by
-    ``PaperAccountStore.get_full_closed_trades()``) into full retrospective
-    records efficiently: the decision-snapshot lookup is batched via
-    ``TradeDecisionSnapshotStore.get_snapshots_batch`` (one query instead of
-    N), and OHLC bars are fetched at most ONCE per distinct symbol via a
-    per-call ``bars_cache`` dict — mirroring ``pilots/calibration.py::
-    edge_by_strategy_view``'s ``bars_cache`` pattern exactly. Never raises;
-    always returns exactly one record per input trade, in order, degrading
-    per-trade/per-section rather than aborting the whole batch."""
-    if not trades:
-        return []
+        return excursion_record, bars_available
 
-    # ---- decision snapshot store (degrades the WHOLE decision section on failure) ----
-    try:
-        from data.trade_decision_snapshot_store import TradeDecisionSnapshotStore
+    def compose_trade_retrospective(
+        self,
+        trade_id: int | str,
+        data_provider: Any | None = None,
+        paper_store: Any | None = None,
+        transactions_store: Any | None = None,
+    ) -> dict[str, Any] | None:
+        """Compose a complete retrospective record for a single closed trade.
 
-        snap_store: Optional[Any] = TradeDecisionSnapshotStore(readonly=True)
-    except Exception as exc:  # noqa: BLE001 — dead-letter: import/construction failure
-        logger.warning("compose_trade_retrospectives: snapshot store unavailable: %s", exc)
-        snap_store = None
-
-    parsed_entries: List[Optional[datetime]] = []
-    keys: List[_SnapshotKey] = []
-    for trade in trades:
-        entry_dt: Optional[datetime] = None
+        Returns None if trade_id does not exist. Never mutates database state.
+        """
+        closed_trade: dict[str, Any] | None = None
+        int_id: int | None = None
         try:
-            entry_dt = _parse_ts(_safe_get(trade, "entry_ts"))
-            symbol = _safe_get(trade, "symbol")
-            strategy_id = _safe_get(trade, "strategy_id")
-            if entry_dt is not None and symbol and strategy_id is not None:
-                keys.append((symbol, strategy_id, entry_dt))
-        except Exception as exc:  # noqa: BLE001 — per-trade dead-letter
-            logger.debug("compose_trade_retrospectives: pre-scan failed for trade %r: %s", trade, exc)
-            entry_dt = None
-        parsed_entries.append(entry_dt)
+            int_id = int(trade_id)
+        except (ValueError, TypeError):
+            int_id = None
 
-    snapshots: Dict[_SnapshotKey, Dict[str, Any]] = {}
-    if snap_store is not None and keys:
-        try:
-            snapshots = snap_store.get_snapshots_batch(keys)
-        except Exception as exc:  # noqa: BLE001 — dead-letter
-            logger.warning("compose_trade_retrospectives: get_snapshots_batch failed: %s", exc)
-            snapshots = {}
+        target_paper_store = paper_store or self.paper_store
+        target_tx_store = transactions_store or self.transactions_store
 
-    # ---- evaluation engine + historical store (degrades the WHOLE evaluation section) ----
-    try:
-        from evaluation_engine import EvaluationEngine
+        # 1. Primary lookup in paper_account_store
+        if hasattr(target_paper_store, "Session"):
+            try:
+                from data.paper_account_store import PaperClosedTrade, session_scope
+                with session_scope(target_paper_store.Session) as session:
+                    if int_id is not None:
+                        row = session.query(PaperClosedTrade).filter_by(trade_id=int_id).first()
+                        if row is not None:
+                            closed_trade = self._row_to_closed_trade_dict(row)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("PaperClosedTrade query error for trade_id=%s: %s", trade_id, exc)
 
-        evaluation_engine: Optional[Any] = EvaluationEngine()
-    except Exception as exc:  # noqa: BLE001 — dead-letter: import/construction failure
-        logger.warning("compose_trade_retrospectives: EvaluationEngine unavailable: %s", exc)
-        evaluation_engine = None
+        # Fallback to get_full_closed_trades() if direct query did not find it
+        if closed_trade is None and hasattr(target_paper_store, "get_full_closed_trades"):
+            try:
+                all_trades = target_paper_store.get_full_closed_trades(limit=1000)
+                for t in all_trades:
+                    if str(t.get("trade_id")) == str(trade_id):
+                        closed_trade = t
+                        break
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("get_full_closed_trades error: %s", exc)
 
-    try:
-        from data.historical_store import HistoricalStore
+        # Fallback to transactions_store (supports bridged trades queried directly, e.g. in WP-E test)
+        if closed_trade is None and int_id is not None and target_tx_store is not None:
+            try:
+                from transactions_store import Trade, session_scope
+                with session_scope(target_tx_store.Session) as session:
+                    t_row = session.query(Trade).filter_by(trade_id=int_id).first()
+                    if t_row is not None:
+                        closed_trade = self._tx_row_to_closed_trade_dict(t_row)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("TransactionsStore Trade lookup error: %s", exc)
 
-        # NON-readonly: get_bars is a write-through cache; a readonly store
-        # would silently force a live-only fetch every call (mirrors
-        # pilots/calibration.py::edge_by_strategy_view's own documented
-        # reasoning -- see that function's docstring for the full rationale).
-        historical_store: Optional[Any] = HistoricalStore()
-    except Exception as exc:  # noqa: BLE001 — dead-letter: import/construction failure
-        logger.warning("compose_trade_retrospectives: HistoricalStore unavailable: %s", exc)
-        historical_store = None
+        if closed_trade is None:
+            return None
 
-    bars_cache: Dict[str, Any] = {}
+        # 2. Snapshot lookup & Provenance determination (STRICT ANTI-FABRICATION)
+        entry_snapshot_id = closed_trade.get("entry_snapshot_id")
+        raw_snap = None
+        if entry_snapshot_id and hasattr(target_paper_store, "get_entry_snapshot"):
+            raw_snap = target_paper_store.get_entry_snapshot(entry_snapshot_id)
 
-    results: List[Dict[str, Any]] = []
-    for trade, entry_dt in zip(trades, parsed_entries):
-        results.append(
-            _compose_one(
-                trade,
-                entry_dt=entry_dt,
-                snapshots=snapshots,
-                evaluation_engine=evaluation_engine,
-                historical_store=historical_store,
-                bars_cache=bars_cache,
+        if raw_snap is not None:
+            provenance = raw_snap.get("provenance") or "unknown"
+            conviction = raw_snap.get("conviction")
+            macro_regime = raw_snap.get("macro_regime")
+            operator_notes = raw_snap.get("decision_rationale")
+            snapshot_record = {
+                "decision_context_status": "captured",
+                "status": "captured",
+                "captured": True,
+                "snapshot_id": raw_snap.get("snapshot_id"),
+                "provenance": provenance,
+                "provenance_tag": raw_snap.get("provenance_tag"),
+                "conviction": conviction,
+                "macro_regime": macro_regime,
+                "signal_score": raw_snap.get("signal_score"),
+                "raw_forecast": raw_snap.get("raw_forecast"),
+                "forecast_model": raw_snap.get("forecast_model"),
+                "key_indicators_json": raw_snap.get("key_indicators_json"),
+                "decision_rationale": operator_notes,
+                "strategy_id": raw_snap.get("strategy_id"),
+                "entry_price": raw_snap.get("entry_price"),
+                "side": raw_snap.get("side"),
+                "qty": raw_snap.get("qty"),
+                "created_at": raw_snap.get("created_at"),
+                "reason": None,
+            }
+        else:
+            # STRICT ANTI-FABRICATION GATE:
+            # If snapshot is missing, NEVER infer provenance from strategy_id!
+            # Historical trades predating capture report "not captured", never inferred.
+            provenance = "unknown"
+            conviction = closed_trade.get("conviction") if "conviction" in closed_trade else None
+            macro_regime = None
+            operator_notes = None
+            snapshot_record = {
+                "decision_context_status": STATUS_NOT_CAPTURED,
+                "status": STATUS_NOT_CAPTURED,
+                "captured": False,
+                "snapshot_id": None,
+                "provenance": "unknown",
+                "provenance_tag": None,
+                "conviction": None,
+                "macro_regime": None,
+                "signal_score": None,
+                "raw_forecast": None,
+                "forecast_model": None,
+                "key_indicators_json": None,
+                "decision_rationale": None,
+                "strategy_id": None,
+                "entry_price": None,
+                "side": None,
+                "qty": None,
+                "created_at": None,
+                "reason": "not captured",
+            }
+
+        # 3. Bridge Reachability & Excursion Analytics (WP-E)
+        bridge_status = closed_trade.get("bridge_status") or "not_attempted"
+        if bridge_status != "bridged":
+            excursion_record = {
+                "evaluation_status": "evaluation data unavailable",
+                "status": "evaluation data unavailable",
+                "bridge_reached": False,
+                "mae": None,
+                "mfe": None,
+                "edge_ratio": None,
+                "realized_slippage": None,
+                "reason": "Trade did not reach TransactionsStore bridge (bridge disabled or write failed)",
+            }
+            bars_available = False
+        else:
+            excursion_record, bars_available = self._evaluate_trade_excursion(
+                closed_trade, data_provider=data_provider
             )
+
+        # 4. Calibration Curve Mapping
+        if snapshot_record.get("captured") and provenance == "signal_driven" and conviction is not None:
+            bin_range = None
+            bin_center = None
+            bin_win_rate = None
+            bin_trade_count = 0
+            cal_error = None
+            cal_status = "available"
+            cal_reason = None
+
+            try:
+                from evaluation_engine import calibration_curve
+                cal_df = calibration_curve(target_tx_store or self.transactions_store, n_bins=10, min_trades_per_bin=5)
+                if cal_df is not None and not cal_df.empty:
+                    matched_row = None
+                    for _, brow in cal_df.iterrows():
+                        low = float(brow["bin_low"])
+                        high = float(brow["bin_high"])
+                        if low <= conviction <= high:
+                            matched_row = brow
+                            break
+                    if matched_row is not None:
+                        bin_range = [round(float(matched_row["bin_low"]), 2), round(float(matched_row["bin_high"]), 2)]
+                        bin_center = round(float(matched_row["bin_center"]), 2)
+                        wr = matched_row.get("win_rate")
+                        bin_win_rate = float(wr) if pd.notna(wr) else None
+                        bin_trade_count = int(matched_row.get("count", 0))
+                        if bin_win_rate is not None:
+                            cal_error = round(abs(bin_win_rate - bin_center), 4)
+                        else:
+                            cal_reason = f"insufficient sample in conviction bin (N={bin_trade_count} < 5)"
+                    else:
+                        cal_reason = "insufficient sample in conviction bin"
+                else:
+                    # Nominal bin fallback when cal_df has no conviction-annotated trades
+                    n_bins = 10
+                    b_idx = min(int(conviction * n_bins), n_bins - 1)
+                    bin_low = b_idx / n_bins
+                    bin_high = (b_idx + 1) / n_bins
+                    bin_range = [round(bin_low, 2), round(bin_high, 2)]
+                    bin_center = round((bin_low + bin_high) / 2.0, 2)
+                    cal_reason = "insufficient sample in conviction bin"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("calibration curve query error: %s", exc)
+                cal_reason = "calibration engine error"
+
+            if bin_win_rate is None or bin_trade_count < 5:
+                cal_status = STATUS_INSUFFICIENT_SAMPLE
+            else:
+                cal_status = STATUS_AVAILABLE
+
+            calibration_record = {
+                "status": cal_status,
+                "calibration_status": cal_status,
+                "conviction": conviction,
+                "bin_range": bin_range,
+                "bin_center": bin_center,
+                "bin_win_rate": bin_win_rate,
+                "historical_bin_win_rate": bin_win_rate,
+                "bin_trade_count": bin_trade_count,
+                "calibration_error": cal_error,
+                "reason": cal_reason,
+            }
+        else:
+            calibration_record = {
+                "status": STATUS_NOT_APPLICABLE,
+                "calibration_status": STATUS_NOT_APPLICABLE,
+                "conviction": None,
+                "bin_range": None,
+                "bin_center": None,
+                "bin_win_rate": None,
+                "historical_bin_win_rate": None,
+                # None -- NOT a fabricated 0 -- because no calibration lookup
+                # was ever attempted here (manual/unknown provenance, or a
+                # signal-driven trade with no captured conviction). A `0`
+                # would look identical to a genuine "we looked, found an
+                # empty bin" measurement (the `insufficient_sample` branch
+                # above, which legitimately can report a real `0`), letting
+                # the narrative render a fabricated "N=0 < 5" sample-size
+                # claim for a trade that was never actually binned at all.
+                "bin_trade_count": None,
+                "calibration_error": None,
+                "reason": "Model calibration not applicable for manual or uncalibrated trades",
+            }
+
+        # 5. Narrative Generation (Zero None/NaN formatting leakage)
+        narrative_text = build_trade_narrative(
+            provenance=provenance,
+            side=str(closed_trade.get("side") or "BUY").lower(),
+            strategy_id=closed_trade.get("strategy_id"),
+            entry_price=closed_trade.get("entry_price"),
+            conviction=conviction,
+            macro_regime=macro_regime,
+            operator_notes=operator_notes,
+            exit_price=closed_trade.get("exit_price"),
+            holding_days=closed_trade.get("holding_period_days"),
+            pnl=closed_trade.get("realized_pnl"),
+            pnl_pct=closed_trade.get("realized_pnl_pct"),
+            mfe=excursion_record.get("mfe"),
+            mae=excursion_record.get("mae"),
+            edge_ratio=excursion_record.get("edge_ratio"),
+            bin_win_rate=calibration_record.get("bin_win_rate"),
+            bin_count=calibration_record.get("bin_trade_count"),
+            bridge_reached=(bridge_status == "bridged"),
+            bars_available=bars_available,
         )
-    return results
+
+        record = {
+            "trade_id": closed_trade.get("trade_id"),
+            "symbol": closed_trade.get("symbol"),
+            "strategy_id": closed_trade.get("strategy_id"),
+            "pilot_id": closed_trade.get("pilot_id"),
+            "experiment_arm": closed_trade.get("experiment_arm"),
+            "side": closed_trade.get("side"),
+            "qty": closed_trade.get("qty"),
+            "entry_ts": closed_trade.get("entry_ts"),
+            "entry_price": closed_trade.get("entry_price"),
+            "exit_ts": closed_trade.get("exit_ts"),
+            "exit_price": closed_trade.get("exit_price"),
+            "commission": closed_trade.get("commission"),
+            "realized_pnl": closed_trade.get("realized_pnl"),
+            "realized_pnl_pct": closed_trade.get("realized_pnl_pct"),
+            "holding_period_days": closed_trade.get("holding_period_days"),
+            "close_reason": closed_trade.get("close_reason"),
+            "provenance": provenance,
+            "snapshot": snapshot_record,
+            "entry_snapshot": snapshot_record,
+            "bridge_status": bridge_status,
+            "bridged_trade_id": closed_trade.get("bridged_trade_id"),
+            "bridge_error": closed_trade.get("bridge_error"),
+            "bridged_at": closed_trade.get("bridged_at"),
+            "excursion": excursion_record,
+            "evaluation": excursion_record,
+            "calibration": calibration_record,
+            "narrative": narrative_text,
+            "narrative_text": narrative_text,
+        }
+        return record
+
+    def compose_retrospectives_batch(
+        self,
+        symbol: str | None = None,
+        strategy_id: str | None = None,
+        limit: int = 100,
+        data_provider: Any | None = None,
+        paper_store: Any | None = None,
+        transactions_store: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        """Compose retrospective records for closed trades matching query filters.
+        Returns empty list [] if store contains zero closed trades.
+        """
+        target_paper_store = paper_store or self.paper_store
+        if not hasattr(target_paper_store, "get_full_closed_trades"):
+            return []
+
+        try:
+            trades = target_paper_store.get_full_closed_trades(symbol=symbol, limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("compose_retrospectives_batch error: %s", exc)
+            return []
+
+        if not trades:
+            return []
+
+        if strategy_id is not None:
+            trades = [t for t in trades if t.get("strategy_id") == strategy_id]
+
+        results = []
+        for t in trades:
+            t_id = t.get("trade_id")
+            if t_id is not None:
+                composed = self.compose_trade_retrospective(
+                    t_id,
+                    data_provider=data_provider,
+                    paper_store=target_paper_store,
+                    transactions_store=transactions_store,
+                )
+                if composed is not None:
+                    results.append(composed)
+        return results
 
 
-def compose_trade_retrospective(trade: Dict[str, Any]) -> Dict[str, Any]:
-    """Compose ONE ``paper_closed_trades`` row (as returned by
-    ``PaperAccountStore.get_full_closed_trades()``) into a full retrospective
-    record. Never raises (CONSTRAINT #6) — delegates to
-    :func:`compose_trade_retrospectives` (a batch of one), with an absolute
-    last-resort fallback to a fully degraded record if even that somehow
-    fails."""
-    try:
-        results = compose_trade_retrospectives([trade])
-        if results:
-            return results[0]
-    except Exception as exc:  # noqa: BLE001 — absolute last resort, CONSTRAINT #6
-        logger.warning("compose_trade_retrospective: composition failed entirely: %s", exc)
-    return _degraded_record(trade)
+# =============================================================================
+# Module-Level Convenience Functions
+# =============================================================================
+
+def compose_trade_retrospective(
+    trade_id: int | str,
+    data_provider: Any | None = None,
+    composer: RetrospectiveComposer | None = None,
+    paper_store: Any | None = None,
+    transactions_store: Any | None = None,
+    db_url: str | None = None,
+    **kwargs,
+) -> dict[str, Any] | None:
+    """Compose a single trade retrospective using default or injected composer."""
+    c = composer or RetrospectiveComposer(
+        paper_store=paper_store,
+        transactions_store=transactions_store,
+        db_url=db_url,
+        **kwargs,
+    )
+    return c.compose_trade_retrospective(
+        trade_id,
+        data_provider=data_provider,
+        paper_store=paper_store,
+        transactions_store=transactions_store,
+    )
+
+
+def compose_retrospectives_batch(
+    symbol: str | None = None,
+    strategy_id: str | None = None,
+    limit: int = 100,
+    data_provider: Any | None = None,
+    composer: RetrospectiveComposer | None = None,
+    paper_store: Any | None = None,
+    transactions_store: Any | None = None,
+    db_url: str | None = None,
+    **kwargs,
+) -> list[dict[str, Any]]:
+    """Compose batch trade retrospectives using default or injected composer."""
+    c = composer or RetrospectiveComposer(
+        paper_store=paper_store,
+        transactions_store=transactions_store,
+        db_url=db_url,
+        **kwargs,
+    )
+    return c.compose_retrospectives_batch(
+        symbol=symbol,
+        strategy_id=strategy_id,
+        limit=limit,
+        data_provider=data_provider,
+        paper_store=paper_store,
+        transactions_store=transactions_store,
+    )

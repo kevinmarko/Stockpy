@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { TabGuide } from "../components/TabGuide";
 import { Modal } from "../components/Modal";
+import { RetrospectiveDetailModal } from "../components/RetrospectiveDetailModal";
 import { SymbolInput } from "../components/SymbolInput";
 import { theme } from "../theme";
 import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
@@ -114,6 +115,7 @@ export function PaperBroker() {
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetCash, setResetCash] = useState(100000);
+  const [retroTradeId, setRetroTradeId] = useState<number | null>(null);
   const [execStatus, setExecStatus] = useState<string | null>(null);
   // Distinct from execMutation.error: that field only ever populates on a THROWN
   // exception (network error / non-2xx). api/pilots_api.py's strategy-options/execute
@@ -1566,7 +1568,23 @@ export function PaperBroker() {
         </div>
 
         <div>
-          <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>Closed Trades</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Closed Trades</h2>
+            <Link
+              to="/retrospective"
+              style={{
+                fontSize: 13,
+                color: "#818cf8",
+                textDecoration: "none",
+                fontWeight: 600,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              View Retrospective Journal &rarr;
+            </Link>
+          </div>
           <div style={{ background: theme.surface, borderRadius: 8, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
               <thead>
@@ -1581,22 +1599,23 @@ export function PaperBroker() {
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Realized P&L</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "right" }}>Realized P&L %</th>
                   <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>Close Reason</th>
+                  <th style={{ padding: "12px 16px", color: theme.textSecondary, fontSize: 12, fontWeight: 600, textAlign: "center" }}>Autopsy</th>
                 </tr>
               </thead>
               <tbody>
                 {closedTrades.loading && !closedTrades.data && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading closed trades...</td>
+                    <td colSpan={11} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>Loading closed trades...</td>
                   </tr>
                 )}
                 {closedTrades.error && !closedTrades.data && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load closed trades: {closedTrades.error}</td>
+                    <td colSpan={11} style={{ padding: 24, textAlign: "center", color: theme.decline }}>Failed to load closed trades: {closedTrades.error}</td>
                   </tr>
                 )}
                 {closedTrades.data?.length === 0 && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No closed trades</td>
+                    <td colSpan={11} style={{ padding: 24, textAlign: "center", color: theme.textSecondary }}>No closed trades</td>
                   </tr>
                 )}
                 {closedTrades.data?.map(t => (
@@ -1615,6 +1634,16 @@ export function PaperBroker() {
                       {t.realized_pnl_pct != null ? `${(t.realized_pnl_pct * 100).toFixed(2)}%` : "—"}
                     </td>
                     <td style={{ padding: "12px 16px", color: theme.textSecondary }}>{t.close_reason}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "center" }}>
+                      <button
+                        type="button"
+                        className="btn btn-neutral"
+                        onClick={() => setRetroTradeId(t.trade_id)}
+                        style={{ padding: "4px 8px", fontSize: 11 }}
+                      >
+                        Autopsy &rarr;
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -2023,6 +2052,13 @@ export function PaperBroker() {
           </div>
         </Modal>
       )}
+
+      {/* Retrospective Autopsy Modal */}
+      <RetrospectiveDetailModal
+        isOpen={retroTradeId !== null}
+        tradeId={retroTradeId}
+        onClose={() => setRetroTradeId(null)}
+      />
     </div>
   );
 }

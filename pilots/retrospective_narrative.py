@@ -1,366 +1,609 @@
-"""pilots/retrospective_narrative.py — per-trade templated narrative (v1, no LLM).
+"""pilots/retrospective_narrative.py — Templated Narrative Generator (v1 Non-LLM)
+=============================================================================
 
-Renders one plain-text narrative sentence-block for a single Retrospective
-Learning Loop (Trade Journal) record — the exact dict shape produced by
-``pilots.retrospective_composer.compose_trade_retrospective`` (see that
-module's own docstring / CLAUDE.md's "Retrospective Learning Loop" framing
-for the locked contract):
+Authoritative Requirements:
+- .agents/ORIGINAL_REQUEST.md (§ R5, WP-F)
+- .agents/PROJECT.md (§ 4 Retrospective Core Engine, Interface Contract 2 & 4)
+- .agents/worker_m3/DISPATCH.md
+- .agents/explorer_survey_2/retrospective_learning_loop_survey_report.md (§ 5)
 
-    {
-        "trade_id": int, "symbol": str, "strategy_id": str, "pilot_id": Optional[str],
-        "side": str, "qty": float, "entry_ts": Optional[str], "entry_price": float,
-        "exit_ts": str, "exit_price": float, "realized_pnl": float,
-        "realized_pnl_pct": Optional[float], "holding_period_days": Optional[float],
-        "close_reason": str,
-        "evaluation": {
-            "available": bool, "mfe": Optional[float], "mae": Optional[float],
-            "edge_ratio": Optional[float], "reason": Optional[str],
-        },
-        "decision": {
-            "state": "signal_driven" | "manual" | "unknown",
-            "provenance": Optional[str], "conviction": Optional[float],
-            "regime": Optional[str], "factors": Optional[Dict[str, Any]], "notes": Optional[str],
-        },
-    }
+Core Architecture:
+A deterministic, non-LLM sentence builder that compiles 3 structured clauses
+into an analytical, honest narrative for a closed paper trade:
+1. Entry Clause: Provenance, execution price, strategy catalyst, conviction, and macro regime.
+2. Outcome Clause: Holding duration, exit price, net realized dollar and percentage PnL.
+3. Excursion & Calibration Clause: Holding-period risk (MFE/MAE/Edge Ratio) and conviction reliability calibration.
 
-**Strictly template-based — there is NO LLM call anywhere in this module.**
-Every branch below is an explicit, hand-written template string; every value
-that could be ``None``/NaN has an explicit missing-data variant, so the
-rendered narrative can NEVER present a guess as a fact (CONSTRAINT #4) and
-NEVER raises on a malformed/incomplete input (CONSTRAINT #6).
-
-The single most fabrication-sensitive branch in this whole module is the
-"why" sentence (:func:`_why_sentence`): it hard-codes exactly three literal
-outcomes for ``decision.state`` — ``"signal_driven"``, ``"manual"``, and
-``"unknown"`` — and the "manual"/"unknown" wordings are REQUIRED VERBATIM
-text (per the Retrospective Learning Loop plan's own checklist), never
-embellished or inferred. ``decision.state`` is read as-is from the composed
-record; this module never re-derives it from ``strategy_id`` or anything
-else — that inference belongs solely to the composer, per its own
-docstring's anti-shortcut rule.
+Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES - WP-F):
+- Zero None, NaN, nan, or null tokens may EVER leak into the output text.
+- Never infer provenance; if entry snapshot was not captured or is unknown, mark as unrecorded provenance.
+- Never assert calibration win rate if sample size < min_sample (default 5) or conviction is uncalibrated.
+- If evaluation bridge was not reached or pricing data missing, explicitly state excursion data unavailable.
+- Manual discretionary trades explicitly state model calibration is not applicable.
 """
+
 from __future__ import annotations
 
-import logging
 import math
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any
 
-logger = logging.getLogger(__name__)
+# =============================================================================
+# Numeric Formatting Safety Primitives (Survey 2 § 5.2 / WP-F Zero Leakage)
+# =============================================================================
 
-__all__ = ["build_trade_narrative"]
+#: Placeholder substituted for a quoted operator note during assembly, so the
+#: final defense-in-depth None/NaN/null cleanup pass (WP-F) never rewrites
+#: words inside the operator's own quoted text -- restored verbatim as the
+#: very last step. Deliberately not a value any real trade field could ever
+#: legitimately equal.
+_NOTES_SENTINEL = "\x00RETRO_NOTES_SENTINEL\x00"
+
+#: Max characters retained from a free-text field (operator note or
+#: strategy_id) before truncation with an ellipsis -- bounds how much of the
+#: narrative one long/garbage value can consume, without touching content a
+#: legitimate value would ever plausibly need.
+_MAX_FREETEXT_LEN = 200
 
 
-# ---------------------------------------------------------------------------
-# Shared, defensive formatting helpers — every one degrades to an honest
-# "unknown"/omitted variant on a missing or non-finite value; none ever
-# raises and none ever renders the literal substring "None"/"nan"/"NaN".
-# ---------------------------------------------------------------------------
+def _sanitize_freetext(val: Any, *, max_len: int = _MAX_FREETEXT_LEN, strip_quotes: bool = False) -> str | None:
+    """Sanitize a free-text field (operator note, strategy_id) before it is
+    interpolated into the narrative.
+
+    - Collapses embedded newlines/control characters/runs of whitespace to a
+      single space, so a value can never inject a fake multi-line sentence
+      structure or visually break the surrounding prose.
+    - Optionally strips literal double-quote characters (``strip_quotes``) --
+      used for `operator_notes`, which this module always renders wrapped in
+      `"..."`; without this, a note containing its own `"` could prematurely
+      close that quotation and make whatever follows (including genuine
+      system-authored clauses) read as if it were still inside the quote, or
+      vice versa.
+    - Truncates to `max_len` characters with a trailing ellipsis, bounding
+      how much of the narrative a single long/garbage value can consume.
+
+    Returns `None` (never an empty string masquerading as "no value") if the
+    sanitized result is empty.
+    """
+    if val is None:
+        return None
+    text = str(val)
+    # Strip ASCII control characters (0x00-0x1F, 0x7F) and collapse all
+    # whitespace runs (including real newlines/tabs) to a single space.
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if strip_quotes:
+        text = text.replace('"', "'")
+    if not text:
+        return None
+    if len(text) > max_len:
+        text = text[: max_len - 1].rstrip() + "…"
+    return text
 
 
-def _finite_float(value: Any) -> Optional[float]:
-    """Coerce to a finite float, else ``None`` (NaN/inf/garbage -> None)."""
+def _is_valid_num(val: Any) -> bool:
+    """Return True if val is a non-None, finite number."""
+    if val is None:
+        return False
     try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
+        num = float(val)
+        return math.isfinite(num)
+    except (ValueError, TypeError):
+        return False
 
 
-def _fmt_qty(value: Any) -> str:
-    """Render a share/contract quantity. Direction is conveyed by the side
-    verb, not the sign, so this always renders the magnitude."""
-    f = _finite_float(value)
-    if f is None:
-        return "an unknown quantity of"
-    f = abs(f)
-    if f == int(f):
-        return str(int(f))
-    return f"{f:g}"
+def _fmt_curr(val: Any, fallback: str = "unrecorded") -> str:
+    """Safely format currency with dollar sign and commas.
+    Guarantees no None/NaN token is rendered.
+    """
+    if not _is_valid_num(val):
+        return fallback
+    num = float(val)
+    if abs(num) < 1e-9:
+        return "$0.00"
+    if num < 0:
+        return f"-${abs(num):,.2f}"
+    return f"${num:,.2f}"
 
 
-def _fmt_price(value: Any) -> str:
-    f = _finite_float(value)
-    if f is None:
-        return "an unknown price"
-    return f"${f:,.2f}"
+def _fmt_pct(val: Any, signed: bool = False, fallback: str = "unrecorded") -> str:
+    """Safely format decimal fractions as percentages (e.g. 0.05 -> 5.0%).
+    Guarantees no None/NaN token is rendered.
+    """
+    if not _is_valid_num(val):
+        return fallback
+    pct = float(val) * 100.0
+    if abs(pct) < 1e-9:
+        pct = 0.0
+    sign = "+" if signed and pct > 0 else ""
+    return f"{sign}{pct:.1f}%"
 
 
-def _fmt_signed_dollar(value: Any) -> str:
-    f = _finite_float(value)
-    if f is None:
-        return "an unknown amount"
-    sign = "+" if f >= 0 else "-"
-    return f"{sign}${abs(f):,.2f}"
+def _fmt_float(val: Any, decimals: int = 2, fallback: str = "unrecorded") -> str:
+    """Safely format floating point numbers with fixed decimals.
+    Guarantees no None/NaN token is rendered.
+    """
+    if not _is_valid_num(val):
+        return fallback
+    num = float(val)
+    if abs(num) < 1e-9:
+        num = 0.0
+    return f"{num:.{decimals}f}"
 
 
-def _fmt_signed_pct(fraction: float) -> str:
-    """``fraction`` is a raw ratio (0.08 == 8%), matching
-    ``realized_pnl_pct``'s/``mfe``/``mae``'s storage convention throughout
-    this codebase (see ``data/paper_account_store.py``'s
-    ``realized_pnl_pct`` computation and ``evaluation_engine.
-    calculate_edge_ratio``'s MFE/MAE)."""
-    sign = "+" if fraction >= 0 else "-"
-    return f"{sign}{abs(fraction) * 100:.2f}%"
+# =============================================================================
+# Deterministic Narrative Builder
+# =============================================================================
 
+def build_trade_narrative(
+    trade_record: dict[str, Any] | str | None = None,
+    side_or_provenance: str | None = None,
+    strategy_id: str | None = None,
+    entry_price: float | None = None,
+    conviction: float | None = None,
+    macro_regime: str | None = None,
+    operator_notes: str | None = None,
+    exit_price: float | None = None,
+    holding_days: float | None = None,
+    pnl: float | None = None,
+    pnl_pct: float | None = None,
+    mfe: float | None = None,
+    mae: float | None = None,
+    edge_ratio: float | None = None,
+    bin_win_rate: float | None = None,
+    bin_count: int | None = None,
+    min_sample: int = 5,
+    bridge_reached: bool = True,
+    bars_available: bool = True,
+    **kwargs: Any,
+) -> str:
+    """Build a deterministic, non-LLM templated narrative for a trade record.
 
-def _fmt_ts(value: Any) -> Optional[str]:
-    """``"2026-01-05 14:30 UTC"`` from an ISO string or a real ``datetime``;
-    ``None`` on anything unparsable — caller supplies the missing-data
-    variant text."""
-    if value is None:
-        return None
-    dt: Optional[datetime] = None
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, str) and value:
+    Accepts either a composed trade record dictionary as first argument, or explicit
+    keyword/positional arguments representing trade attributes across all 15 permutations.
+    """
+    # 1. Resolve inputs across calling conventions (dict input vs keyword kwargs)
+    rec: dict[str, Any] = {}
+    prov_arg: str | None = None
+
+    if isinstance(trade_record, dict):
+        rec = trade_record
+    elif isinstance(trade_record, str):
+        prov_arg = trade_record
+    elif trade_record is not None:
+        prov_arg = str(trade_record)
+
+    snap = rec.get("entry_snapshot") or rec.get("snapshot") or {}
+    exc = rec.get("excursion") or rec.get("evaluation") or {}
+    cal = rec.get("calibration") or {}
+
+    # Provenance & Captured
+    captured: bool = True
+    if "captured" in snap:
+        captured = bool(snap["captured"])
+    elif "captured" in rec:
+        captured = bool(rec["captured"])
+    elif "decision_context_status" in snap:
+        captured = str(snap["decision_context_status"]).lower() == "captured"
+
+    raw_prov = (
+        kwargs.get("provenance")
+        or prov_arg
+        or rec.get("provenance")
+        or snap.get("provenance")
+        or "unknown"
+    )
+    prov = str(raw_prov).lower().strip()
+    if not captured or prov not in ("signal_driven", "manual"):
+        prov = "unknown"
+
+    # Side
+    raw_side = (
+        kwargs.get("side")
+        or (side_or_provenance if prov_arg is None else None)
+        or rec.get("side")
+        or snap.get("side")
+        or "buy"
+    )
+    side_str = str(raw_side).lower().strip()
+    if side_str not in ("buy", "sell", "long", "short"):
+        side_str = "buy"
+
+    # Strategy ID
+    strat = (
+        kwargs.get("strategy_id")
+        or strategy_id
+        or rec.get("strategy_id")
+        or snap.get("strategy_id")
+    )
+    if strat and str(strat).strip().lower() in ("none", "null", "nan"):
+        strat = None
+    strat = _sanitize_freetext(strat)
+
+    # Entry Price
+    ep = (
+        kwargs.get("entry_price")
+        if "entry_price" in kwargs
+        else (entry_price if entry_price is not None else rec.get("entry_price", snap.get("entry_price")))
+    )
+    if not _is_valid_num(ep):
+        ep = None
+    else:
+        ep = float(ep)
+
+    # Conviction
+    conv = (
+        kwargs.get("conviction")
+        if "conviction" in kwargs
+        else (
+            conviction
+            if conviction is not None
+            else snap.get("conviction", cal.get("conviction", rec.get("conviction")))
+        )
+    )
+    if not _is_valid_num(conv):
+        conv = None
+    else:
+        conv = float(conv)
+
+    # Macro Regime
+    regime = (
+        kwargs.get("macro_regime")
+        or macro_regime
+        or snap.get("macro_regime")
+        or rec.get("macro_regime")
+    )
+    if regime and str(regime).strip().lower() in ("none", "null", "nan", "unrecorded"):
+        regime = None
+
+    # Operator Notes
+    notes = (
+        kwargs.get("operator_notes")
+        or operator_notes
+        or snap.get("decision_rationale")
+        or snap.get("operator_notes")
+        or rec.get("operator_notes")
+        or rec.get("decision_rationale")
+    )
+    if notes and str(notes).strip().lower() in ("none", "null", "nan"):
+        notes = None
+    # strip_quotes=True: this value is always rendered wrapped in `"..."`
+    # below (S2.2) -- a raw embedded `"` could otherwise prematurely close
+    # that quotation and make subsequent text (including genuine
+    # system-authored clauses) misread as still being inside the operator's
+    # own quoted words, or vice versa.
+    notes = _sanitize_freetext(notes, strip_quotes=True)
+
+    # Exit Price
+    xp = (
+        kwargs.get("exit_price")
+        if "exit_price" in kwargs
+        else (exit_price if exit_price is not None else rec.get("exit_price"))
+    )
+    if not _is_valid_num(xp):
+        xp = None
+    else:
+        xp = float(xp)
+
+    # Holding Days
+    h_days = (
+        kwargs.get("holding_days")
+        if "holding_days" in kwargs
+        else (
+            holding_days
+            if holding_days is not None
+            else rec.get("holding_period_days", rec.get("holding_days"))
+        )
+    )
+    if not _is_valid_num(h_days):
+        h_days = None
+    else:
+        h_days = float(h_days)
+
+    # Realized PnL & PnL %
+    realized_p = (
+        kwargs.get("pnl")
+        if "pnl" in kwargs
+        else (pnl if pnl is not None else rec.get("realized_pnl", rec.get("pnl")))
+    )
+    if not _is_valid_num(realized_p):
+        realized_p = None
+    else:
+        realized_p = float(realized_p)
+
+    realized_pct = (
+        kwargs.get("pnl_pct")
+        if "pnl_pct" in kwargs
+        else (pnl_pct if pnl_pct is not None else rec.get("realized_pnl_pct", rec.get("pnl_pct")))
+    )
+    if not _is_valid_num(realized_pct):
+        realized_pct = None
+    else:
+        realized_pct = float(realized_pct)
+
+    # Degenerate entry price guard (force realized_pct=None if entry_price <= 0)
+    if ep is not None and ep <= 0.0:
+        realized_pct = None
+
+    # Excursion (MFE, MAE, Edge Ratio)
+    mfe_val = (
+        kwargs.get("mfe")
+        if "mfe" in kwargs
+        else (mfe if mfe is not None else exc.get("mfe"))
+    )
+    if not _is_valid_num(mfe_val):
+        mfe_val = None
+    else:
+        mfe_val = float(mfe_val)
+
+    mae_val = (
+        kwargs.get("mae")
+        if "mae" in kwargs
+        else (mae if mae is not None else exc.get("mae"))
+    )
+    if not _is_valid_num(mae_val):
+        mae_val = None
+    else:
+        mae_val = float(mae_val)
+
+    edge_val = (
+        kwargs.get("edge_ratio")
+        if "edge_ratio" in kwargs
+        else (edge_ratio if edge_ratio is not None else exc.get("edge_ratio"))
+    )
+    if not _is_valid_num(edge_val):
+        edge_val = None
+    else:
+        edge_val = float(edge_val)
+
+    # Calibration (Bin Win Rate, Bin Trade Count)
+    b_wr = (
+        kwargs.get("bin_win_rate")
+        if "bin_win_rate" in kwargs
+        else (
+            bin_win_rate
+            if bin_win_rate is not None
+            else cal.get("bin_win_rate", cal.get("historical_bin_win_rate"))
+        )
+    )
+    if not _is_valid_num(b_wr):
+        b_wr = None
+    else:
+        b_wr = float(b_wr)
+
+    b_cnt = (
+        kwargs.get("bin_count")
+        if "bin_count" in kwargs
+        else (
+            bin_count
+            if bin_count is not None
+            else cal.get("bin_trade_count", cal.get("bin_count"))
+        )
+    )
+    if b_cnt is not None:
         try:
-            dt = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    if dt is None:
-        return None
-    try:
-        return dt.strftime("%Y-%m-%d %H:%M") + " UTC"
-    except Exception:  # noqa: BLE001 — defensive: never raise on a bad datetime
-        return None
+            b_cnt = int(b_cnt)
+        except (ValueError, TypeError):
+            b_cnt = None
 
-
-_SIDE_VERBS = {"BUY": "Bought", "SELL": "Sold"}
-
-
-def _side_verb(side: Any) -> str:
-    if not isinstance(side, str) or not side:
-        return "Traded"
-    return _SIDE_VERBS.get(side.upper(), f"Traded ({side})")
-
-
-def _indefinite_article(word: str) -> str:
-    return "an" if word[:1].lower() in "aeiou" else "a"
-
-
-# ---------------------------------------------------------------------------
-# Sentence 1 — what happened
-# ---------------------------------------------------------------------------
-
-
-def _what_happened_sentence(retro: Dict[str, Any]) -> str:
-    """Symbol, side, qty, entry (price + time, or "at an unknown time" when
-    ``entry_ts is None``), exit (price + time), close_reason."""
-    if not isinstance(retro, dict):
-        retro = {}
-    symbol = retro.get("symbol") or "the position"
-    side_verb = _side_verb(retro.get("side"))
-    qty_str = _fmt_qty(retro.get("qty"))
-
-    entry_ts_str = _fmt_ts(retro.get("entry_ts"))
-    entry_price_str = _fmt_price(retro.get("entry_price"))
-    if entry_ts_str:
-        opened_clause = f"opened {entry_ts_str} at {entry_price_str}"
+    # Bridge Reached & Bars Available
+    if "bridge_reached" in kwargs:
+        b_reached = bool(kwargs["bridge_reached"])
+    elif "bridge_status" in rec:
+        b_reached = (rec.get("bridge_status") == "bridged")
+    elif "bridge_reached" in exc:
+        b_reached = bool(exc.get("bridge_reached"))
     else:
-        opened_clause = f"opened at an unknown time at {entry_price_str}"
+        b_reached = bool(bridge_reached)
 
-    exit_ts_str = _fmt_ts(retro.get("exit_ts"))
-    exit_price_str = _fmt_price(retro.get("exit_price"))
-    if exit_ts_str:
-        closed_clause = f"closed {exit_ts_str} at {exit_price_str}"
+    if "bars_available" in kwargs:
+        b_bars = bool(kwargs["bars_available"])
+    elif b_reached and str(exc.get("evaluation_status", "")).lower() == "evaluation data unavailable":
+        b_bars = False
     else:
-        closed_clause = f"closed at an unknown time at {exit_price_str}"
+        b_bars = bool(bars_available)
 
-    close_reason = retro.get("close_reason") or "unknown reason"
-
-    return f"{side_verb} {qty_str} {symbol} — {opened_clause}, {closed_clause} ({close_reason})."
-
-
-# ---------------------------------------------------------------------------
-# Sentence 2 — outcome
-# ---------------------------------------------------------------------------
-
-
-def _outcome_sentence(retro: Dict[str, Any]) -> str:
-    """``realized_pnl`` + ``realized_pnl_pct`` when it is a real, finite
-    number; the percentage clause is OMITTED (never rendered as
-    "None%"/"nan%") when it is unavailable."""
-    if not isinstance(retro, dict):
-        retro = {}
-    pnl_str = _fmt_signed_dollar(retro.get("realized_pnl"))
-
-    pct = _finite_float(retro.get("realized_pnl_pct"))
-    if pct is not None:
-        return f"Realized P&L: {pnl_str} ({_fmt_signed_pct(pct)})."
-    return f"Realized P&L: {pnl_str} (percentage unavailable — degenerate entry price)."
-
-
-# ---------------------------------------------------------------------------
-# Sentence 3 — the full move (MFE/MAE/Edge Ratio, or an honest reason)
-# ---------------------------------------------------------------------------
-
-
-def _move_sentence(retro: Dict[str, Any]) -> str:
-    if not isinstance(retro, dict):
-        retro = {}
-    evaluation = retro.get("evaluation")
-    if not isinstance(evaluation, dict):
-        evaluation = {}
-
-    if evaluation.get("available"):
-        mfe = _finite_float(evaluation.get("mfe"))
-        mae = _finite_float(evaluation.get("mae"))
-        if mfe is not None and mae is not None:
-            edge_ratio = _finite_float(evaluation.get("edge_ratio"))
-            edge_clause = (
-                f" (Edge Ratio {edge_ratio:.2f})" if edge_ratio is not None else " (Edge Ratio unavailable)"
+    # -------------------------------------------------------------------------
+    # CLAUSE 1: Entry & Decision Catalyst
+    # -------------------------------------------------------------------------
+    if prov == "signal_driven":
+        strat_display = strat or "automated strategy"
+        if conv is not None and regime is not None:
+            # S1.1: Complete context
+            entry_clause = (
+                f"Signal-driven {side_str} trade entered on {strat_display} recommendation "
+                f"at {_fmt_curr(ep)} (conviction: {_fmt_float(conv)}, regime: {regime})."
             )
-            return (
-                f"Over the hold, price moved as much as {mfe:.1%} in your favor "
-                f"and {mae:.1%} against you{edge_clause}."
+        elif conv is not None and regime is None:
+            # S1.2: Missing regime
+            entry_clause = (
+                f"Signal-driven {side_str} trade entered on {strat_display} recommendation "
+                f"at {_fmt_curr(ep)} (conviction: {_fmt_float(conv)}, regime: unrecorded)."
             )
-        # Marked available but MFE/MAE are themselves missing/non-finite —
-        # defensive branch; should not happen given the composer's contract,
-        # but never fabricate a number here (CONSTRAINT #4).
-        return "Evaluation data unavailable for this trade — MFE/MAE missing despite being marked available."
+        elif conv is None and regime is not None:
+            # S1.3: Missing conviction
+            entry_clause = (
+                f"Signal-driven {side_str} trade entered on {strat_display} recommendation "
+                f"at {_fmt_curr(ep)} (regime: {regime})."
+            )
+        elif strat is not None:
+            # S1.4: Missing both conviction & regime, known strategy ID
+            entry_clause = (
+                f"Signal-driven {side_str} trade entered on {strat} recommendation at {_fmt_curr(ep)}."
+            )
+        else:
+            # S1.5: Missing strategy ID
+            entry_clause = f"Signal-driven {side_str} trade entered via automated strategy at {_fmt_curr(ep)}."
 
-    reason = evaluation.get("reason") or "no reason given"
-    return f"Evaluation data unavailable for this trade — {reason}."
+    elif prov == "manual":
+        if notes and str(notes).strip():
+            # S2.2: Manual with operator note. The note is spliced in via a
+            # sentinel placeholder (restored after the final
+            # None/NaN/null-token cleanup pass below), so a genuine operator
+            # note containing the literal word "None"/"null"/"nan" as
+            # ordinary prose is never silently rewritten -- that cleanup
+            # pass exists to catch a formatting BUG in this module's own
+            # system-authored text, not to edit words out of a human's own
+            # quoted words.
+            entry_clause = (
+                f'Manual discretionary {side_str} trade executed by operator at {_fmt_curr(ep)} '
+                f'(note: "{_NOTES_SENTINEL}").'
+            )
+        else:
+            # S2.1: Standard manual
+            entry_clause = f"Manual discretionary {side_str} trade executed by operator at {_fmt_curr(ep)}."
 
+    else:  # unknown / unrecorded
+        if ep is not None:
+            # S3.1: Standard unrecorded
+            entry_clause = (
+                f"Trade executed at {_fmt_curr(ep)} with unrecorded provenance "
+                f"(entry-time context not captured)."
+            )
+        else:
+            # S3.2: Missing entry price
+            entry_clause = "Trade executed with unrecorded provenance and unverified entry price."
 
-# ---------------------------------------------------------------------------
-# Sentence 4 — why (the fabrication-sensitive branch)
-# ---------------------------------------------------------------------------
-
-# Required-verbatim wording (per the Retrospective Learning Loop plan's own
-# checklist) for the two non-signal-driven states. NEVER embellish or infer
-# a reason for either — a manual trade has no model reasoning behind it by
-# definition, and "unknown" means decision context was never captured at all.
-_MANUAL_TEXT = "You placed this trade manually — no model signal was behind it."
-_UNKNOWN_TEXT = "Entry context wasn't captured for this trade."
-
-
-def _provenance_label(provenance: Any) -> str:
-    """Derive a short human label from a raw provenance string, e.g.
-    ``"automated:options_auto_scan"`` -> ``"automated options"``. Falls back
-    to a generic ``"automated"`` label for an unrecognized/malformed
-    provenance — never fabricates a specific-sounding source that wasn't
-    literally present in the string."""
-    if not isinstance(provenance, str) or not provenance:
-        return "automated"
-    prefix, sep, source = provenance.partition(":")
-    if not sep:
-        cleaned = provenance.replace("_", " ").replace("-", " ").strip()
-        return cleaned or "automated"
-    source_label = source.replace("_", " ").replace("-", " ").strip()
-    if not source_label:
-        return prefix or "automated"
-    first_word = source_label.split()[0]
-    return f"{prefix} {first_word}".strip() or "automated"
-
-
-# Known factor keys get a friendlier, still-verbatim-value phrasing; any
-# other key falls back to a generic "a <key> of <value>" rendering — the
-# KEY and VALUE are always read straight from ``factors``, never invented.
-_FACTOR_TEMPLATES = {
-    "ivr": "an IVR of {value}",
-    "vrp": "a VRP of {value}",
-    "vix": "a VIX of {value}",
-    "credit_to_width_ratio": "a credit-to-width ratio of {value}",
-    "short_delta": "a short delta of {value}",
-}
-
-
-def _fmt_factor_value(value: Any) -> str:
-    if isinstance(value, float):
-        return f"{value:g}"
-    return str(value)
-
-
-def _format_one_factor(key: str, value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if key == "trend_bias" and isinstance(value, str) and value:
-        return f"a {value.lower()} trend bias"
-    template = _FACTOR_TEMPLATES.get(key)
-    if template:
-        return template.format(value=_fmt_factor_value(value))
-    label = key.replace("_", " ").strip()
-    if not label:
-        return None
-    return f"a {label} of {_fmt_factor_value(value)}"
-
-
-def _factor_clause(factors: Any) -> Optional[str]:
-    """Up to two of the present, non-None ``factors`` entries, rendered
-    verbatim (real key, real value). ``None``/empty -> no clause at all."""
-    if not isinstance(factors, dict) or not factors:
-        return None
-    parts: List[str] = []
-    for key, value in factors.items():
-        formatted = _format_one_factor(key, value)
-        if formatted:
-            parts.append(formatted)
-        if len(parts) >= 2:
-            break
-    if not parts:
-        return None
-    return f"driven partly by {' and '.join(parts)}"
-
-
-def _signal_driven_sentence(decision: Dict[str, Any]) -> str:
-    label = _provenance_label(decision.get("provenance"))
-    conviction = _finite_float(decision.get("conviction"))
-    if conviction is not None:
-        base = f"The model rated this a {conviction:.2f} conviction {label} trade"
+    # -------------------------------------------------------------------------
+    # CLAUSE 2: Outcome & Hold Period
+    # -------------------------------------------------------------------------
+    if realized_p is not None and realized_pct is None and ep is not None and ep <= 0.0:
+        # O1.5: Genuinely degenerate entry price (the actual cause, verified
+        # -- not merely "we don't have a percentage for some reason"). A
+        # prior version fired this branch whenever `realized_pct` was simply
+        # absent, regardless of why -- rendering a fabricated, self-
+        # contradicting cause (e.g. alongside a perfectly valid $150.00 entry
+        # price stated one clause earlier, or alongside Clause 1's own
+        # "unverified entry price" wording for a genuinely unrecorded trade).
+        outcome_clause = (
+            f"Position closed at {_fmt_curr(xp)} realizing {_fmt_curr(realized_p)} "
+            f"(percentage return unavailable due to degenerate entry price)."
+        )
+    elif realized_p is not None and realized_pct is None:
+        # O1.5b: A percentage return is unavailable for some OTHER reason
+        # (missing entry price, non-degenerate but percentage not computed,
+        # etc.) -- state that honestly rather than asserting a specific,
+        # unverified cause.
+        outcome_clause = (
+            f"Position closed at {_fmt_curr(xp)} realizing {_fmt_curr(realized_p)} "
+            f"(percentage return unrecorded)."
+        )
+    elif realized_p == 0.0:
+        # O1.3: Breakeven
+        if h_days is not None:
+            outcome_clause = (
+                f"Position closed at {_fmt_curr(xp)} after {_fmt_float(h_days, 1)} days "
+                f"at breakeven ($0.00 realized PnL)."
+            )
+        else:
+            outcome_clause = f"Position closed at {_fmt_curr(xp)} at breakeven ($0.00 realized PnL)."
+    elif realized_p is not None and realized_p > 0:
+        # O1.1: Gain
+        if h_days is not None:
+            outcome_clause = (
+                f"Position closed at {_fmt_curr(xp)} after {_fmt_float(h_days, 1)} days, "
+                f"realizing a gain of +{_fmt_curr(realized_p)} ({_fmt_pct(realized_pct, signed=True)})."
+            )
+        else:
+            outcome_clause = (
+                f"Position closed at {_fmt_curr(xp)} (holding duration unrecorded), "
+                f"realizing a gain of +{_fmt_curr(realized_p)} ({_fmt_pct(realized_pct, signed=True)})."
+            )
+    elif realized_p is not None and realized_p < 0:
+        # O1.2: Loss
+        if h_days is not None:
+            outcome_clause = (
+                f"Position closed at {_fmt_curr(xp)} after {_fmt_float(h_days, 1)} days, "
+                f"realizing a loss of -{_fmt_curr(abs(realized_p))} ({_fmt_pct(realized_pct, signed=True)})."
+            )
+        else:
+            outcome_clause = (
+                f"Position closed at {_fmt_curr(xp)} (holding duration unrecorded), "
+                f"realizing a loss of -{_fmt_curr(abs(realized_p))} ({_fmt_pct(realized_pct, signed=True)})."
+            )
     else:
-        # Degrade to omit the conviction number entirely -- never render
-        # "None conviction" (CONSTRAINT #4).
-        article = _indefinite_article(label)
-        base = f"The model rated this {article} {label} trade"
+        outcome_clause = f"Position closed at {_fmt_curr(xp)}."
 
-    clause = _factor_clause(decision.get("factors"))
-    if clause:
-        return f"{base}, {clause}."
-    return f"{base}."
+    # -------------------------------------------------------------------------
+    # CLAUSE 3: Excursion & Conviction Calibration
+    # -------------------------------------------------------------------------
+    if not b_reached:
+        if prov == "manual":
+            excursion_clause = (
+                "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge); "
+                "model calibration not applicable for manual trades."
+            )
+        elif prov == "signal_driven":
+            excursion_clause = (
+                "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge)."
+            )
+        else:
+            excursion_clause = (
+                "Hold-period excursion metrics unavailable (trade did not reach evaluation bridge); "
+                "conviction calibration unavailable."
+            )
+    elif not b_bars or mae_val is None or mfe_val is None:
+        if prov == "manual":
+            excursion_clause = (
+                "Hold-period excursion metrics unavailable (pricing data missing for hold period); "
+                "model calibration not applicable for manual trades."
+            )
+        elif prov == "unknown":
+            excursion_clause = (
+                "Hold-period excursion metrics unavailable (pricing data missing for hold period); "
+                "conviction calibration unavailable."
+            )
+        else:
+            excursion_clause = (
+                "Hold-period excursion metrics unavailable (pricing data missing for hold period)."
+            )
+    else:
+        exc_prefix = (
+            f"Hold-period excursion reached MFE +{_fmt_pct(mfe_val)} vs MAE -{_fmt_pct(mae_val)} "
+            f"(Edge Ratio: {_fmt_float(edge_val)})"
+        )
+        if prov == "manual":
+            excursion_clause = f"{exc_prefix}; model calibration not applicable for manual trades."
+        elif prov == "unknown":
+            excursion_clause = f"{exc_prefix}; conviction calibration unavailable (provenance unrecorded)."
+        else:  # signal_driven
+            if conv is None:
+                # No conviction was ever captured for this trade -- there is
+                # nothing to bin, regardless of what bin_win_rate/bin_count
+                # happen to be. Asserting a bin placement here (a prior
+                # version's condition never checked `conv`) would name a
+                # subject -- "this trade's conviction" -- that doesn't exist.
+                excursion_clause = f"{exc_prefix}; conviction not captured, calibration unavailable."
+            elif b_wr is not None and b_cnt is not None and b_cnt >= min_sample:
+                excursion_clause = (
+                    f"{exc_prefix}; entry conviction binned at historical {_fmt_pct(b_wr)} win rate (N={b_cnt})."
+                )
+            elif b_cnt is not None and b_cnt < min_sample:
+                excursion_clause = (
+                    f"{exc_prefix}; historical calibration unavailable for this conviction level "
+                    f"(insufficient sample, N={b_cnt} < {min_sample})."
+                )
+            else:
+                # A real conviction exists but no bin count was ever
+                # produced (e.g. a calibration-engine error) -- an explicit
+                # missing-data statement, never silent (a prior version fell
+                # through to a bare, unqualified excursion sentence here).
+                excursion_clause = f"{exc_prefix}; historical calibration unavailable (no calibration data)."
 
+    # Final assembly
+    narrative = f"{entry_clause} {outcome_clause} {excursion_clause}".strip()
 
-def _why_sentence(retro: Dict[str, Any]) -> str:
-    if not isinstance(retro, dict):
-        retro = {}
-    decision = retro.get("decision")
-    if not isinstance(decision, dict):
-        decision = {}
-    state = decision.get("state")
+    # Defense-in-depth: guarantee ZERO None, NaN, nan, null leakage (WP-F) in
+    # this module's OWN system-authored text. Applied BEFORE the operator's
+    # quoted note is spliced back in (below) -- a note is a human's own
+    # words, not a formatting bug this pass exists to fix, and rewriting a
+    # word inside it (e.g. a genuine note reading "null hypothesis
+    # rejected") would silently alter a direct quotation.
+    narrative = re.sub(r"\bNone\b", "unrecorded", narrative)
+    narrative = re.sub(r"\b(NaN|nan)\b", "unrecorded", narrative)
+    narrative = re.sub(r"\bnull\b", "unrecorded", narrative)
 
-    if state == "signal_driven":
-        return _signal_driven_sentence(decision)
-    if state == "manual":
-        return _MANUAL_TEXT
-    # "unknown" and any other/unexpected value both defensively fall back
-    # here (CONSTRAINT #6) -- never guess at what a model "probably" thought.
-    return _UNKNOWN_TEXT
+    if _NOTES_SENTINEL in narrative:
+        narrative = narrative.replace(_NOTES_SENTINEL, notes or "")
 
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def build_trade_narrative(retro: Dict[str, Any]) -> str:
-    """Plain-text, 4-sentence narrative for one retrospective record (the
-    exact shape documented in this module's docstring). Strictly
-    template-based — NO LLM call anywhere in this module. Never raises
-    (CONSTRAINT #6): a malformed/incomplete ``retro`` degrades to a
-    best-effort narrative rather than crashing the caller."""
-    try:
-        if not isinstance(retro, dict):
-            retro = {}
-        sentences = [
-            _what_happened_sentence(retro),
-            _outcome_sentence(retro),
-            _move_sentence(retro),
-            _why_sentence(retro),
-        ]
-        return " ".join(s for s in sentences if s)
-    except Exception as exc:  # noqa: BLE001 — CONSTRAINT #6: never raise
-        logger.warning("build_trade_narrative failed on a malformed record: %s", exc)
-        return "Narrative unavailable for this trade — the underlying record was malformed."
+    return narrative
