@@ -255,6 +255,11 @@ def build_trade_narrative(
     )
     if regime and str(regime).strip().lower() in ("none", "null", "nan", "unrecorded"):
         regime = None
+    # Sanitized like `strategy_id`/`operator_notes` above -- an
+    # unsanitized macro_regime could otherwise inject fabricated
+    # "measured" clauses (fake MFE/MAE/win-rate text) into this
+    # system-authored narrative. See docs/known_issues for the incident.
+    regime = _sanitize_freetext(regime)
 
     # Operator Notes
     notes = (
@@ -488,8 +493,16 @@ def build_trade_narrative(
             f"Position closed at {_fmt_curr(xp)} realizing {_fmt_curr(realized_p)} "
             f"(percentage return unrecorded)."
         )
-    elif realized_p == 0.0:
-        # O1.3: Breakeven
+    elif realized_p is not None and abs(realized_p) < 1e-9:
+        # O1.3: Breakeven. Epsilon-guarded (matching this module's own
+        # `_fmt_curr`/`_fmt_pct`/`_fmt_float` zero-threshold convention)
+        # rather than exact `realized_p == 0.0` equality -- averaging in at
+        # two different leg prices produces real float division noise (e.g.
+        # avg_entry_price=0.15000000000000002), so a genuinely-flat trade's
+        # realized_pnl can land at something like -5.55e-17, not exact 0.0.
+        # Exact equality misclassified that as a "loss of -$0.00", which also
+        # silently biased downstream cohort win-rate/Brier-score math in
+        # pilots/retrospective_insights.py (see that module's matching fix).
         if h_days is not None:
             outcome_clause = (
                 f"Position closed at {_fmt_curr(xp)} after {_fmt_float(h_days, 1)} days "

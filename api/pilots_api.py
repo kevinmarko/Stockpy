@@ -6159,7 +6159,13 @@ def get_paper_broker_retrospective_insights(
 def get_paper_broker_bridge_metrics() -> dict[str, Any]:
     """Completeness and reliability metrics for the paper-to-transactions bridge."""
     from data.paper_account_store import PaperAccountStore
-    store = PaperAccountStore()
+    # readonly=True: this is a pure GET read -- a write-mode store runs real
+    # schema/data side effects at construction time (Base.metadata.create_all,
+    # seeding a funded PaperAccount row, a migration that can outright raise
+    # on a partially-migrated DB) that don't belong behind this endpoint, and
+    # it makes get_bridge_completeness_metrics()'s own readonly cold-start
+    # honesty branch reachable here.
+    store = PaperAccountStore(readonly=True)
     return store.get_bridge_completeness_metrics()
 
 

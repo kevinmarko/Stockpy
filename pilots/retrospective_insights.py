@@ -25,6 +25,7 @@ Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES - WP-G):
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -35,6 +36,15 @@ from pilots.retrospective_narrative import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Epsilon threshold for classifying a realized PnL as a genuine breakeven,
+#: matching `retrospective_narrative.py`'s own zero-threshold convention.
+#: Averaging in at two different leg prices produces real float division
+#: noise (e.g. avg_entry_price=0.15000000000000002), so a genuinely-flat
+#: trade's realized_pnl can land at something like -5.55e-17, not exact 0.0
+#: -- an exact `p == 0`/`p > 0`/`p < 0` comparison would silently misclassify
+#: it as a real win/loss, biasing win_rate/profit_factor/the Brier score.
+_PNL_ZERO_EPSILON = 1e-9
 
 
 # =============================================================================
@@ -181,9 +191,9 @@ def _compute_cohort_metrics(
     pnls = [p for p in raw_pnls if p is not None]
     excluded_unmeasurable_pnl_count = len(raw_pnls) - len(pnls)
 
-    winning_trades = sum(1 for p in pnls if p > 0)
-    losing_trades = sum(1 for p in pnls if p < 0)
-    breakeven_trades = sum(1 for p in pnls if p == 0)
+    winning_trades = sum(1 for p in pnls if p > _PNL_ZERO_EPSILON)
+    losing_trades = sum(1 for p in pnls if p < -_PNL_ZERO_EPSILON)
+    breakeven_trades = sum(1 for p in pnls if abs(p) <= _PNL_ZERO_EPSILON)
 
     # Win rate is computed over trades with a MEASURED outcome only -- an
     # unmeasurable trade must never silently dilute the denominator.
@@ -191,8 +201,8 @@ def _compute_cohort_metrics(
     total_realized_pnl = round(sum(pnls), 2) if pnls else None
 
     # Profit Factor: Gross Gains / Gross Losses
-    gross_gains = sum(p for p in pnls if p > 0)
-    gross_losses = sum(abs(p) for p in pnls if p < 0)
+    gross_gains = sum(p for p in pnls if p > _PNL_ZERO_EPSILON)
+    gross_losses = sum(abs(p) for p in pnls if p < -_PNL_ZERO_EPSILON)
     if gross_losses > 0:
         profit_factor = round(gross_gains / gross_losses, 4)
     else:
@@ -246,7 +256,7 @@ def _compute_cohort_metrics(
             conv = _extract_conviction(t)
             p = _extract_pnl(t)
             if conv is not None and p is not None:
-                outcome = 1.0 if p > 0 else 0.0
+                outcome = 1.0 if p > _PNL_ZERO_EPSILON else 0.0
                 brier_sq_errors.append((conv - outcome) ** 2)
 
         if brier_sq_errors:
@@ -271,8 +281,8 @@ def _compute_cohort_metrics(
         for strat_id, s_trades in grouped_by_strategy.items():
             s_raw_pnls = [_extract_pnl(st) for st in s_trades]
             s_pnls = [p for p in s_raw_pnls if p is not None]
-            s_wins = sum(1 for p in s_pnls if p > 0)
-            s_losses = sum(1 for p in s_pnls if p < 0)
+            s_wins = sum(1 for p in s_pnls if p > _PNL_ZERO_EPSILON)
+            s_losses = sum(1 for p in s_pnls if p < -_PNL_ZERO_EPSILON)
             s_count = len(s_trades)
             s_wr = round(s_wins / len(s_pnls), 4) if s_pnls else None
             s_total_pnl = round(sum(s_pnls), 2) if s_pnls else None
@@ -542,14 +552,17 @@ def generate_batch_retrospective_insights(
         }
 
     # 6. Return strictly partitioned structure with ZERO blended aggregate
-    # metrics. `signal_driven_cohort` is a genuine copy of `auto_stats`, not
-    # the same dict object aliased under a second key -- both keys exist for
-    # interface-contract compatibility (some callers/tests read one name,
-    # some the other), but a caller mutating one must never silently mutate
-    # the other.
+    # metrics. `signal_driven_cohort` is a genuine DEEP copy of `auto_stats`,
+    # not the same dict object (nor its nested `strategies`/`symbols`
+    # containers) aliased under a second key -- `dict(auto_stats)` alone only
+    # copies the top level, leaving `strategies`/`symbols` as the SAME nested
+    # objects in both cohorts, silently violating this module's own disjoint-
+    # cohort invariant the moment a future caller mutates one in place. Both
+    # keys exist for interface-contract compatibility (some callers/tests
+    # read one name, some the other).
     return {
         "automated_cohort": auto_stats,
-        "signal_driven_cohort": dict(auto_stats),
+        "signal_driven_cohort": copy.deepcopy(auto_stats),
         "manual_cohort": manual_stats,
         "unrecorded_cohort": unrecorded_stats,
         "contrastive_insights": contrastive_insights,

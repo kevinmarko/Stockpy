@@ -574,39 +574,53 @@ class EvaluationEngine:
         # fetch of ALL persisted fills up front, not a per-symbol store query
         # inside the loop.
         broker_histories: Dict[str, pd.DataFrame] = {}
-        try:
-            from settings import settings as _settings
-            if getattr(_settings, "EVAL_BROKER_TRADES_ENABLED", False):
-                from data.broker_fills_store import BrokerFillsStore
+        # Skip this fallback entirely when the caller explicitly injected its
+        # own `transactions_store` -- e.g. pilots/retrospective_composer.py's
+        # isolated single-trade evaluation, which builds a throwaway
+        # in-memory store containing STRICTLY the one trade being evaluated.
+        # Unconditionally consulting the real, shared BrokerFillsStore here
+        # would silently reach OUTSIDE that isolation guarantee: a symbol
+        # genuinely absent from the isolated store would fall through to a
+        # DIFFERENT, real trade's excursion data from the shared broker-fills
+        # DB instead of the isolated store's own honest "no history" NaN --
+        # the exact contamination class the explicit `transactions_store=`
+        # injection exists to prevent (see evaluate_portfolio's own
+        # docstring). This fallback is for the general/default (non-injected)
+        # evaluation path only.
+        if transactions_store is None:
+            try:
+                from settings import settings as _settings
+                if getattr(_settings, "EVAL_BROKER_TRADES_ENABLED", False):
+                    from data.broker_fills_store import BrokerFillsStore
 
-                bstore = BrokerFillsStore(readonly=True)
-                by_symbol: Dict[str, list] = {}
-                for t in bstore.closed_trades():  # newest-exit-first, unpaginated
-                    by_symbol.setdefault(t.symbol, []).append(t)
-                for sym, trades in by_symbol.items():
-                    latest = trades[0]  # already newest-first
-                    broker_histories[sym] = pd.DataFrame([{
-                        'entry_ts': latest.entry_ts,
-                        'exit_ts': latest.exit_ts,
-                        'entry_price': latest.entry_price,
-                        'exit_price': latest.exit_price,
-                        'shares': latest.quantity,
-                        # reconstruct_closed_trades() only ever produces long
-                        # round-trips (a short-sale excess is dropped, never
-                        # fabricated as an entry -- see that function's
-                        # docstring), so 'side' is always 'long' here.
-                        'side': 'long',
-                        'strategy': None,
-                        'notes': None,
-                        'conviction': np.nan,
-                    }])
-        except Exception as exc:  # noqa: BLE001 - dead-letter: MAE/MFE just stay NaN
-            logger.warning(
-                "evaluate_portfolio: broker-trade fallback unavailable (%s) -- "
-                "MAE/MFE/Edge Ratio stay NaN for symbols with no internal history.",
-                exc,
-            )
-            broker_histories = {}
+                    bstore = BrokerFillsStore(readonly=True)
+                    by_symbol: Dict[str, list] = {}
+                    for t in bstore.closed_trades():  # newest-exit-first, unpaginated
+                        by_symbol.setdefault(t.symbol, []).append(t)
+                    for sym, trades in by_symbol.items():
+                        latest = trades[0]  # already newest-first
+                        broker_histories[sym] = pd.DataFrame([{
+                            'entry_ts': latest.entry_ts,
+                            'exit_ts': latest.exit_ts,
+                            'entry_price': latest.entry_price,
+                            'exit_price': latest.exit_price,
+                            'shares': latest.quantity,
+                            # reconstruct_closed_trades() only ever produces long
+                            # round-trips (a short-sale excess is dropped, never
+                            # fabricated as an entry -- see that function's
+                            # docstring), so 'side' is always 'long' here.
+                            'side': 'long',
+                            'strategy': None,
+                            'notes': None,
+                            'conviction': np.nan,
+                        }])
+            except Exception as exc:  # noqa: BLE001 - dead-letter: MAE/MFE just stay NaN
+                logger.warning(
+                    "evaluate_portfolio: broker-trade fallback unavailable (%s) -- "
+                    "MAE/MFE/Edge Ratio stay NaN for symbols with no internal history.",
+                    exc,
+                )
+                broker_histories = {}
 
         for idx, row in df.to_dict('index').items():
             symbol = row['Symbol']

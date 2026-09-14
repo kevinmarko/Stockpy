@@ -615,13 +615,28 @@ class TestFailOpenBridgeDurabilityUnderDatabaseLocks:
         assert t["bridged_trade_id"] is None
         assert "database table is locked" in (t["bridge_error"] or "")
 
-        # Verify composer gracefully handles this failed trade
-        composer = RetrospectiveComposer(paper_store=store, db_url=isolated_db)
+        # Verify composer gracefully handles this failed trade. A
+        # bridge_status of "failed" no longer gates excursion evaluation --
+        # _evaluate_trade_excursion builds its OWN isolated in-memory store
+        # from this trade's own fields and never reads the real
+        # transactions_store bridge -- so this asserts the honest
+        # "pricing data missing" reason instead of the old, incorrect
+        # "did not reach evaluation bridge" gate text. `historical_store`
+        # is stubbed offline-safe: a real HistoricalStore would otherwise
+        # attempt a live network fetch for AMD bars on this cache miss.
+        class _NoOpHistoricalStore:
+            def get_bars(self, symbol, lookback_days=504, **kwargs):
+                return None
+
+        composer = RetrospectiveComposer(
+            paper_store=store, db_url=isolated_db, historical_store=_NoOpHistoricalStore()
+        )
         retro = composer.compose_trade_retrospective(t["trade_id"])
         assert retro is not None
         assert retro["bridge_status"] == "failed"
         assert retro["excursion"]["evaluation_status"] == "evaluation data unavailable"
-        assert "trade did not reach evaluation bridge" in retro["narrative"]
+        assert retro["excursion"]["bridge_reached"] is True
+        assert "Hold-period excursion metrics unavailable" in retro["narrative"]
         # Assert zero token leakage in narrative for this failed trade
         assert re.search(r"\b(None|NaN|nan|null)\b", retro["narrative"]) is None
 
