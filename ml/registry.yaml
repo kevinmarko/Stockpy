@@ -42,16 +42,16 @@ models:
     owner: TBD
     materiality_tier: experimental
     path: ml/models/lgbm_latest.pkl
-    trained_date: '2026-08-24'
-    cpcv_dsr: 0.02407823552192498
+    trained_date: '2026-09-04'
+    cpcv_dsr: 1.7294176083023635e-16
     pbo: 0.2
-    n_train: 450
+    n_train: 460
     deployable: false
     notes: LightGBM LambdaRank model for cross-sectional return rank prediction. Trained
       monthly on an expanding window of dashboard_df snapshots via PITFeatureStore.
       NDCG@1 monitored in CV logs. Weight in settings.SIGNAL_WEIGHTS["lgbm_ranker"]
       = 0.10 (modest until validated at > 200 out-of-sample dates).
-    artifact_file: lgbm_20260824.pkl
+    artifact_file: lgbm_20260904.pkl
     hyperparameters:
       objective: lambdarank
       metric: ndcg
@@ -64,10 +64,13 @@ models:
       bagging_fraction: 0.8
       bagging_freq: 1
       verbose: -1
+      random_state: 42
+      deterministic: true
+      force_row_wise: true
     train_window:
-      start: '2025-08-29'
-      end: '2026-07-17'
-      n_dates: 45
+      start: '2025-09-11'
+      end: '2026-08-05'
+      n_dates: 46
     features:
     - ROC_12M
     - ROC_6M
@@ -98,23 +101,23 @@ models:
     - earnings_yield_rank
     - quality_factor_score_rank
     - low_vol_score_rank
-    cpcv_mean_oos_sharpe: 2.9738658043496
-    cpcv_mean_oos_max_dd: 0.012760134209014428
+    cpcv_mean_oos_sharpe: 0.4565802702593012
+    cpcv_mean_oos_max_dd: 0.01672409586126621
   meta_labeler_timeseries_momentum:
     role: meta_labeler
     owner: TBD
     materiality_tier: experimental
     path: ml/models/meta_timeseries_momentum_latest.pkl
-    trained_date: '2026-08-21'
-    cpcv_dsr: 6.698769815553169e-45
+    trained_date: '2026-09-06'
+    cpcv_dsr: 3.903957950158125e-46
     pbo: 0.0
-    n_train: 16468
+    n_train: 16439
     deployable: false
     notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct).
-      Trained on triple-barrier labels from ml/triple_barrier.py. If predict_proba
-      < settings.META_LABEL_MIN_CONFIDENCE (0.4), the position size for that cycle
-      is zeroed by SignalAggregator.
-    artifact_file: meta_timeseries_momentum_20260821.pkl
+      Trained on triple-barrier labels from ml/triple_barrier.py. If predict_proba <
+      settings.META_LABEL_MIN_CONFIDENCE (0.4), the position size for that cycle is
+      zeroed by SignalAggregator.
+    artifact_file: meta_timeseries_momentum_20260906.pkl
     hyperparameters:
       objective: binary
       metric: binary_logloss
@@ -129,47 +132,8 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2012-02-23'
-      end: '2026-08-21'
-      n_dates: 3645
-    features:
-    - momentum
-    - realized_vol_20d
-    - dist_sma_50
-    - vol_ewma
-    - primary_score
-    cpcv_mean_oos_sharpe: -0.7316701244983145
-    cpcv_mean_oos_max_dd: null
-  meta_labeler_cross_sectional_momentum:
-    role: meta_labeler
-    owner: TBD
-    materiality_tier: experimental
-    path: ml/models/meta_cross_sectional_momentum_latest.pkl
-    trained_date: '2026-08-23'
-    cpcv_dsr: 5.439908371777128e-08
-    pbo: 0.0
-    n_train: 16442
-    deployable: false
-    notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal
-      correct). Shares the same triple-barrier label construction and feature set
-      as the timeseries momentum meta-labeler; trained and persisted independently.
-    artifact_file: meta_cross_sectional_momentum_20260823.pkl
-    hyperparameters:
-      objective: binary
-      metric: binary_logloss
-      num_leaves: 15
-      learning_rate: 0.05
-      n_estimators: 500
-      lambda_l1: 0.1
-      lambda_l2: 0.1
-      feature_fraction: 0.8
-      bagging_fraction: 0.8
-      bagging_freq: 1
-      verbose: -1
-      class_weight: balanced
-    train_window:
-      start: '2012-02-27'
-      end: '2026-08-21'
+      start: '2012-03-12'
+      end: '2026-09-04'
       n_dates: 3643
     features:
     - momentum
@@ -177,7 +141,46 @@ models:
     - dist_sma_50
     - vol_ewma
     - primary_score
-    cpcv_mean_oos_sharpe: 0.29665292976939
+    cpcv_mean_oos_sharpe: -0.766403239392764
+    cpcv_mean_oos_max_dd: null
+  meta_labeler_cross_sectional_momentum:
+    role: meta_labeler
+    owner: TBD
+    materiality_tier: experimental
+    path: ml/models/meta_cross_sectional_momentum_latest.pkl
+    trained_date: '2026-09-07'
+    cpcv_dsr: 2.36954044448318e-08
+    pbo: 0.0
+    n_train: 16427
+    deployable: false
+    notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct).
+      Shares the same triple-barrier label construction and feature set as the timeseries
+      momentum meta-labeler; trained and persisted independently.
+    artifact_file: meta_cross_sectional_momentum_20260907.pkl
+    hyperparameters:
+      objective: binary
+      metric: binary_logloss
+      num_leaves: 15
+      learning_rate: 0.05
+      n_estimators: 500
+      lambda_l1: 0.1
+      lambda_l2: 0.1
+      feature_fraction: 0.8
+      bagging_fraction: 0.8
+      bagging_freq: 1
+      verbose: -1
+      class_weight: balanced
+    train_window:
+      start: '2012-03-12'
+      end: '2026-09-04'
+      n_dates: 3643
+    features:
+    - momentum
+    - realized_vol_20d
+    - dist_sma_50
+    - vol_ewma
+    - primary_score
+    cpcv_mean_oos_sharpe: 0.28177712147451
     cpcv_mean_oos_max_dd: null
   options_meta_labeler:
     role: options_meta_labeler
@@ -189,9 +192,9 @@ models:
     pbo: null
     n_train: 0
     deployable: false
-    notes: Options meta labeler for dynamic position sizing and entry filtering based
-      on paper closed trades. Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo
-      are null rather than a fabricated 0.0/1.0 (CONSTRAINT
+    notes: 'Options meta labeler for dynamic position sizing and entry filtering based on paper closed trades.
+      Not yet trained on any paper trades (n_train=0) -- cpcv_dsr/pbo are null rather than a fabricated
+      0.0/1.0 (CONSTRAINT #4); this is "not evaluated," not "evaluated and failed."'
   meta_labeler_backfill_timeseries_momentum:
     role: meta_labeler
     owner: TBD
