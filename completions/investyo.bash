@@ -12,7 +12,6 @@ _investyo_complete() {
         main.py|*/main.py) cmd='main.py' ;;
         main_orchestrator.py|*/main_orchestrator.py) cmd='main_orchestrator.py' ;;
         universe_engine.py|*/universe_engine.py) cmd='universe_engine.py' ;;
-        app_shell.py|*/app_shell.py) cmd='app_shell.py' ;;
         execution.kill_switch) [[ "$prevw" == "-m" ]] && cmd='execution.kill_switch' ;;
         validation.harness) [[ "$prevw" == "-m" ]] && cmd='validation.harness' ;;
         prompt_registry) [[ "$prevw" == "-m" ]] && cmd='prompt_registry' ;;
@@ -21,6 +20,12 @@ _investyo_complete() {
         daily_briefing.py|*/daily_briefing.py) cmd='daily_briefing.py' ;;
         track_record_status.py|*/track_record_status.py) cmd='track_record_status.py' ;;
         database_setup.py|*/database_setup.py) cmd='database_setup.py' ;;
+        repair_price_bars_adjustment.py|*/repair_price_bars_adjustment.py) cmd='repair_price_bars_adjustment.py' ;;
+        backfill_edgar_fundamentals.py|*/backfill_edgar_fundamentals.py) cmd='backfill_edgar_fundamentals.py' ;;
+        backfill_news_history.py|*/backfill_news_history.py) cmd='backfill_news_history.py' ;;
+        backfill_news_history_from_audit.py|*/backfill_news_history_from_audit.py) cmd='backfill_news_history_from_audit.py' ;;
+        backfill_sentiment_history.py|*/backfill_sentiment_history.py) cmd='backfill_sentiment_history.py' ;;
+        export_notebooklm.py|*/export_notebooklm.py) cmd='export_notebooklm.py' ;;
       esac
     else
       case "$cmd" in
@@ -50,9 +55,8 @@ _investyo_complete() {
     main.py) kind='opts'; cands=(--interval --refresh-account --agent) ;;
     main_orchestrator.py) kind='opts'; cands=(--dry-run --strict) ;;
     universe_engine.py) kind='opts'; cands=(--date --report) ;;
-    app_shell.py) kind='opts'; cands=(--interval) ;;
-    execution.kill_switch) kind='opts'; cands=(--activate --deactivate --status --reason) ;;
-    validation.harness) kind='opts'; cands=(--strategy --start --end --ticker) ;;
+    execution.kill_switch) kind='opts'; cands=(--activate --deactivate --activate-soft-halt --deactivate-soft-halt --status --reason) ;;
+    validation.harness) kind='opts'; cands=(--strategy --strategies --start --end --ticker --workers -w --json) ;;
     prompt_registry) kind='subs'; cands=(list get sync pin rollback diff verify publish) ;;
     prompt_registry/list) kind='opts'; cands=() ;;
     prompt_registry/get) kind='opts'; cands=(--version -v --raw) ;;
@@ -67,6 +71,12 @@ _investyo_complete() {
     daily_briefing.py) kind='opts'; cands=(--output-dir --print) ;;
     track_record_status.py) kind='opts'; cands=(--output-dir --json) ;;
     database_setup.py) kind='opts'; cands=() ;;
+    repair_price_bars_adjustment.py) kind='opts'; cands=(--tickers --random --source --dry-run) ;;
+    backfill_edgar_fundamentals.py) kind='opts'; cands=(--tickers --since) ;;
+    backfill_news_history.py) kind='opts'; cands=(--tickers --months) ;;
+    backfill_news_history_from_audit.py) kind='opts'; cands=(--tickers --months) ;;
+    backfill_sentiment_history.py) kind='opts'; cands=(--tickers --months --sources --max-seconds-per-symbol) ;;
+    export_notebooklm.py) kind='opts'; cands=(--output-dir --modular-only --consolidated-only --section) ;;
   esac
 
   if [[ "$kind" == "opts" ]]; then

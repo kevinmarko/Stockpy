@@ -1310,6 +1310,7 @@ def execute_0dte_trade(
         commission_and_fees=commission,
         collateral_required=collateral_required,
         strategy_id=strategy_name,
+        pilot_id=strategy_name,
     )
 
     if not success:
@@ -1416,6 +1417,7 @@ def execute_0dte_exits(
             net_cash_impact=net_cash_impact,
             commission_and_fees=commission,
             strategy_id=item_strategy_id,
+            pilot_id=item_strategy_id,
         )
 
         if success:

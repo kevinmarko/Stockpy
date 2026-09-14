@@ -267,15 +267,29 @@ def migrate_daily_signals_schema(cursor, conn):
             except Exception as e:
                 logger.warning(f"Could not add column '{key}': {e}")
 
-    if added:
-        try:
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Schema migration commit FAILED: {e}", exc_info=True)
+        if added:
+            try:
+                conn.commit()
+                logger.info(
+                    f"Schema migration complete. Added {len(added)} new columns: {added}"
+                )
+            except Exception as e:
+                logger.error(f"Schema migration commit FAILED: {e}", exc_info=True)
+                try:
+                    conn.rollback()
+                except Exception as e2:
+                    logger.error(f"Schema migration rollback failed: {e2}", exc_info=True)
         else:
-            logger.info(
-                f"Schema migration complete. Added {len(added)} new columns: {added}"
-            )
+            # Every ALTER TABLE in the loop failed -- BEGIN TRANSACTION above
+            # opened a transaction that would otherwise never be closed,
+            # leaving the connection unable to start a NEW transaction on its
+            # next migration call ("cannot start a transaction within a
+            # transaction"). Roll it back explicitly rather than silently
+            # leaving it dangling.
+            try:
+                conn.rollback()
+            except Exception as e:
+                logger.error(f"Schema migration rollback failed: {e}", exc_info=True)
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")
 
@@ -390,6 +404,10 @@ def migrate_paper_closed_trades_schema(cursor, conn):
                 logger.info(f"paper_closed_trades migration complete. Added columns: {added}")
             except Exception as e:
                 logger.error(f"paper_closed_trades migration commit failed: {e}", exc_info=True)
+                try:
+                    conn.rollback()
+                except Exception as e2:
+                    logger.error(f"paper_closed_trades migration rollback failed: {e2}", exc_info=True)
         else:
             # Every ALTER TABLE in the loop failed -- `BEGIN TRANSACTION`
             # above opened a transaction that would otherwise never be
@@ -452,6 +470,10 @@ def migrate_paper_positions_schema(cursor, conn):
                 logger.info(f"paper_positions migration complete. Added columns: {added}")
             except Exception as e:
                 logger.error(f"paper_positions migration commit failed: {e}", exc_info=True)
+                try:
+                    conn.rollback()
+                except Exception as e2:
+                    logger.error(f"paper_positions migration rollback failed: {e2}", exc_info=True)
         else:
             # Same dangling-transaction guard as migrate_paper_closed_trades_schema above.
             try:

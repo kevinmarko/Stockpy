@@ -79,6 +79,21 @@ def evaluation_engine_inst() -> EvaluationEngine:
     return EvaluationEngine()
 
 
+class _NoOpHistoricalStore:
+    """Offline-safe stand-in for HistoricalStore in tests that don't
+    explicitly inject their own `data_provider`. A real HistoricalStore
+    falls through to a live network fetch on every cache-miss symbol
+    (correct production behavior -- see RetrospectiveComposer's own
+    _evaluate_trade_excursion), which would make these tests silently
+    depend on outbound network access. Returning an empty DataFrame
+    reproduces the exact pre-existing "no data_provider" behavior these
+    tests were written against.
+    """
+
+    def get_bars(self, symbol, lookback_days=504, **kwargs):
+        return pd.DataFrame()
+
+
 @pytest.fixture
 def composer(
     paper_store: PaperAccountStore,
@@ -91,6 +106,7 @@ def composer(
         paper_store=paper_store,
         transactions_store=transactions_store_inst,
         evaluation_engine=evaluation_engine_inst,
+        historical_store=_NoOpHistoricalStore(),
         db_url=isolated_db_url,
     )
 
@@ -314,9 +330,16 @@ class TestStrictAntiFabricationGates:
         assert "unrecorded provenance" in rec["narrative"]
         assert "None" not in rec["narrative"]
 
-    def test_bridge_failed_gate_returns_null_excursion(self, composer, paper_store):
-        """If bridge_status == 'failed', excursion MUST report 'evaluation data unavailable'
-        and null metrics (mae: None, mfe: None, edge_ratio: None).
+    def test_bridge_failed_trade_still_attempts_excursion_evaluation(self, composer, paper_store):
+        """bridge_status == 'failed' no longer gates excursion evaluation --
+        _evaluate_trade_excursion builds its OWN isolated in-memory store
+        directly from this trade's fields and never reads the real
+        transactions_store bridge, so a bridge write failure must not block
+        MAE/MFE from being computed. Without a real data_provider (or cached
+        HistoricalStore bars), the evaluation still honestly reports
+        'evaluation data unavailable' -- for the DIFFERENT reason that
+        hold-period pricing data is missing, not that the bridge wasn't
+        reached.
         """
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with session_scope(paper_store.Session) as session:
@@ -345,16 +368,17 @@ class TestStrictAntiFabricationGates:
 
         exc = rec["excursion"]
         assert exc["evaluation_status"] == "evaluation data unavailable"
-        assert exc["bridge_reached"] is False
+        assert exc["bridge_reached"] is True
         assert exc["mae"] is None
         assert exc["mfe"] is None
         assert exc["edge_ratio"] is None
-        assert exc["realized_slippage"] is None
-        assert "did not reach TransactionsStore bridge" in exc["reason"]
+        assert "Hold-period pricing data missing or insufficient" in exc["reason"]
         assert "Hold-period excursion metrics unavailable" in rec["narrative"]
 
-    def test_bridge_disabled_gate_returns_null_excursion(self, composer, paper_store):
-        """If bridge_status == 'disabled', excursion metrics must be strictly null."""
+    def test_bridge_disabled_trade_still_attempts_excursion_evaluation(self, composer, paper_store):
+        """bridge_status == 'disabled' (the default) no longer gates excursion
+        evaluation either -- see test_bridge_failed_trade_still_attempts_
+        excursion_evaluation above for the full reasoning."""
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with session_scope(paper_store.Session) as session:
             pct = PaperClosedTrade(
@@ -379,7 +403,7 @@ class TestStrictAntiFabricationGates:
         rec = composer.compose_trade_retrospective(203)
         assert rec is not None
         assert rec["excursion"]["evaluation_status"] == "evaluation data unavailable"
-        assert rec["excursion"]["bridge_reached"] is False
+        assert rec["excursion"]["bridge_reached"] is True
         assert rec["excursion"]["mae"] is None
         assert rec["excursion"]["mfe"] is None
 

@@ -806,8 +806,8 @@ export function RetrospectiveJournal() {
                                   <td style={{ padding: "6px 8px", textAlign: "right", color: s.win_rate == null ? theme.textMuted : s.win_rate >= 0.5 ? theme.growth : theme.decline }}>
                                     {s.win_rate != null ? `${(s.win_rate * 100).toFixed(1)}%` : "—"}
                                   </td>
-                                  <td style={{ padding: "6px 8px", textAlign: "right", color: s.total_realized_pnl >= 0 ? theme.growth : theme.decline }}>
-                                    ${s.total_realized_pnl.toFixed(2)}
+                                  <td style={{ padding: "6px 8px", textAlign: "right", color: s.total_realized_pnl == null ? theme.textMuted : s.total_realized_pnl >= 0 ? theme.growth : theme.decline }}>
+                                    {s.total_realized_pnl != null ? `$${s.total_realized_pnl.toFixed(2)}` : "—"}
                                   </td>
                                   <td style={{ padding: "6px 8px", textAlign: "right" }}>
                                     {s.mean_edge_ratio != null ? `${s.mean_edge_ratio.toFixed(2)}x` : "—"}

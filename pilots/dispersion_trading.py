@@ -1150,6 +1150,7 @@ def execute_dispersion_trade(
         commission_and_fees=2 * basket.index_contracts * OPTION_FEE_PER_CONTRACT_LEG,
         status=OrderStatus.FILLED,
         strategy_id=strategy_id,
+        pilot_id=strategy_id,
     )
 
     if not idx_success:
@@ -1182,6 +1183,7 @@ def execute_dispersion_trade(
             commission_and_fees=c_comm,
             status=OrderStatus.FILLED,
             strategy_id=strategy_id,
+            pilot_id=strategy_id,
         )
 
         if c_success:
