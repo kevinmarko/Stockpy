@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useMemo } from "react";
+import { usePersistedState } from "../hooks/usePersistedState";
 
 /**
  * Global toggle for `SymbolInput`'s default suggestion ORDER (not which
@@ -26,10 +27,14 @@ import React, { createContext, useContext, useState } from "react";
  * honest-empty dead end -- see `SymbolInput.tsx`'s own doc comment), which
  * suppresses the FMP section entirely regardless of ordering.
  *
- * Follows `ThemeContext.tsx`'s exact try/catch-around-localStorage pattern
- * and `ExplainTickerContext.tsx`'s safe-fallback-outside-provider pattern
- * (a component rendered without `SearchDefaultProvider` -- e.g. an isolated
- * component test -- gets the new default rather than crashing).
+ * Persistence delegates to the existing `usePersistedState` hook
+ * (`../hooks/usePersistedState.ts`) -- the same "non-sensitive UI
+ * preference" contract it already implements for other per-browser
+ * settings -- rather than hand-rolling a second try/catch-around-localStorage
+ * implementation. Follows `ExplainTickerContext.tsx`'s
+ * safe-fallback-outside-provider pattern (a component rendered without
+ * `SearchDefaultProvider` -- e.g. an isolated component test -- gets the
+ * new default rather than crashing).
  */
 
 const STORAGE_KEY = "stockpy_search_universe_first";
@@ -41,42 +46,38 @@ export interface SearchDefaultContextValue {
 
 const SearchDefaultContext = createContext<SearchDefaultContextValue | undefined>(undefined);
 
-function readStored(): boolean {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === "true") return true;
-    if (stored === "false") return false;
-  } catch {
-    // Private browsing / storage blocked -- fall through to the default.
-  }
-  return true; // new default: universe-first
-}
-
 export function SearchDefaultProvider({
   children,
   initialUniverseFirst,
 }: {
   children: React.ReactNode;
-  /** Test-only escape hatch: skip the localStorage read and start from this
-   * value instead. Production's one call site (`App.tsx`) never passes
-   * this -- real usage always reads/persists via localStorage. */
+  /** Test-only escape hatch: seeds the persisted value's default instead of
+   * the real `true`. Only takes effect while nothing is already stored for
+   * `STORAGE_KEY` in this browser (`usePersistedState`'s own default-value
+   * semantics) and only on this provider's FIRST mount -- changing this prop
+   * on an already-mounted `SearchDefaultProvider` has no effect, since it's
+   * read only inside a lazy `useState` initializer. Production's one call
+   * site (`App.tsx`) never passes this -- real usage always starts from
+   * whatever's already persisted. */
   initialUniverseFirst?: boolean;
 }) {
-  const [universeFirst, setUniverseFirstState] = useState<boolean>(
-    () => initialUniverseFirst ?? readStored()
+  const [universeFirst, setUniverseFirst] = usePersistedState<boolean>(
+    STORAGE_KEY,
+    initialUniverseFirst ?? true
   );
 
-  const setUniverseFirst = (value: boolean) => {
-    setUniverseFirstState(value);
-    try {
-      localStorage.setItem(STORAGE_KEY, String(value));
-    } catch {
-      // Preference just won't survive a reload in this browser -- non-fatal.
-    }
-  };
+  // Memoized so a `SearchDefaultProvider` re-render triggered by something
+  // ELSE (e.g. an ancestor's unrelated state change in `App.tsx`) doesn't
+  // hand every `useSearchDefault()` consumer a new object reference --
+  // `usePersistedState`'s own setter is already `useCallback`-stable, so
+  // this only produces a new value when `universeFirst` itself changes.
+  const value = useMemo(
+    () => ({ universeFirst, setUniverseFirst }),
+    [universeFirst, setUniverseFirst]
+  );
 
   return (
-    <SearchDefaultContext.Provider value={{ universeFirst, setUniverseFirst }}>
+    <SearchDefaultContext.Provider value={value}>
       {children}
     </SearchDefaultContext.Provider>
   );
