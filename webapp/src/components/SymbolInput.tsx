@@ -216,9 +216,23 @@ export function SymbolInput({
   // symbol Enter would submit. Never a concern pre-PR / in rollback mode,
   // where untracked results are always appended after, never inserted
   // before, an already-rendered index.
+  //
+  // Keyed on a content signature, NOT the `fmpResults` array reference --
+  // the fetch effect above assigns a fresh `[]` both when it clears results
+  // on every query change and when a query genuinely resolves to zero
+  // matches (`res.results ?? []`), so depending on the array itself resets
+  // the highlight on every one of those content-preserving updates too,
+  // not just a real reorder. A highlighted row surviving an empty-to-empty
+  // "change" is exactly the case a real user hits: type, arrow down to a
+  // tracked match, then press Enter before or after an FMP fetch that
+  // turns up nothing -- reset only when the actual symbol set changes.
+  const fmpResultsKey = useMemo(
+    () => fmpResults.map((r) => r.symbol).join(","),
+    [fmpResults]
+  );
   useEffect(() => {
     setActiveIndex(-1);
-  }, [fmpResults]);
+  }, [fmpResultsKey]);
 
   const trackedSymbolSet = useMemo(
     () => new Set(trackedList.map((u) => u.symbol)),
