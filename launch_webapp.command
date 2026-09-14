@@ -559,25 +559,88 @@ _verify_live_backends() {
     fi
 }
 
+# Reads a process's current working directory. macOS has no /proc, so lsof is
+# the only way; -Fn emits one "n<path>" record per line, which is far safer to
+# parse than the default columnar output (a path containing spaces — e.g. this
+# repo's own "Stockpy Pilots.app" sibling — breaks column splitting).
+_pid_cwd() {  # $1 = pid ; prints the cwd path, or nothing
+    lsof -p "$1" -a -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+}
+
+# Prints the absolute git COMMON dir for a path, or nothing when it isn't a git
+# checkout. This is the "same repository?" test: `--git-common-dir` resolves to
+# the SAME absolute path for the main checkout and for every `git worktree add`
+# of it, while an unrelated project resolves somewhere else entirely.
+#
+# Anything unexpected here (not a directory, not a checkout, or a git too old
+# for --path-format) yields an empty string, which _check_vite_port treats as
+# "not ours" — i.e. this degrades toward the conservative refuse-to-kill path,
+# never toward killing a process we failed to identify.
+_repo_common_dir() {  # $1 = a directory
+    [ -n "$1" ] && [ -d "$1" ] || return 1
+    git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
+}
+
+# Prints the absolute root of the WORKING TREE a path belongs to, or nothing.
+# Unlike --git-common-dir (which is deliberately shared across every worktree of
+# a repo, and is what decides ownership above), --show-toplevel is distinct per
+# worktree — so the two together tell us "same repo?" and "same checkout?".
+#
+# A plain "$SCRIPT_DIR" prefix test cannot answer the second question here: this
+# repo's own worktrees live UNDER the main checkout at .claude/worktrees/<name>,
+# so every sibling worktree is literally prefixed by the main checkout's path
+# and would be misreported as "a previous run of this project".
+_repo_toplevel() {  # $1 = a directory
+    [ -n "$1" ] && [ -d "$1" ] || return 1
+    git -C "$1" rev-parse --show-toplevel 2>/dev/null
+}
+
 # Vite runs with --strictPort (a silent port bump would break CORS against the
 # backends, which are pinned to :5173 — see settings.CORS_ALLOWED_ORIGINS), so
 # unlike the APIs above we can't just "reuse" a live server without risking a
-# mock/live mode mismatch. Instead: detect a stale same-project instance and
-# offer to clear it; for anything else, fail with a clear, actionable message
+# mock/live mode mismatch. Instead: detect a stale instance belonging to this
+# repository (this checkout OR any sibling git worktree of it) and clear it;
+# for anything genuinely foreign, fail with a clear, actionable message
 # instead of Vite's raw EADDRINUSE stack trace.
 _check_vite_port() {
-    local port=5173 pid cmd
+    local port=5173 pid cmd vite_cwd this_repo that_repo this_top that_top
     pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
     [ -z "$pid" ] && return 0
 
     cmd="$(ps -p "$pid" -ww -o command= 2>/dev/null)"
 
-    # Auto-heal the common case: a leftover Vite dev server from THIS project's
-    # own previous run (matched by process cwd) — never touches an unrelated
-    # process. No prompt: it's our own disposable dev server, safe to recycle.
-    if [[ "$cmd" == *"vite"* ]] && lsof -p "$pid" -a -d cwd 2>/dev/null | grep -q "$SCRIPT_DIR/webapp"; then
-        echo "  ⚠  Port $port was held by a leftover Vite server from a previous run"
-        echo "     of this project (PID $pid) — stopping it and continuing…"
+    # Auto-heal the common case: a leftover Vite dev server belonging to THIS
+    # REPOSITORY — either this exact checkout's own previous run, or a sibling
+    # git worktree of the same repo. Never touches an unrelated process.
+    #
+    # The sibling-worktree half is not hypothetical. This project is routinely
+    # developed across many simultaneous `git worktree` checkouts (agent
+    # sessions create them under .claude/worktrees/), and every one of them
+    # runs `npm run dev` against the same fixed :5173. An abandoned session
+    # leaves that dev server listening indefinitely. Matching only on
+    # "$SCRIPT_DIR/webapp" classified such a server as a total stranger and
+    # took the hard `exit 1` path below — so the real launcher could never
+    # start again until the operator hunted the PID down by hand, and the app
+    # simply "stopped opening". Comparing git common dirs is a strictly
+    # stronger ownership test than a cwd prefix: it still says no to every
+    # genuinely foreign process, while a dev server from our own repository is
+    # a disposable thing we are entitled to recycle.
+    vite_cwd="$(_pid_cwd "$pid")"
+    this_repo="$(_repo_common_dir "$SCRIPT_DIR")"
+    that_repo="$(_repo_common_dir "$vite_cwd")"
+
+    if [[ "$cmd" == *"vite"* ]] && [ -n "$this_repo" ] && [ "$this_repo" = "$that_repo" ]; then
+        this_top="$(_repo_toplevel "$SCRIPT_DIR")"
+        that_top="$(_repo_toplevel "$vite_cwd")"
+        if [ -n "$this_top" ] && [ "$this_top" = "$that_top" ]; then
+            echo "  ⚠  Port $port was held by a leftover Vite server from a previous run"
+            echo "     of this checkout (PID $pid):"
+        else
+            echo "  ⚠  Port $port was held by a leftover Vite server from another"
+            echo "     worktree of this same repository (PID $pid):"
+        fi
+        echo "       ${vite_cwd:-<unknown cwd>}"
+        echo "     That's our own disposable dev server — stopping it and continuing…"
         kill "$pid" 2>/dev/null
         for _ in $(seq 1 10); do
             lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1 || break
@@ -654,6 +717,22 @@ MODE_CHOICE="${MODE_CHOICE:-1}"
 
 LIVE_MODE=false
 [ "$MODE_CHOICE" = "2" ] && LIVE_MODE=true
+
+# ── Pre-flight :5173 BEFORE starting anything heavy ──────────────────────────
+# _check_vite_port can `exit 1` (a genuinely foreign process holds the port).
+# It used to run only just before `npm run dev`, i.e. AFTER data_api,
+# metrics_api and the orchestrator daemon had each been started and waited on
+# — so a port conflict meant ~20s of booting three backends, then the EXIT
+# trap immediately tearing all three back down. The daemon log showed a clean
+# "started" line followed one second later by "Received signal 15", which
+# reads like the daemon crashed rather than like a port conflict in a
+# different component entirely. Checking first makes the failure immediate and
+# attributable, and leaves nothing half-started behind.
+#
+# It is still called again at its original site further down: the port is free
+# now, which makes that call a no-op return, but it stays as the guard against
+# something else grabbing :5173 during the backend startup window.
+_check_vite_port
 
 if [ "$LIVE_MODE" = true ]; then
     # ── venv for the Python backends ─────────────────────────────────────────
