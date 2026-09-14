@@ -25,7 +25,6 @@ Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES - WP-G):
 
 from __future__ import annotations
 
-import copy
 import logging
 from typing import Any
 
@@ -552,17 +551,31 @@ def generate_batch_retrospective_insights(
         }
 
     # 6. Return strictly partitioned structure with ZERO blended aggregate
-    # metrics. `signal_driven_cohort` is a genuine DEEP copy of `auto_stats`,
-    # not the same dict object (nor its nested `strategies`/`symbols`
-    # containers) aliased under a second key -- `dict(auto_stats)` alone only
-    # copies the top level, leaving `strategies`/`symbols` as the SAME nested
-    # objects in both cohorts, silently violating this module's own disjoint-
-    # cohort invariant the moment a future caller mutates one in place. Both
-    # keys exist for interface-contract compatibility (some callers/tests
-    # read one name, some the other).
+    # metrics. `signal_driven_cohort` is a genuine copy of `auto_stats` --
+    # including its two known mutable nested containers (`strategies`,
+    # `symbols`) -- not the same dict object (nor those containers) aliased
+    # under a second key. `dict(auto_stats)` alone only copies the top
+    # level, leaving `strategies`/`symbols` as the SAME nested objects in
+    # both cohorts, silently violating this module's own disjoint-cohort
+    # invariant the moment a future caller mutates one in place. Copied
+    # explicitly rather than via `copy.deepcopy` (this module stays
+    # dependency-light stdlib -- `copy` is not on its import allowlist, see
+    # tests/test_pilots_strategy_matrix.py) -- `_compute_cohort_metrics`'s
+    # return shape has exactly these two mutable nesting points and nothing
+    # deeper, so this is a complete copy, not a partial one. Both keys exist
+    # for interface-contract compatibility (some callers/tests read one
+    # name, some the other).
+    signal_driven_cohort = dict(auto_stats)
+    if "strategies" in signal_driven_cohort:
+        signal_driven_cohort["strategies"] = {
+            k: dict(v) for k, v in signal_driven_cohort["strategies"].items()
+        }
+    if "symbols" in signal_driven_cohort:
+        signal_driven_cohort["symbols"] = list(signal_driven_cohort["symbols"])
+
     return {
         "automated_cohort": auto_stats,
-        "signal_driven_cohort": copy.deepcopy(auto_stats),
+        "signal_driven_cohort": signal_driven_cohort,
         "manual_cohort": manual_stats,
         "unrecorded_cohort": unrecorded_stats,
         "contrastive_insights": contrastive_insights,
