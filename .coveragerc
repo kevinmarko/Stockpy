@@ -1,5 +1,26 @@
 [run]
 source = .
+# Branch coverage stays ON.
+#
+# Turning it off was measured as a real speedup (on a 743-test subset, CPU went
+# 19.73s -> 17.93s statement-only, and 13.47s with COVERAGE_CORE=sysmon on top),
+# but it BREAKS the JSON report in this repo: coverage's own
+# jsonreport.report_one_file -> PythonFileReporter.code_regions() raises a
+# SyntaxError mid-report, pytest aborts with INTERNALERROR, and no coverage.json
+# is written at all -- so fail_under below is never evaluated either.
+#
+# Reproduced on the full offline suite, twice each, same machine, `-p
+# no:randomly` so ordering is fixed:
+#     branch = True,  default core  -> 0 INTERNALERROR, coverage.json written
+#     branch = True,  sysmon        -> 0 INTERNALERROR, coverage.json written
+#     branch = False, default core  -> 59 INTERNALERROR, no coverage.json
+#     branch = False, sysmon        -> INTERNALERROR,    no coverage.json
+#
+# No file in the repo reproduces it in isolation (code_regions() was run over
+# every tracked .py: 0 failures), so the offending source is generated during
+# the run -- consistent with the reported `File "<unknown>", line 11`. Don't
+# flip this without re-running the full suite and confirming coverage.json is
+# actually produced.
 branch = True
 omit =
     tests/*

@@ -33,6 +33,23 @@ import ml.forecast_backfill as forecast_backfill
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
 
+# Heavy, genuinely CPU-bound: real model fits over synthetic panels. Measured
+# 183.87s wall for 130.81s of CPU across 60 tests -- unlike the GDELT limiter
+# file fixed in #1048, there is no sleep to remove here, it is real work.
+#
+# Four of these were in CI's offline-suite top-10 slowest, so moving them to
+# the `slow` job (which runs on every PR in parallel, and finished in 49s)
+# takes them off the critical path rather than skipping them.
+#
+# Coverage impact was measured, not assumed, and then re-measured end to end.
+# Worst case looked like 0.69 percentage points (this file covers 467
+# statements of ml/forecast_backfill.py against a 67,390-statement scope). The
+# ACTUAL cost on a full offline run is 0.01 points -- 77.52% -> 77.51% --
+# because tests/test_forecast_backfill_job.py and
+# tests/test_train_meta_labelers.py already cover most of the same code.
+# .coveragerc's fail_under is 58, so this is not close to the floor.
+pytestmark = pytest.mark.slow
+
 _KILL_SCRIPT = Path(__file__).parent / "fixtures" / "forecast_backfill_partial_export_kill_script.py"
 
 

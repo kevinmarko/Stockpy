@@ -166,6 +166,13 @@ jobs:
           # -m "not network and not slow": network tests need live upstreams
           # (see nightly.yml); slow tests run in the parallel `test-slow` job
           # below instead of serially in this one.
+          # coverage.py's sys.monitoring backend (PEP 669, Python 3.12+).
+          # Measured ~-5% CPU on a 743-test subset and produces byte-identical
+          # coverage (77.52% either way on a full offline run), so it is a free
+          # win rather than a trade-off. The larger lever -- statement-only
+          # coverage -- was measured, found to crash the JSON report, and
+          # rejected; see .coveragerc's `branch` comment for that evidence.
+          export COVERAGE_CORE=sysmon
           python -m pytest -m "not network and not slow" -v --tb=short \
             --cov --cov-report=json \
             -n auto --dist loadgroup --timeout=180 --timeout-method=thread
