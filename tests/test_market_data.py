@@ -2551,6 +2551,91 @@ class TestCompositeProviderGetQuotesBatch:
         assert set(result.keys()) == {"AAPL", "MSFT"}
         assert all(q.source == "fmp" for q in result.values())
 
+    def test_symbol_missing_from_fmp_batch_response_falls_back_to_yfinance(self):
+        """Regression: FMP's /batch-quote response can silently omit one
+        symbol's row (a coverage gap, e.g. a thinly-covered small-cap/BDC
+        ticker) even though the overall request succeeded and every other
+        symbol resolved fine. Before this fix, that one symbol was simply
+        dropped from the batch result with no fallback attempted -- unlike
+        get_latest_quote's own Alpaca/yfinance chain -- so a Quick Trade
+        lookup for that symbol alone reported "no live quote available" even
+        though yfinance could resolve it."""
+        from data.market_data import (
+            CompositeProvider, FMPProvider, MarketDataError, YFinanceProvider,
+        )
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="test-key", FMP_QUOTES_ENABLED=True,
+        ):
+            cp = CompositeProvider()
+
+        # FMP's batch response resolves MSFT but omits CGBD entirely (no
+        # exception, no error -- just a row missing from the payload).
+        def _fake_fmp_batch(symbols):
+            return {s: _make_fake_quote(s, "fmp") for s in symbols if s != "CGBD"}
+
+        yf_quote = _make_fake_quote("CGBD", "yfinance")
+        with patch.object(FMPProvider, "get_quotes_batch", side_effect=_fake_fmp_batch), \
+             patch.object(FMPProvider, "get_latest_quote", side_effect=MarketDataError("not covered")), \
+             patch.object(YFinanceProvider, "get_latest_quote", return_value=yf_quote):
+            result = cp.get_quotes_batch(["MSFT", "CGBD"])
+
+        assert set(result.keys()) == {"MSFT", "CGBD"}
+        assert result["MSFT"].source == "fmp"
+        assert result["CGBD"] is yf_quote
+        assert result["CGBD"].source == "yfinance"
+
+    def test_symbol_still_unresolvable_after_fallback_is_dead_lettered_not_raised(self):
+        """A symbol no provider in the chain can resolve stays absent from
+        the result -- never raises -- exactly like a total FMP batch
+        failure already does (CONSTRAINT #6)."""
+        from data.market_data import (
+            CompositeProvider, FMPProvider, MarketDataError, YFinanceProvider,
+        )
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="test-key", FMP_QUOTES_ENABLED=True,
+        ):
+            cp = CompositeProvider()
+
+        with patch.object(FMPProvider, "get_quotes_batch", return_value={}), \
+             patch.object(FMPProvider, "get_latest_quote", side_effect=MarketDataError("nope")), \
+             patch.object(YFinanceProvider, "get_latest_quote", side_effect=MarketDataError("nope either")):
+            result = cp.get_quotes_batch(["BADSYM"])
+
+        assert result == {}
+
+    def test_fallback_disabled_never_reaches_alpaca_or_yfinance(self):
+        """FMP_FALLBACK_ENABLED=False mirrors get_latest_quote's own
+        documented contract exactly: a still-missing symbol is still retried
+        against FMP's own single /quote endpoint (the chain is [FMPProvider]
+        alone, not skipped entirely -- ``_get_quote_via_fmp_chain``'s
+        existing, unchanged behavior), but the Alpaca/yfinance tail is never
+        appended, so a symbol FMP can't resolve either way stays absent
+        rather than silently falling through to a non-FMP source."""
+        from data.market_data import (
+            CompositeProvider, FMPProvider, MarketDataError, YFinanceProvider,
+        )
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="test-key", FMP_QUOTES_ENABLED=True,
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+
+        def _fake_fmp_batch(symbols):
+            return {s: _make_fake_quote(s, "fmp") for s in symbols if s != "CGBD"}
+
+        with patch.object(FMPProvider, "get_quotes_batch", side_effect=_fake_fmp_batch), \
+             patch.object(FMPProvider, "get_latest_quote", side_effect=MarketDataError("not covered")), \
+             patch.object(
+                 YFinanceProvider, "get_latest_quote",
+                 side_effect=AssertionError("must not reach yfinance when fallback is disabled"),
+             ):
+            result = cp.get_quotes_batch(["MSFT", "CGBD"])
+
+        assert set(result.keys()) == {"MSFT"}
+
     def test_empty_input_returns_empty_dict(self):
         from data.market_data import CompositeProvider
 

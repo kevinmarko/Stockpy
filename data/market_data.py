@@ -2195,6 +2195,25 @@ class CompositeProvider(MarketDataProvider):
         instrumenting a bulk fetch with N synthetic per-symbol latency
         samples would misrepresent what was actually N/batch_size real
         network calls, not N real ones.
+
+        Per-symbol fallback for a still-missing FMP result (fixed 2026-09):
+        ``FMPProvider.get_quotes_batch``'s own dead-letter contract drops a
+        symbol from its response both when the WHOLE request fails
+        (network error, cooldown open -- see ``docs/module_efficiency_
+        redundancy_audit.md``'s deliberate "don't retry N individual FMP
+        calls" rationale for THAT case) and, independently, when FMP's
+        ``/batch-quote`` response simply omits one row for a symbol its
+        ``/quote`` endpoint (or a fallback provider) can still resolve --
+        e.g. a thinly-covered small-cap/BDC ticker. ``get_latest_quote``
+        already has an Alpaca/yfinance fallback chain for exactly this
+        (``_get_quote_via_fmp_chain``); a symbol still missing after the
+        batch call is retried through that SAME chain, one symbol at a
+        time (bounded by how many symbols this call ever passes -- this
+        method's real callers are position-count/quick-trade sized, never
+        a full-universe fan-out), so the batch endpoint's own retry
+        avoidance still holds. Dead-lettered per symbol (CONSTRAINT #6): a
+        fallback failure for one symbol never blanks the rest of a
+        genuinely mixed-result batch.
         """
         if not symbols:
             return {}
@@ -2214,6 +2233,21 @@ class CompositeProvider(MarketDataProvider):
             for sym, quote in fetched.items():
                 self._cache.put(quote)
                 out[sym.upper()] = quote
+
+            if isinstance(provider, FMPProvider):
+                still_missing = [s for s in missing if s.upper() not in out]
+                for sym in still_missing:
+                    try:
+                        quote = self._get_quote_via_fmp_chain(sym)
+                    except MarketDataError as exc:
+                        logger.warning(
+                            "CompositeProvider: batch fallback chain also "
+                            "failed for %s (%s); leaving it out of the "
+                            "batch result.", sym, exc,
+                        )
+                        continue
+                    self._cache.put(quote)
+                    out[sym.upper()] = quote
 
         return out
 
