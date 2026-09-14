@@ -7,10 +7,20 @@ to disk.
 
 Design rules
 ------------
-- NEVER hand-splice YAML text.  We round-trip via PyYAML (the repo's declared
-  dependency).  Comments are lost by PyYAML's safe dumper; we mitigate this by
-  preserving key ORDER and re-emitting the leading banner comment block verbatim
-  so the file stays human-readable and self-documenting.
+- Comments MUST survive a write.  PyYAML drops them, and this file's ~37-line
+  schema-documentation header is load-bearing (it is the only place explaining,
+  e.g., why ``cpcv_mean_oos_max_dd`` is null for ``meta_labeler_*`` roles).  So
+  ``_dump_registry`` does a SURGICAL in-place splice: it re-serializes only the
+  model blocks whose values actually changed and leaves every other byte --
+  header, blank lines, key order, untouched models, any hand-added inline
+  comment -- exactly as it was on disk.  The splice is verified by re-parsing
+  before it is written; a file shaped in a way the splicer does not recognise
+  falls back to a full PyYAML dump that still re-emits the REAL on-disk header
+  (never a hardcoded copy, which is precisely how the header silently lost four
+  lines during a 2026-09-04 lgbm_ranker retrain).
+- The hardcoded ``_REGISTRY_HEADER`` below is used ONLY to bootstrap a registry
+  file that does not exist yet.  ``tests/test_registry_yaml_comment_preservation.py``
+  pins it against the real ``ml/registry.yaml`` header so it cannot drift.
 - The deployability gate is the single source of truth:
       deployable = (cpcv_dsr is not None and cpcv_dsr > 0.95
                     and pbo is not None and pbo < 0.5)
@@ -28,12 +38,16 @@ from typing import Any, Optional
 
 import yaml
 
+from yaml_comment_io import leading_comment_block as _leading_comment_block
+
 logger = logging.getLogger("ML.RegistryIO")
 
 _DEFAULT_REGISTRY_PATH = Path(__file__).parent / "registry.yaml"
 
-# The leading comment banner is not preserved by PyYAML's dumper, so we re-emit
-# it verbatim on write to keep the file self-documenting.
+# Bootstrap header for a registry file that does not exist yet.  An EXISTING
+# file's own header is always read back off disk and preserved verbatim -- this
+# constant is never used to overwrite one.  Kept in sync with ml/registry.yaml by
+# tests/test_registry_yaml_comment_preservation.py.
 _REGISTRY_HEADER = """\
 # InvestYo ML Model Registry
 # ===========================
@@ -67,7 +81,11 @@ _REGISTRY_HEADER = """\
 #                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
 #                  deployable gate)
 # cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
-#                  SAME DSR-selected strategy (never read by the deployable gate)
+#                  SAME DSR-selected strategy (never read by the deployable gate). Null for
+#                  meta_labeler_* roles: their CPCV returns are discrete per-event R-multiples
+#                  (see scripts/train_meta_labelers.py::compute_cpcv_metrics), not compoundable
+#                  fractional-of-capital returns, so a compounded-equity-curve drawdown is not a
+#                  meaningful statistic for them.
 """
 
 
@@ -334,17 +352,207 @@ def update_model_metrics(
     return entry
 
 
-def _dump_registry(data: dict, path: Path) -> None:
-    """Write the registry back to disk, re-emitting the banner comment block."""
-    body = yaml.safe_dump(
-        data,
+_DUMP_WIDTH = 100
+
+# PyYAML's ``width`` is a soft hint whose effective wrap column depends on the
+# emitter's current indent, so a block dumped standalone and then shifted right
+# by 2 does NOT wrap like the same block dumped in situ.  80 is the value that
+# empirically reproduces this registry's existing convention: at the time of
+# writing it re-serializes 8 of the 10 model blocks in ml/registry.yaml
+# byte-for-byte, and the 2 it does not are older entries whose prose was wrapped
+# at a different historical width.  A mismatch is purely cosmetic — re-flowed
+# prose inside the block being updated anyway — never a change in data.
+_BLOCK_DUMP_WIDTH = 80
+
+
+def _dump_yaml(obj: Any, *, width: int = _DUMP_WIDTH) -> str:
+    """The one canonical PyYAML serialization used everywhere in this module."""
+    return yaml.safe_dump(
+        obj,
         default_flow_style=False,
         sort_keys=False,
         allow_unicode=True,
-        width=100,
+        width=width,
     )
+
+
+def _find_models_blocks(lines: list[str]) -> Optional[tuple[int, int, list[tuple[str, int, int]]]]:
+    """Locate the ``models:`` mapping and the line span of each model entry.
+
+    Returns ``(section_start, section_end, [(key, start, end), ...])`` where the
+    spans are half-open indices into ``lines``, or ``None`` if the file is not
+    shaped the way this splicer understands.
+    """
+    models_line = None
+    for i, line in enumerate(lines):
+        if line.rstrip("\n").rstrip() == "models:":
+            models_line = i
+            break
+    if models_line is None:
+        return None
+
+    # The models mapping runs until the next line at indent 0 that is neither
+    # blank nor a comment.
+    section_end = len(lines)
+    for j in range(models_line + 1, len(lines)):
+        stripped = lines[j].strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not lines[j].startswith(" "):
+            section_end = j
+            break
+
+    entries: list[tuple[str, int, int]] = []
+    starts: list[tuple[str, int]] = []
+    for j in range(models_line + 1, section_end):
+        line = lines[j]
+        if not line.startswith("  ") or line.startswith("   "):
+            continue
+        body = line[2:]
+        if body.startswith("#") or not body.strip():
+            continue
+        key, sep, _ = body.partition(":")
+        if not sep or not key.strip() or key.strip() != key.rstrip():
+            continue
+        starts.append((key.strip(), j))
+
+    if not starts:
+        return None
+    for idx, (key, start) in enumerate(starts):
+        end = starts[idx + 1][1] if idx + 1 < len(starts) else section_end
+        entries.append((key, start, end))
+    return models_line, section_end, entries
+
+
+def _serialize_model_block(key: str, spec: Any) -> str:
+    """Serialize one ``models.<key>`` entry as an indent-2 YAML block."""
+    dumped = _dump_yaml({key: spec}, width=_BLOCK_DUMP_WIDTH)
+    return "".join(
+        ("  " + ln) if ln.strip() else ln for ln in dumped.splitlines(keepends=True)
+    )
+
+
+def _splice_registry_text(text: str, data: dict) -> Optional[str]:
+    """Surgically apply ``data`` onto ``text``, preserving every other byte.
+
+    Only the model blocks whose parsed values actually differ are re-serialized;
+    the header, blank lines, key ordering, untouched models and any hand-added
+    inline comments are carried through verbatim.
+
+    Returns ``None`` (never a partially-applied result) whenever the file's
+    shape, or the nature of the change, is outside what this splicer can apply
+    safely — the caller then falls back to a full dump.  The result is always
+    re-parsed and compared against ``data`` before being returned, so a splice
+    that would have changed meaning is rejected rather than written.
+    """
+    try:
+        current = yaml.safe_load(text)
+    except Exception:
+        return None
+    if not isinstance(current, dict) or not isinstance(data, dict):
+        return None
+
+    # Anything outside `models` changing is out of scope for a splice.
+    if set(current.keys()) != set(data.keys()):
+        return None
+    for key in data:
+        if key != "models" and current[key] != data[key]:
+            return None
+
+    old_models, new_models = current.get("models"), data.get("models")
+    if not isinstance(old_models, dict) or not isinstance(new_models, dict):
+        return None
+    # A removed model would need us to delete text; stay conservative.
+    if not set(old_models).issubset(set(new_models)):
+        return None
+    if old_models == new_models:
+        return text  # nothing to change — keep the file byte-identical
+
+    lines = text.splitlines(keepends=True)
+    located = _find_models_blocks(lines)
+    if located is None:
+        return None
+    _, section_end, entries = located
+    if {key for key, _, _ in entries} != set(old_models):
+        return None  # duplicate/unparsed keys — do not guess
+
+    out: list[str] = list(lines[: entries[0][1]])
+    for key, start, end in entries:
+        if old_models[key] == new_models[key]:
+            out.extend(lines[start:end])
+            continue
+        block = _serialize_model_block(key, new_models[key])
+        # Blank lines and comments trailing this entry belong to whatever comes
+        # next (a hand-written note above the following model, a separator).
+        # Carry them across verbatim rather than letting the re-serialization
+        # swallow them.  Comments sitting INSIDE a changed block are the one
+        # thing a splice cannot keep — that is the minimal, documented blast
+        # radius of updating a model's values.
+        trailing = []
+        idx = end - 1
+        while idx >= start and (
+            lines[idx].strip() == "" or lines[idx].lstrip().startswith("#")
+        ):
+            trailing.insert(0, lines[idx])
+            idx -= 1
+        out.append(block)
+        out.extend(trailing)
+
+    for key in new_models:
+        if key not in old_models:
+            out.append(_serialize_model_block(key, new_models[key]))
+
+    out.extend(lines[section_end:])
+    spliced = "".join(out)
+    if not spliced.endswith("\n"):
+        spliced += "\n"
+
+    # Verify before trusting: a splice that does not round-trip to exactly the
+    # intended state is rejected outright (CONSTRAINT #6 — fail closed).
+    try:
+        if yaml.safe_load(spliced) != data:
+            return None
+    except Exception:
+        return None
+    return spliced
+
+
+def _dump_registry(data: dict, path: Path) -> None:
+    """Write the registry back to disk without eroding its documentation.
+
+    Preferred path is a surgical in-place splice (see
+    :func:`_splice_registry_text`).  If the file does not exist yet, or is
+    shaped in a way the splicer declines to touch, we fall back to a full
+    PyYAML dump — re-emitting the REAL on-disk header when there is one, and the
+    bootstrap constant only for a brand-new file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: Optional[str] = None
+    if path.exists():
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Could not read existing registry at %s: %s", path, exc)
+
+    if existing:
+        spliced = _splice_registry_text(existing, data)
+        if spliced is not None:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(spliced)
+            return
+        logger.warning(
+            "Registry at %s could not be updated surgically; falling back to a full "
+            "YAML dump (its leading comment header is preserved, any inline comments "
+            "inside the body are not).",
+            path,
+        )
+
+    header = _leading_comment_block(existing) if existing else None
+    if header is None:
+        header = _REGISTRY_HEADER
+
     with open(path, "w", encoding="utf-8") as f:
-        f.write(_REGISTRY_HEADER)
+        f.write(header)
         f.write("\n")
-        f.write(body)
+        f.write(_dump_yaml(data))
