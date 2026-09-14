@@ -581,6 +581,20 @@ _repo_common_dir() {  # $1 = a directory
     git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
 }
 
+# Prints the absolute root of the WORKING TREE a path belongs to, or nothing.
+# Unlike --git-common-dir (which is deliberately shared across every worktree of
+# a repo, and is what decides ownership above), --show-toplevel is distinct per
+# worktree — so the two together tell us "same repo?" and "same checkout?".
+#
+# A plain "$SCRIPT_DIR" prefix test cannot answer the second question here: this
+# repo's own worktrees live UNDER the main checkout at .claude/worktrees/<name>,
+# so every sibling worktree is literally prefixed by the main checkout's path
+# and would be misreported as "a previous run of this project".
+_repo_toplevel() {  # $1 = a directory
+    [ -n "$1" ] && [ -d "$1" ] || return 1
+    git -C "$1" rev-parse --show-toplevel 2>/dev/null
+}
+
 # Vite runs with --strictPort (a silent port bump would break CORS against the
 # backends, which are pinned to :5173 — see settings.CORS_ALLOWED_ORIGINS), so
 # unlike the APIs above we can't just "reuse" a live server without risking a
@@ -589,7 +603,7 @@ _repo_common_dir() {  # $1 = a directory
 # for anything genuinely foreign, fail with a clear, actionable message
 # instead of Vite's raw EADDRINUSE stack trace.
 _check_vite_port() {
-    local port=5173 pid cmd vite_cwd this_repo that_repo
+    local port=5173 pid cmd vite_cwd this_repo that_repo this_top that_top
     pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
     [ -z "$pid" ] && return 0
 
@@ -616,15 +630,17 @@ _check_vite_port() {
     that_repo="$(_repo_common_dir "$vite_cwd")"
 
     if [[ "$cmd" == *"vite"* ]] && [ -n "$this_repo" ] && [ "$this_repo" = "$that_repo" ]; then
-        if [ "${vite_cwd#"$SCRIPT_DIR"}" != "$vite_cwd" ]; then
+        this_top="$(_repo_toplevel "$SCRIPT_DIR")"
+        that_top="$(_repo_toplevel "$vite_cwd")"
+        if [ -n "$this_top" ] && [ "$this_top" = "$that_top" ]; then
             echo "  ⚠  Port $port was held by a leftover Vite server from a previous run"
-            echo "     of this project (PID $pid) — stopping it and continuing…"
+            echo "     of this checkout (PID $pid):"
         else
             echo "  ⚠  Port $port was held by a leftover Vite server from another"
             echo "     worktree of this same repository (PID $pid):"
-            echo "       ${vite_cwd:-<unknown cwd>}"
-            echo "     That's our own disposable dev server — stopping it and continuing…"
         fi
+        echo "       ${vite_cwd:-<unknown cwd>}"
+        echo "     That's our own disposable dev server — stopping it and continuing…"
         kill "$pid" 2>/dev/null
         for _ in $(seq 1 10); do
             lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1 || break

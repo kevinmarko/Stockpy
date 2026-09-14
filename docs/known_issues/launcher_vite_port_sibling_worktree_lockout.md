@@ -114,6 +114,39 @@ Two changes, both in `launch_webapp.command`:
   This is a manual verification: it is deliberately NOT in the pytest suite, because binding a
   fixed port and killing processes would be flaky under parallel CI runs.
 
+## Follow-up (same day): the message named the wrong culprit
+
+Found by running the merged launcher end-to-end from the **main checkout**, which the first
+round's verification had not done (it set `SCRIPT_DIR` to a worktree). Ownership — the kill /
+don't-kill decision, i.e. the actual bug — was correct in every case. The *message* was not.
+
+The branch choosing between "a previous run of this project" and "another worktree" used a plain
+path-prefix test, `[ "${vite_cwd#"$SCRIPT_DIR"}" != "$vite_cwd" ]`. But this repo's worktrees live
+**underneath** the main checkout:
+
+```
+SCRIPT_DIR : /Users/kevinlee/Stockpy-live
+sibling    : /Users/kevinlee/Stockpy-live/.claude/worktrees/<name>
+```
+
+so every sibling worktree *is* prefixed by the main checkout's path and was reported as "a previous
+run of this project" — in exactly the configuration the incident happens in. Worse, that arm
+printed no cwd, so the operator lost the one detail that made the original failure traceable: which
+worktree the server actually belonged to.
+
+Fixed with a second helper, `_repo_toplevel` (`git rev-parse --show-toplevel`), which is distinct
+per worktree where `--git-common-dir` is deliberately shared. The two together answer the two
+different questions — `--git-common-dir` "same repository?" (ownership, unchanged) and
+`--show-toplevel` "same checkout?" (wording only). The cwd is now echoed after the `fi`, so both
+arms report it.
+
+Verified the same way: a sibling worktree's server now reports "another worktree of this same
+repository" with its path, and a real previous run of the main checkout reports "a previous run of
+this checkout" with its path. `TestNestedWorktreeIsNotMisreportedAsThisCheckout` pins it — all 5 of
+its tests fail against the pre-fix launcher, including a positional assertion that the cwd echo
+sits outside the if/else (a plain occurrence count does not catch this: the old code contained the
+same echo exactly once, buried in one arm).
+
 ## Deliberately not changed
 
 `_sweep_stray_ports` (the `--stop` path, and the source of the
