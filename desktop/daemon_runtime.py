@@ -1009,11 +1009,24 @@ class OrchestratorDaemon:
             try:
                 from data.paper_account_store import PaperAccountStore
 
-                equity_now = float(PaperAccountStore(readonly=True).get_account().equity)
+                _lv_store = PaperAccountStore(readonly=True)
+                equity_now = float(_lv_store.get_account().equity)
                 now_ts = time.time()
-                self._circuit_breaker_equity_history.append((now_ts, equity_now))
+                _unpriced = list(getattr(_lv_store, "last_unpriced_symbols", []) or [])
+                if _unpriced:
+                    # Some position fell back to its cost-basis placeholder
+                    # this tick (no live quote/chain mark). Recording that
+                    # equity would inject a fake jump (unrealized P&L
+                    # vanishing, then reappearing next tick) into the
+                    # loss-velocity series -- skip the sample instead.
+                    logger.warning(
+                        "maybe_update_circuit_breaker: skipping loss-velocity sample; "
+                        "no live mark for %s.", _unpriced,
+                    )
+                else:
+                    self._circuit_breaker_equity_history.append((now_ts, equity_now))
 
-                if len(self._circuit_breaker_equity_history) >= 2:
+                if not _unpriced and len(self._circuit_breaker_equity_history) >= 2:
                     earliest_ts, earliest_equity = self._circuit_breaker_equity_history[0]
                     elapsed_seconds = now_ts - earliest_ts
                     # Require >= 60s of real elapsed time so the rate isn't

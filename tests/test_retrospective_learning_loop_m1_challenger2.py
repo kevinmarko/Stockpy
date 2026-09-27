@@ -31,6 +31,20 @@ import evaluation_engine
 import pilots.calibration as pilots_cal
 
 
+@pytest.fixture(autouse=True)
+def _bridge_all_equity_strategies(monkeypatch):
+    """This file tests the bridge's MECHANICS (fail-open, SAVEPOINTs,
+    completeness metrics) with generic/default strategy_ids such as
+    'untagged'. Eligibility filtering (manual/hedge/untagged/options are
+    never fed to the models) is covered by
+    tests/test_paper_marking_and_model_feed.py, so empty the strategy
+    exclusion list here."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES", [])
+
+
+
 @pytest.fixture
 def isolated_db(tmp_path):
     """Provides a fresh SQLite file-backed DB URL for complete test isolation."""
@@ -383,7 +397,9 @@ def test_completeness_metrics_mixed_states_and_error_truncation(isolated_db, mon
     assert m["last_failure"]["symbol"] == "MFAIL"
 
 
-def test_completeness_metrics_readonly_uninitialized(isolated_db):
+def test_completeness_metrics_readonly_uninitialized(isolated_db, monkeypatch):
+    # "100% of nothing" is the bridge-DISABLED convention; pin it off.
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False)
     """Readonly store against empty/uninitialized database returns graceful defaults."""
     store = PaperAccountStore(db_url=isolated_db, readonly=True)
     m = store.get_bridge_completeness_metrics()

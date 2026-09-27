@@ -50,7 +50,7 @@
     - `bridge_error` (TEXT, nullable): Error message captured on bridge failure, truncated to 500 characters.
     - `bridged_at` (VARCHAR(32), nullable): ISO 8601 UTC timestamp of bridge execution.
   - **Fail-Open Bridge Telemetry & Conviction Forwarding**:
-    - During `_record_closed_trade()`, if `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` is `True`, the trade bridges to `TransactionsStore.record_trade()`. The opening conviction is looked up from `paper_entry_snapshots` and forwarded along with normalized side (`"long"` if long else `"short"`), enabling empirical win-rate calibration in `evaluation_engine.py::calibration_curve()`.
+    - During `_record_closed_trade()`, if `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` is `True` (the default since 2026-09) and the trade is eligible (an equity trade whose `strategy_id` is not in `PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES`; otherwise it is recorded as `bridge_status="excluded"` — see `docs/architecture/execution.md`'s `data/paper_account_store.py` entry), the trade bridges to `TransactionsStore.record_trade()`. The opening conviction is looked up from `paper_entry_snapshots` and forwarded along with normalized side (`"long"` if long else `"short"`), enabling empirical win-rate calibration in `evaluation_engine.py::calibration_curve()`.
     - Bridge operations execute inside a nested SAVEPOINT (`with session.begin_nested():`). If the bridge throws an exception, the savepoint rolls back and marks `bridge_status = "failed"` with `bridge_error`, while position closure, cash updates, and realized PnL accounting commit successfully (fails open, zero impact on execution).
     - If bridging is disabled in settings, `bridge_status` is recorded as `"disabled"`.
   - **Queryable Completeness Metrics**:

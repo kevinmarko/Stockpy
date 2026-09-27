@@ -240,7 +240,7 @@ def test_get_account_and_positions_reflect_a_real_fill(tmp_path):
     with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
         asyncio.run(broker.submit_order(_intent()))
 
-    with patch("data.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={'AAPL': 150.0}):
         positions = asyncio.run(broker.get_open_positions())
         account = asyncio.run(broker.get_account())
 

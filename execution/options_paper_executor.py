@@ -656,6 +656,20 @@ class OptionsPaperExecutor:
             # Spot price lookup
             spot = spot_map.get(ticker.upper()) if spot_map else None
 
+            # Without a caller-supplied spot, legs are marked from the store's
+            # live marks. If any leg's mark is a cost-basis placeholder (no
+            # real quote/chain data), there is no real price to evaluate P&L
+            # against or to close at -- skip the group rather than act on a
+            # fabricated zero-P&L mark.
+            if (spot is None or spot <= 0) and any(
+                getattr(pos, "mark_is_estimated", False) for pos, _ in group
+            ):
+                logger.warning(
+                    "OptionsPaperExecutor: skipping exit evaluation for %s %s -- "
+                    "no live mark for at least one leg.", ticker, exp_str,
+                )
+                continue
+
             # Calculate mark price, P&L, entry cash for each leg in group
             total_entry_debit = 0.0
             total_entry_credit = 0.0

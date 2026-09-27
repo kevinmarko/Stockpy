@@ -280,15 +280,38 @@ class Settings(BaseSettings):
         description="Automatically execute valid options strategy directives into the paper broker every cycle.",
     )
     PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Bridge each PaperAccountStore closed trade into the real transactions_store "
-            "'trades' ledger (via record_trade+close_trade), so sizing.kelly and "
-            "evaluation_engine's MAE/MFE/calibration warm up on simulated paper fills. "
-            "Defaults False: 'trades' has no paper/live discriminator column, and it feeds "
-            "strategy_engine.py, main_orchestrator.py, pilots/mirror.py, and MCP reporting "
-            "tools -- mixing simulated PnL into that ledger by default would be a silent "
-            "data-integrity change to what those consumers report as real performance."
+            "Bridge each eligible PaperAccountStore closed trade into the transactions_store "
+            "'trades' ledger (via record_trade+close_trade), so sizing.kelly's win-rate/payoff "
+            "estimate and evaluation_engine's MAE/MFE/calibration learn from paper fills. "
+            "Defaults True (operator decision, 2026-09): paper trading is the platform's "
+            "primary execution venue, so its realized outcomes are the only closed-trade "
+            "history the models can learn from. Only signal-driven EQUITY trades are bridged: "
+            "option contracts and any strategy_id in PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES "
+            "(manual clicks, delta hedges, untagged legacy inventory) are recorded with "
+            "bridge_status='excluded' and never reach the ledger, because strategy_engine's "
+            "aggregate Kelly path reads that ledger unfiltered. Note: 'trades' has no "
+            "paper/live discriminator column -- bridged rows are identifiable only by their "
+            "notes ('Paper bridge, ...'). Set False to stop feeding paper outcomes to the models."
+        ),
+    )
+    PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES: list[str] = Field(
+        default_factory=lambda: ["Manual Trade", "Delta Hedge", "untagged"],
+        description=(
+            "Paper-trade strategy_ids never bridged into the transactions_store 'trades' "
+            "ledger (case-insensitive). Defaults to the non-signal buckets: discretionary "
+            "Quick Trade/order-ticket clicks ('Manual Trade'), SPY delta-hedge legs "
+            "('Delta Hedge'), and legacy unattributed inventory ('untagged'). JSON array in .env."
+        ),
+    )
+    PAPER_OPTION_MARK_CACHE_SECONDS: float = Field(
+        default=60.0,
+        description=(
+            "TTL (seconds) of the in-process option-chain cache PaperAccountStore uses to mark "
+            "paper option positions from real chain data (bid/ask mid, else Black-Scholes on the "
+            "contract's live IV). Bounds chain downloads for high-frequency readers such as the "
+            "1 Hz /ws/risk/portfolio stream and the daemon's per-tick equity sample."
         ),
     )
     MAX_OPTION_NOTIONAL_PER_TRADE: float = Field(

@@ -2210,8 +2210,10 @@ class CompositeProvider(MarketDataProvider):
         batch call is retried through that SAME chain, one symbol at a
         time (bounded by how many symbols this call ever passes -- this
         method's real callers are position-count/quick-trade sized, never
-        a full-universe fan-out), so the batch endpoint's own retry
-        avoidance still holds. Dead-lettered per symbol (CONSTRAINT #6): a
+        a full-universe fan-out). When the WHOLE batch came back empty the
+        retry skips FMP and starts at the Alpaca/yfinance tail, so a total
+        FMP failure never turns into N extra single-symbol FMP requests;
+        FMP's /quote is only retried for rows a successful batch omitted. Dead-lettered per symbol (CONSTRAINT #6): a
         fallback failure for one symbol never blanks the rest of a
         genuinely mixed-result batch.
         """
@@ -2236,9 +2238,15 @@ class CompositeProvider(MarketDataProvider):
 
             if isinstance(provider, FMPProvider):
                 still_missing = [s for s in missing if s.upper() not in out]
+                # A partial batch (FMP answered but omitted a row) may still
+                # resolve via FMP's single-symbol /quote, so keep FMP in the
+                # chain. A WHOLE-batch failure (nothing fetched) means FMP is
+                # down or rate-limiting: go straight to Alpaca/yfinance
+                # instead of issuing N more FMP requests.
+                include_fmp = bool(fetched)
                 for sym in still_missing:
                     try:
-                        quote = self._get_quote_via_fmp_chain(sym)
+                        quote = self._get_quote_via_fmp_chain(sym, include_primary=include_fmp)
                     except MarketDataError as exc:
                         logger.warning(
                             "CompositeProvider: batch fallback chain also "
@@ -2339,7 +2347,7 @@ class CompositeProvider(MarketDataProvider):
         tail.append(YFinanceProvider())
         return tail
 
-    def _get_quote_via_fmp_chain(self, sym: str) -> Quote:
+    def _get_quote_via_fmp_chain(self, sym: str, *, include_primary: bool = True) -> Quote:
         """Ordered-chain quote fetch used ONLY when ``self._quote_provider``
         is an ``FMPProvider`` (i.e. ``MARKET_DATA_PROVIDER=fmp``).
 
@@ -2358,7 +2366,11 @@ class CompositeProvider(MarketDataProvider):
         provider, the symbol, and the exception — never DEBUG/INFO — so a
         silent fallback can never masquerade as success.
         """
-        chain: List[MarketDataProvider] = [self._quote_provider]
+        # include_primary=False skips FMP itself and goes straight to the
+        # fallback tail -- used by get_quotes_batch after a WHOLE-batch FMP
+        # failure, where re-hitting FMP's /quote once per symbol would add N
+        # requests to an already failing/rate-limited host.
+        chain: List[MarketDataProvider] = [self._quote_provider] if include_primary else []
         chain.extend(self._build_fmp_fallback_tail())
 
         last_exc: Optional[BaseException] = None

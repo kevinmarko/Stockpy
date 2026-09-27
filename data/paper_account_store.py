@@ -20,7 +20,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import resolve_database_url, create_db_engine, session_scope
 from settings import settings
-from data import fmp_client
 from execution.broker_base import AccountSnapshot, PositionSnapshot, OrderResult, OrderStatus
 
 logger = logging.getLogger(__name__)
@@ -29,6 +28,151 @@ logger = logging.getLogger(__name__)
 # (e.g. 1e-13 rather than exactly 0.0) -- see CLAUDE.md's "Degenerate-std
 # guard convention": never compare a computed float to 0 with ==.
 _QTY_EPSILON = 1e-9
+
+# Option-contract multiplier: paper option prices (avg_entry_price, marks,
+# fills) are stored per CONTRACT, i.e. per-share premium x 100.
+_OPTION_MULTIPLIER = 100.0
+
+
+def _is_option_symbol(sym: str) -> bool:
+    return " " in sym and "$" in sym
+
+
+def _fetch_stock_prices(symbols: List[str]) -> Dict[str, float]:
+    """Live spot prices for ``symbols`` -- the single stock-quote seam for
+    paper-position marking.
+
+    Routes through ``pilots.price_provider.get_latest_prices`` ->
+    ``CompositeProvider.get_quotes_batch``: one ``/batch-quote`` request for
+    every cache miss, the in-process quote TTL cache, and the FMP -> Alpaca
+    -> yfinance fallback chain. A symbol with no real, positive, finite
+    quote is ABSENT from the result (never a fabricated 0.0). Never raises.
+    """
+    if not symbols:
+        return {}
+    try:
+        from pilots.price_provider import get_latest_prices
+
+        return get_latest_prices(list(symbols))
+    except Exception as exc:  # noqa: BLE001 -- never let a quote hiccup crash marking
+        logger.warning("paper marking: stock quote fetch failed for %s: %s", symbols, exc)
+        return {}
+
+
+_OPTION_CHAIN_CACHE: Dict[tuple, tuple] = {}
+_OPTION_CHAIN_CACHE_LOCK = __import__("threading").Lock()
+
+
+def _fetch_option_chain(underlying: str, expiration: str) -> Any:
+    """The option-chain seam for paper-position marking, with an in-process
+    TTL cache (``settings.PAPER_OPTION_MARK_CACHE_SECONDS``) so a 1 Hz risk
+    stream or a per-tick daemon equity sample doesn't re-download the same
+    chain every call. Failures (``None``) are cached too, for the same TTL,
+    so an unavailable chain isn't retried on every tick. Never raises.
+    """
+    import time
+
+    key = (underlying.upper(), expiration)
+    ttl = float(getattr(settings, "PAPER_OPTION_MARK_CACHE_SECONDS", 60.0) or 0.0)
+    now = time.monotonic()
+    with _OPTION_CHAIN_CACHE_LOCK:
+        hit = _OPTION_CHAIN_CACHE.get(key)
+        if hit is not None and (now - hit[0]) < ttl:
+            return hit[1]
+    chain = None
+    try:
+        from data.market_data import get_options_provider
+
+        chain = get_options_provider().fetch_options_chain(underlying.upper(), expiration)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("paper marking: option chain fetch failed for %s %s: %s", underlying, expiration, exc)
+        chain = None
+    with _OPTION_CHAIN_CACHE_LOCK:
+        _OPTION_CHAIN_CACHE[key] = (now, chain)
+    return chain
+
+
+def _positive_finite(value: Any) -> Optional[float]:
+    import math
+
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if (math.isfinite(v) and v > 0.0) else None
+
+
+def _option_mark_per_share(
+    underlying: str,
+    exp_str: str,
+    strike: float,
+    opt_type: str,
+    spot: Optional[float],
+    now: datetime,
+) -> Optional[float]:
+    """Real per-SHARE mark for one option contract, or ``None`` when no real
+    data supports one (the caller then falls back to cost basis and flags the
+    position as unpriced -- never a fabricated model price).
+
+    Order of preference:
+      1. Expired contract -> intrinsic value from the live spot (it will be
+         cash-settled at exactly that by ``settle_expired_options``).
+      2. Live chain bid/ask midpoint.
+      3. Black-Scholes using the contract's own live chain implied
+         volatility and ``settings.OPTIONS_RISK_FREE_RATE``.
+      4. Chain last trade price.
+    """
+    try:
+        exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+    except Exception:
+        return None
+    is_call = opt_type.lower().startswith("c")
+
+    if exp_date < now.date():
+        if spot is None:
+            return None
+        return max(0.0, spot - strike) if is_call else max(0.0, strike - spot)
+
+    chain = _fetch_option_chain(underlying, exp_str)
+    table = getattr(chain, "calls" if is_call else "puts", None) if chain is not None else None
+    row = None
+    try:
+        if table is not None and len(table) > 0 and "strike" in table.columns:
+            matches = table[(table["strike"].astype(float) - float(strike)).abs() < 1e-6]
+            if len(matches) > 0:
+                row = matches.iloc[0]
+    except Exception:  # noqa: BLE001
+        row = None
+    if row is None:
+        return None
+
+    bid = _positive_finite(row.get("bid"))
+    ask = _positive_finite(row.get("ask"))
+    if bid is not None and ask is not None and ask >= bid:
+        return (bid + ask) / 2.0
+
+    iv = _positive_finite(row.get("impliedVolatility"))
+    if iv is not None and spot is not None:
+        try:
+            from pilots.options_risk import calculate_black_scholes_greeks
+
+            expiry_dt = datetime.combine(exp_date, datetime.min.time()).replace(
+                hour=20, tzinfo=timezone.utc  # 16:00 ET close, approx.
+            )
+            now_utc = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+            t_years = max(0.0, (expiry_dt - now_utc).total_seconds()) / (365.0 * 86400.0)
+            bs = calculate_black_scholes_greeks(
+                spot=spot, strike=float(strike), t_years=t_years, sigma=iv,
+                option_type="call" if is_call else "put",
+                r=float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045)),
+            )
+            price = _positive_finite(bs.get("price"))
+            if price is not None:
+                return price
+        except Exception:  # noqa: BLE001
+            pass
+
+    return _positive_finite(row.get("lastPrice"))
 
 Base = declarative_base()
 
@@ -204,6 +348,9 @@ class PaperAccountStore:
         # closed. Incremented once per failed per-trade bridge attempt;
         # inspectable by callers/tests as store._transactions_bridge_failures.
         self._transactions_bridge_failures = 0
+        # Symbols whose last mark fell back to cost basis because no real
+        # quote/chain data was available (see _resolve_position_prices).
+        self.last_unpriced_symbols: List[str] = []
 
         if not readonly:
             self._ensure_account_exists()
@@ -525,83 +672,96 @@ class PaperAccountStore:
                 "qty/avg_entry_price) before retrying."
             ) from exc
 
-    def _resolve_position_prices(self, positions: List[PaperPosition]) -> Dict[str, float]:
+    def _resolve_position_prices(self, positions: List[Any]) -> Dict[str, float]:
+        """Resolve current mark prices for stock and option positions.
+
+        ``positions`` may be ORM rows or any objects exposing ``symbol`` and
+        ``avg_entry_price``. Stocks are marked from a real live quote
+        (``_fetch_stock_prices``); options from real chain data
+        (``_option_mark_per_share``: intrinsic if expired, else bid/ask mid,
+        else Black-Scholes on the contract's own live IV, else last trade).
+
+        A position with no real mark falls back to ``avg_entry_price`` so
+        equity stays defined, AND its symbol is recorded in
+        ``self.last_unpriced_symbols`` so callers that must not act on a
+        cost-basis placeholder (auto-exit rules, the circuit breaker's
+        loss-velocity sampler) can tell a real mark from a fallback. A
+        missing/zero/NaN quote is never used as a price.
         """
-        Resolves current mark prices for both stock and option positions.
-        Stocks are quoted via fmp_client.batch_quote.
-        Options are marked dynamically using Black-Scholes if spot price is known,
-        falling back to avg_entry_price if unresolvable.
-        """
+        self.last_unpriced_symbols = []
         if not positions:
             return {}
 
         stock_symbols = set()
         option_positions = []
-
         for p in positions:
             sym = p.symbol.upper().strip()
-            if " " in sym and "$" in sym:
-                # Option format: e.g. "AAPL 2026-09-18 $150.00 CALL"
+            if _is_option_symbol(sym):
                 option_positions.append(p)
-                underlying = sym.split()[0]
-                stock_symbols.add(underlying)
+                stock_symbols.add(sym.split()[0])
             else:
                 stock_symbols.add(sym)
 
+        spot_prices = _fetch_stock_prices(sorted(stock_symbols)) if stock_symbols else {}
         prices: Dict[str, float] = {}
-        if stock_symbols:
-            try:
-                quotes_resp = fmp_client.batch_quote(list(stock_symbols))
-                prices = {q.get("symbol", "").upper(): float(q.get("price", 0.0)) for q in quotes_resp if isinstance(q, dict)}
-            except Exception as e:
-                logger.error(f"Failed to fetch quotes for paper positions: {e}")
-                prices = {}
+        unpriced: List[str] = []
 
-        # Price option positions
+        for p in positions:
+            sym = p.symbol.upper().strip()
+            if _is_option_symbol(sym):
+                continue
+            px = spot_prices.get(sym)
+            if px is None:
+                prices[sym] = float(p.avg_entry_price)
+                unpriced.append(sym)
+            else:
+                prices[sym] = px
+
+        now = datetime.now(timezone.utc)
         for p in option_positions:
             sym = p.symbol.upper().strip()
-            parts = sym.split()
-            # Expecting: [UNDERLYING, EXPIRATION, $STRIKE, TYPE]
+            mark = None
             try:
-                underlying = parts[0]
-                exp_str = parts[1]
-                strike_str = parts[2].replace("$", "")
+                parts = sym.split()
+                underlying, exp_str = parts[0], parts[1]
+                strike = float(parts[2].replace("$", ""))
                 opt_type = parts[3].lower()
+                per_share = _option_mark_per_share(
+                    underlying, exp_str, strike, opt_type, spot_prices.get(underlying), now
+                )
+                if per_share is not None:
+                    mark = round(per_share, 4) * _OPTION_MULTIPLIER
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("paper marking: could not mark %s: %s", sym, exc)
+                mark = None
+            if mark is None:
+                prices[sym] = float(p.avg_entry_price)
+                unpriced.append(sym)
+            else:
+                prices[sym] = mark
 
-                strike = float(strike_str)
-                spot = prices.get(underlying, 0.0)
-
-                if spot > 0:
-                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                    today = datetime.now(timezone.utc).date()
-                    dte = max(1, (exp_date - today).days)
-                    t_years = dte / 365.0
-
-                    # Standard Black-Scholes pricing
-                    import math
-
-                    def norm_cdf(x):
-                        return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
-
-                    r = 0.04
-                    sigma = 0.30  # baseline implied volatility estimate
-                    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * math.sqrt(t_years))
-                    d2 = d1 - sigma * math.sqrt(t_years)
-
-                    if opt_type == "call":
-                        bs_price = spot * norm_cdf(d1) - strike * math.exp(-r * t_years) * norm_cdf(d2)
-                    else:
-                        bs_price = strike * math.exp(-r * t_years) * norm_cdf(-d2) - spot * norm_cdf(-d1)
-
-                    # Option contract unit price is $/share * 100
-                    unit_mark = max(0.01, round(bs_price, 4)) * 100.0
-                    prices[sym] = unit_mark
-                else:
-                    prices[sym] = p.avg_entry_price
-            except Exception:
-                prices[sym] = p.avg_entry_price
-
+        if unpriced:
+            logger.warning(
+                "paper marking: no live mark for %d position(s) %s; valued at cost basis "
+                "and flagged unpriced.", len(unpriced), unpriced,
+            )
+        self.last_unpriced_symbols = unpriced
         return prices
+
+    @staticmethod
+    def _detach_positions(positions: List["PaperPosition"]) -> List[Any]:
+        """Plain copies of position rows, so pricing (network I/O) can run
+        AFTER the DB session closes instead of holding a SQLite transaction
+        open across live quote/chain fetches."""
+        from types import SimpleNamespace
+
+        return [
+            SimpleNamespace(
+                symbol=p.symbol, qty=float(p.qty), avg_entry_price=float(p.avg_entry_price),
+                strategy_id=p.strategy_id, pilot_id=p.pilot_id, experiment_arm=p.experiment_arm,
+            )
+            for p in positions
+        ]
 
     def get_account(self) -> AccountSnapshot:
         """Returns account equity, cash, buying_power (same as cash here)."""
@@ -616,15 +776,17 @@ class PaperAccountStore:
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).first()
             cash = float(acc.cash_balance) if acc else 0.0
+            positions = self._detach_positions(
+                session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
+            )
 
-            positions = session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
-            
-            equity = cash
-            if positions:
-                prices = self._resolve_position_prices(positions)
-                for p in positions:
-                    price = prices.get(p.symbol.upper(), p.avg_entry_price)
-                    equity += (float(p.qty) * float(price))
+        equity = cash
+        self.last_unpriced_symbols = []
+        if positions:
+            prices = self._resolve_position_prices(positions)
+            for p in positions:
+                price = prices.get(p.symbol.upper(), p.avg_entry_price)
+                equity += (float(p.qty) * float(price))
 
         return AccountSnapshot(equity=equity, cash=cash, buying_power=cash)
 
@@ -656,32 +818,37 @@ class PaperAccountStore:
                 return []
 
         results = []
+        self.last_unpriced_symbols = []
         with session_scope(self.Session) as session:
-            positions = session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
-            if not positions:
-                return []
+            positions = self._detach_positions(
+                session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
+            )
+        if not positions:
+            return []
 
-            prices = self._resolve_position_prices(positions)
+        prices = self._resolve_position_prices(positions)
+        unpriced = set(self.last_unpriced_symbols)
 
-            for p in positions:
-                current_price = prices.get(p.symbol.upper(), p.avg_entry_price)
-                market_value = float(p.qty) * float(current_price)
-                if p.qty >= 0:
-                    unrealized_pl = market_value - (float(p.qty) * float(p.avg_entry_price))
-                else:
-                    # Short position: gain when current price is lower than entry price
-                    unrealized_pl = (float(p.avg_entry_price) - float(current_price)) * abs(float(p.qty))
-                
-                results.append(PositionSnapshot(
-                    symbol=p.symbol,
-                    qty=float(p.qty),
-                    avg_entry_price=float(p.avg_entry_price),
-                    market_value=market_value,
-                    unrealized_pl=unrealized_pl,
-                    strategy_id=p.strategy_id,
-                    pilot_id=p.pilot_id,
-                    experiment_arm=p.experiment_arm
-                ))
+        for p in positions:
+            current_price = prices.get(p.symbol.upper(), p.avg_entry_price)
+            market_value = float(p.qty) * float(current_price)
+            if p.qty >= 0:
+                unrealized_pl = market_value - (float(p.qty) * float(p.avg_entry_price))
+            else:
+                # Short position: gain when current price is lower than entry price
+                unrealized_pl = (float(p.avg_entry_price) - float(current_price)) * abs(float(p.qty))
+            
+            results.append(PositionSnapshot(
+                symbol=p.symbol,
+                qty=float(p.qty),
+                avg_entry_price=float(p.avg_entry_price),
+                market_value=market_value,
+                unrealized_pl=unrealized_pl,
+                strategy_id=p.strategy_id,
+                pilot_id=p.pilot_id,
+                experiment_arm=p.experiment_arm,
+                mark_is_estimated=p.symbol.upper().strip() in unpriced,
+            ))
         return results
 
     def reset_account(self, starting_cash: Optional[float] = None) -> None:
@@ -1730,6 +1897,31 @@ class PaperAccountStore:
             if leg_group_id: po.leg_group_id = leg_group_id
             if order_kind: po.order_kind = order_kind
 
+    @staticmethod
+    def _bridge_exclusion_reason(pos: PaperPosition) -> Optional[str]:
+        """Why a closed paper trade must NOT be bridged into the
+        transactions_store 'trades' ledger, or ``None`` if it is eligible.
+
+        That ledger feeds strategy_engine's aggregate Kelly sizing unfiltered
+        by strategy, so only signal-driven EQUITY outcomes may enter it:
+          * option contracts -- per-contract premium returns are a different
+            distribution from the equity trades Kelly is sizing;
+          * ``settings.PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES`` (default:
+            'Manual Trade', 'Delta Hedge', 'untagged') -- discretionary
+            clicks, hedge legs, and unattributed inventory are not outcomes
+            of any model decision.
+        """
+        if _is_option_symbol(str(pos.symbol or "")):
+            return "excluded: option contract (equity-only model feed)"
+        excluded = {
+            str(x).strip().lower()
+            for x in (getattr(settings, "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES", None) or [])
+        }
+        sid = str(pos.strategy_id or "untagged").strip()
+        if sid.lower() in excluded:
+            return f"excluded: strategy_id {sid!r} is not a model-driven strategy"
+        return None
+
     def _record_closed_trade(self, session, pos: PaperPosition, closed_qty: float, exit_price: float, close_reason: str, commission: float = 0.0):
         closed_qty_abs = abs(closed_qty)
         is_long = pos.qty > 0
@@ -1775,6 +1967,7 @@ class PaperAccountStore:
 
         entry_snapshot_id = getattr(pos, "entry_snapshot_id", None)
         bridge_enabled = bool(getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False))
+        exclusion_reason = self._bridge_exclusion_reason(pos) if bridge_enabled else None
 
         pct = PaperClosedTrade(
             strategy_id=pos.strategy_id,
@@ -1794,9 +1987,13 @@ class PaperAccountStore:
             close_reason=close_reason,
             leg_group_id=None,
             entry_snapshot_id=entry_snapshot_id,
-            bridge_status="not_attempted" if bridge_enabled else "disabled",
+            bridge_status=(
+                "disabled" if not bridge_enabled
+                else "excluded" if exclusion_reason
+                else "not_attempted"
+            ),
             bridged_trade_id=None,
-            bridge_error=None,
+            bridge_error=exclusion_reason,
             bridged_at=None,
         )
         session.add(pct)
@@ -1815,7 +2012,11 @@ class PaperAccountStore:
                 logger.debug("Failed to query PaperEntrySnapshot for bridge conviction: %s", snap_err)
 
         # transactions_store bridge (PR 872 remediation, Task 1; Retrospective Learning Loop M1).
-        if bridge_enabled:
+        if bridge_enabled and exclusion_reason:
+            # Recorded as 'excluded' (reason in bridge_error) -- a deliberate
+            # policy outcome, not a failure, and never counted as attempted.
+            session.flush()
+        elif bridge_enabled:
             if self._transactions_store is None:
                 self._transactions_bridge_failures += 1
                 pct.bridge_status = "failed"
@@ -2050,6 +2251,7 @@ class PaperAccountStore:
                         "bridged_count": 0,
                         "failed_count": 0,
                         "disabled_count": 0,
+                        "excluded_count": 0,
                         "completeness_pct": 100.0 if not bridge_enabled else None,
                         "status": "disabled" if not bridge_enabled else "unknown",
                         "last_failure": None,
@@ -2075,6 +2277,7 @@ class PaperAccountStore:
                     "bridged_count": 0,
                     "failed_count": 0,
                     "disabled_count": 0,
+                    "excluded_count": 0,
                     "completeness_pct": 100.0 if not bridge_enabled else None,
                     "status": "disabled" if not bridge_enabled else "unknown",
                     "last_failure": None,
@@ -2087,6 +2290,9 @@ class PaperAccountStore:
                 + counts.get("not_attempted", 0)
                 + counts.get(None, 0)
             )
+            # Deliberately not bridged (options / manual / hedge / untagged)
+            # -- neither attempted nor a failure.
+            excluded_count = counts.get("excluded", 0)
             attempted_count = bridged_count + failed_count
 
             if attempted_count > 0:
@@ -2139,6 +2345,7 @@ class PaperAccountStore:
                 "bridged_count": bridged_count,
                 "failed_count": failed_count,
                 "disabled_count": disabled_count,
+                "excluded_count": excluded_count,
                 "completeness_pct": completeness_pct,
                 "status": status,
                 "last_failure": last_failure_record,

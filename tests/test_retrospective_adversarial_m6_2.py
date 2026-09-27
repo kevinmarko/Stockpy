@@ -48,6 +48,20 @@ from settings import settings
 import transactions_store
 
 
+@pytest.fixture(autouse=True)
+def _bridge_all_equity_strategies(monkeypatch):
+    """This file tests the bridge's MECHANICS (fail-open, SAVEPOINTs,
+    completeness metrics) with generic/default strategy_ids such as
+    'untagged'. Eligibility filtering (manual/hedge/untagged/options are
+    never fed to the models) is covered by
+    tests/test_paper_marking_and_model_feed.py, so empty the strategy
+    exclusion list here."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES", [])
+
+
+
 # =============================================================================
 # Fixtures
 # =============================================================================

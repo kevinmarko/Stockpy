@@ -34,7 +34,7 @@ from settings import settings
 from tests._db_isolation import redirect_class_to_memory_db
 
 
-def _make_fake_paper_account_store(equities):
+def _make_fake_paper_account_store(equities, unpriced=None):
     """Build a fake ``data.paper_account_store.PaperAccountStore`` class
     whose ``get_account().equity`` yields successive values from
     ``equities`` (one per construction+call), for
@@ -49,7 +49,7 @@ def _make_fake_paper_account_store(equities):
 
     class _FakePaperAccountStore:
         def __init__(self, *args, **kwargs) -> None:
-            pass
+            self.last_unpriced_symbols = list(unpriced or [])
 
         def get_account(self) -> "_FakeAccountSnapshot":
             return _FakeAccountSnapshot(next(it))
@@ -1590,6 +1590,37 @@ class TestMaybeUpdateCircuitBreaker:
         # (94_000 - 100_000) / (300s / 60) = -6_000 / 5 = -1_200/min
         assert update_calls[0]["loss_velocity_per_min"] == pytest.approx(-1_200.0, rel=0.02)
         assert update_calls[0]["account_equity"] == pytest.approx(94_000.0)
+
+    def test_loss_velocity_sample_skipped_when_a_position_is_unpriced(self, monkeypatch):
+        """A tick where any paper position fell back to its cost-basis
+        placeholder (no live mark) must NOT be recorded -- its equity would
+        inject a fake jump into the loss-velocity series and could trip the
+        circuit breaker on a quote outage rather than a real loss."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
+        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
+        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=False)
+
+        class _FakeProvider:
+            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
+                return daily_df if interval == "1d" else hourly_df
+
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
+        monkeypatch.setattr(
+            "data.paper_account_store.PaperAccountStore",
+            _make_fake_paper_account_store([80_000.0], unpriced=["AAPL"]),
+        )
+        update_calls: list[dict] = []
+        self._install_fake_cb(monkeypatch, update_calls)
+
+        d = OrchestratorDaemon()
+        d._circuit_breaker_equity_history.append((time.time() - 300.0, 100_000.0))
+        d.maybe_update_circuit_breaker()
+
+        assert len(d._circuit_breaker_equity_history) == 1  # sample not recorded
+        assert update_calls[0]["loss_velocity_per_min"] is None
+        assert update_calls[0]["account_equity"] is None
 
     def test_noop_when_disabled_computes_nothing(self, monkeypatch):
         """(d) CIRCUIT_BREAKER_ENABLED=False must still be a true no-op for

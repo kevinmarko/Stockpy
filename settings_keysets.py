@@ -394,11 +394,11 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
     ),
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": (
         "Bridges simulated PaperAccountStore closed trades into the real "
-        "transactions_store 'trades' ledger, which has no paper/live "
-        "discriminator column and feeds strategy_engine.py, "
+        "transactions_store 'trades' ledger (default ON since 2026-09, "
+        "signal-driven equity trades only), which has no paper/live "
+        "discriminator column and feeds strategy_engine.py's Kelly sizing, "
         "main_orchestrator.py, pilots/mirror.py, and MCP reporting tools -- "
-        "enabling it mixes simulated PnL into what those consumers report "
-        "as real performance."
+        "toggling it changes what those consumers learn from and report."
     ),
     "DEAD_LETTER_RETRY_ENABLED": (
         "Gates POST /dead-letter/retry, which spawns a real main.py "

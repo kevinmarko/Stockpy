@@ -2605,6 +2605,33 @@ class TestCompositeProviderGetQuotesBatch:
 
         assert result == {}
 
+    def test_whole_batch_failure_skips_fmp_single_quote_retries(self):
+        """When FMP's /batch-quote returns NOTHING (a whole-request failure:
+        outage, 429, cooldown open), the per-symbol fallback must go straight
+        to the Alpaca/yfinance tail -- never issue one more FMP /quote
+        request per symbol into the already failing host."""
+        from data.market_data import CompositeProvider, FMPProvider, YFinanceProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="test-key", FMP_QUOTES_ENABLED=True,
+        ):
+            cp = CompositeProvider()
+
+        with patch.object(FMPProvider, "get_quotes_batch", return_value={}), \
+             patch.object(FMPProvider, "get_latest_quote") as fmp_single_mock, \
+             patch.object(
+                 YFinanceProvider, "get_latest_quote",
+                 side_effect=lambda sym: _make_fake_quote(sym, "yfinance"),
+             ) as yf_mock:
+            result = cp.get_quotes_batch(["AAPL", "MSFT", "CGBD"])
+
+        # The chain catches provider exceptions, so assert on the call itself.
+        fmp_single_mock.assert_not_called()
+
+        assert set(result.keys()) == {"AAPL", "MSFT", "CGBD"}
+        assert all(q.source == "yfinance" for q in result.values())
+        assert yf_mock.call_count == 3
+
     def test_fallback_disabled_never_reaches_alpaca_or_yfinance(self):
         """FMP_FALLBACK_ENABLED=False mirrors get_latest_quote's own
         documented contract exactly: a still-missing symbol is still retried

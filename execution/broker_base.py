@@ -125,6 +125,10 @@ class PositionSnapshot:
     strategy_id: Optional[str] = None
     pilot_id: Optional[str] = None
     experiment_arm: Optional[str] = None
+    # True when market_value/unrealized_pl are a cost-basis placeholder
+    # because no real live mark was available (see
+    # PaperAccountStore._resolve_position_prices) -- never act on P&L then.
+    mark_is_estimated: bool = False
 
 
 @dataclass

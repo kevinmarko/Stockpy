@@ -26,6 +26,20 @@ from data.paper_account_store import (
 from transactions_store import TransactionsStore
 
 
+@pytest.fixture(autouse=True)
+def _bridge_all_equity_strategies(monkeypatch):
+    """This file tests the bridge's MECHANICS (fail-open, SAVEPOINTs,
+    completeness metrics) with generic/default strategy_ids such as
+    'untagged'. Eligibility filtering (manual/hedge/untagged/options are
+    never fed to the models) is covered by
+    tests/test_paper_marking_and_model_feed.py, so empty the strategy
+    exclusion list here."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES", [])
+
+
+
 @pytest.fixture
 def isolated_db_url(tmp_path):
     """Provides a fresh file-backed SQLite database isolated per test."""
@@ -691,7 +705,9 @@ class TestAdversarialFillMechanics:
         assert snap_ml2_dict["qty"] == 3.0
         assert snap_ml2_dict["conviction"] == 0.88
 
-    def test_readonly_store_telemetry_safety_and_cold_start(self, isolated_db_url):
+    def test_readonly_store_telemetry_safety_and_cold_start(self, isolated_db_url, monkeypatch):
+        # "100% of nothing" is the bridge-DISABLED convention; pin it off.
+        monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False)
         """Readonly store must query existing data safely and gracefully handle empty/cold databases."""
         # Test on fresh/cold DB before table creation
         cold_store = PaperAccountStore(db_url=isolated_db_url, readonly=True)
