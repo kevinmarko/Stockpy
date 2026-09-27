@@ -127,44 +127,25 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | `docs/VALIDATION_STRATEGY_FIX_LOG.md` | Dated rollup of `STRATEGY_REGISTRY` deployability-gate fix attempts (`scripts/refresh_validations.py`) — before/after PBO/DSR/Sharpe/MaxDD per strategy, the causal lever used, and (for strategies that stayed honestly `deployable=False`) the measured, evidence-backed reason why. Cross-references the fixing PR and each strategy's `docs/signals/<name>.md` **Backtest Validation** section |
 | `docs/AGENTIC_TRADING_SAFETY_FRAMEWORK.md` | Capability map, guardrail status, and structural gaps for the agentic trading surface |
 
-## Frontend strategy: web app only — desktop app decommissioned and archived
+## Frontend strategy: web app only
 
-**The Pilots PWA (`webapp/`) is the platform's one actively-developed frontend.** All new
-features, UI improvements, and bug fixes for the operator-facing surface go into `webapp/`
-going forward. If a legacy-GUI-only feature has no `webapp/` equivalent yet, treat closing
-that gap as `webapp/` work — not as a reason to extend the frozen code below.
+**The Pilots PWA (`webapp/`) is the platform's only frontend.** All operator-facing
+features, UI improvements, and bug fixes go into `webapp/`.
 
-**The desktop app is decommissioned and lives in `legacy/streamlit_command_center/`** (moved
-out of `gui/`/`desktop/`/repo-root in 2026-09 so the repo structure itself signals frozen,
-rather than relying on this paragraph) **— do not develop it further.** This covers:
-- `legacy/streamlit_command_center/app.py` + `legacy/streamlit_command_center/panels/` — the
-  Streamlit "InvestYo Command Center" (all 19 tabs; was `gui/app.py` + `gui/panels/`).
-- `legacy/streamlit_command_center/app_shell.py` and `legacy/streamlit_command_center/desktop_shell/`
-  (`net_util.py`, `ui_server.py`, `engine_supervisor.py`) — the pywebview wrapper that pops
-  the Command Center into a native window (was `app_shell.py` + `desktop/`'s native-shell
-  modules).
+**The Streamlit desktop app was deleted in 2026-09.** That covers the "InvestYo Command
+Center", its pywebview native-window shell, and the `launch_app.command` /
+`launch_gui.command` / `scripts/build_macos_app.command` launchers. Git history has it. If
+you find a feature it had and `webapp/` lacks, build it in `webapp/`.
 
-These remain in the repo and still run for existing local setups via their **unmoved**
-launchers (`launch_app.command`, `launch_gui.command`, `scripts/build_macos_app.command` —
-only their internal reference to the new archive path changed; the operator-facing commands
-are unchanged) — a severe bug blocking use of the platform entirely may still be patched —
-but treat them as frozen: no new tabs, panels, settings widgets, or capability.
+**`legacy/` now holds archived code**: working code moved out of the active codebase so it
+can be restored if needed. Nothing in the active platform imports from it; don't add to it
+except when archiving.
 
-**`shared/` — NOT part of the frozen surface.** The Command Center's panels/app_shell import
-31 modules (`env_io.py`, `orchestrator_runner.py`, `daemon_client.py`, `strategy_registry.py`,
-`regime_filter.py`, and 26 others) that originated in `gui/` but are live backend logic used
-directly by production code entirely outside the frozen UI — `api/pilots_api.py`,
-`api/data_api.py`, `api/_jobs.py`, `pilots/observability.py`, `pilots/models.py`,
-`pilots/calibration.py`, `main.py`, `evaluation_engine.py`, `alerting.py`,
-`diagnostics_and_visuals.py`, `scripts/*`. These now live in `shared/` — a normal,
-actively-maintained package, not frozen, not archived.
-
-**Unaffected — this is the data/compute layer both frontends sit on, and `webapp/` depends on
-it being maintained:** `main.py`, `main_orchestrator.py`, every `api/*.py` service, `shared/`
-(see above), and the orchestrator daemon (`desktop/daemon_runtime.py`,
-`desktop/orchestrator_daemon.py`, `desktop/run_history_store.py`, `desktop/daemon_status.py`,
-`desktop/assets/` — these still live under `desktop/`; only the native-shell trio moved out).
-Only the Streamlit GUI and its native-window wrapper are being sunset.
+**`shared/` is a normal, maintained package.** It started as helpers for the desktop app,
+but most of it (`env_io.py`, `orchestrator_runner.py`, `daemon_client.py`,
+`strategy_registry.py`, and others) is backend logic used by `api/*`, `pilots/*`, `main.py`,
+and `scripts/*`. A few modules there still exist only for the Gravity suite and will be
+archived with it.
 
 ## Commands
 
@@ -176,30 +157,13 @@ npm run dev                          # http://localhost:5173 — offline mock da
 VITE_USE_MOCK=false npm run dev      # against the live backend (see below)
 uvicorn api.pilots_api:app --port 8602    # backend the PWA talks to (+ data_api:8603 / metrics_api:8604 as needed)
 
-# ── Legacy desktop app — decommissioned, no new development ───────────────────
-# legacy/streamlit_command_center/ (Streamlit "InvestYo Command Center" + its
-# app_shell.py/desktop_shell/ native-shell modules) is frozen; see "Frontend
-# strategy" above. Kept runnable for existing setups. The launchers below stay
-# at these exact repo-root paths — only their internal invocation changed.
-#   chmod +x launch.command launch_app.command   # one-time setup, already done
-# REFRESH_INTERVAL_SECONDS at the top of launch.command controls single-run (=0)
-# vs interval-loop (>0, default 60 s) mode.
-# The script verifies .venv exists and that Python is exactly 3.12.x before
-# launching, then pauses ("Press any key") on exit so errors are always visible.
+# ── Terminal launcher for the advisory loop ─────────────────────────────────────
+# launch.command runs main.py in a Terminal window. REFRESH_INTERVAL_SECONDS at
+# the top of the file picks single-run (=0) or interval-loop (>0, default 60 s).
+# It checks .venv exists and Python is 3.12.x, then pauses on exit so errors stay visible.
+./launch.command
 
-./launch_app.command                 # legacy: opens the unified Command Center in a native
-                                      # desktop window (pywebview) with an always-on
-                                      # background refresh loop tied to the window's lifecycle
-python3 -m legacy.streamlit_command_center.app_shell [--interval N]  # what launch_app.command runs under the hood
-./scripts/build_macos_app.command    # ONE-TIME (legacy): builds InvestYo.app (real macOS app
-                                      # bundle, custom icon, no Terminal flash) that runs
-                                      # launch_app.command — drag the result into /Applications
-                                      # or the Dock; not committed to git (bakes in an absolute
-                                      # path — see .gitignore)
-streamlit run legacy/streamlit_command_center/app.py  # legacy: InvestYo Command Center — full 19-tab operational GUI
-./launch_gui.command                 # legacy: same as above, macOS double-click launcher
-
-# ── Backend pipeline (unaffected by the frontend decommission) ────────────────
+# ── Backend pipeline ─────────────────────────────────────────────────────────────
 ./setup.sh                       # creates .venv (Python 3.12, via uv — https://astral.sh/uv), installs requirements.txt
 # Everything below works either after `source .venv/bin/activate`, or prefixed
 # with `uv run` (e.g. `uv run pytest`) to skip activation entirely — uv
@@ -240,7 +204,7 @@ The full per-module architecture reference (previously inlined here) is split by
 | [`docs/architecture/execution.md`](docs/architecture/execution.md) | `execution/cost_model.py`, `broker_base.py`, `alpaca_broker.py`, `kill_switch.py`, `risk_gate.py`, `order_manager.py`, `queue_builder.py`, `compose.py` |
 | [`docs/architecture/execution-boundary.md`](docs/architecture/execution-boundary.md) | The explore/execute universe boundary — why Autopilot's autonomous universe (`data/portfolio_sync.py::compute_tracked_universe()`) can never include a symbol only browsed via the Symbol Screener or Quick Trade, and the options auto-scan's operator-override vs. default-universe distinction |
 | [`docs/architecture/observability-and-apis.md`](docs/architecture/observability-and-apis.md) | `observability/*`, `api/state_api.py`, `api/control_api.py`, `api/pilots_api.py`, `llm/status_store.py`, `investyo_mcp_server.py`, `mcp_remote_adapter.py`, `pilots/retrospective_*` |
-| [`docs/architecture/webapp-and-gui.md`](docs/architecture/webapp-and-gui.md) | `webapp/` (Pilots PWA, `RetrospectiveJournal`), `api/data_api.py`, `api/metrics_api.py`, `shared/daemon_client.py`, `desktop/` (daemon runtime, orchestrator daemon), `legacy/streamlit_command_center/` (frozen InvestYo Command Center + native shell), `scripts/*`, `docs/GO_LIVE_CHECKLIST.md`, `docs/RUNBOOK.md` |
+| [`docs/architecture/webapp-and-gui.md`](docs/architecture/webapp-and-gui.md) | `webapp/` (Pilots PWA, `RetrospectiveJournal`), `api/data_api.py`, `api/metrics_api.py`, `shared/daemon_client.py`, `desktop/` (daemon runtime, orchestrator daemon), `scripts/*`, `docs/GO_LIVE_CHECKLIST.md`, `docs/RUNBOOK.md` |
 | [`docs/architecture/validation-and-signals.md`](docs/architecture/validation-and-signals.md) | `validation/purged_cv.py`, `metrics.py`, `harness.py`, `stress_scenarios.py`, `signals/` package (registry, aggregator, all `SignalModule` implementations) |
 | [`docs/architecture/ml-and-reports.md`](docs/architecture/ml-and-reports.md) | `ml/` pipeline, `reports/*.html.j2` templates, `ai_verification_prompts.py` (Gravity AI Auditor) |
 | [`docs/architecture/testing.md`](docs/architecture/testing.md) | Index of every file under `tests/` and what each covers |

@@ -104,10 +104,8 @@
   from observability.alerts import send_alert
   send_alert("CRITICAL", "PREFLIGHT TEST — ignore", channels=["discord"])
   ```
-- [ ] Command Center launches without errors and the Observability tab renders:
-  ```
-  streamlit run legacy/streamlit_command_center/app.py
-  ```
+- [ ] The web app (`./launch_webapp.command`, live mode) loads without errors and its
+  Mission Control screen (`/observability`) renders.
 - [ ] Heartbeat file refreshes every 60 s: `ls -la ~/.stockpy_local/output/heartbeat.txt`
   (or `$LOCAL_DATA_ROOT/output/heartbeat.txt` if you've overridden the default — not a
   repo-relative `output/`, as of `settings.LOCAL_DATA_ROOT` — 2026-08).

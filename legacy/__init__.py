@@ -1,6 +1,6 @@
-"""legacy/ — frozen, no-new-development code kept runnable for existing setups.
+"""legacy/ — archived code, kept so it can be restored if needed.
 
-See CLAUDE.md's "Frontend strategy" section for what's frozen and why.
+Nothing here is maintained or imported by the active platform. The Streamlit
+desktop app that used to live in legacy/streamlit_command_center/ was deleted
+in 2026-09; git history has it.
 """
-
-from __future__ import annotations

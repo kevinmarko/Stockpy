@@ -12,7 +12,6 @@ mask the real error or crash the panel silently).
 
 from __future__ import annotations
 
-import importlib
 
 import pytest
 
@@ -224,19 +223,3 @@ class TestBusySimulatedStreamlit:
 # ---------------------------------------------------------------------------
 
 
-EDITED_PANEL_MODULES = [
-    "legacy.streamlit_command_center.panels.paper_monitor",
-    "legacy.streamlit_command_center.panels.live_inventory",
-    "legacy.streamlit_command_center.panels.settings_manager",
-    "legacy.streamlit_command_center.panels.strategy_matrix",
-    "legacy.streamlit_command_center.panels.report_viewer",
-    "legacy.streamlit_command_center.panels.market_data",
-    "legacy.streamlit_command_center.panels.analytics",
-    "legacy.streamlit_command_center.panels.reports_library",
-]
-
-
-@pytest.mark.parametrize("module_name", EDITED_PANEL_MODULES)
-def test_edited_panel_imports_cleanly(module_name):
-    mod = importlib.import_module(module_name)
-    assert mod is not None

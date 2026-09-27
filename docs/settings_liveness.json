@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 372,
+    "live_safe": 375,
     "no_op": 5,
-    "restart_required": 100,
+    "restart_required": 97,
     "total": 477
   },
   "dynamic_sites": [
@@ -89,41 +89,6 @@
       "rules": []
     },
     {
-      "expr": "getattr(settings, tkey, False)",
-      "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
-      "line": 164,
-      "resolved_by_factory": null,
-      "rules": []
-    },
-    {
-      "expr": "getattr(settings, sel_key, 'none')",
-      "file": "legacy/streamlit_command_center/panels/ai_control_center.py",
-      "line": 189,
-      "resolved_by_factory": null,
-      "rules": []
-    },
-    {
-      "expr": "getattr(settings, key, fallback)",
-      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
-      "line": 190,
-      "resolved_by_factory": null,
-      "rules": []
-    },
-    {
-      "expr": "getattr(settings, key, '')",
-      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
-      "line": 207,
-      "resolved_by_factory": null,
-      "rules": []
-    },
-    {
-      "expr": "getattr(settings, key, [])",
-      "file": "legacy/streamlit_command_center/panels/settings_manager.py",
-      "line": 275,
-      "resolved_by_factory": null,
-      "rules": []
-    },
-    {
       "expr": "getattr(settings, attr, None)",
       "file": "llm/status_store.py",
       "line": 212,
@@ -145,10 +110,11 @@
       "rules": []
     }
   ],
-  "files_scanned": 465,
+  "files_scanned": 433,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
+    "ADVISORY_ONLY",
     "ADVISORY_REUSE_PIPELINE_COMPUTE",
     "AGENTIC_DISCOVERY_ENABLED",
     "AGENTIC_MAX_CANDIDATES",
@@ -202,14 +168,15 @@
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
     "COMMAND_EXECUTION_ENABLED",
-    "CORRELATION_CLUSTER_LOOKBACK_DAYS",
     "CORRELATION_CLUSTER_THRESHOLD",
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
     "DATA_FETCH_MAX_CONCURRENCY",
     "DATA_FETCH_TASK_TIMEOUT_SECONDS",
     "DATA_FRESHNESS_TTL_SECONDS",
     "DEAD_LETTER_RETRY_ENABLED",
+    "DISABLED_SIGNAL_MODULES",
     "DISCORD_WEBHOOK_URL",
+    "DRY_RUN",
     "DUAL_MOMENTUM_RISKY_ASSETS",
     "DUAL_MOMENTUM_SAFE_ASSET",
     "EDGAR_COOLDOWN_SECONDS",
@@ -350,6 +317,7 @@
     "LOCAL_LLM_API_KEY",
     "LOCAL_LLM_BASE_URL",
     "LOCAL_LLM_MODEL",
+    "LOG_LEVEL",
     "MACRO_GATE_WRITES_ENABLED",
     "MACRO_REFRESH_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
@@ -530,30 +498,19 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 954,
+    "attr": 880,
     "factory_param": 4,
-    "getattr_const": 405,
+    "getattr_const": 398,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 284,
+    "attr": 282,
     "factory_param": 4,
     "getattr_const": 232,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
-    "ADVISORY_ONLY": [
-      {
-        "discarded": true,
-        "form": "getattr_const",
-        "rules": [
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/app.py:251",
-        "via": []
-      }
-    ],
     "ALERT_WEBHOOK_URL": [
       {
         "discarded": false,
@@ -686,6 +643,17 @@
         "via": []
       }
     ],
+    "CORRELATION_CLUSTER_LOOKBACK_DAYS": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "api/pilots_api.py:4122",
+        "via": []
+      }
+    ],
     "CORS_ALLOWED_ORIGINS": [
       {
         "discarded": false,
@@ -756,141 +724,20 @@
     "DASHBOARD_REFRESH_SECONDS": [
       {
         "discarded": false,
-        "form": "attr",
+        "form": "name_literal",
         "rules": [
-          "module_level"
+          "dynamic_name_literal_unattributable"
         ],
-        "site": "legacy/streamlit_command_center/app.py:148",
+        "site": "api/pilots_api.py:4234",
         "via": []
       },
       {
         "discarded": false,
-        "form": "attr",
+        "form": "name_literal",
         "rules": [
-          "decorator_arg",
-          "module_level"
+          "dynamic_name_literal_unattributable"
         ],
-        "site": "legacy/streamlit_command_center/panels/__init__.py:96",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/ai_insights.py:36",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/analytics.py:153",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/analytics.py:212",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/analytics.py:247",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/analytics_signals.py:104",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/gravity_audit.py:50",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/gravity_audit.py:73",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/live_inventory.py:51",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/market_data.py:51",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/observability.py:861",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/options_matrix.py:75",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "decorator_arg",
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/panels/pairs.py:147",
+        "site": "pilots/settings_domains.py:138",
         "via": []
       }
     ],
@@ -1649,37 +1496,6 @@
         "via": []
       }
     ],
-    "DISABLED_SIGNAL_MODULES": [
-      {
-        "discarded": true,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/app.py:153",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/app.py:155",
-        "via": []
-      }
-    ],
-    "DRY_RUN": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/app.py:147",
-        "via": []
-      }
-    ],
     "EDGAR_FULLTEXT_CHUNK_TOKENS": [
       {
         "discarded": false,
@@ -1710,15 +1526,6 @@
           "dynamic_name_literal_unattributable"
         ],
         "site": "api/pilots_api.py:5060",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "legacy/streamlit_command_center/panels/settings_manager.py:126",
         "via": []
       }
     ],
@@ -1809,15 +1616,6 @@
           "dynamic_name_literal_unattributable"
         ],
         "site": "api/pilots_api.py:5032",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "legacy/streamlit_command_center/panels/settings_manager.py:162",
         "via": []
       }
     ],
@@ -2333,17 +2131,6 @@
         "via": []
       }
     ],
-    "LOG_LEVEL": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/app.py:85",
-        "via": []
-      }
-    ],
     "MARKET_DATA_BARS_TTL_SECONDS": [
       {
         "discarded": false,
@@ -2833,24 +2620,6 @@
         "rules": [
           "module_level"
         ],
-        "site": "legacy/streamlit_command_center/app.py:146",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "legacy/streamlit_command_center/desktop_shell/ui_server.py:44",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
         "site": "main_orchestrator.py:118",
         "via": []
       },
@@ -3263,7 +3032,6 @@
     ]
   },
   "restart_required_only_import_time_discard": [
-    "ADVISORY_ONLY",
     "FOLLOW_API_TOKEN",
     "MCP_OAUTH_ENABLED",
     "MCP_OAUTH_PASSWORD",
@@ -3272,17 +3040,18 @@
   ],
   "restart_required_reason_counts": {
     "cross_module_init_helper": 101,
-    "decorator_arg": 13,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 7,
+    "dynamic_name_literal_unattributable": 8,
     "indirect_init_helper_d1": 14,
     "init_body": 13,
     "init_self_assign": 51,
     "method_self_assign": 8,
-    "module_level": 79,
+    "module_level": 58,
     "os_environ": 2
   },
   "restart_required_via_name_literal_only": [
+    "CORRELATION_CLUSTER_LOOKBACK_DAYS",
+    "DASHBOARD_REFRESH_SECONDS",
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
