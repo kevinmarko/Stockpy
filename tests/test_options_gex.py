@@ -16,11 +16,16 @@ Tests:
 import ast
 import json
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 import numpy as np
 import pandas as pd
+
+# Relative, always-future expiration for fake chain providers: GEX excludes
+# expired contracts, so a hardcoded calendar date silently zeroes the profile
+# once it passes.
+FUTURE_EXP = (date.today() + timedelta(days=30)).isoformat()
 
 from pilots.options_gex import (
     DEFAULT_CONCENTRATION_THRESHOLD_PCT,
@@ -195,7 +200,7 @@ def test_get_options_gex_profile_net_gex_matches_dealer_hedging_flow(monkeypatch
     mock_options_provider = MagicMock()
     mock_options_provider.fetch_options_chain.side_effect = (
         lambda symbol, expiration=None: (
-            ["2026-09-18"] if expiration is None else _make_fake_yf_chain()
+            [FUTURE_EXP] if expiration is None else _make_fake_yf_chain()
         )
     )
 
@@ -588,7 +593,7 @@ def test_get_options_gex_profile_resolves_real_gex_from_yfinance_shaped_chain(mo
     mock_options_provider = MagicMock()
     mock_options_provider.fetch_options_chain.side_effect = (
         lambda symbol, expiration=None: (
-            ["2026-09-18"] if expiration is None else _make_fake_yf_chain()
+            [FUTURE_EXP] if expiration is None else _make_fake_yf_chain()
         )
     )
 
