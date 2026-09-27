@@ -72,7 +72,7 @@ from settings import ENV_PATH, settings
 from data_engine import DataEngine, MockDataEngine
 from processing_engine import ProcessingEngine
 from macro_engine import MacroEngine
-from technical_options_engine import TechnicalOptionsEngine
+from volatility.garch import GarchVolatilityEstimator
 from forecasting_engine import ForecastingEngine
 from forecasting.forecast_tracker import ForecastTracker
 from strategy_engine import StrategyEngine
@@ -82,7 +82,6 @@ from data.robinhood_portfolio import fetch_account_snapshot, account_snapshot_to
 from allocators.dual_momentum import DualMomentumAllocator
 from signals import global_registry
 from signals.base import SignalContext
-from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
 from execution.kill_switch import GlobalKillSwitch
 from diagnostics_and_visuals import (
     telemetry,
@@ -183,18 +182,18 @@ class PipelineFatalError(RuntimeError):
 # their literal text, and this instrumentation is deliberately additive, not
 # a replacement for it.
 #
-# "macro_options" combines the "Routing data through Macro Engine..." and
-# "Routing data through Technical Options Engine..." banners into one slice:
-# the Macro Engine step itself has no per-ticker loop, so the whole slice's
-# advance_symbol() ticks come from the options/IV ThreadPoolExecutor loop
-# that immediately follows.
+# "macro_volatility" combines the "Routing data through Macro Engine..." and
+# "Routing data through Trend & Volatility Engine..." banners into one slice
+# (MacroStep + TrendVolatilityStep): the Macro Engine step itself has no
+# per-ticker loop, so the whole slice's advance_symbol() ticks come from the
+# GARCH/trend-indicator ThreadPoolExecutor loop that immediately follows.
 #
 # "execution" combines the advisory-overlay evaluation loop (the last
 # per-symbol ThreadPoolExecutor loop in the cycle) with report generation,
 # JSON payload export, and broker order submission -- none of which iterate
 # per-ticker, so this slice's ticks likewise come entirely from one loop
 # (_eval_one).
-_PROGRESS_STAGES = ["data", "macro_options", "processing", "forecasting", "strategy", "execution"]
+_PROGRESS_STAGES = ["data", "macro_volatility", "processing", "forecasting", "strategy", "execution"]
 
 
 # =============================================================================
@@ -337,8 +336,7 @@ class EngineContext:
     construction-site substitution.
     """
     macro_engine: Optional[MacroEngine] = None
-    technical_options_engine: Optional[TechnicalOptionsEngine] = None
-    iv_history_store: Optional[IVHistoryStore] = None
+    garch_estimator: Optional[GarchVolatilityEstimator] = None
     processing_engine: Optional[ProcessingEngine] = None
     forecasting_engine: Optional[ForecastingEngine] = None
     strategy_engine: Optional[StrategyEngine] = None
@@ -366,8 +364,7 @@ class EngineContext:
         _tracker = ForecastTracker()
         return cls(
             macro_engine=MacroEngine(data_engine=data_engine),
-            technical_options_engine=TechnicalOptionsEngine(),
-            iv_history_store=IVHistoryStore(),
+            garch_estimator=GarchVolatilityEstimator(),
             processing_engine=ProcessingEngine(),
             forecasting_engine=ForecastingEngine(tracker=_tracker),
             strategy_engine=StrategyEngine(),
@@ -383,11 +380,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 ) -> tuple:
     """
     Synchronous execution of the quantitative engines:
-    Macro -> Technical Options -> Processing -> Forecasting -> Strategy & Evaluation.
+    Macro -> Trend & Volatility -> Processing -> Forecasting -> Strategy & Evaluation.
     """
     from pipeline.context import RunContext
     from pipeline.runner import PipelineRunner
-    from pipeline.production_steps import OptionsAnalysisStep, ProcessingStep, ForecastingStep, StrategyEvalStep
+    from pipeline.production_steps import MacroStep, TrendVolatilityStep, ProcessingStep, ForecastingStep, StrategyEvalStep
 
     ctx = RunContext(
         force_account=False,
@@ -411,7 +408,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     ctx.context_extras["robinhood_positions"] = robinhood_positions
 
     runner = PipelineRunner([
-        OptionsAnalysisStep(),
+        MacroStep(),
+        TrendVolatilityStep(),
         ProcessingStep(),
         ForecastingStep(),
         StrategyEvalStep()
@@ -1379,24 +1377,6 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
     
     try:
         await _main_body(effective_dry_run, strict=strict)
-
-        # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
-        # Evaluated here so a standalone `python main_orchestrator.py` CLI run
-        # evaluates 0DTE hard stops, since the daemon's own _timer_loop
-        # handles it separately.
-        if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
-            try:
-                from pilots.zero_dte_engine import manage_0dte_exits
-                _0dte_res = manage_0dte_exits()
-                if _0dte_res.get("executed_count", 0) > 0:
-                    telemetry.info(
-                        "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
-                        _0dte_res.get("evaluated_count", 0),
-                        _0dte_res.get("executed_count", 0),
-                        _0dte_res.get("failed_count", 0),
-                    )
-            except Exception as _0dte_exc:
-                telemetry.debug("0DTE exit lifecycle evaluation skipped: %s", _0dte_exc)
     finally:
         _hb_task.cancel()
         if _cls_task:

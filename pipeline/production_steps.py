@@ -242,18 +242,22 @@ class RunPipelineStep(PipelineStep):
         ctx.context_extras["shared_context"] = shared_context
 
 
-class OptionsAnalysisStep(PipelineStep):
-    """Calculates options and GARCH."""
-    name = "macro_options"
-    
+class MacroStep(PipelineStep):
+    """Builds this cycle's ``MacroEconomicDTO`` (Sahm, macro kill switch, HMM).
+
+    Split out of the old ``OptionsAnalysisStep`` (2026-09, step 3d) with its
+    body unchanged, so the equity path no longer runs through the options
+    desk to get its macro regime.
+    """
+    name = "macro_volatility"
+
     def run(self, ctx: RunContext) -> None:
-        """Compute per-ticker options metrics and GJR-GARCH volatility."""
-        from main_orchestrator import MacroEngine, TechnicalOptionsEngine, IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp, MacroEconomicDTO
+        """Compute the macro regime DTO onto ``ctx.macro_dto``."""
+        from main_orchestrator import MacroEngine, MacroEconomicDTO
         from macro_engine import macro_killswitch_data_unavailable
-        from concurrent.futures import ThreadPoolExecutor
 
         if ctx.progress is not None:
-            ctx.progress.start_stage("macro_options", symbols_total=len(ctx.symbols))
+            ctx.progress.start_stage("macro_volatility", symbols_total=len(ctx.symbols))
 
         engines = ctx.engine_context
 
@@ -300,107 +304,91 @@ class OptionsAnalysisStep(PipelineStep):
             data_unavailable=data_unavailable,
         )
 
-        # Technical Options Analysis
-        telemetry.info("Routing data through Technical Options Engine...")
-        toe = (engines.technical_options_engine
-               if engines is not None and engines.technical_options_engine is not None
-               else TechnicalOptionsEngine())
-        iv_store = (engines.iv_history_store
-                    if engines is not None and engines.iv_history_store is not None
-                    else IVHistoryStore())
-        
-        tech_opt_indicators = {}
 
-        def _options_one(ticker):
+class TrendVolatilityStep(PipelineStep):
+    """Per-ticker GJR-GARCH vol and the Aroon/Coppock/Chandelier indicators.
+
+    What is left of the old ``OptionsAnalysisStep`` once the options desk was
+    cut out of core (2026-09, step 3d): the implied-vol reads, True IVR, VRP,
+    realized-vol rank and the options strategy matrix are gone; ``GARCH_Vol``
+    (cold-start sizing), the GARCH term structure ``ForecastingStep`` reuses,
+    and the trend/exit indicators ``StrategyEvalStep`` uses are computed
+    exactly as before, now from ``volatility.garch`` and ``trend_indicators``.
+    """
+    name = "macro_volatility"
+
+    def run(self, ctx: RunContext) -> None:
+        """Compute per-ticker trend/exit indicators and GJR-GARCH volatility."""
+        from main_orchestrator import GarchVolatilityEstimator
+        from trend_indicators import calculate_trend_exit_indicators
+        from concurrent.futures import ThreadPoolExecutor
+
+        engines = ctx.engine_context
+
+        telemetry.info("Routing data through Trend & Volatility Engine...")
+        garch = (engines.garch_estimator
+                 if engines is not None and engines.garch_estimator is not None
+                 else GarchVolatilityEstimator())
+
+        trend_vol_indicators = {}
+
+        def _trend_vol_one(ticker):
             df_hist = ctx.tech_raw.get(ticker)
             if df_hist is None or df_hist.empty:
                 if ctx.progress is not None:
-                    ctx.progress.advance_symbol(f"Options: {ticker} (no data)")
-                return ticker, None, None, None
+                    ctx.progress.advance_symbol(f"Volatility: {ticker} (no data)")
+                return ticker, None, None
             try:
-                indicators = toe.calculate_indicators(df_hist)
-                # ONE GJR-GARCH fit covers both this step's horizon=1 uses
-                # (GARCH_Vol column / VRP / True IVR, unchanged from before)
+                indicators = calculate_trend_exit_indicators(df_hist)
+                # ONE GJR-GARCH fit covers both the horizon=1 GARCH_Vol column
                 # AND the forecasting step's per-horizon Monte Carlo sigma
                 # (10/30/60/90) -- see estimate_gjr_garch_volatility_term_structure's
                 # docstring. Threaded through via garch_term_structure below
                 # so ForecastingStep never has to refit.
-                garch_term_structure = toe.estimate_gjr_garch_volatility_term_structure(
+                garch_term_structure = garch.estimate_gjr_garch_volatility_term_structure(
                     df_hist, horizons=(1, 10, 30, 60, 90)
                 )
                 # None means there isn't even enough history to measure a
                 # historical-stdev fallback (CONSTRAINT #4 -- see the
-                # estimator's own docstring). Degrade GARCH_Vol/VRP to NaN
-                # (VRP = current_iv - vol propagates the NaN and correctly
-                # gates the VRP leg closed) rather than letting this whole
-                # per-ticker step crash on `garch_term_structure[1]` and lose
-                # Aroon/Coppock/Chandelier/True_IVR too, none of which depend
-                # on GARCH at all.
+                # estimator's own docstring). Degrade GARCH_Vol to NaN rather
+                # than letting this whole per-ticker step crash on
+                # `garch_term_structure[1]` and lose Aroon/Coppock/Chandelier
+                # too, none of which depend on GARCH at all.
                 vol = garch_term_structure[1] if garch_term_structure is not None else float('nan')
-                realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
-
-                as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
-                price_val = float(df_hist['Close'].iloc[-1])
-
-                current_iv = float('nan')
-                iv_record = None
-                if ctx.market is not None:
-                    current_iv = get_30d_atm_iv(ctx.market, ticker, as_of_date, spot_price=price_val)
-                    if not np.isnan(current_iv):
-                        iv_record = (ticker, as_of_date, current_iv)
-
-                true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
-                vrp = get_vrp(ticker, current_iv, vol)
-
-                opt_strategy = toe.generate_option_strategy_matrix(
-                    true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
-                    aroon_osc=indicators["Aroon_Oscillator"],
-                    coppock_val=indicators["Coppock_Curve"],
-                    stock_price=price_val,
-                    current_iv=current_iv if not np.isnan(current_iv) else vol,
-                    vrp=vrp,
-                    macro_dto=ctx.macro_dto
-                )
                 result = {
                     "Aroon_Oscillator": indicators["Aroon_Oscillator"],
                     "Coppock_Curve": indicators["Coppock_Curve"],
                     "Chandelier_Long": indicators["Chandelier_Long"],
                     "Chandelier_Short": indicators["Chandelier_Short"],
                     "GARCH_Vol": vol,
-                    "Realized_Vol_Rank": realized_vol_rank,
-                    "True_IVR": true_ivr,
-                    "VRP": vrp,
-                    "Option_Strategy_Matrix": opt_strategy
                 }
                 if ctx.progress is not None:
-                    ctx.progress.advance_symbol(f"Options: {ticker}")
-                return ticker, result, iv_record, garch_term_structure
-            except Exception as opt_exc:
+                    ctx.progress.advance_symbol(f"Volatility: {ticker}")
+                return ticker, result, garch_term_structure
+            except Exception as tv_exc:
                 telemetry.warning(
-                    f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
-                    f"Skipping options metrics for this ticker this cycle."
+                    f"Trend & volatility analysis failed for {ticker}: {tv_exc}. "
+                    f"Skipping GARCH/trend metrics for this ticker this cycle."
                 )
                 if ctx.progress is not None:
-                    ctx.progress.advance_symbol(f"Options: {ticker} (failed)")
-                return ticker, None, None, None
+                    ctx.progress.advance_symbol(f"Volatility: {ticker} (failed)")
+                return ticker, None, None
 
-        opt_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(ctx.symbols)))
-        if opt_workers <= 1 or len(ctx.symbols) <= 1:
-            opt_results = [_options_one(t) for t in ctx.symbols]
+        tv_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(ctx.symbols)))
+        if tv_workers <= 1 or len(ctx.symbols) <= 1:
+            tv_results = [_trend_vol_one(t) for t in ctx.symbols]
         else:
-            with ThreadPoolExecutor(max_workers=opt_workers) as opt_pool:
-                opt_results = list(opt_pool.map(_options_one, ctx.symbols))
+            with ThreadPoolExecutor(max_workers=tv_workers) as tv_pool:
+                tv_results = list(tv_pool.map(_trend_vol_one, ctx.symbols))
 
         garch_term_structures: dict[str, dict[int, float]] = {}
-        for tk, res, iv_rec, term_structure in opt_results:
-            if iv_rec is not None:
-                iv_store.record_iv(iv_rec[0], iv_rec[1], iv_rec[2])
+        for tk, res, term_structure in tv_results:
             if res is not None:
-                tech_opt_indicators[tk] = res
+                trend_vol_indicators[tk] = res
             if term_structure is not None:
                 garch_term_structures[tk] = term_structure
 
-        ctx.context_extras["tech_opt_indicators"] = tech_opt_indicators
+        ctx.context_extras["trend_vol_indicators"] = trend_vol_indicators
         # Per-ticker {horizon: annualized_vol} GARCH term structure, consumed
         # by ForecastingStep below to avoid refitting GJR-GARCH a second time
         # this cycle for the SAME per-horizon Monte Carlo sigma computation.
@@ -462,8 +450,8 @@ class ProcessingStep(PipelineStep):
                 "dashboard compilation (tech ∪ fund raw data)",
             )
 
-        tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
-        _apply_options_columns(ctx.dashboard_df, tech_opt_indicators)
+        trend_vol_indicators = ctx.context_extras.get("trend_vol_indicators", {})
+        _apply_trend_vol_columns(ctx.dashboard_df, trend_vol_indicators)
 
 
 class ForecastingStep(PipelineStep):
@@ -522,7 +510,7 @@ class ForecastingStep(PipelineStep):
             history_series = history_df['Close'] if history_df is not None else None
 
             try:
-                # {horizon: annualized_vol}, fit ONCE by OptionsAnalysisStep above
+                # {horizon: annualized_vol}, fit ONCE by TrendVolatilityStep above
                 # (against this same history_df) -- lets generate_forecast give
                 # each of the 10/30/60/90-day horizons its OWN mean-reversion
                 # -aware sigma without a redundant second GJR-GARCH fit here.
@@ -636,7 +624,11 @@ def _apply_forecast_columns(
         )
 
 
-_OPTIONS_COLUMN_MAP = (
+# Realized_Vol_Rank / True_IVR / VRP were options-desk columns; since the
+# options desk left core (2026-09, step 3d) TrendVolatilityStep no longer
+# computes them, so they are always NaN here. They stay in COLUMN_SCHEMA (and
+# this map) until the schema trim in step 4.
+_TREND_VOL_COLUMN_MAP = (
     ('GARCH_Vol', 'GARCH_Vol'),
     ('Realized_Vol_Rank', 'Realized_Vol_Rank'),
     ('True_IVR', 'True_IVR'),
@@ -647,13 +639,13 @@ _OPTIONS_COLUMN_MAP = (
 )
 
 
-def _apply_options_columns(dashboard_df: pd.DataFrame, tech_opt_indicators: dict) -> None:
-    """Map OptionsAnalysisStep's per-ticker ``tech_opt_indicators`` dict onto
+def _apply_trend_vol_columns(dashboard_df: pd.DataFrame, trend_vol_indicators: dict) -> None:
+    """Map TrendVolatilityStep's per-ticker ``trend_vol_indicators`` dict onto
     ``dashboard_df``'s GARCH/IVR/VRP/Aroon/Coppock/Chandelier columns.
 
     NaN-fills every column first, then overlays whatever each ticker actually
-    has in ``tech_opt_indicators``. A ticker absent from that dict (its
-    ``OptionsAnalysisStep._options_one()`` call failed or was dead-lettered
+    has in ``trend_vol_indicators``. A ticker absent from that dict (its
+    ``TrendVolatilityStep._trend_vol_one()`` call failed or was dead-lettered
     this cycle) or missing an individual key stays NaN for that cell --
     "uncomputable" must never read as "zero VRP" / "zero True IVR"
     (CONSTRAINT #4); a fabricated 0.0 there is indistinguishable from a
@@ -665,11 +657,11 @@ def _apply_options_columns(dashboard_df: pd.DataFrame, tech_opt_indicators: dict
     chain.
     """
     nan = float("nan")
-    for col_key, _ in _OPTIONS_COLUMN_MAP:
+    for col_key, _ in _TREND_VOL_COLUMN_MAP:
         dashboard_df[col_key] = nan
-    for col_key, mapped_key in _OPTIONS_COLUMN_MAP:
+    for col_key, mapped_key in _TREND_VOL_COLUMN_MAP:
         dashboard_df[col_key] = dashboard_df['Symbol'].map(
-            lambda x: tech_opt_indicators.get(x, {}).get(mapped_key, nan)
+            lambda x: trend_vol_indicators.get(x, {}).get(mapped_key, nan)
         )
 
 
@@ -2453,7 +2445,7 @@ class StrategyEvalStep(PipelineStep):
         eval_results = {}
         dead_letter_entries = []
         fund_dtos = ctx.context_extras.get("fund_dtos", {})
-        tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
+        trend_vol_indicators = ctx.context_extras.get("trend_vol_indicators", {})
         robinhood_positions = ctx.context_extras.get("robinhood_positions", {})
 
         # -- Vectorized Signal Aggregation --
@@ -2481,8 +2473,8 @@ class StrategyEvalStep(PipelineStep):
         edge = ctx.dashboard_df.get('Edge Ratio', ctx.dashboard_df.get('Edge_Ratio', pd.Series(0.0, index=ctx.dashboard_df.index)))
         vec_df['edge_ratio'] = edge.fillna(0.0).values
         
-        vec_df['chandelier_long'] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get('Chandelier_Long', 0.0)).values
-        vec_df['chandelier_short'] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get('Chandelier_Short', 0.0)).values
+        vec_df['chandelier_long'] = ctx.dashboard_df['Symbol'].map(lambda x: trend_vol_indicators.get(x, {}).get('Chandelier_Long', 0.0)).values
+        vec_df['chandelier_short'] = ctx.dashboard_df['Symbol'].map(lambda x: trend_vol_indicators.get(x, {}).get('Chandelier_Short', 0.0)).values
         
         vec_df['current_price'] = ctx.dashboard_df.get('Price', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
         vec_df['Close'] = vec_df['current_price']
@@ -2595,9 +2587,9 @@ class StrategyEvalStep(PipelineStep):
 
                 chan_long = 0.0
                 chan_short = 0.0
-                if ticker in tech_opt_indicators:
-                    chan_long = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
-                    chan_short = tech_opt_indicators[ticker].get('Chandelier_Short', 0.0)
+                if ticker in trend_vol_indicators:
+                    chan_long = trend_vol_indicators[ticker].get('Chandelier_Long', 0.0)
+                    chan_short = trend_vol_indicators[ticker].get('Chandelier_Short', 0.0)
 
                 strategy_output = se.evaluate_security(
                     bar=bar_dto,
@@ -2668,7 +2660,7 @@ class StrategyEvalStep(PipelineStep):
                     # string strategy_col in this loop already defaults to.
                     'Sizing_Was_Capped': "Yes" if strategy_output.get('Sizing_Was_Capped') else "No",
                     'Sizing_Binding_Constraint': strategy_output.get('Sizing_Binding_Constraint') or "",
-                    'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
+                    'Option Strategy': strategy_output['Option Strategy'],
                     'buyRange': strategy_output['buyRange'],
                     'sellRange': strategy_output['sellRange'],
                     'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
@@ -3227,21 +3219,11 @@ class StateSnapshotStep(PipelineStep):
             universe_funnel=ctx.context_extras.get("universe_funnel"),
         )
 
-        # Persist the optional Pilots-PWA analytics artifacts (options premium
-        # matrix + pairs radar). Both are opt-in (settings.*_ENABLED, default
-        # False) and dead-letter-guarded: a failure here NEVER affects the
-        # pipeline (CONSTRAINT #6). Heavy engine imports live in reporting/*,
-        # never in the AST-guarded api/pilots_api.py.
-        try:
-            from reporting.options_snapshot import write_options_matrix
-
-            write_options_matrix(
-                ctx.symbols,
-                vix=float(ctx.macro_raw.get("VIXCLS", 0.0) or 0.0),
-                market_regime=str(ctx.macro_raw.get("market_regime", "RISK ON")),
-            )
-        except Exception as opt_err:  # noqa: BLE001
-            telemetry.warning(f"Options matrix snapshot skipped: {opt_err}")
+        # Persist the optional Pilots-PWA pairs radar artifact. Opt-in
+        # (settings.PAIRS_SNAPSHOT_ENABLED, default False) and
+        # dead-letter-guarded: a failure here NEVER affects the pipeline
+        # (CONSTRAINT #6). The options premium matrix used to be written here
+        # too; it left core with the options desk (2026-09, step 3d).
         try:
             from reporting.pairs_snapshot import write_pairs_snapshot
 

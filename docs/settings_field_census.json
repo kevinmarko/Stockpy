@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "f521df1d6c2b947958a71e4da015b7c9c56f5820",
+    "git_commit": "d77db873ea61fe8c260ba65151b5d217e5060af2",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4077,7 +4077,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 434,
+    "files_scanned": 436,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -4389,7 +4389,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 397,
+      "total_reads": 394,
       "distinct_fields": 232,
       "counts": {
         "FMP_API_KEY": 13,
@@ -4400,10 +4400,8 @@
         "OPTIONS_RISK_FREE_RATE": 7,
         "ADVISORY_ONLY": 6,
         "LLM_COMMENTARY_ENABLED": 6,
-        "OPTIONS_0DTE_ENABLED": 6,
         "OPAL_RESEARCH_ENABLED": 5,
         "OPTIONS_ALERT_WEBHOOK_URL": 5,
-        "OPTIONS_AUTO_EXIT_ENABLED": 5,
         "PROMPT_REGISTRY_ENABLED": 5,
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 5,
         "ANTHROPIC_API_KEY": 4,
@@ -4412,7 +4410,9 @@
         "FMP_SCREENER_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
+        "OPTIONS_0DTE_ENABLED": 4,
         "OPTIONS_0DTE_HARD_EXIT_TIME": 4,
+        "OPTIONS_AUTO_EXIT_ENABLED": 4,
         "ROBINHOOD_EXECUTION_MODE": 4,
         "DATA_FETCH_MAX_CONCURRENCY": 3,
         "FMP_NEWS_MAX_PAGES": 3,

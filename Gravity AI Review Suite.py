@@ -3347,7 +3347,7 @@ class GravityAIAuditor:
             mock_targets = [
                 "engine.advisory.ProcessingEngine",
                 "engine.advisory.ForecastingEngine",
-                "engine.advisory.TechnicalOptionsEngine",
+                "engine.advisory.GarchVolatilityEstimator",
                 "engine.advisory.StrategyEngine",
             ]
 
@@ -8065,7 +8065,7 @@ class GravityAIAuditor:
 
                 with (
                     _mock.patch("engine.advisory.ProcessingEngine") as _pe,
-                    _mock.patch("engine.advisory.TechnicalOptionsEngine") as _toe,
+                    _mock.patch("engine.advisory.GarchVolatilityEstimator") as _toe,
                     _mock.patch("engine.advisory.ForecastingEngine") as _fe,
                     _mock.patch("engine.advisory.StrategyEngine") as _se,
                     _mock.patch("engine.advisory.TransactionsStore"),
@@ -9415,7 +9415,7 @@ class GravityAIAuditor:
             )
             fe = ForecastingEngine()
             with patch.object(_s2, "FORECAST_USE_GARCH_SIGMA", True), patch(
-                "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility",
+                "volatility.garch.GarchVolatilityEstimator.estimate_gjr_garch_volatility",
                 return_value=KNOWN_ANNUAL,
             ):
                 got_daily = fe._estimate_daily_sigma(hist_df, fallback_daily_sigma=0.99)

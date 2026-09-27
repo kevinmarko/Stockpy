@@ -116,7 +116,7 @@ class TestGarchSigma:
         with mock.patch.object(
             forecasting_engine.ForecastingEngine, "run_monte_carlo", side_effect=_spy_monte_carlo
         ), mock.patch(
-            "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility_term_structure",
+            "volatility.garch.GarchVolatilityEstimator.estimate_gjr_garch_volatility_term_structure",
             return_value={h: annual_vol for h in (10, 30, 60, 90)},
         ):
             engine.generate_forecast(
@@ -156,7 +156,7 @@ class TestGarchSigma:
         propagate the exception."""
         df = _ohlcv_df(120, seed=13)
         with mock.patch(
-            "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility",
+            "volatility.garch.GarchVolatilityEstimator.estimate_gjr_garch_volatility",
             side_effect=RuntimeError("arch fit blew up"),
         ):
             result = engine._estimate_daily_sigma(df, fallback_daily_sigma=0.0201)

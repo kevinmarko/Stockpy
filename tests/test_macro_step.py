@@ -1,7 +1,8 @@
 """
-tests/test_options_analysis_step_macro_dto.py
-================================================
-Regression coverage for pipeline/production_steps.py::OptionsAnalysisStep.run()'s
+tests/test_macro_step.py
+========================
+Regression coverage for pipeline/production_steps.py::MacroStep.run()'s (split
+out of the old options step in 2026-09, step 3d)
 MacroEconomicDTO construction -- the async-orchestrator (main_orchestrator.py)
 production path whose ctx.macro_dto is what execution/risk_gate.py's
 PreTradeRiskGate actually reads for real order approval.
@@ -13,12 +14,9 @@ BAMLH0A0HYM2/VIXCLS, or MacroEngine.calculate_sahm_rule's own fallback firing,
 must set ctx.macro_dto.data_unavailable=True (and therefore killSwitch=True),
 never silently compute off substituted benign defaults (CONSTRAINT #4/#6).
 
-ctx.symbols is deliberately empty in every test here -- OptionsAnalysisStep's
-per-ticker options/GARCH analysis loop is out of scope for this file (already
-covered by tests/test_production_steps_columns_contract.py's
-_apply_options_columns tests); an empty symbol list exercises the macro-DTO
-construction path (the first ~20 lines of .run()) while making the
-per-ticker ThreadPoolExecutor loop a guaranteed no-op.
+MacroStep has no per-ticker loop (that half of the old options step is now
+TrendVolatilityStep, covered by tests/test_trend_volatility_step.py), so
+ctx.symbols is left empty in every test here.
 """
 from __future__ import annotations
 
@@ -31,7 +29,7 @@ from data_engine import MockDataEngine
 from macro_engine import MacroEngine
 from main_orchestrator import EngineContext
 from pipeline.context import RunContext
-from pipeline.production_steps import OptionsAnalysisStep
+from pipeline.production_steps import MacroStep
 
 
 class _FakeFred:
@@ -53,7 +51,7 @@ class _FakeEngineWithFred:
 
 
 def _make_ctx(macro_raw, macro_engine, market=None) -> RunContext:
-    """Minimal RunContext exercising only OptionsAnalysisStep.run()'s macro
+    """Minimal RunContext exercising only MacroStep.run()'s macro
     DTO construction -- symbols=[] keeps every downstream engine untouched."""
     return RunContext(
         force_account=False,
@@ -74,7 +72,7 @@ def _make_ctx(macro_raw, macro_engine, market=None) -> RunContext:
     )
 
 
-class TestOptionsAnalysisStepMacroDataUnavailable:
+class TestMacroStepMacroDataUnavailable:
     def test_healthy_macro_raw_and_real_sahm_reading_is_available(self):
         """The byte-identical-when-healthy regression guard: a fully populated
         macro_raw plus a real (non-fallback) Sahm reading must NOT set
@@ -85,7 +83,7 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
         macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
 
         ctx = _make_ctx(macro_raw, me)
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.data_unavailable is False
         assert ctx.macro_dto.killSwitch is False
@@ -95,7 +93,7 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
         me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
 
         ctx = _make_ctx({}, me)
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.data_unavailable is True
         assert ctx.macro_dto.killSwitch is True
@@ -107,7 +105,7 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
         macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0}  # no VIXCLS
 
         ctx = _make_ctx(macro_raw, me)
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.data_unavailable is True
         assert ctx.macro_dto.killSwitch is True
@@ -121,7 +119,7 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
         macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
 
         ctx = _make_ctx(macro_raw, me)
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.data_unavailable is True
         assert ctx.macro_dto.killSwitch is True
@@ -142,7 +140,7 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
             )
 
         ctx = _make_ctx(macro_raw, me, market=_FakeMarket())
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.data_unavailable is True
         assert ctx.macro_dto.killSwitch is True
@@ -160,7 +158,7 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
             pass
 
         ctx = _make_ctx(macro_raw, me, market=_BareMarket())
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.data_unavailable is False
         assert ctx.macro_dto.killSwitch is False
@@ -168,14 +166,14 @@ class TestOptionsAnalysisStepMacroDataUnavailable:
     def test_sahm_rule_indicator_reflects_real_fred_value_not_fallback(self):
         """ctx.macro_dto.sahm_rule_indicator must carry the actual FRED-derived
         reading when available, not a hardcoded 0.0 -- confirms
-        OptionsAnalysisStep correctly threads _calculate_sahm_rule_detailed's
+        MacroStep correctly threads _calculate_sahm_rule_detailed's
         value through, mirroring the wiring already fixed in main.py."""
         fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.37])})
         me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
         macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
 
         ctx = _make_ctx(macro_raw, me)
-        OptionsAnalysisStep().run(ctx)
+        MacroStep().run(ctx)
 
         assert ctx.macro_dto.sahm_rule_indicator == 0.37
         assert ctx.macro_dto.data_unavailable is False

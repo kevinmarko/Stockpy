@@ -197,8 +197,8 @@ def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
 
     assert result_equity["Action Signal"] == "STRONG BUY"
     assert result_equity["buyRange"] == "Buy Zone: $149.62 - $157.50"
-    # Should select standard equity OTM covered call (delta-20)
-    assert "OTM Covered Call (delta-20)" in result_equity["Option Strategy"]
+
+    assert result_equity["Option Strategy"] == ""  # options overlay removed (step 3d)
 
     # Case 2: REIT high-yielder in a Buy setup (AGNC - Real Estate)
     bar_reit = MarketBarDTO(datetime.now(), "AGNC", 9.80, 10.05, 9.75, 9.85, 2500000)
@@ -213,9 +213,9 @@ def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
         forecast_price=10.50, trend_strength=60.0, atr=0.15
     )
 
-    # Should select OTM Covered Call with delta-15 (since Real Estate sector is a yield asset)
+
     assert result_reit["Action Signal"] in ["BUY", "STRONG BUY"]
-    assert "OTM Covered Call (delta-15)" in result_reit["Option Strategy"]
+    assert result_reit["Option Strategy"] == ""  # options overlay removed (step 3d)
 
     # Case 3: Neutral Stock in HOLD setup
     # Make trend strength neutral (40.0)

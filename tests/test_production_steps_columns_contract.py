@@ -3,7 +3,7 @@ tests/test_production_steps_columns_contract.py
 =================================================
 Shared CONSTRAINT #4 writeback contract, proved once and applied to both of
 pipeline/production_steps.py's per-ticker dict -> dashboard_df column
-writers: ``_apply_forecast_columns`` and ``_apply_options_columns``.
+writers: ``_apply_forecast_columns`` and ``_apply_trend_vol_columns``.
 Formerly two structural-twin files (tests/test_production_steps_forecast_columns.py,
 tests/test_production_steps_options_columns.py) independently re-proving the
 same five-scenario contract for two different writers -- consolidated here
@@ -26,9 +26,12 @@ dict onto Target_Days/ARIMA/MC_Target/MC_Lower/MC_Upper/Forecast_10/
 Forecast_30/Forecast_60/Forecast_90/Forecast_30_Prophet_Lower/
 Forecast_30_Prophet_Upper -- source keys equal column names.
 
-``_apply_options_columns`` maps OptionsAnalysisStep's per-ticker
-tech_opt_indicators dict onto GARCH_Vol/Realized_Vol_Rank/True_IVR/VRP/
-Aroon Oscillator/Coppock Curve/Chandelier Exit -- three source keys
+``_apply_trend_vol_columns`` maps TrendVolatilityStep's per-ticker
+trend_vol_indicators dict onto GARCH_Vol/Realized_Vol_Rank/True_IVR/VRP/
+Aroon Oscillator/Coppock Curve/Chandelier Exit (Realized_Vol_Rank/True_IVR/
+VRP are no longer produced since the options desk left core in 2026-09, so
+they stay NaN in production; the mapping itself is still pinned here until
+those columns are trimmed from COLUMN_SCHEMA in step 4) -- three source keys
 (Aroon_Oscillator, Coppock_Curve, Chandelier_Long) are deliberately renamed
 onto differently-spelled/named dashboard columns, preserved exactly in the
 ``full_expected``/``partial_expected_present`` mappings below.
@@ -46,7 +49,7 @@ from typing import Callable
 import pandas as pd
 import pytest
 
-from pipeline.production_steps import _apply_forecast_columns, _apply_options_columns
+from pipeline.production_steps import _apply_forecast_columns, _apply_trend_vol_columns
 
 FORECAST_COLS = [
     'Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
@@ -122,8 +125,8 @@ CASES = [
         mixed_healthy_expected_value=101.0,
     ),
     WritebackCase(
-        id="options",
-        apply=lambda df, src: _apply_options_columns(df, src),
+        id="trend_vol",
+        apply=lambda df, src: _apply_trend_vol_columns(df, src),
         columns=OPTIONS_COLUMNS,
         full_source_symbol="AAPL",
         full_source={"AAPL": {

@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 434,
+  "files_scanned": 436,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -500,7 +500,7 @@
   "read_forms": {
     "attr": 877,
     "factory_param": 4,
-    "getattr_const": 397,
+    "getattr_const": 394,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
@@ -2620,7 +2620,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "main_orchestrator.py:118",
+        "site": "main_orchestrator.py:117",
         "via": []
       },
       {
@@ -2848,7 +2848,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "technical_options_engine.py:25",
+        "site": "technical_options_engine.py:24",
         "via": []
       }
     ],

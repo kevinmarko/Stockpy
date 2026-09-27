@@ -615,12 +615,12 @@ class TestRunPipelineStageOrdering:
             raise AssertionError(f"stage banner not logged: {needle!r}")
 
         macro_i = _first_index("Macro Engine")
-        options_i = _first_index("Technical Options Engine")
+        volatility_i = _first_index("Trend & Volatility Engine")
         processing_i = _first_index("Computational Core")
         forecasting_i = _first_index("Forecasting Engine")
         strategy_i = _first_index("Strategy and Evaluation")
 
-        assert macro_i < options_i < processing_i < forecasting_i < strategy_i
+        assert macro_i < volatility_i < processing_i < forecasting_i < strategy_i
 
 
 # ===========================================================================

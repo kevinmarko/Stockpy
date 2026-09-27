@@ -57,7 +57,7 @@ def test_advisory_evaluate_uses_cached_bars_and_fundamentals():
     mock_market.get_latest_quote.return_value = mock_quote
 
     with mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-         mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+         mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
          mock.patch("engine.advisory.StrategyEngine") as MockSE, \
          mock.patch("engine.advisory._get_historical_store") as MockHS:
 

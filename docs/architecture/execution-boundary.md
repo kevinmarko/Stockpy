@@ -225,6 +225,8 @@ The fully-automated (no-override) path is a *different* call chain from §4,
 and does **not** inherit `compute_tracked_universe()`'s breadth. Traced end
 to end:
 
+> **2026-09 (step 3d):** nothing calls `run_automated_options_lifecycle()` any more — `main.py` and the daemon stopped running the options lifecycle when the options desk left core. The trace below describes the pre-3d behaviour and is kept until the module moves to `legacy/` in step 4.
+
 - **`execution/options_lifecycle.py::run_automated_options_lifecycle()`**
   — called from both `main.py`'s cycle and
   `desktop/daemon_runtime.py::OrchestratorDaemon.trigger_run()`
