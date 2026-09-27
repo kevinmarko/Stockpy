@@ -18,7 +18,12 @@ not deleted:
    advisory BUY size.
 2. **Macro DTO construction** → `pipeline/production_steps.py::MacroStep` (body unchanged).
 3. **Aroon / Coppock / Chandelier** → `trend_indicators.py::calculate_trend_exit_indicators`
-   (verbatim). The plan assumed these could be sourced from `processing_engine`'s own
+   (same formulas). It calls `pandas_ta_classic` directly rather than the `DataFrame.ta`
+   accessor: `pandas_ta` and `pandas_ta_classic` are both installed and both register that
+   accessor (last import wins), and under `pandas_ta` the old `df.ta.chandelier_exit` call
+   returned differently named columns, so the Chandelier values silently became 0.0. This
+   surfaced as an import-order-dependent test failure; the pre-move goldens now pass under
+   every import order. The plan assumed these could be sourced from `processing_engine`'s own
    columns; they can't — `processing_engine` uses Aroon length 25 (vs 14), a different
    Coppock window, and only a long Chandelier. Swapping would have changed signals, so the
    exact code moved instead.
