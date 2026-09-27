@@ -164,7 +164,7 @@ describe("EquityOrderTicket", () => {
       cash: 5,
       buying_power: 5,
     });
-    render(<EquityOrderTicket symbol="AGNC" spotPrice={10.0} />);
+    render(<EquityOrderTicket symbol="AGNC" spotPrice={10.0} onClear={vi.fn()} />);
     fireEvent.click(screen.getByText("Sell AGNC"));
     await screen.findByText("$5.00");
 
@@ -181,7 +181,7 @@ describe("EquityOrderTicket", () => {
       order_id: "eq_ord_125",
       message: "Paper stock order filled: SELL 2.27 shares of AAPL at $220.32 (Total: $499.13).",
     });
-    render(<EquityOrderTicket symbol="AAPL" spotPrice={220.32} />);
+    render(<EquityOrderTicket symbol="AAPL" spotPrice={220.32} onClear={vi.fn()} />);
     fireEvent.click(screen.getByText("Sell AAPL"));
     fireEvent.click(screen.getByText("By Shares"));
     fireEvent.change(screen.getByDisplayValue("1"), { target: { value: "2.2694" } });
