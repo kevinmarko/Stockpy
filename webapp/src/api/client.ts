@@ -429,8 +429,8 @@ const liveApi = {
     ),
   getModels: () => http<ModelRow[]>("/models"),
   getPairs: () => http<PairsRadar>("/pairs"),
-  // ---- On-demand Options/Pairs recompute (data base, :8603) — webapp porting
-  // backlog items 8a/8b. Distinct from getOptions/getPairs above (which only
+  // ---- On-demand Pairs recompute (data base, :8603) — webapp porting
+  // backlog item 8b. Distinct from getPairs above (which only
   // ever serve the last PIPELINE-WRITTEN artifact): these POSTs recompute
   // synchronously against operator-chosen parameters/symbols, capped small.
   // A 422 (too few/many symbols, identical Y/X) throws ApiError the normal
