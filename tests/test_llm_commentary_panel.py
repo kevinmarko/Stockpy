@@ -24,18 +24,13 @@ TestGenerateForSymbolRow   — enricher returns None → returns None;
                              enricher returns valid payload → llm_rationale dict;
                              enricher raises → returns None (CONSTRAINT #6);
                              missing symbol → returns None without calling enricher.
-TestPanelsWiring           — legacy.streamlit_command_center.panels exports _render_llm_commentary_button
-                             AND render_report_viewer calls it (source grep).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
-from unittest import mock
+from typing import Any, Dict
 
-import pytest
 
 from shared.llm_commentary_panel import (
     commentary_state_key,
@@ -273,30 +268,3 @@ class TestGenerateForSymbolRow:
 # ---------------------------------------------------------------------------
 # TestPanelsWiring
 # ---------------------------------------------------------------------------
-
-
-class TestPanelsWiring:
-    def test_render_button_helper_is_exported(self):
-        from legacy.streamlit_command_center import panels
-
-        assert hasattr(panels, "_render_llm_commentary_button")
-        assert callable(panels._render_llm_commentary_button)
-
-    def test_render_report_viewer_calls_button_helper(self):
-        # Source-grep guards against an accidental drop of the wiring in
-        # the drill-down expander.
-        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "report_viewer.py"
-        src = path.read_text(encoding="utf-8")
-        assert "_render_llm_commentary_button(row, pick)" in src
-
-    def test_helper_imports_from_panel_module(self):
-        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "report_viewer.py"
-        src = path.read_text(encoding="utf-8")
-        assert "from shared.llm_commentary_panel import" in src
-        for name in (
-            "commentary_state_key",
-            "commentary_status",
-            "format_rationale_markdown",
-            "generate_for_symbol_row",
-        ):
-            assert name in src, f"helper {name} missing from legacy/streamlit_command_center/panels/report_viewer.py"

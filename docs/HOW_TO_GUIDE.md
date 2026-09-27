@@ -210,50 +210,28 @@ Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine e
 
 ## 5. Running the Pipeline
 
-### The recommended way — the unified desktop app
+### The recommended way — the web app
 
-`launch_app.command` at the project root is the recommended everyday way to start the
-platform. Double-click it from **Finder** or the **Dock** and a single native desktop
-window opens with the full Command Center inside it — no browser tab, no separate
-terminal window to babysit.
+The platform's UI is the **Pilots PWA** (`webapp/`). Double-click `launch_webapp.command`
+at the project root from **Finder** or the **Dock**. It asks whether to use offline mock
+data (the default) or live data. In live mode it starts the backend APIs it needs (and the
+orchestrator daemon, when `ORCHESTRATOR_DAEMON_ENABLED=true`) if they aren't already
+running, then opens the web app. It does not run the pipeline for you — use the Pipeline
+screen (below) or `launch.command`.
 
-**This is a behavior change from the old model, and it's worth being explicit about:**
-the background refresh loop that keeps prices, indicators, and signals current now runs
-**automatically for as long as the window stays open**, and **stops the moment you close
-the window** — you don't start or stop it separately, and there's nothing left running
-in the background after you quit. (The old model — `launch.command`'s headless interval
-loop and `launch_gui.command`'s browser-tab GUI — required you to separately manage a
-terminal loop and a browser tab, and either could keep running after you thought you'd
-closed things down.)
+For a backend that keeps running with no Terminal window open, install the always-on stack
+service — see `docs/RUNBOOK.md` §0.1.
 
-A small freshness indicator in the sidebar shows how recently the background loop last
-refreshed, so you always know at a glance whether what you're looking at is current.
+The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`,
+`legacy/streamlit_command_center/`) was deleted in 2026-09; git history has it.
 
-Under the hood, `launch_app.command` runs:
-
-```bash
-python3 -m legacy.streamlit_command_center.app_shell [--interval N]
-```
-
-`legacy/streamlit_command_center/app_shell.py` opens `legacy/streamlit_command_center/app.py` in a native window (via `pywebview`) and supervises the
-background refresh loop tied to that window's lifecycle. Everything described below for
-the browser-tab Command Center — the eighteen tabs, the Launcher, Settings, Strategy
-Matrix, and so on — is the same GUI, just hosted in a native window instead of your
-browser.
-
-**One-time setup** (already done — listed here for reference if you ever recreate the file):
-
-```bash
-chmod +x launch_app.command
-```
-
-**To add to the Dock**: drag `launch_app.command` to your Dock → right-click → Options → Keep in Dock.
+**To add to the Dock**: drag `launch_webapp.command` to your Dock → right-click → Options → Keep in Dock.
 
 ---
 
 ### The headless way — double-click on macOS
 
-Prefer a terminal-only, no-GUI loop, or need something scriptable for a scheduled task?
+Prefer a terminal-only loop with no web app, or need something scriptable for a scheduled task?
 `launch.command` at the project root is a macOS launcher you can double-click from **Finder** or the **Dock**. It:
 
 1. Navigates to the project root automatically.
@@ -279,40 +257,32 @@ REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
 
 ---
 
-### The Command Center — visual control panel
+### The web app — visual control panel
 
-The **Command Center** is a graphical front-end over the same pipeline, ideal if you prefer clicking to typing. The recommended way to open it is `launch_app.command` (see above), which hosts it in a native desktop window. If you'd rather have it in a browser tab instead (e.g. for headless/dev use), double-click **`launch_gui.command`** (macOS) or run:
+The web app is a graphical front-end over the same pipeline. Its main screens:
 
-```bash
-streamlit run legacy/streamlit_command_center/app.py
-```
+- **Pipeline** (`/pipeline`) — daemon status, run triggers ("Run full advisory pipeline"
+  plus stage-scoped ones), run history, and the dead-letter queue with per-symbol retry.
+- **Console** (`/console`) and **Commands** (`/commands`) — launch jobs and CLI targets
+  (including strategy validation) and follow their output.
+- **Mission Control** (`/observability`) — regime, portfolio risk, equity/drawdown,
+  forecast skill, circuit breakers, risk-gate blocks, heartbeat, and logs; see
+  [§12](#12-the-observability-dashboard).
+- **Portfolio** (`/portfolio`) — holdings, P&L, and held-vs-signal reconciliation.
+- **Options** (`/options`), **Pairs radar** (`/pairs`), **Signal Breakdown** (`/signals`),
+  **Symbol Screener**, **Forecast Viewer**, and other research screens.
+- **Calibration** (`/calibration`) and **Attribution** (`/attribution`) — decision journal,
+  conviction calibration, and Brinson-Fachler attribution.
+- **Report Library** (`/operations/reports`) — generated reports.
+- **Universe Transparency** (`/universe`) — tracked universe and coverage status.
+- **Settings** (`/settings`) — execution mode and kill switch (General), tunables, strategy
+  weights/enabled modules (Strategy), brokers, AI capabilities (AI), prompt registry
+  (Prompts), feature flags, and a full settings reference.
+- **Help & Glossary** (`/help`) — searchable glossary; each screen also has a "How this
+  works" panel.
 
-Either way it's the same GUI, with eighteen tabs:
-
-1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a **live 0–100% pipeline-progress bar** (see below), a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles. Also surfaces the Robinhood execution-bridge mode banner (see [Robinhood Execution Bridge](#robinhood-execution-bridge)).
-2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, one-click download of the generated HTML report / signals CSV, and a full **Brinson-Fachler Attribution Analysis** section. Edit the GICS-11 sector matrix directly (`st.data_editor`) or **bulk-paste TSV/CSV** from a spreadsheet, then click *Compute attribution* to see allocation / selection / interaction effects (top-line metrics + per-sector breakdown + bar chart, with CSV downloads for the editor input and the breakdown).
-3. **⚙️ Settings** — edit **non-secret** tunables (`RISK_FREE_RATE`, `KELLY_FRACTION`, `DEFAULT_TICKERS`, thresholds, …) and save them to `.env`. **Secrets (API keys, passwords, TOTP) are shown masked and are read-only here** — edit those directly in `.env`. Changes take effect on the **next** launch.
-4. **🧩 Strategy Matrix** — enable/disable individual signal modules (writes `DISABLED_SIGNAL_MODULES`), adjust their weights (writes `SIGNAL_WEIGHTS`), and manually activate/deactivate the **Macro Kill Switch**.
-5. **📒 Paper Monitor** — your Robinhood account snapshot (account state only) side-by-side with the pipeline's market-data projection, reconciled by ticker. Check **🔐 Force fresh login (bypass cache)** before clicking the fetch button to re-authenticate against Robinhood on demand instead of reading the daily cache — equivalent to `python3 main.py --refresh-account`, but only the login/fetch, no full pipeline run.
-6. **🛡️ Gravity Audit** — runs the Gravity AI Review Suite and shows pass/fail per step; review this before authorizing a live run.
-7. **🧮 Options** — Black-Scholes Greeks and an IV-Rank proxy per active symbol.
-8. **🛰️ Market Data** — which provider is active (Alpaca real-time vs. yfinance delayed), quote freshness, and a cache-reset control.
-9. **📊 Observability** — Mission Control: macro-regime / VIX / HMM summary, account holdings & P&L, open positions vs. pipeline signals, portfolio heat/gross/net exposure, validation report status, recent closed trades, an equity-curve/drawdown/regime-overlay chart, the risk gate block log, plus heartbeat trend, system telemetry, latency heatmap, and error log — the single observability surface for the platform (the former standalone `streamlit run observability/dashboard.py` app has been retired; see [§12 The Observability Dashboard](#12-the-observability-dashboard)).
-10. **📡 Live Inventory** — the full Task 1.4 sync view: holdings ∪ every Robinhood watchlist ∪ file-backed watchlists, each symbol's `CoverageStatus` (FULL / QUOTES_ONLY / EQUITY_ONLY / UNCOVERED), cost-basis delta, and forecast-availability flag. **🔄 Sync Now** refreshes the universe and persists it as `DEFAULT_TICKERS` in `.env`. **📥 Refresh Robinhood snapshot** has its own **🔐 Force fresh login (bypass cache)** checkbox for an on-demand re-login (see Paper Monitor above).
-11. **❓ Help** — the in-app glossary and per-tab/per-metric explainer tooltips plus the first-run onboarding tour; see [In-App Help & Glossary](#in-app-help--glossary).
-12. **📝 Prompts** — the Remote-Updatable Prompt Registry: view/publish versioned prompt text, verify signatures, and roll back; see [§16 Remote Prompt Updates (Prompt Registry)](#16-remote-prompt-updates-prompt-registry).
-13. **🪄 AI Insights** — Opal research brief, Claude analyst note, Gemini chart-pattern read, and an aggregate Claude-vs-Gemini disagreement view, all operator-triggered per symbol; see [AI Insights & AI Control Center](#ai-insights--ai-control-center).
-14. **🎛️ AI Control Center** — one place to toggle every AI capability (Claude commentary, Gemini alerts/vision, Gravity AI runner, Opal research), run each on demand, and start/stop a recurring pipeline run; see [AI Insights & AI Control Center](#ai-insights--ai-control-center).
-15. **📊 Analytics** — read-only backend analytics that previously reached no GUI: broker realized performance (win rate / profit factor / realized P&L reconstructed from Robinhood order history), the account-value equity curve, a recent-alerts feed, the ML model registry, per-symbol news sentiment, and realized slippage + CoVaR.
-16. **🔗 Pairs** — an **advisory-only** view over the pairs-trading engine: *Scan* ranks cointegrated candidate pairs (p-value + half-life), *Analyze* shows the live Kalman hedge ratio, spread z-score, rolling-ADF p-value, and the current entry/exit/stop label. Displayed, never traded.
-17. **📁 Report Library** — an inline-viewable browser over every generated report; see [Report Library](#17-report-library).
-18. **🔬 Validation Lab** — run the strategy-validation harness on demand per strategy and view the pass/fail results (PBO / DSR / Sharpe / MaxDD against the deployability gates); see [Validation Lab](#18-validation-lab).
-
-The Command Center is **read-only and file-backed**: it never talks to the broker directly — it launches the orchestrator and reads the files the orchestrator writes, so it stays usable even when the broker API is down. One-time setup: `chmod +x launch_gui.command`.
-
-#### Live pipeline-progress bar (Launcher tab)
-
-While a run is in flight the Launcher tab shows a **live 0–100% progress bar** with the current stage name and percent complete (e.g. *"Forecasting — 62%"*). It is fully file-backed, just like the rest of the Command Center: the orchestrator's `reporting/progress.py` reporter writes `output/progress.json` (atomic write-then-rename) as it advances through stages and per-symbol work, and the Launcher polls that file every `settings.PROGRESS_POLL_SECONDS` (default **5 s**). Before the orchestrator's first stage is reached — or when no run is active — the bar is indeterminate or hidden rather than showing a fabricated percentage. Nothing extra is needed to enable it; a missing or malformed `progress.json` simply degrades to no bar.
+The old desktop app's live 0–100% pipeline-progress bar (`output/progress.json`) has no
+web app equivalent yet.
 
 ---
 
@@ -417,8 +387,8 @@ Open either in any browser. The advisory report (`daily_report.html`)
 - **Search box + sortable columns**: type to filter by symbol/action/rationale;
   click a column header to sort. (No page reload, no external JS libraries.)
 - **Gravity AI Audit Log tab**: raw JSON findings from the verification suite.
-- **Reports tab — Decision Journal**: log whether you acted on, passed, or modified each advisory signal (see [Manual Execution Journal](#manual-execution-journal-reports-tab) below).
-- **Reports tab — Conviction Calibration**: reliability diagram showing whether the conviction scores match actual win rates (see [Conviction Calibration](#conviction-calibration-reports-tab) below).
+- **Decision Journal** (web app Calibration screen): log whether you acted on, passed, or modified each advisory signal (see [Manual Execution Journal](#manual-execution-journal-reports-tab) below).
+- **Conviction Calibration** (web app Calibration screen): reliability diagram showing whether the conviction scores match actual win rates (see [Conviction Calibration](#conviction-calibration-reports-tab) below).
 
 Non-held watchlist symbols render "—" in the holdings columns (positions are
 never fabricated). The report contains no credentials.
@@ -429,30 +399,29 @@ never fabricated). The report contains no credentials.
 
 ### State snapshot (for the dashboard)
 
-`output/state_snapshot.json` — machine-readable summary consumed by the Streamlit observability dashboard. Updated every pipeline run. A timestamped copy is ALSO written to `output/history/state_snapshot_<UTC>.json` and pruned after `SNAPSHOT_HISTORY_DAYS` (default 30); the daily HTML report's "Δ Since Last Run" band reads the two most recent rotated copies via `scripts/snapshot_diff.py`.
+`output/state_snapshot.json` — machine-readable summary read by the web app's backend (Mission Control, symbol pages, and more). Updated every pipeline run. A timestamped copy is ALSO written to `output/history/state_snapshot_<UTC>.json` and pruned after `SNAPSHOT_HISTORY_DAYS` (default 30); the daily HTML report's "Δ Since Last Run" band reads the two most recent rotated copies via `scripts/snapshot_diff.py`.
 
 ### Manual Execution Journal (Reports tab)
 
-The **Decision Journal** section in the Reports tab lets you log what you did with each advisory signal — useful for post-hoc analysis and for teaching the calibration tracker which signals you actually endorsed.
+The **Decision journal** section on the web app's **Calibration** screen (`/calibration`) lets you log what you did with each advisory signal — useful for post-hoc analysis and for teaching the calibration tracker which signals you actually endorsed.
 
 **How it works:**
 
-1. Open the Reports tab and scroll to "Signal Decision Journal".
-2. Select the symbol from the dropdown (pre-populated with the last pipeline signals).
-3. The context strip shows the system recommendation, conviction score, and current price.
-4. Add optional notes, then click one of:
+1. Open the Calibration screen and scroll to the decision journal.
+2. Pick a current signal to log a decision against.
+3. Add optional notes, then click one of:
    - **✅ Acted** — you executed (or are executing) the suggested action.
    - **⏭ Passed** — you saw the signal but chose not to act.
    - **🔁 Modified** — you acted differently from the system (enter notes explaining the change).
-5. The entry is appended to `output/decision_log.jsonl` (JSON-Lines, one entry per line).
+4. The entry is appended to `output/decision_log.jsonl` (JSON-Lines, one entry per line).
 
 For **"Acted"** entries only, the journal automatically looks up the nearest matching trade in `quant_platform.db` within ±24 h and records the `trade_id`. This allows the conviction calibration chart to filter to "decisions the operator actually endorsed."
 
-**Log file location:** `output/decision_log.jsonl` — append-only, never read by the signal pipeline. The Past Decisions expander shows the last 20 entries with a CSV download button.
+**Log file location:** `output/decision_log.jsonl` — append-only, never read by the signal pipeline. The Calibration screen lists recent entries.
 
 ### Conviction Calibration (Reports tab)
 
-The **Conviction Calibration** section in the Reports tab renders a reliability diagram — comparing the system's stated conviction score against the actual empirical win rate per conviction bin.
+The **Conviction Calibration** section on the web app's **Calibration** screen renders a reliability diagram — comparing the system's stated conviction score against the actual empirical win rate per conviction bin.
 
 - X-axis: conviction bin (0–1, split into 10 equal bins by default).
 - Y-axis: actual win rate for closed trades in that bin.
@@ -614,7 +583,7 @@ Add the `is_options_selling=True` flag when constructing the harness in code. Th
 Reports are saved to `reports/` as:
 - `reports/<strategy_name>_validation_summary.json` — machine-readable CURRENT-run snapshot, overwritten every harness run (consumed by preflight check)
 - `reports/<strategy_name>_validation_report.html` — human-readable with Plotly charts
-- `reports/history/<strategy_name>_validation_history.jsonl` — append-only, one row per historical run (capped at `MAX_VALIDATION_HISTORY_ROWS`), so PBO/DSR/Sharpe/MaxDD can be plotted as a trend across runs (read via `validation.harness.read_validation_history`; rendered in the GUI's Gravity Audit / Safety tab under "Validation trend across runs")
+- `reports/history/<strategy_name>_validation_history.jsonl` — append-only, one row per historical run (capped at `MAX_VALIDATION_HISTORY_ROWS`), so PBO/DSR/Sharpe/MaxDD can be plotted as a trend across runs (read via `validation.harness.read_validation_history`; rendered on the web app's Strategy Health screen as a validation trend)
 
 ### Walk-forward stability
 
@@ -671,12 +640,9 @@ Or use `launchd` on macOS (more reliable than cron for Mac):
 
 ### Monitor while running
 
-Open the Command Center (`launch_app.command`, or `launch_gui.command` / `streamlit run legacy/streamlit_command_center/app.py`) and go to the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks — see [§12 The Observability Dashboard](#12-the-observability-dashboard) for the full panel breakdown (now folded into this tab; the standalone `streamlit run observability/dashboard.py` app has been retired).
-```bash
-streamlit run legacy/streamlit_command_center/app.py
-```
-
-Opens the Command Center at `http://localhost:8501` — open the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks (see [§12](#12-the-observability-dashboard)).
+Open the web app's **Mission Control** screen (`/observability`) for regime, portfolio risk,
+kill switch / circuit-breaker status, and recent risk-gate blocks, and the **Portfolio**
+screen for live P&L and open positions — see [§12 The Observability Dashboard](#12-the-observability-dashboard).
 
 ### Minimum paper trading period
 
@@ -686,63 +652,50 @@ The preflight check requires **90 days** of continuous paper trading before goin
 
 ## 12. The Observability Dashboard
 
-> **The standalone `streamlit run observability/dashboard.py` app has been retired.**
-> Everything described in this section now lives in the Command Center's **📊 Observability**
-> tab — open it via `launch_app.command` (recommended; native desktop window, always-on
-> background refresh) or `launch_gui.command` / `streamlit run legacy/streamlit_command_center/app.py` (browser tab).
-> There is no longer a second app to separately launch or keep running.
+The platform's observability surface is the web app's **Mission Control** screen
+(`/observability`). The old standalone `observability/dashboard.py` app and the Streamlit
+desktop app's Observability tab are both gone (the desktop app was deleted in 2026-09).
 
-Inside the Command Center, the Observability tab auto-refreshes alongside the rest of
-the GUI. When running under `launch_app.command`, the always-on background refresh loop
-keeps this tab's data current for as long as the window stays open; when running the
-browser-tab GUI, use the tab's own refresh control to force an immediate update without
-waiting for the next auto-refresh.
-```bash
-streamlit run legacy/streamlit_command_center/app.py
-```
-
-Open the **📊 Observability** tab. This tab is the platform's single
-observability surface — the former standalone `streamlit run
-observability/dashboard.py` app has been retired and every panel it used to
-render now lives here.
-
-Panels refresh whenever the tab re-renders (Streamlit's normal script rerun,
-e.g. on interaction or a manual page reload); the underlying `state_snapshot.json`
-read is additionally keyed on the file's mtime so a fresh orchestrator/advisory
-run is picked up on the very next render rather than after a fixed TTL.
+Mission Control loads everything in one `GET /observability/summary` call. The sections
+past the attention strip, portfolio risk, and equity chart are collapsed under a
+"Background telemetry" disclosure.
 
 ### What you'll see
 
-| Panel | Data source | What it shows |
-|-------|-------------|--------------|
-| Kill switch banner | `output/KILL_SWITCH` file | Red = active (all orders blocked), Green = inactive |
-| Macro regime / VIX / HMM | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
-| Macro Regime Gate | `.env` (`MACRO_REGIME_GATE_ENABLED`) | Toggle + live Sahm Rule / HY OAS / yield-curve telemetry |
-| **Account Holdings & P&L** | **`$LOCAL_DATA_ROOT/robinhood_cache/account_snapshot.json`** (default `~/.stockpy_local/robinhood_cache/account_snapshot.json`; renamed/relocated from `cache/account_snapshot.json` by `settings.LOCAL_DATA_ROOT`, 2026-08) | **Total equity, buying power, unrealized P&L, dividends, and a per-position table with green/red-coloured unrealized P&L. Falls back to a "run `main.py --refresh-account`" note when no snapshot exists.** |
-| Strategy P&L | `quant_platform.db` | Realized P&L by strategy |
-| Open positions | `quant_platform.db` vs signals | Internal book vs pipeline recommendations |
-| Portfolio risk metrics | `quant_platform.db` | Portfolio heat, gross exposure, net exposure |
-| Validation status | `reports/*_validation_summary.json` | Deployable / not deployable per strategy (run-over-run trend lives in the Gravity Audit tab) |
-| Recent closed trades | `quant_platform.db` | Last 20 fills |
-| Equity curve & regime overlay | `quant_platform.db` + `output/history/` | Cumulative realized P&L, drawdown, and macro regime over time |
-| Risk gate block log | `output/risk_gate_blocks.jsonl` | Last 100 blocked orders and which check blocked them |
-| Heartbeat trend, system telemetry, latency heatmap, error log | `output/heartbeat.txt`, host/process metrics, `logs/investyo.log` | Orchestrator liveness trend, CPU/memory/disk, per-symbol fetch latency, classified error log |
+| Section | What it shows |
+|-------|--------------|
+| Attention strip (top) | Items that need action: circuit-breaker trips, portfolio heat over limit, risk-gate blocks, sizing-cap escalations, a heartbeat older than 120 s, the macro gate being off. Shows "All clear" when nothing qualifies. |
+| Control · Macro regime gate | Toggle for `MACRO_REGIME_GATE_ENABLED`, plus regime, VIX, Sahm Rule, HY OAS, 10Y-2Y, and HMM risk-on probability |
+| Portfolio risk | Portfolio heat and exposure over the account equity history |
+| Equity & drawdown | Equity curve and drawdown |
+| Forecast skill / Forecast skill by symbol | Portfolio-wide and per-symbol forecast reliability and weights |
+| Circuit breakers | Kill switch + risk-gate block counts |
+| Risk gate block log | Recent blocked orders (`output/risk_gate_blocks.jsonl`) and which check blocked them |
+| System telemetry | Host and process resource usage |
+| Data latency | Per-symbol fetch latency (needs `MARKET_DATA_LATENCY_TRACKING_ENABLED=true`) |
+| Sizing cap-event audit trail | Sizing guardrail cap events |
+| ETF volatility transmission | ETF-transmission switches and per-symbol values |
+| Heartbeat | Current orchestrator heartbeat age (`output/heartbeat.txt`) |
+| Strategy P&L | Realized P&L by strategy |
+| Logs | Tail of `logs/investyo.log` |
 
-The Account Holdings panel reads the same Robinhood snapshot the advisory
+Account holdings and P&L (equity, buying power, per-position unrealized P&L) are on the
+**Portfolio** screen.
+
+The Portfolio screen's holdings read the same Robinhood snapshot the advisory
 report uses — it is the source of truth for account state (holdings, cost
 basis, dividends, equity) and never contains credentials.
 
-**Note on the paths in the table above:** `quant_platform.db`, `output/...`, and `logs/...` are
-shown as short-hand file names — as of `settings.LOCAL_DATA_ROOT` (2026-08), all of them actually
-live under `$LOCAL_DATA_ROOT` (default `~/.stockpy_local/`), OUTSIDE the git checkout, not at the
-repo root shown literally. `reports/*_validation_summary.json` is the one exception in this table
-and remains repo-relative. See `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT`
+**Note on the paths in the table above:** `output/...` and `logs/...` are shown as short-hand
+file names — as of `settings.LOCAL_DATA_ROOT` (2026-08), they actually live under
+`$LOCAL_DATA_ROOT` (default `~/.stockpy_local/`), OUTSIDE the git checkout. See `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT`
 subsection for the exact per-subfolder layout.
 
 ### Staleness warning
 
-If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the Observability tab shows a yellow staleness warning. This means no fresh signals are available.
-If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the Heartbeat Age Trend panel shows a stale/slow status badge. This means no fresh signals are available.
+If the orchestrator heartbeat (`output/heartbeat.txt`) is older than 120 s, Mission Control's
+Heartbeat section shows a stale status and the attention strip lists it. This means no fresh
+signals are available.
 
 ---
 
@@ -940,7 +893,8 @@ In advisory mode: next pipeline run skips evaluation and logs the pause reason.
 In live mode: `OrderManager` raises `KillSwitchActiveError` before any order. The pipeline
 continues to run and produce signals — only order submission is blocked.
 
-The Launcher tab → Safety Controls also exposes a toggle button.
+The web app's Settings → General screen also has a pause/resume toggle for the same
+sentinel (resume is disabled there while `ADVISORY_ONLY=false`; resume at the console).
 
 ### Deactivate (resume)
 
@@ -970,7 +924,7 @@ becomes extreme. You don't need to trigger this manually — it fires when:
   (faster trigger with HMM agreement)
 
 In advisory mode, this auto-fire has no practical effect (no orders to block) but the
-sentinel is still written so the GUI pause indicator activates and the operator is alerted.
+sentinel is still written so the web app's kill-switch banner activates and the operator is alerted.
 
 ### Macro-triggered advisory gating (independent of the kill switch)
 
@@ -1237,29 +1191,21 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
 
-The Safety tab now leads with two new sections before the Gravity audit launcher:
+The desktop app's Safety tab was deleted in 2026-09. In the web app, **Mission Control**
+(`/observability`) has the equivalent **Circuit breakers** section (kill switch +
+risk-gate block counts) and the **Risk gate block log** (recent entries from
+`output/risk_gate_blocks.jsonl`). Run the Gravity audit from the **Console** screen.
 
-1. **🚧 Circuit Breaker Dashboard** — every active trip derived from
-   `output/KILL_SWITCH` and the last 24 hours of `output/risk_gate_blocks.jsonl`.
-   CRITICAL severity halts everything (kill switch, daily loss limit, portfolio
-   heat, macro kill switch, minimum_validation gate); WARNING covers per-symbol
-   blocks (max position size, max correlation, market hours, etc.). Click
-   **🔬 Inspect raw trip payloads** to see the original JSON-line block — that's
-   the source of truth.
-
-2. **🕸️ Dependency Map** — pick the data source(s) that are degraded right
-   now (Alpaca, Finnhub, FRED, Robinhood, etc.) and the panel lists every
-   strategy/tab/report that loses coverage. Useful both as documentation
-   (read-only) and as triage during an outage. The map lives in
-   `shared/dependency_map.py`; extend it there as new consumers come online.
+The old Dependency Map view (which data sources feed which consumers) has no web app screen;
+the map itself is still `shared/dependency_map.py` (`impacted_consumers([...])`).
 
 When the orchestrator vetoes orders unexpectedly:
-1. Open the Safety tab.
-2. Look at the Circuit Breaker Dashboard for the most recent CRITICAL trip.
-3. If it's the kill switch, check Strategy Matrix → Manual Kill Switch panel to
-   deactivate (the sentinel file is `output/KILL_SWITCH`).
-4. If it's a risk-gate block, read the `threshold` / `observed` columns and the
-   raw payload — those tell you *which check* fired and *by how much*.
+1. Open Mission Control.
+2. Look at Circuit breakers and the Risk gate block log for the most recent trip.
+3. If it's the kill switch, deactivate it with the Settings → General toggle or
+   `python -m execution.kill_switch --deactivate` (the sentinel file is `output/KILL_SWITCH`).
+4. If it's a risk-gate block, read the recorded check, threshold, and observed value —
+   those tell you *which check* fired and *by how much*.
 
 ## Advisory-Only Mode
 
@@ -1272,8 +1218,8 @@ account.
 | Layer | Behaviour |
 |-------|-----------|
 | `main_orchestrator._execute_broker_orders` | Returns immediately with an INFO log — no broker imports reached |
-| `legacy/streamlit_command_center/app.py` header | Shows `📋 ADVISORY MODE` banner instead of Simulation / Paper / Live badge |
-| Strategy Matrix mode toggle | Suppressed — replaced by a read-only caption showing underlying flags |
+| Web app status banner | Reads "Advisory Only Mode (Live Execution Disabled)" |
+| Web app execution-mode selector (Settings → General) | Shows Advisory; switching modes writes `ADVISORY_ONLY`/`DRY_RUN` and needs a typed confirmation |
 | `scripts/preflight_check.py` | Eight broker/advisory-false-positive checks auto-skip; `advisory_only_active` = PASS-loud; `robinhood_execution_mode` and `state_snapshot_fresh` always run |
 | Kill switch sentinel | Repurposes as a pause-recommendations gate (see §15) |
 
@@ -1293,57 +1239,43 @@ python3 main_orchestrator.py
 ```
 
 All three flags must be consistent: `ADVISORY_ONLY=false AND DRY_RUN=false AND
-ALPACA_PAPER=false` is required to reach a live submission. The GUI mode toggle
-reappears automatically once `ADVISORY_ONLY=false`.
+ALPACA_PAPER=false` is required to reach a live submission.
 
 ---
 
 ## Strategy Matrix tab — Global Execution Mode toggle
 
-> **Suppressed while `ADVISORY_ONLY=true`.** The toggle reappears automatically
-> when `ADVISORY_ONLY=false`. See [Advisory-Only Mode](#advisory-only-mode) above.
+The desktop app's Strategy Matrix tab was deleted in 2026-09. In the web app the execution
+mode selector is on **Settings → General**, with four modes:
 
-The Strategy Matrix (Control) tab leads with a **🎚️ Global Execution Mode**
-selector backed by `shared/strategy_registry.py`. Three modes:
-
-| Mode | DRY_RUN | ALPACA_PAPER | What happens |
+| Mode | ADVISORY_ONLY | DRY_RUN | What happens |
 |---|---|---|---|
-| 🧪 Simulation | true | true | OrderManager intercepts every intent before any broker contact. Safe default. |
-| 📝 Paper | false | true | Orders route to the Alpaca paper sandbox. No real money. |
-| 🔴 Live | false | false | Orders hit the live broker. Requires a **CONFIRM LIVE PRODUCTION** click. |
+| Advisory | true | — | No broker contact at all (project default). See [Advisory-Only Mode](#advisory-only-mode). |
+| Simulation | false | true | OrderManager intercepts every intent before any broker contact. |
+| Paper | false | false | Orders route to the paper broker (`ALPACA_PAPER=true` for Alpaca's sandbox). No real money. |
+| Live | false | false | Orders hit the live broker (`ALPACA_PAPER=false`). |
 
-**Setting takes effect on the next orchestrator/advisory launch.** We never
-mutate a running `settings.Settings`. The writer goes through the allowlist-
-bounded `shared/env_io.write_setting` so the GUI cannot flip a half-state (only
-ALPACA_PAPER without DRY_RUN, for example) — both flags are written together.
+Every mode change needs a typed confirmation, and the flags (`ADVISORY_ONLY`, plus
+`DRY_RUN` and `ALPACA_PAPER` for non-advisory modes) are written together so a half-state
+can't be set. **Setting takes effect on the next orchestrator/advisory launch.**
 
-Below the mode selector is the **📜 Strategy Version Registry**: a table of
-each registered signal module with its sha256 prefix (first 12 hex chars) and
-file mtime. If you redeployed a strategy file but the version hash and mtime
-haven't moved, the file did not actually change on disk — useful when
-"obviously I deployed this" disagrees with the dashboard.
+Signal-module weights, enabled/disabled modules, and each module's version fingerprint
+(sha256 prefix + file mtime) are on **Settings → Strategy**. If you redeployed a strategy
+file but the fingerprint and mtime haven't moved, the file did not actually change on disk.
 
 ## Reports tab — Live vs Backtested provenance + drill-down
 
-The Reports tab now opens with a colour-coded banner:
-
-* **🔵 Live data** (blue `st.info`) — sourced from `output/state_snapshot.json`
-  written by the most recent orchestrator/advisory run AND the active execution
-  mode is Paper or Live.
-* **⚪ Backtested / simulated** (grey Markdown blockquote) — either no snapshot
-  exists yet, or `DRY_RUN=true` is active so every number is simulated.
-
-Each MFE/MAE/Edge Ratio entry now has a **🔬 Drill down by symbol** expander:
-pick a ticker → see the full signal row + recent closed trades for that symbol
-from `transactions_store.TransactionsStore`. Use this to answer "why is this
-score what it is" without exporting the CSV.
+The desktop app's Reports tab (and its live-vs-backtested banner and per-symbol drill-down)
+was deleted in 2026-09. In the web app, a symbol's detail page (`/symbol/:ticker`) and the
+**Signal Breakdown** screen (`/signals`) explain a symbol's current score, and
+**Trade History** (`/trade-history`) lists closed trades.
 
 ## Advisory-Only Mode (Tier 5.1, default-on)
 
 The project ships with **`settings.ADVISORY_ONLY=true`** as the default. In this mode the platform runs the full quant pipeline — fetches data, computes indicators, runs forecasts, sizes positions, writes the HTML report and JSON payload — but **never submits orders to any broker**.
 
 **What you will see:**
-- GUI: a persistent blue `📋 ADVISORY MODE` banner above the tab bar; the Strategy Matrix `Global Execution Mode` toggle shows `📋 Advisory mode — broker execution disabled` instead of the Simulation/Paper/Live radio.
+- Web app: a status banner reading "Advisory Only Mode (Live Execution Disabled)"; Settings → General shows Advisory as the current execution mode.
 - Orchestrator: an INFO log line `"ADVISORY_ONLY=True — broker execution surface is quarantined; skipping all order submission, reconciliation, and broker imports."`
 - Preflight: a new `advisory_only_active` row at position #2; the four broker-dependent rows (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`) show as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`.
 
@@ -1394,7 +1326,7 @@ rules:
 | Variable | Default | Notes |
 |---|---|---|
 | `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory where `main.py` is launched. |
-| `NTFY_DASHBOARD_URL` | *(empty)* | Optional URL appended to every alert body (e.g. `http://localhost:8501`). Tap the notification to open the GUI directly. |
+| `NTFY_DASHBOARD_URL` | *(empty)* | Optional URL appended to every alert body (e.g. `http://localhost:5173`). Tap the notification to open the web app directly. |
 
 ### Adding or editing rules
 
@@ -1642,61 +1574,47 @@ append-only ledger (`output/execution_placed.jsonl`, keyed by
 same order was already placed today. If it was, it is skipped — so re-running the
 queue after a partial session never double-fills.
 
-### The Robinhood panel in the Command Center
+### Checking the queue, receipts, and reconciliation
 
-The GUI Command Center (`streamlit run legacy/streamlit_command_center/app.py`) has a **Robinhood** panel
-that gives you a single read-only view of the whole execution loop:
+The desktop app's Robinhood panel was deleted in 2026-09. In the web app, the current
+`output/execution_queue.json` (each intent, its mode, `allow_place`, and gate reasons for
+blocked intents) is shown read-only on the **Agent** (`/agentic`) and **Commands** screens.
 
-- **Queue** — the current `output/execution_queue.json`: each proposed intent,
-  its mode, whether it is placeable (`allow_place`), and — for blocked intents —
-  the gate reasons.
-- **Receipts** — what the agent actually previewed, placed, and skipped, read
-  from `output/execution_receipts.jsonl` and the placed-intent ledger.
-- **Reconciliation** — `execution/receipts_store.py` matches those receipts and
-  ledger entries against your account's *actual* Robinhood fills, so you can
-  confirm every recorded placement has a real fill (and spot any drift). Check
-  this panel after every live run.
+Receipts and reconciliation have no web app view yet. What the agent previewed, placed, and
+skipped is in `output/execution_receipts.jsonl` and the placed-intent ledger
+(`output/execution_placed.jsonl`); `execution/receipts_store.py` matches those against your
+account's actual Robinhood fills. Check them after every live run.
 
-The panel never places orders itself — placement always goes through the
-`/rh-execute` skill with per-order confirmation. It is purely the operator's
-window into the queue, the outcomes, and the reconciliation.
+Placement always goes through the `/rh-execute` skill with per-order confirmation — no web
+app screen places Robinhood orders.
 
 ---
 
 ## In-App Help & Glossary
 
-The **❓ Help tab** in the Command Center (`streamlit run legacy/streamlit_command_center/app.py`) gives instant access
-to every concept in this guide without leaving the browser window.
+The web app's **Help & Glossary** screen (`/help`) gives instant access to every concept in
+this guide.
 
 ### What you'll find
 
 | Widget | Where | What it does |
 |---|---|---|
-| `❓ What is this & how do I use it?` expander | Top of every tab | Plain-English summary of the tab's purpose and controls |
-| Metric tooltips | VIX, HMM Risk-On, Sahm Rule, Macro Regime KPI chips | Hover-over definition — never a bare number |
-| Glossary | Help tab → search box | 60+ terms (Kelly Target, PBO, DSR, Sahm Rule, IVR, HMM, …) with plain-English definitions and "Read more →" links back to this guide |
-| Section help expanders | Reports, Options, Live Inventory | Inline context for Brinson-Fachler, VRP gate, Coverage Status |
+| "How this works" panel | Top of each screen | Plain-English summary of the screen's purpose; expanded on a screen's first visit only |
+| `?` info tips | Section headings (e.g. on Mission Control) | Definition of that section's concept |
+| Glossary | Help & Glossary screen → search box | Searchable definitions of every metric, gate, and term |
 
 ### First-run onboarding tour
 
-On the **very first launch** of the Command Center the Help tab shows a 4-step
-"Start here" checklist (and the Launcher tab's how-to expander opens automatically):
-
-1. Set `FRED_API_KEY` in `.env` (free API key from FRED at `https://fred.stlouisfed.org/docs/api/api_key.html`).
-2. Click **🔄 Refresh Data (Advisory)** in the Launcher tab.
-3. Open the HTML report (`output/daily_report_*.html`).
-4. Review the Conviction Calibration chart (Reports tab) once closed trades accumulate.
-
-Click **✅ Got it — don't show again** to dismiss permanently. The tour writes a marker
-file (`output/.gui_onboarded`). Delete that file to reset the tour.
+The web app has an onboarding flow for first-time use. To see it again, use **Reset
+onboarding** on Settings → General.
 
 ### Help-key convention
 
 Metric tooltips are looked up via keys of the form `"<tab>.<metric_name>"` in
 `shared/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
 — it **never raises** (CONSTRAINT #6). All operator-facing definitions live in
-`shared/help_content.py`; never hard-code explainer prose directly in the
-`legacy/streamlit_command_center/panels/` per-tab modules.
+`shared/help_content.py`. The web app keeps its own help text in
+`webapp/src/help/helpContent.ts`.
 
 ### Anchor-contract invariant
 
@@ -1728,7 +1646,7 @@ or the broker execution surface.
 | `prompt_registry/baseline/` | Git-committed fallback bodies (always available, no network) |
 | `output/prompt_cache/` | Signed on-disk cache of fetched versions (rollback depth = 5 by default) |
 | `prompt_registry/__main__.py` | CLI: `list`, `get`, `sync`, `pin`, `rollback`, `diff`, `verify`, `publish` |
-| `legacy/streamlit_command_center/app.py` tab "📝 Prompts" | GUI: resolved version / source per ID, Sync, diff viewer, Rollback |
+| Web app Settings → Prompts (`/settings/prompts`) | Resolved version / source per ID, body and diff viewer, pin/clear-pin, Sync (runs as a job) |
 
 ### Resolution order (CONSTRAINT #4 — never empty)
 
@@ -1768,7 +1686,7 @@ python -m prompt_registry sync
 
 Fetches the manifest, verifies HMAC-SHA256 signatures, writes to `output/prompt_cache/`.
 Requires `PROMPT_REGISTRY_URL` and `PROMPT_REGISTRY_SIGNING_KEY` set in `.env`.
-**CONSTRAINT #5 — never called on a timer.**  Sync is explicit (CLI or the GUI "🔄 Sync" button).
+**CONSTRAINT #5 — never called on a timer.**  Sync is explicit (CLI, or Sync on the web app's Settings → Prompts screen).
 
 #### Pinning a specific version
 
@@ -1803,7 +1721,7 @@ Non-zero exit if any file fails — useful in CI or after a manual cache edit.
 python -m prompt_registry diff master_preprompt 1.0.0 1.1.0
 ```
 
-Prints a unified diff to stdout.  The GUI "Prompts" tab renders the same diff inline.
+Prints a unified diff to stdout.  The web app's Settings → Prompts screen renders a diff inline.
 
 ### Publishing a new version (author machine only)
 
@@ -1838,7 +1756,7 @@ unchanged.
 | `PROMPT_CACHE_KEEP_VERSIONS` | No | `5` | Rollback depth per prompt ID |
 | `PROMPT_MAX_CHARS` | No | `50000` | Max body size enforced by guardrails |
 
-The four secret keys are masked in the GUI Settings tab and raise `SecretWriteError` if a write
+The four secret keys are masked in the web app's settings screens and raise `SecretWriteError` if a write
 is attempted through the `shared/env_io` path (CONSTRAINT #3).  Edit them by hand in `.env` only.
 
 ### Troubleshooting
@@ -1849,53 +1767,38 @@ is attempted through the `shared/env_io` path (CONSTRAINT #3).  Edit them by han
 | Signature verification failed | `PROMPT_REGISTRY_SIGNING_KEY` mismatch | Confirm the key matches the one used at publish time |
 | `publish` exits non-zero immediately | `PROMPT_REGISTRY_PUBLISH_TOKEN` absent | Set the token in `.env` on the author machine only |
 | `rollback` says "fewer than 2 versions" | Only one version in cache | Run `sync` to fetch the remote manifest, then retry |
-| GUI "Prompts" tab shows all sources as "baseline" | Registry disabled or never synced | Enable registry and click "🔄 Sync" in the Prompts tab |
+| Settings → Prompts shows all sources as "baseline" | Registry disabled or never synced | Enable registry and run Sync from Settings → Prompts (or `python -m prompt_registry sync`) |
 
 ---
 
 ## AI Insights & AI Control Center
 
-Two Command Center tabs cover every AI-generated commentary/research feature on
-the platform. Both are strictly **advisory and operator-triggered** — no AI
-output here ever places or modifies an order.
+The web app covers the platform's AI commentary/research features in two places. Both are
+strictly **advisory and operator-triggered** — no AI output here ever places or modifies an
+order.
 
-### 🪄 AI Insights tab
+### Per-symbol AI reads (Symbol detail page)
 
-Per-symbol, on-demand AI reads on top of the pipeline's own signals:
+Each symbol's detail page (`/symbol/:ticker`) has on-demand AI sections:
 
 | Section | What it does | Requires |
 |---|---|---|
-| Opal research brief | Qualitative thesis/catalysts/risk-factors brief grounded in real Finnhub news + earnings-calendar data (never invents numbers) | `OPAL_RESEARCH_ENABLED=true` + `OPENAI_API_KEY` (or `GEMINI_API_KEY` if routed to Gemini) |
+| Opal research brief | Qualitative thesis/catalysts/risk-factors brief grounded in real news + earnings-calendar data (never invents numbers) | `OPAL_RESEARCH_ENABLED=true` + `OPENAI_API_KEY` (or `GEMINI_API_KEY` if routed to Gemini) |
 | Claude analyst note | Plain-English rationale for the current Action Signal | `LLM_COMMENTARY_ENABLED=true` + `ANTHROPIC_API_KEY` |
-| Gemini chart pattern read | Sends a 252-bar price chart to Gemini Vision and returns a structured pattern/trend/support-resistance read | `LLM_COMMENTARY_ENABLED=true` + `GEMINI_API_KEY` |
-| Claude vs. Gemini disagreement view | One row per watchlist symbol comparing the deterministic Action Signal against each AI's verdict | Populated once you've generated notes for symbols in the current session |
+| Gemini chart pattern read | Sends a price chart to Gemini Vision and returns a structured pattern/trend/support-resistance read | `LLM_COMMENTARY_ENABLED=true` + `GEMINI_API_KEY` |
 
-Every section is button-gated — nothing calls out to an AI provider until you
-click it — and each toggle is independent, so you can run Opal alone without
-enabling Claude or Gemini commentary.
+Nothing calls out to an AI provider until you click. The old desktop app's Claude-vs-Gemini
+disagreement view has no web app equivalent yet.
 
-### 🎛️ AI Control Center tab
+### AI Control Center (Settings → AI)
 
-One place to see and control every AI capability on the platform, and to
-start/stop AI-adjacent scheduled runs:
-
-- **Section A — Capability grid.** One row per AI option (Claude analyst
-  rationale, Gemini alert commentary, Gemini chart vision, the Gravity AI
-  audit runner, Opal research) showing a `🟢 ready` / `⚪ disabled` /
-  `🟡 key missing` / `🚧 not built` badge and an on/off toggle. Toggles write
-  to `.env` and take effect on the **next** launch — never live.
-- **Section B — On-demand per-symbol actions.** Run the Claude note, Gemini
-  chart read, or Opal brief for a chosen symbol without leaving this tab
-  (reuses the exact same helpers as the AI Insights tab — no duplicated
-  logic, no duplicated cache).
-- **Section C — Gravity AI audit.** Runs the Gravity AI Review Suite on
-  demand.
-- **Section D — Scheduled run.** Start (and later stop) an `--interval` or
-  `--agent` background advisory loop. You start it, you stop it — nothing
-  runs on its own.
+One toggle per AI master switch (Claude analyst rationale, Gemini alert commentary, Gemini
+chart vision, the Gravity AI audit runner, Opal research), with a provider selector where a
+capability can be routed to more than one provider. Writes go to `.env`. Run the Gravity
+audit from the **Console** screen; set the pipeline schedule on Settings → Data & Automation.
 
 Provider API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
-are secret-only and can never be set from the GUI — edit `.env` directly.
+are secret-only and can never be set from the web app — edit `.env` directly.
 
 ### Relevant environment variables
 
@@ -1913,7 +1816,7 @@ each agent, and `docs/plans/OPAL_BUILD_SPEC.md` for Opal's design record.
 
 ### Standing rule
 
-Every AI action on both tabs is either a button click or an operator-started,
+Every AI action in the web app is either a button click or an operator-started,
 operator-stoppable loop. Nothing here calls another AI agent, watches a PR, or
 re-invokes itself automatically — the same "no automatic AI invocation" rule
 that applies to Claude Code sessions on this repo applies to the platform's
@@ -1921,7 +1824,7 @@ own AI features.
 
 ## 17. Report Library
 
-The **📁 Report Library** tab is a single place to browse and read every report
+The web app's **Report Library** screen (`/operations/reports`) is a single place to browse and read every report
 file the platform produces. It is read-only and file-backed — it renders files
 that already exist on disk and never calls the broker or fetches live market
 data. Think of it as a document viewer over the pipeline's output folder.
@@ -1933,11 +1836,12 @@ data. Think of it as a document viewer over the pipeline's output folder.
   cycle, so it is always current — whatever the most recent run produced is what
   you see here.
 - **Daily briefings.** One human-readable briefing per day. Older briefings stay
-  available so you can look back at a previous day's read. You can also generate
-  **today's** briefing from within the tab if it hasn't been produced yet.
+  available so you can look back at a previous day's read. (The old desktop app's
+  "generate today's briefing" button has no web app equivalent; run
+  `python scripts/daily_briefing.py` instead.)
 - **Orchestrator dashboards.** The full-pipeline daily report and its
   volatility-band chart. Unlike the daily HTML report, these only refresh when
-  you kick off a **manual full-orchestrator run** (from the Launcher tab). If
+  you kick off a **manual full-orchestrator run** (from the Pipeline screen). If
   they look out of date, that just means no full-orchestrator run has happened
   since — run one to refresh them.
 - **Validation reports.** Per-strategy validation output (PBO / DSR / Sharpe /
@@ -1947,7 +1851,7 @@ data. Think of it as a document viewer over the pipeline's output folder.
 
 ### Viewing and downloading
 
-Each file can be **viewed inline** (rendered directly in the app) or
+Each file can be **viewed inline** (an opt-in "View inline" toggle) or
 **downloaded** to your machine for archiving or sharing. Nothing is modified —
 opening or downloading a report never changes it or re-runs any analysis.
 
@@ -1963,50 +1867,37 @@ full-orchestrator run to bring it up to date.
 
 ## 18. Validation Lab
 
-The **🔬 Validation Lab** tab lets you run the strategy-validation harness on
-demand and read the results back without leaving the Command Center. Previously
-the only way to produce a validation report was to run
-`python -m scripts.refresh_validations` from a terminal; the Report Library tab
-could only *display* whatever summaries already existed on disk. This tab closes
-that loop — configure a run, launch it, watch it, and read the verdict. It is
-read-only and file-backed: it launches the harness as a background subprocess
-and never calls the broker or submits any order.
+The desktop app's Validation Lab tab was deleted in 2026-09. In the web app:
 
 ### Running a validation
 
-1. **Choose strategies.** Pick one or more registered strategies from the
-   multiselect (the list comes straight from the runner's strategy registry).
-2. **Choose a window.** Set the backtest start and end dates. The default window
-   starts at 2010-01-01 and ends today.
-3. **Run it.** Press **▶️ Run validation**. The harness runs as a background
-   subprocess so the app stays responsive; the button is disabled while a run is
-   already in flight or when no strategy is selected.
+Use the **Commands** screen (`/commands`) to build a
+`python -m scripts.refresh_validations --strategies ...` run, or press
+**🧪 Bulk Validate All Strategies** to start with every registered strategy selected.
+Executing from the web app needs `COMMAND_EXECUTION_ENABLED=true`; otherwise the screen
+composes the command for you to paste into a terminal. The harness never calls the broker
+or submits any order.
 
 ### Watching the run
 
-The **Run status** section shows whether the current run is still going (🟢
-Running) or has finished (✅ exit 0 / ❌ non-zero), and tails the live log. Use
-the **🔄 Refresh** button to poll for the latest status and log lines — Streamlit
-does not auto-refresh, so this is how you advance the view while a run is
-in progress.
+A launched command runs as a background job. The top status bar's "Jobs" chip shows it
+from any screen, and the launching screen streams its log.
 
 ### Reading the results
 
-The **Results** section reads the `reports/*_validation_summary.json` files the
-run wrote and shows a per-strategy table with a **deployable ✅/❌** verdict plus
-the four standard gate values — **PBO**, **DSR**, **Sharpe**, and **Max
-Drawdown**. The pass/fail thresholds are imported from `validation.thresholds`
-(PBO below its cap, DSR and net Sharpe above their floors, Max Drawdown below its
-limit), so what you see here can never drift from the harness's own deployability
-gate. The rendered walk-forward / CPCV HTML report can be viewed inline or
-downloaded. A strategy only counts toward the preflight `validation_reports`
+The run writes `reports/*_validation_summary.json`. The **Strategy Health** screen shows
+per-pilot validation results, and the **Report Library** lists each strategy's validation
+summary and HTML report. Each summary has a **deployable** verdict plus the four standard
+gate values — **PBO**, **DSR**, **Sharpe**, and **Max Drawdown** — judged against the
+thresholds in `validation.thresholds` (PBO below its cap, DSR and net Sharpe above their
+floors, Max Drawdown below its limit). A strategy only counts toward the preflight `validation_reports`
 check once it is deployable **and** its report is less than 30 days old.
 
 ---
 
 ## Sentiment Dynamics Tab
 
-The **💬 Sentiment Dynamics** tab is a per-symbol, on-demand view of two
+The web app's **Sentiment Dynamics** screen (`/sentiment`) is a per-symbol, on-demand view of two
 independent sentiment signals plus a real GJR-GARCH asymmetric-volatility
 computation. It never fabricates a number when data isn't available — every
 metric is either a genuine computed/fetched value or an honest "—" with an
@@ -2033,17 +1924,15 @@ explanatory note.
 
 The agent requires the `google.antigravity` SDK to be installed and a
 `GEMINI_API_KEY` set in `.env`. When either is missing, or the live call
-fails, the tab shows an honest **"unavailable"** note and blanks (`—`) for
+fails, the screen shows an honest **"unavailable"** note and blanks (`—`) for
 LLM Sentiment / Intensity / Credibility — it never falls back to a
 fabricated placeholder number. The GJR-GARCH Volatility Persistence metric is
 computed independently of the agent, so it can still show a real value even
 when the agent itself is unavailable (as long as there are at least 100 daily
 return observations to fit on).
 
-The same `SentimentRiskEngine` methods back both this tab and the
-`GET /metrics/sentiment/{symbol}` endpoint in `api/metrics_api.py` (used by
-the Pilots PWA's `/sentiment` screen) — one honesty contract enforced
-centrally, not two divergent implementations.
+The screen reads the `GET /metrics/sentiment/{symbol}` endpoint in
+`api/metrics_api.py`, backed by the same `SentimentRiskEngine` methods.
 
 ---
 
@@ -2063,8 +1952,7 @@ table, exposing four endpoints:
 | `GET /signals` | Just the `signals` list from that snapshot |
 | `GET /trades` | Closed trades from the transactions store (`[]` when there are none) |
 
-It is deliberately **not wired into the desktop shell, the GUI, or any
-orchestrator** — you launch it yourself, on demand, when you want a read-only
+It is deliberately **not wired into the web app or any orchestrator** — you launch it yourself, on demand, when you want a read-only
 HTTP view of the persisted state.
 
 ### 1. Generate a bearer token
@@ -2084,7 +1972,7 @@ STATE_API_TOKEN=<paste-the-token-here>
 CORS_ALLOWED_ORIGINS=["http://localhost:3000"]
 ```
 
-`STATE_API_TOKEN` is a **secret** (masked in the GUI, never GUI-writable).
+`STATE_API_TOKEN` is a **secret** (masked in the web app, never writable from it).
 `CORS_ALLOWED_ORIGINS` is a JSON list of the browser origins allowed to call
 the API; the default is `["http://localhost:3000"]`. The API answers `GET`
 requests only.

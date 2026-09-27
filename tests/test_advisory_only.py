@@ -21,13 +21,9 @@ any one of them fails CI immediately.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest import mock
 
 import pandas as pd
-import pytest
 
-from settings import settings
 
 
 # ---------------------------------------------------------------------------
@@ -79,32 +75,6 @@ def test_execute_broker_orders_does_not_log_quarantine_when_flag_disabled(monkey
 # ---------------------------------------------------------------------------
 # Layer 2: GUI Strategy Matrix mode toggle gate
 # ---------------------------------------------------------------------------
-
-def test_strategy_mode_toggle_source_references_advisory_only():
-    """AST-level guard: ``_render_strategy_mode_toggle`` must read
-    ``ADVISORY_ONLY`` and skip the radio/confirm controls when it is True.
-    Lightweight grep is enough — we just need to detect a regression that
-    removes the gate entirely."""
-    # gui/panels.py was converted to a package (Phase 4a extracted
-    # gui/panels/__init__.py into per-tab modules; __init__.py is now a
-    # thin re-export stub). ``_render_strategy_mode_toggle`` now lives in
-    # legacy/streamlit_command_center/panels/strategy_matrix.py (formerly
-    # gui/panels/strategy_matrix.py, moved by the gui -> shared/legacy split)
-    # — see tests/test_ai_insights_panel.py for the same fix pattern applied
-    # to the AI Insights tab.
-    src = Path("legacy/streamlit_command_center/panels/strategy_matrix.py").read_text(encoding="utf-8")
-    # The function must contain BOTH the setting reference and the explicit
-    # caller-visible "Advisory mode — broker execution disabled" banner string.
-    assert 'ADVISORY_ONLY' in src
-    assert 'Advisory mode — broker execution disabled' in src
-
-
-def test_app_banner_advisory_only_branch_present():
-    """``gui/app.py`` must render an ADVISORY MODE banner when the flag is
-    True.  Source-grep guard."""
-    src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
-    assert "ADVISORY_ONLY" in src
-    assert "ADVISORY MODE" in src
 
 
 # ---------------------------------------------------------------------------

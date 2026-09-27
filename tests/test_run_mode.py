@@ -24,8 +24,6 @@ Verified invariants
 
 from __future__ import annotations
 
-import dataclasses
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -178,7 +176,3 @@ def test_label_contains_mode():
 # ===========================================================================
 # gui/app.py references run_mode
 # ===========================================================================
-
-def test_app_imports_run_mode():
-    app_src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
-    assert "run_mode" in app_src, "gui/app.py must import or reference shared.run_mode"

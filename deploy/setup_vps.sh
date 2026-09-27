@@ -182,11 +182,6 @@ ${DOMAIN_NAME} {
         reverse_proxy localhost:8602
     }
 
-    # Streamlit dashboard
-    handle /streamlit/* {
-        reverse_proxy localhost:8501
-    }
-
     # Default fallback to index.html (client-side routing)
     try_files {path} /index.html
 }
@@ -204,11 +199,6 @@ else
         reverse_proxy localhost:8602
     }
 
-    # Streamlit dashboard
-    handle /streamlit/* {
-        reverse_proxy localhost:8501
-    }
-
     # Default fallback to index.html (client-side routing)
     try_files {path} /index.html
 
@@ -223,12 +213,11 @@ systemctl enable caddy
 # ─── 7. Install Systemd Services ─────────────────────────────────────────────
 echo "[7/8] Installing systemd services..."
 cp "${INSTALL_DIR}/deploy/investyo-mcp.service" /etc/systemd/system/
-cp "${INSTALL_DIR}/deploy/investyo-streamlit.service" /etc/systemd/system/
 cp "${INSTALL_DIR}/deploy/investyo-daemon.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable investyo-mcp investyo-streamlit investyo-daemon
-systemctl start investyo-mcp investyo-streamlit investyo-daemon
+systemctl enable investyo-mcp investyo-daemon
+systemctl start investyo-mcp investyo-daemon
 
 # ─── 8. Install Cron Jobs ────────────────────────────────────────────────────
 echo "[8/8] Installing cron jobs..."
@@ -242,7 +231,6 @@ echo ""
 echo " Services:"
 echo "   MCP Server:          systemctl status investyo-mcp"
 echo "   Orchestrator Daemon: systemctl status investyo-daemon"
-echo "   Streamlit:           systemctl status investyo-streamlit"
 echo ""
 echo " IMPORTANT: if you haven't already, copy your .env file to the VM:"
 echo "   scp .env <user>@<vps-ip>:${INSTALL_DIR}/.env"
@@ -251,7 +239,6 @@ echo ""
 echo " To check logs:"
 echo "   journalctl -u investyo-mcp -f"
 echo "   journalctl -u investyo-daemon -f"
-echo "   journalctl -u investyo-streamlit -f"
 echo ""
 echo " To point mcp_remote_adapter.py at this box instead of the GCP VM, set"
 echo " these in claude_desktop_config.json's \"env\" block for this server:"

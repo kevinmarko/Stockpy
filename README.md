@@ -18,11 +18,9 @@ an HTML report.
 > security. Nothing here is investment, financial, or legal advice. You are
 > solely responsible for any decision made using this platform's output.
 >
-> **Web app is the primary interface; the desktop app is decommissioned.** All
-> new UI development targets the [Pilots PWA](webapp/README.md) (`webapp/`). The
-> Streamlit "InvestYo Command Center" (`legacy/streamlit_command_center/`) and its native
-> desktop wrapper (`launch_app.command`, `launch_gui.command`) are frozen/legacy —
-> they still run for existing setups, but get no new tabs, panels, or features.
+> **The web app is the only interface.** The [Pilots PWA](webapp/README.md)
+> (`webapp/`) is the platform's UI. The old Streamlit "InvestYo Command Center"
+> desktop app and its launchers were deleted in 2026-09 (git history has them).
 > See "Launching" below.
 
 ## Quick start (fresh machine)
@@ -175,19 +173,9 @@ backend service does.
 .venv/bin/python3 main_orchestrator.py    # async orchestrator (HTML report)
 ```
 
-**Legacy — decommissioned, no new development:**
-
-```bash
-./launch_app.command    # native desktop window (pywebview) wrapping the Streamlit GUI
-./launch_gui.command    # InvestYo Command Center (Streamlit GUI) in a browser tab
-```
-
-Both still run for existing local setups (see `docs/RUNBOOK.md` §0 for `launch_app.command`'s
-exact startup behavior), but the platform's frontend strategy has moved to the web app above.
-`legacy/streamlit_command_center/` (the Streamlit Command Center's 18 tabs, `app_shell.py`,
-and its native-window support code under `desktop_shell/` — `net_util.py`, `ui_server.py`,
-`engine_supervisor.py`) gets no new tabs, panels, or capability going forward — new UI work
-goes into `webapp/`.
+The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`, and
+everything under `legacy/streamlit_command_center/`) was deleted in 2026-09. Use the web
+app above.
 
 ---
 
@@ -197,8 +185,7 @@ The platform's default mode is **advisory** (`ADVISORY_ONLY=true` in `.env`):
 
 - `main_orchestrator._execute_broker_orders()` returns immediately before any broker
   import — no orders are submitted regardless of `ALPACA_*` credentials.
-- The GUI Strategy Matrix mode toggle is replaced with a read-only "broker execution
-  disabled" banner.
+- The web app shows an "Advisory Only Mode (Live Execution Disabled)" status banner.
 - `scripts/preflight_check.py` auto-skips broker-readiness checks
   (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`)
   and instead enforces the `advisory_only_active` check.
@@ -233,8 +220,8 @@ Each override is cited in the advisory rationale so the HTML report explains the
 
 Re-enabling broker execution is a deliberate sequence: (1) set `ADVISORY_ONLY=false`
 in `.env`; (2) run `python scripts/preflight_check.py` — it should now run the broker
-gates instead of skipping them; (3) re-launch. The GUI mode toggle (Simulation / Paper /
-Live) reappears automatically. See `docs/GO_LIVE_CHECKLIST.md` for the full readiness gate.
+gates instead of skipping them; (3) re-launch. The web app's execution-mode selector
+(Settings → General: Advisory / Simulation / Paper / Live) also writes `ADVISORY_ONLY`. See `docs/GO_LIVE_CHECKLIST.md` for the full readiness gate.
 
 ---
 
@@ -255,7 +242,6 @@ pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
 make smoke                                  # same
 python scripts/bug_hunter.py                # unified bug hunter scan (AST audit, webapp parity, pytest)
 python scripts/bug_hunter.py --quick        # fast bug hunter scan (AST audit + webapp typecheck)
-streamlit run legacy/streamlit_command_center/app.py                    # legacy Command Center GUI (10 tabs, incl. Observability) — decommissioned, see "Launching"
 python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
 python scripts/preflight_check.py --json    # machine-readable output
 python -m execution.kill_switch --status    # check / toggle the advisory pause gate

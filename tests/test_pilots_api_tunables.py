@@ -568,27 +568,27 @@ class TestPutTunables:
     def test_happy_path_writes_via_env_io_and_echoes(self):
         with mock.patch.object(
             pilots_api.env_io, "write_many_atomic",
-            return_value=["KELLY_FRACTION", "LOG_LEVEL", "DRY_RUN"],
+            return_value=["KELLY_FRACTION", "HMM_N_STATES", "DRY_RUN"],
         ) as w:
             # DRY_RUN is a DANGEROUS_KEYS member and needs its confirmation
-            # echo; KELLY_FRACTION/LOG_LEVEL are ordinary and need none.
+            # echo; KELLY_FRACTION/HMM_N_STATES are ordinary and need none.
             resp = _put(
-                {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True},
+                {"KELLY_FRACTION": 0.6, "HMM_N_STATES": 4, "DRY_RUN": True},
                 confirm={"DRY_RUN": "DRY_RUN"},
             )
         assert resp.status_code == 200
         body = resp.json()
-        # KELLY_FRACTION is live_safe (applies immediately via the real
-        # writer, genuinely invoked here); LOG_LEVEL/DRY_RUN are
-        # restart_required — an honest rollup of a mixed batch is "mixed",
-        # not a blanket "next_daemon_restart" (see _settings_editor_payload).
+        # KELLY_FRACTION and DRY_RUN are live_safe (apply immediately via the
+        # real writer, genuinely invoked here); HMM_N_STATES is
+        # restart_required, so an honest rollup of the batch is "mixed", not a
+        # blanket "next_daemon_restart" (see _settings_editor_payload).
         assert body["applies"] == "mixed"
         assert body["rejected"] == {}
         # Echoes the REQUEST/coerced values, not the (stale) settings singleton.
-        assert body["written"] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
+        assert body["written"] == {"KELLY_FRACTION": 0.6, "HMM_N_STATES": 4, "DRY_RUN": True}
         # write_many_atomic called ONCE with the accepted dict.
         assert w.call_count == 1
-        assert w.call_args[0][0] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
+        assert w.call_args[0][0] == {"KELLY_FRACTION": 0.6, "HMM_N_STATES": 4, "DRY_RUN": True}
 
     def test_int_field_coerced_to_int(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:

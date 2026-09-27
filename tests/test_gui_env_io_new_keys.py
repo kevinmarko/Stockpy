@@ -105,33 +105,3 @@ def test_secret_key_still_raises(temp_env):
     with pytest.raises(SecretWriteError):
         env_io.write_setting("FINNHUB_API_KEY", "should-never-write")
     assert "FINNHUB_API_KEY" not in temp_env.read_text(encoding="utf-8")
-
-
-def test_daemon_shutdown_timeout_has_a_settings_manager_widget():
-    """Per this codebase's convention (CLAUDE.md's gui/env_io.py bullet):
-    never add a GUI-writable setting without both ALLOWED_KEYS AND a
-    _SETTINGS_LAYOUT widget."""
-    from legacy.streamlit_command_center.panels.settings_manager import _SETTINGS_LAYOUT
-
-    layout = dict(_SETTINGS_LAYOUT)
-    assert "DAEMON_SHUTDOWN_TIMEOUT_SECONDS" in layout
-    assert layout["DAEMON_SHUTDOWN_TIMEOUT_SECONDS"] == "number"
-
-
-def test_daemon_shutdown_timeout_widget_bounds_match_the_real_validator():
-    """Regression guard: the Settings Manager widget's min/max for this key
-    must stay in lockstep with settings.py's own field_validator bounds.
-    Before this, the widget accepted any float -- submitting e.g. 0 would
-    write successfully to .env, then fail Settings() construction on the
-    daemon's next launch, potentially locking the operator out of this very
-    UI needing to fix it."""
-    from legacy.streamlit_command_center.panels.settings_manager import _NUMBER_BOUNDS
-    from settings import (
-        DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
-        DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
-    )
-
-    assert _NUMBER_BOUNDS["DAEMON_SHUTDOWN_TIMEOUT_SECONDS"] == (
-        DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
-        DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
-    )

@@ -14,36 +14,19 @@ Operational reference for day-to-day use, incident response, and maintenance.
 
 ## 0. Everyday Startup (macOS double-click)
 
-The fastest way to start the platform is to **double-click `launch_app.command`** in
-Finder or the Dock. This opens the unified Command Center in its own native desktop
-window (no browser tab) and starts an always-on background refresh loop that runs for
-as long as the window stays open, stopping automatically when you close it. This is
-now the recommended everyday launcher — it replaces separately running `launch.command`
-and `launch_gui.command`.
+The platform's only UI is the Pilots PWA (`webapp/`). The old Streamlit desktop app
+(`launch_app.command`, `launch_gui.command`, `legacy/streamlit_command_center/`) was
+deleted in 2026-09; git history has it.
 
-Before it starts the app, `launch_app.command` now (2026-07-31) does two more things
-on every double-click:
+**Double-click `launch_webapp.command`** in Finder or the Dock to start the web app. It asks
+whether to run against offline mock data (the default) or live data. In live mode it starts
+`data_api` (`:8603`) and `metrics_api` (`:8604`) if they aren't already up, starts the
+orchestrator daemon (Control API `:8601` + Pilots API `:8602`) when
+`ORCHESTRATOR_DAEMON_ENABLED=true` and neither port is up, and writes `webapp/.env.local` so
+the app points at them. It does not run the pipeline for you. For a backend that keeps
+running with no Terminal window open, see §0.1.
 
-- **Safe restart**: it reads a PID from `output/app_shell.pid` (gitignored, per-checkout);
-  if that process is still alive it sends `SIGTERM`, polls for up to `SHUTDOWN_GRACE_SECONDS`
-  (40 s, 2026-07 fix — was 10 s; raised to exceed the daemon backend's own
-  `stop_engine`/`stop_ui_server` teardown budget, see the shutdown-budget ladder in
-  §3.13), printing a progress line every ~5 s while it waits, then `SIGKILL`s it if it
-  hasn't exited — so double-clicking again cleanly replaces a still-running instance
-  instead of leaving two competing refresh loops. No need to manually close the previous
-  window first. The new instance's PID is written back to the same file. When nothing is
-  mid-cycle, teardown is normally ~1 s regardless — the longer wait only ever matters
-  when a cycle is genuinely in flight, which is precisely when waiting is correct.
-- **Auto-sync**: if the checkout is a git work tree with an upstream configured, it
-  runs `git fetch --quiet` then `git merge --ff-only` against that upstream. This is
-  best-effort and fast-forward-only — on any failure (local edits that would conflict,
-  diverged history, a detached HEAD, or no upstream) it prints a warning and launches
-  with whatever code is already checked out. It never touches your working tree and
-  never blocks the launch.
-
-`launch.command` (headless interval loop) and `launch_gui.command` (Command Center in
-a browser tab) still work and remain useful for headless/scripted runs or development,
-but are no longer the primary day-to-day path:
+`launch.command` (headless interval loop) still works for headless/scripted runs:
 
 1. Verifies `.venv` exists and Python is exactly 3.12.x before starting.
 2. Prints a clear error (and pauses for you to read it) if either check fails.
@@ -52,9 +35,7 @@ but are no longer the primary day-to-day path:
 4. Pauses with "Press any key to close" after exit so final output is always visible.
 
 **To change the interval**: open `launch.command` in any text editor, set
-`REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run). `launch_app.command`'s
-background refresh loop is controlled the same way via
-`python -m legacy.streamlit_command_center.app_shell --interval N`.
+`REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run).
 
 **If `.venv` is missing** (e.g., fresh clone):
 
@@ -64,39 +45,21 @@ python3.12 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-Then double-click `launch_app.command` again.
+Then double-click the launcher again.
 
 **If the wrong Python version is detected**: the launcher tells you which version was found
 and how to recreate `.venv` with Python 3.12.
 
-**Still prefer a browser-tab control panel?** Double-click **`launch_gui.command`** (or run
-`streamlit run legacy/streamlit_command_center/app.py`) to open the **Command Center** — an 18-tab GUI that launches
-the pipeline, shows live stage status, edits non-secret `.env` tunables (secrets stay
-masked/read-only), toggles signal modules and the pause gate (kill switch), and surfaces
-the Gravity audit. The GUI is read-only / file-backed: it launches `main_orchestrator.py`
-(or `main.py` for the advisory refresh path) as a subprocess and reads the files it writes,
-so it never touches a broker directly. The standalone `streamlit run observability/dashboard.py`
-paper-trading dashboard has been retired — its panels now live in the Command Center's
-Observability tab, available from either launch path.
+**Running the pipeline from the web app**: the **Pipeline** screen (`/pipeline`) shows the
+orchestrator daemon's live status, run history, and dead-letter queue, and has the run
+triggers ("Run full advisory pipeline" plus stage-scoped ones). Runs go through the daemon.
+The old desktop app's live 0–100% progress bar (`output/progress.json`) has no web app
+equivalent yet.
 
-The **Launcher tab** exposes two distinct entry points:
-
-* **▶️ Launch Pipeline** — `main_orchestrator.py` (full pipeline, HTML report, JSON
-  payload; broker skipped while `ADVISORY_ONLY=true`).
-* **🔄 Refresh Data (Advisory)** — `main.py` (broker-free; fastest path to refresh
-  `output/state_snapshot.json`, signals, and the HTML report).
-
-A pre-launch readiness check warns about missing required env vars (e.g. `FRED_API_KEY`)
-*before* the subprocess starts. The tab tails BOTH the active run log AND the platform-wide
-structured telemetry stream (`logs/investyo.log`) so one window covers diagnostics across
-both entry points. The Launcher tab also shows a live **0–100% pipeline-progress bar**
-(backed by `reporting/progress.py`, which writes `output/progress.json` as each stage and
-symbol completes; the bar polls at `settings.PROGRESS_POLL_SECONDS`, default 5 s).
-
-The **🔬 Validation Lab tab** (tab 18) runs and views strategy-validation reports on demand:
-pick strategies + a date range and click **Run** to launch a `scripts.refresh_validations`
-subprocess, then review the per-strategy deployable ✅/❌ verdicts and the generated
-`reports/validation_*.html`. On-demand only (no scheduling).
+**Strategy validation**: the **Commands** screen (`/commands`) can compose and (with
+`COMMAND_EXECUTION_ENABLED=true`) run `scripts.refresh_validations`, including a
+"🧪 Bulk Validate All Strategies" button. The **Strategy Health** screen shows validation
+results per pilot.
 
 The **daily HTML report** leads with a **"Δ Since Last Run" band**: new BUYs, action
 flips, conviction moves (`|Δ| ≥ SNAPSHOT_CONVICTION_DELTA_THRESHOLD`, default 0.20),
@@ -104,35 +67,22 @@ holdings added/dropped, and regime changes. Powered by rotated state snapshots i
 `output/history/` (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). The band is hidden
 on first ever run.
 
-**Not sure what a term means?** The **❓ Help tab** has a searchable glossary of 60+ terms
-(Kelly Target, PBO, DSR, Sahm Rule, IVR, HMM, …) and plain-English tab descriptions —
-no page switch needed.  Every tab also carries a collapsible
-`❓ What is this & how do I use it?` expander at the top.
+**Not sure what a term means?** The web app's **Help & Glossary** screen (`/help`) has a
+searchable glossary, and each screen has a dismissible "How this works" panel.
 
-The **Reports tab** includes:
+The **Calibration** screen (`/calibration`) holds the **Decision Journal** (log a decision
+per signal; entries go to `output/decision_log.jsonl`) and **Conviction Calibration**
+(whether stated conviction scores match empirical win rates per bin). The **Attribution**
+screen (`/attribution`) has the **Brinson-Fachler** allocation / selection / interaction
+breakdown.
 
-* **Decision Journal** — log "acted / passed / modified" per signal; entries go to
-  `output/decision_log.jsonl` and for "acted" entries are linked to the nearest
-  `quant_platform.db` trade record within ±24 h.
-* **Conviction Calibration** — reliability diagram showing whether stated conviction
-  scores match empirical win rates per bin. Starts empty until conviction-annotated
-  trades accumulate; bins with < 5 trades show NaN.
-* **Brinson-Fachler Attribution Analysis** — edit a GICS-11 sector matrix or bulk-paste
-  TSV/CSV from a spreadsheet to compute allocation / selection / interaction effects.
+### 0.1 Always-On Backend for the Webapp (recommended)
 
-### 0.1 Migrating to Webapp-Only (recommended)
-
-Per `CLAUDE.md`'s "Frontend strategy" section, the Pilots PWA (`webapp/`) is now the
-platform's one actively-developed frontend; `legacy/streamlit_command_center/` (the former
-`gui/`, `app_shell.py`, and `desktop/`'s native-shell modules), and their launchers
-(`launch_app.command`, `launch_gui.command`) are frozen/legacy —
-still runnable, but getting no new tabs, panels, or capability. Everything above in §0
-describes that legacy desktop-app startup path, kept accurate for existing setups. This
-subsection is the operator sequence for retiring day-to-day reliance on it in favor of the
-webapp talking to the always-on backend stack that already exists in this repo for exactly
-this purpose (`scripts/com.investyo.stack.plist` + `scripts/investyo_stack_service.sh`) —
-instead of `launch_app.command`'s own background refresh loop, which only runs while its
-window stays open.
+The Pilots PWA (`webapp/`) is the platform's only frontend (the Streamlit desktop app was
+deleted in 2026-09). This subsection is the operator sequence for running the webapp against
+the always-on backend stack that already exists in this repo
+(`scripts/com.investyo.stack.plist` + `scripts/investyo_stack_service.sh`), so the refresh
+loop and APIs keep running with no Terminal window open.
 
 1. **Install (or confirm) the always-on backend stack service** — double-click
    `scripts/install_stack_service.command` (idempotent; safe to re-run). This installs the
@@ -181,19 +131,10 @@ window stays open.
    (default `http://localhost:8602`) / `VITE_API_TOKEN` if they differ from the defaults, then
    `npm run dev` (or build/serve for a standing install). No component code changes —
    `src/api/client.ts` is the single mock/live switch point.
-5. **Stop double-clicking `launch_app.command` going forward.** With the stack service
-   installed and `PILOTS_API_ENABLED=true`, the always-on refresh loop and the Control/Pilots
-   APIs no longer depend on that window being open, so the desktop app simply doesn't need to
-   be launched day-to-day. It remains runnable as a fallback (per the frontend-strategy
-   decision, nothing in this sequence removes it) — this step is a change in operator habit,
-   not a code change.
 
-**What this does NOT require**: no data-layer or pipeline change. `main.py`,
-`main_orchestrator.py`, and every `api/*.py` service are explicitly unaffected by the
-frontend-strategy decision. The whole sequence above is: one `.env` flag, confirming a
-launchd service that already ships in this repo, and the two webapp env vars
-`webapp/README.md` already documents for its own mock↔live switch — as of this writing there
-is no further backend or webapp work outstanding to go webapp-only.
+**What this does NOT require**: no data-layer or pipeline change. The whole sequence above
+is: one `.env` flag, confirming a launchd service that already ships in this repo, and the
+two webapp env vars `webapp/README.md` already documents for its own mock↔live switch.
 
 ### 0.2 Caddy + Tailscale (Remote/Production Access)
 
@@ -275,8 +216,7 @@ sitting in `webapp/dist`; rebuild.
 > runtime-state checks that are false-positives in advisory mode (`heartbeat_fresh`,
 > `validation_reports`, `no_unexpected_risk_blocks`) — and instead passes a single
 > `advisory_only_active` check. `robinhood_execution_mode` and `state_snapshot_fresh` are
-> never auto-skipped (see the Robinhood Execution Bridge section below). The GUI Strategy
-> Matrix mode toggle (Simulation / Paper / Live) is also suppressed.
+> never auto-skipped (see the Robinhood Execution Bridge section below).
 
 **To re-enable broker execution (future use):**
 
@@ -356,16 +296,16 @@ Run this EVERY trading morning before 09:00 ET:
 
 | Check | Command / Action |
 |-------|-----------------|
-| **Start pipeline** | Double-click `launch_app.command` (or `launch.command` / use `🔄 Refresh Data (Advisory)` in Launcher tab) |
-| Advisory mode active | Launcher tab banner shows `📋 ADVISORY MODE` (blue) |
-| Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old); or Observability tab → heartbeat sparkline |
+| **Start pipeline** | Web app **Pipeline** screen → "Run full advisory pipeline" (needs the backend from §0.1), or double-click `launch.command` |
+| Advisory mode active | Web app status banner shows "Advisory Only Mode (Live Execution Disabled)" |
+| Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old); or web app **Mission Control** → Heartbeat |
 | Preflight pass | `python scripts/preflight_check.py` (exit 0; `advisory_only_active` = PASS) |
 | Account snapshot fresh | `python3 main.py --refresh-account` if snapshot age > 20 h |
-| Holdings & P&L sane | Observability tab → **Account Holdings & P&L** — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
-| No dead-letter failures | Launcher tab → Dead-Letter Queue (all symbols completed) |
+| Holdings & P&L sane | Web app **Portfolio** screen — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
+| No dead-letter failures | Web app **Pipeline** screen → Dead-Letter Queue (all symbols completed) |
 | Δ Since Last Run reviewed | Open `output/daily_report.html` — check top band for unexpected action flips or conviction drops |
-| Regime & VIX checked | Observability tab → recession telemetry (Sahm Rule / HY OAS / VIX / regime) |
-| Conviction calibration glanced | Reports tab → Conviction Calibration (win-rate bars near the diagonal) |
+| Regime & VIX checked | Web app **Mission Control** → regime telemetry (Sahm Rule / HY OAS / VIX / regime) |
+| Conviction calibration glanced | Web app **Calibration** screen → Conviction Calibration (win-rate bars near the diagonal) |
 | **(post-deploy only)** DB tables landing in one place | After any deploy touching DB-path resolution (e.g. `settings.LOCAL_DATA_ROOT`-related changes): a daemon restart without error is NOT proof every code path picked up the new path — verify by direct inspection (`lsof` on the DB file, compare row counts/mtimes across old and new locations) that all tables are writing to the same, expected DB. See `docs/known_issues/forecast_tracker_local_data_root_split.md` for the concrete precedent (`forecast_errors` kept writing to the old DB for hours after a restart while every other table had moved). |
 
 ---
@@ -388,8 +328,8 @@ For systematic bug diagnosis, vulnerability classification, and root-cause inves
 python3 main.py --refresh-account
 ```
 
-Or from the GUI: Launcher tab → **🔄 Refresh Data (Advisory)** with the
-`refresh_account` checkbox ticked.
+Or from the web app: Settings → **🔑 Brokers & Keys** → Robinhood refresh (same
+`force=True` fetch, via the device-approval login flow).
 
 **Verify**:
 
@@ -422,15 +362,15 @@ availability.
 
 **Symptom**: The HTML report or observability dashboard shows one of your Robinhood
 holdings without an Action Signal (blank, `—`, or `PARTIAL` data quality), while other
-symbols completed normally. The Launcher tab Dead-Letter Queue may show the symbol with a
-stage and exception.
+symbols completed normally. The web app **Pipeline** screen's Dead-Letter Queue may show the
+symbol with a stage and exception.
 
 **Immediate action**:
 
-1. Open the Launcher tab → Dead-Letter Queue. Note the `stage` and `error` for the
-   affected symbol.
-2. Click the **🔄 Retry** button next to the symbol — this spawns `main.py` with
-   `WATCHLIST=<SYMBOL>` so only that ticker is re-evaluated.
+1. Open the web app **Pipeline** screen → Dead-Letter Queue. Note the `stage` and `error`
+   for the affected symbol.
+2. Click **Retry** next to the symbol (needs `DEAD_LETTER_RETRY_ENABLED` and the command
+   token) — this re-runs only that ticker.
 3. If retry also fails, check the error:
 
 | Stage | Common cause | Fix |
@@ -458,7 +398,7 @@ sources. The platform is advisory; the operator retains all execution decisions.
 
 ### 3.3 Calibration Score Dropping Below Threshold
 
-**Symptom**: Reports tab → Conviction Calibration shows the reliability diagram's bars
+**Symptom**: web app **Calibration** screen → Conviction Calibration shows the reliability diagram's bars
 systematically below the diagonal (the system claims high conviction but actual win rates
 are lower). The Calibration Error (MAE) KPI climbs above `0.10` (10 pp average
 discrepancy between stated conviction and empirical win rate).
@@ -496,9 +436,9 @@ for name, mod in global_registry.get_all().items():
 
 | MAE | Response |
 |-----|----------|
-| 0.05–0.10 | Monitor. Check if a specific conviction bucket (e.g. 0.7–0.8) is systematically wrong; reduce weight on the corresponding signal module via Settings tab. |
+| 0.05–0.10 | Monitor. Check if a specific conviction bucket (e.g. 0.7–0.8) is systematically wrong; reduce weight on the corresponding signal module via the web app's Settings → Strategy screen. |
 | 0.10–0.15 | Re-run the strategy validation harness: `python -m validation.harness --strategy <name> --start 2015-01-01 --end 2024-12-31`. If PBO > 0.50 or DSR < 0.95, the strategy is no longer deployable. Reduce its `SIGNAL_WEIGHTS` entry to `0` until the next retrain cycle. |
-| > 0.15 | Disable the strategy module via the GUI Strategy Matrix tab (`DISABLED_SIGNAL_MODULES`). Document the degradation in `output/decision_log.jsonl` (entry type: "modified"). Alert to re-evaluate the regime and signal architecture. |
+| > 0.15 | Disable the strategy module via the web app's Settings → Strategy screen (`DISABLED_SIGNAL_MODULES`). Document the degradation in `output/decision_log.jsonl` (entry type: "modified"). Alert to re-evaluate the regime and signal architecture. |
 
 **Minimum data requirement**: bins with fewer than 5 trades show `NaN` win rate (never
 fabricated). A calibration MAE reading is only reliable once at least 30 conviction-
@@ -589,7 +529,7 @@ file, correctly reported as "missing" for a key that was only ever set in the *r
 `.env`. Fixed: `settings.ENV_PATH` (`Path(__file__).resolve().parent / ".env"`, anchored
 at `settings.py`'s own location, not the process CWD or a directory walk) is now the
 single anchor every `.env` locator in the codebase imports — `main.py`,
-`main_orchestrator.py`, `legacy/streamlit_command_center/app_shell.py`, `desktop/orchestrator_daemon.py`, all five
+`main_orchestrator.py`, `desktop/orchestrator_daemon.py`, all five
 standalone `api/*.py` FastAPI services, and every `scripts/*.py` entry point (via the new
 `scripts/_bootstrap.py::bootstrap()` — see §3.5c below) all pass `ENV_PATH` explicitly.
 
@@ -842,9 +782,9 @@ Covered by `tests/test_orchestrator_daemon.py::TestDaemonFileWriting`/`TestSigna
 
 ### 3.14 Shutdown Taking Longer Than Expected
 
-**Symptom**: closing the desktop app window, running `kill -TERM` on a daemon process, or
-double-clicking `launch_app.command` to replace a running instance takes noticeably longer
-than it used to (up to tens of seconds instead of ~1s).
+**Symptom**: running `kill -TERM` on a daemon process, or stopping/restarting the
+`com.investyo.stack` launchd job, takes noticeably longer than it used to (up to tens of
+seconds instead of ~1s).
 
 **This is very likely expected, not a hang.** As of 2026-07, shutdown timeouts across the
 whole stack were re-derived from ONE published budget,
@@ -856,30 +796,28 @@ routinely SIGKILLing it mid-teardown as happened before this fix. The ladder:
 |---|---|---|---|
 | 0 | An in-flight pipeline cycle | unbounded — never waited out | unbounded — never waited out |
 | 1 | Daemon `_teardown()` (`desktop/orchestrator_daemon.py`) | n/a | `DAEMON_SHUTDOWN_TIMEOUT_SECONDS` = 25s |
-| 2 | `stop_engine`/`stop_run` (`legacy/streamlit_command_center/desktop_shell/engine_supervisor.py`) | 5s (unchanged) | ~30s (= 25 + 5s grace) |
-| 3 | `launch_app.command`'s previous-instance replace | `SHUTDOWN_GRACE_SECONDS` = 40s | 40s |
+| 2 | launchd `ExitTimeOut` (`scripts/com.investyo.stack.plist`) / systemd `TimeoutStopSec` (`deploy/investyo-daemon.service`) | n/a | 45s |
 
 **Why an in-flight cycle is never waited out**: a full pipeline cycle can take minutes, and
 there is no safe way to abort one mid-flight (see `pipeline/runner.py`'s own docstring on
 why adding cancellation there would silently turn a crash into a swallowed error). So a
-`main.py --interval` process that's mid-cycle when asked to stop is still SIGKILLed after
-its 5s window, exactly as before — this is safe (advisory-only, no broker contact, and
+`main.py --interval` process that's mid-cycle when asked to stop is simply killed — this is
+safe (advisory-only, no broker contact, and
 `output/state_snapshot.json` is now written atomically — see below — so a kill mid-write
 never corrupts it). What changed is the **persistent daemon** backend
 (`ORCHESTRATOR_DAEMON_ENABLED=true`), which now gets a genuinely bounded grace period long
 enough to drain its two API servers and let an in-flight run finish (or, past the budget,
 give up on it cleanly and log a warning) instead of being cut off mid-teardown.
 
-**If a wait genuinely seems stuck past the daemon backend's ~30-40s window**: check
+**If a wait genuinely seems stuck past the daemon backend's ~45s window**: check
 `logs/investyo.log` for `"Orchestrator daemon shut down cleanly."` (the terminal
 confirmation) or `"timeout=%.1fs elapsed while a run was still in flight"` (the honest
 give-up warning) — either one means teardown actually ran within budget. Its absence past
-40s means something is genuinely stuck, not merely slow; check for a wedged run
+45s means something is genuinely stuck, not merely slow; check for a wedged run
 (`GET /status`'s `is_running`) or an unresponsive Control API before force-killing.
 
 Covered by `tests/test_orchestrator_daemon.py::TestShutdownBudget`,
-`tests/test_daemon_runtime.py::TestShutdownTimerJoinBudget`,
-`tests/test_engine_supervisor.py`'s backend-aware timeout tests, and
+`tests/test_daemon_runtime.py::TestShutdownTimerJoinBudget`, and
 `tests/test_state_snapshot_advisory.py`/`tests/test_main_orchestrator.py`'s
 `TestAtomicWrite`/atomic-write regression tests.
 
@@ -899,7 +837,7 @@ Covered by `tests/test_orchestrator_daemon.py::TestShutdownBudget`,
 
 | Frequency | Task |
 |-----------|------|
-| Daily | Review HTML report Δ band; check Observability tab heartbeat and recession telemetry. Validation-report staleness/deployability is now checked automatically (see §3.4 and §5.4) — no manual glance needed unless it alerts. |
+| Daily | Review HTML report Δ band; check web app Mission Control heartbeat and regime telemetry. Validation-report staleness/deployability is now checked automatically (see §3.4 and §5.4) — no manual glance needed unless it alerts. |
 | Weekly | Glance at Conviction Calibration MAE; review any Dead-Letter Queue entries |
 | Monthly | Rotate API keys (FRED, Robinhood). Validation harness re-run is now automatic (§5.4) — spot-check the webapp Strategy Health screen rather than re-running it by hand. |
 | Quarterly | Full review of `MAX_POSITION_WEIGHT`, `KELLY_FRACTION`, `KELLY_CAP`; check calibration curve for systematic bias |
@@ -1075,10 +1013,7 @@ python3 main.py
 #           Reason: advisory pause — investigating anomaly  |  Universe would have been: ...
 ```
 
-The GUI also exposes the kill switch toggle in the Launcher tab → Safety Controls. While
-the sentinel is active, the GUI safety indicator shows `🔴 PAUSED`.
-
-> **Note — the Pilots PWA is a second front-end for this same sentinel (2026-07):**
+> **Note — the Pilots PWA is a front-end for this same sentinel (2026-07):**
 > `api/pilots_api.py`'s `POST /automation/pause` / `POST /automation/resume` (Settings
 > screen → Signal generation toggle) call the exact `GlobalKillSwitch` this section
 > describes — not a separate mechanism. Two things to know operating it from there:
@@ -1135,8 +1070,8 @@ cp ~/.stockpy_local/quant_platform.db ~/.stockpy_local/quant_platform_backup_$(d
 ### Incident log
 
 Document every pause in `$LOCAL_DATA_ROOT/output/decision_log.jsonl` (default
-`~/.stockpy_local/output/decision_log.jsonl`) via the Reports tab → Decision
-Journal (entry type: "modified", notes: describe the anomaly and resolution). This keeps
+`~/.stockpy_local/output/decision_log.jsonl`) via the web app **Calibration** screen →
+Decision Journal (entry type: "modified", notes: describe the anomaly and resolution). This keeps
 a timestamped operator log that the calibration tracker can correlate with signal
 accuracy changes.
 
@@ -1159,15 +1094,17 @@ When a data source (Alpaca market data, Finnhub, FRED, Robinhood) is reporting e
 - **Fallback Behavior**: When FMP is unavailable, `CompositeProvider` transparently falls back to Alpaca/yfinance for quotes and Yahoo for fundamentals (if `FMP_FALLBACK_ENABLED=true`).
 - **What to Check**: If data is stale or missing, check `$LOCAL_DATA_ROOT/logs/investyo.log` for warnings naming FMP fallbacks. Confirm `FMP_API_KEY` is set and valid.
 
-1. Open Safety tab → Dependency Map (`shared/dependency_map.py`).
-2. Multi-select the degraded sources.
-3. Read the impacted-consumers table — this is the authoritative list of
-   strategies/tabs/reports that lose coverage right now.
-4. If a CRITICAL consumer (e.g. `processing_engine`, `forecasting_engine`) appears in
-   the list → pause recommendations via the kill-switch toggle in the Safety tab.
-5. After remediation, refresh the Safety tab; the dashboard derives its state from files
-   (`output/KILL_SWITCH`, `output/risk_gate_blocks.jsonl`), so there is no in-process
-   cache to invalidate.
+The desktop app's Safety tab → Dependency Map view was deleted in 2026-09 and the web app
+has no equivalent screen. The underlying map (`shared/dependency_map.py`) still exists:
+
+1. Call `shared.dependency_map.impacted_consumers([...])` with the degraded sources (e.g.
+   from a `.venv/bin/python3` shell). The result is the authoritative list of consumers
+   that lose coverage right now.
+2. If a CRITICAL consumer (e.g. `processing_engine`, `forecasting_engine`) appears in
+   the list → pause recommendations via the kill switch (web app Settings → General
+   toggle, or `python -m execution.kill_switch --activate`).
+3. State is file-backed (`output/KILL_SWITCH`, `output/risk_gate_blocks.jsonl`), so there
+   is no in-process cache to invalidate after remediation.
 
 ---
 
@@ -1178,8 +1115,8 @@ broker surface quarantined:
 
 1. **Orchestrator** — `main_orchestrator._execute_broker_orders` returns immediately with
    an INFO log before any broker import is reached.
-2. **GUI** — `legacy/streamlit_command_center/app.py` renders a persistent `📋 ADVISORY MODE` banner; the Strategy
-   Matrix mode toggle (Simulation / Paper / Live) is suppressed.
+2. **Web app** — a status banner reads "Advisory Only Mode (Live Execution Disabled)"; the
+   execution mode is shown and changed from Settings → General.
 3. **Preflight** — eight broker-dependent / advisory-false-positive checks auto-skip;
    `advisory_only_active` check is PASS-loud (and PASS-with-warning when
    `ADVISORY_ONLY=false`). `robinhood_execution_mode` and `state_snapshot_fresh` are
@@ -1394,8 +1331,9 @@ first few live sessions and raise it only once real fills reconcile cleanly.
 After each placement the skill appends to `output/execution_placed.jsonl` (the
 idempotency ledger) and `output/execution_receipts.jsonl` (the outcome audit
 trail); `execution/receipts_store.py` reconciles both against actual Robinhood
-fills, surfaced in the GUI Command Center's Robinhood panel — check it after
-every live run.
+fills. The desktop app's Robinhood panel that displayed this was deleted in 2026-09
+and the web app has no equivalent view yet — check the two JSONL files directly
+after every live run.
 
 ### Step 5 — Kill-switch pause (stop placement immediately)
 

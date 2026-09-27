@@ -3,9 +3,6 @@ tests/test_validation_lab_panel.py
 ==================================
 Offline unit tests for Agent B's 🔬 **Validation Lab** tab:
 
-* ``render_validation_lab`` is importable and exported on the ``legacy.streamlit_command_center.panels``
-  namespace (so ``gui/app.py``'s ``safe_panel(panels.render_validation_lab)``
-  binding resolves).
 * ``orchestrator_runner.launch_validation_run`` builds the exact expected argv
   (``python -m scripts.refresh_validations --strategies … --start … --end …``)
   and spawns NO real process (``subprocess.Popen`` is monkeypatched to a fake).
@@ -118,24 +115,6 @@ class TestLaunchValidationRun:
 # ---------------------------------------------------------------------------
 # Panel export + app wiring
 # ---------------------------------------------------------------------------
-class TestPanelWiring:
-    def test_render_validation_lab_importable(self) -> None:
-        from legacy.streamlit_command_center.panels.validation_lab import render_validation_lab
-
-        assert callable(render_validation_lab)
-
-    def test_render_validation_lab_on_panels_namespace(self) -> None:
-        from legacy.streamlit_command_center import panels
-
-        assert hasattr(panels, "render_validation_lab")
-        assert callable(panels.render_validation_lab)
-
-    def test_tab_label_present_in_app_source(self) -> None:
-        # Read the source (not import — gui/app.py runs Streamlit at import time).
-        src = (_REPO_ROOT / "legacy" / "streamlit_command_center" / "app.py").read_text(encoding="utf-8")
-        assert '"🔬 Validation Lab"' in src
-        # And that it is bound as tabs[17] with the right panel.
-        assert "safe_panel(panels.render_validation_lab)" in src
 
 
 # ---------------------------------------------------------------------------

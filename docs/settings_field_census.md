@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `9f43a46e9596892dcf196dfccc49739ba61ebac1`
+- Measured at commit: `33730ad5d9f18108bebd68f80a42d372e5b3438c`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -224,7 +224,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **465** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **433** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -237,14 +237,14 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 853 | 281 |
-| (b) `getattr(settings, "KEY", default)` | 405 | 232 |
-| (c) `getattr(settings, <var>)` (dynamic) | 18 sites | n/a — key not statically known |
+| (a) `settings.KEY` | 779 | 279 |
+| (b) `getattr(settings, "KEY", default)` | 398 | 232 |
+| (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
-Fields reached by at least one form: **466** of 477.
+Fields reached by at least one form: **464** of 477.
 
-### Fields with NO statically-attributable read — **11**
+### Fields with NO statically-attributable read — **13**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -253,10 +253,12 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
+| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:4122` | likely read dynamically |
+| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4234`, `pilots/settings_domains.py:138` | likely read dynamically |
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4891` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4890` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:5060`, `legacy/streamlit_command_center/panels/settings_manager.py:126` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:5032`, `legacy/streamlit_command_center/panels/settings_manager.py:162` | likely read dynamically |
+| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:5060` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:5032` | likely read dynamically |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
@@ -293,7 +295,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `CLOSED_POSITION_RETENTION_DAYS` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
 | `DATABASE_URL` | b | 1 | 0 |
-| `DATA_FETCH_MAX_CONCURRENCY` | b | 4 | 0 |
+| `DATA_FETCH_MAX_CONCURRENCY` | b | 3 | 0 |
 | `DB_MAX_OVERFLOW` | b | 2 | 0 |
 | `DB_POOL_SIZE` | b | 2 | 0 |
 | `EDGAR_COOLDOWN_SECONDS` | b | 1 | 0 |
@@ -415,7 +417,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `MULTI_BROKER_GATEWAY_ENABLED` | b | 1 | 0 |
 | `NO_VENV_REEXEC` | d | 0 | 1 |
 | `OFI_SHIELD_ENABLED` | b | 1 | 0 |
-| `OPAL_RESEARCH_MODEL` | b | 2 | 0 |
+| `OPAL_RESEARCH_MODEL` | b | 1 | 0 |
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
 | `OPTIONS_0DTE_ENABLED` | b | 6 | 0 |
@@ -457,7 +459,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` | b | 2 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
 
-### Dynamic `getattr` sites (form c) — **18**
+### Dynamic `getattr` sites (form c) — **13**
 
 The key is not a literal, so no static analysis can attribute these to a field name.
 
@@ -473,11 +475,6 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/pilots_api.py:5448` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
-| `legacy/streamlit_command_center/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
-| `legacy/streamlit_command_center/panels/ai_control_center.py:189` | `getattr(settings, sel_key, 'none')` |
-| `legacy/streamlit_command_center/panels/settings_manager.py:190` | `getattr(settings, key, fallback)` |
-| `legacy/streamlit_command_center/panels/settings_manager.py:207` | `getattr(settings, key, '')` |
-| `legacy/streamlit_command_center/panels/settings_manager.py:275` | `getattr(settings, key, [])` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 | `runtime_flags_writer.py:773` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:782` | `getattr(settings_module.settings, key, None)` |

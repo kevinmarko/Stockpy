@@ -3,7 +3,7 @@ tests/test_gui_env_io_etf_transmission_keys.py
 ================================================
 Pins the 19 non-secret ETF volatility-transmission overlay settings (Ben-David,
 Franzoni & Moussawi 2018, JF) to ``gui/env_io.py``'s ``ALLOWED_KEYS`` so the
-Command Center Settings tab can write them -- holdings ingestion
+settings editors can write them -- holdings ingestion
 (``data/etf_holdings.py``), market-residualized measurement columns + portfolio
 covariance inflation (``risk/etf_transmission.py``), and the per-name sizing
 derate (``sizing/position_sizer.py``):
@@ -46,7 +46,6 @@ import pytest
 
 import shared.env_io as env_io
 from shared.env_io import ALLOWED_KEYS, SECRET_KEYS
-from legacy.streamlit_command_center.panels.settings_manager import _SETTINGS_LAYOUT
 
 BOOL_KEYS = [
     "ETF_HOLDINGS_ENABLED",
@@ -116,38 +115,6 @@ def test_list_key_is_json_encoded(key):
 )
 def test_non_list_key_not_json_encoded(key):
     assert key not in env_io._JSON_KEYS
-
-
-@pytest.mark.parametrize("key", NEW_KEYS)
-def test_new_key_has_settings_layout_widget(key):
-    """Every key added to ALLOWED_KEYS also gets a rendered widget in the
-    Settings Manager tab (gui/panels/settings_manager.py's _SETTINGS_LAYOUT)."""
-    layout_keys = {k for k, _kind in _SETTINGS_LAYOUT}
-    assert key in layout_keys, f"{key} missing a Settings-Manager widget"
-
-
-@pytest.mark.parametrize("key", BOOL_KEYS)
-def test_bool_key_widget_kind(key):
-    layout = dict(_SETTINGS_LAYOUT)
-    assert layout[key] == "bool"
-
-
-@pytest.mark.parametrize("key", INT_KEYS)
-def test_int_key_widget_kind(key):
-    layout = dict(_SETTINGS_LAYOUT)
-    assert layout[key] == "int"
-
-
-@pytest.mark.parametrize("key", FLOAT_KEYS)
-def test_float_key_widget_kind(key):
-    layout = dict(_SETTINGS_LAYOUT)
-    assert layout[key] == "number"
-
-
-@pytest.mark.parametrize("key", LIST_KEYS)
-def test_list_key_widget_kind_is_tickers(key):
-    layout = dict(_SETTINGS_LAYOUT)
-    assert layout[key] == "tickers"
 
 
 def test_bool_roundtrip(temp_env):

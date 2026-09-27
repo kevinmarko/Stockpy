@@ -5,7 +5,6 @@ Unit tests for the Launcher-tab safety controls.
 
 Verified invariants
 -------------------
-*   ``_render_launcher_safety_controls`` exists in ``legacy.streamlit_command_center.panels``.
 *   Safe Mode is DERIVED (kill_switch active AND DRY_RUN=true) — no new env var.
 *   ``DRY_RUN`` can be toggled via :func:`shared.env_io.write_setting` without
     introducing a ``SAFE_MODE`` env var.
@@ -16,7 +15,6 @@ Verified invariants
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -27,26 +25,9 @@ from unittest import mock
 
 def _make_env_io(tmp_env: Path) -> object:
     """Return a fresh ``env_io`` module bound to ``tmp_env``."""
-    import importlib
     with mock.patch.dict(os.environ, {}, clear=False):
         import shared.env_io as _env_io
         return _env_io
-
-
-# ===========================================================================
-# legacy.streamlit_command_center.panels API surface
-# ===========================================================================
-
-def test_render_launcher_safety_controls_exists():
-    import legacy.streamlit_command_center.panels as panels
-    assert hasattr(panels, "_render_launcher_safety_controls"), (
-        "_render_launcher_safety_controls must be defined in legacy.streamlit_command_center.panels"
-    )
-
-
-def test_render_launcher_safety_controls_callable():
-    import legacy.streamlit_command_center.panels as panels
-    assert callable(panels._render_launcher_safety_controls)
 
 
 # ===========================================================================

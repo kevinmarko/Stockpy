@@ -17,17 +17,12 @@ Verified invariants
 *   Empty stdout → ``all_passed=False``.
 *   Non-zero exit code → ``all_passed=False`` (even with valid JSON).
 *   Zero exit code + all passing → ``all_passed=True``.
-*   :func:`_render_preflight_panel` exists in ``legacy.streamlit_command_center.panels``.
-*   ``render_launcher`` references ``_render_preflight_panel`` (wiring check).
 """
 
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 import subprocess
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -170,29 +165,3 @@ def test_run_preflight_subprocess_exception_returns_false():
 
     assert report.all_passed is False
     assert "binary not found" in (report.error or "")
-
-
-# ===========================================================================
-# Wiring checks — legacy.streamlit_command_center.panels
-# ===========================================================================
-
-def test_render_preflight_panel_exists_in_panels():
-    import legacy.streamlit_command_center.panels as panels
-    assert hasattr(panels, "_render_preflight_panel"), (
-        "_render_preflight_panel must be defined in legacy.streamlit_command_center.panels"
-    )
-
-
-def test_render_preflight_panel_callable():
-    import legacy.streamlit_command_center.panels as panels
-    assert callable(panels._render_preflight_panel)
-
-
-def test_render_launcher_calls_preflight_panel():
-    """render_launcher must call _render_preflight_panel."""
-    import legacy.streamlit_command_center.panels as panels
-
-    src = inspect.getsource(panels.render_launcher)
-    assert "_render_preflight_panel" in src, (
-        "render_launcher must call _render_preflight_panel"
-    )
