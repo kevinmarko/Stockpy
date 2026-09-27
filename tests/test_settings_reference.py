@@ -259,7 +259,6 @@ class TestReferenceWriteIndexDerivation:
             "OPTIONS_AUTO_EXIT_ENABLED",
             "OPTIONS_DELTA_HEDGE_ENABLED",
             "OPTIONS_0DTE_ENABLED",
-            "CIRCUIT_BREAKER_ENABLED",
             "MULTI_BROKER_GATEWAY_ENABLED",
         ):
             assert key in pilots_api._REFERENCE_WRITE_INDEX, f"{key} missing from _REFERENCE_WRITE_INDEX"

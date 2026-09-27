@@ -13,7 +13,6 @@ Coverage
 
 from __future__ import annotations
 
-import json
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
@@ -28,12 +27,7 @@ from execution.broker_base import (
     OrderType,
     PositionSnapshot,
 )
-from execution.dynamic_circuit_breaker import (
-    CircuitBreakerMetrics,
-    CircuitBreakerState,
-    DynamicCircuitBreaker,
-)
-from execution.risk_gate import PreTradeRiskGate, RiskContext
+from execution.risk_gate import HaltState, PreTradeRiskGate, RiskContext
 from settings import settings
 
 
@@ -105,85 +99,56 @@ def _afterhours_timestamp() -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# 0. dynamic_circuit_breaker_check
+# 0. kill_switch_halt_check
 # ---------------------------------------------------------------------------
 
-class TestDynamicCircuitBreakerCheck:
+class TestKillSwitchHaltCheck:
     def test_passes_when_normal(self):
         gate = PreTradeRiskGate()
-        ctx = RiskContext(circuit_breaker_state=CircuitBreakerState.NORMAL)
-        result = gate.dynamic_circuit_breaker_check(_buy(), ctx)
+        ctx = RiskContext(halt_state=HaltState.NORMAL)
+        result = gate.kill_switch_halt_check(_buy(), ctx)
         assert result.passed
 
-    def test_passes_when_caution(self):
+    def test_unknown_state_string_passes(self):
         gate = PreTradeRiskGate()
-        ctx = RiskContext(circuit_breaker_state=CircuitBreakerState.CAUTION)
-        result = gate.dynamic_circuit_breaker_check(_buy(), ctx)
+        ctx = RiskContext(halt_state="CAUTION")
+        result = gate.kill_switch_halt_check(_buy(), ctx)
         assert result.passed
 
     def test_soft_halt_blocks_buy(self):
         gate = PreTradeRiskGate()
-        ctx = RiskContext(
-            circuit_breaker_state=CircuitBreakerState.SOFT_HALT,
-            circuit_breaker_reason="VOLATILITY_BURST_HALT",
-        )
-        result = gate.dynamic_circuit_breaker_check(_buy("AAPL"), ctx)
+        ctx = RiskContext(halt_state=HaltState.SOFT_HALT, halt_reason="operator soft halt")
+        result = gate.kill_switch_halt_check(_buy("AAPL"), ctx)
         assert not result.passed
         assert "SOFT_HALT active" in result.reason
         assert "BUY orders blocked" in result.reason
 
     def test_soft_halt_permits_sell(self):
         gate = PreTradeRiskGate()
-        ctx = RiskContext(
-            circuit_breaker_state=CircuitBreakerState.SOFT_HALT,
-            circuit_breaker_reason="FLASH_CRASH_SHIELD",
-        )
-        result = gate.dynamic_circuit_breaker_check(_sell("AAPL"), ctx)
+        ctx = RiskContext(halt_state="SOFT_HALT", halt_reason="operator soft halt")
+        result = gate.kill_switch_halt_check(_sell("AAPL"), ctx)
         assert result.passed
         assert "SELL allowed" in result.reason
 
     def test_hard_halt_blocks_both_buy_and_sell(self):
         gate = PreTradeRiskGate()
-        ctx = RiskContext(
-            circuit_breaker_state=CircuitBreakerState.HARD_HALT,
-            circuit_breaker_reason="LOSS_VELOCITY_BREACH",
-        )
-        buy_res = gate.dynamic_circuit_breaker_check(_buy("AAPL"), ctx)
+        ctx = RiskContext(halt_state=HaltState.HARD_HALT, halt_reason="manual kill switch")
+        buy_res = gate.kill_switch_halt_check(_buy("AAPL"), ctx)
         assert not buy_res.passed
         assert "HARD_HALT active" in buy_res.reason
 
-        sell_res = gate.dynamic_circuit_breaker_check(_sell("AAPL"), ctx)
+        sell_res = gate.kill_switch_halt_check(_sell("AAPL"), ctx)
         assert not sell_res.passed
         assert "HARD_HALT active" in sell_res.reason
 
-    def test_dynamic_circuit_breaker_instance_evaluation(self):
-        cb = DynamicCircuitBreaker()
-        cb.update_metrics(volatility_zscore=4.0, persist=False)
-        assert cb.current_state == CircuitBreakerState.SOFT_HALT
 
-        gate = PreTradeRiskGate(circuit_breaker=cb)
-        buy_res = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
-        assert not buy_res.passed
+class TestKillSwitchHaltCheckSentinels:
+    """No explicit halt_state -> the check reads the GlobalKillSwitch sentinel
+    files, and fails SAFE to SOFT_HALT if reading them raises."""
 
-        sell_res = gate.dynamic_circuit_breaker_check(_sell(), RiskContext())
-        assert sell_res.passed
-
-
-class TestDynamicCircuitBreakerCheckFileSentinelFallback:
-    """Check #0's `else` branch: no `circuit_breaker`/`circuit_breaker_state`/
-    `circuit_breaker_metrics` was supplied via context or the gate's own
-    constructor, so the check falls through to the file-sentinel +
-    persisted-metrics fallback. Covers the fail-open bug fix (item 5) and
-    the incomplete-fallback fix (item 6)."""
-
-    def test_fails_open_bug_is_fixed_on_exception(self, monkeypatch):
-        """Regression test for the fail-open exception swallow: an exception
-        raised while evaluating the file-sentinel fallback must degrade to a
-        SOFT_HALT block, never a silent passed=True. Previously this branch
-        was a bare `except Exception: pass`, so a raise here left `state`
-        as `None` and the check fell through to the final `return
-        RiskCheckResult(name, True, ...)` -- i.e. an evaluation FAILURE was
-        indistinguishable from "everything is NORMAL"."""
+    def test_read_failure_fails_safe_to_soft_halt(self, monkeypatch):
+        """An exception while reading the sentinels must block a BUY (never a
+        silent passed=True) and must be logged."""
         import execution.risk_gate as risk_gate_module
 
         monkeypatch.setattr(
@@ -205,16 +170,15 @@ class TestDynamicCircuitBreakerCheckFileSentinelFallback:
         )
 
         gate = PreTradeRiskGate()
-        result = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
+        result = gate.kill_switch_halt_check(_buy(), RiskContext())
 
-        assert not result.passed, "fail-open bug: exception was silently swallowed as passed=True"
+        assert not result.passed, "exception was silently swallowed as passed=True"
         assert "SOFT_HALT" in result.reason
-        assert logged_errors, "logger.error() was never called -- the exception was hidden, not surfaced"
+        assert logged_errors, "logger.error() was never called -- the exception was hidden"
 
-    def test_fails_open_bug_fixed_permits_sell_under_soft_halt(self, monkeypatch):
-        """The fail-safe SOFT_HALT (not HARD_HALT) preserves the existing
-        asymmetric-gating semantics: a risk-reducing SELL is still allowed
-        even when fallback evaluation itself failed."""
+    def test_read_failure_still_permits_sell(self, monkeypatch):
+        """The fail-safe is SOFT_HALT, not HARD_HALT, so a risk-reducing SELL
+        still goes through."""
         import execution.risk_gate as risk_gate_module
 
         monkeypatch.setattr(
@@ -223,12 +187,11 @@ class TestDynamicCircuitBreakerCheckFileSentinelFallback:
         )
 
         gate = PreTradeRiskGate()
-        sell_result = gate.dynamic_circuit_breaker_check(_sell(), RiskContext())
+        sell_result = gate.kill_switch_halt_check(_sell(), RiskContext())
         assert sell_result.passed
         assert "SELL" in sell_result.reason or "soft" in sell_result.reason.lower()
 
     def test_hard_halt_sentinel_blocks_buy_and_sell(self, monkeypatch):
-        """Item 6: the fallback previously never checked HARD_HALT at all."""
         import execution.risk_gate as risk_gate_module
 
         monkeypatch.setattr(
@@ -239,18 +202,36 @@ class TestDynamicCircuitBreakerCheckFileSentinelFallback:
         )
 
         gate = PreTradeRiskGate()
-        buy_result = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
+        buy_result = gate.kill_switch_halt_check(_buy(), RiskContext())
         assert not buy_result.passed
         assert "HARD_HALT" in buy_result.reason
 
-        sell_result = gate.dynamic_circuit_breaker_check(_sell(), RiskContext())
+        sell_result = gate.kill_switch_halt_check(_sell(), RiskContext())
         assert not sell_result.passed
         assert "HARD_HALT" in sell_result.reason
 
-    def test_persisted_metrics_honored_when_kill_switch_sentinels_clear(self, monkeypatch, tmp_path):
-        """Item 6: the fallback previously never read
-        DynamicCircuitBreaker().load_metrics() at all -- a live updater's
-        persisted SOFT_HALT state was invisible to this fallback path."""
+    def test_soft_halt_sentinel_blocks_buy_permits_sell(self, monkeypatch):
+        import execution.risk_gate as risk_gate_module
+
+        monkeypatch.setattr(
+            risk_gate_module.GlobalKillSwitch, "is_active", lambda self: False
+        )
+        monkeypatch.setattr(
+            risk_gate_module.GlobalKillSwitch, "is_soft_halt_active", lambda self: True
+        )
+        monkeypatch.setattr(
+            risk_gate_module.GlobalKillSwitch, "soft_halt_reason", lambda self: "operator soft halt"
+        )
+
+        gate = PreTradeRiskGate()
+        buy_result = gate.kill_switch_halt_check(_buy(), RiskContext())
+        assert not buy_result.passed
+        assert "operator soft halt" in buy_result.reason
+
+        sell_result = gate.kill_switch_halt_check(_sell(), RiskContext())
+        assert sell_result.passed
+
+    def test_all_clear_passes(self, monkeypatch):
         import execution.risk_gate as risk_gate_module
 
         monkeypatch.setattr(
@@ -260,78 +241,44 @@ class TestDynamicCircuitBreakerCheckFileSentinelFallback:
             risk_gate_module.GlobalKillSwitch, "is_soft_halt_active", lambda self: False
         )
 
-        state_file = tmp_path / "circuit_breaker_state.json"
-        persisted = CircuitBreakerMetrics(
-            state=CircuitBreakerState.SOFT_HALT,
-            reason="VOLATILITY_BURST_HALT: persisted by live updater",
-        )
-        state_file.write_text(json.dumps(persisted.to_dict()), encoding="utf-8")
-
-        real_dcb_cls = risk_gate_module.DynamicCircuitBreaker
-        monkeypatch.setattr(
-            risk_gate_module,
-            "DynamicCircuitBreaker",
-            lambda *a, **k: real_dcb_cls(state_file=state_file),
-        )
-
         gate = PreTradeRiskGate()
-        result = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
-        assert not result.passed
-        assert "SOFT_HALT" in result.reason
-
-    def test_kill_switch_hard_halt_wins_over_persisted_soft_halt(self, monkeypatch, tmp_path):
-        """When both signals are present, the MORE SEVERE one (HARD_HALT)
-        must win, not whichever was evaluated first."""
-        import execution.risk_gate as risk_gate_module
-
-        monkeypatch.setattr(
-            risk_gate_module.GlobalKillSwitch, "is_active", lambda self: True
-        )
-        monkeypatch.setattr(
-            risk_gate_module.GlobalKillSwitch, "reason", lambda self: "manual kill switch"
-        )
-
-        state_file = tmp_path / "circuit_breaker_state.json"
-        persisted = CircuitBreakerMetrics(
-            state=CircuitBreakerState.SOFT_HALT,
-            reason="VOLATILITY_BURST_HALT: persisted by live updater",
-        )
-        state_file.write_text(json.dumps(persisted.to_dict()), encoding="utf-8")
-
-        real_dcb_cls = risk_gate_module.DynamicCircuitBreaker
-        monkeypatch.setattr(
-            risk_gate_module,
-            "DynamicCircuitBreaker",
-            lambda *a, **k: real_dcb_cls(state_file=state_file),
-        )
-
-        gate = PreTradeRiskGate()
-        result = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
-        assert not result.passed
-        assert "HARD_HALT" in result.reason
-
-    def test_all_clear_still_passes(self, monkeypatch, tmp_path):
-        """No kill-switch sentinel active and no persisted halt state ->
-        the fallback must still pass conservatively (NORMAL)."""
-        import execution.risk_gate as risk_gate_module
-
-        monkeypatch.setattr(
-            risk_gate_module.GlobalKillSwitch, "is_active", lambda self: False
-        )
-        monkeypatch.setattr(
-            risk_gate_module.GlobalKillSwitch, "is_soft_halt_active", lambda self: False
-        )
-
-        real_dcb_cls = risk_gate_module.DynamicCircuitBreaker
-        monkeypatch.setattr(
-            risk_gate_module,
-            "DynamicCircuitBreaker",
-            lambda *a, **k: real_dcb_cls(state_file=tmp_path / "circuit_breaker_state.json"),
-        )
-
-        gate = PreTradeRiskGate()
-        result = gate.dynamic_circuit_breaker_check(_buy(), RiskContext())
+        result = gate.kill_switch_halt_check(_buy(), RiskContext())
         assert result.passed
+
+
+class TestKillSwitchHaltRealSentinels:
+    """run_all() against real GlobalKillSwitch sentinel files (no monkeypatched
+    methods): the path every production order takes."""
+
+    def _gate_with_sentinels(self, monkeypatch, tmp_path):
+        import execution.risk_gate as risk_gate_module
+        from execution.kill_switch import GlobalKillSwitch as RealKS
+
+        ks = RealKS(sentinel_file=tmp_path / "KILL_SWITCH", soft_halt_file=tmp_path / "SOFT_HALT")
+        monkeypatch.setattr(risk_gate_module, "GlobalKillSwitch", lambda *a, **k: ks)
+        return PreTradeRiskGate(enforce_market_hours=False), ks
+
+    def test_soft_halt_file_blocks_buy_and_alerts(self, monkeypatch, tmp_path):
+        from unittest import mock
+
+        gate, ks = self._gate_with_sentinels(monkeypatch, tmp_path)
+        with mock.patch("observability.alerts.send_alert"):
+            ks.activate_soft_halt(reason="operator soft halt")
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            passed, results = gate.run_all(_buy("NVDA"), RiskContext())
+        assert not passed
+        assert results[0].check_name == "kill_switch_halt"
+        assert "operator soft halt" in results[0].reason
+        args, kwargs = m_alert.call_args
+        assert args[0] == "WARNING"
+        assert "Kill-switch SOFT_HALT blocked order for NVDA" in args[1]
+        assert kwargs["dedup_key"] == "kill_switch_halt"
+
+    def test_no_sentinels_passes_check_zero(self, monkeypatch, tmp_path):
+        gate, _ = self._gate_with_sentinels(monkeypatch, tmp_path)
+        result = gate.kill_switch_halt_check(_buy("NVDA"), RiskContext())
+        assert result.passed
+        assert result.check_name == "kill_switch_halt"
 
 
 # ---------------------------------------------------------------------------
@@ -931,17 +878,17 @@ class TestRunAll:
         assert not results[-1].passed
         assert results[-1].check_name == "macro_kill_switch"
 
-    def test_short_circuit_on_circuit_breaker_soft_halt(self):
+    def test_short_circuit_on_kill_switch_soft_halt(self):
         gate = PreTradeRiskGate(enforce_market_hours=True)
         ctx = self._valid_context()
-        ctx.circuit_breaker_state = CircuitBreakerState.SOFT_HALT
-        ctx.circuit_breaker_reason = "VOLATILITY_BURST_HALT"
+        ctx.halt_state = HaltState.SOFT_HALT
+        ctx.halt_reason = "operator soft halt"
         passed, results = gate.run_all(_buy(), ctx)
         assert not passed
         # Short-circuit on Check #0
         assert len(results) == 1
         assert not results[0].passed
-        assert results[0].check_name == "dynamic_circuit_breaker"
+        assert results[0].check_name == "kill_switch_halt"
 
     def test_rate_limit_not_charged_on_blocked_order(self):
         """Rate counter must only increment on full-pass — blocked orders waste no budget."""

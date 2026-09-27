@@ -1746,7 +1746,7 @@ class Settings(BaseSettings):
     )
     CIRCUIT_BREAKER_ENABLED: bool = Field(
         default=False,
-        description="Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
+        description="Retired (2026-09): the dynamic circuit breaker is no longer wired into the risk gate or the daemon, so this flag has no effect. The kill switch (execution/kill_switch.py) remains the pre-trade halt. Field kept until the settings trim.",
     )
     OFI_SHIELD_ENABLED: bool = Field(
         default=False,
@@ -1754,7 +1754,7 @@ class Settings(BaseSettings):
     )
     CIRCUIT_BREAKER_REFERENCE_SYMBOL: str = Field(
         default="SPY",
-        description="Reference symbol used for the live volatility-jump circuit-breaker updater's baseline/reactive vol computation.",
+        description="Retired (2026-09): read only by the removed daemon circuit-breaker updater; has no effect.",
     )
 
     # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---

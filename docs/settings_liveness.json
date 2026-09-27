@@ -12,8 +12,8 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 375,
-    "no_op": 5,
+    "live_safe": 373,
+    "no_op": 7,
     "restart_required": 97,
     "total": 477
   },
@@ -56,21 +56,21 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4409,
+      "line": 4398,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4514,
+      "line": 4503,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5448,
+      "line": 5437,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -160,8 +160,6 @@
     "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
     "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
     "CACHE_LONG_SHORT_WRITES_ENABLED",
-    "CIRCUIT_BREAKER_ENABLED",
-    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
     "CLOSED_POSITION_RETENTION_DAYS",
     "CLOSED_POSITION_RETENTION_MAX_SYMBOLS",
     "CNN_LSTM_PROCESS_POOL_WORKERS",
@@ -490,6 +488,8 @@
     "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
   "no_op": [
+    "CIRCUIT_BREAKER_ENABLED",
+    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
     "GOOGLE_TRENDS_OVERLAP_DAYS",
     "GOOGLE_TRENDS_WINDOW_DAYS",
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
@@ -498,13 +498,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 880,
+    "attr": 877,
     "factory_param": 4,
-    "getattr_const": 398,
+    "getattr_const": 397,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 282,
+    "attr": 280,
     "factory_param": 4,
     "getattr_const": 232,
     "os_environ": 2
@@ -717,7 +717,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:164",
+        "site": "execution/risk_gate.py:161",
         "via": []
       }
     ],
@@ -737,7 +737,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "pilots/settings_domains.py:138",
+        "site": "pilots/settings_domains.py:132",
         "via": []
       }
     ],
@@ -1503,7 +1503,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4891",
+        "site": "api/pilots_api.py:4880",
         "via": []
       }
     ],
@@ -1514,7 +1514,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4890",
+        "site": "api/pilots_api.py:4879",
         "via": []
       }
     ],
@@ -1525,7 +1525,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:5060",
+        "site": "api/pilots_api.py:5049",
         "via": []
       }
     ],
@@ -1615,7 +1615,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:5032",
+        "site": "api/pilots_api.py:5021",
         "via": []
       }
     ],
@@ -1988,7 +1988,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:174",
+        "site": "execution/risk_gate.py:171",
         "via": []
       }
     ],
@@ -2193,7 +2193,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:159",
+        "site": "execution/risk_gate.py:156",
         "via": []
       }
     ],
@@ -2204,7 +2204,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:169",
+        "site": "execution/risk_gate.py:166",
         "via": []
       }
     ],
@@ -2215,7 +2215,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:156",
+        "site": "execution/risk_gate.py:153",
         "via": []
       }
     ],
@@ -2226,7 +2226,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:153",
+        "site": "execution/risk_gate.py:150",
         "via": []
       }
     ],
@@ -2859,7 +2859,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:179",
+        "site": "execution/risk_gate.py:176",
         "via": []
       }
     ],

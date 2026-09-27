@@ -89,7 +89,6 @@ _EXPECTED_GROUPS = [
     "Validation Gates",
     "RLHF Calibration",
     "Options Desk Automation",
-    "Circuit Breaker",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
 
@@ -109,7 +108,10 @@ _NEW_OPTIONS_DESK_KEYS = {
     "MAX_CONCURRENT_OPTION_POSITIONS",
 }
 
-_NEW_CIRCUIT_BREAKER_KEYS = {
+# The dynamic circuit breaker was unwired from the risk gate and daemon in
+# 2026-09; its settings no longer do anything, so they must not be offered as
+# editable tunables.
+_RETIRED_CIRCUIT_BREAKER_KEYS = {
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
     "CIRCUIT_BREAKER_VPIN_THRESHOLD",
@@ -431,7 +433,6 @@ class TestTunablesScopeInvariants:
             | _NEW_REGIME_KEYS
             | _NEW_MISC_TUNABLE_KEYS
             | _NEW_OPTIONS_DESK_KEYS
-            | _NEW_CIRCUIT_BREAKER_KEYS
             | _NEW_PROMOTED_KEYS
         )
         assert set(pilots_api._TUNABLE_INDEX) == expected
@@ -462,9 +463,9 @@ class TestTunablesScopeInvariants:
         # The one field this promotion deliberately excludes, and why.
         assert "OPTIONS_EARNINGS_CRUSH_ENABLED" not in _NEW_OPTIONS_DESK_KEYS
 
-    def test_circuit_breaker_group_has_exactly_the_intended_fields(self):
-        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Circuit Breaker")
-        assert {k for k, _kind, _extras in group[1]} == _NEW_CIRCUIT_BREAKER_KEYS
+    def test_retired_circuit_breaker_keys_are_not_tunables(self):
+        assert not any(g[0] == "Circuit Breaker" for g in pilots_api._TUNABLE_GROUPS)
+        assert not (_RETIRED_CIRCUIT_BREAKER_KEYS & set(pilots_api._TUNABLE_INDEX))
 
 
 # ---------------------------------------------------------------------------

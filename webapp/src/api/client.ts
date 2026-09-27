@@ -221,7 +221,6 @@ import type { StrategyReportCardSnapshot,
   BrokerFailoverRequest,
   BrokerFailoverResponse,
   SecRule606ReportResponse,
-  CircuitBreakerStatusResponse,
   TrendsStitchDemoResponse,
   DigestPayload,
 } from "./types";
@@ -1487,9 +1486,6 @@ const liveApi = {
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectLiveTrade: (token: string) =>
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/reject`, { method: "POST" }),
-
-  // ---- Dynamic Circuit Breaker ----
-  getCircuitBreakerStatus: () => http<CircuitBreakerStatusResponse>("/risk/circuit-breaker/status"),
 
   // ---- Trends Stitching Demo ----
   getTrendsStitchDemo: () => http<TrendsStitchDemoResponse>("/data/trends/stitch-demo"),
