@@ -21,7 +21,7 @@
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2734,
+      "line": 2738,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -3026,7 +3026,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11079",
+        "site": "Gravity AI Review Suite.py:11083",
         "via": []
       }
     ],
