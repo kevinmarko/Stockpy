@@ -30,7 +30,6 @@ function widgets(overrides: Partial<CustomViewWidgets> = {}): CustomViewWidgets 
     pilotsTable: false,
     sentimentMini: false,
     portfolioHeat: false,
-    optionsDirective: false,
     signalBreakdown: false,
     macroRegime: false,
     ...overrides,
@@ -72,14 +71,13 @@ describe("CustomView screen", () => {
     expect(screen.queryByTestId("custom-view-open-chat")).not.toBeInTheDocument();
   });
 
-  it("renders each of the 6 additional widget sections when enabled", () => {
+  it("renders each of the 5 additional widget sections when enabled", () => {
     addOrUpdateView({
       name: "Everything",
       widgets: widgets({
         pilotsTable: true,
         sentimentMini: true,
         portfolioHeat: true,
-        optionsDirective: true,
         signalBreakdown: true,
         macroRegime: true,
       }),
@@ -90,7 +88,6 @@ describe("CustomView screen", () => {
       "Pilots",
       "Sentiment history",
       "Portfolio heat",
-      "Options directives",
       "Signal breakdown",
       "Macro regime",
     ]) {

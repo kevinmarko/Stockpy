@@ -4,11 +4,11 @@ import React, { createContext, useCallback, useContext, useState } from "react";
  * Global chat-panel open/close + context-injection state.
  *
  * `AIChatInterface` (webapp/src/components/AIChatInterface.tsx) is mounted
- * once, globally, in App.tsx -- individual screens (e.g. Options Matrix)
+ * once, globally, in App.tsx -- individual screens (e.g. a custom Data App view)
  * live under React Router and have no direct access to App.tsx's local
  * state. This context is the seam that lets any screen under
  * `<ChatProvider>` open the one global chat panel pre-loaded with a
- * screen-specific context string (e.g. a summary of the options directives
+ * screen-specific context string (e.g. which custom Data App view is
  * currently on screen), without threading callbacks through the router.
  *
  * Mirrors this codebase's existing ToastContext.tsx pattern: a Provider

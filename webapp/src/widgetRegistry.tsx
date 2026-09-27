@@ -5,7 +5,6 @@ import { SymbolSignalOverlayChart } from "./components/SymbolSignalOverlayChart"
 import { PilotsTableWidget } from "./components/PilotsTableWidget";
 import { SentimentMiniChart } from "./components/SentimentMiniChart";
 import { PortfolioHeatWidget } from "./components/PortfolioHeatWidget";
-import { OptionsDirectiveSummary } from "./components/OptionsDirectiveSummary";
 import { SignalBreakdownMiniWidget } from "./components/SignalBreakdownMiniWidget";
 import { MacroRegimeBanner } from "./components/MacroRegimeBanner";
 
@@ -41,12 +40,11 @@ export const WIDGET_LABELS: Record<keyof CustomViewWidgets, string> = {
   pilotsTable: "Pilots holdings table",
   sentimentMini: "Sentiment history mini-chart",
   portfolioHeat: "Portfolio heat gauge",
-  optionsDirective: "Options directive summary",
   signalBreakdown: "Signal breakdown mini-chart",
   macroRegime: "Macro regime banner",
 };
 
-/** "All 9 widget keys, in stable order" -- derived from `WIDGET_LABELS`
+/** "All 8 widget keys, in stable order" -- derived from `WIDGET_LABELS`
  * (kept exhaustive at compile time by the `Record<keyof CustomViewWidgets,
  * string>` annotation above), same convention `CreateDataApp.tsx` used
  * before this module existed. */
@@ -66,7 +64,6 @@ export const WIDGET_COMPONENTS: Record<NonChatWidgetKey, { Component: ComponentT
   pilotsTable: { Component: PilotsTableWidget, heading: "Pilots" },
   sentimentMini: { Component: SentimentMiniChart, heading: "Sentiment history" },
   portfolioHeat: { Component: PortfolioHeatWidget, heading: "Portfolio heat" },
-  optionsDirective: { Component: OptionsDirectiveSummary, heading: "Options directives" },
   signalBreakdown: { Component: SignalBreakdownMiniWidget, heading: "Signal breakdown" },
   macroRegime: { Component: MacroRegimeBanner, heading: "Macro regime" },
 };

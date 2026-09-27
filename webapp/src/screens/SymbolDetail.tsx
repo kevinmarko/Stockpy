@@ -17,10 +17,8 @@ import type {
   AiResearchResponse,
   ForecastModelError,
   ForecastSkill,
-  OptionsDirective,
   RollingBeta,
   SymbolDetail as SymbolDetailT,
-  SymbolOptions,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
@@ -31,7 +29,6 @@ import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { seriesColor, theme } from "../theme";
-import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
 import ActiveTraderLadder from "../components/ActiveTraderLadder";
@@ -257,7 +254,6 @@ export function SymbolDetail() {
     () => api.getForecast(ticker, forecastHorizon),
     [ticker, forecastHorizon]
   );
-  const options = useApi<SymbolOptions>(() => api.getSymbolOptions(ticker), [ticker]);
   const rollingBeta = useApi<RollingBeta>(() => api.getRollingBeta(ticker, 60), [ticker]);
   const decisions = useApi<DecisionEntry[]>(
     () => api.getDecisions({ symbol: ticker, limit: 10 }),
@@ -268,7 +264,6 @@ export function SymbolDetail() {
     () => {
       reload();
       forecast.reload();
-      options.reload();
       rollingBeta.reload();
       decisions.reload();
     },
@@ -331,12 +326,6 @@ export function SymbolDetail() {
           <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
             {fmtUsd(identity.price)}
           </div>
-          <button 
-            className="btn btn-outline" 
-            onClick={() => nav(`/symbol/${ticker}/options`)}
-          >
-            Trade Options
-          </button>
         </div>
       </div>
 
@@ -365,7 +354,6 @@ export function SymbolDetail() {
             .dashboard-layout > [data-grid-area="tactical"] { grid-column: span 4; }
             .dashboard-layout > [data-grid-area="rolling_beta"] { grid-column: span 6; }
             .dashboard-layout > [data-grid-area="forecast"] { grid-column: span 6; }
-            .dashboard-layout > [data-grid-area="options"] { grid-column: span 4; }
             .dashboard-layout > [data-grid-area="decision"] { grid-column: span 8; }
             .dashboard-layout > [data-grid-area="claude"] { grid-column: span 4; }
             .dashboard-layout > [data-grid-area="gemini"] { grid-column: span 4; }
@@ -675,26 +663,6 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div data-grid-area="options" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-          {/* Options premium directive (persisted matrix; advisory) */}
-          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
-              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Options premium</h2>
-            </div>
-            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-              {options.loading ? (
-                <Loading lines={1} />
-              ) : !options.data || !options.data.directive ? (
-                <div className="empty" style={{ padding: "var(--s-4-5)" }}>
-                  {options.data?.reason ?? "No options directive for this symbol yet."}
-                </div>
-              ) : (
-                <OptionsDirectiveView d={options.data.directive} />
-              )}
-            </div>
-          </section>
-        </div>
-
         {/* On-demand AI generation — Claude analyst note, Gemini chart-pattern
             read, Opal research brief. Each is operator-triggered only (never
             generated automatically) and fully independent: one card failing or
@@ -757,45 +725,6 @@ export function SymbolDetail() {
         <ActiveTraderLadder symbol={data.symbol} currentPrice={identity.price} />
       </div>
     </div>
-  );
-}
-
-/** Renders one persisted options premium directive (advisory, read-only). */
-function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
-  const legOk = d.Integrity_OK === true;
-  const theta = realizableTheta(d);
-  const ivr = effectiveIvr(d);
-  return (
-    <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-2)" }}>
-        <div style={{ fontWeight: 700 }}>{d.Strategy ?? "—"}</div>
-        <span className={`badge ${legOk ? "badge-good" : "badge-bad"}`}>
-          {legOk ? "Integrity ✓" : "Integrity ✗"}
-        </span>
-      </div>
-      <div className="list">
-        <StatRow label="Action" value={d.Action ?? "—"} />
-        <StatRow label="Trend bias" value={d.Trend_Bias ?? "—"} />
-        <StatRow label="Net premium" value={fmtUsd(d.Net_Premium ?? null)} />
-        <StatRow
-          label="Realizable θ/day"
-          value={theta.note ? "—" : fmtUsd(theta.value)}
-        />
-        <StatRow
-          label="Short strike / Δ"
-          value={`${fmtUsd(d.Short_Strike ?? null)} / ${fmtNum(d.Short_Delta ?? null, 2)}`}
-        />
-        <StatRow
-          label="Long strike / Δ"
-          value={`${fmtUsd(d.Long_Strike ?? null)} / ${fmtNum(d.Long_Delta ?? null, 2)}`}
-        />
-        <StatRow label="GARCH σ" value={fmtNum(d.Sigma_GARCH ?? null, 3)} />
-        <StatRow
-          label={ivr.isTrue ? "IVR (chain)" : "IVR (proxy)"}
-          value={fmtNum(ivr.value, 1)}
-        />
-      </div>
-    </>
   );
 }
 

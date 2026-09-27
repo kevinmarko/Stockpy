@@ -3,8 +3,8 @@
  * sector/industry/market-cap/price/beta/dividend screener, independent of
  * the tracked pipeline universe. Exercises the mock fixture (real mock API,
  * matching DataExplorer.test.tsx's convention), the honest-empty-result
- * branches, the filter presets, and the two handoff actions into Paper
- * Broker (Quick Trade / Strategy Scan) via URL query params.
+ * branches, the filter presets, and the Quick Trade handoff into Paper
+ * Broker via a URL query param.
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -95,28 +95,6 @@ describe("SymbolScreener screen (real mock API)", () => {
 
     fireEvent.click(screen.getByText("Quick Trade →"));
     expect(mockNavigate).toHaveBeenCalledWith("/paper-broker?quickTradeSymbol=AAPL");
-  });
-
-  it("selecting rows and Send to Strategy Scan navigates with ?scanSymbols=", async () => {
-    renderScreen();
-    fireEvent.click(screen.getByText("Large Cap Tech"));
-    await screen.findByText("AAPL");
-
-    fireEvent.click(screen.getByLabelText("Select AAPL"));
-    fireEvent.click(screen.getByLabelText("Select MSFT"));
-
-    const sendBtn = screen.getByTestId("send-to-strategy-scan");
-    expect(sendBtn).not.toBeDisabled();
-    fireEvent.click(sendBtn);
-
-    expect(mockNavigate).toHaveBeenCalledWith("/paper-broker?scanSymbols=AAPL%2CMSFT");
-  });
-
-  it("Send to Strategy Scan is disabled with nothing selected", async () => {
-    renderScreen();
-    fireEvent.click(screen.getByText("Large Cap Tech"));
-    await screen.findByText("AAPL");
-    expect(screen.getByTestId("send-to-strategy-scan")).toBeDisabled();
   });
 
   it("a null field (e.g. QQQ's sector/market-cap) renders '—', never a fabricated value", async () => {

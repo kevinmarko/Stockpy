@@ -1,5 +1,5 @@
 /**
- * ResearchHub.test.tsx — the Research section's landing hub: all 12 screen
+ * ResearchHub.test.tsx — the Research section's landing hub: all 11 screen
  * cards render with their label + description (Sentiment Dynamics and
  * Sector Selection closing parity gap G2 — the hub previously listed only 9
  * of the 11 screens the nav actually carries; the SVI Stitching Algorithm
@@ -40,7 +40,6 @@ function renderHub(initialPath = "/research") {
         <Route path="/models" element={<Stub marker="landed:models" />} />
         <Route path="/strategy-health" element={<Stub marker="landed:strategy-health" />} />
         <Route path="/pairs" element={<Stub marker="landed:pairs" />} />
-        <Route path="/options" element={<Stub marker="landed:options" />} />
         <Route path="/signals" element={<Stub marker="landed:signals" />} />
         <Route path="/sentiment" element={<Stub marker="landed:sentiment" />} />
         <Route path="/sector-selection" element={<Stub marker="landed:sector-selection" />} />
@@ -61,7 +60,7 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 12 card labels", () => {
+  it("renders all 11 card labels", () => {
     renderHub();
     for (const label of [
       "Pilots",
@@ -69,7 +68,6 @@ describe("ResearchHub screen", () => {
       "Models",
       "Strategy Health",
       "Pairs radar",
-      "Options",
       "Signal Breakdown",
       "Sentiment Dynamics",
       "Sector Selection",
@@ -81,7 +79,7 @@ describe("ResearchHub screen", () => {
     }
   });
 
-  it("renders live TAB_HELP descriptions for all 11 cards, not a hard-coded duplicate", () => {
+  it("renders live TAB_HELP descriptions for all 10 cards, not a hard-coded duplicate", () => {
     renderHub();
     // Asserts against the actual TAB_HELP.* text at runtime -- a change to
     // helpContent.ts's prose would break this test if ResearchHub still
@@ -93,7 +91,6 @@ describe("ResearchHub screen", () => {
       screen.getByText(TAB_HELP["strategy-health"].description)
     ).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.pairs.description)).toBeInTheDocument();
-    expect(screen.getByText(TAB_HELP.options.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.signals.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.sentiment.description)).toBeInTheDocument();
     expect(
@@ -126,7 +123,6 @@ describe("ResearchHub screen", () => {
     ["Models", "landed:models"],
     ["Strategy Health", "landed:strategy-health"],
     ["Pairs radar", "landed:pairs"],
-    ["Options", "landed:options"],
     ["Signal Breakdown", "landed:signals"],
     ["Sentiment Dynamics", "landed:sentiment"],
     ["Sector Selection", "landed:sector-selection"],
