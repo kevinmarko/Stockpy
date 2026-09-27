@@ -574,6 +574,14 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # below. `pilots` is allowed here for that one narrow composition,
         # matching pilots.discovery's identical precedent above.
         allowed = allowed | {"data", "pilots", "datetime", "execution"}
+    if module_name == "paper_equity_order":
+        # pilots.paper_equity_order (the equity-only Quick Trade order path,
+        # split off the options desk in 2026-09) imports exactly the three
+        # narrow modules pilots.paper_broker's options-order composition
+        # already relies on: data.paper_account_store, pilots.order_sizing
+        # (math+typing only) and pilots.price_provider (data+logging+typing
+        # only), plus stdlib uuid for order ids. No heavy engine.
+        allowed = allowed | {"data", "pilots", "uuid"}
     if module_name == "live_trade_proposals":
         # pilots.live_trade_proposals mirrors pilots.paper_broker's exact
         # pattern (settings + a dependency-light store module), except its

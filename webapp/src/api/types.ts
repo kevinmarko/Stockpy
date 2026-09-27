@@ -4432,6 +4432,26 @@ export interface OptionsOrderResult {
   message: string;
 }
 
+// Equity-only Quick Trade ticket (POST /pilots/paper-broker/order). Split out
+// of the options desk's OptionsOrderRequest/Result so equity paper trading
+// has no dependency on options code, which is being archived -- see
+// pilots/paper_equity_order.py's own module docstring.
+export interface EquityOrderRequest {
+  symbol: string;
+  side?: 'buy' | 'sell';
+  quantity?: number;
+  dollar_amount?: number;
+  order_type?: 'market' | 'limit';
+  limit_price?: number;
+  isLive?: boolean;
+}
+
+export interface EquityOrderResult {
+  ok: boolean;
+  order_id: string | null;
+  message: string;
+}
+
 export interface OptionsBacktestParams {
   strategy: string;
   ticker: string;
