@@ -28,11 +28,16 @@ to fix all 5 and turn the model feed on.
 ## Disclosed, not changed
 
 - The `trades` ledger still has no paper/live discriminator column — bridged rows are identifiable only by `notes="Paper bridge, ..."`, so MCP/reporting consumers of that ledger now include paper outcomes.
-- `pilots/scenario_matrix.py` still defaults `base_iv=0.25`.
-- 3 `tests/test_options_gex.py` failures reproduce on untouched `main` (pre-existing, not from this change).
+- (Resolved later in this PR: `scenario_matrix` base IV, the `options_gex` stale dates, and CI dependency drift.)
 
 ## Follow-up (same PR): removed the remaining fixed volatilities
 
 - `pilots/options_risk.py`: `calculate_position_greeks` has no default `sigma` (was 0.25). Each leg uses its own live chain IV (`resolve_option_iv`); a leg without one, or with an unparseable expiry (previously assumed 30 days), is `missing_data` and excluded from aggregates.
 - `execution/options_paper_executor.py`: `_price_option_contract` (σ=0.30) is removed. So are the σ=0.20 post-earnings close and the `entry_price * iv_crush_factor` fallback. All three are replaced by `_real_option_price_per_contract` (side-aware live quote → mid → Black-Scholes on the leg's own IV → last). Strike-built earnings-crush entries and post-earnings closes refuse/skip with a reason when no real price exists.
 - Tests: the stale hardcoded expiries (`2026-08-21`, `2026-09-18`) are replaced with relative future dates. That also fixes the previously-failing `test_calculate_portfolio_greeks_multi_leg_spread`. There are new refusal and side-aware-fill tests in `tests/test_options_paper_executor.py`, a no-IV test in `tests/test_options_risk.py`, and a what-if exit-skip test in `tests/test_options_lifecycle.py`.
+
+## Follow-up 2: scenario matrix + CI drift
+
+- `pilots/scenario_matrix.py`: `base_iv` defaults to `None` (was 0.25). IV comes from `iv_map` → position IV → the leg's live chain IV → an explicit `base_iv`. With none of these, or with an unparseable expiry (previously 30 days), the leg is excluded and listed in `missing_data_symbols`. The API response now includes that field, and `ScenarioHeatmap.tsx` renders an "exposure understated" warning.
+- CI drift: `SQLAlchemy` is pinned `<2.1` (2.1 defaults `postgresql://` to psycopg v3), and `soupsieve` is bumped to 2.9.0 (two ReDoS CVEs). `pilots/options_gex.py`'s synthetic chain no longer defaults to a hardcoded, now-past expiration.
+- Full offline suite: 13,640 passed, 0 failed.

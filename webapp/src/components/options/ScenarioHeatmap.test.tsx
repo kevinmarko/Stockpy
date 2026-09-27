@@ -156,6 +156,24 @@ describe("ScenarioHeatmap", () => {
     expect(screen.queryByText(/No open positions to stress-test/i)).not.toBeInTheDocument();
   });
 
+  it("warns that exposure is understated when positions were excluded for missing IV/spot", () => {
+    render(
+      <ScenarioHeatmap
+        initialData={{ ...mockScenarioData, missing_data_symbols: ["AAPL 2026-12-18 $150.00 CALL"] }}
+      />
+    );
+    const alert = screen.getByTestId("scenario-missing-data");
+    expect(alert).toHaveTextContent(/1 position is excluded/);
+    expect(alert).toHaveTextContent("AAPL 2026-12-18 $150.00 CALL");
+    // The grid still renders for the legs that WERE priced.
+    expect(screen.getByText(/Multi-Dimensional Scenario Matrix/i)).toBeInTheDocument();
+  });
+
+  it("shows no exclusion warning when nothing was excluded (or the field is absent)", () => {
+    render(<ScenarioHeatmap initialData={{ ...mockScenarioData, missing_data_symbols: [] }} />);
+    expect(screen.queryByTestId("scenario-missing-data")).not.toBeInTheDocument();
+  });
+
   it("triggers refresh callback", async () => {
     const handleRefresh = vi.fn();
     render(<ScenarioHeatmap initialData={mockScenarioData} onRefresh={handleRefresh} />);

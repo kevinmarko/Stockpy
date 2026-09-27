@@ -41,6 +41,7 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
   }
 
   const { spot_shifts, iv_shifts, time_slices, matrix, historical_scenarios, current_portfolio_value, positions_count } = matrixData;
+  const missingSymbols = matrixData.missing_data_symbols ?? [];
 
   // A book with zero open positions has nothing to stress-test -- every cell
   // in the grid below is honestly $0 (correct math), but rendered without
@@ -135,6 +136,25 @@ export const ScenarioHeatmap: React.FC<ScenarioHeatmapProps> = ({ initialData, o
         gap: 16,
       }}
     >
+      {missingSymbols.length > 0 && (
+        <div
+          role="alert"
+          data-testid="scenario-missing-data"
+          style={{
+            background: "rgba(245, 158, 11, 0.12)",
+            border: "1px solid rgba(245, 158, 11, 0.45)",
+            borderRadius: 6,
+            padding: "10px 12px",
+            fontSize: 13,
+          }}
+        >
+          ⚠️ {missingSymbols.length} position{missingSymbols.length === 1 ? " is" : "s are"} excluded from this
+          stress grid — no live spot price or implied volatility was available, so{" "}
+          {missingSymbols.length === 1 ? "it isn't" : "they aren't"} modeled rather than priced at a made-up
+          volatility. Exposure shown here is understated by: {missingSymbols.join(", ")}.
+        </div>
+      )}
+
       {/* Header controls */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>

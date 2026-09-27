@@ -14902,6 +14902,8 @@ export const mockApi = {
       // current_portfolio_value/P&L above) -- keep positions_count consistent
       // with that rather than the honest 0 a truly empty account would report.
       positions_count: 3,
+      // Every mock leg carries a usable IV, so nothing is excluded here.
+      missing_data_symbols: [],
     });
   },
   async getDeltaHedgePreview() {

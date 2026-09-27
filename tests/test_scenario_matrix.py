@@ -505,3 +505,66 @@ def test_scenario_matrix_ast_import_safety():
             if node.module:
                 for forbidden in forbidden_modules:
                     assert forbidden not in node.module, f"Forbidden from-import found: {node.module}"
+
+
+# ---------------------------------------------------------------------------
+# No fixed default IV: legs use real IV or are reported missing
+# ---------------------------------------------------------------------------
+
+_NOW = datetime(2026, 1, 5, tzinfo=timezone.utc)
+_OPT = {"symbol": "AAPL 2026-03-20 $150.00 CALL", "qty": 1.0, "avg_entry_price": 500.0}
+
+
+def test_option_without_any_iv_is_missing_not_priced_at_default():
+    with patch("data.paper_account_store.resolve_option_iv", return_value=None):
+        res = evaluate_scenario_matrix(
+            positions=[_OPT], spot_map={"AAPL": 150.0},
+            spot_shifts=[0.0], iv_shifts=[0.0], time_shifts_days=[0], now=_NOW,
+        )
+    assert res["missing_data_symbols"] == [_OPT["symbol"]]
+    assert res["baseline"]["portfolio_market_value"] == 0.0
+
+
+def test_option_uses_its_live_chain_iv():
+    from pilots.options_risk import calculate_black_scholes_greeks
+
+    with patch("data.paper_account_store.resolve_option_iv", return_value=0.42) as iv_mock:
+        res = evaluate_scenario_matrix(
+            positions=[_OPT], spot_map={"AAPL": 150.0},
+            spot_shifts=[0.0], iv_shifts=[0.0], time_shifts_days=[0], now=_NOW,
+        )
+    iv_mock.assert_called_once_with("AAPL", "2026-03-20", 150.0, "call")
+    assert res["missing_data_symbols"] == []
+    t = (datetime(2026, 3, 20, tzinfo=timezone.utc) - _NOW).total_seconds() / 86400.0 / 365.0
+    expected = calculate_black_scholes_greeks(150.0, 150.0, t, 0.42, "call")["price"] * 100.0
+    # Baseline market value is reported rounded to cents.
+    assert res["baseline"]["portfolio_market_value"] == pytest.approx(expected, abs=0.01)
+
+
+def test_iv_map_and_explicit_base_iv_still_honored_without_live_lookup():
+    with patch("data.paper_account_store.resolve_option_iv") as iv_mock:
+        via_map = evaluate_scenario_matrix(
+            positions=[_OPT], spot_map={"AAPL": 150.0}, iv_map={"AAPL": 0.30},
+            spot_shifts=[0.0], iv_shifts=[0.0], time_shifts_days=[0], now=_NOW,
+        )
+        iv_mock.assert_not_called()
+    with patch("data.paper_account_store.resolve_option_iv", return_value=None):
+        via_base = evaluate_scenario_matrix(
+            positions=[_OPT], spot_map={"AAPL": 150.0}, base_iv=0.30,
+            spot_shifts=[0.0], iv_shifts=[0.0], time_shifts_days=[0], now=_NOW,
+        )
+    assert via_map["missing_data_symbols"] == via_base["missing_data_symbols"] == []
+    assert via_map["baseline"]["portfolio_market_value"] == pytest.approx(
+        via_base["baseline"]["portfolio_market_value"]
+    )
+
+
+def test_api_response_surfaces_excluded_positions():
+    """The webapp contract carries missing_data_symbols so a partial stress
+    grid is never shown as the whole book."""
+    with patch("data.paper_account_store.resolve_option_iv", return_value=None):
+        res = to_scenario_matrix_response(evaluate_scenario_matrix(
+            positions=[_OPT], spot_map={"AAPL": 150.0},
+            spot_shifts=[0.0], iv_shifts=[0.0], time_shifts_days=[0], now=_NOW,
+        ))
+    assert res["missing_data_symbols"] == [_OPT["symbol"]]

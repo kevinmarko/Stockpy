@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import math
 from typing import Any, Dict, List, Optional
 
 from pilots.options_risk import calculate_black_scholes_greeks, parse_option_symbol
@@ -93,13 +94,31 @@ def get_historical_presets() -> Dict[str, Dict[str, Any]]:
     return dict(HISTORICAL_PRESETS)
 
 
+def _positive_or_none(value: Any) -> Optional[float]:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if (math.isfinite(v) and v > 0.0) else None
+
+
 def _parse_position(
     pos: Any,
     now: datetime,
-    base_iv: float = 0.25,
+    base_iv: Optional[float] = None,
     iv_map: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
-    """Extracts standardized position attributes from PaperPosition objects or dictionaries."""
+    """Extracts standardized position attributes from PaperPosition objects or dictionaries.
+
+    Option IV resolution order: ``iv_map[symbol]`` -> ``iv_map[ticker]`` ->
+    the position's own ``iv``/``implied_volatility``/``sigma`` -> the
+    contract's live chain IV (``data.paper_account_store.resolve_option_iv``)
+    -> an explicit caller-supplied ``base_iv``. If none exists, ``sigma`` is
+    ``None`` and the position is reported in ``missing_symbols`` rather than
+    stress-tested at a made-up volatility (this used to default to 0.25). An
+    unparseable expiration likewise yields ``t_years=None`` (it used to
+    assume 30 days).
+    """
     if isinstance(pos, dict):
         symbol = str(pos.get("symbol", "")).strip()
         qty = float(pos.get("qty", pos.get("quantity", 0.0)) or 0.0)
@@ -124,17 +143,27 @@ def _parse_position(
             now_utc = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
             dte = max(0.0, (exp_date - now_utc).total_seconds() / 86400.0)
         except Exception:
-            dte = 30.0
-        t_years = dte / 365.0
+            dte = None  # never assume a made-up tenor
+        t_years = dte / 365.0 if dte is not None else None
 
-        # Resolve IV
-        sigma = base_iv
+        # Resolve IV -- never a fixed default.
+        sigma: Optional[float] = None
         if iv_map and symbol in iv_map:
-            sigma = float(iv_map[symbol])
+            sigma = _positive_or_none(iv_map[symbol])
         elif iv_map and ticker in iv_map:
-            sigma = float(iv_map[ticker])
-        elif pos_iv is not None and float(pos_iv) > 0:
-            sigma = float(pos_iv)
+            sigma = _positive_or_none(iv_map[ticker])
+        elif _positive_or_none(pos_iv) is not None:
+            sigma = _positive_or_none(pos_iv)
+        if sigma is None and dte is not None:
+            try:
+                from data.paper_account_store import resolve_option_iv
+
+                sigma = resolve_option_iv(ticker, exp_str, strike, opt_type)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("scenario_matrix: live IV lookup failed for %s: %s", symbol, exc)
+                sigma = None
+        if sigma is None and base_iv is not None:
+            sigma = _positive_or_none(base_iv)
 
         return {
             "symbol": symbol,
@@ -146,7 +175,7 @@ def _parse_position(
             "option_type": opt_type,
             "dte": dte,
             "t_years": t_years,
-            "sigma": max(0.01, sigma),
+            "sigma": max(0.01, sigma) if sigma is not None else None,
             "avg_entry_price": avg_entry,
             "fallback_spot": float(pos_spot) if (pos_spot and float(pos_spot) > 0) else None,
         }
@@ -206,6 +235,10 @@ def _price_position_under_scenario(
     opt_type = parsed_pos["option_type"]
     base_t_years = parsed_pos["t_years"]
     base_sigma = parsed_pos["sigma"]
+    if base_sigma is None or base_t_years is None:
+        # No real implied volatility / tenor -> reported as missing, never
+        # stress-tested at a fixed default.
+        return None
 
     # Shock leg IV: sigma' = max(0.01, sigma * (1 + iv_shift))
     shocked_sigma = max(0.01, base_sigma * (1.0 + iv_shift))
@@ -334,7 +367,7 @@ def evaluate_scenario_matrix(
     iv_shifts: Optional[List[float]] = None,
     time_shifts_days: Optional[List[int]] = None,
     *,
-    base_iv: float = 0.25,
+    base_iv: Optional[float] = None,
     iv_map: Optional[Dict[str, float]] = None,
     r: Optional[float] = None,
     now: Optional[datetime] = None,
@@ -349,7 +382,9 @@ def evaluate_scenario_matrix(
         spot_shifts: Relative spot shocks, defaulting to [-0.10, -0.05, -0.03, -0.01, 0.0, 0.01, 0.03, 0.05, 0.10].
         iv_shifts: Relative IV shocks, defaulting to [-0.20, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20].
         time_shifts_days: Days elapsed, defaulting to [0, 7, 14, 21].
-        base_iv: Default IV for option contracts if not specified in iv_map or position (default 0.25).
+        base_iv: Optional explicit fallback IV, used only when no iv_map entry, position IV,
+            or live chain IV exists. Default None: such a leg is reported in
+            missing_data_symbols instead of being priced at a made-up volatility.
         iv_map: Optional mapping of symbol or ticker to IV.
         r: Risk-free rate (defaults to settings.OPTIONS_RISK_FREE_RATE or 0.045).
         now: Reference timestamp for DTE calculation (defaults to utcnow).
@@ -604,6 +639,11 @@ def to_scenario_matrix_response(result: Dict[str, Any]) -> Dict[str, Any]:
         # identical as an all-zero grid otherwise. See
         # docs/known_issues/scenario_matrix_field_mismatch.md's follow-up note.
         "positions_count": result["baseline"]["positions_count"],
+        # Positions left OUT of every cell because no real spot or implied
+        # volatility was available -- the grid understates exposure by these
+        # legs, so the frontend must say so rather than show a silently
+        # partial stress test as the whole book.
+        "missing_data_symbols": list(result.get("missing_data_symbols", [])),
     }
 
 

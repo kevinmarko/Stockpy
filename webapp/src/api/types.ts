@@ -4543,6 +4543,10 @@ export interface ScenarioMatrixResponse {
    * result, not a fabricated/broken one) -- optional so an older cached
    * response without this field doesn't break existing callers. */
   positions_count?: number;
+  /** Positions excluded from every cell because no real spot price or implied
+   * volatility was available (never priced at a made-up default IV). The grid
+   * understates exposure by these legs. Optional for older responses. */
+  missing_data_symbols?: string[];
 }
 
 export interface VolSmilePoint {
