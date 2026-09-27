@@ -1,6 +1,8 @@
 # SEC Rule 606 "price improvement" was structurally always $0.00/0% in production — a fabricated, not measured, zero
 
-**Status: Fixed and verified.** Found during a secondary audit pass (2026-08-24)
+**Status: Fixed and verified. Superseded 2026-09 (step 3c):** the `OrderManager` audit hook and `GET /pilots/execution/sec-606/report` were removed, so nothing writes or serves this table any more; the store and reporter move to `legacy/` in step 4.
+
+**Original status: Fixed and verified.** Found during a secondary audit pass (2026-08-24)
 scoped to `execution/multi_broker_gateway.py`'s NBBO/price-improvement math — which
 turned out to contain none: the audit's first, and most important, finding was that
 the file it was asked to look at has zero NBBO/price-improvement logic at all. The

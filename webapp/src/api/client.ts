@@ -222,7 +222,6 @@ import type { StrategyReportCardSnapshot,
   MultiBrokerStatusResponse,
   BrokerFailoverRequest,
   BrokerFailoverResponse,
-  SecRule606ReportResponse,
   TrendsStitchDemoResponse,
   DigestPayload,
 } from "./types";
@@ -1450,7 +1449,7 @@ const liveApi = {
       body: JSON.stringify(request),
     }),
 
-  // ---- Tier D: AI Research Copilot, 3D Vol, Multi-Broker & SEC 606 ----
+  // ---- Tier D: AI Research Copilot, 3D Vol & Multi-Broker ----
 
   synthesizeQuantResearch: (request: ResearchSynthesizeRequest) =>
     http<ResearchSynthesizeResponse>("/pilots/ai/research/synthesize", {
@@ -1476,14 +1475,6 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
-  getSecRule606Report: (params?: { year?: number; quarter?: number; is_option?: boolean }) => {
-    const q = new URLSearchParams();
-    if (params?.year != null) q.set("year", String(params.year));
-    if (params?.quarter != null) q.set("quarter", String(params.quarter));
-    if (params?.is_option != null) q.set("is_option", String(params.is_option));
-    const qs = q.toString() ? `?${q.toString()}` : "";
-    return http<SecRule606ReportResponse>(`/pilots/execution/sec-606/report${qs}`);
-  },
 
   // ---- Live Trade Approvals ----
 

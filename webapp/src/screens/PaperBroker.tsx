@@ -27,7 +27,6 @@ import { HrpCvarOptimizerView } from "../components/portfolio/HrpPortfolioOptimi
 import { AlmgrenChrissRouterView } from "../components/execution/AlmgrenChrissRouterView";
 import { ResearchCopilotView } from "../components/ai/ResearchCopilotView";
 import { MultiBrokerGatewayView } from "../components/execution/MultiBrokerGatewayView";
-import { SecRule606ReportView } from "../components/execution/SecRule606ReportView";
 import { FixGatewayStatusRadar } from "../components/execution/FixGatewayStatusRadar";
 import type { RollOrderRequest, Quote } from "../api/types";
 
@@ -142,7 +141,6 @@ export function PaperBroker() {
   const [showAlmgrenChriss, setShowAlmgrenChriss] = useState(false);
   const [showAiCopilot, setShowAiCopilot] = useState(false);
   const [showMultiBroker, setShowMultiBroker] = useState(false);
-  const [showSec606, setShowSec606] = useState(false);
   const [showFixGateway, setShowFixGateway] = useState(false);
 
   // Position Roll state
@@ -418,21 +416,6 @@ export function PaperBroker() {
             }}
           >
             🔀 Multi-Broker
-          </button>
-          <button
-            onClick={() => setShowSec606(!showSec606)}
-            style={{
-              padding: "8px 14px",
-              background: showSec606 ? theme.accent : theme.surface,
-              border: `1px solid ${showSec606 ? theme.accent : theme.border}`,
-              color: showSec606 ? "#000" : theme.textPrimary,
-              borderRadius: 4,
-              cursor: "pointer",
-              fontWeight: 600,
-              fontSize: 13,
-            }}
-          >
-            📋 SEC 606
           </button>
           <button
             onClick={handleManageExits}
@@ -943,19 +926,6 @@ export function PaperBroker() {
               ✕
             </button>
             <FixGatewayStatusRadar onClose={() => setShowFixGateway(false)} />
-          </div>
-        )}
-
-        {/* SEC Rule 606 Compliance Disclosure Reporter */}
-        {showSec606 && (
-          <div style={{ position: "relative" }}>
-            <button 
-              onClick={() => setShowSec606(false)}
-              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
-            >
-              ✕
-            </button>
-            <SecRule606ReportView />
           </div>
         )}
 
