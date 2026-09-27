@@ -10,9 +10,13 @@ pipeline and advisory paths, so the move had to be numerically invisible.
 The golden values below were captured by running the PRE-MOVE
 ``TechnicalOptionsEngine`` methods on these exact synthetic series (commit
 d77db873). The moved code must keep reproducing them. GARCH values use a
-1e-6 relative tolerance because the SLSQP fit can differ in the last few
-bits across platforms/BLAS builds (CI runs on Linux, the goldens came from
-macOS); the indicator values are plain rolling arithmetic and use 1e-9.
+1e-4 relative tolerance: the SLSQP maximum-likelihood fit lands on slightly
+different bits per platform/BLAS build (CI's Linux runners measured ~8e-6
+relative off the macOS goldens), while a real regression -- a different
+model spec, return scaling or bounds -- moves the result by orders of
+magnitude more. TestDelegatesMatchCore in tests/test_volatility_garch.py
+keeps the same-process comparison exact. The indicator values are plain
+rolling arithmetic and use 1e-9.
 
 The full before/after pipeline comparison (one cycle on frozen inputs,
 ``state_snapshot``-level columns plus advisory recommendations) was run
@@ -66,7 +70,7 @@ def _series(seed: int, n: int) -> pd.DataFrame:
 @pytest.mark.parametrize("key", sorted(_GOLDEN))
 def test_garch_day_ahead_vol_matches_pre_move_golden(key):
     got = GarchVolatilityEstimator().estimate_gjr_garch_volatility(_series(*key))
-    assert got == pytest.approx(_GOLDEN[key]["vol"], rel=1e-6)
+    assert got == pytest.approx(_GOLDEN[key]["vol"], rel=1e-4)
 
 
 @pytest.mark.parametrize("key", sorted(_GOLDEN))
@@ -76,7 +80,7 @@ def test_garch_term_structure_matches_pre_move_golden(key):
     )
     assert set(got) == set(_GOLDEN[key]["ts"])
     for h, expected in _GOLDEN[key]["ts"].items():
-        assert got[h] == pytest.approx(expected, rel=1e-6), f"horizon {h}"
+        assert got[h] == pytest.approx(expected, rel=1e-4), f"horizon {h}"
 
 
 @pytest.mark.parametrize("key", sorted(_GOLDEN))
