@@ -2,6 +2,8 @@
 
 > **2026-09 (step 3e):** the options-desk HTTP routes (`/pilots/options/*`, the options `/pilots/paper-broker/*` actions, `/pilots/ai/*`, `/pilots/portfolio/optimize/hrp-cvar`, `/pilots/execution/{optimize,fix,brokers}/*`, `/brokerage/options/order`, `/options`, `/symbols/{t}/options`, `/data/options/*`, `/metrics/options/*`, `/ws/risk/portfolio`) are removed. Mentions of them below are historical; the modules behind them move to `legacy/` in step 4. The live-trade approval routes under `/pilots/execution/` are kept.
 
+> **2026-09 (step 3f):** the options desk is gone from the webapp too. Removed: the `/options` (`OptionsMatrix.tsx`) and `/symbol/:ticker/options` (`OptionsChain.tsx`) screens and their nav/hub/palette/Marketplace links; Symbol Detail's "Trade Options" button and options-premium panel; the `optionsDirective` custom-view widget (a saved view that has it still loads, the key is dropped); every options panel on Paper Broker (desk scanners, Greeks, delta hedge, strategy auto-scan, settle-expired/manage-exits/roll, meta-labeler, backtest, scenario matrix, and the Positions Greeks/Roll columns); Symbol Screener's "Send to Strategy Scan"; the `components/{options,execution,portfolio,ai}/` folders and the 3-D vol/LOB charts; and 52 client/mock methods. Paper Broker keeps the account summary, positions, orders, closed trades and Quick Trade (`EquityOrderTicket`). Entries below that describe those screens are historical until the step-6 rewrite.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 > **Frontend:** `webapp/` (the Pilots PWA) is the platform's only UI. The Streamlit
