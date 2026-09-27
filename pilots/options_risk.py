@@ -184,13 +184,20 @@ def calculate_position_greeks(
     position: PaperPosition,
     spot_price: Optional[float],
     *,
-    sigma: float = 0.25,
+    sigma: Optional[float] = None,
     r: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
     Computes total Greek exposures for a single paper position (stock or option leg).
     Takes into account position quantity sign (long > 0 vs short < 0) and option contract multiplier (100).
+
+    ``sigma`` is the option's implied volatility. There is deliberately NO
+    default: an option leg with no real IV (``sigma=None``) -- or with an
+    unparseable expiration -- returns ``missing_data=True`` and is excluded
+    from portfolio aggregates, rather than being valued at a made-up
+    volatility. ``calculate_portfolio_greeks`` resolves each leg's own live
+    chain IV via ``data.paper_account_store.resolve_option_iv``.
     """
     if r is None:
         r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
@@ -199,7 +206,10 @@ def calculate_position_greeks(
     qty = float(position.qty)
     opt_info = parse_option_symbol(sym)
 
-    if spot_price is None or spot_price <= 0:
+    iv_missing = opt_info is not None and (
+        sigma is None or not math.isfinite(float(sigma)) or float(sigma) <= 0
+    )
+    if spot_price is None or spot_price <= 0 or iv_missing:
         return {
             "symbol": sym,
             "asset_type": "option" if opt_info else "stock",
@@ -217,6 +227,10 @@ def calculate_position_greeks(
             "position_vega_1pct": None,
             "market_value": None,
             "missing_data": True,
+            "missing_reason": (
+                "no live spot price" if (spot_price is None or spot_price <= 0)
+                else "no live implied volatility"
+            ),
         }
 
     if not opt_info:
@@ -254,7 +268,15 @@ def calculate_position_greeks(
         exp_date = datetime.strptime(exp_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         dte = max(0.0, (exp_date - now).total_seconds() / 86400.0)
     except Exception:
-        dte = 30.0
+        # Never assume a made-up 30-day tenor.
+        return {
+            "symbol": sym, "asset_type": "option", "base_ticker": ticker, "qty": qty,
+            "spot_price": spot_price, "delta_per_unit": None, "gamma_per_unit": None,
+            "theta_daily_per_unit": None, "vega_1pct_per_unit": None, "position_delta": None,
+            "position_dollar_delta": None, "position_gamma": None, "position_theta_daily": None,
+            "position_vega_1pct": None, "market_value": None, "missing_data": True,
+            "missing_reason": "unparseable expiration",
+        }
 
     t_years = dte / 365.0
 
@@ -262,7 +284,7 @@ def calculate_position_greeks(
         spot=spot_price,
         strike=strike,
         t_years=t_years,
-        sigma=sigma,
+        sigma=float(sigma),
         option_type=opt_type,
         r=r,
     )
@@ -478,7 +500,23 @@ def calculate_portfolio_greeks(
         if spot is None:
             positions_with_missing_data.append(pos.symbol)
 
-        g = calculate_position_greeks(pos, spot_price=spot, now=now)
+        iv = None
+        if opt_info:
+            # The leg's OWN live chain IV (cached per underlying/expiration);
+            # None excludes the leg as missing_data rather than faking one.
+            try:
+                from data.paper_account_store import resolve_option_iv
+
+                iv = resolve_option_iv(
+                    ticker, opt_info["expiration"], float(opt_info["strike"]), opt_info["option_type"]
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("options_risk: IV lookup failed for %s: %s", pos.symbol, exc)
+                iv = None
+            if iv is None and spot is not None:
+                positions_with_missing_data.append(pos.symbol)
+
+        g = calculate_position_greeks(pos, spot_price=spot, sigma=iv, now=now)
         g["symbol_beta"] = beta_val
         g["beta_is_estimated"] = not beta_is_measured
 

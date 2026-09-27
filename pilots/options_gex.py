@@ -1124,11 +1124,20 @@ def generate_synthetic_options_chain(
     base_sigma: float = 0.20,
     call_oi_bias: float = 1.0,
     put_oi_bias: float = 1.0,
-    expiration: str = "2026-09-18",
+    expiration: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Generates realistic synthetic options chain data for unit tests and Monte Carlo simulations.
+
+    ``expiration`` defaults to today + ``dte`` days. It used to default to a
+    hardcoded calendar date ("2026-09-18"); once that date passed, every
+    generated contract was already expired, so GEX (which excludes expired
+    contracts) silently came back as zero for the synthetic fallback chain.
     """
+    if expiration is None:
+        from datetime import timedelta
+
+        expiration = (date.today() + timedelta(days=max(1, int(round(dte))))).isoformat()
     if strikes is None:
         strikes = [spot_price * (0.80 + 0.02 * i) for i in range(21)]
 

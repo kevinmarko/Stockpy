@@ -14,8 +14,40 @@ from unittest.mock import patch
 import pytest
 
 from data.paper_account_store import PaperAccountStore
-from execution.options_paper_executor import OptionsPaperExecutor, _price_option_contract
+from types import SimpleNamespace
+
+import numpy as np
+import pandas as pd
+
+import data.paper_account_store as pas
+from execution.options_paper_executor import OptionsPaperExecutor
 from settings import settings
+
+# Relative, always-future expiration: these scenarios price legs from live
+# chain data, and a hardcoded calendar date silently becomes an EXPIRED
+# contract (valued at intrinsic, not fillable) once the real date passes.
+FUTURE_EXP = (date.today() + timedelta(days=45)).isoformat()
+FUTURE_EARNINGS = (date.today() + timedelta(days=44)).isoformat()
+
+
+# Explicit test IV served by the fake live chain below. Option legs are priced
+# from each contract's own live implied volatility (never a fixed default), so
+# these lifecycle scenarios supply one through the chain seam.
+TEST_IV = 0.30
+
+
+def _fake_chain(underlying, expiration):
+    strikes = np.arange(10.0, 1000.0, 0.5)
+    table = pd.DataFrame({
+        "strike": strikes, "bid": 0.0, "ask": 0.0, "lastPrice": 0.0,
+        "impliedVolatility": TEST_IV,
+    })
+    return SimpleNamespace(calls=table, puts=table.copy())
+
+
+@pytest.fixture(autouse=True)
+def _live_iv_chain(monkeypatch):
+    monkeypatch.setattr(pas, "_fetch_option_chain", _fake_chain)
 
 
 @pytest.fixture
@@ -319,13 +351,13 @@ def test_earnings_crush_trade_execution(store, executor):
     candidate = {
         "symbol": "NVDA",
         "strategy": "Iron Condor",
-        "expiration": "2026-08-21",
-        "earnings_date": "2026-08-20",
+        "expiration": FUTURE_EXP,
+        "earnings_date": FUTURE_EARNINGS,
         "legs": [
-            {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
-            {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
-            {"symbol": "NVDA 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
-            {"symbol": "NVDA 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
         ],
         "net_credit": 2.70,
     }
@@ -349,10 +381,10 @@ def test_earnings_crush_trade_execution(store, executor):
     straddle_candidate = {
         "symbol": "AAPL",
         "strategy": "Short Straddle",
-        "expiration": "2026-08-21",
+        "expiration": FUTURE_EXP,
         "spot": 150.0,
         "atm_strike": 150.0,
-        "earnings_date": "2026-08-20",
+        "earnings_date": FUTURE_EARNINGS,
     }
     res_straddle = executor.execute_earnings_crush_trade(straddle_candidate, contracts=1)
     assert res_straddle["success"] is True
@@ -379,13 +411,13 @@ def test_settle_post_earnings_trades(store, executor):
     candidate = {
         "symbol": "NVDA",
         "strategy": "Iron Condor",
-        "expiration": "2026-08-21",
+        "expiration": FUTURE_EXP,
         "earnings_date": str(today),
         "legs": [
-            {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
-            {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
-            {"symbol": "NVDA 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
-            {"symbol": "NVDA 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
         ],
         "net_credit": 2.70,
     }
@@ -527,3 +559,22 @@ def test_run_automated_delta_hedge_cycle_skips_spy_quote_fetch_when_no_open_posi
     mock_get_price.assert_not_called()
 
 
+
+
+def test_what_if_exit_evaluation_skips_legs_without_live_iv(store, executor, monkeypatch):
+    """A caller-supplied spot_map values legs by Black-Scholes on each
+    contract's OWN live IV. With no live IV there is no real price, so the
+    group is skipped -- not valued at a fixed volatility."""
+    monkeypatch.setattr(pas, "_fetch_option_chain", lambda u, e: None)
+    today = date.today()
+    exp_str = (today + timedelta(days=10)).strftime("%Y-%m-%d")  # < 21 DTE: would trigger
+    legs = [
+        {"symbol": f"AAPL {exp_str} $150.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+        {"symbol": f"AAPL {exp_str} $145.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+    ]
+    assert store.apply_multi_leg_fill(
+        client_order_id="OPEN-PCS-NOIV", symbol="AAPL", strategy_name="Put Credit Spread",
+        contracts=1, legs=legs, net_cash_impact=150.0, commission_and_fees=1.30,
+    )
+    exits = executor.evaluate_position_exits(spot_map={"AAPL": 170.0}, current_date=today)
+    assert exits == []

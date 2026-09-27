@@ -9774,11 +9774,12 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
   ],
   bridge_health: {
     bridge_enabled: true,
-    total_closed_trades: 21,
+    total_closed_trades: 24,
     attempted_count: 21,
     bridged_count: 19,
     failed_count: 2,
     disabled_count: 0,
+    excluded_count: 3,
     completeness_pct: 90.48,
     status: "degraded",
     last_failure: {

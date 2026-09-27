@@ -727,3 +727,31 @@ def _isolate_paper_and_transactions_db_in_tests(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(_pas, "resolve_database_url", lambda: isolated_url)
     monkeypatch.setattr(_ts, "resolve_database_url", lambda: isolated_url)
+
+
+@pytest.fixture(autouse=True)
+def _stub_paper_marking_network_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``PaperAccountStore`` position marking network-free in tests.
+
+    ``get_account()``/``get_open_positions()`` mark positions through two
+    live seams -- ``_fetch_stock_prices`` (CompositeProvider batch quotes,
+    with an Alpaca/yfinance fallback chain) and ``_fetch_option_chain``
+    (a yfinance option chain). Dozens of pre-existing tests open paper
+    positions without mocking either, so without this stub they would make
+    real outbound requests. Default stub: no live data at all, so every
+    position is marked at cost basis and flagged unpriced -- a test that
+    needs real marks patches the seam itself (a ``patch(...)`` inside the
+    test overrides this monkeypatch for its duration). Tests of the real
+    seams opt out with ``@pytest.mark.real_paper_marking``. The module-level
+    option-chain cache is cleared either way so cached chains never leak
+    between tests.
+    """
+    try:
+        import data.paper_account_store as _pas
+    except Exception:
+        return
+    _pas._OPTION_CHAIN_CACHE.clear()
+    if request.node.get_closest_marker("real_paper_marking") is not None:
+        return
+    monkeypatch.setattr(_pas, "_fetch_stock_prices", lambda symbols: {})
+    monkeypatch.setattr(_pas, "_fetch_option_chain", lambda underlying, expiration: None)

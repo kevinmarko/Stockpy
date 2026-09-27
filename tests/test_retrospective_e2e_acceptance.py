@@ -50,6 +50,20 @@ from settings import settings
 # docs/known_issues for the self-confirming-test incident this replaces.
 from pilots.retrospective_narrative import build_trade_narrative
 
+
+@pytest.fixture(autouse=True)
+def _bridge_all_equity_strategies(monkeypatch):
+    """This file tests the bridge's MECHANICS (fail-open, SAVEPOINTs,
+    completeness metrics) with generic/default strategy_ids such as
+    'untagged'. Eligibility filtering (manual/hedge/untagged/options are
+    never fed to the models) is covered by
+    tests/test_paper_marking_and_model_feed.py, so empty the strategy
+    exclusion list here."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES", [])
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -125,12 +139,18 @@ class TestTier1FeatureCoverage:
     # -----------------------------------------------------------------------
     # R1: §0 Dependency Check & Schema Tracing
     # -----------------------------------------------------------------------
-    def test_r1_bridge_setting_exists_and_defaults_false(self):
-        """R1.1: Verify PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED exists and defaults False."""
+    def test_r1_bridge_setting_exists_and_defaults_true(self):
+        """R1.1: PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED exists and defaults
+        True (2026-09 operator decision: paper outcomes feed the models). Live
+        sizing contamination is prevented by the eligibility filter
+        (PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES + options exclusion) instead."""
+        from settings import Settings
+
         assert hasattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED")
-        val = getattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED")
-        assert isinstance(val, bool)
-        assert val is False, "Bridge must default to False to prevent live sizing contamination"
+        assert Settings.model_fields["PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED"].default is True
+        assert "Manual Trade" in Settings.model_fields[
+            "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES"
+        ].default_factory()
 
     def test_r1_surviving_vs_lost_fields_tracing(self, paper_store):
         """R1.2: Trace columns on PaperClosedTrade table."""
@@ -328,7 +348,9 @@ class TestTier1FeatureCoverage:
             metrics = get_metrics()
             assert "total_closed_trades" in metrics
             assert "completeness_pct" in metrics
-            assert 0.0 <= metrics["completeness_pct"] <= 100.0
+            # None = genuinely unmeasured (bridge on, nothing attempted yet).
+            pct = metrics["completeness_pct"]
+            assert pct is None or 0.0 <= pct <= 100.0
         else:
             # Verify mathematical definition
             total = 10

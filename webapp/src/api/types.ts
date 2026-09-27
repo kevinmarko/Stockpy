@@ -6350,7 +6350,7 @@ export interface RetrospectiveTradeRecord {
   provenance: RetrospectiveProvenance;
   snapshot: RetrospectiveSnapshot | null;
   entry_snapshot?: RetrospectiveSnapshot | null;
-  bridge_status: "bridged" | "failed" | "disabled" | "not_attempted" | string;
+  bridge_status: "bridged" | "failed" | "disabled" | "not_attempted" | "excluded" | string;
   bridged_trade_id: number | null;
   bridge_error: string | null;
   bridged_at: string | null;
@@ -6403,6 +6403,8 @@ export interface BridgeHealthMetrics {
   bridged_count: number;
   failed_count: number;
   disabled_count: number;
+  /** Closed trades deliberately NOT fed to the models (options, manual, hedge, untagged). */
+  excluded_count?: number;
   completeness_pct: number | null;
   status: "healthy" | "degraded" | "disabled" | "unconfigured" | string;
   last_failure?: {

@@ -1,6 +1,6 @@
 """Tests for pilots/options_risk.py (Portfolio Risk & Aggregate Greeks Engine)."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock
 import pytest
 
@@ -92,7 +92,8 @@ def test_calculate_position_greeks_short_put():
     # Short 1 put contract (qty = -1.0)
     pos = PaperPosition(symbol="AAPL 2026-09-18 $145.00 PUT", qty=-1.0, avg_entry_price=2.0)
     fixed_now = datetime(2026, 8, 19, tzinfo=timezone.utc)
-    g = calculate_position_greeks(pos, spot_price=150.0, now=fixed_now)
+    # IV is the option's own implied volatility -- no fixed default exists.
+    g = calculate_position_greeks(pos, spot_price=150.0, sigma=0.25, now=fixed_now)
 
     assert g["asset_type"] == "option"
     assert g["qty"] == -1.0
@@ -105,10 +106,12 @@ def test_calculate_position_greeks_short_put():
 def test_calculate_portfolio_greeks_multi_leg_spread():
     store = PaperAccountStore(db_url="sqlite:///:memory:")
 
-    # Setup Put Credit Spread: Short 1 contract 150P, Long 1 contract 145P
+    # Setup Put Credit Spread: Short 1 contract 150P, Long 1 contract 145P.
+    # Relative expiry: a hardcoded date silently becomes an expired contract.
+    exp = (date.today() + timedelta(days=30)).isoformat()
     legs = [
-        {"symbol": "AAPL 2026-09-18 $150.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 250.0},
-        {"symbol": "AAPL 2026-09-18 $145.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 100.0},
+        {"symbol": f"AAPL {exp} $150.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 250.0},
+        {"symbol": f"AAPL {exp} $145.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 100.0},
     ]
     store.apply_multi_leg_fill(
         client_order_id="test_pcs_1",
@@ -135,7 +138,8 @@ def test_calculate_portfolio_greeks_multi_leg_spread():
     # and test_beta_weighted_delta_spy_calculation just below in this same file.
     from unittest.mock import patch
 
-    with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)):
+    with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)), \
+         patch("data.paper_account_store.resolve_option_iv", return_value=0.25):
         greeks = calculate_portfolio_greeks(store=store, market_provider=mock_provider, spy_spot=500.0)
 
     assert greeks["total_positions"] == 2
@@ -151,6 +155,32 @@ def test_calculate_portfolio_greeks_multi_leg_spread():
     assert greeks["net_delta_shares"] > 0
     assert greeks["net_dollar_delta"] > 0
     assert greeks["beta_weighted_delta_spy"] > 0
+
+
+def test_option_without_live_iv_is_missing_data_not_fixed_sigma():
+    """An option leg with no live implied volatility is excluded as
+    missing_data (listed in positions_with_missing_data) -- never valued at a
+    made-up default volatility."""
+    pos = PaperPosition(symbol="AAPL 2026-12-18 $145.00 PUT", qty=-1.0, avg_entry_price=200.0)
+    g = calculate_position_greeks(pos, spot_price=150.0)
+    assert g["missing_data"] is True
+    assert g["missing_reason"] == "no live implied volatility"
+    assert g["position_delta"] is None
+
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    exp = (date.today() + timedelta(days=30)).isoformat()
+    store.apply_fill("o1", f"AAPL {exp} $145.00 PUT", "sell", 1.0, 200.0, allow_short=True)
+    mock_provider = MagicMock()
+    mock_provider.get_quotes_batch.side_effect = lambda symbols: {s: MagicMock(price=150.0) for s in symbols}
+    from unittest.mock import patch
+
+    with patch("pilots.options_risk._resolve_symbol_beta", return_value=(1.0, True)), \
+         patch("data.paper_account_store.resolve_option_iv", return_value=None):
+        greeks = calculate_portfolio_greeks(store=store, market_provider=mock_provider, spy_spot=500.0)
+
+    assert greeks["option_positions_count"] == 0
+    assert greeks["net_delta_shares"] == 0.0
+    assert f"AAPL {exp} $145.00 PUT" in greeks["positions_with_missing_data"]
 
 
 def test_calculate_black_scholes_greeks_0dte_fallback():

@@ -1,14 +1,40 @@
 """Tests for execution/options_paper_executor.py."""
 
 import logging
+from datetime import date, timedelta
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import numpy as np
+import pandas as pd
 import pytest
 
+import data.paper_account_store as pas
 from data.paper_account_store import PaperAccountStore
 from execution.options_paper_executor import OptionsPaperExecutor, _calculate_default_expiration
 from ml.options_meta_labeler import OptionsMetaLabeler, OptionsTradeFeatureRow, global_options_meta_labeler
+
+# Relative, always-future expiration: these scenarios price legs from live
+# chain data, and a hardcoded calendar date silently becomes an EXPIRED
+# contract (valued at intrinsic, not fillable) once the real date passes.
+FUTURE_EXP = (date.today() + timedelta(days=45)).isoformat()
+FUTURE_EARNINGS = (date.today() + timedelta(days=44)).isoformat()
+
+
+def _fake_iv_chain(underlying, expiration):
+    """Live chain stand-in with an explicit IV: option legs are priced from
+    each contract's own live implied volatility, never a fixed default."""
+    table = pd.DataFrame({
+        "strike": np.arange(10.0, 1000.0, 0.5), "bid": 0.0, "ask": 0.0,
+        "lastPrice": 0.0, "impliedVolatility": 0.30,
+    })
+    return SimpleNamespace(calls=table, puts=table.copy())
+
+
+@pytest.fixture(autouse=True)
+def _live_iv_chain(monkeypatch):
+    monkeypatch.setattr(pas, "_fetch_option_chain", _fake_iv_chain)
+
 
 
 def test_calculate_default_expiration():
@@ -623,13 +649,13 @@ def _iron_condor_candidate(symbol="NVDA"):
     return {
         "symbol": symbol,
         "strategy": "Iron Condor",
-        "expiration": "2026-08-21",
-        "earnings_date": "2026-08-20",
+        "expiration": FUTURE_EXP,
+        "earnings_date": FUTURE_EARNINGS,
         "legs": [
-            {"symbol": f"{symbol} 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
-            {"symbol": f"{symbol} 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
-            {"symbol": f"{symbol} 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
-            {"symbol": f"{symbol} 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+            {"symbol": f"{symbol} {FUTURE_EXP} $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": f"{symbol} {FUTURE_EXP} $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": f"{symbol} {FUTURE_EXP} $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": f"{symbol} {FUTURE_EXP} $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
         ],
         "net_credit": 2.70,
     }
@@ -681,11 +707,11 @@ def test_execute_earnings_crush_trade_never_fabricates_price():
     candidate = {
         "symbol": "NVDA",
         "strategy": "Iron Condor",
-        "expiration": "2026-08-21",
+        "expiration": FUTURE_EXP,
         "legs": [
-            {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
             # No fill_price, no price/raw_price anywhere on this leg.
-            {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $115.00 PUT", "side": "sell", "qty": 1.0},
         ],
     }
 
@@ -693,7 +719,7 @@ def test_execute_earnings_crush_trade_never_fabricates_price():
 
     assert res["success"] is False
     assert "150" not in res["reason"] and "1.5" not in res["reason"]
-    assert "NVDA 2026-08-21 $115.00 PUT" in res["reason"]
+    assert f"NVDA {FUTURE_EXP} $115.00 PUT" in res["reason"]
 
     # No partial fill was ever submitted.
     assert store.get_open_positions() == []
@@ -734,7 +760,7 @@ def test_settle_post_earnings_trades_falls_back_on_falsy_position_strategy_id():
     assert len(positions_before) == 4
     assert all(p.strategy_id == "" for p in positions_before)
 
-    settle_res = executor.settle_post_earnings_trades(force=True)
+    settle_res = executor.settle_post_earnings_trades(force=True, spot_map={"NVDA": 120.0})
 
     assert settle_res["settled"], f"Expected a settled trade, got: {settle_res}"
     assert not settle_res["failed"]
@@ -776,7 +802,7 @@ def test_settle_post_earnings_trades_honors_real_non_default_strategy_id():
     # settle_post_earnings_trades finds this trade via its client_order_id's
     # "EC-%" prefix (execute_earnings_crush_trade always uses that prefix
     # regardless of strategy_name), independent of the position's own tag.
-    settle_res = executor.settle_post_earnings_trades(force=True)
+    settle_res = executor.settle_post_earnings_trades(force=True, spot_map={"NVDA": 120.0})
     assert settle_res["settled"], f"Expected a settled trade, got: {settle_res}"
     close_order_id = settle_res["settled"][0]["order_id"]
 
@@ -816,10 +842,10 @@ def test_settle_post_earnings_trades_finds_position_via_new_strategy_id_not_just
     executor = OptionsPaperExecutor(store=store)
 
     legs = [
-        {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
-        {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
-        {"symbol": "NVDA 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
-        {"symbol": "NVDA 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+        {"symbol": f"NVDA {FUTURE_EXP} $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+        {"symbol": f"NVDA {FUTURE_EXP} $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+        {"symbol": f"NVDA {FUTURE_EXP} $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+        {"symbol": f"NVDA {FUTURE_EXP} $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
     ]
     commission = 0.65 * len(legs)
     # Net credit: sell legs (180 + 200) minus buy legs (50 + 60), less commission.
@@ -864,3 +890,98 @@ def test_settle_post_earnings_trades_finds_position_via_new_strategy_id_not_just
         # still carries the new canonical id, confirming the query matched it
         # by strategy_id rather than mutating anything to make it match.
         assert parent_order.strategy_id == "earnings-crush"
+
+
+# ---------------------------------------------------------------------------
+# No fixed-volatility pricing: legs are priced from real chain data or refused
+# ---------------------------------------------------------------------------
+
+
+def _open_ec_condor(store, executor):
+    candidate = {
+        "symbol": "NVDA", "strategy": "Iron Condor", "expiration": FUTURE_EXP,
+        "earnings_date": FUTURE_EARNINGS,
+        "legs": [
+            {"symbol": f"NVDA {FUTURE_EXP} $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": f"NVDA {FUTURE_EXP} $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+        ],
+        "net_credit": 2.70,
+    }
+    assert executor.execute_earnings_crush_trade(candidate, contracts=1)["success"] is True
+
+
+def test_settle_post_earnings_refuses_without_a_real_price(monkeypatch):
+    """No live quote, no live IV, no spot -> the trade stays open and is
+    reported failed; it is never closed at a made-up (fixed-sigma or
+    entry-price-haircut) price."""
+    monkeypatch.setattr(pas, "_fetch_option_chain", lambda u, e: None)
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    _open_ec_condor(store, executor)
+
+    res = executor.settle_post_earnings_trades(force=True, spot_map={"NVDA": 120.0})
+
+    assert res["settled_count"] == 0
+    assert res["failed_count"] == 1
+    assert "No real option price" in res["failed"][0]["reason"]
+    assert len(store.get_open_positions()) == 4
+
+
+def test_settle_post_earnings_closes_at_live_quote_on_closing_side(monkeypatch):
+    """With a live two-sided quote, a short leg is bought back at the ASK and
+    a long leg sold at the BID."""
+    def _quoted_chain(underlying, expiration):
+        table = pd.DataFrame({
+            "strike": [110.0, 115.0, 125.0, 130.0], "bid": [0.10, 0.40, 0.50, 0.12],
+            "ask": [0.20, 0.60, 0.70, 0.22], "lastPrice": 0.0, "impliedVolatility": 0.25,
+        })
+        return SimpleNamespace(calls=table, puts=table.copy())
+
+    monkeypatch.setattr(pas, "_fetch_option_chain", _quoted_chain)
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    _open_ec_condor(store, executor)
+
+    res = executor.settle_post_earnings_trades(force=True, spot_map={"NVDA": 120.0})
+    assert res["settled_count"] == 1
+    fills = {l["symbol"].split()[2] + l["symbol"].split()[3]: (l["side"], l["fill_price"]) for l in res["settled"][0]["closing_legs"]}
+    assert fills["$110.00PUT"] == ("sell", pytest.approx(10.0))   # long -> bid 0.10
+    assert fills["$115.00PUT"] == ("buy", pytest.approx(60.0))    # short -> ask 0.60
+    assert fills["$125.00CALL"] == ("buy", pytest.approx(70.0))   # short -> ask 0.70
+    assert fills["$130.00CALL"] == ("sell", pytest.approx(12.0))  # long -> bid 0.12
+
+
+def test_strike_built_earnings_crush_refuses_without_real_leg_prices(monkeypatch):
+    monkeypatch.setattr(pas, "_fetch_option_chain", lambda u, e: None)
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    res = executor.execute_earnings_crush_trade(
+        {"symbol": "AAPL", "strategy": "Short Straddle", "expiration": FUTURE_EXP,
+         "spot": 150.0, "atm_strike": 150.0},
+        contracts=1,
+    )
+    assert res["success"] is False
+    assert "No real option price" in res["reason"]
+    assert store.get_open_positions() == []
+
+
+def test_strike_built_earnings_crush_sells_at_the_bid(monkeypatch):
+    def _quoted_chain(underlying, expiration):
+        table = pd.DataFrame({
+            "strike": [150.0], "bid": [4.10], "ask": [4.40], "lastPrice": 0.0,
+            "impliedVolatility": 0.35,
+        })
+        return SimpleNamespace(calls=table, puts=table.copy())
+
+    monkeypatch.setattr(pas, "_fetch_option_chain", _quoted_chain)
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    executor = OptionsPaperExecutor(store=store)
+    res = executor.execute_earnings_crush_trade(
+        {"symbol": "AAPL", "strategy": "Short Straddle", "expiration": FUTURE_EXP,
+         "spot": 150.0, "atm_strike": 150.0},
+        contracts=1,
+    )
+    assert res["success"] is True
+    assert {round(l["fill_price"], 2) for l in res["legs"]} == {410.0}

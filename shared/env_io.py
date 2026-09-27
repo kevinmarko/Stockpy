@@ -748,6 +748,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL).
     "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
+    "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
+    "PAPER_OPTION_MARK_CACHE_SECONDS",
     "MAX_OPTION_NOTIONAL_PER_TRADE",
     "MAX_CONCURRENT_OPTION_POSITIONS",
     "OPTIONS_META_LABELER_ENABLED",
@@ -965,6 +967,7 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "DEFAULT_TICKERS",
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
+        "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",  # list[str] of strategy_ids
         "SECTOR_FORECAST_CONFIGS",  # dict[str, dict] per-sector forecast overrides
         "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}

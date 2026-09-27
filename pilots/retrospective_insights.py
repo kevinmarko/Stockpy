@@ -511,6 +511,7 @@ def generate_batch_retrospective_insights(
     bridged_count = sum(1 for r in records if r.get("bridge_status") == "bridged")
     failed_count = sum(1 for r in records if r.get("bridge_status") == "failed")
     disabled_count = sum(1 for r in records if r.get("bridge_status") == "disabled")
+    excluded_count = sum(1 for r in records if r.get("bridge_status") == "excluded")
 
     if paper_store and hasattr(paper_store, "get_bridge_completeness_metrics"):
         try:
@@ -546,6 +547,7 @@ def generate_batch_retrospective_insights(
             "bridged_count": bridged_count,
             "failed_count": failed_count,
             "disabled_count": disabled_count,
+            "excluded_count": excluded_count,
             "completeness_pct": comp_pct,
             "status": status,
         }

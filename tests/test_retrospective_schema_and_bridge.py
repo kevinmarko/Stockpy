@@ -32,6 +32,20 @@ import transactions_store
 import evaluation_engine
 
 
+@pytest.fixture(autouse=True)
+def _bridge_all_equity_strategies(monkeypatch):
+    """This file tests the bridge's MECHANICS (fail-open, SAVEPOINTs,
+    completeness metrics) with generic/default strategy_ids such as
+    'untagged'. Eligibility filtering (manual/hedge/untagged/options are
+    never fed to the models) is covered by
+    tests/test_paper_marking_and_model_feed.py, so empty the strategy
+    exclusion list here."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES", [])
+
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -481,9 +495,9 @@ def test_bridge_forced_failure_fails_open_captures_error(isolated_db_url, monkey
     assert "simulated disk I/O error" in metrics["last_failure"]["error"]
 
 
-def test_bridge_disabled_sets_disabled_status(isolated_db_url):
-    """When bridge is disabled (default), closed trades record bridge_status='disabled'."""
-    assert settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED is False
+def test_bridge_disabled_sets_disabled_status(isolated_db_url, monkeypatch):
+    """When the bridge is disabled, closed trades record bridge_status='disabled'."""
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False)
 
     store = PaperAccountStore(db_url=isolated_db_url)
     assert store._transactions_store is None
@@ -546,7 +560,9 @@ def test_bridge_completeness_metrics_calculation(isolated_db_url, monkeypatch):
     assert metrics["last_failure"]["symbol"] == "FAIL_SYM"
 
 
-def test_bridge_completeness_metrics_zero_closed_trades(isolated_db_url):
+def test_bridge_completeness_metrics_zero_closed_trades(isolated_db_url, monkeypatch):
+    # "100% of nothing" is the bridge-DISABLED convention; pin it off.
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False)
     """Verify completeness metric division guard when zero trades have been closed."""
     store = PaperAccountStore(db_url=isolated_db_url)
     metrics = store.get_bridge_completeness_metrics()

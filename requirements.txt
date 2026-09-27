@@ -91,7 +91,7 @@ scikit-learn==1.9.0
 scipy==1.17.1
 setuptools==83.0.0
 six==1.17.0
-soupsieve==2.8.4
+soupsieve==2.9.0
 stack-data==0.6.3
 statsmodels==0.14.6
 threadpoolctl==3.6.0
@@ -116,7 +116,7 @@ prophet>=1.1.5
 google-cloud-language>=2.14.0
 # QuantFAA>=0.1.0
 pandas-datareader>=0.10.0
-SQLAlchemy>=2.0.0
+SQLAlchemy>=2.0.0,<2.1  # 2.1 switches the default postgresql:// driver to psycopg (v3); this repo ships psycopg2-binary
 psycopg2-binary>=2.9.9
 openai>=1.40.0  # Tier 9 Scope 4 — Opal research agent; >=1.40 for Structured Outputs .parse() helper
 anthropic>=0.25.0
