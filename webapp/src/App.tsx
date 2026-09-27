@@ -12,11 +12,9 @@ import { Marketplace } from "./screens/Marketplace";
 import { PilotDetail } from "./screens/PilotDetail";
 import { Portfolio } from "./screens/Portfolio";
 import { SymbolDetail } from "./screens/SymbolDetail";
-import { OptionsChain } from "./screens/OptionsChain";
 import { Activity } from "./screens/Activity";
 import { Models } from "./screens/Models";
 import { PairsRadar } from "./screens/PairsRadar";
-import { OptionsMatrix } from "./screens/OptionsMatrix";
 import { Attribution } from "./screens/Attribution";
 import { Observability } from "./screens/Observability";
 import { StrategyHealth } from "./screens/StrategyHealth";
@@ -255,11 +253,9 @@ export default function App() {
                   <Route path="/compare" element={<Comparison />} />
                   <Route path="/pilots/:id" element={<PilotDetail />} />
                   <Route path="/symbol/:ticker" element={<SymbolDetail />} />
-                  <Route path="/symbol/:ticker/options" element={<OptionsChain />} />
                   <Route path="/activity" element={<Activity />} />
                   <Route path="/models" element={<Models />} />
                   <Route path="/pairs" element={<PairsRadar />} />
-                  <Route path="/options" element={<OptionsMatrix />} />
                   <Route path="/retrospective" element={<RetrospectiveJournal />} />
                   <Route path="/attribution" element={<Attribution />} />
                   <Route path="/observability" element={<Observability />} />

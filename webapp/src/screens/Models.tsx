@@ -109,7 +109,7 @@ function ModelCard({
   const isBackfill = isBackfillStub(m.name);
   const canRetrain =
     !isBackfill &&
-    (m.role === "cross_sectional_ranker" || m.role === "meta_labeler" || m.role === "options_meta_labeler");
+    (m.role === "cross_sectional_ranker" || m.role === "meta_labeler");
   return (
     <section className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", padding: 0 }}>
       <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)", padding: "var(--s-3)", borderBottom: "1px solid var(--border)" }}>
@@ -317,24 +317,19 @@ export function Models() {
     setRetrainErrors((prev) => ({ ...prev, [m.name]: undefined }));
     setSubmitting((prev) => ({ ...prev, [m.name]: true }));
     try {
-      if (m.role === "options_meta_labeler") {
-        await api.retrainOptionsMetaModel();
-        reload();
-      } else {
-        const job =
-          m.role === "cross_sectional_ranker"
-            ? await api.createJob("train_lgbm")
-            : await api.createJob("train_meta", { signal: metaLabelerSignal(m.name) });
-        setTrainingJobs((prev) => ({ ...prev, [m.name]: job.job_id }));
-        if (timeoutsRef.current[m.name]) clearTimeout(timeoutsRef.current[m.name]);
-        // Last-resort safety net on top of the WS push and the GET /jobs/{id}
-        // poll above: if BOTH somehow never observe a terminal status (every
-        // poll request itself failing, a dropped connection, a server
-        // restart mid-job, ...), the button must not stay disabled forever.
-        timeoutsRef.current[m.name] = setTimeout(() => {
-          clearTrainingJob(m.name, job.job_id);
-        }, 10 * 60 * 1000);
-      }
+      const job =
+        m.role === "cross_sectional_ranker"
+          ? await api.createJob("train_lgbm")
+          : await api.createJob("train_meta", { signal: metaLabelerSignal(m.name) });
+      setTrainingJobs((prev) => ({ ...prev, [m.name]: job.job_id }));
+      if (timeoutsRef.current[m.name]) clearTimeout(timeoutsRef.current[m.name]);
+      // Last-resort safety net on top of the WS push and the GET /jobs/{id}
+      // poll above: if BOTH somehow never observe a terminal status (every
+      // poll request itself failing, a dropped connection, a server
+      // restart mid-job, ...), the button must not stay disabled forever.
+      timeoutsRef.current[m.name] = setTimeout(() => {
+        clearTrainingJob(m.name, job.job_id);
+      }, 10 * 60 * 1000);
     } catch (err: any) {
       if (err instanceof JobConflictError) {
         setRetrainErrors((prev) => ({

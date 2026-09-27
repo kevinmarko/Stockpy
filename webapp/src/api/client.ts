@@ -57,9 +57,6 @@ import type { StrategyReportCardSnapshot,
   MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
-  OptionsMatrix,
-  OptionsRecomputeRequest,
-  OptionsRecomputeResult,
   PairsAnalyzeRequest,
   PairsAnalyzeResult,
   PairsRadar,
@@ -110,7 +107,6 @@ import type { StrategyReportCardSnapshot,
   RlhfSftExportResult,
   UniverseListResponse,
   Thresholds,
-  SymbolOptions,
   TriggerRunResult,
   Bar,
   Fundamentals,
@@ -140,7 +136,6 @@ import type { StrategyReportCardSnapshot,
   MacroSentimentResponse,
   OrderBookLadderResponse,
   ModelComparisonResponse,
-  OptionsAnalyticsSummaryResponse,
   CacheLongShortConcentratedPosition,
   CacheLongShortSimulateRequest,
   CacheLongShortSimulateResult,
@@ -153,75 +148,10 @@ import type { StrategyReportCardSnapshot,
   PaperBrokerOrder,
   PaperBrokerClosedTrade,
   PaperBrokerResetResult,
-  StrategyOptionsCandidatesResponse,
-  StrategyOptionsExecutionResult,
-  PortfolioGreeks,
   CacheLongShortApproveBulkResult,
 
-  OptionChainResponse,
-  OptionsOrderRequest,
-  OptionsOrderResult,
   EquityOrderRequest,
   EquityOrderResult,
-  OptionsBacktestParams,
-  OptionsBacktestResponse,
-  OptionsMetaModelStatus,
-  OptionsMetaModelRetrainResult,
-  PaperBrokerSettleExpiredResult,
-  ScenarioMatrixResponse,
-  VolSurfaceResponse,
-  DeltaHedgePreview,
-  DeltaHedgeResult,
-  RollOrderRequest,
-  ManageExitsResult,
-  EarningsCrushCandidate,
-  EarningsCrushCandidatesResponse,
-  EarningsCrushExecutionResult,
-  UnusualOptionsFlowResponse,
-  FlowSentimentResponse,
-  HarRvForecastResponse,
-  VolMispricingResponse,
-  GammaScalpRequest,
-  GammaScalpResponse,
-  OptionsAlertTestResult,
-  DispersionBasketResponse,
-  DispersionBasketOrderRequest,
-  DispersionExecutionResult,
-  ZeroDteSignalResponse,
-  ZeroDteTradeRequest,
-  ZeroDteExecutionResult,
-  VpinMetricsResponse,
-  SorAnalysisRequest,
-  SorAnalysisResponse,
-  LeggingSimulationRequest,
-  LeggingSimulationResponse,
-  GexProfileResponse,
-  LobQueueSimulationRequest,
-  LobQueueSimulationResponse,
-  CopulaPairsResponse,
-  MarketMakerSimRequest,
-  MarketMakerSimResponse,
-  TransformerForecastResponse,
-  DiffusionStressRequest,
-  DiffusionStressResponse,
-  HrpCvarOptimizeRequest,
-  HrpCvarOptimizeResponse,
-  AlmgrenChrissOptimizeRequest,
-  AlmgrenChrissOptimizeResponse,
-  FixRouteOrderRequest,
-  FixRouteOrderResponse,
-  FixSessionStatusResponse,
-  FixSessionControlResponse,
-  FixTestRequestPayload,
-  FixResetSeqRequest,
-  ResearchSynthesizeRequest,
-  ResearchSynthesizeResponse,
-  AutonomousBacktestRequest,
-  AutonomousBacktestResponse,
-  VolSurface3DMeshResponse,
-  MultiBrokerStatusResponse,
-  BrokerFailoverRequest,
-  BrokerFailoverResponse,
   TrendsStitchDemoResponse,
   DigestPayload,
 } from "./types";
@@ -282,25 +212,11 @@ function baseFor(path: string): string {
     path === "/api/chat" ||
     path.startsWith("/ws/ticks/") ||
     path.startsWith("/ws/chat/") ||
-    path.startsWith("/ws/risk/") ||
     path.startsWith("/risk/")
   ) {
     return DATA_BASE_URL;
   }
   return BASE_URL;
-}
-
-/**
- * Full ws:// (or wss:// on an https origin) URL for the real-time portfolio risk & Greek endpoint.
- */
-export function portfolioRiskWsUrl(tokenOverride?: string): string {
-  const httpBase = baseFor("/ws/risk/portfolio");
-  const wsBase = httpBase.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
-  const params = new URLSearchParams();
-  const token = tokenOverride || TOKEN;
-  if (token) params.set("token", token);
-  const qs = params.toString();
-  return `${wsBase}/ws/risk/portfolio${qs ? `?${qs}` : ""}`;
 }
 
 /**
@@ -512,13 +428,6 @@ const liveApi = {
       `/sector/selection?target=${encodeURIComponent(target)}&n=${n}`
     ),
   getModels: () => http<ModelRow[]>("/models"),
-  getOptions: () => http<OptionsMatrix>("/options"),
-  getSymbolOptions: (ticker: string) =>
-    http<SymbolOptions>(`/symbols/${encodeURIComponent(ticker)}/options`),
-  getOptionsChain: (ticker: string, expiration?: string) =>
-    http<OptionChainResponse>(
-      `/data/options/chain/${encodeURIComponent(ticker)}${expiration ? `?expiration=${encodeURIComponent(expiration)}` : ""}`
-    ),
   getPairs: () => http<PairsRadar>("/pairs"),
   // ---- On-demand Options/Pairs recompute (data base, :8603) — webapp porting
   // backlog items 8a/8b. Distinct from getOptions/getPairs above (which only
@@ -534,16 +443,6 @@ const liveApi = {
     }),
   scanPairs: (req: PairsScanRequest) =>
     http<PairsScanResult>("/data/pairs/scan", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  recomputeOptions: (req: OptionsRecomputeRequest) =>
-    http<OptionsRecomputeResult>("/data/options/recompute", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  postOptionsOrder: (req: OptionsOrderRequest) =>
-    http<OptionsOrderResult>("/brokerage/options/order", {
       method: "POST",
       body: JSON.stringify(req),
     }),
@@ -731,50 +630,6 @@ const liveApi = {
     }),
   getForecastResult: (symbol: string) =>
     http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
-  getTransformerForecast: (symbol: string) =>
-    http<TransformerForecastResponse>(
-      `/pilots/options/ai/transformer-forecast?symbol=${encodeURIComponent(symbol)}`
-    ),
-  runDiffusionStressTest: (req: DiffusionStressRequest) =>
-    http<DiffusionStressResponse>("/pilots/options/ai/diffusion-stress-test", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  optimizeHrpCvar: (req: HrpCvarOptimizeRequest) =>
-    http<HrpCvarOptimizeResponse>("/pilots/portfolio/optimize/hrp-cvar", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  optimizeAlmgrenChriss: (req: AlmgrenChrissOptimizeRequest) =>
-    http<AlmgrenChrissOptimizeResponse>("/pilots/execution/optimize/almgren-chriss", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  // Currently unused: no screen/component calls this yet -- fully wired
-  // (types, client, mock fixture) but available for a future UI wire-up,
-  // not dead from disuse.
-  routeFixOrder: (req: FixRouteOrderRequest) =>
-    http<FixRouteOrderResponse>("/pilots/execution/fix/route", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  getFixSessionStatus: () =>
-    http<FixSessionStatusResponse>("/pilots/execution/fix/session/status"),
-  sendFixTestRequest: (req?: FixTestRequestPayload) =>
-    http<FixSessionControlResponse>("/pilots/execution/fix/session/test-request", {
-      method: "POST",
-      body: JSON.stringify(req || {}),
-    }),
-  resetFixSequence: (req: FixResetSeqRequest) =>
-    http<FixSessionControlResponse>("/pilots/execution/fix/session/reset-seq", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  reconnectFixSession: () =>
-    http<FixSessionControlResponse>("/pilots/execution/fix/session/reconnect", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",
@@ -1174,8 +1029,6 @@ const liveApi = {
   getOrderBookLadder: (symbol: string) =>
     http<OrderBookLadderResponse>(`/data/ladder/${encodeURIComponent(symbol)}`),
   getModelComparison: () => http<ModelComparisonResponse>("/metrics/models/comparison"),
-  getOptionsAnalytics: (symbol: string) =>
-    http<OptionsAnalyticsSummaryResponse>(`/metrics/options/analytics/${encodeURIComponent(symbol)}`),
   getForecastBackfill: () => http<ForecastBackfillSummary>("/pilots/forecast_backfill"),
   /**
    * POST /pilots/forecast_backfill/run. Deliberately bypasses the shared
@@ -1299,181 +1152,6 @@ const liveApi = {
     http<TunablesUpdateResult>("/settings/paper-broker", {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
-    }),
-  getStrategyOptionsCandidates: (symbols?: string[]) => {
-    const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
-    return http<StrategyOptionsCandidatesResponse>(`/pilots/paper-broker/strategy-options/candidates${q}`);
-  },
-  executeStrategyOptions: (symbols?: string[], dryRun = false, maxNotional?: number) =>
-    http<StrategyOptionsExecutionResult>("/pilots/paper-broker/strategy-options/execute", {
-      method: "POST",
-      body: JSON.stringify({ symbols, dry_run: dryRun, max_notional: maxNotional }),
-    }),
-  getPaperBrokerGreeks: () => http<PortfolioGreeks>("/pilots/paper-broker/greeks"),
-  runOptionsBacktest: (params: OptionsBacktestParams) =>
-    http<OptionsBacktestResponse>("/pilots/options/backtest", {
-      method: "POST",
-      body: JSON.stringify(params),
-    }),
-  getOptionsMetaModelStatus: () => http<OptionsMetaModelStatus>("/pilots/options/meta-model/status"),
-  retrainOptionsMetaModel: () =>
-    http<OptionsMetaModelRetrainResult>("/pilots/options/meta-model/retrain", {
-      method: "POST",
-    }),
-  settleExpiredPaperOptions: () =>
-    http<PaperBrokerSettleExpiredResult>("/pilots/paper-broker/settle-expired", {
-      method: "POST",
-    }),
-  getVolSurface: (symbol: string, expiration?: string) =>
-    http<VolSurfaceResponse>(
-      `/pilots/options/vol-surface?symbol=${encodeURIComponent(symbol)}${expiration ? `&expiration=${encodeURIComponent(expiration)}` : ""}`
-    ),
-  getScenarioMatrix: (params?: { spot_shifts?: number[]; iv_shifts?: number[]; days_forward?: number }) =>
-    http<ScenarioMatrixResponse>("/pilots/paper-broker/scenario-matrix", {
-      method: "POST",
-      body: params ? JSON.stringify(params) : undefined,
-    }),
-  getDeltaHedgePreview: () =>
-    http<DeltaHedgePreview>("/pilots/paper-broker/delta-hedge/preview"),
-  executeDeltaHedge: (params?: { target_delta?: number; confirm?: boolean }) =>
-    http<DeltaHedgeResult>("/pilots/paper-broker/delta-hedge/execute", {
-      method: "POST",
-      body: params ? JSON.stringify(params) : undefined,
-    }),
-  managePaperOptionsExits: (params?: { force?: boolean }) =>
-    http<ManageExitsResult>("/pilots/paper-broker/manage-exits", {
-      method: "POST",
-      body: params ? JSON.stringify(params) : undefined,
-    }),
-  rollPaperOptionPosition: (request: RollOrderRequest) =>
-    http<OptionsOrderResult>("/pilots/paper-broker/roll", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  getEarningsCrushCandidates: (symbols?: string[]) => {
-    const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
-    return http<EarningsCrushCandidatesResponse>(`/pilots/options/earnings-crush/candidates${q}`);
-  },
-  // earnings_crush is an UNGATEABLE_DATA_GAP (api/pilots_api.py::OPTIONS_DESK_DEPLOYABILITY_GATES)
-  // -- the backend blocks by default and returns EarningsCrushExecutionResult's blocked
-  // variant unless overrideDeployabilityGate is explicitly true. Never a standing flag;
-  // pass true only in direct response to the caller's own deliberate, per-click choice.
-  executeEarningsCrushTrade: (
-    candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number },
-    overrideDeployabilityGate?: boolean
-  ) =>
-    http<EarningsCrushExecutionResult>("/pilots/options/earnings-crush/execute", {
-      method: "POST",
-      body: JSON.stringify({ ...candidate, override_deployability_gate: overrideDeployabilityGate }),
-    }),
-  getUnusualOptionsFlow: (params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) => {
-    const q = new URLSearchParams();
-    if (params?.symbol) q.set("symbol", params.symbol);
-    if (params?.min_vol_oi != null) q.set("min_vol_oi", String(params.min_vol_oi));
-    if (params?.min_notional != null) q.set("min_notional", String(params.min_notional));
-    const qs = q.toString() ? `?${q.toString()}` : "";
-    return http<UnusualOptionsFlowResponse>(`/pilots/options/flow/unusual${qs}`);
-  },
-  getOptionsFlowSentiment: (symbol: string) =>
-    http<FlowSentimentResponse>(`/pilots/options/flow/sentiment?symbol=${encodeURIComponent(symbol)}`),
-  getHarRvForecast: (symbol: string) =>
-    http<HarRvForecastResponse>(`/pilots/options/forecast/har-rv?symbol=${encodeURIComponent(symbol)}`),
-  getVolMispricing: (symbol: string, expiration?: string) =>
-    http<VolMispricingResponse>(
-      `/pilots/options/forecast/mispricing?symbol=${encodeURIComponent(symbol)}${expiration ? `&expiration=${encodeURIComponent(expiration)}` : ""}`
-    ),
-  simulateGammaScalping: (request: GammaScalpRequest) =>
-    http<GammaScalpResponse>("/pilots/options/gamma-scalp/simulate", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  testOptionsAlert: (params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) =>
-    http<OptionsAlertTestResult>("/pilots/options/alerts/test", {
-      method: "POST",
-      body: params ? JSON.stringify(params) : undefined,
-    }),
-  getDispersionOpportunities: (index_symbol?: string) => {
-    const q = index_symbol ? `?index_symbol=${encodeURIComponent(index_symbol)}` : "";
-    return http<DispersionBasketResponse>(`/pilots/options/dispersion/opportunities${q}`);
-  },
-  // dispersion_trading is an UNGATEABLE_DATA_GAP -- see executeEarningsCrushTrade's
-  // comment above; identical override contract.
-  executeDispersionBasket: (
-    request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number },
-    overrideDeployabilityGate?: boolean
-  ) =>
-    http<DispersionExecutionResult>("/pilots/options/dispersion/execute", {
-      method: "POST",
-      body: JSON.stringify({ ...request, override_deployability_gate: overrideDeployabilityGate }),
-    }),
-  getZeroDteSignals: (symbol?: string) => {
-    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
-    return http<ZeroDteSignalResponse>(`/pilots/options/zero-dte/signals${q}`);
-  },
-  // zero_dte_engine is an UNGATEABLE_DATA_GAP -- see executeEarningsCrushTrade's
-  // comment above; identical override contract.
-  executeZeroDteTrade: (
-    request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number },
-    overrideDeployabilityGate?: boolean
-  ) =>
-    http<ZeroDteExecutionResult>("/pilots/options/zero-dte/execute", {
-      method: "POST",
-      body: JSON.stringify({ ...request, override_deployability_gate: overrideDeployabilityGate }),
-    }),
-  getVpinMetrics: (symbol: string) =>
-    http<VpinMetricsResponse>(`/pilots/options/vpin/metrics?symbol=${encodeURIComponent(symbol)}`),
-  analyzeOptionsRouting: (request: SorAnalysisRequest) =>
-    http<SorAnalysisResponse>("/pilots/options/sor/analyze", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  simulateOptionsLegging: (request: LeggingSimulationRequest) =>
-    http<LeggingSimulationResponse>("/pilots/options/sor/simulate-legging", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  getOptionsGexProfile: (symbol: string) =>
-    http<GexProfileResponse>(`/pilots/options/gex/profile?symbol=${encodeURIComponent(symbol)}`),
-  simulateLobQueue: (request: LobQueueSimulationRequest) =>
-    http<LobQueueSimulationResponse>("/pilots/options/lob/simulate-queue", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  getCopulaPairsAnalysis: (pair?: string) => {
-    const q = pair ? `?pair=${encodeURIComponent(pair)}` : "";
-    return http<CopulaPairsResponse>(`/pilots/options/copula/pairs${q}`);
-  },
-  simulateMarketMakerAgent: (request: MarketMakerSimRequest) =>
-    http<MarketMakerSimResponse>("/pilots/options/market-maker/simulate", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-
-  // ---- Tier D: AI Research Copilot, 3D Vol & Multi-Broker ----
-
-  synthesizeQuantResearch: (request: ResearchSynthesizeRequest) =>
-    http<ResearchSynthesizeResponse>("/pilots/ai/research/synthesize", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  runAutonomousBacktest: (request: AutonomousBacktestRequest) =>
-    http<AutonomousBacktestResponse>("/pilots/ai/backtest/autonomous", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }),
-  // Currently unused: no screen/component calls this yet -- fully wired
-  // (types, client, mock fixture, and a real api/pilots_api.py route) but
-  // available for a future UI wire-up, not dead from disuse.
-  getVolSurface3DMesh: (symbol?: string) => {
-    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
-    return http<VolSurface3DMeshResponse>(`/pilots/options/vol-surface/3d-mesh${q}`);
-  },
-  getMultiBrokerStatus: () =>
-    http<MultiBrokerStatusResponse>("/pilots/execution/brokers/status"),
-  triggerBrokerFailover: (request: BrokerFailoverRequest) =>
-    http<BrokerFailoverResponse>("/pilots/execution/brokers/failover", {
-      method: "POST",
-      body: JSON.stringify(request),
     }),
 
   // ---- Live Trade Approvals ----

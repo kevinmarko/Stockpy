@@ -400,13 +400,6 @@ export function Marketplace() {
                 Cointegrated stat-arb candidates
               </div>
             </Link>
-            <Link to="/options" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🎯</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Options premium</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Per-symbol premium directives
-              </div>
-            </Link>
             <Link to="/attribution" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧮</div>
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Attribution</div>

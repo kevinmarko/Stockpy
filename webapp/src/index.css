@@ -118,7 +118,7 @@
   /* .glass-input's surface tint: a translucent WHITE (matching --surface's
      hue in light mode) instead of the dark block's translucent near-black
      -- the dark literal was the bug (verified live: a solid near-black
-     search box on an otherwise white Options Matrix toolbar). */
+     search box on an otherwise white toolbar). */
   --glass-surface: rgba(255, 255, 255, 0.6);
   --glass-surface-focus: rgba(255, 255, 255, 0.85);
 

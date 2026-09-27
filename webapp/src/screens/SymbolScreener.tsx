@@ -69,7 +69,6 @@ export function SymbolScreener() {
   const [screenerError, setScreenerError] = useState<string | null>(null);
   const [screenerRan, setScreenerRan] = useState(false);
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -147,22 +146,8 @@ export function SymbolScreener() {
     void runScreener(preset.filters);
   };
 
-  const toggleSelected = (symbol: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(symbol)) next.delete(symbol);
-      else next.add(symbol);
-      return next;
-    });
-  };
-
   const quickTrade = (symbol: string) => {
     navigate(`/paper-broker?quickTradeSymbol=${encodeURIComponent(symbol)}`);
-  };
-
-  const sendToStrategyScan = () => {
-    if (selected.size === 0) return;
-    navigate(`/paper-broker?scanSymbols=${encodeURIComponent([...selected].join(","))}`);
   };
 
   return (
@@ -171,7 +156,7 @@ export function SymbolScreener() {
       <p className="screen-sub">
         Search or filter FMP's full symbol universe by sector, industry, market cap, price, beta,
         or dividend yield — independent of your tracked watchlist. Send a discovered symbol
-        straight to Paper Broker's Quick Trade, or a whole selection to its Strategy Scan. Browsing
+        straight to Paper Broker's Quick Trade. Browsing
         or trading a symbol from here is manual and paper-only — Autopilot's automated signals only
         act on symbols already in your tracked universe (watchlist, holdings, or discovered scan
         candidates).
@@ -332,20 +317,11 @@ export function SymbolScreener() {
               <span style={{ fontSize: "var(--t-caption)", color: theme.textSecondary }}>
                 {screenerResults.length} result{screenerResults.length === 1 ? "" : "s"}
               </span>
-              <Button
-                variant="primary"
-                disabled={selected.size === 0}
-                onClick={sendToStrategyScan}
-                data-testid="send-to-strategy-scan"
-              >
-                Send {selected.size || ""} to Strategy Scan
-              </Button>
             </div>
             <div style={{ overflowX: "auto" }}>
               <Table>
                 <thead>
                   <tr>
-                    <th></th>
                     <th>Symbol</th>
                     <th>Company</th>
                     <th>Sector</th>
@@ -360,14 +336,6 @@ export function SymbolScreener() {
                 <tbody>
                   {screenerResults.map((r) => (
                     <tr key={r.symbol}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selected.has(r.symbol)}
-                          onChange={() => toggleSelected(r.symbol)}
-                          aria-label={`Select ${r.symbol}`}
-                        />
-                      </td>
                       <td style={{ fontWeight: 600 }}>{r.symbol}</td>
                       <td>{r.company_name ?? "—"}</td>
                       <td>{r.sector ?? "—"}</td>

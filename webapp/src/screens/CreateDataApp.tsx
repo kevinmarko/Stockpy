@@ -19,7 +19,7 @@ function slugifyForTestId(s: string): string {
 
 const WIDGET_CATEGORIES = {
   "Visualizations & Charts": ["edgeByStrategy", "symbolOverlay", "sentimentMini", "signalBreakdown"] as const,
-  "Portfolios & Holdings": ["pilotsTable", "portfolioHeat", "optionsDirective"] as const,
+  "Portfolios & Holdings": ["pilotsTable", "portfolioHeat"] as const,
   "Metrics & Intelligence": ["macroRegime", "aiChat"] as const,
 };
 
@@ -33,11 +33,10 @@ const TEMPLATES = [
       pilotsTable: false,
       sentimentMini: false,
       portfolioHeat: true,
-      optionsDirective: true,
       signalBreakdown: false,
       macroRegime: true,
     },
-    widgetOrder: ["macroRegime", "portfolioHeat", "optionsDirective"] as (keyof CustomViewWidgets)[],
+    widgetOrder: ["macroRegime", "portfolioHeat"] as (keyof CustomViewWidgets)[],
   },
   {
     name: "Algorithmic Trading Desk",
@@ -48,7 +47,6 @@ const TEMPLATES = [
       pilotsTable: false,
       sentimentMini: false,
       portfolioHeat: false,
-      optionsDirective: false,
       signalBreakdown: true,
       macroRegime: false,
     },
@@ -63,7 +61,6 @@ const TEMPLATES = [
       pilotsTable: false,
       sentimentMini: true,
       portfolioHeat: false,
-      optionsDirective: false,
       signalBreakdown: true,
       macroRegime: true,
     },
@@ -78,7 +75,6 @@ const DEFAULT_WIDGETS: CustomViewWidgets = {
   pilotsTable: false,
   sentimentMini: false,
   portfolioHeat: false,
-  optionsDirective: false,
   signalBreakdown: false,
   macroRegime: false,
 };

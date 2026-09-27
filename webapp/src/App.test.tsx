@@ -218,7 +218,6 @@ describe("App — Settings gear + nav", () => {
       "Models",
       "Strategy Health",
       "Pairs radar",
-      "Options",
       "Signal Breakdown",
       "Forecast Viewer",
       "Data Explorer",

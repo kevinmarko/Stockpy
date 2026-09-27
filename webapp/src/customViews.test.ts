@@ -30,7 +30,6 @@ const ALL_WIDGETS_OFF: CustomViewWidgets = {
   pilotsTable: false,
   sentimentMini: false,
   portfolioHeat: false,
-  optionsDirective: false,
   signalBreakdown: false,
   macroRegime: false,
 };

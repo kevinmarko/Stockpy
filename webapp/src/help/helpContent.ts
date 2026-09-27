@@ -43,7 +43,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "slippage":
     "The difference between the expected price of a trade and the actual price at which it executes, simulated to reflect real-world execution costs.",
   "advisory only":
-    "The platform recommends; you decide. It is in advisory mode by default — no order is ever sent to a broker automatically. Every action signal, size, and options directive is informational.",
+    "The platform recommends; you decide. It is in advisory mode by default — no order is ever sent to a broker automatically. Every action signal and size is informational.",
   "action signal":
     "The system's recommendation for each ticker: STRONG BUY, BUY, HOLD, RISK REDUCE, or AVOID. Purely informational — act on your own judgment.",
   conviction:
@@ -102,18 +102,6 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A GJR-GARCH volatility estimate that weights recent bad days more than good ones (the leverage effect) — more accurate than a plain moving standard deviation. It's the primary vol input for sizing and options.",
   "attention weight":
     "How much the BERT-LLA forecaster's self-attention layer weighted each day in its lookback window when forming a forecast — shaded on the price chart, darker means higher weight. This reflects which days the model itself found most informative, not a buy/sell signal or a claim about future importance. Only appears when BERT-LLA actually ran for that request; absent otherwise, never a fabricated overlay.",
-  "put credit spread":
-    "Sells a put and buys a lower-strike protective put, collecting premium if the stock stays above the short put; max loss is the spread width minus premium. Suggested only when IVR, VRP, and macro are all favorable. Advisory only.",
-  "iron condor":
-    "A put credit spread below the market plus a call credit spread above it, profiting if the stock stays in a range until expiry. Requires favorable IV. Advisory only.",
-  "iv rank":
-    // IVR/VRP/VIX gate values here are literal constants inside
-    // technical_options_engine.py (not settings-derived) — gui/help_content.py
-    // hard-codes them too for the same reason, so this matches its precedent
-    // rather than being an inconsistency with the live-threshold entries above.
-    "Implied Volatility Rank — where current IV sits in its past-year range. IVR 80 = top 20% of the year, historically a good time to sell premium. Credit spreads require IVR > 50.",
-  vrp:
-    "Volatility Risk Premium — implied volatility in excess of realized. When options charge more than the stock actually moves, there's premium to collect. A VRP > 0.02 is required before recommending a premium-selling strategy.",
   "brinson-fachler":
     "Attribution that splits benchmark out-/under-performance into Allocation (right sectors?), Selection (right stocks within a sector?), and Interaction (the combined effect).",
   "execution mode":
@@ -133,7 +121,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Two symbols whose price spread is stationary — it mean-reverts instead of wandering — tested via the Engle-Granger method. The basis for every pair on the Pairs radar screen; a broken cointegration (rolling ADF p-value > 0.10) exits the trade.",
   "half-life":
     // Fixed algorithm parameter (signals/pairs_trading.py-equivalent), not a
-    // Thresholds API field — same "documented literal" precedent as "iv rank"/vrp below.
+    // Thresholds API field — a "documented literal", not a live threshold.
     "How many trading days a pair's spread takes to close half the distance back to its rolling mean, from an Ornstein-Uhlenbeck fit. Pairs radar only surfaces pairs with a half-life between 5 and 60 days — too fast is noise, too slow ties up capital.",
   "z-score":
     "How many standard deviations the current spread sits from its rolling mean. Pairs radar enters at |z| > 2, exits on a 0-cross, and stops out at |z| > 4.",
@@ -150,7 +138,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "circuit breaker":
     // The 24h dedup window is a documented literal default (gui/circuit_breakers.py
     // ::collect_circuit_breaker_trips's `window` parameter), not a Thresholds API
-    // field — same "documented literal" precedent as "half-life"/"iv rank" above.
+    // field — same "documented literal" precedent as "half-life" above.
     "The kill switch plus every risk-gate block, merged into one severity-classified view: CRITICAL (halts everything, e.g. the kill switch or a daily loss limit) or WARNING (a single order blocked). Deduped to the most recent trip per breaker within a rolling 24h window so a chatty block log doesn't bury the signal — an unresolved trip stays visible until a newer one for that same breaker supersedes it.",
   "skill decay":
     "How much a symbol's pooled forecast skill (inverse-RMSE, all models combined) has changed between an older baseline half of the lookback window and the most recent half. Positive means skill is degrading — recent forecasts have been less accurate than the baseline; negative means it improved. Shown as 'insufficient history' rather than a fabricated number when either half has too few completed, actualized forecasts to trust its RMSE.",
@@ -166,7 +154,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     // SYMBOL_RATING_AUTO_DROP_ENABLED / SYMBOL_RATING_DROP_THRESHOLD_CYCLES
     // are settings.py fields, not Thresholds API fields (GET /thresholds
     // doesn't surface them) -- same "documented literal" precedent as
-    // "iv rank"/"half-life"/"circuit breaker" above.
+    // "half-life"/"circuit breaker" above.
     "Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine each cycle. After enough consecutive BAD-rated cycles (5 by default), a symbol CAN be automatically excluded from tracking and buying — but this auto-drop behavior is off by default, and even when it's on, it never applies to anything you currently hold. An excluded symbol shows an 'Excluded' badge on Tracked Universe; 'Re-include' immediately undoes the exclusion by hand.",
   "analyst note":
     "An on-demand Claude-written narrative for one symbol — a one-sentence headline, a why-now catalyst paragraph, 1-3 key-risk bullets, and an invalidation condition that would void the thesis. Grounded in the platform's own deterministic numbers, never inventing new ones, and only generated when you click Generate — nothing here runs automatically.",
@@ -228,16 +216,6 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The slide-over drawer opened via the ⓘ button on the Tracked Universe table. It breaks down exactly why a symbol is tracked (is it held? on a watchlist? the fallback sheet?), what its current coverage is, and if it's dropping, how many bad cycles it has accumulated.",
   "symbol screener":
     "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist.",
-  "options delta":
-    "The rate of change of an option's price per $1 move in the underlying stock. Calls have positive delta (0 to 1), puts have negative delta (-1 to 0). A delta of 0.30 means the option price moves ~$0.30 for each $1 stock move.",
-  "options theta":
-    "The daily time-decay of an option's price — how much value the option loses each day just from the passage of time, all else equal. Always negative for long positions.",
-  "options gamma":
-    "The rate of change of delta per $1 move in the underlying. High gamma means delta changes rapidly, making the position more sensitive to large stock moves.",
-  "implied volatility":
-    "The market's forward-looking expectation of the underlying's annualized volatility, backed out of the option's current market price via the Black-Scholes model. Higher IV means pricier options.",
-  "chance of profit":
-    "The estimated probability that an option position is profitable at expiration, accounting for the premium paid. Derived from Black-Scholes: for a call, it is N(d2) where d2 uses the break-even price (strike + premium) instead of the strike alone.",
   liveness:
     "How and when a settings change takes effect: immediately (live in the running process), on next daemon restart (captured by runtime code or components), no effect (unreferenced setting), or env pinned (overridden by an active shell environment variable).",
   "settings reference":
@@ -372,12 +350,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "Ranks candidate upstream/downstream industry sectors by how relevant they are to a target stock — combining semantic similarity (SBERT, cosine similarity) with each sector's Sector Heat Factor (recent news + investor-forum volume). The top N ranked sectors are the ones this platform's research treats as most relevant for supplementing a thin single-stock signal. Every field is '—' when it honestly couldn't be computed, never a fabricated number — and a persistent banner explains when investor-forum volume specifically is unavailable.",
     keyConcepts: ["semantic similarity", "sector heat factor", "sector correlation coefficient"],
   },
-  options: {
-    title: "Options Matrix",
-    description:
-      "Premium-selling strategy directives per active symbol: recommended structure (Put Credit Spread, Iron Condor, or Cash/Wait), strikes, net premium, and Greeks. Gated by IVR > 50, VRP > 0.02, VIX < 30, and no CREDIT EVENT — Cash/Wait is returned when any gate fails. All informational.",
-    keyConcepts: ["put credit spread", "iron condor", "iv rank", "vrp", "garch vol"],
-  },
   agentic: {
     title: "Agentic Trading",
     description:
@@ -424,7 +396,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "symbol-screener": {
     title: "Symbol screener",
     description:
-      "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist. Send a discovered symbol straight to Paper Broker's Quick Trade, or a whole selection to its Strategy Scan.",
+      "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist. Send a discovered symbol straight to Paper Broker's Quick Trade.",
     keyConcepts: [],
   },
   "trade-history": {
@@ -568,7 +540,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "symbol-detail": {
     title: "Symbol Detail",
     description:
-      "Deep dive on one symbol: the advisory recommendation, the regime-multiplier sizing breakdown behind that Kelly Target, factor exposure, risk & regime, rolling beta, forecast skill, and the persisted options directive — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
+      "Deep dive on one symbol: the advisory recommendation, the regime-multiplier sizing breakdown behind that Kelly Target, factor exposure, risk & regime, rolling beta, and forecast skill — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
     keyConcepts: [
       "advisory only",
       "kelly target",
@@ -584,12 +556,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "A systematic tax-loss harvesting (TLH) overlay. It monitors concentrated equity positions for TLH opportunities, generating a proxy hedge (like a highly-correlated sector ETF) to maintain beta exposure while avoiding wash-sale rules. Pending trades are routed here for approval before taking effect.",
     keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
-  },
-  "options-chain": {
-    title: "Options Chain Explorer",
-    description:
-      "Interactive options chain for a single symbol — browse available expirations, inspect bid/ask/IV/Greeks per strike, and see the statistically-grounded Chance of Profit for each contract. Chain data comes from yfinance; the underlying spot price for Greek calculations comes from the FMP quote endpoint for reliability. Use Builder mode to construct common multi-leg strategies (spreads, straddles, calendars) from the chain, then review the combined order in the ticket — Paper orders simulate a fill, and Live orders require an explicit confirmation and remain subject to advisory-only constraints (no order is actually routed to a broker yet).",
-    keyConcepts: ["options delta", "options theta", "implied volatility", "chance of profit"],
   },
   universe: {
     title: "Universe Transparency",

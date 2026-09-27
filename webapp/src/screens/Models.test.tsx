@@ -27,21 +27,6 @@ describe("Models screen (real mock API)", () => {
     vi.useRealTimers();
   });
 
-  it("clicking Retrain Now on the options_meta_labeler row calls retrainOptionsMetaModel", async () => {
-    const retrainSpy = vi.spyOn(api, "retrainOptionsMetaModel").mockResolvedValue({
-      status: "success",
-      trained_samples: 1250,
-      accuracy: 65.4,
-      roc_auc: 0.68,
-      trained_at: "2026-08-20T00:00:00Z"
-    });
-    renderModels();
-    const els = await screen.findAllByText("options_meta_labeler");
-    const card = els[0].closest("section")!;
-    fireEvent.click(within(card).getByText("Retrain Now"));
-    expect(retrainSpy).toHaveBeenCalled();
-  });
-
   it("a meta_labeler_backfill_* stub renders a Forecast Backfill link, never a Retrain Now button that would 400", async () => {
     // Regression test: ml/registry.yaml's meta_labeler_backfill_<signal_id>
     // stubs used to inherit the same "Retrain Now" button as a real
@@ -82,7 +67,7 @@ describe("Models screen (real mock API)", () => {
     // no trained_date at all (needs_retrain: null) -- exactly ONE badge.
     renderModels();
     await screen.findByText("meta_labeler_cross_sectional_momentum");
-    expect(screen.getAllByText("⏱ Needs retrain").length).toBe(2);
+    expect(screen.getAllByText("⏱ Needs retrain").length).toBe(1);
   });
 
   it("a model with no trained_date renders an honest '—' age, never a guessed retrain flag", async () => {
