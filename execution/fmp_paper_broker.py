@@ -14,9 +14,10 @@ submits equity market orders exclusively):
     limit order can never later fill on its own -- rejecting it is the
     honest outcome, not silently filling at a price the order didn't ask
     for and not silently accepting an order that will sit forever.
-  - Multi-leg options orders (OrderIntent.legs non-empty): rejected. A
-    single-symbol FMP quote cannot honestly price a spread/condor; faking
-    one from an equity quote would be fabricated data (CONSTRAINT #4).
+  - Multi-leg options orders (OrderIntent.legs non-empty): priced per leg
+    from the caller-supplied leg prices and filled atomically via
+    PaperAccountStore.apply_multi_leg_fill. The options import is lazy so
+    equity paper trading never depends on the options desk.
 """
 
 import asyncio
@@ -38,7 +39,6 @@ from execution.broker_base import (
 from execution.cost_model import TieredCostModel
 from data.paper_account_store import PaperAccountStore
 from data import fmp_client
-from pilots.options_risk import parse_option_symbol
 
 logger = logging.getLogger("FMPPaperBroker")
 
@@ -92,6 +92,10 @@ class FMPPaperBroker(BrokerBase):
         # 3. Multi-leg options execution branch
         if intent.legs:
             try:
+                # Lazy: equity paper trading must not depend on the options
+                # desk module (pilots/options_risk.py is slated for archive).
+                from pilots.options_risk import parse_option_symbol
+
                 parsed_legs = []
                 signed_prices = []
                 strikes = []

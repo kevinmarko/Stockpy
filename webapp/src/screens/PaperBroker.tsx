@@ -8,7 +8,7 @@ import { Modal } from "../components/Modal";
 import { RetrospectiveDetailModal } from "../components/RetrospectiveDetailModal";
 import { SymbolInput } from "../components/SymbolInput";
 import { theme } from "../theme";
-import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
+import { EquityOrderTicket } from "../components/EquityOrderTicket";
 import { ScenarioHeatmap } from "../components/options/ScenarioHeatmap";
 import { VolSurfaceView } from "../components/options/VolSurfaceView";
 import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
@@ -799,10 +799,9 @@ export function PaperBroker() {
                   View Options Chain →
                 </button>
               </div>
-              <OptionsOrderTicket
+              <EquityOrderTicket
                 key={`quick-trade-${quickTradeSymbol}`}
                 symbol={quickTradeSymbol}
-                assetType="stock"
                 spotPrice={quickTradeQuote.price}
                 onClear={() => {
                   setQuickTradeSymbol(null);

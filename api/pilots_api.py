@@ -5935,6 +5935,15 @@ class OptionsOrderRequestModel(BaseModel):
     legs: Optional[List[Dict[str, Any]]] = None
     isLive: bool = False
 
+class EquityOrderRequestModel(BaseModel):
+    symbol: str
+    side: Optional[str] = "buy"
+    quantity: Optional[float] = None
+    dollar_amount: Optional[float] = None
+    order_type: Optional[str] = "market"
+    limit_price: Optional[float] = None
+    isLive: bool = False
+
 class StrategyOptionsExecutionRequest(BaseModel):
     symbols: Optional[List[str]] = None
     dry_run: bool = False
@@ -6166,6 +6175,20 @@ def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> D
     store.reset_account(starting_cash=starting_cash)
     acc = store.get_account()
     return {"status": "ok", "message": "Paper account reset", "cash": acc.cash}
+
+@app.post("/pilots/paper-broker/order", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
+def post_paper_broker_equity_order(body: EquityOrderRequestModel) -> Dict[str, Any]:
+    """Execute a manual equity paper order (Paper Broker Quick Trade)."""
+    from pilots.paper_broker import execute_equity_order
+    return execute_equity_order(
+        symbol=body.symbol,
+        side=body.side or "buy",
+        quantity=body.quantity,
+        dollar_amount=body.dollar_amount,
+        order_type=body.order_type or "market",
+        limit_price=body.limit_price,
+        is_live=body.isLive,
+    )
 
 @app.post("/brokerage/options/order", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
 def post_brokerage_options_order(body: OptionsOrderRequestModel) -> Dict[str, Any]:
