@@ -684,7 +684,9 @@ class GravityAIAuditor:
             # controls for wiring verification only, not real strategies —
             # isolate their reports so they never clobber reports/*_validation_summary.json
             # for actual production strategies (or get picked up by
-            # scripts/preflight_check.py's validation_reports gate).
+            # scripts/preflight_check.py's validation_reports gate). The temp
+            # dir only isolates FILES; record_to_history_db=False below keeps
+            # them out of the shared validation_runs DB table too.
             audit_reports_dir = tempfile.mkdtemp(prefix="gravity_harness_audit_")
 
             # 1. Random strategy (should fail deployability)
@@ -715,7 +717,8 @@ class GravityAIAuditor:
                 cost_model=cost_model,
                 n_cpcv_splits=5,
                 n_test_splits=1,
-                reports_dir=audit_reports_dir
+                reports_dir=audit_reports_dir,
+                record_to_history_db=False,
             )
 
             report_random = harness.run(
@@ -753,7 +756,8 @@ class GravityAIAuditor:
                 cost_model=cost_model,
                 n_cpcv_splits=5,
                 n_test_splits=1,
-                reports_dir=audit_reports_dir
+                reports_dir=audit_reports_dir,
+                record_to_history_db=False,
             )
 
             report_trend = harness_trend.run(

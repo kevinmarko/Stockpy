@@ -763,6 +763,7 @@ class StrategyValidationHarness:
         is_options_selling: bool = False,
         stress_returns_fn: Optional[Callable[[str, str], pd.Series]] = None,
         reports_dir: str = "reports",
+        record_to_history_db: bool = True,
     ):
         """
         Args:
@@ -784,6 +785,14 @@ class StrategyValidationHarness:
                 Tests and audit sandboxes MUST override this to an isolated
                 tmp directory so smoke-test/negative-control runs never
                 clobber real strategy reports.
+            record_to_history_db: When False, skip the durable copy in the
+                ``validation_runs`` DB table. ``reports_dir`` only isolates the
+                FILES a run writes; the DB lives at the shared
+                ``settings.LOCAL_DATA_ROOT``, so audit sandboxes running
+                synthetic controls (e.g. the Gravity suite's Random_Audit /
+                Trending_Audit) MUST pass False or their fake strategies land
+                in the operator's real validation history and read back as
+                real deployability results.
         """
         self.strategy_fn = strategy_fn
         self.universe_fn = universe_fn
@@ -793,6 +802,7 @@ class StrategyValidationHarness:
         self.is_options_selling = is_options_selling
         self.stress_returns_fn = stress_returns_fn
         self.reports_dir = reports_dir
+        self.record_to_history_db = record_to_history_db
 
     def run(
         self,
@@ -1302,6 +1312,9 @@ class StrategyValidationHarness:
         a DB hiccup must never abort an otherwise-successful validation run,
         matching ``_append_validation_history``'s own contract.
         """
+        # getattr: some tests build the harness via __new__ without __init__.
+        if not getattr(self, "record_to_history_db", True):
+            return
         try:
             from validation.validation_history_store import ValidationHistoryStore
 
