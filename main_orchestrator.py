@@ -588,7 +588,7 @@ async def _execute_broker_orders(
             log_fn(result)
 
         now = datetime.now(timezone.utc)
-        for _, row in final_df.iterrows():
+        for row in final_df.to_dict("records"):
             symbol = str(row.get("Symbol", "")).upper()
             signal = str(row.get("Action Signal", "")).upper()
             kelly = float(row.get("Kelly Target", 0.0) or 0.0)
@@ -785,7 +785,7 @@ def _write_state_snapshot(
         signals = []
         held_symbols = set()
         if not final_df.empty:
-            for _, row in final_df.iterrows():
+            for row in final_df.to_dict("records"):
                 shares = float(row.get("Shares", 0.0) or row.get("Robinhood Shares", 0.0) or 0.0)
                 sym = str(row.get("Symbol", "")).upper().strip()
                 if sym and shares > 0:
@@ -1106,7 +1106,7 @@ def _build_daily_summary(ctx) -> "tuple[dict, list]":
             closed["exit_ts"] = pd.to_datetime(closed["exit_ts"], errors="coerce")
             today = pd.Timestamp(datetime.now(timezone.utc).date())
             todays = closed[closed["exit_ts"].dt.normalize() == today]
-            for _, tr in todays.iterrows():
+            for tr in todays.to_dict("records"):
                 try:
                     entry = float(tr["entry_price"])
                     exit_ = float(tr["exit_price"])
