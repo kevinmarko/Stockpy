@@ -532,7 +532,7 @@
   "read_forms": {
     "attr": 954,
     "factory_param": 4,
-    "getattr_const": 406,
+    "getattr_const": 405,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
@@ -937,7 +937,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:322",
+        "site": "data/paper_account_store.py:379",
         "via": []
       },
       {
@@ -1137,7 +1137,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:333",
+        "site": "data/paper_account_store.py:390",
         "via": []
       },
       {
@@ -1146,7 +1146,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:335",
+        "site": "data/paper_account_store.py:392",
         "via": []
       },
       {
@@ -1427,7 +1427,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:333",
+        "site": "data/paper_account_store.py:390",
         "via": []
       },
       {
@@ -1436,7 +1436,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:335",
+        "site": "data/paper_account_store.py:392",
         "via": []
       },
       {
@@ -1828,9 +1828,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:457",
+        "site": "data/paper_account_store.py:514",
         "via": [
-          357
+          414
         ]
       }
     ],
@@ -2486,7 +2486,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:333",
+        "site": "data/paper_account_store.py:390",
         "via": []
       },
       {
@@ -2724,9 +2724,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "execution/options_paper_executor.py:159",
+        "site": "execution/options_paper_executor.py:178",
         "via": [
-          181
+          200
         ]
       }
     ],
@@ -3015,7 +3015,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/paper_account_store.py:358",
+        "site": "data/paper_account_store.py:415",
         "via": []
       }
     ],

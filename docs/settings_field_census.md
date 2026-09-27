@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `2d45227de022ffe5cc55a9bd7b4f5d40ebdad6f8`
+- Measured at commit: `9f43a46e9596892dcf196dfccc49739ba61ebac1`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -238,7 +238,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 853 | 281 |
-| (b) `getattr(settings, "KEY", default)` | 406 | 232 |
+| (b) `getattr(settings, "KEY", default)` | 405 | 232 |
 | (c) `getattr(settings, <var>)` (dynamic) | 18 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
@@ -433,7 +433,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
 | `OPTIONS_META_LABELER_ENABLED` | b | 3 | 0 |
 | `OPTIONS_PROFIT_TARGET_PCT` | b | 1 | 0 |
-| `OPTIONS_RISK_FREE_RATE` | b | 8 | 0 |
+| `OPTIONS_RISK_FREE_RATE` | b | 7 | 0 |
 | `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | b | 1 | 0 |
 | `OPTIONS_STOP_LOSS_MULTIPLE` | b | 1 | 0 |
 | `OPTIONS_VPIN_TOXICITY_THRESHOLD` | b | 3 | 0 |

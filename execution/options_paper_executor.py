@@ -42,37 +42,56 @@ def _calculate_default_expiration(target_dte: int = 30) -> str:
     return friday.strftime("%Y-%m-%d")
 
 
-def _price_option_contract(
-    spot: float,
+def _real_option_price_per_contract(
+    underlying: str,
+    expiration: str,
     strike: float,
-    dte: int,
     opt_type: str,
-    r: Optional[float] = None,
-    sigma: float = 0.30,
-) -> float:
-    """Calculates Black-Scholes unit price for an option contract ($/contract, multiplier=100)."""
-    if r is None:
-        r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
+    spot: Optional[float],
+    *,
+    side: Optional[str] = None,
+    prefer_model: bool = False,
+    as_of: Optional[date] = None,
+) -> Optional[float]:
+    """Real per-CONTRACT ($/share x 100) price for one option leg, or ``None``.
 
-    if dte <= 0:
-        if str(opt_type).upper() == "CALL":
-            intrinsic = max(0.0, spot - strike)
-        else:
-            intrinsic = max(0.0, strike - spot)
-        return max(0.01, round(intrinsic, 4)) * 100.0
+    Thin wrapper over ``data.paper_account_store.resolve_option_price_per_share``
+    (intrinsic if expired -> side-aware live quote -> bid/ask mid ->
+    Black-Scholes on the contract's OWN live implied volatility -> last
+    trade). There is no fixed-volatility fallback: ``None`` means no real
+    price exists and the caller must refuse/skip rather than fill or
+    evaluate at a made-up number.
+    """
+    from data.paper_account_store import resolve_option_price_per_share
 
-    t_years = max(1, dte) / 365.0
-    from scipy.stats import norm
+    now = None
+    if as_of is not None:
+        now = datetime.combine(as_of, datetime.min.time()).replace(hour=14, tzinfo=timezone.utc)
+    per_share = resolve_option_price_per_share(
+        underlying, expiration, float(strike), opt_type, spot, now,
+        side=side, prefer_model=prefer_model,
+    )
+    # A fill needs a positive price: an expired/worthless leg (intrinsic $0)
+    # is not fillable here -- PaperAccountStore rejects fill_price <= 0, and
+    # settle_expired_options cash-settles expired contracts instead.
+    if per_share is None or per_share <= 0:
+        return None
+    return round(per_share, 4) * 100.0
 
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * math.sqrt(t_years))
-    d2 = d1 - sigma * math.sqrt(t_years)
 
-    if str(opt_type).upper() == "CALL":
-        bs_price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-    else:
-        bs_price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
+def _positive_float(value: Any) -> Optional[float]:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if (math.isfinite(v) and v > 0.0) else None
 
-    return max(0.01, round(bs_price, 4)) * 100.0
+
+def _live_spot(symbol: str) -> Optional[float]:
+    """Real live spot for ``symbol`` via the shared quote seam, or ``None``."""
+    from data.paper_account_store import _fetch_stock_prices
+
+    return _fetch_stock_prices([symbol.upper()]).get(symbol.upper())
 
 
 def _resolve_short_delta(directive: Dict[str, Any]) -> Optional[float]:
@@ -676,6 +695,7 @@ class OptionsPaperExecutor:
             total_unrealized_pl = 0.0
             closing_legs = []
 
+            group_unpriced = False
             for pos, opt_info in group:
                 strike = float(opt_info["strike"])
                 opt_type = opt_info["option_type"].lower()
@@ -685,7 +705,16 @@ class OptionsPaperExecutor:
 
                 # Option pricing
                 if spot is not None and spot > 0:
-                    mark_price = _price_option_contract(spot, strike, dte, opt_type)
+                    # Caller-supplied (what-if) spot: value the leg with
+                    # Black-Scholes on its OWN live implied volatility at
+                    # that spot. No real IV/quote -> skip the whole group.
+                    mark_price = _real_option_price_per_contract(
+                        ticker, exp_str, strike, opt_type, spot,
+                        prefer_model=True, as_of=today,
+                    )
+                    if mark_price is None:
+                        group_unpriced = True
+                        break
                 else:
                     if pos.market_value is not None and abs_qty > 0:
                         mark_price = abs(float(pos.market_value)) / abs_qty
@@ -710,6 +739,14 @@ class OptionsPaperExecutor:
                     "qty": abs_qty,
                     "fill_price": mark_price,
                 })
+
+            if group_unpriced:
+                logger.warning(
+                    "OptionsPaperExecutor: skipping exit evaluation for %s %s -- no live "
+                    "implied volatility/quote to value a leg at the supplied spot.",
+                    ticker, exp_str,
+                )
+                continue
 
             net_entry_credit = total_entry_credit - total_entry_debit
             is_credit = net_entry_credit > 0
@@ -992,30 +1029,59 @@ class OptionsPaperExecutor:
         else:
             # Construct from strikes in candidate dict
             # Support Iron Condor (short_put, long_put, short_call, long_call)
-            # or Straddle (put_strike, call_strike or atm_strike)
-            spot = float(candidate.get("spot", candidate.get("spot_price", 100.0)))
-            
-            if "short_put" in candidate or "short_put_strike" in candidate:
+            # or Straddle (put_strike, call_strike or atm_strike).
+            # Every leg is priced from REAL chain data (buys at the ask, sells
+            # at the bid; else mid; else Black-Scholes on the leg's own live
+            # IV) -- never a fixed volatility or a placeholder spot.
+            spot_raw = candidate.get("spot", candidate.get("spot_price"))
+            spot = _positive_float(spot_raw) if spot_raw is not None else None
+
+            leg_specs: List[tuple] = []
+            if parsed_legs:
+                # Caller already supplied priced legs -- never overlay a
+                # second, strike-constructed set on top of them.
+                pass
+            elif "short_put" in candidate or "short_put_strike" in candidate:
                 sp = float(candidate.get("short_put", candidate.get("short_put_strike", 0.0)))
                 lp = float(candidate.get("long_put", candidate.get("long_put_strike", 0.0)))
                 sc = float(candidate.get("short_call", candidate.get("short_call_strike", 0.0)))
                 lc = float(candidate.get("long_call", candidate.get("long_call_strike", 0.0)))
-
                 if sp > 0:
                     strikes.extend([sp, lp, sc, lc])
-                    parsed_legs = [
-                        {"symbol": f"{sym} {expiration} ${lp:.2f} PUT", "side": "buy", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, lp, target_dte, "put"), "raw_price": _price_option_contract(spot, lp, target_dte, "put") / 100.0},
-                        {"symbol": f"{sym} {expiration} ${sp:.2f} PUT", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, sp, target_dte, "put"), "raw_price": _price_option_contract(spot, sp, target_dte, "put") / 100.0},
-                        {"symbol": f"{sym} {expiration} ${sc:.2f} CALL", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, sc, target_dte, "call"), "raw_price": _price_option_contract(spot, sc, target_dte, "call") / 100.0},
-                        {"symbol": f"{sym} {expiration} ${lc:.2f} CALL", "side": "buy", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, lc, target_dte, "call"), "raw_price": _price_option_contract(spot, lc, target_dte, "call") / 100.0},
-                    ]
+                    leg_specs = [(lp, "PUT", "buy"), (sp, "PUT", "sell"), (sc, "CALL", "sell"), (lc, "CALL", "buy")]
             elif "atm_strike" in candidate or "strike" in candidate:
-                atm = float(candidate.get("atm_strike", candidate.get("strike", spot)))
-                parsed_legs = [
-                    {"symbol": f"{sym} {expiration} ${atm:.2f} PUT", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, atm, target_dte, "put"), "raw_price": _price_option_contract(spot, atm, target_dte, "put") / 100.0},
-                    {"symbol": f"{sym} {expiration} ${atm:.2f} CALL", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, atm, target_dte, "call"), "raw_price": _price_option_contract(spot, atm, target_dte, "call") / 100.0},
-                ]
-                strikes.append(atm)
+                atm_raw = candidate.get("atm_strike", candidate.get("strike"))
+                atm = _positive_float(atm_raw) if atm_raw is not None else None
+                if atm is None:
+                    spot = spot if spot is not None else _live_spot(sym)
+                    atm = spot
+                if atm is not None:
+                    strikes.append(atm)
+                    leg_specs = [(atm, "PUT", "sell"), (atm, "CALL", "sell")]
+
+            if leg_specs and spot is None:
+                # Only needed for an expired-contract intrinsic value or the
+                # Black-Scholes-on-live-IV fallback; a live quote needs none.
+                spot = _live_spot(sym)
+            for k, typ, leg_side in leg_specs:
+                leg_sym = f"{sym} {expiration} ${k:.2f} {typ}"
+                px = _real_option_price_per_contract(sym, expiration, k, typ, spot, side=leg_side)
+                if px is None:
+                    unpriced_legs.append(leg_sym)
+                    continue
+                parsed_legs.append({
+                    "symbol": leg_sym, "side": leg_side, "qty": float(contracts),
+                    "ratio_qty": 1.0, "fill_price": px, "raw_price": px / 100.0,
+                })
+
+            if unpriced_legs:
+                return {
+                    "success": False,
+                    "reason": (
+                        f"No real option price available for leg(s) {unpriced_legs} in {sym} "
+                        "trade (no live quote/implied volatility); refusing to fabricate a fill price."
+                    ),
+                }
 
         if not parsed_legs:
             return {"success": False, "reason": f"No valid legs constructed for {sym} Earnings Crush"}
@@ -1090,6 +1156,12 @@ class OptionsPaperExecutor:
         Scans open positions for trades opened under the 'Earnings Crush' strategy where the
         earnings announcement has completed (as of current_date), and closes all constituent legs
         at market open to harvest pure IV crush.
+
+        Legs close at real prices only (see ``_real_option_price_per_contract``);
+        a trade with any unpriced leg is reported in ``failed`` and left open.
+        ``iv_crush_factor`` is accepted for backward compatibility but no longer
+        used -- it previously filled at ``entry_price * iv_crush_factor``, a
+        made-up price.
         """
         today = current_date or datetime.now(timezone.utc).date()
         settled = []
@@ -1172,35 +1244,53 @@ class OptionsPaperExecutor:
         for trade in active_ec_trades:
             ticker = trade["ticker"]
             closing_legs = []
+            unpriced_legs: List[str] = []
             spot = spot_map.get(ticker.upper()) if spot_map else None
+            if spot is None or spot <= 0:
+                spot = _live_spot(ticker)
 
             for pos in trade["positions"]:
                 qty = float(pos["qty"])
                 abs_qty = abs(qty)
-                entry_price = float(pos["avg_entry_price"])
                 opt_info = parse_option_symbol(pos["symbol"])
-
-                # Option pricing post IV crush
-                if spot is not None and spot > 0 and opt_info:
-                    strike = float(opt_info["strike"])
-                    opt_type = str(opt_info["option_type"]).lower()
-                    exp_str = opt_info["expiration"]
-                    try:
-                        exp_d = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                        dte = max(0, (exp_d - today).days)
-                    except Exception:
-                        dte = 1
-                    mark_price = _price_option_contract(spot, strike, dte, opt_type, sigma=0.20)
-                else:
-                    mark_price = entry_price * iv_crush_factor
-
                 closing_side = "sell" if qty > 0 else "buy"
+
+                # Close at a REAL price: the live quote on the closing side
+                # (sell at the bid / buy at the ask), else mid, else
+                # Black-Scholes on the leg's own live implied volatility
+                # (which already reflects the post-earnings IV crush), or
+                # intrinsic value if expired. No fixed volatility and no
+                # entry-price haircut.
+                mark_price = None
+                if opt_info:
+                    mark_price = _real_option_price_per_contract(
+                        ticker, opt_info["expiration"], float(opt_info["strike"]),
+                        str(opt_info["option_type"]), spot,
+                        side=closing_side, as_of=today,
+                    )
+                if mark_price is None:
+                    unpriced_legs.append(pos["symbol"])
+                    continue
+
                 closing_legs.append({
                     "symbol": pos["symbol"],
                     "side": closing_side,
                     "qty": abs_qty,
                     "fill_price": mark_price,
                 })
+
+            if unpriced_legs:
+                # Never close part of a multi-leg position (that would leave a
+                # naked leg) and never close at a made-up price.
+                failed.append({
+                    "symbol": ticker,
+                    "parent_order_id": trade["parent_order_id"],
+                    "reason": (
+                        f"No real option price for leg(s) {unpriced_legs} "
+                        "(no live quote/implied volatility); not closing this cycle."
+                    ),
+                })
+                continue
 
             if not closing_legs:
                 continue

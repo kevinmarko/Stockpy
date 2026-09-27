@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "2d45227de022ffe5cc55a9bd7b4f5d40ebdad6f8",
+    "git_commit": "9f43a46e9596892dcf196dfccc49739ba61ebac1",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -4376,16 +4376,16 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 406,
+      "total_reads": 405,
       "distinct_fields": 232,
       "counts": {
         "FMP_API_KEY": 13,
         "GEMINI_API_KEY": 9,
         "ADVISORY_ONLY": 8,
-        "OPTIONS_RISK_FREE_RATE": 8,
         "FMP_NEWS_ENABLED": 7,
         "LLM_COMMENTARY_TIMEOUT_SECONDS": 7,
         "OPENAI_API_KEY": 7,
+        "OPTIONS_RISK_FREE_RATE": 7,
         "LLM_COMMENTARY_ENABLED": 6,
         "OPAL_RESEARCH_ENABLED": 6,
         "OPTIONS_0DTE_ENABLED": 6,

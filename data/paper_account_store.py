@@ -102,6 +102,122 @@ def _positive_finite(value: Any) -> Optional[float]:
     return v if (math.isfinite(v) and v > 0.0) else None
 
 
+def _option_chain_row(underlying: str, exp_str: str, strike: float, opt_type: str) -> Any:
+    """The live chain row for one contract, or ``None``."""
+    is_call = str(opt_type).lower().startswith("c")
+    chain = _fetch_option_chain(underlying, exp_str)
+    table = getattr(chain, "calls" if is_call else "puts", None) if chain is not None else None
+    try:
+        if table is not None and len(table) > 0 and "strike" in table.columns:
+            matches = table[(table["strike"].astype(float) - float(strike)).abs() < 1e-6]
+            if len(matches) > 0:
+                return matches.iloc[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def resolve_option_iv(underlying: str, exp_str: str, strike: float, opt_type: str) -> Optional[float]:
+    """The contract's own live implied volatility from the (cached) option
+    chain, or ``None`` when no real, positive, finite IV exists. Callers must
+    treat ``None`` as "Greeks/model price unavailable" -- never substitute a
+    fixed volatility."""
+    row = _option_chain_row(underlying, exp_str, strike, opt_type)
+    return _positive_finite(row.get("impliedVolatility")) if row is not None else None
+
+
+def _bs_price_per_share(
+    spot: float, strike: float, exp_date: date, opt_type: str, iv: float, now: datetime
+) -> Optional[float]:
+    try:
+        from pilots.options_risk import calculate_black_scholes_greeks
+
+        expiry_dt = datetime.combine(exp_date, datetime.min.time()).replace(
+            hour=20, tzinfo=timezone.utc  # 16:00 ET close, approx.
+        )
+        now_utc = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        t_years = max(0.0, (expiry_dt - now_utc).total_seconds()) / (365.0 * 86400.0)
+        bs = calculate_black_scholes_greeks(
+            spot=spot, strike=float(strike), t_years=t_years, sigma=iv,
+            option_type="call" if str(opt_type).lower().startswith("c") else "put",
+            r=float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045)),
+        )
+        return _positive_finite(bs.get("price"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resolve_option_price_per_share(
+    underlying: str,
+    exp_str: str,
+    strike: float,
+    opt_type: str,
+    spot: Optional[float],
+    now: Optional[datetime] = None,
+    *,
+    side: Optional[str] = None,
+    prefer_model: bool = False,
+) -> Optional[float]:
+    """Real per-SHARE price for one option contract, or ``None`` when no
+    real data supports one. Never a fixed-volatility model price.
+
+    Order of preference:
+      1. Expired contract -> intrinsic value from ``spot``.
+      2. A marketable live quote for ``side``: ``"buy"`` -> ask,
+         ``"sell"`` -> bid (a paper fill crosses the spread like a real one).
+      3. Live bid/ask midpoint.
+      4. Black-Scholes on the contract's OWN live implied volatility
+         (``resolve_option_iv``) and ``settings.OPTIONS_RISK_FREE_RATE``.
+      5. Last trade price.
+
+    ``prefer_model=True`` puts step 4 first -- for what-if valuation at a
+    caller-supplied ``spot`` (a scenario spot), where a live quote reflects
+    today's spot, not the scenario's.
+    """
+    now = now or datetime.now(timezone.utc)
+    try:
+        exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+    except Exception:
+        return None
+    is_call = str(opt_type).lower().startswith("c")
+
+    if exp_date < now.date():
+        if spot is None:
+            return None
+        return max(0.0, spot - strike) if is_call else max(0.0, strike - spot)
+
+    row = _option_chain_row(underlying, exp_str, strike, opt_type)
+    if row is None:
+        return None
+
+    iv = _positive_finite(row.get("impliedVolatility"))
+
+    def _model() -> Optional[float]:
+        if iv is None or spot is None:
+            return None
+        return _bs_price_per_share(spot, strike, exp_date, opt_type, iv, now)
+
+    if prefer_model:
+        px = _model()
+        if px is not None:
+            return px
+
+    bid = _positive_finite(row.get("bid"))
+    ask = _positive_finite(row.get("ask"))
+    side_l = (side or "").lower()
+    if side_l == "buy" and ask is not None:
+        return ask
+    if side_l == "sell" and bid is not None:
+        return bid
+    if bid is not None and ask is not None and ask >= bid:
+        return (bid + ask) / 2.0
+
+    px = _model()
+    if px is not None:
+        return px
+    return _positive_finite(row.get("lastPrice"))
+
+
 def _option_mark_per_share(
     underlying: str,
     exp_str: str,
@@ -110,69 +226,11 @@ def _option_mark_per_share(
     spot: Optional[float],
     now: datetime,
 ) -> Optional[float]:
-    """Real per-SHARE mark for one option contract, or ``None`` when no real
-    data supports one (the caller then falls back to cost basis and flags the
-    position as unpriced -- never a fabricated model price).
-
-    Order of preference:
-      1. Expired contract -> intrinsic value from the live spot (it will be
-         cash-settled at exactly that by ``settle_expired_options``).
-      2. Live chain bid/ask midpoint.
-      3. Black-Scholes using the contract's own live chain implied
-         volatility and ``settings.OPTIONS_RISK_FREE_RATE``.
-      4. Chain last trade price.
-    """
-    try:
-        exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
-    except Exception:
-        return None
-    is_call = opt_type.lower().startswith("c")
-
-    if exp_date < now.date():
-        if spot is None:
-            return None
-        return max(0.0, spot - strike) if is_call else max(0.0, strike - spot)
-
-    chain = _fetch_option_chain(underlying, exp_str)
-    table = getattr(chain, "calls" if is_call else "puts", None) if chain is not None else None
-    row = None
-    try:
-        if table is not None and len(table) > 0 and "strike" in table.columns:
-            matches = table[(table["strike"].astype(float) - float(strike)).abs() < 1e-6]
-            if len(matches) > 0:
-                row = matches.iloc[0]
-    except Exception:  # noqa: BLE001
-        row = None
-    if row is None:
-        return None
-
-    bid = _positive_finite(row.get("bid"))
-    ask = _positive_finite(row.get("ask"))
-    if bid is not None and ask is not None and ask >= bid:
-        return (bid + ask) / 2.0
-
-    iv = _positive_finite(row.get("impliedVolatility"))
-    if iv is not None and spot is not None:
-        try:
-            from pilots.options_risk import calculate_black_scholes_greeks
-
-            expiry_dt = datetime.combine(exp_date, datetime.min.time()).replace(
-                hour=20, tzinfo=timezone.utc  # 16:00 ET close, approx.
-            )
-            now_utc = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
-            t_years = max(0.0, (expiry_dt - now_utc).total_seconds()) / (365.0 * 86400.0)
-            bs = calculate_black_scholes_greeks(
-                spot=spot, strike=float(strike), t_years=t_years, sigma=iv,
-                option_type="call" if is_call else "put",
-                r=float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045)),
-            )
-            price = _positive_finite(bs.get("price"))
-            if price is not None:
-                return price
-        except Exception:  # noqa: BLE001
-            pass
-
-    return _positive_finite(row.get("lastPrice"))
+    """Real per-SHARE mark (no side: intrinsic if expired, else bid/ask mid,
+    else Black-Scholes on the contract's live IV, else last trade), or
+    ``None`` -- the caller then values the position at cost and flags it
+    unpriced. See ``resolve_option_price_per_share``."""
+    return resolve_option_price_per_share(underlying, exp_str, strike, opt_type, spot, now)
 
 Base = declarative_base()
 
